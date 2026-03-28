@@ -9,7 +9,7 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
     WorkflowConfig {
         schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
         version: WORKFLOW_CONFIG_VERSION,
-        default_workflow_ref: "standard".to_string(),
+        default_workflow_ref: "standard-workflow".to_string(),
         checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
         phase_catalog: BTreeMap::from([
             (
@@ -107,9 +107,9 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 variables: Vec::new(),
             },
             WorkflowDefinition {
-                id: "standard".to_string(),
-                name: "Standard".to_string(),
-                description: "Default execution flow across requirements, implementation, review, and testing."
+                id: "standard-workflow".to_string(),
+                name: "Standard Workflow".to_string(),
+                description: "Default task delivery workflow for this repository."
                     .to_string(),
                 phases: vec![
                     "requirements".to_string().into(),

@@ -2,13 +2,14 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
-pub const STANDARD_WORKFLOW_REF: &str = "standard";
+pub const STANDARD_WORKFLOW_REF: &str = "standard-workflow";
 pub const UI_UX_WORKFLOW_REF: &str = "ui-ux-standard";
 pub const REQUIREMENT_TASK_GENERATION_WORKFLOW_REF: &str = "ao.requirement/plan";
 pub const REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF: &str = "ao.requirement/execute";
 
 const PACK_STANDARD_WORKFLOW_REF: &str = "ao.task/standard";
 const PACK_UI_UX_WORKFLOW_REF: &str = "ao.task/ui-ux";
+const LEGACY_STANDARD_WORKFLOW_REF: &str = "standard";
 const LEGACY_REQUIREMENT_TASK_GENERATION_WORKFLOW_REF: &str = "requirement-task-generation";
 const LEGACY_REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF: &str = "requirement-task-generation-run";
 
@@ -41,7 +42,7 @@ fn normalize_requested_workflow_ref(workflow_ref: Option<&str>) -> Option<String
     let normalized = requested.to_ascii_lowercase();
 
     match normalized.as_str() {
-        STANDARD_WORKFLOW_REF | PACK_STANDARD_WORKFLOW_REF | "builtin/task-standard" => {
+        STANDARD_WORKFLOW_REF | LEGACY_STANDARD_WORKFLOW_REF | PACK_STANDARD_WORKFLOW_REF | "builtin/task-standard" => {
             Some(STANDARD_WORKFLOW_REF.to_string())
         }
         UI_UX_WORKFLOW_REF

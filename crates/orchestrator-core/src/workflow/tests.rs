@@ -14,7 +14,7 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
     OrchestratorWorkflow {
         id: "WF-test".to_string(),
         task_id: "TASK-1".to_string(),
-        workflow_ref: Some("standard".to_string()),
+        workflow_ref: Some("standard-workflow".to_string()),
         subject: SubjectRef::task("TASK-1".to_string()),
         input: None,
         vars: std::collections::HashMap::new(),
@@ -349,7 +349,7 @@ fn resume_clears_failure_and_can_complete_after_retry() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
     let mut workflow = executor.bootstrap(
         "WF-retry".to_string(),
-        WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard-workflow".to_string())),
     );
 
     executor.mark_current_phase_failed(&mut workflow, "first attempt failed".to_string());
@@ -376,7 +376,7 @@ fn lifecycle_marks_completed_workflow_as_merge_conflict() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
     let mut workflow = executor.bootstrap(
         "WF-merge-conflict".to_string(),
-        WorkflowRunInput::for_task("TASK-merge".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-merge".to_string(), Some("standard-workflow".to_string())),
     );
     executor.mark_current_phase_success(&mut workflow);
     assert_eq!(workflow.status, WorkflowStatus::Completed);
@@ -395,7 +395,7 @@ fn lifecycle_resolves_merge_conflict_and_clears_failure_reason() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
     let mut workflow = executor.bootstrap(
         "WF-merge-conflict-resolve".to_string(),
-        WorkflowRunInput::for_task("TASK-merge-resolve".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-merge-resolve".to_string(), Some("standard-workflow".to_string())),
     );
     executor.mark_current_phase_success(&mut workflow);
     executor.mark_merge_conflict(&mut workflow, "failed to merge source branch into target branch".to_string());
@@ -495,7 +495,7 @@ fn rework_routes_to_prior_phase_by_id() {
     );
     let mut workflow = executor.bootstrap(
         "WF-rework-target".to_string(),
-        WorkflowRunInput::for_task("TASK-rework".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-rework".to_string(), Some("standard-workflow".to_string())),
     );
     executor.mark_current_phase_success(&mut workflow);
     assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
@@ -523,7 +523,7 @@ fn rework_without_target_reruns_current_phase() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string(), "code-review".to_string()]);
     let mut workflow = executor.bootstrap(
         "WF-rework-current".to_string(),
-        WorkflowRunInput::for_task("TASK-rework-current".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-rework-current".to_string(), Some("standard-workflow".to_string())),
     );
     executor.mark_current_phase_success(&mut workflow);
     assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
@@ -557,7 +557,7 @@ fn phase_with_max_attempts_1_escalates_immediately_on_rework() {
 
     let mut workflow = executor.bootstrap(
         "WF-retry-1".to_string(),
-        WorkflowRunInput::for_task("TASK-retry-1".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-retry-1".to_string(), Some("standard-workflow".to_string())),
     );
 
     workflow.rework_counts.insert("implementation".to_string(), 1);
@@ -598,7 +598,7 @@ fn phase_with_max_attempts_5_allows_more_retries() {
 
     let mut workflow = executor.bootstrap(
         "WF-retry-5".to_string(),
-        WorkflowRunInput::for_task("TASK-retry-5".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-retry-5".to_string(), Some("standard-workflow".to_string())),
     );
 
     for i in 0..4 {
@@ -655,7 +655,7 @@ fn skip_guarded_phase_skips_when_task_type_matches() {
 
     let mut workflow = executor.bootstrap(
         "WF-skip-1".to_string(),
-        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard-workflow".to_string())),
     );
     let task = make_task(TaskType::Docs, Priority::Medium);
 
@@ -683,7 +683,7 @@ fn skip_guarded_phase_does_not_skip_when_guard_does_not_match() {
 
     let mut workflow = executor.bootstrap(
         "WF-skip-2".to_string(),
-        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard-workflow".to_string())),
     );
     let task = make_task(TaskType::Feature, Priority::High);
 
@@ -705,7 +705,7 @@ fn skip_guarded_phase_any_matching_guard_causes_skip() {
 
     let mut workflow = executor.bootstrap(
         "WF-skip-3".to_string(),
-        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard-workflow".to_string())),
     );
     let task = make_task(TaskType::Feature, Priority::Low);
 
@@ -723,7 +723,7 @@ fn skip_guarded_phase_with_empty_skip_if_runs_normally() {
 
     let mut workflow = executor.bootstrap(
         "WF-skip-4".to_string(),
-        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard-workflow".to_string())),
     );
     let task = make_task(TaskType::Docs, Priority::Medium);
 
@@ -757,7 +757,7 @@ fn skip_guarded_phase_skips_first_phase_on_bootstrap() {
 
     let mut workflow = executor.bootstrap(
         "WF-skip-boot".to_string(),
-        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard-workflow".to_string())),
     );
     let task = make_task(TaskType::Chore, Priority::Medium);
 
@@ -784,7 +784,7 @@ fn skip_guarded_phases_skips_consecutive_phases() {
 
     let mut workflow = executor.bootstrap(
         "WF-skip-consec".to_string(),
-        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-skip".to_string(), Some("standard-workflow".to_string())),
     );
     let task = make_task(TaskType::Docs, Priority::Medium);
 
@@ -807,7 +807,7 @@ fn advance_ignores_agent_target_phase_and_uses_default_order() {
     ]);
     let mut workflow = executor.bootstrap(
         "WF-advance-target".to_string(),
-        WorkflowRunInput::for_task("TASK-advance-target".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-advance-target".to_string(), Some("standard-workflow".to_string())),
     );
     assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
 
@@ -860,7 +860,7 @@ fn rework_with_nonexistent_target_falls_back_to_current_phase() {
     );
     let mut workflow = executor.bootstrap(
         "WF-rework-bad-target".to_string(),
-        WorkflowRunInput::for_task("TASK-rework-bad".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-rework-bad".to_string(), Some("standard-workflow".to_string())),
     );
     executor.mark_current_phase_success(&mut workflow);
     assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
@@ -904,7 +904,7 @@ fn advance_can_follow_agent_selected_target_when_yaml_allows_it() {
     );
     let mut workflow = executor.bootstrap(
         "WF-advance-agent-target".to_string(),
-        WorkflowRunInput::for_task("TASK-advance-agent-target".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-advance-agent-target".to_string(), Some("standard-workflow".to_string())),
     );
 
     let decision = PhaseDecision {
@@ -938,7 +938,7 @@ fn default_max_attempts_is_3_when_no_config() {
 
     let mut workflow = executor.bootstrap(
         "WF-default-retry".to_string(),
-        WorkflowRunInput::for_task("TASK-default-retry".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-default-retry".to_string(), Some("standard-workflow".to_string())),
     );
 
     for i in 0..3 {
@@ -1015,7 +1015,7 @@ fn on_verdict_rework_routes_to_configured_phase() {
     );
     let mut workflow = executor.bootstrap(
         "WF-verdict-rework".to_string(),
-        WorkflowRunInput::for_task("TASK-verdict-rework".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-verdict-rework".to_string(), Some("standard-workflow".to_string())),
     );
     executor.mark_current_phase_success(&mut workflow);
     executor.mark_current_phase_success(&mut workflow);
@@ -1117,7 +1117,7 @@ fn on_verdict_advance_skips_to_configured_phase() {
     );
     let mut workflow = executor.bootstrap(
         "WF-verdict-advance".to_string(),
-        WorkflowRunInput::for_task("TASK-verdict-advance".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-verdict-advance".to_string(), Some("standard-workflow".to_string())),
     );
     assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
 
@@ -1143,7 +1143,7 @@ fn no_on_verdict_uses_default_advance_behavior() {
     ]);
     let mut workflow = executor.bootstrap(
         "WF-default-advance".to_string(),
-        WorkflowRunInput::for_task("TASK-default-advance".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-default-advance".to_string(), Some("standard-workflow".to_string())),
     );
     assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
 
@@ -1208,7 +1208,7 @@ fn bootstrap_derives_status_from_machine_state() {
     let executor = WorkflowLifecycleExecutor::new(vec!["requirements".to_string(), "implementation".to_string()]);
     let workflow = executor.bootstrap(
         "WF-derive-test".to_string(),
-        WorkflowRunInput::for_task("TASK-derive".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-derive".to_string(), Some("standard-workflow".to_string())),
     );
     assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
     assert_eq!(workflow.status, WorkflowStatus::Running);
@@ -1219,7 +1219,7 @@ fn status_stays_in_sync_through_lifecycle_transitions() {
     let executor = WorkflowLifecycleExecutor::new(vec!["requirements".to_string(), "implementation".to_string()]);
     let mut workflow = executor.bootstrap(
         "WF-sync-test".to_string(),
-        WorkflowRunInput::for_task("TASK-sync".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-sync".to_string(), Some("standard-workflow".to_string())),
     );
     assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
 
@@ -1244,7 +1244,7 @@ fn cancel_keeps_status_synced_with_machine_state() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
     let mut workflow = executor.bootstrap(
         "WF-cancel-sync".to_string(),
-        WorkflowRunInput::for_task("TASK-cancel-sync".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-cancel-sync".to_string(), Some("standard-workflow".to_string())),
     );
 
     executor.cancel(&mut workflow);
@@ -1257,7 +1257,7 @@ fn failed_phase_keeps_status_synced_with_machine_state() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
     let mut workflow = executor.bootstrap(
         "WF-fail-sync".to_string(),
-        WorkflowRunInput::for_task("TASK-fail-sync".to_string(), Some("standard".to_string())),
+        WorkflowRunInput::for_task("TASK-fail-sync".to_string(), Some("standard-workflow".to_string())),
     );
 
     executor.mark_current_phase_failed(&mut workflow, "test error".to_string());
