@@ -160,7 +160,7 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
     }
 }
 
-pub(crate) fn builtin_workflow_yaml_overlays() -> [(&'static str, &'static str); 2] {
+pub(crate) fn builtin_workflow_yaml_overlays() -> [(&'static str, &'static str); 5] {
     [
         (
             "vision-draft",
@@ -169,6 +169,18 @@ pub(crate) fn builtin_workflow_yaml_overlays() -> [(&'static str, &'static str);
         (
             "vision-refine",
             include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/vision-refine.yaml")),
+        ),
+        (
+            "requirements-draft",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/requirements-draft.yaml")),
+        ),
+        (
+            "requirements-refine",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/requirements-refine.yaml")),
+        ),
+        (
+            "requirements-execute",
+            include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/builtin-workflows/requirements-execute.yaml")),
         ),
     ]
 }

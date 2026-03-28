@@ -2178,3 +2178,109 @@ fn repo_requirements_yaml_parses_requirement_workflows() {
     assert!(workflow_ids.contains(&"req-refine"));
     assert!(workflow_ids.contains(&"req-review"));
 }
+
+#[test]
+fn builtin_workflow_config_includes_all_planning_builtin_refs() {
+    let config = builtin_workflow_config();
+    let workflow_ids = config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
+
+    assert!(
+        workflow_ids.contains(&"builtin/vision-draft"),
+        "builtin config should include builtin/vision-draft"
+    );
+    assert!(
+        workflow_ids.contains(&"builtin/vision-refine"),
+        "builtin config should include builtin/vision-refine"
+    );
+    assert!(
+        workflow_ids.contains(&"builtin/requirements-draft"),
+        "builtin config should include builtin/requirements-draft"
+    );
+    assert!(
+        workflow_ids.contains(&"builtin/requirements-refine"),
+        "builtin config should include builtin/requirements-refine"
+    );
+    assert!(
+        workflow_ids.contains(&"builtin/requirements-execute"),
+        "builtin config should include builtin/requirements-execute"
+    );
+}
+
+#[test]
+fn resolve_workflow_phase_plan_finds_builtin_vision_draft() {
+    let config = builtin_workflow_config();
+    let phases = resolve_workflow_phase_plan(&config, Some("builtin/vision-draft"))
+        .expect("builtin/vision-draft should resolve");
+    assert!(!phases.is_empty(), "builtin/vision-draft should have at least one phase");
+}
+
+#[test]
+fn resolve_workflow_phase_plan_finds_builtin_requirements_execute() {
+    let config = builtin_workflow_config();
+    let phases = resolve_workflow_phase_plan(&config, Some("builtin/requirements-execute"))
+        .expect("builtin/requirements-execute should resolve");
+    assert!(!phases.is_empty(), "builtin/requirements-execute should have at least one phase");
+}
+
+#[test]
+fn project_local_yaml_override_takes_precedence_over_builtin() {
+    let base_config = builtin_workflow_config();
+    let original_vision_draft = base_config
+        .workflows
+        .iter()
+        .find(|w| w.id == "builtin/vision-draft")
+        .expect("original builtin/vision-draft should exist")
+        .clone();
+
+    let override_yaml = r#"
+workflows:
+  - id: builtin/vision-draft
+    name: Overridden Vision Draft
+    description: Project-local override of builtin/vision-draft
+    phases:
+      - requirements
+      - implementation
+"#;
+
+    let override_config = parse_yaml_workflow_config(override_yaml).expect("override YAML should parse");
+    let merged = merge_yaml_into_config(base_config, override_config);
+
+    let merged_vision_draft = merged
+        .workflows
+        .iter()
+        .find(|w| w.id == "builtin/vision-draft")
+        .expect("merged workflow should exist");
+
+    assert_eq!(merged_vision_draft.name, "Overridden Vision Draft");
+    assert_eq!(merged_vision_draft.description, "Project-local override of builtin/vision-draft");
+    assert_eq!(merged_vision_draft.phases.len(), 2);
+    assert_ne!(merged_vision_draft.name, original_vision_draft.name);
+}
+
+#[test]
+fn project_local_requirements_override_takes_precedence() {
+    let base_config = builtin_workflow_config();
+
+    let override_yaml = r#"
+workflows:
+  - id: builtin/requirements-execute
+    name: Custom Requirements Execute
+    description: Project-local override
+    phases:
+      - requirements
+      - implementation
+      - code-review
+"#;
+
+    let override_config = parse_yaml_workflow_config(override_yaml).expect("override YAML should parse");
+    let merged = merge_yaml_into_config(base_config, override_config);
+
+    let merged_workflow = merged
+        .workflows
+        .iter()
+        .find(|w| w.id == "builtin/requirements-execute")
+        .expect("merged workflow should exist");
+
+    assert_eq!(merged_workflow.name, "Custom Requirements Execute");
+    assert_eq!(merged_workflow.phases.len(), 3);
+}
