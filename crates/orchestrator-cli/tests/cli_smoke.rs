@@ -286,3 +286,63 @@ fn help_includes_workflow_monitor_command() -> Result<(), Box<dyn std::error::Er
 
     Ok(())
 }
+
+#[test]
+fn quick_start_commands_exist_in_binary() -> Result<(), Box<dyn std::error::Error>> {
+    let binary = assert_cmd::cargo::cargo_bin!("ao");
+
+    // Define commands and flags documented in docs/getting-started/quick-start.md
+    let commands_to_verify = vec![
+        // Basic commands
+        ("ao doctor", vec![]),
+        ("ao setup", vec![]),
+        // Task commands
+        ("ao task create", vec!["--title", "--description", "--task-type", "--priority"]),
+        ("ao task status", vec!["--id", "--status"]),
+        ("ao task stats", vec![]),
+        // Workflow commands
+        ("ao workflow run", vec!["--task-id", "--sync"]),
+        ("ao workflow list", vec![]),
+        // Daemon commands
+        ("ao daemon start", vec!["--autonomous"]),
+        ("ao daemon status", vec![]),
+        // Output commands
+        ("ao output monitor", vec![]),
+        // Status commands
+        ("ao status", vec![]),
+        // Requirements commands
+        ("ao requirements create", vec!["--title", "--priority", "--acceptance-criterion"]),
+        ("ao requirements execute", vec!["--id"]),
+    ];
+
+    for (cmd_str, expected_flags) in commands_to_verify {
+        let parts: Vec<&str> = cmd_str.split_whitespace().skip(1).collect();
+
+        // Get help for the command to verify it exists
+        let help_output = Command::new(&binary)
+            .args(&parts)
+            .arg("--help")
+            .output()
+            .map_err(|e| format!("Failed to run 'ao {} --help': {}", parts.join(" "), e))?;
+
+        assert!(
+            help_output.status.success(),
+            "Command 'ao {}' should exist and provide help",
+            parts.join(" ")
+        );
+
+        let help_stdout = String::from_utf8(help_output.stdout)?;
+
+        // Verify expected flags exist in help output
+        for flag in expected_flags {
+            assert!(
+                help_stdout.contains(flag),
+                "Flag '{}' should be documented for 'ao {}' command",
+                flag,
+                parts.join(" ")
+            );
+        }
+    }
+
+    Ok(())
+}
