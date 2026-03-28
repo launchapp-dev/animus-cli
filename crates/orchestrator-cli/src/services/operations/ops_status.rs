@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::process::{Command as ProcessCommand, Stdio};
@@ -17,6 +17,7 @@ use crate::print_value;
 const STATUS_SCHEMA: &str = "ao.status.v1";
 const RECENT_COMPLETIONS_LIMIT: usize = 5;
 const RECENT_FAILURES_LIMIT: usize = 3;
+const STALE_TASK_THRESHOLD_HOURS: i64 = 72;
 const CI_PROVIDER_GITHUB: &str = "github";
 const GH_RUN_LIST_FIELDS: &str =
     "databaseId,displayTitle,name,workflowName,status,conclusion,event,headBranch,headSha,createdAt,updatedAt,url";
@@ -31,6 +32,7 @@ struct StatusDashboard {
     task_summary: TaskSummarySlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
+    stale_tasks: StaleTasks,
     ci: CiStatusSlice,
 }
 
@@ -96,6 +98,23 @@ struct RecentFailuresSlice {
     entries: Vec<RecentFailureEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleTasks {
+    available: bool,
+    entries: Vec<StaleTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleTaskEntry {
+    task_id: String,
+    title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workflow_id: Option<String>,
+    last_activity_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -192,12 +211,14 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let daemon_service = hub.daemon();
     let tasks_service = hub.tasks();
     let task_stats_service = tasks_service.clone();
+    let project_root_str = project_root.to_string();
 
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
+    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, stale_tasks_result, ci_slice) = tokio::join!(
         daemon_service.health(),
         tasks_service.list(),
         task_stats_service.statistics(),
         collect_workflow_status_snapshot(project_root),
+        collect_stale_tasks(project_root_str.clone()),
         collect_ci_status(project_root),
     );
 
@@ -205,6 +226,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
+    let (stale_tasks, stale_tasks_error) = split_result(stale_tasks_result);
 
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
@@ -227,6 +249,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
             workflows_error,
         ),
+        stale_tasks: build_stale_tasks_slice(stale_tasks.as_deref(), stale_tasks_error),
         ci: ci_slice,
     };
 
@@ -416,6 +439,14 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
     }
 }
 
+fn build_stale_tasks_slice(stale_tasks: Option<&[StaleTaskEntry]>, error: Option<String>) -> StaleTasks {
+    StaleTasks {
+        available: stale_tasks.is_some(),
+        entries: stale_tasks.map(|entries| entries.to_vec()).unwrap_or_default(),
+        error,
+    }
+}
+
 fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc>, Option<String>) {
     let failed_phase = workflow
         .phases
@@ -453,6 +484,29 @@ fn load_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSna
     })
 }
 
+fn extract_recent_failures(workflows: &[OrchestratorWorkflow], limit: usize) -> Vec<RecentFailureEntry> {
+    let mut entries: Vec<RecentFailureEntry> = workflows
+        .iter()
+        .filter(|workflow| workflow.status == WorkflowStatus::Failed)
+        .map(|workflow| {
+            let (phase_id, failed_at, phase_error) = latest_failed_phase(workflow);
+            RecentFailureEntry {
+                workflow_id: workflow.id.clone(),
+                task_id: workflow.task_id.clone(),
+                phase_id,
+                failed_at,
+                failure_reason: workflow.failure_reason.clone().or(phase_error),
+            }
+        })
+        .collect();
+
+    entries.sort_by(|left, right| {
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    });
+    entries.truncate(limit);
+    entries
+}
+
 fn load_recent_failures(project_root: &str, limit: usize) -> Result<Vec<RecentFailureEntry>> {
     let candidate_limit = i64::try_from(limit.saturating_mul(32)).context("recent failure limit overflow")?;
     let conn = open_project_db(Path::new(project_root))?;
@@ -470,34 +524,90 @@ fn load_recent_failures(project_root: &str, limit: usize) -> Result<Vec<RecentFa
     drop(conn);
 
     let manager = WorkflowStateManager::new(project_root);
-    let mut seen = HashSet::new();
-    let mut entries = Vec::new();
+    let mut workflows = Vec::new();
     for workflow_id in candidate_ids {
-        if !seen.insert(workflow_id.clone()) {
-            continue;
+        if let Ok(workflow) = manager.load(&workflow_id) {
+            workflows.push(workflow);
         }
-        let Ok(workflow) = manager.load(&workflow_id) else {
-            continue;
-        };
-        if workflow.status != WorkflowStatus::Failed {
-            continue;
-        }
-
-        let (phase_id, failed_at, phase_error) = latest_failed_phase(&workflow);
-        entries.push(RecentFailureEntry {
-            workflow_id: workflow.id.clone(),
-            task_id: workflow.task_id.clone(),
-            phase_id,
-            failed_at,
-            failure_reason: workflow.failure_reason.clone().or(phase_error),
-        });
     }
 
-    entries.sort_by(|left, right| {
-        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    Ok(extract_recent_failures(&workflows, limit))
+}
+
+async fn collect_stale_tasks(project_root: String) -> Result<Vec<StaleTaskEntry>> {
+    tokio::task::spawn_blocking(move || load_stale_tasks(project_root.as_str()))
+        .await
+        .map_err(|error| anyhow!("failed to collect stale tasks: {error}"))?
+}
+
+fn load_stale_tasks(project_root: &str) -> Result<Vec<StaleTaskEntry>> {
+    let conn = open_project_db(Path::new(project_root))?;
+    let now = Utc::now();
+    let threshold = now - chrono::Duration::hours(STALE_TASK_THRESHOLD_HOURS);
+
+    let mut stmt = conn.prepare(
+        "SELECT t.id, t.json FROM tasks t WHERE t.status = 'in_progress'"
+    )?;
+
+    let tasks_json: Vec<(String, String)> = stmt
+        .query_map([], |row| {
+            let json_str: String = row.get(1)?;
+            Ok((row.get::<_, String>(0)?, json_str))
+        })?
+        .filter_map(|row| row.ok())
+        .collect();
+    drop(stmt);
+
+    // Query the most recent checkpoint timestamp for each workflow
+    let mut stmt = conn.prepare(
+        "SELECT workflow_id, MAX(timestamp) as latest_timestamp FROM checkpoints GROUP BY workflow_id"
+    )?;
+
+    let workflow_timestamps: HashMap<String, String> = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .filter_map(|row| row.ok())
+        .collect();
+    drop(stmt);
+    drop(conn);
+
+    let mut stale_entries = Vec::new();
+
+    for (task_id, json_str) in tasks_json {
+        let task: OrchestratorTask = match serde_json::from_str(&json_str) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+
+        let workflow_id = task.workflow_metadata.workflow_id.clone();
+        let last_activity = if let Some(wf_id) = &workflow_id {
+            workflow_timestamps
+                .get(wf_id)
+                .and_then(|ts_str| DateTime::parse_from_rfc3339(ts_str).ok())
+                .map(|dt| dt.with_timezone(&Utc))
+        } else {
+            task.metadata.started_at.clone()
+        };
+
+        if let Some(activity_time) = last_activity {
+            if activity_time < threshold {
+                stale_entries.push(StaleTaskEntry {
+                    task_id,
+                    title: task.title,
+                    workflow_id,
+                    last_activity_at: activity_time,
+                });
+            }
+        }
+    }
+
+    stale_entries.sort_by(|left, right| {
+        left.last_activity_at.cmp(&right.last_activity_at)
+            .then_with(|| left.task_id.cmp(&right.task_id))
     });
-    entries.truncate(limit);
-    Ok(entries)
+
+    Ok(stale_entries)
 }
 
 async fn collect_ci_status(project_root: &str) -> CiStatusSlice {
@@ -638,6 +748,26 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         }
     }
     if let Some(error) = dashboard.active_agents.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Stale Tasks");
+    if dashboard.stale_tasks.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.stale_tasks.entries {
+            let _ = writeln!(
+                &mut output,
+                "  - task_id={} title={} workflow_id={} last_activity_at={}",
+                entry.task_id,
+                entry.title,
+                entry.workflow_id.as_deref().unwrap_or("none"),
+                entry.last_activity_at.to_rfc3339()
+            );
+        }
+    }
+    if let Some(error) = dashboard.stale_tasks.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);

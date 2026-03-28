@@ -197,7 +197,7 @@ fn recent_failures_are_sorted_limited_and_fallback_current_phase() {
         ),
     ];
 
-    let entries = recent_failures(&workflows);
+    let entries = extract_recent_failures(&workflows, 3);
     assert_eq!(entries.len(), 3, "entries should be capped at 3");
     assert_eq!(entries[0].workflow_id, "WF-005");
     assert_eq!(entries[1].workflow_id, "WF-002");
@@ -456,6 +456,7 @@ fn render_status_dashboard_uses_required_section_order() {
         },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
+        stale_tasks: StaleTasks { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
             available: false,
@@ -468,13 +469,15 @@ fn render_status_dashboard_uses_required_section_order() {
     let output = render_status_dashboard(&dashboard);
     let daemon_idx = output.find("Daemon").expect("daemon section should exist");
     let agents_idx = output.find("Active Agents").expect("active agents section should exist");
+    let stale_idx = output.find("Stale Tasks").expect("stale tasks section should exist");
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
-    assert!(agents_idx < summary_idx);
+    assert!(agents_idx < stale_idx);
+    assert!(stale_idx < summary_idx);
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
