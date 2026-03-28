@@ -31,6 +31,7 @@ struct StatusDashboard {
     task_summary: TaskSummarySlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
+    stale_items: StaleItemsSlice,
     ci: CiStatusSlice,
 }
 
@@ -61,6 +62,8 @@ struct ActiveAgentAssignment {
     workflow_id: String,
     phase_id: String,
     attributed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    linked_requirement_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -106,6 +109,22 @@ struct RecentFailureEntry {
     failed_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleItemsSlice {
+    available: bool,
+    entries: Vec<StaleItemEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleItemEntry {
+    id: String,
+    title: String,
+    status: String,
+    last_updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug)]
@@ -206,10 +225,11 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (task_stats, task_stats_error) = split_result(task_stats_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
 
+    let now = Utc::now();
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
         project_root: project_root.to_string(),
-        generated_at: Utc::now(),
+        generated_at: now,
         daemon: build_daemon_slice(daemon_health.as_ref(), daemon_error.clone()),
         active_agents: build_active_agents_slice(
             daemon_health.as_ref(),
@@ -222,11 +242,12 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             tasks.as_deref(),
             combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
         ),
-        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
+        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error.clone()),
         recent_failures: build_recent_failures_slice(
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
             workflows_error,
         ),
+        stale_items: build_stale_items_slice(tasks.as_deref(), now, tasks_error),
         ci: ci_slice,
     };
 
@@ -307,6 +328,8 @@ fn active_agent_assignments(
     tasks: &[OrchestratorTask],
 ) -> Vec<ActiveAgentAssignment> {
     let task_titles: HashMap<&str, &str> = tasks.iter().map(|task| (task.id.as_str(), task.title.as_str())).collect();
+    let task_requirements: HashMap<&str, &[String]> =
+        tasks.iter().map(|task| (task.id.as_str(), task.linked_requirements.as_slice())).collect();
 
     let mut running: Vec<&OrchestratorWorkflow> =
         workflows.iter().filter(|workflow| workflow.status == WorkflowStatus::Running).collect();
@@ -316,12 +339,19 @@ fn active_agent_assignments(
     let mut assignments: Vec<ActiveAgentAssignment> = running
         .into_iter()
         .take(attributed_count)
-        .map(|workflow| ActiveAgentAssignment {
-            task_id: workflow.task_id.clone(),
-            task_title: task_titles.get(workflow.task_id.as_str()).copied().unwrap_or("Unknown task").to_string(),
-            workflow_id: workflow.id.clone(),
-            phase_id: workflow_active_phase(workflow),
-            attributed: true,
+        .map(|workflow| {
+            let linked_requirement_ids = task_requirements
+                .get(workflow.task_id.as_str())
+                .map(|reqs| reqs.to_vec())
+                .unwrap_or_default();
+            ActiveAgentAssignment {
+                task_id: workflow.task_id.clone(),
+                task_title: task_titles.get(workflow.task_id.as_str()).copied().unwrap_or("Unknown task").to_string(),
+                workflow_id: workflow.id.clone(),
+                phase_id: workflow_active_phase(workflow),
+                attributed: true,
+                linked_requirement_ids,
+            }
         })
         .collect();
 
@@ -333,6 +363,7 @@ fn active_agent_assignments(
             workflow_id: format!("unknown-{}", placeholder_index + 1),
             phase_id: "unknown".to_string(),
             attributed: false,
+            linked_requirement_ids: Vec::new(),
         });
     }
 
@@ -414,6 +445,45 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
         entries: failures.map(|entries| entries.to_vec()).unwrap_or_default(),
         error,
     }
+}
+
+fn build_stale_items_slice(tasks: Option<&[OrchestratorTask]>, now: DateTime<Utc>, error: Option<String>) -> StaleItemsSlice {
+    StaleItemsSlice {
+        available: tasks.is_some(),
+        entries: tasks.map(|tasks| stale_items(tasks, now)).unwrap_or_default(),
+        error,
+    }
+}
+
+fn stale_items(tasks: &[OrchestratorTask], now: DateTime<Utc>) -> Vec<StaleItemEntry> {
+    const STALE_DAYS_THRESHOLD: i64 = 7;
+    let stale_threshold = now.checked_sub_signed(chrono::Duration::days(STALE_DAYS_THRESHOLD));
+
+    let mut entries: Vec<StaleItemEntry> = tasks
+        .iter()
+        .filter(|task| {
+            matches!(task.status, TaskStatus::InProgress | TaskStatus::Ready)
+        })
+        .filter_map(|task| {
+            let last_updated = task.metadata.updated_at.with_timezone(&Utc);
+            if let Some(threshold) = stale_threshold {
+                if last_updated < threshold {
+                    return Some(StaleItemEntry {
+                        id: task.id.clone(),
+                        title: task.title.clone(),
+                        status: task.status.to_string(),
+                        last_updated_at: last_updated,
+                    });
+                }
+            }
+            None
+        })
+        .collect();
+
+    entries.sort_by(|left, right| {
+        left.last_updated_at.cmp(&right.last_updated_at).then_with(|| left.id.cmp(&right.id))
+    });
+    entries
 }
 
 fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc>, Option<String>) {
@@ -630,10 +700,15 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         let _ = writeln!(&mut output, "  entries: none");
     } else {
         for entry in &dashboard.active_agents.assignments {
+            let reqs_str = if entry.linked_requirement_ids.is_empty() {
+                "none".to_string()
+            } else {
+                entry.linked_requirement_ids.join(",")
+            };
             let _ = writeln!(
                 &mut output,
-                "  - task_id={} task_title={} workflow_id={} phase_id={} attributed={}",
-                entry.task_id, entry.task_title, entry.workflow_id, entry.phase_id, entry.attributed
+                "  - task_id={} task_title={} workflow_id={} phase_id={} attributed={} linked_requirement_ids={}",
+                entry.task_id, entry.task_title, entry.workflow_id, entry.phase_id, entry.attributed, reqs_str
             );
         }
     }
@@ -689,6 +764,26 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         }
     }
     if let Some(error) = dashboard.recent_failures.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Stale Items");
+    if dashboard.stale_items.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.stale_items.entries {
+            let _ = writeln!(
+                &mut output,
+                "  - id={} title={} status={} last_updated_at={}",
+                entry.id,
+                entry.title,
+                entry.status,
+                entry.last_updated_at.to_rfc3339()
+            );
+        }
+    }
+    if let Some(error) = dashboard.stale_items.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);

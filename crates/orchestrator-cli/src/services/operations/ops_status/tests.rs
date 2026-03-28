@@ -105,6 +105,29 @@ fn make_workflow(
     }
 }
 
+fn recent_failures(workflows: &[OrchestratorWorkflow]) -> Vec<RecentFailureEntry> {
+    let mut entries: Vec<RecentFailureEntry> = workflows
+        .iter()
+        .filter(|workflow| workflow.status == WorkflowStatus::Failed)
+        .map(|workflow| {
+            let (phase_id, failed_at, phase_error) = latest_failed_phase(workflow);
+            RecentFailureEntry {
+                workflow_id: workflow.id.clone(),
+                task_id: workflow.task_id.clone(),
+                phase_id,
+                failed_at,
+                failure_reason: workflow.failure_reason.clone().or(phase_error),
+            }
+        })
+        .collect();
+
+    entries.sort_by(|left, right| {
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    });
+    entries.truncate(3);
+    entries
+}
+
 #[test]
 fn recent_completions_are_sorted_and_limited() {
     let tasks = vec![
@@ -239,14 +262,18 @@ fn active_agent_assignments_fill_unknown_slots() {
         vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
         None,
     )];
-    let tasks = vec![make_task("TASK-001", "Implement status", TaskStatus::InProgress, None)];
+    let mut task = make_task("TASK-001", "Implement status", TaskStatus::InProgress, None);
+    task.linked_requirements = vec!["REQ-001".to_string(), "REQ-002".to_string()];
+    let tasks = vec![task];
 
     let assignments = active_agent_assignments(3, &workflows, &tasks);
     assert_eq!(assignments.len(), 3);
     assert!(assignments[0].attributed);
     assert_eq!(assignments[0].task_id, "TASK-001");
+    assert_eq!(assignments[0].linked_requirement_ids, vec!["REQ-001", "REQ-002"]);
     assert_eq!(assignments[1].workflow_id, "unknown-1");
     assert!(!assignments[1].attributed);
+    assert!(assignments[1].linked_requirement_ids.is_empty());
 }
 
 #[test]
@@ -420,6 +447,109 @@ fn ci_status_reports_lookup_errors_non_fatally() {
 }
 
 #[test]
+fn stale_items_includes_in_progress_and_ready_tasks_older_than_7_days() {
+    let now = parse_time("2026-02-27T00:00:00Z");
+    let old_updated_at = parse_time("2026-02-19T00:00:00Z"); // 8 days old
+    let recent_updated_at = parse_time("2026-02-25T00:00:00Z"); // 2 days old
+
+    let tasks = vec![
+        OrchestratorTask {
+            id: "TASK-001".to_string(),
+            title: "Stale in-progress".to_string(),
+            description: String::new(),
+            task_type: TaskType::Feature,
+            status: TaskStatus::InProgress,
+            blocked_reason: None,
+            blocked_at: None,
+            blocked_phase: None,
+            blocked_by: None,
+            priority: Priority::Medium,
+            risk: RiskLevel::Medium,
+            scope: Scope::Medium,
+            complexity: Complexity::Medium,
+            impact_area: Vec::new(),
+            assignee: Assignee::Unassigned,
+            estimated_effort: None,
+            linked_requirements: Vec::new(),
+            linked_architecture_entities: Vec::new(),
+            dependencies: Vec::new(),
+            checklist: Vec::new(),
+            tags: Vec::new(),
+            workflow_metadata: WorkflowMetadata::default(),
+            worktree_path: None,
+            branch_name: None,
+            metadata: TaskMetadata {
+                created_at: old_updated_at,
+                updated_at: old_updated_at,
+                created_by: "test".to_string(),
+                updated_by: "test".to_string(),
+                started_at: None,
+                completed_at: None,
+                version: 1,
+            },
+            deadline: None,
+            paused: false,
+            cancelled: false,
+            resolution: None,
+            resource_requirements: ResourceRequirements::default(),
+            consecutive_dispatch_failures: None,
+            last_dispatch_failure_at: None,
+            dispatch_history: Vec::new(),
+        },
+        OrchestratorTask {
+            id: "TASK-002".to_string(),
+            title: "Fresh in-progress".to_string(),
+            metadata: TaskMetadata {
+                created_at: recent_updated_at,
+                updated_at: recent_updated_at,
+                created_by: "test".to_string(),
+                updated_by: "test".to_string(),
+                started_at: None,
+                completed_at: None,
+                version: 1,
+            },
+            status: TaskStatus::InProgress,
+            ..make_task("TASK-002", "Fresh in-progress", TaskStatus::InProgress, None)
+        },
+        OrchestratorTask {
+            id: "TASK-003".to_string(),
+            title: "Stale ready".to_string(),
+            status: TaskStatus::Ready,
+            metadata: TaskMetadata {
+                created_at: old_updated_at,
+                updated_at: old_updated_at,
+                created_by: "test".to_string(),
+                updated_by: "test".to_string(),
+                started_at: None,
+                completed_at: None,
+                version: 1,
+            },
+            ..make_task("TASK-003", "Stale ready", TaskStatus::Ready, None)
+        },
+        OrchestratorTask {
+            id: "TASK-004".to_string(),
+            title: "Stale done (should not be included)".to_string(),
+            status: TaskStatus::Done,
+            metadata: TaskMetadata {
+                created_at: old_updated_at,
+                updated_at: old_updated_at,
+                created_by: "test".to_string(),
+                updated_by: "test".to_string(),
+                started_at: None,
+                completed_at: Some(old_updated_at),
+                version: 1,
+            },
+            ..make_task("TASK-004", "Stale done", TaskStatus::Done, Some(old_updated_at))
+        },
+    ];
+
+    let entries = stale_items(&tasks, now);
+    assert_eq!(entries.len(), 2, "only in-progress and ready tasks should be included");
+    assert_eq!(entries[0].id, "TASK-001");
+    assert_eq!(entries[1].id, "TASK-003");
+}
+
+#[test]
 fn render_status_dashboard_uses_required_section_order() {
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
@@ -456,6 +586,7 @@ fn render_status_dashboard_uses_required_section_order() {
         },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
+        stale_items: StaleItemsSlice { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
             available: false,
@@ -471,11 +602,13 @@ fn render_status_dashboard_uses_required_section_order() {
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
+    let stale_idx = output.find("Stale Items").expect("stale items section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
-    assert!(failures_idx < ci_idx);
+    assert!(failures_idx < stale_idx);
+    assert!(stale_idx < ci_idx);
 }
