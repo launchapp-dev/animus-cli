@@ -11,18 +11,31 @@ fn parse_time(value: &str) -> DateTime<Utc> {
 }
 
 fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<DateTime<Utc>>) -> OrchestratorTask {
+    make_task_with_metadata(id, title, status, completed_at, None, None, Priority::Medium)
+}
+
+fn make_task_with_metadata(
+    id: &str,
+    title: &str,
+    status: TaskStatus,
+    completed_at: Option<DateTime<Utc>>,
+    updated_at: Option<DateTime<Utc>>,
+    blocked_reason: Option<&str>,
+    priority: Priority,
+) -> OrchestratorTask {
     let now = parse_time("2026-02-01T00:00:00Z");
+    let updated = updated_at.unwrap_or(now);
     OrchestratorTask {
         id: id.to_string(),
         title: title.to_string(),
         description: String::new(),
         task_type: TaskType::Feature,
         status,
-        blocked_reason: None,
+        blocked_reason: blocked_reason.map(str::to_string),
         blocked_at: None,
         blocked_phase: None,
         blocked_by: None,
-        priority: Priority::Medium,
+        priority,
         risk: RiskLevel::Medium,
         scope: Scope::Medium,
         complexity: Complexity::Medium,
@@ -39,7 +52,7 @@ fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<Dat
         branch_name: None,
         metadata: TaskMetadata {
             created_at: now,
-            updated_at: now,
+            updated_at: updated,
             created_by: "test".to_string(),
             updated_by: "test".to_string(),
             started_at: None,
@@ -456,6 +469,8 @@ fn render_status_dashboard_uses_required_section_order() {
         },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
+        blocked_tasks: BlockedTasksSlice { available: true, entries: Vec::new(), error: None },
+        stale_tasks: StaleTasksSlice { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
             available: false,
@@ -471,11 +486,222 @@ fn render_status_dashboard_uses_required_section_order() {
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
+    let blocked_idx = output.find("Blocked Tasks").expect("blocked tasks section should exist");
+    let stale_idx = output.find("Stale Tasks").expect("stale tasks section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
-    assert!(failures_idx < ci_idx);
+    assert!(failures_idx < blocked_idx);
+    assert!(blocked_idx < stale_idx);
+    assert!(stale_idx < ci_idx);
+}
+
+#[test]
+fn blocked_tasks_filters_and_sorts_by_priority_then_updated_at() {
+    let now = parse_time("2026-02-01T00:00:00Z");
+    let earlier = parse_time("2026-01-31T00:00:00Z");
+
+    let tasks = vec![
+        make_task_with_metadata(
+            "TASK-001",
+            "Low priority blocked",
+            TaskStatus::Blocked,
+            None,
+            Some(now),
+            Some("waiting for review"),
+            Priority::Low,
+        ),
+        make_task_with_metadata(
+            "TASK-002",
+            "High priority blocked older",
+            TaskStatus::Blocked,
+            None,
+            Some(earlier),
+            Some("dependency issue"),
+            Priority::High,
+        ),
+        make_task_with_metadata(
+            "TASK-003",
+            "High priority blocked newer",
+            TaskStatus::Blocked,
+            None,
+            Some(now),
+            Some("critical blocker"),
+            Priority::High,
+        ),
+        make_task("TASK-004", "Not blocked", TaskStatus::InProgress, None),
+    ];
+
+    let entries = blocked_tasks(&tasks);
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries[0].task_id, "TASK-003", "high priority with newer updated_at should come first");
+    assert_eq!(entries[1].task_id, "TASK-002", "high priority with older updated_at should come second");
+    assert_eq!(entries[2].task_id, "TASK-001", "low priority should come last");
+}
+
+#[test]
+fn blocked_tasks_uses_blocked_reason_or_dependency() {
+    let mut task_with_reason = make_task("TASK-001", "Has reason", TaskStatus::Blocked, None);
+    task_with_reason.blocked_reason = Some("custom reason".to_string());
+
+    let mut task_with_blocked_by = make_task("TASK-002", "Has dependency", TaskStatus::Blocked, None);
+    task_with_blocked_by.blocked_by = Some("TASK-001".to_string());
+
+    let mut task_with_nothing = make_task("TASK-003", "No info", TaskStatus::Blocked, None);
+
+    let tasks = vec![task_with_reason, task_with_blocked_by, task_with_nothing];
+
+    let entries = blocked_tasks(&tasks);
+    assert_eq!(entries.len(), 3);
+
+    let entry1 = entries.iter().find(|e| e.task_id == "TASK-001").unwrap();
+    assert_eq!(entry1.blocked_reason, "custom reason");
+
+    let entry2 = entries.iter().find(|e| e.task_id == "TASK-002").unwrap();
+    assert_eq!(entry2.blocked_reason, "dependency: TASK-001");
+
+    let entry3 = entries.iter().find(|e| e.task_id == "TASK-003").unwrap();
+    assert_eq!(entry3.blocked_reason, "blocked");
+}
+
+#[test]
+fn blocked_tasks_handles_on_hold_status() {
+    let tasks = vec![
+        make_task_with_metadata(
+            "TASK-001",
+            "On hold task",
+            TaskStatus::OnHold,
+            None,
+            None,
+            Some("on hold reason"),
+            Priority::Medium,
+        ),
+        make_task("TASK-002", "Ready task", TaskStatus::Ready, None),
+    ];
+
+    let entries = blocked_tasks(&tasks);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].task_id, "TASK-001");
+}
+
+#[test]
+fn blocked_tasks_capped_at_limit() {
+    let mut tasks = vec![];
+    for i in 0..15 {
+        tasks.push(make_task_with_metadata(
+            &format!("TASK-{:03}", i),
+            &format!("Task {}", i),
+            TaskStatus::Blocked,
+            None,
+            None,
+            Some("blocked"),
+            Priority::Medium,
+        ));
+    }
+
+    let entries = blocked_tasks(&tasks);
+    assert_eq!(entries.len(), 10, "should be capped at 10");
+}
+
+#[test]
+fn stale_tasks_filters_in_progress_by_threshold() {
+    let base_time = parse_time("2026-02-01T00:00:00Z");
+    let stale_update = parse_time("2026-01-30T00:00:00Z");
+    let recent_update = parse_time("2026-02-01T00:00:00Z");
+
+    let tasks = vec![
+        make_task_with_metadata(
+            "TASK-001",
+            "Very stale",
+            TaskStatus::InProgress,
+            None,
+            Some(parse_time("2026-01-01T00:00:00Z")),
+            None,
+            Priority::Medium,
+        ),
+        make_task_with_metadata(
+            "TASK-002",
+            "Stale",
+            TaskStatus::InProgress,
+            None,
+            Some(stale_update),
+            None,
+            Priority::Medium,
+        ),
+        make_task_with_metadata(
+            "TASK-003",
+            "Recent",
+            TaskStatus::InProgress,
+            None,
+            Some(recent_update),
+            None,
+            Priority::Medium,
+        ),
+        make_task("TASK-004", "Blocked not counted", TaskStatus::Blocked, None),
+    ];
+
+    let entries = stale_tasks(&tasks);
+    assert!(entries.len() >= 2, "should include tasks older than 24h");
+    assert!(entries.iter().all(|e| e.task_id != "TASK-003"), "recent task should not be included");
+    assert!(entries.iter().all(|e| e.task_id != "TASK-004"), "blocked task should not be included");
+}
+
+#[test]
+fn stale_tasks_sorted_by_hours_descending() {
+    let base_time = parse_time("2026-02-01T00:00:00Z");
+    let tasks = vec![
+        make_task_with_metadata(
+            "TASK-001",
+            "48 hours old",
+            TaskStatus::InProgress,
+            None,
+            Some(parse_time("2026-01-30T00:00:00Z")),
+            None,
+            Priority::Medium,
+        ),
+        make_task_with_metadata(
+            "TASK-002",
+            "72 hours old",
+            TaskStatus::InProgress,
+            None,
+            Some(parse_time("2026-01-29T00:00:00Z")),
+            None,
+            Priority::Medium,
+        ),
+        make_task_with_metadata(
+            "TASK-003",
+            "25 hours old",
+            TaskStatus::InProgress,
+            None,
+            Some(parse_time("2026-01-31T23:00:00Z")),
+            None,
+            Priority::Medium,
+        ),
+    ];
+
+    let entries = stale_tasks(&tasks);
+    assert!(entries.len() >= 2);
+    assert!(entries[0].hours_stale >= entries[1].hours_stale, "should be sorted descending");
+}
+
+#[test]
+fn stale_tasks_capped_at_limit() {
+    let mut tasks = vec![];
+    for i in 0..15 {
+        tasks.push(make_task_with_metadata(
+            &format!("TASK-{:03}", i),
+            &format!("Task {}", i),
+            TaskStatus::InProgress,
+            None,
+            Some(parse_time("2026-01-01T00:00:00Z")),
+            None,
+            Priority::Medium,
+        ));
+    }
+
+    let entries = stale_tasks(&tasks);
+    assert_eq!(entries.len(), 10, "should be capped at 10");
 }

@@ -7,8 +7,8 @@ use std::sync::Arc;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, ServiceHub, TaskStatistics,
-    TaskStatus, WorkflowPhaseStatus, WorkflowStateManager, WorkflowStatus,
+    open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, Priority, ServiceHub,
+    TaskStatistics, TaskStatus, WorkflowPhaseStatus, WorkflowStateManager, WorkflowStatus,
 };
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,9 @@ use crate::print_value;
 const STATUS_SCHEMA: &str = "ao.status.v1";
 const RECENT_COMPLETIONS_LIMIT: usize = 5;
 const RECENT_FAILURES_LIMIT: usize = 3;
+const BLOCKED_TASKS_LIMIT: usize = 10;
+const STALE_TASKS_LIMIT: usize = 10;
+const STALE_THRESHOLD_HOURS: i64 = 24;
 const CI_PROVIDER_GITHUB: &str = "github";
 const GH_RUN_LIST_FIELDS: &str =
     "databaseId,displayTitle,name,workflowName,status,conclusion,event,headBranch,headSha,createdAt,updatedAt,url";
@@ -31,6 +34,8 @@ struct StatusDashboard {
     task_summary: TaskSummarySlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
+    blocked_tasks: BlockedTasksSlice,
+    stale_tasks: StaleTasksSlice,
     ci: CiStatusSlice,
 }
 
@@ -106,6 +111,36 @@ struct RecentFailureEntry {
     failed_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedTasksSlice {
+    available: bool,
+    entries: Vec<BlockedTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedTaskEntry {
+    task_id: String,
+    title: String,
+    blocked_reason: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleTasksSlice {
+    available: bool,
+    entries: Vec<StaleTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleTaskEntry {
+    task_id: String,
+    title: String,
+    hours_stale: i64,
 }
 
 #[derive(Debug)]
@@ -222,11 +257,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             tasks.as_deref(),
             combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
         ),
-        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
+        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error.clone()),
         recent_failures: build_recent_failures_slice(
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
-            workflows_error,
+            workflows_error.clone(),
         ),
+        blocked_tasks: build_blocked_tasks_slice(tasks.as_deref(), tasks_error.clone()),
+        stale_tasks: build_stale_tasks_slice(tasks.as_deref(), tasks_error),
         ci: ci_slice,
     };
 
@@ -414,6 +451,80 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
         entries: failures.map(|entries| entries.to_vec()).unwrap_or_default(),
         error,
     }
+}
+
+fn build_blocked_tasks_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> BlockedTasksSlice {
+    BlockedTasksSlice {
+        available: tasks.is_some(),
+        entries: tasks.map(blocked_tasks).unwrap_or_default(),
+        error,
+    }
+}
+
+fn blocked_tasks(tasks: &[OrchestratorTask]) -> Vec<BlockedTaskEntry> {
+    let task_map: HashMap<&str, &OrchestratorTask> = tasks.iter().map(|t| (t.id.as_str(), t)).collect();
+    let mut entries: Vec<BlockedTaskEntry> = tasks
+        .iter()
+        .filter(|task| task.status.is_blocked())
+        .map(|task| {
+            let blocked_reason = task
+                .blocked_reason
+                .as_ref()
+                .cloned()
+                .or_else(|| task.blocked_by.as_ref().map(|dep_id| format!("dependency: {dep_id}")))
+                .unwrap_or_else(|| "blocked".to_string());
+            BlockedTaskEntry {
+                task_id: task.id.clone(),
+                title: task.title.clone(),
+                blocked_reason,
+            }
+        })
+        .collect();
+    entries.sort_by(|left, right| {
+        let left_task = task_map.get(left.task_id.as_str());
+        let right_task = task_map.get(right.task_id.as_str());
+        match (left_task, right_task) {
+            (Some(left_t), Some(right_t)) => {
+                right_t.priority.cmp(&left_t.priority).then_with(|| right_t.metadata.updated_at.cmp(&left_t.metadata.updated_at))
+            }
+            _ => std::cmp::Ordering::Equal,
+        }
+    });
+    entries.truncate(BLOCKED_TASKS_LIMIT);
+    entries
+}
+
+fn build_stale_tasks_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> StaleTasksSlice {
+    StaleTasksSlice {
+        available: tasks.is_some(),
+        entries: tasks.map(stale_tasks).unwrap_or_default(),
+        error,
+    }
+}
+
+fn stale_tasks(tasks: &[OrchestratorTask]) -> Vec<StaleTaskEntry> {
+    let now = Utc::now();
+    let mut entries: Vec<StaleTaskEntry> = tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::InProgress)
+        .filter_map(|task| {
+            let updated_at = task.metadata.updated_at;
+            let duration = now.signed_duration_since(updated_at);
+            let hours_stale = duration.num_hours();
+            if hours_stale >= STALE_THRESHOLD_HOURS {
+                Some(StaleTaskEntry {
+                    task_id: task.id.clone(),
+                    title: task.title.clone(),
+                    hours_stale,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    entries.sort_by(|left, right| right.hours_stale.cmp(&left.hours_stale));
+    entries.truncate(STALE_TASKS_LIMIT);
+    entries
 }
 
 fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc>, Option<String>) {
@@ -689,6 +800,40 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         }
     }
     if let Some(error) = dashboard.recent_failures.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Blocked Tasks");
+    if dashboard.blocked_tasks.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.blocked_tasks.entries {
+            let _ = writeln!(
+                &mut output,
+                "  - task_id={} title={} blocked_reason={}",
+                entry.task_id, entry.title, entry.blocked_reason
+            );
+        }
+    }
+    if let Some(error) = dashboard.blocked_tasks.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Stale Tasks");
+    if dashboard.stale_tasks.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.stale_tasks.entries {
+            let _ = writeln!(
+                &mut output,
+                "  - task_id={} title={} hours_stale={}",
+                entry.task_id, entry.title, entry.hours_stale
+            );
+        }
+    }
+    if let Some(error) = dashboard.stale_tasks.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
