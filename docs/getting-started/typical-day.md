@@ -57,6 +57,7 @@ The daemon schedules ready work, supervises runners, and records execution state
 ### 5. Watch the system
 
 ```bash
+ao now
 ao daemon health
 ao workflow list
 ao output tail

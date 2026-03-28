@@ -6,6 +6,7 @@ Formal specifications and exhaustive listings for the AO CLI.
 
 | Page | Description |
 |---|---|
+| [Feature Status](feature-status.md) | Shipped, in-flight, and planned features with status legend |
 | [CLI Command Surface](cli/index.md) | Complete command tree with all subcommands and flags |
 | [Global Flags](cli/global-flags.md) | Flags available on every command |
 | [Exit Codes](cli/exit-codes.md) | Process exit codes and error classification |
