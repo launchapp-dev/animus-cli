@@ -13,6 +13,7 @@ use orchestrator_core::{
 use serde::{Deserialize, Serialize};
 
 use crate::print_value;
+use crate::services::runtime::{stale_in_progress_summary, StaleInProgressSummary};
 
 const STATUS_SCHEMA: &str = "ao.status.v1";
 const RECENT_COMPLETIONS_LIMIT: usize = 5;
@@ -32,6 +33,10 @@ struct StatusDashboard {
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    stale_items: Option<StaleItemsSlice>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    next_task: Option<NextTaskSlice>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,6 +157,32 @@ struct CiRunSummary {
     url: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+struct StaleItemsSlice {
+    available: bool,
+    #[serde(flatten)]
+    summary: Option<StaleInProgressSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskEntry {
+    task_id: String,
+    title: String,
+    priority: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    entry: Option<NextTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(clippy::large_enum_variant)]
 enum CiLookupOutcome {
@@ -206,6 +237,9 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (task_stats, task_stats_error) = split_result(task_stats_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
 
+    let stale_items_slice = build_stale_items_slice(tasks.as_deref(), tasks_error.clone());
+    let next_task_slice = build_next_task_slice(tasks.as_deref(), tasks_error.clone());
+
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
         project_root: project_root.to_string(),
@@ -228,6 +262,8 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             workflows_error,
         ),
         ci: ci_slice,
+        stale_items: stale_items_slice,
+        next_task: next_task_slice,
     };
 
     if json {
@@ -236,6 +272,41 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
 
     println!("{}", render_status_dashboard(&dashboard));
     Ok(())
+}
+
+fn priority_order(priority: orchestrator_core::Priority) -> i32 {
+    match priority {
+        orchestrator_core::Priority::Critical => 0,
+        orchestrator_core::Priority::High => 1,
+        orchestrator_core::Priority::Medium => 2,
+        orchestrator_core::Priority::Low => 3,
+    }
+}
+
+fn build_stale_items_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> Option<StaleItemsSlice> {
+    let summary = tasks.map(|tasks| stale_in_progress_summary(tasks, 24, Utc::now()));
+    Some(StaleItemsSlice { available: tasks.is_some(), summary, error })
+}
+
+fn build_next_task_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> Option<NextTaskSlice> {
+    let entry = tasks.and_then(|tasks| {
+        let mut candidates: Vec<&OrchestratorTask> = tasks
+            .iter()
+            .filter(|task| matches!(task.status, TaskStatus::Ready | TaskStatus::Backlog))
+            .collect();
+        candidates.sort_by(|left, right| {
+            priority_order(left.priority)
+                .cmp(&priority_order(right.priority))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        candidates.into_iter().next().map(|task| NextTaskEntry {
+            task_id: task.id.clone(),
+            title: task.title.clone(),
+            priority: task.priority.as_str().to_string(),
+            status: task.status.to_string(),
+        })
+    });
+    Some(NextTaskSlice { available: tasks.is_some(), entry, error })
 }
 
 fn split_result<T>(result: Result<T>) -> (Option<T>, Option<String>) {
@@ -603,6 +674,30 @@ fn parse_gh_run_list(payload: &str) -> Result<Option<CiRunSummary>> {
     }))
 }
 
+#[cfg(test)]
+fn recent_failures(workflows: &[OrchestratorWorkflow]) -> Vec<RecentFailureEntry> {
+    let mut entries: Vec<RecentFailureEntry> = workflows
+        .iter()
+        .filter(|workflow| workflow.status == WorkflowStatus::Failed)
+        .map(|workflow| {
+            let (phase_id, failed_at, phase_error) = latest_failed_phase(workflow);
+            RecentFailureEntry {
+                workflow_id: workflow.id.clone(),
+                task_id: workflow.task_id.clone(),
+                phase_id,
+                failed_at,
+                failure_reason: workflow.failure_reason.clone().or(phase_error),
+            }
+        })
+        .collect();
+
+    entries.sort_by(|left, right| {
+        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
+    });
+    entries.truncate(RECENT_FAILURES_LIMIT);
+    entries
+}
+
 fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let mut output = String::new();
     let _ = writeln!(&mut output, "AO Status Dashboard");
@@ -714,6 +809,46 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     }
     if let Some(error) = dashboard.ci.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    if let Some(stale_items) = dashboard.stale_items.as_ref() {
+        let _ = writeln!(&mut output, "Stale Items");
+        if let Some(summary) = &stale_items.summary {
+            let _ = writeln!(&mut output, "  threshold_hours: {}", summary.threshold_hours);
+            let _ = writeln!(&mut output, "  count: {}", summary.count);
+            if summary.tasks.is_empty() {
+                let _ = writeln!(&mut output, "  entries: none");
+            } else {
+                for entry in &summary.tasks {
+                    let _ = writeln!(
+                        &mut output,
+                        "  - task_id={} title={} updated_at={} age_hours={}",
+                        entry.task_id, entry.title, entry.updated_at, entry.age_hours
+                    );
+                }
+            }
+        }
+        if let Some(error) = stale_items.error.as_deref() {
+            let _ = writeln!(&mut output, "  error: {error}");
+        }
+        let _ = writeln!(&mut output);
+    }
+
+    if let Some(next_task) = dashboard.next_task.as_ref() {
+        let _ = writeln!(&mut output, "Next Task");
+        if let Some(entry) = &next_task.entry {
+            let _ = writeln!(
+                &mut output,
+                "  - task_id={} priority={} status={} title={}",
+                entry.task_id, entry.priority, entry.status, entry.title
+            );
+        } else {
+            let _ = writeln!(&mut output, "  entry: none");
+        }
+        if let Some(error) = next_task.error.as_deref() {
+            let _ = writeln!(&mut output, "  error: {error}");
+        }
     }
 
     output

@@ -463,6 +463,8 @@ fn render_status_dashboard_uses_required_section_order() {
             reason: Some("gh CLI is not installed".to_string()),
             error: None,
         },
+        stale_items: None,
+        next_task: None,
     };
 
     let output = render_status_dashboard(&dashboard);
@@ -478,4 +480,116 @@ fn render_status_dashboard_uses_required_section_order() {
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
+}
+
+#[test]
+fn stale_items_slice_includes_summary_when_tasks_available() {
+    let tasks = vec![
+        make_task("TASK-001", "in progress", TaskStatus::InProgress, None),
+        make_task("TASK-002", "ready", TaskStatus::Ready, None),
+    ];
+
+    let slice = build_stale_items_slice(Some(&tasks), None);
+    assert!(slice.is_some());
+    let slice = slice.unwrap();
+    assert!(slice.available);
+    assert!(slice.summary.is_some());
+    assert!(slice.error.is_none());
+    assert_eq!(slice.summary.as_ref().unwrap().threshold_hours, 24);
+}
+
+#[test]
+fn stale_items_slice_unavailable_when_tasks_missing() {
+    let slice = build_stale_items_slice(None, Some("task fetch failed".to_string()));
+    assert!(slice.is_some());
+    let slice = slice.unwrap();
+    assert!(!slice.available);
+    assert!(slice.summary.is_none());
+    assert_eq!(slice.error.as_deref(), Some("task fetch failed"));
+}
+
+#[test]
+fn next_task_slice_selects_highest_priority_ready_task() {
+    let tasks = vec![
+        make_task_with_priority("TASK-001", "low priority", TaskStatus::Backlog, Priority::Low, None),
+        make_task_with_priority("TASK-002", "high priority", TaskStatus::Ready, Priority::High, None),
+        make_task_with_priority("TASK-003", "medium priority", TaskStatus::Ready, Priority::Medium, None),
+    ];
+
+    let slice = build_next_task_slice(Some(&tasks), None);
+    assert!(slice.is_some());
+    let slice = slice.unwrap();
+    assert!(slice.available);
+    assert!(slice.entry.is_some());
+    let entry = slice.entry.unwrap();
+    assert_eq!(entry.task_id, "TASK-002");
+    assert_eq!(entry.priority, "high");
+    assert_eq!(entry.status, "ready");
+}
+
+#[test]
+fn next_task_slice_selects_backlog_when_no_ready() {
+    let tasks = vec![
+        make_task_with_priority("TASK-001", "backlog only", TaskStatus::Backlog, Priority::Medium, None),
+        make_task_with_priority("TASK-002", "done", TaskStatus::Done, Priority::High, None),
+    ];
+
+    let slice = build_next_task_slice(Some(&tasks), None);
+    assert!(slice.is_some());
+    let slice = slice.unwrap();
+    assert!(slice.available);
+    assert!(slice.entry.is_some());
+    assert_eq!(slice.entry.unwrap().task_id, "TASK-001");
+}
+
+#[test]
+fn next_task_slice_empty_when_no_ready_or_backlog() {
+    let tasks = vec![
+        make_task_with_priority("TASK-001", "in progress", TaskStatus::InProgress, Priority::Critical, None),
+        make_task_with_priority("TASK-002", "done", TaskStatus::Done, Priority::High, None),
+    ];
+
+    let slice = build_next_task_slice(Some(&tasks), None);
+    assert!(slice.is_some());
+    let slice = slice.unwrap();
+    assert!(slice.available);
+    assert!(slice.entry.is_none());
+    assert!(slice.error.is_none());
+}
+
+#[test]
+fn next_task_slice_uses_task_id_as_tiebreaker() {
+    let tasks = vec![
+        make_task_with_priority("TASK-002", "second", TaskStatus::Ready, Priority::High, None),
+        make_task_with_priority("TASK-001", "first", TaskStatus::Ready, Priority::High, None),
+        make_task_with_priority("TASK-003", "third", TaskStatus::Ready, Priority::High, None),
+    ];
+
+    let slice = build_next_task_slice(Some(&tasks), None);
+    assert!(slice.is_some());
+    let slice = slice.unwrap();
+    assert!(slice.entry.is_some());
+    assert_eq!(slice.entry.unwrap().task_id, "TASK-001");
+}
+
+#[test]
+fn next_task_slice_unavailable_when_tasks_missing() {
+    let slice = build_next_task_slice(None, Some("task fetch failed".to_string()));
+    assert!(slice.is_some());
+    let slice = slice.unwrap();
+    assert!(!slice.available);
+    assert!(slice.entry.is_none());
+    assert_eq!(slice.error.as_deref(), Some("task fetch failed"));
+}
+
+fn make_task_with_priority(
+    id: &str,
+    title: &str,
+    status: TaskStatus,
+    priority: Priority,
+    completed_at: Option<DateTime<Utc>>,
+) -> OrchestratorTask {
+    let mut task = make_task(id, title, status, completed_at);
+    task.priority = priority;
+    task
 }
