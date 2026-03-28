@@ -107,12 +107,6 @@ mod tests {
     }
 
     #[test]
-    fn load_returns_default_when_file_missing() {
-        let creds = Credentials::load_global();
-        assert!(creds.providers.is_empty() || !creds.providers.is_empty());
-    }
-
-    #[test]
     fn deserializes_valid_json() {
         let json = r#"{"providers":{"openai":{"api_key":"sk-123"}}}"#;
         let creds: Credentials = serde_json::from_str(json).unwrap();

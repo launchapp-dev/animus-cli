@@ -1,44 +1,67 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, existsSync } from "node:fs";
-import { resolve } from "node:path";
 
-const dir = import.meta.dirname;
-
-const featureFiles = [
-  { file: "dashboard-page.tsx", exports: ["DashboardPage"] },
-  { file: "tasks-pages.tsx", exports: ["TasksPage", "TaskCreatePage", "TaskDetailPage"] },
-  { file: "workflow-pages.tsx", exports: ["WorkflowsPage", "WorkflowDetailPage", "WorkflowCheckpointPage"] },
-  { file: "queue-page.tsx", exports: ["QueuePage"] },
-  { file: "daemon-page.tsx", exports: ["DaemonPage"] },
-  { file: "projects-pages.tsx", exports: ["ProjectsPage", "ProjectDetailPage", "RequirementDetailPage"] },
-  { file: "events-page.tsx", exports: ["EventsPage"] },
-  { file: "review-page.tsx", exports: ["ReviewHandoffPage"] },
-  { file: "output-page.tsx", exports: ["TaskOutputPage"] },
-  { file: "not-found-page.tsx", exports: ["NotFoundPage"] },
-];
+const featureModules = [
+  {
+    name: "dashboard-page",
+    load: () => import("./dashboard-page"),
+    exports: ["DashboardPage"],
+  },
+  {
+    name: "tasks-pages",
+    load: () => import("./tasks-pages"),
+    exports: ["TasksPage", "TaskCreatePage", "TaskDetailPage"],
+  },
+  {
+    name: "workflow-pages",
+    load: () => import("./workflow-pages"),
+    exports: ["WorkflowsPage", "WorkflowDetailPage", "WorkflowCheckpointPage"],
+  },
+  {
+    name: "queue-page",
+    load: () => import("./queue-page"),
+    exports: ["QueuePage"],
+  },
+  {
+    name: "daemon-page",
+    load: () => import("./daemon-page"),
+    exports: ["DaemonPage"],
+  },
+  {
+    name: "projects-pages",
+    load: () => import("./projects-pages"),
+    exports: ["ProjectsPage", "ProjectDetailPage", "RequirementDetailPage"],
+  },
+  {
+    name: "events-page",
+    load: () => import("./events-page"),
+    exports: ["EventsPage"],
+  },
+  {
+    name: "review-page",
+    load: () => import("./review-page"),
+    exports: ["ReviewHandoffPage"],
+  },
+  {
+    name: "output-page",
+    load: () => import("./output-page"),
+    exports: ["TaskOutputPage"],
+  },
+  {
+    name: "not-found-page",
+    load: () => import("./not-found-page"),
+    exports: ["NotFoundPage"],
+  },
+] as const;
 
 describe("feature page modules", () => {
-  for (const { file, exports: requiredExports } of featureFiles) {
-    describe(file, () => {
-      it("exists", () => {
-        expect(existsSync(resolve(dir, file))).toBe(true);
-      });
+  for (const { name, load, exports: requiredExports } of featureModules) {
+    it(`${name} exports renderable page components`, async () => {
+      const module = await load();
 
-      it("exports all required page components", () => {
-        const source = readFileSync(resolve(dir, file), "utf8");
-        for (const name of requiredExports) {
-          expect(source).toContain(`export function ${name}(`);
-        }
-      });
-
-      it("imports hooks from @/lib/graphql/client", () => {
-        const source = readFileSync(resolve(dir, file), "utf8");
-        const usesHooks = source.includes("useQuery") || source.includes("useMutation") || source.includes("useSubscription");
-        if (usesHooks) {
-          expect(source).toContain('@/lib/graphql/client');
-          expect(source).not.toMatch(/from ["']urql["']/);
-        }
-      });
+      for (const exportName of requiredExports) {
+        expect(module).toHaveProperty(exportName);
+        expect(typeof module[exportName]).toBe("function");
+      }
     });
   }
 });

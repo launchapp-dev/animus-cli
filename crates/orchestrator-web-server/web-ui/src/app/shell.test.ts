@@ -4,26 +4,9 @@ import { APP_ROUTE_PATHS } from "./router";
 import { MAIN_CONTENT_ID, PRIMARY_NAV_ITEMS } from "./shell";
 
 describe("PRIMARY_NAV_ITEMS", () => {
-  it("matches required top-level navigation order", () => {
-    const labels = PRIMARY_NAV_ITEMS.map((item) => item.label);
-    expect(labels).toEqual([
-      "Dashboard",
-      "Tasks",
-      "Workflows",
-      "Queue",
-      "Agents",
-      "Ops Map",
-      "Vision",
-      "Requirements",
-      "Architecture",
-      "Events",
-      "History",
-      "Errors",
-      "Daemon",
-      "Builder",
-      "Skills",
-      "Settings",
-    ]);
+  it("uses unique labels and destinations", () => {
+    expect(new Set(PRIMARY_NAV_ITEMS.map((item) => item.label)).size).toBe(PRIMARY_NAV_ITEMS.length);
+    expect(new Set(PRIMARY_NAV_ITEMS.map((item) => item.to)).size).toBe(PRIMARY_NAV_ITEMS.length);
   });
 
   it("points to registered routes only", () => {

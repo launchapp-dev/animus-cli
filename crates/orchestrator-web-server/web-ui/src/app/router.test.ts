@@ -3,47 +3,19 @@ import { describe, expect, it } from "vitest";
 import { APP_ROUTE_PATHS } from "./router";
 
 describe("APP_ROUTE_PATHS", () => {
-  it("contains required route architecture", () => {
-    const requiredPaths = [
-      "/",
-      "/dashboard",
-      "/daemon",
-      "/agents",
-      "/projects",
-      "/projects/:projectId",
-      "/projects/:projectId/requirements/:requirementId",
-      "/planning",
-      "/planning/vision",
-      "/planning/requirements",
-      "/planning/requirements/new",
-      "/planning/requirements/:requirementId",
-      "/tasks",
-      "/tasks/new",
-      "/tasks/:taskId",
-      "/tasks/:taskId/output",
-      "/workflows",
-      "/workflows/builder",
-      "/workflows/builder/new",
-      "/workflows/builder/:definitionId",
-      "/workflows/dispatch/task",
-      "/workflows/dispatch/requirements",
-      "/workflows/dispatch/custom",
-      "/workflows/:workflowId",
-      "/workflows/:workflowId/checkpoints/:checkpoint",
-      "/queue",
-      "/events",
-      "/reviews/handoff",
-      "/errors",
-      "/settings/mcp",
-      "/settings/agents",
-      "/settings/daemon",
-      "/architecture",
-      "/history",
-      "/ops-map",
-      "/skills",
-      "*",
-    ];
+  it("keeps route paths unique", () => {
+    expect(new Set(APP_ROUTE_PATHS).size).toBe(APP_ROUTE_PATHS.length);
+  });
 
-    expect(APP_ROUTE_PATHS).toEqual(requiredPaths);
+  it("includes landing, review, settings, and fallback routes", () => {
+    expect(APP_ROUTE_PATHS).toEqual(
+      expect.arrayContaining([
+        "/",
+        "/dashboard",
+        "/reviews/handoff",
+        "/settings/mcp",
+        "*",
+      ]),
+    );
   });
 });

@@ -197,7 +197,7 @@ fn recent_failures_are_sorted_limited_and_fallback_current_phase() {
         ),
     ];
 
-    let entries = recent_failures(&workflows);
+    let entries = recent_failures_from_workflows(workflows.iter(), 3);
     assert_eq!(entries.len(), 3, "entries should be capped at 3");
     assert_eq!(entries[0].workflow_id, "WF-005");
     assert_eq!(entries[1].workflow_id, "WF-002");

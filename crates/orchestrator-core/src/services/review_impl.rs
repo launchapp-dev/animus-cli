@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::domain_state::{load_handoffs, save_handoffs, HandoffRecord};
+use crate::domain_state::{load_handoffs, project_state_dir, save_handoffs, HandoffRecord};
 use crate::types::{AgentHandoffStatus, HandoffTargetRole};
 
 use protocol::default_model_for_tool as protocol_default_model_for_tool;
@@ -77,9 +77,7 @@ fn resolve_workflow_id_for_run(project_root: &Path, run_id: &str) -> Option<Stri
 }
 
 fn transcript_path(project_root: &Path, workflow_id: &str, root_run_id: &str) -> PathBuf {
-    project_root
-        .join(".ao")
-        .join("state")
+    project_state_dir(project_root.to_string_lossy().as_ref())
         .join("agent-handoffs")
         .join(sanitize_segment(workflow_id))
         .join(format!("{}.jsonl", sanitize_segment(root_run_id)))
@@ -419,7 +417,19 @@ impl ReviewServiceApi for FileServiceHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain_state::project_state_dir;
     use tempfile::TempDir;
+
+    #[test]
+    fn transcript_path_uses_project_state_dir() {
+        crate::test_env::stable_test_home();
+        let temp = TempDir::new().expect("tempdir");
+        let expected_root = project_state_dir(temp.path().to_string_lossy().as_ref());
+        let transcript = transcript_path(temp.path(), "workflow:1", "run/1");
+
+        assert!(transcript.starts_with(&expected_root));
+        assert!(transcript.ends_with(Path::new("agent-handoffs/workflow_1/run_1.jsonl")));
+    }
 
     #[tokio::test]
     async fn request_handoff_requires_run_id() {

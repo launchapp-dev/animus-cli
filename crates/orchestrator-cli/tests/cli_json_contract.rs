@@ -1,5 +1,5 @@
 #[path = "support/test_harness.rs"]
-mod test_harness;
+pub mod test_harness;
 
 use anyhow::Result;
 use protocol::CLI_SCHEMA_ID;

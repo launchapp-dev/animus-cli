@@ -5,34 +5,34 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use tempfile::TempDir;
 
-pub(crate) struct CliHarness {
+pub struct CliHarness {
     binary_path: PathBuf,
     project_root: TempDir,
     config_root: TempDir,
 }
 
 impl CliHarness {
-    pub(crate) fn new() -> Result<Self> {
+    pub fn new() -> Result<Self> {
         let binary_path = assert_cmd::cargo::cargo_bin!("ao").to_path_buf();
         let project_root = tempfile::tempdir().context("failed to create project root tempdir")?;
         let config_root = tempfile::tempdir().context("failed to create config root tempdir")?;
         Ok(Self { binary_path, project_root, config_root })
     }
 
-    pub(crate) fn project_root(&self) -> &Path {
+    pub fn project_root(&self) -> &Path {
         self.project_root.path()
     }
 
-    pub(crate) fn config_root(&self) -> &Path {
+    pub fn config_root(&self) -> &Path {
         self.config_root.path()
     }
 
-    pub(crate) fn scoped_root(&self) -> PathBuf {
+    pub fn scoped_root(&self) -> PathBuf {
         let scope = protocol::repository_scope_for_path(self.project_root.path());
         self.config_root.path().join(".ao").join(scope)
     }
 
-    pub(crate) fn run_json_ok(&self, args: &[&str]) -> Result<Value> {
+    pub fn run_json_ok(&self, args: &[&str]) -> Result<Value> {
         let output = self.run_json_command(args)?;
 
         if !output.status.success() {
@@ -59,12 +59,12 @@ impl CliHarness {
         Ok(payload)
     }
 
-    pub(crate) fn run_json_err(&self, args: &[&str]) -> Result<Value> {
+    pub fn run_json_err(&self, args: &[&str]) -> Result<Value> {
         let (payload, _) = self.run_json_err_with_exit(args)?;
         Ok(payload)
     }
 
-    pub(crate) fn run_json_err_with_exit(&self, args: &[&str]) -> Result<(Value, i32)> {
+    pub fn run_json_err_with_exit(&self, args: &[&str]) -> Result<(Value, i32)> {
         let output = self.run_json_command(args)?;
 
         if output.status.success() {
@@ -90,7 +90,7 @@ impl CliHarness {
         Ok((payload, output.status.code().unwrap_or(-1)))
     }
 
-    pub(crate) fn run_json_output(&self, args: &[&str]) -> Result<std::process::Output> {
+    pub fn run_json_output(&self, args: &[&str]) -> Result<std::process::Output> {
         self.run_json_command(args)
     }
 

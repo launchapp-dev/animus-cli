@@ -33,14 +33,9 @@ pub use daemon_config::{
 pub use daemon_tick_metrics::DaemonTickMetrics;
 pub use doctor::{DoctorCheck, DoctorCheckResult, DoctorCheckStatus, DoctorRemediation, DoctorReport};
 pub use domain_state::{
-    compute_entity_review_status, errors_path, handoffs_path, history_path, load_errors, load_handoffs,
-    load_history_store, load_qa_approvals, load_qa_results, load_reviews, parse_review_decision,
-    parse_review_entity_type, parse_reviewer_role, project_state_dir, qa_approvals_path, qa_results_path,
-    read_json_or_default, reviews_path, save_errors, save_handoffs, save_history_store, save_qa_approvals,
-    save_qa_results, save_reviews, write_json_atomic, write_json_pretty, EntityReviewStatus, ErrorRecord, ErrorStore,
-    HandoffRecord, HandoffStore, HistoryExecutionRecord, HistoryStore, QaGateResultRecord, QaPhaseGateResult,
-    QaResultsStore, QaReviewApprovalRecord, QaReviewApprovalStore, ReviewDecision, ReviewEntityType, ReviewRecord,
-    ReviewStore, ReviewerRole,
+    errors_path, handoffs_path, history_path, load_errors, load_handoffs, load_history_store, project_state_dir,
+    read_json_or_default, save_errors, save_handoffs, save_history_store, write_json_atomic, write_json_pretty,
+    ErrorRecord, ErrorStore, HandoffRecord, HandoffStore, HistoryExecutionRecord, HistoryStore,
 };
 pub use execution_projection::{
     builtin_execution_projector_registry, execution_fact_subject_kind, project_execution_fact,

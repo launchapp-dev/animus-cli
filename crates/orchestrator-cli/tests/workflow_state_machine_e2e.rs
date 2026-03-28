@@ -1,5 +1,5 @@
 #[path = "support/test_harness.rs"]
-mod test_harness;
+pub mod test_harness;
 
 use anyhow::{Context, Result};
 use serde_json::Value;

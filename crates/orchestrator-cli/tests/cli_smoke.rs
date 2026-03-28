@@ -9,7 +9,7 @@ fn help_includes_top_level_usage() -> Result<(), Box<dyn std::error::Error>> {
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Agent Orchestrator CLI"), "help output should include CLI title");
     assert!(stdout.contains("Usage: ao [OPTIONS] <COMMAND>"), "help output should include usage line");
-    assert!(stdout.contains("tui"), "help output should include tui command");
+    assert!(stdout.contains("status"), "help output should include status command");
     Ok(())
 }
 
@@ -21,16 +21,16 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
     assert!(top_level_help.status.success(), "top-level help should succeed");
     let top_level_stdout = String::from_utf8(top_level_help.stdout)?;
     assert!(
-        top_level_stdout.contains("Draft and refine project vision artifacts"),
-        "top-level help should describe vision command"
+        top_level_stdout.contains("Draft and manage project requirements"),
+        "top-level help should describe requirements command"
     );
     assert!(
         top_level_stdout.contains("Run and control workflow execution"),
         "top-level help should describe workflow command"
     );
     assert!(
-        top_level_stdout.contains("Record and inspect review decisions and handoffs"),
-        "top-level help should describe review command"
+        top_level_stdout.contains("Show a unified project status dashboard"),
+        "top-level help should describe status command"
     );
     assert!(
         top_level_stdout.contains("Search, install, update, and publish versioned skills"),
@@ -219,8 +219,8 @@ fn help_uses_explicit_value_names_and_repeatable_flag_guidance() -> Result<(), B
     assert!(workflow_run_help.status.success(), "workflow run help should succeed");
     let workflow_run_stdout = String::from_utf8(workflow_run_help.stdout)?;
     assert!(
-        workflow_run_stdout.contains("--workflow-ref <WORKFLOW_REF>"),
-        "workflow run help should expose workflow ref value names"
+        workflow_run_stdout.contains("[PIPELINE]"),
+        "workflow run help should expose the pipeline positional argument"
     );
 
     let task_list_help = Command::new(&binary).args(["task", "list", "--help"]).output()?;
@@ -264,25 +264,6 @@ fn invalid_arguments_include_usage_and_help_hint() -> Result<(), Box<dyn std::er
     assert!(stderr.contains("unexpected argument '--bogus' found"), "stderr should identify the unexpected argument");
     assert!(stderr.contains("Usage: ao task list [OPTIONS]"), "stderr should include command usage");
     assert!(stderr.contains("For more information, try '--help'."), "stderr should include a hint to use --help");
-
-    Ok(())
-}
-
-#[test]
-fn help_includes_workflow_monitor_command() -> Result<(), Box<dyn std::error::Error>> {
-    let binary = assert_cmd::cargo::cargo_bin!("ao");
-    let output = Command::new(&binary).arg("--help").output()?;
-    assert!(output.status.success(), "help command should succeed");
-    let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("workflow-monitor"), "help output should include workflow-monitor command");
-    assert!(stdout.contains("Live workflow phase monitor"), "help output should describe workflow-monitor command");
-
-    let monitor_help = Command::new(&binary).args(["workflow-monitor", "--help"]).output()?;
-    assert!(monitor_help.status.success(), "workflow-monitor help should succeed");
-    let monitor_stdout = String::from_utf8(monitor_help.stdout)?;
-    assert!(monitor_stdout.contains("--refresh-interval"), "workflow-monitor help should explain --refresh-interval");
-    assert!(monitor_stdout.contains("--buffer-lines"), "workflow-monitor help should explain --buffer-lines");
-    assert!(monitor_stdout.contains("--workflow-id"), "workflow-monitor help should explain --workflow-id");
 
     Ok(())
 }
