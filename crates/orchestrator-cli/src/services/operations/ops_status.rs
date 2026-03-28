@@ -13,6 +13,7 @@ use orchestrator_core::{
 use serde::{Deserialize, Serialize};
 
 use crate::print_value;
+use crate::services::runtime::stale_in_progress_summary;
 
 const STATUS_SCHEMA: &str = "ao.status.v1";
 const RECENT_COMPLETIONS_LIMIT: usize = 5;
@@ -32,6 +33,8 @@ struct StatusDashboard {
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    inbox: Option<InboxPayload>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -127,6 +130,34 @@ struct CiStatusSlice {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub(crate) struct InboxPayload {
+    pub(crate) schema: &'static str,
+    pub(crate) project_root: String,
+    pub(crate) generated_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) next_task: Option<OrchestratorTask>,
+    pub(crate) stale_attention: StaleAttentionSlice,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct StaleAttentionSlice {
+    pub(crate) available: bool,
+    pub(crate) threshold_hours: u64,
+    pub(crate) count: usize,
+    pub(crate) tasks: Vec<StaleTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct StaleTaskEntry {
+    pub(crate) task_id: String,
+    pub(crate) title: String,
+    pub(crate) updated_at: String,
+    pub(crate) age_hours: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct CiRunSummary {
     id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -206,10 +237,18 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
     let (task_stats, task_stats_error) = split_result(task_stats_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
 
+    let generated_at = Utc::now();
+    let inbox = build_inbox_payload(
+        project_root,
+        generated_at,
+        tasks.as_deref(),
+        combine_errors([tasks_error.as_deref()]),
+    );
+
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
         project_root: project_root.to_string(),
-        generated_at: Utc::now(),
+        generated_at,
         daemon: build_daemon_slice(daemon_health.as_ref(), daemon_error.clone()),
         active_agents: build_active_agents_slice(
             daemon_health.as_ref(),
@@ -228,6 +267,7 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             workflows_error,
         ),
         ci: ci_slice,
+        inbox,
     };
 
     if json {
@@ -236,6 +276,18 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
 
     println!("{}", render_status_dashboard(&dashboard));
     Ok(())
+}
+
+pub(crate) async fn build_inbox(hub: Arc<dyn ServiceHub>, project_root: &str) -> Result<InboxPayload> {
+    let tasks_service = hub.tasks();
+    let tasks_result = tasks_service.list().await;
+
+    let (tasks, error) = split_result(tasks_result);
+    let generated_at = Utc::now();
+
+    let inbox = build_inbox_payload(project_root, generated_at, tasks.as_deref(), error);
+
+    inbox.ok_or_else(|| anyhow!("failed to build inbox payload"))
 }
 
 fn split_result<T>(result: Result<T>) -> (Option<T>, Option<String>) {
@@ -438,6 +490,58 @@ fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc
     (phase_id, failed_at, phase_error)
 }
 
+fn build_inbox_payload(
+    project_root: &str,
+    generated_at: DateTime<Utc>,
+    tasks: Option<&[OrchestratorTask]>,
+    error: Option<String>,
+) -> Option<InboxPayload> {
+    if error.is_some() {
+        return Some(InboxPayload {
+            schema: "ao.inbox.v1",
+            project_root: project_root.to_string(),
+            generated_at,
+            next_task: None,
+            stale_attention: StaleAttentionSlice {
+                available: false,
+                threshold_hours: 24,
+                count: 0,
+                tasks: Vec::new(),
+                error,
+            },
+        });
+    }
+
+    let tasks = tasks?;
+
+    let next = tasks.iter().find(|task| matches!(task.status, TaskStatus::Ready | TaskStatus::Backlog)).cloned();
+
+    let stale_summary = stale_in_progress_summary(tasks, 24, generated_at);
+
+    Some(InboxPayload {
+        schema: "ao.inbox.v1",
+        project_root: project_root.to_string(),
+        generated_at,
+        next_task: next,
+        stale_attention: StaleAttentionSlice {
+            available: true,
+            threshold_hours: stale_summary.threshold_hours,
+            count: stale_summary.count,
+            tasks: stale_summary
+                .tasks
+                .iter()
+                .map(|entry| StaleTaskEntry {
+                    task_id: entry.task_id.clone(),
+                    title: entry.title.clone(),
+                    updated_at: entry.updated_at.clone(),
+                    age_hours: entry.age_hours,
+                })
+                .collect(),
+            error: None,
+        },
+    })
+}
+
 async fn collect_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSnapshot> {
     let project_root = project_root.to_string();
     tokio::task::spawn_blocking(move || load_workflow_status_snapshot(project_root.as_str()))
@@ -608,6 +712,22 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let _ = writeln!(&mut output, "AO Status Dashboard");
     let _ = writeln!(&mut output, "Project Root: {}", dashboard.project_root);
     let _ = writeln!(&mut output, "Generated At: {}", dashboard.generated_at.to_rfc3339());
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "What to do now");
+    if let Some(inbox) = dashboard.inbox.as_ref() {
+        if let Some(task) = inbox.next_task.as_ref() {
+            let _ = writeln!(&mut output, "  next task: {} ({})", task.title, task.id);
+        } else {
+            let _ = writeln!(&mut output, "  next task: none");
+        }
+        let _ = writeln!(&mut output, "  stale items: {}", inbox.stale_attention.count);
+    } else {
+        let _ = writeln!(&mut output, "  next task: unavailable");
+        let _ = writeln!(&mut output, "  stale items: unavailable");
+    }
+    let _ = writeln!(&mut output, "  blocked items: {}", dashboard.task_summary.blocked);
+    let _ = writeln!(&mut output, "  active workflows: {}", dashboard.active_agents.count);
     let _ = writeln!(&mut output);
 
     let _ = writeln!(&mut output, "Daemon");
