@@ -32,6 +32,9 @@ struct StatusDashboard {
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
+    next_task: NextTaskSlice,
+    stale_in_progress: StaleInProgressSlice,
+    blocked_tasks: BlockedTasksSlice,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -124,6 +127,53 @@ struct CiStatusSlice {
     reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskSlice {
+    available: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task: Option<NextTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NextTaskEntry {
+    id: String,
+    title: String,
+    priority: String,
+    linked_requirement_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleInProgressSlice {
+    available: bool,
+    entries: Vec<StaleInProgressEntry>,
+    threshold_hours: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct StaleInProgressEntry {
+    task_id: String,
+    title: String,
+    hours_stale: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedTasksSlice {
+    available: bool,
+    entries: Vec<BlockedTaskEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedTaskEntry {
+    task_id: String,
+    title: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -222,12 +272,15 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
             tasks.as_deref(),
             combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
         ),
-        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
+        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error.clone()),
         recent_failures: build_recent_failures_slice(
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
             workflows_error,
         ),
         ci: ci_slice,
+        next_task: build_next_task_slice(tasks.as_deref(), tasks_error.clone()),
+        stale_in_progress: build_stale_in_progress_slice(tasks.as_deref(), 24, tasks_error.clone()),
+        blocked_tasks: build_blocked_tasks_slice(tasks.as_deref(), tasks_error),
     };
 
     if json {
@@ -413,6 +466,86 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
         available: failures.is_some(),
         entries: failures.map(|entries| entries.to_vec()).unwrap_or_default(),
         error,
+    }
+}
+
+fn build_next_task_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> NextTaskSlice {
+    let task = tasks.and_then(|tasks_list| {
+        let mut prioritized = tasks_list.to_vec();
+        prioritized.sort_by(|a, b| {
+            priority_rank(a.priority)
+                .cmp(&priority_rank(b.priority))
+                .then_with(|| b.metadata.updated_at.cmp(&a.metadata.updated_at))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        prioritized.into_iter().find(|task| matches!(task.status, TaskStatus::Ready | TaskStatus::Backlog))
+    });
+
+    NextTaskSlice {
+        available: tasks.is_some(),
+        task: task.map(|t| NextTaskEntry {
+            id: t.id,
+            title: t.title,
+            priority: format!("{:?}", t.priority).to_lowercase(),
+            linked_requirement_ids: t.linked_requirements,
+        }),
+        error,
+    }
+}
+
+fn build_stale_in_progress_slice(
+    tasks: Option<&[OrchestratorTask]>,
+    threshold_hours: u64,
+    error: Option<String>,
+) -> StaleInProgressSlice {
+    let entries = tasks.map(|tasks_list| {
+        let threshold_seconds = threshold_hours.saturating_mul(3600);
+        let now = Utc::now();
+        let mut stale_tasks: Vec<&OrchestratorTask> = tasks_list
+            .iter()
+            .filter(|task| task.status == TaskStatus::InProgress)
+            .filter(|task| {
+                let age_seconds = now.signed_duration_since(task.metadata.updated_at).num_seconds().max(0) as u64;
+                age_seconds >= threshold_seconds
+            })
+            .collect();
+
+        stale_tasks.sort_by(|a, b| a.metadata.updated_at.cmp(&b.metadata.updated_at).then(a.id.cmp(&b.id)));
+
+        stale_tasks
+            .into_iter()
+            .map(|task| {
+                let age_seconds = now.signed_duration_since(task.metadata.updated_at).num_seconds().max(0) as u64;
+                let hours_stale = age_seconds / 3600;
+                StaleInProgressEntry { task_id: task.id.clone(), title: task.title.clone(), hours_stale }
+            })
+            .collect()
+    });
+
+    StaleInProgressSlice { available: tasks.is_some(), entries: entries.unwrap_or_default(), threshold_hours, error }
+}
+
+fn build_blocked_tasks_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> BlockedTasksSlice {
+    let entries = tasks.map(|tasks_list| {
+        let mut blocked: Vec<&OrchestratorTask> =
+            tasks_list.iter().filter(|task| task.status.is_blocked()).collect();
+        blocked.sort_by(|a, b| a.id.cmp(&b.id));
+        blocked
+            .into_iter()
+            .take(5)
+            .map(|task| BlockedTaskEntry { task_id: task.id.clone(), title: task.title.clone() })
+            .collect()
+    });
+
+    BlockedTasksSlice { available: tasks.is_some(), entries: entries.unwrap_or_default(), error }
+}
+
+fn priority_rank(priority: orchestrator_core::Priority) -> usize {
+    match priority {
+        orchestrator_core::Priority::Critical => 0,
+        orchestrator_core::Priority::High => 1,
+        orchestrator_core::Priority::Medium => 2,
+        orchestrator_core::Priority::Low => 3,
     }
 }
 
@@ -713,6 +846,50 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         let _ = writeln!(&mut output, "  reason: {reason}");
     }
     if let Some(error) = dashboard.ci.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Next Task");
+    if let Some(task) = &dashboard.next_task.task {
+        let _ = writeln!(&mut output, "  task_id: {}", task.id);
+        let _ = writeln!(&mut output, "  title: {}", task.title);
+        let _ = writeln!(&mut output, "  priority: {}", task.priority);
+        let _ = writeln!(&mut output, "  linked_requirements: {}", task.linked_requirement_ids.join(", "));
+    } else {
+        let _ = writeln!(&mut output, "  task: none");
+    }
+    if let Some(error) = dashboard.next_task.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Stale In Progress (threshold: {}h)", dashboard.stale_in_progress.threshold_hours);
+    if dashboard.stale_in_progress.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.stale_in_progress.entries {
+            let _ = writeln!(
+                &mut output,
+                "  - task_id={} title={} hours_stale={}",
+                entry.task_id, entry.title, entry.hours_stale
+            );
+        }
+    }
+    if let Some(error) = dashboard.stale_in_progress.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Blocked Tasks (first 5)");
+    if dashboard.blocked_tasks.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &dashboard.blocked_tasks.entries {
+            let _ = writeln!(&mut output, "  - task_id={} title={}", entry.task_id, entry.title);
+        }
+    }
+    if let Some(error) = dashboard.blocked_tasks.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
 

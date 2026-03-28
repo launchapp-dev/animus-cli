@@ -463,6 +463,9 @@ fn render_status_dashboard_uses_required_section_order() {
             reason: Some("gh CLI is not installed".to_string()),
             error: None,
         },
+        next_task: NextTaskSlice { available: true, task: None, error: None },
+        stale_in_progress: StaleInProgressSlice { available: true, entries: Vec::new(), threshold_hours: 24, error: None },
+        blocked_tasks: BlockedTasksSlice { available: true, entries: Vec::new(), error: None },
     };
 
     let output = render_status_dashboard(&dashboard);
@@ -472,10 +475,70 @@ fn render_status_dashboard_uses_required_section_order() {
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
+    let next_task_idx = output.find("Next Task").expect("next task section should exist");
+    let stale_idx = output.find("Stale In Progress").expect("stale in progress section should exist");
+    let blocked_idx = output.find("Blocked Tasks").expect("blocked tasks section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
+    assert!(ci_idx < next_task_idx);
+    assert!(next_task_idx < stale_idx);
+    assert!(stale_idx < blocked_idx);
+}
+
+#[test]
+fn next_task_finds_highest_priority_ready_task() {
+    let tasks = vec![
+        make_task("TASK-001", "low priority ready", TaskStatus::Ready, None),
+        make_task("TASK-002", "medium priority ready", TaskStatus::Ready, None),
+        make_task("TASK-003", "done task", TaskStatus::Done, None),
+    ];
+    let mut tasks = tasks;
+    tasks[0].priority = Priority::Low;
+    tasks[1].priority = Priority::High;
+
+    let slice = build_next_task_slice(Some(&tasks), None);
+    assert!(slice.available);
+    assert!(slice.task.is_some());
+    assert_eq!(slice.task.as_ref().unwrap().id, "TASK-002");
+    assert_eq!(slice.task.as_ref().unwrap().priority, "high");
+}
+
+#[test]
+fn next_task_returns_none_when_no_ready_tasks() {
+    let tasks = vec![make_task("TASK-001", "done task", TaskStatus::Done, None)];
+
+    let slice = build_next_task_slice(Some(&tasks), None);
+    assert!(slice.available);
+    assert!(slice.task.is_none());
+}
+
+#[test]
+fn stale_in_progress_detects_old_tasks() {
+    let mut task = make_task("TASK-001", "stale task", TaskStatus::InProgress, None);
+    task.metadata.updated_at = parse_time("2026-02-01T00:00:00Z");
+    let tasks = vec![task];
+
+    let slice = build_stale_in_progress_slice(Some(&tasks), 24, None);
+    assert!(slice.available);
+    assert_eq!(slice.threshold_hours, 24);
+    assert!(!slice.entries.is_empty());
+    assert_eq!(slice.entries[0].task_id, "TASK-001");
+}
+
+#[test]
+fn blocked_tasks_limits_to_five() {
+    let mut tasks = Vec::new();
+    for i in 1..=10 {
+        let mut task = make_task(&format!("TASK-{i:03}"), &format!("blocked task {i}"), TaskStatus::Blocked, None);
+        task.blocked_reason = Some("waiting".to_string());
+        tasks.push(task);
+    }
+
+    let slice = build_blocked_tasks_slice(Some(&tasks), None);
+    assert!(slice.available);
+    assert_eq!(slice.entries.len(), 5);
 }
