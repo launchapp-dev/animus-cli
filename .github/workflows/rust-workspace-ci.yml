@@ -104,3 +104,25 @@ jobs:
 
       - name: Smoke test llm-cli-wrapper help
         run: cargo run --locked -p llm-cli-wrapper --bin llm-cli-wrapper -- --help
+
+  quick-start-smoke-test:
+    name: quick-start-smoke-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: cargo-check
+    env:
+      CARGO_TERM_COLOR: always
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo build artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Quick-start happy path smoke test
+        run: cargo test --locked -p orchestrator-cli --test quick_start_e2e -- --nocapture
+        continue-on-error: false
