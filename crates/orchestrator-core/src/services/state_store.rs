@@ -160,6 +160,10 @@ fn deserialize_core_state(contents: &str) -> Result<CoreState> {
         }
     }
 
+    if let Some(obj) = raw.as_object_mut() {
+        obj.remove("logs");
+    }
+
     serde_json::from_value::<CoreState>(raw).context("core-state JSON does not match expected schema")
 }
 
