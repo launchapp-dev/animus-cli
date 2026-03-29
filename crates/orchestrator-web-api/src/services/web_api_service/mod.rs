@@ -1,5 +1,6 @@
 mod daemon_handlers;
 mod event_stream;
+mod now_handlers;
 mod parsing;
 mod projects_handlers;
 mod queue_handlers;

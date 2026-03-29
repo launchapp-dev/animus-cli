@@ -77,6 +77,7 @@ impl WebServer {
 fn build_router(state: AppState) -> Router {
     let api_router = Router::new()
         .route("/system/info", get(system_info_handler))
+        .route("/now", get(now_handler))
         .route("/openapi.json", get(openapi_spec_handler))
         .route("/docs", get(openapi_docs_handler))
         .route("/events", get(events_handler))
@@ -171,6 +172,13 @@ fn build_router(state: AppState) -> Router {
 
 async fn system_info_handler(State(state): State<AppState>) -> Response {
     match state.api.system_info().await {
+        Ok(data) => success_response(data),
+        Err(error) => error_response(error),
+    }
+}
+
+async fn now_handler(State(state): State<AppState>) -> Response {
+    match state.api.now().await {
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
