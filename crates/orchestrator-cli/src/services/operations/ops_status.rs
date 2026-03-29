@@ -1,14 +1,14 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::process::{Command as ProcessCommand, Stdio};
-use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, OrchestratorWorkflow, ServiceHub, TaskStatistics,
-    TaskStatus, WorkflowPhaseStatus, WorkflowStateManager, WorkflowStatus,
+    load_active_workflow_summaries, load_daemon_health_snapshot, load_recent_failed_workflow_summaries,
+    load_task_statistics, open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, TaskStatistics, TaskStatus,
+    WorkflowActivitySummary,
 };
 use serde::{Deserialize, Serialize};
 
@@ -110,7 +110,7 @@ struct RecentFailureEntry {
 
 #[derive(Debug)]
 struct WorkflowStatusSnapshot {
-    active_workflows: Vec<OrchestratorWorkflow>,
+    active_workflows: Vec<WorkflowActivitySummary>,
     recent_failures: Vec<RecentFailureEntry>,
 }
 
@@ -188,23 +188,26 @@ struct GhRunListEntry {
     url: Option<String>,
 }
 
-pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, json: bool) -> Result<()> {
-    let daemon_service = hub.daemon();
-    let tasks_service = hub.tasks();
-    let task_stats_service = tasks_service.clone();
-
-    let (daemon_result, tasks_result, task_stats_result, workflow_snapshot_result, ci_slice) = tokio::join!(
-        daemon_service.health(),
-        tasks_service.list(),
-        task_stats_service.statistics(),
+pub(crate) async fn handle_status(project_root: &str, json: bool) -> Result<()> {
+    let (daemon_result, task_stats_result, workflow_snapshot_result, recent_completions_result, ci_slice) = tokio::join!(
+        load_daemon_health_snapshot(Path::new(project_root)),
+        collect_task_statistics(project_root),
         collect_workflow_status_snapshot(project_root),
+        collect_recent_completions(project_root),
         collect_ci_status(project_root),
     );
 
     let (daemon_health, daemon_error) = split_result(daemon_result);
-    let (tasks, tasks_error) = split_result(tasks_result);
     let (task_stats, task_stats_error) = split_result(task_stats_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
+    let (recent_completions, recent_completions_error) = split_result(recent_completions_result);
+    let (task_titles, task_titles_error) = match workflow_snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.active_workflows.iter().map(|workflow| workflow.task_id.clone()).collect::<Vec<_>>())
+    {
+        Some(task_ids) => split_result(load_task_titles(project_root, &task_ids)),
+        None => (None, None),
+    };
 
     let dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
@@ -214,15 +217,14 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
         active_agents: build_active_agents_slice(
             daemon_health.as_ref(),
             workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
-            tasks.as_deref(),
-            combine_errors([daemon_error.as_deref(), workflows_error.as_deref(), tasks_error.as_deref()]),
+            task_titles.as_ref(),
+            combine_errors([daemon_error.as_deref(), workflows_error.as_deref(), task_titles_error.as_deref()]),
         ),
-        task_summary: build_task_summary_slice(
-            task_stats.as_ref(),
-            tasks.as_deref(),
-            combine_errors([task_stats_error.as_deref(), tasks_error.as_deref()]),
+        task_summary: build_task_summary_slice(task_stats.as_ref(), None, task_stats_error),
+        recent_completions: build_recent_completions_entries_slice(
+            recent_completions.as_deref(),
+            recent_completions_error,
         ),
-        recent_completions: build_recent_completions_slice(tasks.as_deref(), tasks_error),
         recent_failures: build_recent_failures_slice(
             workflow_snapshot.as_ref().map(|snapshot| snapshot.recent_failures.as_slice()),
             workflows_error,
@@ -236,6 +238,13 @@ pub(crate) async fn handle_status(hub: Arc<dyn ServiceHub>, project_root: &str, 
 
     println!("{}", render_status_dashboard(&dashboard));
     Ok(())
+}
+
+async fn collect_task_statistics(project_root: &str) -> Result<TaskStatistics> {
+    let project_root = project_root.to_string();
+    tokio::task::spawn_blocking(move || load_task_statistics(Path::new(project_root.as_str())))
+        .await
+        .map_err(|error| anyhow!("failed to collect task statistics: {error}"))?
 }
 
 fn split_result<T>(result: Result<T>) -> (Option<T>, Option<String>) {
@@ -292,25 +301,24 @@ fn daemon_status_label(status: DaemonStatus) -> &'static str {
 
 fn build_active_agents_slice(
     daemon_health: Option<&DaemonHealth>,
-    workflows: Option<&[OrchestratorWorkflow]>,
-    tasks: Option<&[OrchestratorTask]>,
+    workflows: Option<&[WorkflowActivitySummary]>,
+    task_titles: Option<&HashMap<String, String>>,
     error: Option<String>,
 ) -> ActiveAgentsSlice {
     let count = daemon_health.map(|health| health.active_agents).unwrap_or(0);
-    let assignments = active_agent_assignments(count, workflows.unwrap_or_default(), tasks.unwrap_or_default());
+    let empty_titles = HashMap::new();
+    let assignments =
+        active_agent_assignments(count, workflows.unwrap_or_default(), task_titles.unwrap_or(&empty_titles));
     ActiveAgentsSlice { available: daemon_health.is_some(), count, assignments, error }
 }
 
 fn active_agent_assignments(
     active_count: usize,
-    workflows: &[OrchestratorWorkflow],
-    tasks: &[OrchestratorTask],
+    workflows: &[WorkflowActivitySummary],
+    task_titles: &HashMap<String, String>,
 ) -> Vec<ActiveAgentAssignment> {
-    let task_titles: HashMap<&str, &str> = tasks.iter().map(|task| (task.id.as_str(), task.title.as_str())).collect();
-
-    let mut running: Vec<&OrchestratorWorkflow> =
-        workflows.iter().filter(|workflow| workflow.status == WorkflowStatus::Running).collect();
-    running.sort_by(|left, right| left.id.cmp(&right.id).then_with(|| left.task_id.cmp(&right.task_id)));
+    let mut running: Vec<&WorkflowActivitySummary> = workflows.iter().collect();
+    running.sort_by(|left, right| left.workflow_id.cmp(&right.workflow_id).then_with(|| left.task_id.cmp(&right.task_id)));
 
     let attributed_count = active_count.min(running.len());
     let mut assignments: Vec<ActiveAgentAssignment> = running
@@ -318,9 +326,12 @@ fn active_agent_assignments(
         .take(attributed_count)
         .map(|workflow| ActiveAgentAssignment {
             task_id: workflow.task_id.clone(),
-            task_title: task_titles.get(workflow.task_id.as_str()).copied().unwrap_or("Unknown task").to_string(),
-            workflow_id: workflow.id.clone(),
-            phase_id: workflow_active_phase(workflow),
+            task_title: task_titles
+                .get(workflow.task_id.as_str())
+                .cloned()
+                .unwrap_or_else(|| "Unknown task".to_string()),
+            workflow_id: workflow.workflow_id.clone(),
+            phase_id: workflow.phase_id.clone(),
             attributed: true,
         })
         .collect();
@@ -337,16 +348,6 @@ fn active_agent_assignments(
     }
 
     assignments
-}
-
-fn workflow_active_phase(workflow: &OrchestratorWorkflow) -> String {
-    workflow
-        .phases
-        .iter()
-        .find(|phase| phase.status == WorkflowPhaseStatus::Running)
-        .map(|phase| phase.phase_id.clone())
-        .or_else(|| workflow.current_phase.clone())
-        .unwrap_or_else(|| "unknown".to_string())
 }
 
 fn build_task_summary_slice(
@@ -381,14 +382,18 @@ fn build_task_summary_slice(
     TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, error }
 }
 
-fn build_recent_completions_slice(tasks: Option<&[OrchestratorTask]>, error: Option<String>) -> RecentCompletionsSlice {
+fn build_recent_completions_entries_slice(
+    entries: Option<&[RecentCompletionEntry]>,
+    error: Option<String>,
+) -> RecentCompletionsSlice {
     RecentCompletionsSlice {
-        available: tasks.is_some(),
-        entries: tasks.map(recent_completions).unwrap_or_default(),
+        available: entries.is_some(),
+        entries: entries.map(|entries| entries.to_vec()).unwrap_or_default(),
         error,
     }
 }
 
+#[cfg(test)]
 fn recent_completions(tasks: &[OrchestratorTask]) -> Vec<RecentCompletionEntry> {
     let mut entries: Vec<RecentCompletionEntry> = tasks
         .iter()
@@ -416,53 +421,6 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
     }
 }
 
-fn recent_failures_from_workflows<'a>(
-    workflows: impl IntoIterator<Item = &'a OrchestratorWorkflow>,
-    limit: usize,
-) -> Vec<RecentFailureEntry> {
-    let mut entries: Vec<RecentFailureEntry> = workflows
-        .into_iter()
-        .filter(|workflow| workflow.status == WorkflowStatus::Failed)
-        .map(|workflow| {
-            let (phase_id, failed_at, phase_error) = latest_failed_phase(workflow);
-            RecentFailureEntry {
-                workflow_id: workflow.id.clone(),
-                task_id: workflow.task_id.clone(),
-                phase_id,
-                failed_at,
-                failure_reason: workflow.failure_reason.clone().or(phase_error),
-            }
-        })
-        .collect();
-
-    entries.sort_by(|left, right| {
-        right.failed_at.cmp(&left.failed_at).then_with(|| left.workflow_id.cmp(&right.workflow_id))
-    });
-    entries.truncate(limit);
-    entries
-}
-
-fn latest_failed_phase(workflow: &OrchestratorWorkflow) -> (String, DateTime<Utc>, Option<String>) {
-    let failed_phase = workflow
-        .phases
-        .iter()
-        .enumerate()
-        .filter(|(_, phase)| phase.status == WorkflowPhaseStatus::Failed)
-        .max_by(|left, right| left.1.completed_at.cmp(&right.1.completed_at).then_with(|| left.0.cmp(&right.0)))
-        .map(|(_, phase)| phase);
-
-    let phase_id = failed_phase
-        .map(|phase| phase.phase_id.clone())
-        .or_else(|| workflow.current_phase.clone())
-        .unwrap_or_else(|| "unknown".to_string());
-    let failed_at = failed_phase
-        .and_then(|phase| phase.completed_at.as_ref().cloned())
-        .or_else(|| workflow.completed_at.as_ref().cloned())
-        .unwrap_or_else(|| workflow.started_at.with_timezone(&Utc));
-    let phase_error = failed_phase.and_then(|phase| phase.error_message.clone());
-
-    (phase_id, failed_at, phase_error)
-}
 
 async fn collect_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSnapshot> {
     let project_root = project_root.to_string();
@@ -471,46 +429,74 @@ async fn collect_workflow_status_snapshot(project_root: &str) -> Result<Workflow
         .map_err(|error| anyhow!("failed to collect workflow status snapshot: {error}"))?
 }
 
-fn load_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSnapshot> {
-    let manager = WorkflowStateManager::new(project_root);
-    Ok(WorkflowStatusSnapshot {
-        active_workflows: manager.list()?,
-        recent_failures: load_recent_failures(project_root, RECENT_FAILURES_LIMIT)?,
-    })
+async fn collect_recent_completions(project_root: &str) -> Result<Vec<RecentCompletionEntry>> {
+    let project_root = project_root.to_string();
+    tokio::task::spawn_blocking(move || load_recent_completions(project_root.as_str(), RECENT_COMPLETIONS_LIMIT))
+        .await
+        .map_err(|error| anyhow!("failed to collect recent completions: {error}"))?
 }
 
-fn load_recent_failures(project_root: &str, limit: usize) -> Result<Vec<RecentFailureEntry>> {
-    let candidate_limit = i64::try_from(limit.saturating_mul(32)).context("recent failure limit overflow")?;
+fn load_recent_completions(project_root: &str, limit: usize) -> Result<Vec<RecentCompletionEntry>> {
     let conn = open_project_db(Path::new(project_root))?;
+    let limit = i64::try_from(limit).context("recent completions limit overflow")?;
     let mut stmt = conn.prepare(
-        "SELECT workflow_id, MAX(timestamp) AS failed_at
-         FROM checkpoints
-         WHERE status = 'failed'
-         GROUP BY workflow_id
-         ORDER BY failed_at DESC
+        "SELECT id, title, completed_at
+         FROM tasks
+         WHERE status = 'done'
+           AND completed_at IS NOT NULL
+         ORDER BY completed_at DESC, id ASC
          LIMIT ?1",
     )?;
-    let candidate_ids: Vec<String> =
-        stmt.query_map([candidate_limit], |row| row.get::<_, String>(0))?.filter_map(|row| row.ok()).collect();
-    drop(stmt);
-    drop(conn);
+    let rows = stmt.query_map([limit], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?))
+    })?;
 
-    let manager = WorkflowStateManager::new(project_root);
-    let mut seen = HashSet::new();
-    let mut workflows = Vec::new();
-    for workflow_id in candidate_ids {
-        if !seen.insert(workflow_id.clone()) {
-            continue;
-        }
-        let Ok(workflow) = manager.load(&workflow_id) else {
-            continue;
-        };
-        if workflow.status != WorkflowStatus::Failed {
-            continue;
-        }
-        workflows.push(workflow);
+    let mut entries = Vec::new();
+    for row in rows {
+        let (task_id, title, completed_at) = row?;
+        let completed_at = DateTime::parse_from_rfc3339(&completed_at)
+            .with_context(|| format!("invalid task completed_at timestamp for {task_id}"))?
+            .with_timezone(&Utc);
+        entries.push(RecentCompletionEntry {
+            task_id,
+            title: title.unwrap_or_else(|| "Unknown task".to_string()),
+            completed_at,
+        });
     }
-    Ok(recent_failures_from_workflows(workflows.iter(), limit))
+    Ok(entries)
+}
+
+fn load_task_titles(project_root: &str, task_ids: &[String]) -> Result<HashMap<String, String>> {
+    if task_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let conn = open_project_db(Path::new(project_root))?;
+    let mut stmt = conn.prepare("SELECT title FROM tasks WHERE id = ?1")?;
+    let mut titles = HashMap::new();
+    for task_id in task_ids {
+        let title = stmt.query_row([task_id], |row| row.get::<_, Option<String>>(0));
+        if let Ok(Some(title)) = title {
+            titles.insert(task_id.clone(), title);
+        }
+    }
+    Ok(titles)
+}
+
+fn load_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSnapshot> {
+    Ok(WorkflowStatusSnapshot {
+        active_workflows: load_active_workflow_summaries(Path::new(project_root))?,
+        recent_failures: load_recent_failed_workflow_summaries(Path::new(project_root), RECENT_FAILURES_LIMIT)?
+            .into_iter()
+            .map(|entry| RecentFailureEntry {
+                workflow_id: entry.workflow_id,
+                task_id: entry.task_id,
+                phase_id: entry.phase_id,
+                failed_at: entry.failed_at,
+                failure_reason: entry.failure_reason,
+            })
+            .collect(),
+    })
 }
 
 async fn collect_ci_status(project_root: &str) -> CiStatusSlice {

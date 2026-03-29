@@ -157,7 +157,9 @@
       "Bash(mkdir -p ~/.ao/launchapp-sveltekit-51aab1a77fe3/worktrees)",
       "WebFetch(domain:www.launchapp.dev)",
       "mcp__ao__ao_workflow_definitions_list",
-      "Bash(for id:*)"
+      "Bash(for id:*)",
+      "Bash(for f:*)",
+      "Bash(sed -i '' 's/printf ''''TASK-%03d'''' \"\"$task_num\"\"/printf ''''TASK-%03d'''' \"\"$\\(\\(10#$task_num\\)\\)\"\"/' \"$f\")"
     ]
   },
   "enableAllProjectMcpServers": true,

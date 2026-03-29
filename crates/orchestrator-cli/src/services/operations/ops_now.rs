@@ -1,13 +1,19 @@
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::path::Path;
 
-use anyhow::Result;
-use chrono::{DateTime, Utc};
-use orchestrator_core::{ServiceHub, OrchestratorTask, OrchestratorWorkflow, RequirementItem, TaskStatus, WorkflowStatus};
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Duration, Utc};
+use orchestrator_core::{
+    load_active_workflow_summaries, load_blocked_task_summaries, load_next_task_by_priority,
+    load_requirement_link_summaries_by_ids, load_stale_task_summaries, load_task_titles_by_ids,
+    BlockedTaskSummary, RequirementLinkSummary, StaleTaskSummary, WorkflowActivitySummary,
+};
 use serde::Serialize;
 
 use crate::print_value;
 
 const NOW_SCHEMA: &str = "ao.now.v1";
+const STALE_TASK_THRESHOLD_DAYS: i64 = 7;
 
 #[derive(Debug, Clone, Serialize)]
 struct NowSurface {
@@ -62,24 +68,8 @@ struct StaleItem {
     days_stale: u32,
 }
 
-pub(crate) async fn handle_now(hub: Arc<dyn ServiceHub>, json: bool) -> Result<()> {
-    let tasks_service = hub.tasks();
-    let workflows_service = hub.workflows();
-    let requirements_service = hub.planning();
-
-    let (next_task, all_tasks, all_workflows, all_requirements) = tokio::join!(
-        tasks_service.next_task(),
-        tasks_service.list(),
-        workflows_service.list(),
-        requirements_service.list_requirements()
-    );
-
-    let next_task = next_task.ok().flatten();
-    let all_tasks = all_tasks.unwrap_or_default();
-    let all_workflows = all_workflows.unwrap_or_default();
-    let all_requirements = all_requirements.unwrap_or_default();
-
-    let now_surface = build_now_surface(next_task, &all_tasks, &all_workflows, &all_requirements);
+pub(crate) async fn handle_now(project_root: &str, json: bool) -> Result<()> {
+    let now_surface = collect_now_surface(project_root).await?;
 
     if json {
         return print_value(now_surface, true);
@@ -89,84 +79,133 @@ pub(crate) async fn handle_now(hub: Arc<dyn ServiceHub>, json: bool) -> Result<(
     Ok(())
 }
 
+async fn collect_now_surface(project_root: &str) -> Result<NowSurface> {
+    let project_root = project_root.to_string();
+    tokio::task::spawn_blocking(move || load_now_surface(project_root.as_str()))
+        .await
+        .map_err(|error| anyhow!("failed to collect now surface: {error}"))?
+}
+
+fn load_now_surface(project_root: &str) -> Result<NowSurface> {
+    let project_root = Path::new(project_root);
+    let generated_at = Utc::now();
+    let stale_before = generated_at - Duration::days(STALE_TASK_THRESHOLD_DAYS);
+
+    let next_task = load_next_task_by_priority(project_root)?;
+    let linked_requirements = match next_task.as_ref() {
+        Some(task) => load_requirement_link_summaries_by_ids(project_root, &task.linked_requirements)?,
+        None => Vec::new(),
+    };
+
+    let active_workflows = load_active_workflow_summaries(project_root)?;
+    let active_task_ids: Vec<String> = active_workflows.iter().map(|workflow| workflow.task_id.clone()).collect();
+    let active_task_titles = load_task_titles_by_ids(project_root, &active_task_ids)?;
+
+    let blocked_items = load_blocked_task_summaries(project_root)?;
+    let stale_items = load_stale_task_summaries(project_root, stale_before)?;
+
+    Ok(build_now_surface(
+        generated_at,
+        build_next_task_item(next_task, linked_requirements),
+        build_active_workflow_items(active_workflows, &active_task_titles),
+        build_blocked_items(blocked_items),
+        build_stale_items(generated_at, stale_items),
+    ))
+}
+
 fn build_now_surface(
-    next_task: Option<OrchestratorTask>,
-    all_tasks: &[OrchestratorTask],
-    all_workflows: &[OrchestratorWorkflow],
-    all_requirements: &[RequirementItem],
+    generated_at: DateTime<Utc>,
+    next_task: Option<NextTaskItem>,
+    active_workflows: Vec<ActiveWorkflowItem>,
+    blocked_items: Vec<BlockedItem>,
+    stale_items: Vec<StaleItem>,
 ) -> NowSurface {
-    let next_task_item = next_task.as_ref().map(|task| {
-        let linked_reqs = task
-            .linked_requirements
-            .iter()
-            .filter_map(|req_id| all_requirements.iter().find(|r| r.id == *req_id).map(|r| LinkedRequirement {
-                id: r.id.clone(),
-                title: r.title.clone(),
-                priority: format!("{:?}", r.priority),
-            }))
-            .collect();
+    NowSurface { schema: NOW_SCHEMA, generated_at, next_task, active_workflows, blocked_items, stale_items }
+}
 
-        NextTaskItem {
-            id: task.id.clone(),
-            title: task.title.clone(),
-            priority: format!("{:?}", task.priority),
-            status: format!("{:?}", task.status),
-            linked_requirements: linked_reqs,
-        }
-    });
+fn build_next_task_item(
+    next_task: Option<orchestrator_core::OrchestratorTask>,
+    linked_requirements: Vec<RequirementLinkSummary>,
+) -> Option<NextTaskItem> {
+    next_task.map(|task| NextTaskItem {
+        id: task.id,
+        title: task.title,
+        priority: format!("{:?}", task.priority),
+        status: format!("{:?}", task.status),
+        linked_requirements: linked_requirements
+            .into_iter()
+            .map(|requirement| LinkedRequirement {
+                id: requirement.requirement_id,
+                title: requirement.title,
+                priority: storage_label(requirement.priority.as_str()),
+            })
+            .collect(),
+    })
+}
 
-    let active_workflows = all_workflows
-        .iter()
-        .filter(|w| w.status == WorkflowStatus::Running)
-        .map(|w| {
-            let task_title = all_tasks
-                .iter()
-                .find(|t| t.id == w.task_id)
-                .map(|t| t.title.clone())
-                .unwrap_or_else(|| "Unknown task".to_string());
-
-            ActiveWorkflowItem {
-                id: w.id.clone(),
-                task_id: w.task_id.clone(),
-                task_title,
-                status: format!("{:?}", w.status),
-                current_phase: w.current_phase.clone(),
-            }
+fn build_active_workflow_items(
+    active_workflows: Vec<WorkflowActivitySummary>,
+    task_titles: &HashMap<String, String>,
+) -> Vec<ActiveWorkflowItem> {
+    active_workflows
+        .into_iter()
+        .map(|workflow| ActiveWorkflowItem {
+            id: workflow.workflow_id,
+            task_id: workflow.task_id.clone(),
+            task_title: task_titles
+                .get(workflow.task_id.as_str())
+                .cloned()
+                .unwrap_or_else(|| "Unknown task".to_string()),
+            status: storage_label(workflow.status.as_str()),
+            current_phase: Some(workflow.phase_id),
         })
-        .collect();
+        .collect()
+}
 
-    let blocked_items = all_tasks
-        .iter()
-        .filter(|t| t.status.is_blocked())
-        .map(|t| BlockedItem {
-            id: t.id.clone(),
+fn build_blocked_items(blocked_tasks: Vec<BlockedTaskSummary>) -> Vec<BlockedItem> {
+    blocked_tasks
+        .into_iter()
+        .map(|task| BlockedItem {
+            id: task.task_id,
             item_type: "task".to_string(),
-            title: t.title.clone(),
-            blocked_reason: t.blocked_reason.clone(),
-            blocked_at: t.blocked_at,
+            title: task.title,
+            blocked_reason: task.blocked_reason,
+            blocked_at: task.blocked_at,
         })
-        .collect();
+        .collect()
+}
 
-    let now = Utc::now();
-    let stale_items = all_tasks
-        .iter()
-        .filter_map(|t| {
-            let days_since_update = (now.signed_duration_since(t.metadata.updated_at).num_seconds() / 86400) as u32;
-            if days_since_update > 7 && t.status == TaskStatus::InProgress {
-                Some(StaleItem {
-                    id: t.id.clone(),
-                    item_type: "task".to_string(),
-                    title: t.title.clone(),
-                    last_updated: t.metadata.updated_at,
-                    days_stale: days_since_update,
-                })
-            } else {
-                None
+fn build_stale_items(generated_at: DateTime<Utc>, stale_tasks: Vec<StaleTaskSummary>) -> Vec<StaleItem> {
+    stale_tasks
+        .into_iter()
+        .filter_map(|task| {
+            let days_stale = (generated_at.signed_duration_since(task.updated_at).num_seconds() / 86_400) as u32;
+            (days_stale > STALE_TASK_THRESHOLD_DAYS as u32).then_some(StaleItem {
+                id: task.task_id,
+                item_type: "task".to_string(),
+                title: task.title,
+                last_updated: task.updated_at,
+                days_stale,
+            })
+        })
+        .collect()
+}
+
+fn storage_label(value: &str) -> String {
+    value.split(['_', '-'])
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut label = first.to_uppercase().collect::<String>();
+                    label.push_str(chars.as_str());
+                    label
+                }
+                None => String::new(),
             }
         })
-        .collect();
-
-    NowSurface { schema: NOW_SCHEMA, generated_at: Utc::now(), next_task: next_task_item, active_workflows, blocked_items, stale_items }
+        .collect::<String>()
 }
 
 fn render_now_surface(surface: &NowSurface) -> String {
@@ -197,8 +236,13 @@ fn render_now_surface(surface: &NowSurface) -> String {
         output.push_str("  none\n");
     } else {
         for w in &surface.active_workflows {
-            output.push_str(&format!("  - id={} task_id={} task_title={} phase={}\n",
-                w.id, w.task_id, w.task_title, w.current_phase.as_deref().unwrap_or("unknown")));
+            output.push_str(&format!(
+                "  - id={} task_id={} task_title={} phase={}\n",
+                w.id,
+                w.task_id,
+                w.task_title,
+                w.current_phase.as_deref().unwrap_or("unknown")
+            ));
         }
     }
     output.push_str("\n");
@@ -221,8 +265,10 @@ fn render_now_surface(surface: &NowSurface) -> String {
         output.push_str("  none\n");
     } else {
         for item in &surface.stale_items {
-            output.push_str(&format!("  - id={} type={} title={} days_stale={}\n",
-                item.id, item.item_type, item.title, item.days_stale));
+            output.push_str(&format!(
+                "  - id={} type={} title={} days_stale={}\n",
+                item.id, item.item_type, item.title, item.days_stale
+            ));
         }
     }
 

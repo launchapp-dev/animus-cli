@@ -1,6 +1,19 @@
 use super::*;
 use orchestrator_providers::TaskServiceApi as ProviderTaskServiceApi;
 
+fn task_filter_can_use_db_predicates(filter: &TaskFilter) -> bool {
+    filter.risk.is_none()
+        && filter.assignee_type.is_none()
+        && filter.tags.is_none()
+        && filter.linked_requirement.is_none()
+        && filter.linked_architecture_entity.is_none()
+        && filter.search_text.is_none()
+}
+
+fn task_query_can_use_db_page(query: &TaskQuery) -> bool {
+    task_filter_can_use_db_predicates(&query.filter) && query.sort != TaskQuerySort::CreatedAt
+}
+
 #[async_trait]
 impl TaskServiceApi for InMemoryServiceHub {
     fn task_provider(&self) -> Arc<dyn TaskProvider> {
@@ -121,31 +134,43 @@ impl TaskServiceApi for FileServiceHub {
     }
 
     async fn query(&self, query: TaskQuery) -> Result<ListPage<OrchestratorTask>> {
+        if task_query_can_use_db_page(&query) {
+            let (ids, total) = crate::workflow::query_task_ids(&self.project_root, &query)?;
+            let items = crate::workflow::load_tasks_by_ids(&self.project_root, &ids)?;
+            return Ok(ListPage::new(items, total, query.page));
+        }
+
         let tasks = TaskServiceApi::list(self).await?;
         Ok(query_tasks(tasks, &query))
     }
 
     async fn list_filtered(&self, filter: TaskFilter) -> Result<Vec<OrchestratorTask>> {
+        if task_filter_can_use_db_predicates(&filter) {
+            let query = TaskQuery { filter, page: crate::ListPageRequest::unbounded(), sort: TaskQuerySort::Id };
+            let (ids, _) = crate::workflow::query_task_ids(&self.project_root, &query)?;
+            return crate::workflow::load_tasks_by_ids(&self.project_root, &ids);
+        }
+
         let tasks = TaskServiceApi::list(self).await?;
         Ok(tasks.into_iter().filter(|task| task_matches_filter(task, &filter)).collect())
     }
 
     async fn list_prioritized(&self) -> Result<Vec<OrchestratorTask>> {
-        let mut tasks = TaskServiceApi::list(self).await?;
-        sort_tasks_by_priority(&mut tasks);
-        Ok(tasks)
+        let query = TaskQuery {
+            filter: TaskFilter::default(),
+            page: crate::ListPageRequest::unbounded(),
+            sort: TaskQuerySort::Priority,
+        };
+        let (ids, _) = crate::workflow::query_task_ids(&self.project_root, &query)?;
+        crate::workflow::load_tasks_by_ids(&self.project_root, &ids)
     }
 
     async fn next_task(&self) -> Result<Option<OrchestratorTask>> {
-        Ok(TaskServiceApi::list_prioritized(self)
-            .await?
-            .into_iter()
-            .find(|task| matches!(task.status, TaskStatus::Ready | TaskStatus::Backlog)))
+        crate::workflow::load_next_task_by_priority(&self.project_root)
     }
 
     async fn statistics(&self) -> Result<TaskStatistics> {
-        let tasks = TaskServiceApi::list(self).await?;
-        Ok(build_task_statistics(&tasks))
+        crate::workflow::load_task_statistics(&self.project_root)
     }
 
     async fn get(&self, id: &str) -> Result<OrchestratorTask> {

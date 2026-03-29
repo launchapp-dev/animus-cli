@@ -18,7 +18,7 @@ mcp_servers:
     command: npx
     args:
     - -y
-    - '@modelcontextprotocol/server-github'
+    - 'gh-cli-mcp'
   sequential-thinking:
     command: npx
     args:

@@ -60,6 +60,68 @@ async fn mutate_daemon_state<T>(hub: &FileServiceHub, mutator: impl FnOnce(&mut 
     Ok(output)
 }
 
+pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHealth> {
+    let state_file = protocol::scoped_state_root(project_root)
+        .unwrap_or_else(|| project_root.join(".ao"))
+        .join("core-state.json");
+    let snapshot = state_store::load_daemon_state_snapshot(&state_file);
+    let config_dir = runner_config_dir(project_root);
+    let runner_connected = runner_ready_for_status(&config_dir).await;
+    let runner_pid_from_lock = runner_pid_from_lock_for_status(&config_dir);
+    let runner_pid = snapshot.runner_pid.or(runner_pid_from_lock);
+    let runner_alive = runner_pid.map(runner_process_alive_for_status).unwrap_or(false);
+
+    let mut status = snapshot.daemon_status;
+    if matches!(status, DaemonStatus::Running | DaemonStatus::Paused)
+        && runner_pid.is_some()
+        && !runner_connected
+        && !runner_alive
+    {
+        status = DaemonStatus::Crashed;
+    }
+
+    let active_agents = match snapshot.active_process_count {
+        Some(count) => count,
+        None if runner_connected => query_runner_status(&config_dir).await.map(|status| status.active_agents).unwrap_or(0),
+        None => 0,
+    };
+
+    let pm_config_path = crate::daemon_project_config_path(project_root);
+    let daemon_dir = pm_config_path.parent().map(|path| path.to_path_buf());
+    let pool_size = snapshot
+        .daemon_pool_size
+        .or_else(|| crate::load_daemon_project_config(project_root).ok().and_then(|config| config.pool_size));
+    let daemon_pid = daemon_dir.as_ref().and_then(|dir| {
+        std::fs::read_to_string(dir.join("daemon.pid")).ok().and_then(|value| value.trim().parse::<u32>().ok())
+    });
+    let process_alive = daemon_pid.map(protocol::is_process_alive);
+    if matches!(status, DaemonStatus::Stopped) && process_alive == Some(true) {
+        status = DaemonStatus::Running;
+    }
+
+    let pool_utilization_percent =
+        pool_size.map(|pool_size| if pool_size == 0 { 0.0 } else { (active_agents as f64 / pool_size as f64) * 100.0 });
+    let queued_tasks =
+        crate::workflow::count_tasks_with_status(project_root, TaskStatus::Ready).map(|count| count as u32).unwrap_or(0);
+
+    Ok(DaemonHealth {
+        healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
+        status,
+        runner_connected,
+        runner_pid,
+        active_agents,
+        pool_size,
+        project_root: Some(project_root.display().to_string()),
+        daemon_pid,
+        process_alive,
+        pool_utilization_percent,
+        queued_tasks: Some(queued_tasks),
+        total_agents_spawned: None,
+        total_agents_completed: None,
+        total_agents_failed: None,
+    })
+}
+
 #[async_trait]
 impl DaemonServiceApi for InMemoryServiceHub {
     async fn start(&self, config: DaemonStartConfig) -> Result<()> {
@@ -361,8 +423,8 @@ impl DaemonServiceApi for FileServiceHub {
 
         let pool_utilization_percent =
             pool_size.map(|ps| if ps == 0 { 0.0 } else { (active_agents as f64 / ps as f64) * 100.0 });
-        let queued_tasks = crate::workflow::load_all_tasks(&self.project_root)
-            .map(|tasks| tasks.into_values().filter(|task| task.status == TaskStatus::Ready).count() as u32)
+        let queued_tasks = crate::workflow::count_tasks_with_status(&self.project_root, TaskStatus::Ready)
+            .map(|count| count as u32)
             .unwrap_or(0);
 
         Ok(DaemonHealth {
@@ -384,14 +446,7 @@ impl DaemonServiceApi for FileServiceHub {
     }
 
     async fn logs(&self, limit: Option<usize>) -> Result<Vec<LogEntry>> {
-        let lock = self.state.read().await;
-        let mut logs = lock.logs.clone();
-        if let Some(limit) = limit {
-            if logs.len() > limit {
-                logs = logs.split_off(logs.len() - limit);
-            }
-        }
-        Ok(logs)
+        load_logs(&self.logs_file, limit)
     }
 
     async fn clear_logs(&self) -> Result<()> {
@@ -399,7 +454,8 @@ impl DaemonServiceApi for FileServiceHub {
             state.logs.clear();
             Ok(())
         })
-        .await
+        .await?;
+        clear_logs_file(&self.logs_file)
     }
 
     async fn active_agents(&self) -> Result<usize> {
@@ -524,11 +580,13 @@ mod tests {
 
     fn new_file_hub(temp: &TempDir) -> FileServiceHub {
         let state_file = temp.path().join(".ao").join("core-state.json");
+        let logs_file = state_store::logs_file_for_state_file(&state_file);
         std::fs::create_dir_all(state_file.parent().expect("state file should have a parent directory"))
             .expect("state dir should exist");
         FileServiceHub {
             state: std::sync::Arc::new(tokio::sync::RwLock::new(CoreState::default_with_stopped())),
             state_file,
+            logs_file,
             project_root: temp.path().to_path_buf(),
         }
     }

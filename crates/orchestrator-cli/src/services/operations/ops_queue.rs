@@ -155,55 +155,6 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn resolve_enqueue_dispatch_uses_requirement_workflow_default() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let workflow_config = builtin_workflow_config();
-        write_workflow_config(temp.path(), &workflow_config).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
-
-        let hub = Arc::new(InMemoryServiceHub::new());
-        let now = chrono::Utc::now();
-        hub.planning()
-            .upsert_requirement(RequirementItem {
-                id: "REQ-39".to_string(),
-                title: "Dispatch requirement".to_string(),
-                description: "queue dispatch builder test".to_string(),
-                body: None,
-                legacy_id: None,
-                category: None,
-                requirement_type: None,
-                acceptance_criteria: vec!["queues workflow".to_string()],
-                priority: RequirementPriority::Must,
-                status: RequirementStatus::Refined,
-                source: "test".to_string(),
-                tags: Vec::new(),
-                links: RequirementLinks::default(),
-                comments: Vec::new(),
-                relative_path: None,
-                linked_task_ids: Vec::new(),
-                created_at: now,
-                updated_at: now,
-            })
-            .await
-            .expect("requirement should be created");
-
-        let dispatch = resolve_enqueue_dispatch(
-            hub,
-            temp.path().to_string_lossy().as_ref(),
-            None,
-            Some("REQ-39".to_string()),
-            None,
-            None,
-            None,
-            Some(json!({"scope":"shared-ingress"})),
-        )
-        .await
-        .expect("dispatch should resolve");
-
-        assert_eq!(dispatch.workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
-        assert_eq!(dispatch.input, Some(json!({"scope":"shared-ingress"})));
-    }
 
     #[tokio::test]
     async fn resolve_enqueue_dispatch_missing_subject_shows_actionable_error() {

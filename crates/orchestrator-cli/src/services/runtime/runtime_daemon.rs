@@ -88,6 +88,41 @@ fn read_daemon_pid(project_root: &str) -> Option<u32> {
     DaemonRuntimeState::read_daemon_pid_file(project_root)
 }
 
+pub(crate) async fn handle_daemon_status_command(project_root: &str, json: bool) -> Result<()> {
+    let mut status = orchestrator_core::load_daemon_health_snapshot(Path::new(project_root)).await?.status;
+    if let Some(pid) = read_daemon_pid(project_root) {
+        let alive = is_process_alive(pid);
+        if !alive && matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
+            status = DaemonStatus::Crashed;
+            remove_daemon_pid(project_root);
+            let _ = set_daemon_pid(project_root, None);
+        }
+    } else if matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
+        status = DaemonStatus::Crashed;
+    }
+    print_value(status, json)
+}
+
+pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool) -> Result<()> {
+    let mut health = orchestrator_core::load_daemon_health_snapshot(Path::new(project_root)).await?;
+    let pid = read_daemon_pid(project_root);
+    if let Some(pid) = pid {
+        let alive = is_process_alive(pid);
+        health.daemon_pid = Some(pid);
+        health.process_alive = Some(alive);
+        if !alive && matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
+            health.status = DaemonStatus::Crashed;
+            health.healthy = false;
+            remove_daemon_pid(project_root);
+            let _ = set_daemon_pid(project_root, None);
+        }
+    } else if matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
+        health.status = DaemonStatus::Crashed;
+        health.healthy = false;
+    }
+    print_value(health, json)
+}
+
 pub(crate) fn autonomous_daemon_log_path(project_root: &str) -> PathBuf {
     let canonical_root = PathBuf::from(canonicalize_lossy(project_root));
     protocol::scoped_state_root(&canonical_root)
@@ -576,39 +611,8 @@ pub(crate) async fn handle_daemon(
             }
             result.map(|_| print_ok("daemon resumed", json))
         }
-        DaemonCommand::Status => {
-            let mut status = daemon.status().await?;
-            if let Some(pid) = read_daemon_pid(project_root) {
-                let alive = is_process_alive(pid);
-                if !alive && matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
-                    status = DaemonStatus::Crashed;
-                    remove_daemon_pid(project_root);
-                    let _ = set_daemon_pid(project_root, None);
-                }
-            } else if matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
-                status = DaemonStatus::Crashed;
-            }
-            print_value(status, json)
-        }
-        DaemonCommand::Health => {
-            let mut health = daemon.health().await?;
-            let pid = read_daemon_pid(project_root);
-            if let Some(pid) = pid {
-                let alive = is_process_alive(pid);
-                health.daemon_pid = Some(pid);
-                health.process_alive = Some(alive);
-                if !alive && matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
-                    health.status = DaemonStatus::Crashed;
-                    health.healthy = false;
-                    remove_daemon_pid(project_root);
-                    let _ = set_daemon_pid(project_root, None);
-                }
-            } else if matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
-                health.status = DaemonStatus::Crashed;
-                health.healthy = false;
-            }
-            print_value(health, json)
-        }
+        DaemonCommand::Status => handle_daemon_status_command(project_root, json).await,
+        DaemonCommand::Health => handle_daemon_health_command(project_root, json).await,
         DaemonCommand::Logs(args) => handle_daemon_logs(args.limit, args.search, project_root, json),
         DaemonCommand::Stream(args) => handle_daemon_stream(args, project_root).await,
         DaemonCommand::ClearLogs => daemon.clear_logs().await.map(|_| print_ok("daemon logs cleared", json)),
@@ -654,33 +658,8 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
         let entries = logger.read_entries_since(args.tail * 2, args.cat.as_deref(), level, None);
         all_entries.extend(entries);
     }
-    all_entries.sort_by(|a, b| a.ts.cmp(&b.ts));
-
-    let mut shown = 0usize;
-    for entry in &all_entries {
-        if let Some(ref wf) = args.workflow {
-            let matches = entry.workflow_id.as_deref() == Some(wf.as_str())
-                || entry
-                    .meta
-                    .as_ref()
-                    .and_then(|m| m.get("workflow_ref"))
-                    .and_then(|v| v.as_str())
-                    .map(|r| r.contains(wf.as_str()))
-                    .unwrap_or(false);
-            if !matches {
-                continue;
-            }
-        }
-        if let Some(ref run) = args.run {
-            if entry.run_id.as_deref() != Some(run.as_str()) {
-                continue;
-            }
-        }
-        print_entry(entry);
-        shown += 1;
-        if shown >= args.tail {
-            break;
-        }
+    for entry in select_initial_stream_entries(all_entries, &args, level) {
+        print_entry(&entry);
     }
 
     if args.no_follow {
@@ -714,27 +693,9 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
                 let _ = reader.seek(SeekFrom::Start(last_pos));
                 for line in reader.lines().flatten() {
                     if let Ok(entry) = serde_json::from_str::<orchestrator_logging::LogEntry>(&line) {
-                        if let Some(ref cat) = args.cat {
-                            if !entry.cat.starts_with(cat.as_str()) {
-                                continue;
-                            }
+                        if stream_entry_matches(&entry, &args, level) {
+                            print_entry(&entry);
                         }
-                        if let Some(l) = level {
-                            if (entry.level as u8) < (l as u8) {
-                                continue;
-                            }
-                        }
-                        if let Some(ref wf) = args.workflow {
-                            if entry.workflow_id.as_deref() != Some(wf.as_str()) {
-                                continue;
-                            }
-                        }
-                        if let Some(ref run) = args.run {
-                            if entry.run_id.as_deref() != Some(run.as_str()) {
-                                continue;
-                            }
-                        }
-                        print_entry(&entry);
                     }
                 }
             }
@@ -813,6 +774,58 @@ fn short_id(id: &str) -> &str {
     } else {
         id
     }
+}
+
+fn stream_workflow_matches(entry: &orchestrator_logging::LogEntry, workflow: Option<&str>) -> bool {
+    let Some(workflow) = workflow else {
+        return true;
+    };
+
+    entry.workflow_id.as_deref() == Some(workflow)
+        || entry
+            .meta
+            .as_ref()
+            .and_then(|m| m.get("workflow_ref"))
+            .and_then(|v| v.as_str())
+            .map(|r| r == workflow)
+            .unwrap_or(false)
+}
+
+fn stream_entry_matches(
+    entry: &orchestrator_logging::LogEntry,
+    args: &DaemonStreamArgs,
+    level: Option<orchestrator_logging::Level>,
+) -> bool {
+    if let Some(ref cat) = args.cat {
+        if !entry.cat.starts_with(cat.as_str()) {
+            return false;
+        }
+    }
+    if let Some(level) = level {
+        if (entry.level as u8) < (level as u8) {
+            return false;
+        }
+    }
+    if !stream_workflow_matches(entry, args.workflow.as_deref()) {
+        return false;
+    }
+    if let Some(ref run) = args.run {
+        if entry.run_id.as_deref() != Some(run.as_str()) {
+            return false;
+        }
+    }
+    true
+}
+
+fn select_initial_stream_entries(
+    mut entries: Vec<orchestrator_logging::LogEntry>,
+    args: &DaemonStreamArgs,
+    level: Option<orchestrator_logging::Level>,
+) -> Vec<orchestrator_logging::LogEntry> {
+    entries.sort_by(|a, b| a.ts.cmp(&b.ts));
+    let filtered: Vec<_> = entries.into_iter().filter(|entry| stream_entry_matches(entry, args, level)).collect();
+    let start = filtered.len().saturating_sub(args.tail);
+    filtered.into_iter().skip(start).collect()
 }
 
 fn discover_log_files(logs_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
@@ -933,6 +946,7 @@ async fn handle_daemon_events(args: DaemonEventsArgs, json: bool) -> Result<()> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use orchestrator_logging::{Level, LogEntry};
     use std::process::Command;
 
     #[test]
@@ -1024,5 +1038,88 @@ mod tests {
             .expect("probe should succeed");
         let exit_status = status.expect("process should have exited");
         assert_eq!(exit_status.code(), Some(9));
+    }
+
+    fn stream_args() -> DaemonStreamArgs {
+        DaemonStreamArgs { cat: None, level: None, workflow: None, run: None, tail: 20, no_follow: true, pretty: false }
+    }
+
+    fn log_entry(ts: &str, workflow_id: Option<&str>, workflow_ref: Option<&str>, run_id: Option<&str>) -> LogEntry {
+        LogEntry {
+            ts: ts.to_string(),
+            level: Level::Info,
+            cat: "daemon.tick".to_string(),
+            msg: format!("entry-{ts}"),
+            workflow_id: workflow_id.map(ToOwned::to_owned),
+            task_id: None,
+            schedule_id: None,
+            phase_id: None,
+            model: None,
+            tool: None,
+            provider: None,
+            run_id: run_id.map(ToOwned::to_owned),
+            session_id: None,
+            turn: None,
+            input_tokens: None,
+            output_tokens: None,
+            total_tokens: None,
+            tool_calls: None,
+            role: None,
+            content: None,
+            subject_id: None,
+            status: None,
+            from_status: None,
+            to_status: None,
+            branch: None,
+            pr_number: None,
+            mcp_tool: None,
+            mcp_server: None,
+            fallback_from: None,
+            fallback_to: None,
+            cost: None,
+            exit_code: None,
+            duration_ms: None,
+            error: None,
+            meta: workflow_ref.map(|value| serde_json::json!({ "workflow_ref": value })),
+        }
+    }
+
+    #[test]
+    fn select_initial_stream_entries_returns_last_matching_entries() {
+        let mut args = stream_args();
+        args.tail = 2;
+
+        let selected = select_initial_stream_entries(
+            vec![
+                log_entry("2026-01-01T00:00:01Z", None, None, None),
+                log_entry("2026-01-01T00:00:02Z", None, None, None),
+                log_entry("2026-01-01T00:00:03Z", None, None, None),
+            ],
+            &args,
+            None,
+        );
+
+        let timestamps: Vec<_> = selected.iter().map(|entry| entry.ts.as_str()).collect();
+        assert_eq!(timestamps, vec!["2026-01-01T00:00:02Z", "2026-01-01T00:00:03Z"]);
+    }
+
+    #[test]
+    fn stream_entry_matches_uses_same_workflow_logic_for_follow_mode() {
+        let mut args = stream_args();
+        args.workflow = Some("default-plan".to_string());
+
+        let matching = log_entry("2026-01-01T00:00:01Z", None, Some("default-plan"), None);
+        let non_matching = log_entry("2026-01-01T00:00:02Z", None, Some("default-build"), None);
+
+        assert!(stream_entry_matches(&matching, &args, None));
+        assert!(!stream_entry_matches(&non_matching, &args, None));
+    }
+
+    #[test]
+    fn stream_workflow_matches_requires_exact_workflow_ref_match() {
+        let entry = log_entry("2026-01-01T00:00:01Z", None, Some("work-planner"), None);
+
+        assert!(stream_workflow_matches(&entry, Some("work-planner")));
+        assert!(!stream_workflow_matches(&entry, Some("planner")));
     }
 }

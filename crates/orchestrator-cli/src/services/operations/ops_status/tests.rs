@@ -1,8 +1,7 @@
 use super::*;
 use orchestrator_core::{
-    Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope, SubjectRef,
-    TaskDependency, TaskMetadata, TaskType, WorkflowCheckpointMetadata, WorkflowDecisionRecord, WorkflowMachineState,
-    WorkflowMetadata, WorkflowPhaseExecution,
+    Assignee, ChecklistItem, Complexity, ImpactArea, Priority, ResourceRequirements, RiskLevel, Scope,
+    TaskDependency, TaskMetadata, TaskType, WorkflowActivitySummary, WorkflowMetadata,
 };
 use std::collections::HashMap;
 
@@ -57,51 +56,12 @@ fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<Dat
     }
 }
 
-fn make_phase(
-    phase_id: &str,
-    status: WorkflowPhaseStatus,
-    completed_at: Option<DateTime<Utc>>,
-    error_message: Option<&str>,
-) -> WorkflowPhaseExecution {
-    WorkflowPhaseExecution {
-        phase_id: phase_id.to_string(),
-        status,
-        started_at: None,
-        completed_at,
-        attempt: 1,
-        error_message: error_message.map(str::to_string),
-    }
-}
-
-fn make_workflow(
-    id: &str,
-    task_id: &str,
-    status: WorkflowStatus,
-    current_phase: Option<&str>,
-    started_at: DateTime<Utc>,
-    completed_at: Option<DateTime<Utc>>,
-    phases: Vec<WorkflowPhaseExecution>,
-    failure_reason: Option<&str>,
-) -> OrchestratorWorkflow {
-    OrchestratorWorkflow {
-        id: id.to_string(),
+fn make_activity_summary(workflow_id: &str, task_id: &str, phase_id: &str) -> WorkflowActivitySummary {
+    WorkflowActivitySummary {
+        workflow_id: workflow_id.to_string(),
         task_id: task_id.to_string(),
-        workflow_ref: None,
-        input: None,
-        vars: HashMap::new(),
-        status,
-        current_phase_index: 0,
-        phases,
-        machine_state: WorkflowMachineState::Idle,
-        current_phase: current_phase.map(str::to_string),
-        started_at,
-        completed_at,
-        failure_reason: failure_reason.map(str::to_string),
-        checkpoint_metadata: WorkflowCheckpointMetadata::default(),
-        rework_counts: HashMap::<String, u32>::new(),
-        total_reworks: 0,
-        decision_history: Vec::<WorkflowDecisionRecord>::new(),
-        subject: SubjectRef::task(task_id.to_string()),
+        status: "running".to_string(),
+        phase_id: phase_id.to_string(),
     }
 }
 
@@ -125,123 +85,12 @@ fn recent_completions_are_sorted_and_limited() {
 }
 
 #[test]
-fn recent_failures_are_sorted_limited_and_fallback_current_phase() {
-    let workflows = vec![
-        make_workflow(
-            "WF-002",
-            "TASK-2",
-            WorkflowStatus::Failed,
-            Some("implementation"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-26T10:00:00Z")),
-            Vec::new(),
-            Some("runner timeout"),
-        ),
-        make_workflow(
-            "WF-001",
-            "TASK-1",
-            WorkflowStatus::Failed,
-            Some("qa"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-25T11:00:00Z")),
-            vec![make_phase(
-                "qa",
-                WorkflowPhaseStatus::Failed,
-                Some(parse_time("2026-02-25T11:00:00Z")),
-                Some("qa gate failed"),
-            )],
-            None,
-        ),
-        make_workflow(
-            "WF-003",
-            "TASK-3",
-            WorkflowStatus::Failed,
-            Some("merge"),
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-24T11:00:00Z")),
-            vec![
-                make_phase(
-                    "implementation",
-                    WorkflowPhaseStatus::Failed,
-                    Some(parse_time("2026-02-24T10:00:00Z")),
-                    Some("compile failed"),
-                ),
-                make_phase(
-                    "qa",
-                    WorkflowPhaseStatus::Failed,
-                    Some(parse_time("2026-02-24T11:00:00Z")),
-                    Some("tests failed"),
-                ),
-            ],
-            None,
-        ),
-        make_workflow(
-            "WF-004",
-            "TASK-4",
-            WorkflowStatus::Running,
-            Some("implementation"),
-            parse_time("2026-02-20T00:00:00Z"),
-            None,
-            vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
-            None,
-        ),
-        make_workflow(
-            "WF-005",
-            "TASK-5",
-            WorkflowStatus::Failed,
-            None,
-            parse_time("2026-02-20T00:00:00Z"),
-            Some(parse_time("2026-02-27T09:00:00Z")),
-            Vec::new(),
-            Some("unknown failure"),
-        ),
-    ];
-
-    let entries = recent_failures_from_workflows(workflows.iter(), 3);
-    assert_eq!(entries.len(), 3, "entries should be capped at 3");
-    assert_eq!(entries[0].workflow_id, "WF-005");
-    assert_eq!(entries[1].workflow_id, "WF-002");
-    assert_eq!(entries[1].phase_id, "implementation", "current_phase should be used when no failed phase exists");
-    assert_eq!(entries[2].phase_id, "qa", "latest failed phase should be selected");
-}
-
-#[test]
-fn latest_failed_phase_uses_phase_order_when_timestamps_are_missing() {
-    let workflow = make_workflow(
-        "WF-100",
-        "TASK-100",
-        WorkflowStatus::Failed,
-        Some("implementation"),
-        parse_time("2026-02-20T00:00:00Z"),
-        Some(parse_time("2026-02-27T09:00:00Z")),
-        vec![
-            make_phase("implementation", WorkflowPhaseStatus::Failed, None, Some("compile failed")),
-            make_phase("qa", WorkflowPhaseStatus::Failed, None, Some("tests failed")),
-        ],
-        None,
-    );
-
-    let (phase_id, failed_at, failure_reason) = latest_failed_phase(&workflow);
-    assert_eq!(phase_id, "qa");
-    assert_eq!(failed_at, parse_time("2026-02-27T09:00:00Z"));
-    assert_eq!(failure_reason.as_deref(), Some("tests failed"));
-}
-
-#[test]
 fn active_agent_assignments_fill_unknown_slots() {
-    let workflows = vec![make_workflow(
-        "WF-001",
-        "TASK-001",
-        WorkflowStatus::Running,
-        Some("implementation"),
-        parse_time("2026-02-20T00:00:00Z"),
-        None,
-        vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
-        None,
-    )];
-    let tasks = vec![make_task("TASK-001", "Implement status", TaskStatus::InProgress, None)];
+    let workflows = vec![make_activity_summary("WF-001", "TASK-001", "implementation")];
+    let mut titles = HashMap::new();
+    titles.insert("TASK-001".to_string(), "Implement status".to_string());
 
-    let assignments = active_agent_assignments(3, &workflows, &tasks);
+    let assignments = active_agent_assignments(3, &workflows, &titles);
     assert_eq!(assignments.len(), 3);
     assert!(assignments[0].attributed);
     assert_eq!(assignments[0].task_id, "TASK-001");
@@ -252,51 +101,23 @@ fn active_agent_assignments_fill_unknown_slots() {
 #[test]
 fn active_agent_assignments_are_limited_to_daemon_count() {
     let workflows = vec![
-        make_workflow(
-            "WF-001",
-            "TASK-001",
-            WorkflowStatus::Running,
-            Some("implementation"),
-            parse_time("2026-02-20T00:00:00Z"),
-            None,
-            vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
-            None,
-        ),
-        make_workflow(
-            "WF-002",
-            "TASK-002",
-            WorkflowStatus::Running,
-            Some("qa"),
-            parse_time("2026-02-20T00:00:00Z"),
-            None,
-            vec![make_phase("qa", WorkflowPhaseStatus::Running, None, None)],
-            None,
-        ),
+        make_activity_summary("WF-001", "TASK-001", "implementation"),
+        make_activity_summary("WF-002", "TASK-002", "qa"),
     ];
-    let tasks = vec![
-        make_task("TASK-001", "One", TaskStatus::InProgress, None),
-        make_task("TASK-002", "Two", TaskStatus::InProgress, None),
-    ];
+    let mut titles = HashMap::new();
+    titles.insert("TASK-001".to_string(), "One".to_string());
+    titles.insert("TASK-002".to_string(), "Two".to_string());
 
-    let assignments = active_agent_assignments(1, &workflows, &tasks);
+    let assignments = active_agent_assignments(1, &workflows, &titles);
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0].workflow_id, "WF-001");
 }
 
 #[test]
 fn active_agent_assignment_uses_unknown_task_title_when_task_is_missing() {
-    let workflows = vec![make_workflow(
-        "WF-001",
-        "TASK-404",
-        WorkflowStatus::Running,
-        Some("implementation"),
-        parse_time("2026-02-20T00:00:00Z"),
-        None,
-        vec![make_phase("implementation", WorkflowPhaseStatus::Running, None, None)],
-        None,
-    )];
+    let workflows = vec![make_activity_summary("WF-001", "TASK-404", "implementation")];
 
-    let assignments = active_agent_assignments(1, &workflows, &[]);
+    let assignments = active_agent_assignments(1, &workflows, &HashMap::new());
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0].task_id, "TASK-404");
     assert_eq!(assignments[0].task_title, "Unknown task");
@@ -324,26 +145,6 @@ fn task_summary_uses_done_status_from_by_status() {
     assert_eq!(summary.done, 2);
     assert_eq!(summary.in_progress, 3);
     assert_eq!(summary.blocked, 1);
-}
-
-#[test]
-fn task_summary_falls_back_to_task_scan_when_statistics_unavailable() {
-    let tasks = vec![
-        make_task("TASK-001", "Done", TaskStatus::Done, None),
-        make_task("TASK-002", "In Progress", TaskStatus::InProgress, None),
-        make_task("TASK-003", "Ready", TaskStatus::Ready, None),
-        make_task("TASK-004", "Blocked", TaskStatus::Blocked, None),
-        make_task("TASK-005", "On Hold", TaskStatus::OnHold, None),
-        make_task("TASK-006", "Backlog", TaskStatus::Backlog, None),
-    ];
-
-    let summary = build_task_summary_slice(None, Some(&tasks), None);
-    assert!(summary.available);
-    assert_eq!(summary.total, 6);
-    assert_eq!(summary.done, 1);
-    assert_eq!(summary.in_progress, 1);
-    assert_eq!(summary.ready, 1);
-    assert_eq!(summary.blocked, 2);
 }
 
 #[test]

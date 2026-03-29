@@ -1,6 +1,9 @@
-use chrono::{DateTime, Utc};
-use orchestrator_core::{OrchestratorTask, TaskStatus};
 use serde::Serialize;
+
+#[cfg(test)]
+use chrono::{DateTime, Utc};
+#[cfg(test)]
+use orchestrator_core::{OrchestratorTask, TaskStatus};
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub(crate) struct StaleInProgressEntry {
@@ -24,6 +27,7 @@ impl StaleInProgressSummary {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn stale_in_progress_summary(
     tasks: &[OrchestratorTask],
     threshold_hours: u64,
@@ -54,6 +58,7 @@ pub(crate) fn stale_in_progress_summary(
     StaleInProgressSummary { threshold_hours, count: stale_entries.len(), tasks: stale_entries }
 }
 
+#[cfg(test)]
 fn task_age_seconds(now: DateTime<Utc>, updated_at: DateTime<Utc>) -> u64 {
     now.signed_duration_since(updated_at).num_seconds().max(0) as u64
 }

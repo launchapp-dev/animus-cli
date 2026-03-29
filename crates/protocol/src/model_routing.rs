@@ -326,7 +326,6 @@ mod tests {
         assert_eq!(tool_for_model_id("gpt-5.3-codex"), "codex");
     }
 
-
     #[test]
     fn phase_capabilities_defaults_are_correct() {
         let impl_caps = PhaseCapabilities::defaults_for_phase("implementation");

@@ -1,14 +1,22 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::{Duration, Utc};
-use rusqlite::{params, Connection};
+use chrono::{DateTime, Duration, Utc};
+use rusqlite::{params, params_from_iter, types::Value, Connection};
 use serde::{Deserialize, Serialize};
 
-use crate::types::{CheckpointReason, ListPageRequest, OrchestratorWorkflow, WorkflowCheckpoint};
+use crate::types::{
+    CheckpointReason, ListPageRequest, OrchestratorTask, OrchestratorWorkflow, RequirementFilter, RequirementItem,
+    RequirementPriority, RequirementQuery, RequirementQuerySort, TaskFilter,
+    TaskPriorityDistribution, TaskPriorityPolicyReport, TaskQuery, TaskQuerySort, TaskStatistics, TaskStatus,
+    WorkflowCheckpoint, WorkflowPhaseStatus, WorkflowStatus,
+};
 
 pub const DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE: usize = 3;
+const TASK_SUMMARY_COLUMNS_MARKER_FILE: &str = "task-summary-columns-v2.marker";
+const WORKFLOW_SUMMARY_COLUMNS_MARKER_FILE: &str = "workflow-summary-columns-v2.marker";
+const REQUIREMENT_SUMMARY_COLUMNS_MARKER_FILE: &str = "requirement-summary-columns-v1.marker";
 
 fn compress_json(json: &str) -> Vec<u8> {
     zstd::encode_all(json.as_bytes(), 3).unwrap_or_else(|_| json.as_bytes().to_vec())
@@ -25,6 +33,58 @@ fn decompress_json(data: &[u8]) -> Result<String> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct CleanupResult {
     pub deleted: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowActivitySummary {
+    pub workflow_id: String,
+    pub task_id: String,
+    pub status: String,
+    pub phase_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowFailureSummary {
+    pub workflow_id: String,
+    pub task_id: String,
+    pub phase_id: String,
+    pub failed_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowHistorySummary {
+    pub workflow_id: String,
+    pub task_id: String,
+    pub status: String,
+    pub started_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RequirementLinkSummary {
+    pub requirement_id: String,
+    pub title: String,
+    pub priority: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockedTaskSummary {
+    pub task_id: String,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StaleTaskSummary {
+    pub task_id: String,
+    pub title: String,
+    pub updated_at: DateTime<Utc>,
 }
 
 const UNKNOWN_CHECKPOINT_PHASE_BUCKET: &str = "unknown";
@@ -58,9 +118,31 @@ impl WorkflowStateManager {
     pub fn save(&self, workflow: &OrchestratorWorkflow) -> Result<()> {
         let conn = self.open_db()?;
         let data = compress_json(&serde_json::to_string(workflow)?);
+        let summary = workflow_summary_fields(workflow);
         conn.execute(
-            "INSERT OR REPLACE INTO workflows (id, status, json) VALUES (?1, ?2, ?3)",
-            params![workflow.id, status_str(workflow.status), data],
+            "INSERT OR REPLACE INTO workflows (
+                id,
+                status,
+                task_id,
+                phase_id,
+                failed_at,
+                failure_reason,
+                started_at,
+                completed_at,
+                json
+            )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                workflow.id,
+                status_str(workflow.status),
+                summary.task_id,
+                summary.phase_id,
+                summary.failed_at,
+                summary.failure_reason,
+                summary.started_at,
+                summary.completed_at,
+                data
+            ],
         )?;
         Ok(())
     }
@@ -123,13 +205,11 @@ impl WorkflowStateManager {
         let sql_with_status = "SELECT id
              FROM workflows
              WHERE status = ?1
-             ORDER BY COALESCE((SELECT MIN(timestamp) FROM checkpoints WHERE workflow_id = workflows.id), '') DESC,
-                      id ASC
+             ORDER BY started_at DESC, id ASC
              LIMIT ?2 OFFSET ?3";
         let sql_all = "SELECT id
              FROM workflows
-             ORDER BY COALESCE((SELECT MIN(timestamp) FROM checkpoints WHERE workflow_id = workflows.id), '') DESC,
-                      id ASC
+             ORDER BY started_at DESC, id ASC
              LIMIT ?1 OFFSET ?2";
 
         let mut stmt = conn.prepare(match status {
@@ -390,6 +470,109 @@ impl WorkflowStateManager {
     }
 }
 
+pub fn load_active_workflow_summaries(project_root: &std::path::Path) -> Result<Vec<WorkflowActivitySummary>> {
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, status, phase_id
+         FROM workflows
+         WHERE status IN ('running', 'paused')
+         ORDER BY id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+
+    let mut workflows = Vec::new();
+    for row in rows {
+        let (workflow_id, task_id, status, phase_id) = row?;
+        workflows.push(WorkflowActivitySummary {
+            workflow_id,
+            task_id: task_id.unwrap_or_default(),
+            status,
+            phase_id: phase_id.unwrap_or_else(|| "unknown".to_string()),
+        });
+    }
+    Ok(workflows)
+}
+
+pub fn load_recent_failed_workflow_summaries(
+    project_root: &std::path::Path,
+    limit: usize,
+) -> Result<Vec<WorkflowFailureSummary>> {
+    let conn = open_project_db(project_root)?;
+    let limit = i64::try_from(limit).context("recent failed workflow limit overflow")?;
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, phase_id, failed_at, failure_reason
+         FROM workflows
+         WHERE status = 'failed'
+           AND failed_at IS NOT NULL
+         ORDER BY failed_at DESC, id ASC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    })?;
+
+    let mut workflows = Vec::new();
+    for row in rows {
+        let (workflow_id, task_id, phase_id, failed_at, failure_reason) = row?;
+        let failed_at = DateTime::parse_from_rfc3339(&failed_at)
+            .with_context(|| format!("invalid workflow failed_at timestamp for {workflow_id}"))?
+            .with_timezone(&Utc);
+        workflows.push(WorkflowFailureSummary {
+            workflow_id,
+            task_id: task_id.unwrap_or_default(),
+            phase_id: phase_id.unwrap_or_else(|| "unknown".to_string()),
+            failed_at,
+            failure_reason,
+        });
+    }
+    Ok(workflows)
+}
+
+pub fn load_workflow_history_summaries(project_root: &std::path::Path) -> Result<Vec<WorkflowHistorySummary>> {
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, task_id, status, started_at, completed_at
+         FROM workflows
+         WHERE started_at IS NOT NULL
+         ORDER BY started_at DESC, id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
+            row.get::<_, Option<String>>(4)?,
+        ))
+    })?;
+
+    let mut workflows = Vec::new();
+    for row in rows {
+        let (workflow_id, task_id, status, started_at, completed_at) = row?;
+        workflows.push(WorkflowHistorySummary {
+            workflow_id,
+            task_id: task_id.unwrap_or_default(),
+            status,
+            started_at: parse_rfc3339(&started_at, "workflows.started_at")?,
+            completed_at: parse_optional_rfc3339(completed_at, "workflows.completed_at")?,
+        });
+    }
+    Ok(workflows)
+}
+
 pub fn db_path_for_project(project_root: &std::path::Path) -> PathBuf {
     protocol::scoped_state_root(project_root).expect("scoped_state_root requires a home directory").join("workflow.db")
 }
@@ -412,6 +595,12 @@ pub fn open_project_db(project_root: &std::path::Path) -> Result<Connection> {
         "CREATE TABLE IF NOT EXISTS workflows (
             id     TEXT PRIMARY KEY,
             status TEXT NOT NULL,
+            task_id TEXT,
+            phase_id TEXT,
+            failed_at TEXT,
+            failure_reason TEXT,
+            started_at TEXT,
+            completed_at TEXT,
             json   TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows(status);
@@ -428,23 +617,329 @@ pub fn open_project_db(project_root: &std::path::Path) -> Result<Connection> {
         );
         CREATE INDEX IF NOT EXISTS idx_cp_workflow ON checkpoints(workflow_id);
         CREATE TABLE IF NOT EXISTS tasks (
-            id     TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            json   TEXT NOT NULL
+            id           TEXT PRIMARY KEY,
+            status       TEXT NOT NULL,
+            title        TEXT,
+            priority     TEXT,
+            task_type    TEXT,
+            updated_at   TEXT,
+            completed_at TEXT,
+            blocked_reason TEXT,
+            blocked_at   TEXT,
+            json         TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_task_status ON tasks(status);
         CREATE TABLE IF NOT EXISTS requirements (
-            id     TEXT PRIMARY KEY,
-            status TEXT NOT NULL,
-            json   TEXT NOT NULL
+            id               TEXT PRIMARY KEY,
+            status           TEXT NOT NULL,
+            priority         TEXT,
+            category         TEXT,
+            requirement_type TEXT,
+            updated_at       TEXT,
+            json             TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_req_status ON requirements(status);",
     )
     .with_context(|| "failed to create tables")?;
 
+    ensure_workflow_summary_columns(project_root, &conn).context("failed to ensure workflow summary columns")?;
+    ensure_task_summary_columns(project_root, &conn).context("failed to ensure task summary columns")?;
+    ensure_requirement_summary_columns(project_root, &conn).context("failed to ensure requirement summary columns")?;
     maybe_migrate_workflow_json(project_root, &conn);
 
     Ok(conn)
+}
+
+fn ensure_workflow_summary_columns(project_root: &std::path::Path, conn: &Connection) -> Result<()> {
+    let columns = workflow_table_columns(conn)?;
+
+    if !columns.contains("task_id") {
+        conn.execute("ALTER TABLE workflows ADD COLUMN task_id TEXT", [])
+            .context("failed to add workflows.task_id column")?;
+    }
+    if !columns.contains("phase_id") {
+        conn.execute("ALTER TABLE workflows ADD COLUMN phase_id TEXT", [])
+            .context("failed to add workflows.phase_id column")?;
+    }
+    if !columns.contains("failed_at") {
+        conn.execute("ALTER TABLE workflows ADD COLUMN failed_at TEXT", [])
+            .context("failed to add workflows.failed_at column")?;
+    }
+    if !columns.contains("failure_reason") {
+        conn.execute("ALTER TABLE workflows ADD COLUMN failure_reason TEXT", [])
+            .context("failed to add workflows.failure_reason column")?;
+    }
+    if !columns.contains("started_at") {
+        conn.execute("ALTER TABLE workflows ADD COLUMN started_at TEXT", [])
+            .context("failed to add workflows.started_at column")?;
+    }
+    if !columns.contains("completed_at") {
+        conn.execute("ALTER TABLE workflows ADD COLUMN completed_at TEXT", [])
+            .context("failed to add workflows.completed_at column")?;
+    }
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_wf_failed_at ON workflows(status, failed_at)", [])
+        .context("failed to create idx_wf_failed_at")?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_wf_started_at ON workflows(started_at)", [])
+        .context("failed to create idx_wf_started_at")?;
+
+    maybe_backfill_workflow_summary_columns(project_root, conn)
+}
+
+fn workflow_table_columns(conn: &Connection) -> Result<BTreeSet<String>> {
+    let mut stmt = conn.prepare("PRAGMA table_info(workflows)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?.filter_map(|row| row.ok()).collect();
+    Ok(columns)
+}
+
+fn maybe_backfill_workflow_summary_columns(project_root: &std::path::Path, conn: &Connection) -> Result<()> {
+    let marker = db_path_for_project(project_root).with_file_name(WORKFLOW_SUMMARY_COLUMNS_MARKER_FILE);
+    if marker.exists() {
+        return Ok(());
+    }
+
+    let has_rows: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM workflows LIMIT 1)", [], |row| row.get(0)).unwrap_or(false);
+    if !has_rows {
+        std::fs::File::create(marker).context("failed to create workflow summary marker")?;
+        return Ok(());
+    }
+
+    let mut select = conn.prepare("SELECT id, json FROM workflows")?;
+    let rows: Vec<(String, Vec<u8>)> = select
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(select);
+
+    let mut update = conn.prepare(
+        "UPDATE workflows
+         SET task_id = ?2,
+             phase_id = ?3,
+             failed_at = ?4,
+             failure_reason = ?5,
+             started_at = ?6,
+             completed_at = ?7
+         WHERE id = ?1",
+    )?;
+
+    for (workflow_id, data) in rows {
+        let json = decompress_json(&data)?;
+        let workflow = serde_json::from_str::<OrchestratorWorkflow>(&json)?;
+        let summary = workflow_summary_fields(&workflow);
+        update.execute(params![
+            workflow_id,
+            summary.task_id,
+            summary.phase_id,
+            summary.failed_at,
+            summary.failure_reason,
+            summary.started_at,
+            summary.completed_at
+        ])?;
+    }
+
+    std::fs::File::create(marker).context("failed to create workflow summary marker")?;
+    Ok(())
+}
+
+fn ensure_task_summary_columns(project_root: &std::path::Path, conn: &Connection) -> Result<()> {
+    let columns = task_table_columns(conn)?;
+
+    if !columns.contains("title") {
+        conn.execute("ALTER TABLE tasks ADD COLUMN title TEXT", []).context("failed to add tasks.title column")?;
+    }
+    if !columns.contains("priority") {
+        conn.execute("ALTER TABLE tasks ADD COLUMN priority TEXT", [])
+            .context("failed to add tasks.priority column")?;
+    }
+    if !columns.contains("task_type") {
+        conn.execute("ALTER TABLE tasks ADD COLUMN task_type TEXT", [])
+            .context("failed to add tasks.task_type column")?;
+    }
+    if !columns.contains("updated_at") {
+        conn.execute("ALTER TABLE tasks ADD COLUMN updated_at TEXT", [])
+            .context("failed to add tasks.updated_at column")?;
+    }
+    if !columns.contains("completed_at") {
+        conn.execute("ALTER TABLE tasks ADD COLUMN completed_at TEXT", [])
+            .context("failed to add tasks.completed_at column")?;
+    }
+    if !columns.contains("blocked_reason") {
+        conn.execute("ALTER TABLE tasks ADD COLUMN blocked_reason TEXT", [])
+            .context("failed to add tasks.blocked_reason column")?;
+    }
+    if !columns.contains("blocked_at") {
+        conn.execute("ALTER TABLE tasks ADD COLUMN blocked_at TEXT", [])
+            .context("failed to add tasks.blocked_at column")?;
+    }
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_task_completed_at ON tasks(completed_at)", [])
+        .context("failed to create idx_task_completed_at")?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_task_status_updated_at ON tasks(status, updated_at)", [])
+        .context("failed to create idx_task_status_updated_at")?;
+
+    maybe_backfill_task_summary_columns(project_root, conn)
+}
+
+fn ensure_requirement_summary_columns(project_root: &std::path::Path, conn: &Connection) -> Result<()> {
+    let columns = requirement_table_columns(conn)?;
+
+    if !columns.contains("priority") {
+        conn.execute("ALTER TABLE requirements ADD COLUMN priority TEXT", [])
+            .context("failed to add requirements.priority column")?;
+    }
+    if !columns.contains("category") {
+        conn.execute("ALTER TABLE requirements ADD COLUMN category TEXT", [])
+            .context("failed to add requirements.category column")?;
+    }
+    if !columns.contains("requirement_type") {
+        conn.execute("ALTER TABLE requirements ADD COLUMN requirement_type TEXT", [])
+            .context("failed to add requirements.requirement_type column")?;
+    }
+    if !columns.contains("updated_at") {
+        conn.execute("ALTER TABLE requirements ADD COLUMN updated_at TEXT", [])
+            .context("failed to add requirements.updated_at column")?;
+    }
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_req_priority ON requirements(priority)", [])
+        .context("failed to create idx_req_priority")?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_req_updated_at ON requirements(updated_at)", [])
+        .context("failed to create idx_req_updated_at")?;
+
+    maybe_backfill_requirement_summary_columns(project_root, conn)
+}
+
+fn task_table_columns(conn: &Connection) -> Result<BTreeSet<String>> {
+    let mut stmt = conn.prepare("PRAGMA table_info(tasks)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?.filter_map(|row| row.ok()).collect();
+    Ok(columns)
+}
+
+fn requirement_table_columns(conn: &Connection) -> Result<BTreeSet<String>> {
+    let mut stmt = conn.prepare("PRAGMA table_info(requirements)")?;
+    let columns = stmt.query_map([], |row| row.get::<_, String>(1))?.filter_map(|row| row.ok()).collect();
+    Ok(columns)
+}
+
+fn maybe_backfill_task_summary_columns(project_root: &std::path::Path, conn: &Connection) -> Result<()> {
+    let marker = db_path_for_project(project_root).with_file_name(TASK_SUMMARY_COLUMNS_MARKER_FILE);
+    if marker.exists() {
+        return Ok(());
+    }
+
+    let has_rows: bool =
+        conn.query_row("SELECT EXISTS(SELECT 1 FROM tasks LIMIT 1)", [], |row| row.get(0)).unwrap_or(false);
+    if !has_rows {
+        std::fs::File::create(marker).context("failed to create task summary marker")?;
+        return Ok(());
+    }
+
+    let mut select = conn.prepare(
+        "SELECT id, json
+         FROM tasks
+         WHERE title IS NULL
+            OR priority IS NULL
+            OR task_type IS NULL
+            OR updated_at IS NULL
+            OR (status = 'done' AND completed_at IS NULL)
+            OR status = 'blocked'",
+    )?;
+    let rows: Vec<(String, Vec<u8>)> = select
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(select);
+
+    let mut update = conn.prepare(
+        "UPDATE tasks
+         SET title = ?2,
+             priority = ?3,
+             task_type = ?4,
+             updated_at = ?5,
+             completed_at = ?6,
+             blocked_reason = ?7,
+             blocked_at = ?8
+         WHERE id = ?1",
+    )?;
+
+    for row in rows {
+        let (task_id, data) = row;
+        let json = decompress_json(&data)?;
+        let task = serde_json::from_str::<OrchestratorTask>(&json)?;
+        let updated_at = task.metadata.updated_at.to_rfc3339();
+        let completed_at = task.metadata.completed_at.as_ref().map(chrono::DateTime::to_rfc3339);
+        let blocked_at = task.blocked_at.as_ref().map(chrono::DateTime::to_rfc3339);
+        update.execute(params![
+            task_id,
+            task.title,
+            task.priority.as_str(),
+            task.task_type.as_str(),
+            updated_at,
+            completed_at,
+            task.blocked_reason,
+            blocked_at
+        ])?;
+    }
+
+    std::fs::File::create(marker).context("failed to create task summary marker")?;
+    Ok(())
+}
+
+fn maybe_backfill_requirement_summary_columns(project_root: &std::path::Path, conn: &Connection) -> Result<()> {
+    let marker = db_path_for_project(project_root).with_file_name(REQUIREMENT_SUMMARY_COLUMNS_MARKER_FILE);
+    let needs_backfill: bool = conn
+        .query_row(
+            "SELECT EXISTS(
+                SELECT 1
+                FROM requirements
+                WHERE priority IS NULL
+                   OR updated_at IS NULL
+                   OR (status IS NOT NULL AND category IS NULL AND requirement_type IS NULL)
+                LIMIT 1
+            )",
+            [],
+            |row| row.get(0),
+        )
+        .context("failed to determine whether requirement summary backfill is needed")?;
+
+    if marker.exists() && !needs_backfill {
+        return Ok(());
+    }
+    if !needs_backfill {
+        std::fs::File::create(marker).context("failed to create requirement summary marker")?;
+        return Ok(());
+    }
+
+    let mut select = conn.prepare(
+        "SELECT id, json
+         FROM requirements
+         WHERE priority IS NULL
+            OR updated_at IS NULL
+            OR category IS NULL
+            OR requirement_type IS NULL",
+    )?;
+    let rows: Vec<(String, Vec<u8>)> = select
+        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(select);
+
+    let mut update = conn.prepare(
+        "UPDATE requirements
+         SET priority = ?2, category = ?3, requirement_type = ?4, updated_at = ?5
+         WHERE id = ?1",
+    )?;
+
+    for (requirement_id, data) in rows {
+        let json = decompress_json(&data)?;
+        let requirement = serde_json::from_str::<RequirementItem>(&json)?;
+        update.execute(params![
+            requirement_id,
+            requirement_priority_str(requirement.priority),
+            requirement.category,
+            requirement.requirement_type.map(requirement_type_str),
+            requirement.updated_at.to_rfc3339()
+        ])?;
+    }
+
+    std::fs::File::create(marker).context("failed to create requirement summary marker")?;
+    Ok(())
 }
 
 fn maybe_migrate_workflow_json(project_root: &std::path::Path, conn: &Connection) {
@@ -486,9 +981,31 @@ fn maybe_migrate_workflow_json(project_root: &std::path::Path, conn: &Connection
 
         let compact = serde_json::to_string(&workflow).unwrap_or_else(|_| content.clone());
         let data = compress_json(&compact);
+        let summary = workflow_summary_fields(&workflow);
         let _ = conn.execute(
-            "INSERT OR IGNORE INTO workflows (id, status, json) VALUES (?1, ?2, ?3)",
-            params![workflow.id, status_str(workflow.status), data],
+            "INSERT OR IGNORE INTO workflows (
+                id,
+                status,
+                task_id,
+                phase_id,
+                failed_at,
+                failure_reason,
+                started_at,
+                completed_at,
+                json
+            )
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                workflow.id,
+                status_str(workflow.status),
+                summary.task_id,
+                summary.phase_id,
+                summary.failed_at,
+                summary.failure_reason,
+                summary.started_at,
+                summary.completed_at,
+                data
+            ],
         );
         migrated += 1;
     }
@@ -504,6 +1021,76 @@ fn checkpoint_phase_id(workflow: &OrchestratorWorkflow) -> Option<String> {
         .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|phase| phase.phase_id.clone()))
 }
 
+#[derive(Debug, Clone)]
+struct WorkflowSummaryFields {
+    task_id: String,
+    phase_id: Option<String>,
+    failed_at: Option<String>,
+    failure_reason: Option<String>,
+    started_at: String,
+    completed_at: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct FailedPhaseSummary {
+    phase_id: String,
+    failed_at: DateTime<Utc>,
+    error_message: Option<String>,
+}
+
+fn latest_failed_phase_summary(workflow: &OrchestratorWorkflow) -> Option<FailedPhaseSummary> {
+    workflow
+        .phases
+        .iter()
+        .enumerate()
+        .filter(|(_, phase)| phase.status == WorkflowPhaseStatus::Failed)
+        .max_by(|left, right| left.1.completed_at.cmp(&right.1.completed_at).then_with(|| left.0.cmp(&right.0)))
+        .map(|(_, phase)| FailedPhaseSummary {
+            phase_id: phase.phase_id.clone(),
+            failed_at: phase.completed_at.unwrap_or(workflow.started_at),
+            error_message: phase.error_message.clone(),
+        })
+}
+
+fn workflow_summary_fields(workflow: &OrchestratorWorkflow) -> WorkflowSummaryFields {
+    let failed_phase = latest_failed_phase_summary(workflow);
+    let phase_id = match workflow.status {
+        WorkflowStatus::Failed => failed_phase
+            .as_ref()
+            .map(|phase| phase.phase_id.clone())
+            .or_else(|| checkpoint_phase_id(workflow)),
+        _ => workflow
+            .phases
+            .iter()
+            .find(|phase| phase.status == WorkflowPhaseStatus::Running)
+            .map(|phase| phase.phase_id.clone())
+            .or_else(|| checkpoint_phase_id(workflow)),
+    };
+    let failed_at = if workflow.status == WorkflowStatus::Failed {
+        failed_phase
+            .as_ref()
+            .map(|phase| phase.failed_at.to_rfc3339())
+            .or_else(|| workflow.completed_at.as_ref().map(chrono::DateTime::to_rfc3339))
+            .or_else(|| Some(workflow.started_at.to_rfc3339()))
+    } else {
+        None
+    };
+    let failure_reason = if workflow.status == WorkflowStatus::Failed {
+        workflow.failure_reason.clone().or_else(|| failed_phase.and_then(|phase| phase.error_message))
+    } else {
+        workflow.failure_reason.clone()
+    };
+
+    WorkflowSummaryFields {
+        task_id: workflow.task_id.clone(),
+        phase_id,
+        failed_at,
+        failure_reason,
+        started_at: workflow.started_at.to_rfc3339(),
+        completed_at: workflow.completed_at.as_ref().map(chrono::DateTime::to_rfc3339),
+    }
+}
+
 fn status_str(status: crate::types::WorkflowStatus) -> &'static str {
     use crate::types::WorkflowStatus;
     match status {
@@ -517,12 +1104,67 @@ fn status_str(status: crate::types::WorkflowStatus) -> &'static str {
     }
 }
 
+fn requirement_priority_str(priority: RequirementPriority) -> &'static str {
+    match priority {
+        RequirementPriority::Must => "must",
+        RequirementPriority::Should => "should",
+        RequirementPriority::Could => "could",
+        RequirementPriority::Wont => "wont",
+    }
+}
+
+fn requirement_type_str(requirement_type: crate::RequirementType) -> &'static str {
+    match requirement_type {
+        crate::RequirementType::Product => "product",
+        crate::RequirementType::Functional => "functional",
+        crate::RequirementType::NonFunctional => "non-functional",
+        crate::RequirementType::Technical => "technical",
+        crate::RequirementType::Other => "other",
+    }
+}
+
+fn parse_rfc3339(value: &str, field_name: &str) -> Result<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .with_context(|| format!("invalid timestamp in {field_name}: {value}"))
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+}
+
+fn parse_optional_rfc3339(value: Option<String>, field_name: &str) -> Result<Option<DateTime<Utc>>> {
+    value.as_deref().map(|value| parse_rfc3339(value, field_name)).transpose()
+}
+
 pub fn save_task(project_root: &std::path::Path, task: &crate::types::OrchestratorTask) -> Result<()> {
     let conn = open_project_db(project_root)?;
     let data = compress_json(&serde_json::to_string(task)?);
+    let updated_at = task.metadata.updated_at.to_rfc3339();
+    let completed_at = task.metadata.completed_at.as_ref().map(chrono::DateTime::to_rfc3339);
+    let blocked_at = task.blocked_at.as_ref().map(chrono::DateTime::to_rfc3339);
     conn.execute(
-        "INSERT OR REPLACE INTO tasks (id, status, json) VALUES (?1, ?2, ?3)",
-        params![task.id, task.status.to_string(), data],
+        "INSERT OR REPLACE INTO tasks (
+            id,
+            status,
+            title,
+            priority,
+            task_type,
+            updated_at,
+            completed_at,
+            blocked_reason,
+            blocked_at,
+            json
+        )
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            task.id,
+            task.status.to_string(),
+            task.title,
+            task.priority.as_str(),
+            task.task_type.as_str(),
+            updated_at,
+            completed_at,
+            task.blocked_reason,
+            blocked_at,
+            data
+        ],
     )?;
     Ok(())
 }
@@ -551,6 +1193,368 @@ pub fn load_all_tasks(
     Ok(tasks)
 }
 
+pub fn load_tasks_by_ids(
+    project_root: &std::path::Path,
+    task_ids: &[String],
+) -> Result<Vec<crate::types::OrchestratorTask>> {
+    if task_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare("SELECT json FROM tasks WHERE id = ?1")?;
+    let mut tasks = Vec::with_capacity(task_ids.len());
+    for task_id in task_ids {
+        let Ok(data) = stmt.query_row([task_id], |row| row.get::<_, Vec<u8>>(0)) else {
+            continue;
+        };
+        let json = decompress_json(&data)?;
+        tasks.push(serde_json::from_str(&json)?);
+    }
+    Ok(tasks)
+}
+
+pub fn query_task_ids(project_root: &std::path::Path, query: &TaskQuery) -> Result<(Vec<String>, usize)> {
+    let conn = open_project_db(project_root)?;
+    let (where_sql, params) = supported_task_filter_sql(&query.filter)?;
+    let total_sql = format!("SELECT COUNT(*) FROM tasks{where_sql}");
+    let total: usize = conn
+        .query_row(&total_sql, params_from_iter(params.iter()), |row| row.get::<_, i64>(0))
+        .map(|count| count.max(0) as usize)?;
+
+    let (start, end) = query.page.bounds(total);
+    let limit = end.saturating_sub(start);
+    if limit == 0 {
+        return Ok((Vec::new(), total));
+    }
+
+    let order_sql = supported_task_sort_sql(query.sort)?;
+    let ids_sql = format!("SELECT id FROM tasks{where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?");
+    let mut stmt = conn.prepare(&ids_sql)?;
+    let mut id_params = params;
+    id_params.push(Value::Integer(limit as i64));
+    id_params.push(Value::Integer(start as i64));
+    let ids = stmt
+        .query_map(params_from_iter(id_params.iter()), |row| row.get::<_, String>(0))?
+        .filter_map(|row| row.ok())
+        .collect::<Vec<_>>();
+
+    Ok((ids, total))
+}
+
+pub fn load_next_task_by_priority(project_root: &std::path::Path) -> Result<Option<crate::types::OrchestratorTask>> {
+    let conn = open_project_db(project_root)?;
+    let data = conn.query_row(
+        "SELECT json
+         FROM tasks
+         WHERE status IN ('ready', 'backlog')
+         ORDER BY CASE priority
+             WHEN 'critical' THEN 0
+             WHEN 'high' THEN 1
+             WHEN 'medium' THEN 2
+             WHEN 'low' THEN 3
+             ELSE 4
+         END ASC,
+         updated_at DESC,
+         id ASC
+         LIMIT 1",
+        [],
+        |row| row.get::<_, Vec<u8>>(0),
+    );
+
+    match data {
+        Ok(data) => {
+            let json = decompress_json(&data)?;
+            Ok(Some(serde_json::from_str(&json)?))
+        }
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+pub fn load_task_titles_by_ids(
+    project_root: &std::path::Path,
+    task_ids: &[String],
+) -> Result<HashMap<String, String>> {
+    if task_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare("SELECT title FROM tasks WHERE id = ?1")?;
+    let mut titles = HashMap::new();
+    for task_id in task_ids {
+        let title = stmt.query_row([task_id], |row| row.get::<_, Option<String>>(0));
+        if let Ok(Some(title)) = title {
+            titles.insert(task_id.clone(), title);
+        }
+    }
+    Ok(titles)
+}
+
+pub fn load_blocked_task_summaries(project_root: &std::path::Path) -> Result<Vec<BlockedTaskSummary>> {
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, title, blocked_reason, blocked_at
+         FROM tasks
+         WHERE status = 'blocked'
+         ORDER BY updated_at DESC, id ASC",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+
+    let mut blocked_items = Vec::new();
+    for row in rows {
+        let (task_id, title, blocked_reason, blocked_at) = row?;
+        blocked_items.push(BlockedTaskSummary {
+            task_id,
+            title: title.unwrap_or_else(|| "Unknown task".to_string()),
+            blocked_reason,
+            blocked_at: parse_optional_rfc3339(blocked_at, "tasks.blocked_at")?,
+        });
+    }
+    Ok(blocked_items)
+}
+
+pub fn load_stale_task_summaries(
+    project_root: &std::path::Path,
+    stale_before: DateTime<Utc>,
+) -> Result<Vec<StaleTaskSummary>> {
+    let conn = open_project_db(project_root)?;
+    let stale_before = stale_before.to_rfc3339();
+    let mut stmt = conn.prepare(
+        "SELECT id, title, updated_at
+         FROM tasks
+         WHERE status = 'in_progress'
+           AND updated_at IS NOT NULL
+           AND updated_at < ?1
+         ORDER BY updated_at ASC, id ASC",
+    )?;
+    let rows = stmt.query_map([stale_before], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+
+    let mut stale_items = Vec::new();
+    for row in rows {
+        let (task_id, title, updated_at) = row?;
+        stale_items.push(StaleTaskSummary {
+            task_id,
+            title: title.unwrap_or_else(|| "Unknown task".to_string()),
+            updated_at: parse_rfc3339(&updated_at, "tasks.updated_at")?,
+        });
+    }
+    Ok(stale_items)
+}
+
+fn supported_task_filter_sql(filter: &TaskFilter) -> Result<(String, Vec<Value>)> {
+    if filter.risk.is_some()
+        || filter.assignee_type.is_some()
+        || filter.tags.is_some()
+        || filter.linked_requirement.is_some()
+        || filter.linked_architecture_entity.is_some()
+        || filter.search_text.is_some()
+    {
+        anyhow::bail!("unsupported task filter for SQL-backed query");
+    }
+
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+    if let Some(task_type) = filter.task_type {
+        clauses.push("task_type = ?".to_string());
+        params.push(Value::Text(task_type.as_str().to_string()));
+    }
+    if let Some(status) = filter.status {
+        clauses.push("status = ?".to_string());
+        params.push(Value::Text(status.to_string()));
+    }
+    if let Some(priority) = filter.priority {
+        clauses.push("priority = ?".to_string());
+        params.push(Value::Text(priority.as_str().to_string()));
+    }
+
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+    Ok((where_sql, params))
+}
+
+fn supported_task_sort_sql(sort: TaskQuerySort) -> Result<&'static str> {
+    match sort {
+        TaskQuerySort::Priority => Ok(
+            "CASE priority
+                WHEN 'critical' THEN 0
+                WHEN 'high' THEN 1
+                WHEN 'medium' THEN 2
+                WHEN 'low' THEN 3
+                ELSE 4
+             END ASC,
+             updated_at DESC,
+             id ASC",
+        ),
+        TaskQuerySort::UpdatedAt => Ok("updated_at DESC, id ASC"),
+        TaskQuerySort::Id => Ok("id ASC"),
+        TaskQuerySort::CreatedAt => anyhow::bail!("created_at sort is not supported by the SQL-backed task query"),
+    }
+}
+
+fn supported_requirement_filter_sql(filter: &RequirementFilter) -> Result<(String, Vec<Value>)> {
+    if filter.tags.is_some() || filter.linked_task_id.is_some() || filter.search_text.is_some() {
+        anyhow::bail!("unsupported requirement filter for SQL-backed query");
+    }
+
+    let mut clauses = Vec::new();
+    let mut params = Vec::new();
+    if let Some(status) = filter.status {
+        clauses.push("status = ?".to_string());
+        params.push(Value::Text(status.to_string()));
+    }
+    if let Some(priority) = filter.priority {
+        clauses.push("priority = ?".to_string());
+        params.push(Value::Text(requirement_priority_str(priority).to_string()));
+    }
+    if let Some(category) = filter.category.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        clauses.push("LOWER(category) = LOWER(?)".to_string());
+        params.push(Value::Text(category.to_string()));
+    }
+    if let Some(requirement_type) = filter.requirement_type {
+        clauses.push("requirement_type = ?".to_string());
+        params.push(Value::Text(requirement_type_str(requirement_type).to_string()));
+    }
+
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+    Ok((where_sql, params))
+}
+
+fn supported_requirement_sort_sql(sort: RequirementQuerySort) -> &'static str {
+    match sort {
+        RequirementQuerySort::Id => "id ASC",
+        RequirementQuerySort::UpdatedAt => "updated_at DESC, id ASC",
+        RequirementQuerySort::Priority => "CASE priority
+            WHEN 'must' THEN 0
+            WHEN 'should' THEN 1
+            WHEN 'could' THEN 2
+            WHEN 'wont' THEN 3
+            ELSE 4
+         END ASC,
+         updated_at DESC,
+         id ASC",
+        RequirementQuerySort::Status => "status ASC, updated_at DESC, id ASC",
+    }
+}
+
+pub fn load_task_statistics(project_root: &std::path::Path) -> Result<TaskStatistics> {
+    let conn = open_project_db(project_root)?;
+    let total = query_count(&conn, "SELECT COUNT(*) FROM tasks")?;
+    let by_status = query_grouped_counts(&conn, "SELECT status, COUNT(*) FROM tasks GROUP BY status")?;
+    let by_priority = query_grouped_counts(
+        &conn,
+        "SELECT priority, COUNT(*) FROM tasks WHERE priority IS NOT NULL GROUP BY priority",
+    )?;
+    let by_type = query_grouped_counts(
+        &conn,
+        "SELECT task_type, COUNT(*) FROM tasks WHERE task_type IS NOT NULL GROUP BY task_type",
+    )?;
+    let in_progress = query_count(&conn, "SELECT COUNT(*) FROM tasks WHERE status = 'in-progress'")?;
+    let blocked = query_count(&conn, "SELECT COUNT(*) FROM tasks WHERE status IN ('blocked', 'on-hold')")?;
+    let completed = query_count(&conn, "SELECT COUNT(*) FROM tasks WHERE status IN ('done', 'cancelled')")?;
+
+    Ok(TaskStatistics { total, by_status, by_priority, by_type, in_progress, blocked, completed })
+}
+
+pub fn count_tasks_with_status(project_root: &std::path::Path, status: TaskStatus) -> Result<usize> {
+    let conn = open_project_db(project_root)?;
+    let count: i64 =
+        conn.query_row("SELECT COUNT(*) FROM tasks WHERE status = ?1", params![status.to_string()], |row| row.get(0))?;
+    Ok(count.max(0) as usize)
+}
+
+pub fn load_task_priority_policy_report(
+    project_root: &std::path::Path,
+    high_budget_percent: u8,
+) -> Result<TaskPriorityPolicyReport> {
+    if high_budget_percent > 100 {
+        anyhow::bail!("high_budget_percent must be between 0 and 100");
+    }
+
+    let conn = open_project_db(project_root)?;
+    let total_tasks = query_count(&conn, "SELECT COUNT(*) FROM tasks")?;
+    let active_tasks = query_count(&conn, "SELECT COUNT(*) FROM tasks WHERE status NOT IN ('done', 'cancelled')")?;
+    let total_by_priority = query_priority_distribution(
+        &conn,
+        "SELECT priority, COUNT(*) FROM tasks WHERE priority IS NOT NULL GROUP BY priority",
+    )?;
+    let active_by_priority = query_priority_distribution(
+        &conn,
+        "SELECT priority, COUNT(*) FROM tasks
+         WHERE priority IS NOT NULL
+           AND status NOT IN ('done', 'cancelled')
+         GROUP BY priority",
+    )?;
+    let high_budget_limit = active_tasks.saturating_mul(usize::from(high_budget_percent)) / 100;
+    let high_budget_overflow = active_by_priority.high.saturating_sub(high_budget_limit);
+
+    Ok(TaskPriorityPolicyReport {
+        high_budget_percent,
+        high_budget_limit,
+        total_tasks,
+        active_tasks,
+        total_by_priority,
+        active_by_priority,
+        high_budget_compliant: high_budget_overflow == 0,
+        high_budget_overflow,
+    })
+}
+
+fn query_count(conn: &Connection, sql: &str) -> Result<usize> {
+    let count: i64 = conn.query_row(sql, [], |row| row.get(0))?;
+    Ok(count.max(0) as usize)
+}
+
+fn query_grouped_counts(conn: &Connection, sql: &str) -> Result<HashMap<String, usize>> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut counts = HashMap::new();
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
+    for row in rows {
+        let (key, value) = row?;
+        counts.insert(key, value.max(0) as usize);
+    }
+    Ok(counts)
+}
+
+fn query_priority_distribution(conn: &Connection, sql: &str) -> Result<TaskPriorityDistribution> {
+    let mut stmt = conn.prepare(sql)?;
+    let mut distribution = TaskPriorityDistribution::default();
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)))?;
+    for row in rows {
+        let (priority, count) = row?;
+        let count = count.max(0) as usize;
+        match priority.as_str() {
+            "critical" => distribution.critical = count,
+            "high" => distribution.high = count,
+            "medium" => distribution.medium = count,
+            "low" => distribution.low = count,
+            _ => {}
+        }
+    }
+    Ok(distribution)
+}
+
 pub fn delete_task(project_root: &std::path::Path, task_id: &str) -> Result<()> {
     let conn = open_project_db(project_root)?;
     conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])?;
@@ -561,8 +1565,17 @@ pub fn save_requirement(project_root: &std::path::Path, req: &crate::types::Requ
     let conn = open_project_db(project_root)?;
     let data = compress_json(&serde_json::to_string(req)?);
     conn.execute(
-        "INSERT OR REPLACE INTO requirements (id, status, json) VALUES (?1, ?2, ?3)",
-        params![req.id, req.status.to_string(), data],
+        "INSERT OR REPLACE INTO requirements (id, status, priority, category, requirement_type, updated_at, json)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            req.id,
+            req.status.to_string(),
+            requirement_priority_str(req.priority),
+            req.category,
+            req.requirement_type.map(requirement_type_str),
+            req.updated_at.to_rfc3339(),
+            data
+        ],
     )?;
     Ok(())
 }
@@ -589,6 +1602,78 @@ pub fn load_all_requirements(
         .map(|r| (r.id.clone(), r))
         .collect();
     Ok(reqs)
+}
+
+pub fn load_requirements_by_ids(project_root: &std::path::Path, requirement_ids: &[String]) -> Result<Vec<RequirementItem>> {
+    if requirement_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare("SELECT json FROM requirements WHERE id = ?1")?;
+    let mut requirements = Vec::with_capacity(requirement_ids.len());
+    for requirement_id in requirement_ids {
+        let Ok(data) = stmt.query_row([requirement_id], |row| row.get::<_, Vec<u8>>(0)) else {
+            continue;
+        };
+        let json = decompress_json(&data)?;
+        requirements.push(serde_json::from_str(&json)?);
+    }
+    Ok(requirements)
+}
+
+pub fn load_requirement_link_summaries_by_ids(
+    project_root: &std::path::Path,
+    requirement_ids: &[String],
+) -> Result<Vec<RequirementLinkSummary>> {
+    if requirement_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare("SELECT title, priority FROM requirements WHERE id = ?1")?;
+    let mut requirements = Vec::with_capacity(requirement_ids.len());
+    for requirement_id in requirement_ids {
+        let Ok((title, priority)) = stmt.query_row([requirement_id], |row| {
+            Ok((row.get::<_, Option<String>>(0)?, row.get::<_, Option<String>>(1)?))
+        }) else {
+            continue;
+        };
+        requirements.push(RequirementLinkSummary {
+            requirement_id: requirement_id.clone(),
+            title: title.unwrap_or_else(|| "Unknown requirement".to_string()),
+            priority: priority.unwrap_or_else(|| "unknown".to_string()),
+        });
+    }
+    Ok(requirements)
+}
+
+pub fn query_requirement_ids(project_root: &std::path::Path, query: &RequirementQuery) -> Result<(Vec<String>, usize)> {
+    let conn = open_project_db(project_root)?;
+    let (where_sql, params) = supported_requirement_filter_sql(&query.filter)?;
+    let total_sql = format!("SELECT COUNT(*) FROM requirements{where_sql}");
+    let total: usize = conn
+        .query_row(&total_sql, params_from_iter(params.iter()), |row| row.get::<_, i64>(0))
+        .map(|count| count.max(0) as usize)?;
+
+    let (start, end) = query.page.bounds(total);
+    let limit = end.saturating_sub(start);
+    if limit == 0 {
+        return Ok((Vec::new(), total));
+    }
+
+    let order_sql = supported_requirement_sort_sql(query.sort);
+    let ids_sql = format!("SELECT id FROM requirements{where_sql} ORDER BY {order_sql} LIMIT ? OFFSET ?");
+    let mut stmt = conn.prepare(&ids_sql)?;
+    let mut id_params = params;
+    id_params.push(Value::Integer(limit as i64));
+    id_params.push(Value::Integer(start as i64));
+    let ids = stmt
+        .query_map(params_from_iter(id_params.iter()), |row| row.get::<_, String>(0))?
+        .filter_map(|row| row.ok())
+        .collect::<Vec<_>>();
+
+    Ok((ids, total))
 }
 
 pub fn delete_requirement(project_root: &std::path::Path, req_id: &str) -> Result<()> {

@@ -43,6 +43,18 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Setup(args) => services::operations::handle_setup(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
         Command::Pack { command } => services::operations::handle_pack(command, &project_root, cli.json).await,
+        Command::Status => services::operations::handle_status(&project_root, cli.json).await,
+        Command::Daemon { command: DaemonCommand::Status } => {
+            services::runtime::handle_daemon_status_command(&project_root, cli.json).await
+        }
+        Command::Daemon { command: DaemonCommand::Health } => {
+            services::runtime::handle_daemon_health_command(&project_root, cli.json).await
+        }
+        Command::History { command } => services::operations::handle_history(command, &project_root, cli.json).await,
+        Command::Now => services::operations::handle_now(&project_root, cli.json).await,
+        Command::Task { command: TaskCommand::Stats(args) } => {
+            services::runtime::handle_task_stats(args, &project_root, cli.json).await
+        }
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -65,9 +77,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Requirements { command } => {
                     services::operations::handle_requirements(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::History { command } => {
-                    services::operations::handle_history(command, hub.clone(), &project_root, cli.json).await
-                }
+                Command::History { .. } => unreachable!("command handled before hub creation"),
                 Command::Errors { command } => {
                     services::operations::handle_errors(command, &project_root, cli.json).await
                 }
@@ -82,8 +92,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Runner { command } => {
                     services::operations::handle_runner(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Status => services::operations::handle_status(hub.clone(), &project_root, cli.json).await,
-                Command::Now => services::operations::handle_now(hub.clone(), cli.json).await,
+                Command::Now => unreachable!("command handled before hub creation"),
                 Command::Output { command } => {
                     services::operations::handle_output(command, &project_root, cli.json).await
                 }
@@ -94,11 +103,11 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Sync { command } => {
                     services::sync::handle_sync(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Version => {
-                    unreachable!("version command handled before runtime initialization")
+                Command::Status | Command::Version => {
+                    unreachable!("command handled before runtime initialization")
                 }
                 Command::Setup(_) | Command::Doctor(_) => {
-                    unreachable!("setup/doctor commands handled before hub initialization")
+                    unreachable!("command handled before hub initialization")
                 }
             }
         }

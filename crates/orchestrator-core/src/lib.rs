@@ -66,10 +66,11 @@ pub use runtime_contract::{
     CliSessionResumePlan,
 };
 pub use services::{
-    evaluate_task_priority_policy, load_schedule_state, plan_task_priority_rebalance, save_schedule_state,
-    stop_agent_runner_process, DaemonServiceApi, FileServiceHub, InMemoryServiceHub, PhaseExecutionRequest,
-    PhaseExecutionResult, PhaseExecutor, PhaseVerdict, PlanningServiceApi, ProjectServiceApi, ReviewServiceApi,
-    ScheduleRunState, ScheduleState, ServiceHub, TaskServiceApi, WorkflowServiceApi,
+    evaluate_task_priority_policy, load_daemon_health_snapshot, load_schedule_state, plan_task_priority_rebalance,
+    save_schedule_state,
+    stop_agent_runner_process, summarize_tasks, DaemonServiceApi, FileServiceHub, InMemoryServiceHub,
+    PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor, PhaseVerdict, PlanningServiceApi, ProjectServiceApi,
+    ReviewServiceApi, ScheduleRunState, ScheduleState, ServiceHub, TaskServiceApi, WorkflowServiceApi,
 };
 pub use state_machines::{
     load_state_machines_for_project, state_machines_path, write_state_machines_document, LoadedStateMachines,
@@ -97,13 +98,18 @@ pub use types::{
     SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
 };
 pub use workflow::{
-    delete_requirement, delete_task, load_all_requirements, load_all_tasks, load_task,
-    migrate_tasks_and_requirements_from_core_state, open_project_db, phase_plan_for_workflow_ref,
-    resolve_phase_plan_for_workflow_ref, save_requirement, save_task, CleanupResult, ResumabilityStatus, ResumeConfig,
-    WorkflowCheckpointPruneResult, WorkflowLifecycleExecutor, WorkflowResumeManager, WorkflowStateMachine,
-    WorkflowStateManager, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
-    REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF,
-    UI_UX_WORKFLOW_REF,
+    count_tasks_with_status, delete_requirement, delete_task, load_active_workflow_summaries, load_all_requirements,
+    load_all_tasks, load_blocked_task_summaries, load_next_task_by_priority, load_recent_failed_workflow_summaries,
+    load_requirement_link_summaries_by_ids, load_requirements_by_ids, load_stale_task_summaries, load_task,
+    load_task_priority_policy_report, load_task_statistics, load_task_titles_by_ids, load_tasks_by_ids,
+    load_workflow_history_summaries, migrate_tasks_and_requirements_from_core_state, open_project_db,
+    phase_plan_for_workflow_ref, query_requirement_ids, query_task_ids, resolve_phase_plan_for_workflow_ref,
+    save_requirement, save_task, BlockedTaskSummary, CleanupResult, RequirementLinkSummary, ResumabilityStatus,
+    ResumeConfig, StaleTaskSummary, WorkflowActivitySummary, WorkflowCheckpointPruneResult,
+    WorkflowFailureSummary, WorkflowHistorySummary, WorkflowLifecycleExecutor, WorkflowResumeManager,
+    WorkflowStateMachine, WorkflowStateManager,
+    DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, REQUIREMENT_TASK_GENERATION_RUN_WORKFLOW_REF,
+    REQUIREMENT_TASK_GENERATION_WORKFLOW_REF, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
 };
 pub use workflow_config::{
     builtin_workflow_config, compile_yaml_workflow_files, ensure_workflow_config_compiled, ensure_workflow_config_file,

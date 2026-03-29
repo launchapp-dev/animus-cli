@@ -329,6 +329,7 @@ pub fn build_runtime_contract(
         "mcp": {
             "agent_id": mcp_agent_id,
             "endpoint": mcp_endpoint,
+            "enforce_only": enforce_mcp_only,
             "allowed_tool_prefixes": if enforce_mcp_only {
                 protocol::default_allowed_tool_prefixes(mcp_agent_id.unwrap_or("ao"))
             } else {

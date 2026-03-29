@@ -1,6 +1,14 @@
 use super::*;
 use orchestrator_providers::PlanningServiceApi as ProviderPlanningServiceApi;
 
+fn requirement_filter_can_use_db_predicates(filter: &RequirementFilter) -> bool {
+    filter.tags.is_none() && filter.linked_task_id.is_none() && filter.search_text.is_none()
+}
+
+fn requirement_query_can_use_db_page(query: &RequirementQuery) -> bool {
+    requirement_filter_can_use_db_predicates(&query.filter)
+}
+
 #[async_trait]
 impl PlanningServiceApi for InMemoryServiceHub {
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider> {
@@ -154,15 +162,21 @@ impl PlanningServiceApi for FileServiceHub {
     }
 
     async fn query(&self, query: RequirementQuery) -> Result<ListPage<RequirementItem>> {
+        if requirement_query_can_use_db_page(&query) {
+            let (ids, total) = crate::workflow::query_requirement_ids(&self.project_root, &query)?;
+            let items = crate::workflow::load_requirements_by_ids(&self.project_root, &ids)?;
+            return Ok(ListPage::new(items, total, query.page));
+        }
+
         let requirements = PlanningServiceApi::list_requirements(self).await?;
         Ok(planning_shared::query_requirements(requirements, &query))
     }
 
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>> {
-        let mut requirements: Vec<_> =
-            crate::workflow::load_all_requirements(&self.project_root)?.into_values().collect();
-        planning_shared::sort_requirements(&mut requirements, RequirementQuerySort::Id);
-        Ok(requirements)
+        let query =
+            RequirementQuery { filter: RequirementFilter::default(), page: crate::ListPageRequest::unbounded(), sort: RequirementQuerySort::Id };
+        let (ids, _) = crate::workflow::query_requirement_ids(&self.project_root, &query)?;
+        crate::workflow::load_requirements_by_ids(&self.project_root, &ids)
     }
 
     async fn get_requirement(&self, id: &str) -> Result<RequirementItem> {

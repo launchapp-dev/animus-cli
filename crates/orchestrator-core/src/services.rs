@@ -56,7 +56,10 @@ use planning_utils::*;
 pub use runner_helpers::stop_agent_runner_process;
 use runner_helpers::*;
 pub use schedule_state::{load_schedule_state, save_schedule_state, ScheduleRunState, ScheduleState};
-use state_store::{load_core_state, load_core_state_for_mutation, CoreState};
+use state_store::{
+    append_logs, clear_logs_file, load_core_state, load_core_state_for_mutation, load_logs, logs_file_for_state_file,
+    migrate_legacy_logs_to_file, CoreState,
+};
 pub use task_shared::task_matches_filter;
 use task_shared::*;
 
@@ -65,6 +68,14 @@ pub fn evaluate_task_priority_policy(
     high_budget_percent: u8,
 ) -> Result<TaskPriorityPolicyReport> {
     evaluate_task_priority_policy_report(tasks, high_budget_percent)
+}
+
+pub fn summarize_tasks(tasks: &[OrchestratorTask]) -> TaskStatistics {
+    build_task_statistics(tasks)
+}
+
+pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHealth> {
+    daemon_impl::load_daemon_health_snapshot(project_root).await
 }
 
 pub fn plan_task_priority_rebalance(
@@ -237,6 +248,7 @@ impl InMemoryServiceHub {
 pub struct FileServiceHub {
     state: Arc<RwLock<CoreState>>,
     state_file: PathBuf,
+    logs_file: PathBuf,
     project_root: PathBuf,
 }
 
@@ -250,8 +262,10 @@ impl FileServiceHub {
         Self::bootstrap_project_base_configs(&project_root)?;
         let scoped_root = protocol::scoped_state_root(&project_root).unwrap_or_else(|| project_root.join(".ao"));
         let state_file = scoped_root.join("core-state.json");
+        let logs_file = logs_file_for_state_file(&state_file);
 
         Self::migrate_workflows_from_core_state(&state_file, &project_root);
+        migrate_legacy_logs_to_file(&state_file, &logs_file)?;
 
         let mut state = load_core_state(&state_file);
 
@@ -264,7 +278,7 @@ impl FileServiceHub {
         state.requirements.clear();
         state.workflows.clear();
 
-        let hub = Self { state: Arc::new(RwLock::new(state)), state_file, project_root };
+        let hub = Self { state: Arc::new(RwLock::new(state)), state_file, logs_file, project_root };
         Ok(hub)
     }
 
@@ -372,12 +386,15 @@ impl FileServiceHub {
     }
 
     fn persist_snapshot(path: &Path, snapshot: &CoreState) -> Result<()> {
+        append_logs(&logs_file_for_state_file(path), &snapshot.logs)?;
         write_json_pretty(path, snapshot)?;
         Self::persist_structured_artifacts(path, snapshot)?;
         Ok(())
     }
 
     fn persist_and_clear_dirty(path: &Path, state: &mut CoreState) -> Result<()> {
+        append_logs(&logs_file_for_state_file(path), &state.logs)?;
+        state.logs.clear();
         write_json_pretty(path, &*state)?;
 
         if let Some(docs_dir) = Self::docs_dir_for_state_file(path) {

@@ -5,10 +5,6 @@ use crate::types::{
     TaskQuerySort, TaskType, WorkflowFilter, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
 };
 
-fn global_requirements_index_dir(project_root: &std::path::Path) -> std::path::PathBuf {
-    scoped_ao_root(project_root).join("index").join("requirements")
-}
-
 fn scoped_ao_root(project_root: &std::path::Path) -> std::path::PathBuf {
     protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao"))
 }
@@ -180,10 +176,10 @@ async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
     assert!(scoped.join("resume-config.json").exists());
     assert!(project_path.join(".ao").join("workflows").join("custom.yaml").exists());
     assert!(project_path.join(".ao").join("workflows").join("standard-workflow.yaml").exists());
-    assert!(scoped.join("state").join("state-machines.v1.json").exists());
+    assert!(scoped.join("config").join("state-machines.v1.json").exists());
     assert!(!project_path.join(".git").exists());
     assert!(
-        !scoped.join("state").join("workflow-config.v2.json").exists(),
+        !scoped.join("config").join("workflow-config.v2.json").exists(),
         "bootstrap must not generate JSON workflow config"
     );
 }
@@ -1923,75 +1919,6 @@ async fn execute_requirements_runs_requirement_state_machine_before_task_materia
     assert!(task.workflow_metadata.requires_architecture);
     assert!(!task.checklist.is_empty());
     assert!(task.checklist.iter().any(|item| { item.description.to_ascii_lowercase().contains("code review gate") }));
-}
-
-#[tokio::test]
-async fn file_hub_writes_legacy_style_requirement_and_task_files() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let hub = file_hub(temp.path()).expect("create hub");
-
-    PlanningServiceApi::draft_vision(
-        &hub,
-        VisionDraftInput {
-            project_name: Some("Parity Files".to_string()),
-            problem_statement: "Need CLI-compatible artifacts".to_string(),
-            target_users: vec!["PM".to_string(), "Engineer".to_string()],
-            goals: vec!["Generate detailed requirement and task artifacts".to_string()],
-            constraints: vec!["Use Next.js and PostgreSQL".to_string()],
-            value_proposition: None,
-            complexity_assessment: None,
-        },
-    )
-    .await
-    .expect("draft vision");
-
-    let drafted = PlanningServiceApi::draft_requirements(
-        &hub,
-        RequirementsDraftInput { include_codebase_scan: false, append_only: true, max_requirements: 2 },
-    )
-    .await
-    .expect("draft requirements");
-    let requirement_id = drafted.requirements.first().expect("requirement should exist").id.clone();
-
-    let execution = PlanningServiceApi::execute_requirements(
-        &hub,
-        RequirementsExecutionInput {
-            requirement_ids: vec![requirement_id.clone()],
-            start_workflows: false,
-            workflow_ref: None,
-            include_wont: false,
-        },
-    )
-    .await
-    .expect("execute requirements");
-    let task_id = execution.task_ids_created.first().expect("task should be created").clone();
-
-    let requirement = PlanningServiceApi::get_requirement(&hub, &requirement_id).await.expect("load requirement");
-    assert!(!requirement.links.tasks.is_empty());
-    assert!(requirement.links.tasks.contains(&task_id));
-    let requirement_relative_path = requirement.relative_path.clone().expect("relative path should be set");
-
-    let scoped = scoped_ao_root(temp.path());
-    let requirement_file_path = scoped.join("requirements").join(requirement_relative_path);
-    assert!(requirement_file_path.exists());
-
-    let requirement_file_json: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&requirement_file_path).expect("requirement file should be readable"),
-    )
-    .expect("requirement file should be json");
-    assert_eq!(requirement_file_json.get("id").and_then(serde_json::Value::as_str), Some(requirement_id.as_str()));
-
-    let requirement_index_path = global_requirements_index_dir(temp.path()).join("index.json");
-    assert!(requirement_index_path.exists());
-
-    let task_file_path = scoped.join("tasks").join(format!("{}.json", task_id));
-    assert!(task_file_path.exists());
-    let task_file_json: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&task_file_path).expect("task file should be readable"))
-            .expect("task file should be json");
-    let task_description = task_file_json.get("description").and_then(serde_json::Value::as_str).unwrap_or_default();
-    assert!(!task_description.trim().is_empty());
-    assert!(task_description.contains("Acceptance Criteria") || task_description.contains("## Implementation Notes"));
 }
 
 #[tokio::test]

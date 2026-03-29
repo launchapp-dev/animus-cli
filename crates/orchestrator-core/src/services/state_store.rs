@@ -1,6 +1,8 @@
 use super::*;
+use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::io::{BufRead, BufReader, Write};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(super) struct CoreState {
@@ -8,6 +10,7 @@ pub(super) struct CoreState {
     #[serde(alias = "daemon_max_agents")]
     pub(super) daemon_pool_size: Option<usize>,
     pub(super) runner_pid: Option<u32>,
+    #[serde(default, skip_serializing, skip_deserializing)]
     pub(super) logs: Vec<LogEntry>,
     pub(super) active_project_id: Option<String>,
     pub(super) projects: HashMap<String, OrchestratorProject>,
@@ -31,6 +34,18 @@ pub(super) struct CoreState {
     pub(super) all_tasks_dirty: bool,
     #[serde(skip)]
     pub(super) all_requirements_dirty: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub(super) struct DaemonStateSnapshot {
+    #[serde(default)]
+    pub(super) daemon_status: DaemonStatus,
+    #[serde(alias = "daemon_max_agents", default)]
+    pub(super) daemon_pool_size: Option<usize>,
+    #[serde(default)]
+    pub(super) runner_pid: Option<u32>,
+    #[serde(default)]
+    pub(super) active_process_count: Option<usize>,
 }
 
 impl CoreState {
@@ -148,6 +163,98 @@ fn deserialize_core_state(contents: &str) -> Result<CoreState> {
     serde_json::from_value::<CoreState>(raw).context("core-state JSON does not match expected schema")
 }
 
+pub(super) fn logs_file_for_state_file(state_file: &Path) -> PathBuf {
+    state_file.with_file_name("core-logs.jsonl")
+}
+
+pub(super) fn migrate_legacy_logs_to_file(state_file: &Path, logs_file: &Path) -> Result<()> {
+    if !state_file.exists() {
+        return Ok(());
+    }
+
+    let contents = std::fs::read_to_string(state_file)
+        .with_context(|| format!("failed to read core-state at {}", state_file.display()))?;
+    let mut raw: serde_json::Value =
+        serde_json::from_str(&contents).with_context(|| format!("failed to parse core-state at {}", state_file.display()))?;
+    let Some(object) = raw.as_object_mut() else {
+        return Ok(());
+    };
+    let Some(logs_value) = object.remove("logs") else {
+        return Ok(());
+    };
+
+    if !logs_file.exists() {
+        let logs = serde_json::from_value::<Vec<LogEntry>>(logs_value).unwrap_or_default();
+        append_logs(logs_file, &logs)?;
+    }
+
+    write_json_pretty(state_file, &raw)?;
+    Ok(())
+}
+
+pub(super) fn append_logs(logs_file: &Path, logs: &[LogEntry]) -> Result<()> {
+    if logs.is_empty() {
+        return Ok(());
+    }
+
+    if let Some(parent) = logs_file.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create log directory at {}", parent.display()))?;
+    }
+
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(logs_file)
+        .with_context(|| format!("failed to open core log file at {}", logs_file.display()))?;
+    for entry in logs {
+        writeln!(file, "{}", serde_json::to_string(entry)?)
+            .with_context(|| format!("failed to append log entry to {}", logs_file.display()))?;
+    }
+    Ok(())
+}
+
+pub(super) fn load_logs(logs_file: &Path, limit: Option<usize>) -> Result<Vec<LogEntry>> {
+    let file = match std::fs::File::open(logs_file) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err.into()),
+    };
+
+    let mut entries = Vec::new();
+    let mut recent: Option<VecDeque<LogEntry>> = limit.map(|_| VecDeque::new());
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let Ok(entry) = serde_json::from_str::<LogEntry>(trimmed) else {
+            continue;
+        };
+        if let Some(recent) = recent.as_mut() {
+            recent.push_back(entry);
+            if let Some(limit) = limit {
+                while recent.len() > limit {
+                    recent.pop_front();
+                }
+            }
+        } else {
+            entries.push(entry);
+        }
+    }
+
+    Ok(recent.map(|deque| deque.into_iter().collect::<Vec<_>>()).unwrap_or(entries))
+}
+
+pub(super) fn clear_logs_file(logs_file: &Path) -> Result<()> {
+    match std::fs::remove_file(logs_file) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
 pub(super) fn load_core_state(state_file: &Path) -> CoreState {
     if !state_file.exists() {
         return CoreState::default_with_stopped();
@@ -170,6 +277,18 @@ pub(super) fn load_core_state_for_mutation(state_file: &Path) -> Result<CoreStat
     deserialize_core_state(&contents).with_context(|| {
         format!("failed to parse core-state at {}; refusing mutation to avoid data loss", state_file.display())
     })
+}
+
+pub(super) fn load_daemon_state_snapshot(state_file: &Path) -> DaemonStateSnapshot {
+    if !state_file.exists() {
+        return DaemonStateSnapshot::default();
+    }
+
+    let Ok(contents) = std::fs::read_to_string(state_file) else {
+        return DaemonStateSnapshot::default();
+    };
+
+    serde_json::from_str::<DaemonStateSnapshot>(&contents).unwrap_or_default()
 }
 
 #[cfg(test)]

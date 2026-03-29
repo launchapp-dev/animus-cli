@@ -255,7 +255,7 @@ pub(crate) struct DaemonStreamArgs {
     pub(crate) cat: Option<String>,
     #[arg(long, help = "Minimum log level: debug, info, warn, error.")]
     pub(crate) level: Option<String>,
-    #[arg(long, help = "Filter to a specific workflow ID.")]
+    #[arg(long, help = "Filter to a specific workflow ID or workflow ref.")]
     pub(crate) workflow: Option<String>,
     #[arg(long, help = "Filter to a specific run ID.")]
     pub(crate) run: Option<String>,

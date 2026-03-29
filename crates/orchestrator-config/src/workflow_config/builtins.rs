@@ -109,8 +109,7 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
             WorkflowDefinition {
                 id: "standard-workflow".to_string(),
                 name: "Standard Workflow".to_string(),
-                description: "Default task delivery workflow for this repository."
-                    .to_string(),
+                description: "Default task delivery workflow for this repository.".to_string(),
                 phases: vec![
                     "requirements".to_string().into(),
                     "implementation".to_string().into(),

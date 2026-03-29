@@ -2,7 +2,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use chrono::Utc;
 use orchestrator_daemon_runtime::{DaemonEventLog, DaemonRunEvent, DaemonRunHooks, ProjectTickSummary};
 use orchestrator_logging::Logger;
 use orchestrator_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};

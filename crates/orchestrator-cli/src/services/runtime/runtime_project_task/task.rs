@@ -4,20 +4,20 @@ use std::process::Command as ProcessCommand;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Duration, Utc};
 use orchestrator_core::{
-    evaluate_task_priority_policy, plan_task_priority_rebalance, services::ServiceHub, ListPageRequest,
-    TaskCreateInput, TaskFilter, TaskPriorityPolicyReport, TaskPriorityRebalanceOptions, TaskQuery, TaskStatus,
-    TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    load_task_priority_policy_report, open_project_db, plan_task_priority_rebalance, services::ServiceHub,
+    ListPageRequest, TaskCreateInput, TaskFilter, TaskPriorityPolicyReport, TaskPriorityRebalanceOptions, TaskQuery,
+    TaskStatus, TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 use serde::Serialize;
 use tracing::warn;
 
-use crate::services::runtime::{stale_in_progress_summary, StaleInProgressSummary};
+use crate::services::runtime::StaleInProgressSummary;
 use crate::{
     ensure_destructive_confirmation, invalid_input_error, not_found_error, parse_dependency_type, parse_input_json_or,
     parse_priority_opt, parse_risk_opt, parse_task_query_sort_opt, parse_task_status, parse_task_type_opt, print_value,
-    TaskCommand,
+    TaskCommand, TaskStatsArgs,
 };
 
 #[derive(Debug, Serialize)]
@@ -140,10 +140,11 @@ pub(crate) async fn handle_task(
         }
         TaskCommand::Next => print_value(tasks.next_task().await?, json),
         TaskCommand::Stats(args) => {
-            let task_list = tasks.list().await?;
+            let now = Utc::now();
             let stats = tasks.statistics().await?;
-            let stale_in_progress = stale_in_progress_summary(&task_list, args.stale_threshold_hours, Utc::now());
-            let priority_policy = evaluate_task_priority_policy(&task_list, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
+            let stale_in_progress = load_stale_in_progress_summary(project_root, args.stale_threshold_hours, now)?;
+            let priority_policy =
+                load_task_priority_policy_report(Path::new(project_root), DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
             print_value(TaskStatsOutput { stats, stale_in_progress, priority_policy }, json)
         }
         TaskCommand::Get(args) => {
@@ -517,6 +518,52 @@ pub(crate) async fn handle_task(
             )
         }
     }
+}
+
+pub(crate) async fn handle_task_stats(args: TaskStatsArgs, project_root: &str, json: bool) -> Result<()> {
+    let now = Utc::now();
+    let stats = orchestrator_core::load_task_statistics(Path::new(project_root))?;
+    let stale_in_progress = load_stale_in_progress_summary(project_root, args.stale_threshold_hours, now)?;
+    let priority_policy = load_task_priority_policy_report(Path::new(project_root), DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
+    print_value(TaskStatsOutput { stats, stale_in_progress, priority_policy }, json)
+}
+
+fn load_stale_in_progress_summary(
+    project_root: &str,
+    threshold_hours: u64,
+    now: DateTime<Utc>,
+) -> Result<StaleInProgressSummary> {
+    let conn = open_project_db(Path::new(project_root))?;
+    let cutoff = now - Duration::hours(i64::try_from(threshold_hours).context("stale threshold overflow")?);
+    let cutoff = cutoff.to_rfc3339();
+    let mut stmt = conn.prepare(
+        "SELECT id, title, updated_at
+         FROM tasks
+         WHERE status = 'in-progress'
+           AND updated_at IS NOT NULL
+           AND updated_at <= ?1
+         ORDER BY updated_at ASC, id ASC",
+    )?;
+    let rows = stmt.query_map([cutoff], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?))
+    })?;
+
+    let mut tasks = Vec::new();
+    for row in rows {
+        let (task_id, title, updated_at) = row?;
+        let updated_at = DateTime::parse_from_rfc3339(&updated_at)
+            .with_context(|| format!("invalid updated_at for task {task_id}"))?
+            .with_timezone(&Utc);
+        let age_hours = now.signed_duration_since(updated_at).num_seconds().max(0) as u64 / 3600;
+        tasks.push(crate::services::runtime::StaleInProgressEntry {
+            task_id,
+            title: title.unwrap_or_else(|| "Unknown task".to_string()),
+            updated_at: updated_at.to_rfc3339(),
+            age_hours,
+        });
+    }
+
+    Ok(StaleInProgressSummary { threshold_hours, count: tasks.len(), tasks })
 }
 
 #[cfg(test)]

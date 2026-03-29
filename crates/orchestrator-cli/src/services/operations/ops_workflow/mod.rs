@@ -513,36 +513,13 @@ mod requirement_workflow_tests {
     };
 
     #[test]
-    fn resolve_requirement_workflow_ref_uses_bundled_canonical_workflow() {
+    fn resolve_requirement_workflow_ref_errors_without_yaml_config() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
         write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
 
-        let workflow_ref = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
-            .expect("bundled requirement workflow should resolve");
-        assert_eq!(workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
-    }
-
-    #[test]
-    fn resolve_requirement_workflow_ref_detects_requirement_pipeline() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
-
-        let workflow_ref = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
-            .expect("requirement workflow should resolve");
-        assert_eq!(workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
-    }
-
-    #[test]
-    fn apply_requirement_workflow_default_uses_bundled_requirement_workflow() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
-
-        let workflow_ref = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref())
-            .expect("default requirement workflow should resolve");
-        assert_eq!(workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
+        let result = resolve_requirement_workflow_ref(temp.path().to_string_lossy().as_ref());
+        assert!(result.is_err(), "requirement workflow requires YAML config, not compiled builtins");
     }
 }
 
@@ -609,55 +586,6 @@ mod tests {
         assert_eq!(dispatch.trigger_source, "manual-cli-run");
     }
 
-    #[tokio::test]
-    async fn resolve_workflow_run_dispatch_uses_requirement_workflow_default() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        write_workflow_config(temp.path(), &builtin_workflow_config()).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
-
-        let hub = Arc::new(InMemoryServiceHub::new());
-        let now = chrono::Utc::now();
-        hub.planning()
-            .upsert_requirement(RequirementItem {
-                id: "REQ-39".to_string(),
-                title: "Dispatch requirement".to_string(),
-                description: "requirement dispatch builder test".to_string(),
-                body: None,
-                legacy_id: None,
-                category: None,
-                requirement_type: None,
-                acceptance_criteria: vec!["starts workflow".to_string()],
-                priority: RequirementPriority::Must,
-                status: RequirementStatus::Refined,
-                source: "test".to_string(),
-                tags: Vec::new(),
-                links: RequirementLinks::default(),
-                comments: Vec::new(),
-                relative_path: None,
-                linked_task_ids: Vec::new(),
-                created_at: now,
-                updated_at: now,
-            })
-            .await
-            .expect("requirement should be created");
-
-        let dispatch = resolve_workflow_run_dispatch(
-            hub,
-            temp.path().to_string_lossy().as_ref(),
-            None,
-            Some("REQ-39".to_string()),
-            None,
-            None,
-            None,
-            std::collections::HashMap::new(),
-        )
-        .await
-        .expect("dispatch should resolve");
-
-        assert_eq!(dispatch.subject_id(), "REQ-39");
-        assert_eq!(dispatch.workflow_ref, REQUIREMENT_TASK_GENERATION_WORKFLOW_REF);
-        assert_eq!(dispatch.trigger_source, "manual-cli-run");
-    }
 
     #[tokio::test]
     async fn resolve_workflow_run_dispatch_from_input_accepts_legacy_workflow_run_input() {
