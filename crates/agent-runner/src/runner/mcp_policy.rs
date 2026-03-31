@@ -10,20 +10,33 @@ use tracing::{debug, info, warn};
 pub(super) struct McpStdioConfig {
     pub(super) command: String,
     pub(super) args: Vec<String>,
+    pub(super) env: HashMap<String, String>,
+}
+
+#[derive(Debug, Clone)]
+enum AdditionalMcpServerTransport {
+    Http {
+        url: String,
+        auth_token: Option<String>,
+    },
+    Stdio {
+        command: String,
+        args: Vec<String>,
+        env: HashMap<String, String>,
+    },
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct AdditionalMcpServer {
     pub(super) name: String,
-    pub(super) command: String,
-    pub(super) args: Vec<String>,
-    pub(super) env: HashMap<String, String>,
+    transport: AdditionalMcpServerTransport,
 }
 
 #[derive(Debug, Clone)]
 pub(super) struct McpToolEnforcement {
     pub(super) enabled: bool,
     pub(super) endpoint: Option<String>,
+    pub(super) endpoint_auth_token: Option<String>,
     pub(super) stdio: Option<McpStdioConfig>,
     pub(super) agent_id: String,
     pub(super) allowed_prefixes: Vec<String>,
@@ -56,6 +69,7 @@ pub(super) fn resolve_mcp_tool_enforcement(runtime_contract: Option<&serde_json:
         return McpToolEnforcement {
             enabled: false,
             endpoint: None,
+            endpoint_auth_token: None,
             stdio: None,
             agent_id: "ao".to_string(),
             allowed_prefixes: Vec::new(),
@@ -69,6 +83,12 @@ pub(super) fn resolve_mcp_tool_enforcement(runtime_contract: Option<&serde_json:
         contract.pointer("/cli/capabilities/supports_mcp").and_then(serde_json::Value::as_bool).unwrap_or(false);
     let endpoint = contract
         .pointer("/mcp/endpoint")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+    let endpoint_auth_token = contract
+        .pointer("/mcp/auth_token")
         .and_then(serde_json::Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -92,7 +112,17 @@ pub(super) fn resolve_mcp_tool_enforcement(runtime_contract: Option<&serde_json:
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    let stdio = stdio_command.map(|command| McpStdioConfig { command, args: stdio_args });
+    let stdio_env = contract
+        .pointer("/mcp/stdio/env")
+        .and_then(serde_json::Value::as_object)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string())))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let stdio = stdio_command.map(|command| McpStdioConfig { command, args: stdio_args, env: stdio_env });
     let has_endpoint = endpoint.is_some();
     let has_stdio = stdio.is_some();
     let agent_id = contract
@@ -147,23 +177,59 @@ pub(super) fn resolve_mcp_tool_enforcement(runtime_contract: Option<&serde_json:
         .map(|servers| {
             servers
                 .iter()
-                .map(|(name, entry)| AdditionalMcpServer {
-                    name: name.clone(),
-                    command: entry.get("command").and_then(serde_json::Value::as_str).unwrap_or_default().to_string(),
-                    args: entry
+                .filter_map(|(name, entry)| {
+                    let env = entry
+                        .get("env")
+                        .and_then(serde_json::Value::as_object)
+                        .map(|entries| {
+                            entries
+                                .iter()
+                                .filter_map(|(key, value)| value.as_str().map(|value| (key.clone(), value.to_string())))
+                                .collect::<HashMap<_, _>>()
+                        })
+                        .unwrap_or_default();
+
+                    if let Some(url) = entry
+                        .get("url")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())
+                    {
+                        return Some(AdditionalMcpServer {
+                            name: name.clone(),
+                            transport: AdditionalMcpServerTransport::Http {
+                                url: url.to_string(),
+                                auth_token: entry
+                                    .get("auth_token")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::trim)
+                                    .filter(|value| !value.is_empty())
+                                    .map(ToString::to_string),
+                            },
+                        });
+                    }
+
+                    let command = entry
+                        .get("command")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty())?;
+
+                    let args = entry
                         .get("args")
                         .and_then(serde_json::Value::as_array)
                         .map(|a| a.iter().filter_map(serde_json::Value::as_str).map(ToString::to_string).collect())
-                        .unwrap_or_default(),
-                    env: entry
-                        .get("env")
-                        .and_then(serde_json::Value::as_object)
-                        .map(|e| {
-                            e.iter().filter_map(|(k, v)| v.as_str().map(|val| (k.clone(), val.to_string()))).collect()
-                        })
-                        .unwrap_or_default(),
+                        .unwrap_or_default();
+
+                    Some(AdditionalMcpServer {
+                        name: name.clone(),
+                        transport: AdditionalMcpServerTransport::Stdio {
+                            command: command.to_string(),
+                            args,
+                            env,
+                        },
+                    })
                 })
-                .filter(|s| !s.command.is_empty())
                 .collect()
         })
         .unwrap_or_default();
@@ -171,6 +237,7 @@ pub(super) fn resolve_mcp_tool_enforcement(runtime_contract: Option<&serde_json:
     McpToolEnforcement {
         enabled,
         endpoint,
+        endpoint_auth_token,
         stdio,
         agent_id,
         allowed_prefixes,
@@ -244,16 +311,44 @@ fn discover_codex_mcp_server_names() -> Vec<String> {
 
 #[derive(Debug, Clone, Copy)]
 enum McpServerTransport<'a> {
-    Http(&'a str),
-    Stdio { command: &'a str, args: &'a [String] },
+    Http {
+        url: &'a str,
+        auth_token: Option<&'a str>,
+    },
+    Stdio {
+        command: &'a str,
+        args: &'a [String],
+        env: &'a HashMap<String, String>,
+    },
+}
+
+impl AdditionalMcpServer {
+    fn transport(&self) -> McpServerTransport<'_> {
+        match &self.transport {
+            AdditionalMcpServerTransport::Http { url, auth_token } => McpServerTransport::Http {
+                url,
+                auth_token: auth_token.as_deref(),
+            },
+            AdditionalMcpServerTransport::Stdio { command, args, env } => {
+                McpServerTransport::Stdio { command, args, env }
+            }
+        }
+    }
 }
 
 fn resolve_mcp_server_transport<'a>(enforcement: &'a McpToolEnforcement) -> Result<McpServerTransport<'a>> {
     if let Some(stdio) = enforcement.stdio.as_ref() {
-        return Ok(McpServerTransport::Stdio { command: stdio.command.trim(), args: &stdio.args });
+        return Ok(McpServerTransport::Stdio {
+            command: stdio.command.trim(),
+            args: &stdio.args,
+            env: &stdio.env,
+        });
     }
     if let Some(endpoint) = enforcement.endpoint.as_deref() {
-        return Ok(McpServerTransport::Http(endpoint));
+        return Ok(McpServerTransport::Http {
+            url: endpoint,
+            auth_token: enforcement.endpoint_auth_token.as_deref(),
+        });
     }
 
     bail!("MCP-only policy is enabled, but neither mcp.endpoint nor mcp.stdio.command is configured");
@@ -263,8 +358,8 @@ fn summarize_mcp_transport<'a>(
     transport: McpServerTransport<'a>,
 ) -> (&'static str, Option<&'a str>, Option<&'a str>, Option<&'a [String]>) {
     match transport {
-        McpServerTransport::Http(endpoint) => ("http", Some(endpoint), None, None),
-        McpServerTransport::Stdio { command, args } => ("stdio", None, Some(command), Some(args)),
+        McpServerTransport::Http { url, .. } => ("http", Some(url), None, None),
+        McpServerTransport::Stdio { command, args, .. } => ("stdio", None, Some(command), Some(args)),
     }
 }
 
@@ -295,11 +390,11 @@ fn apply_claude_native_mcp_lockdown(
     additional_servers: &[AdditionalMcpServer],
 ) {
     let primary = match transport {
-        McpServerTransport::Http(endpoint) => serde_json::json!({
+        McpServerTransport::Http { url, .. } => serde_json::json!({
             "type": "http",
-            "url": endpoint
+            "url": url
         }),
-        McpServerTransport::Stdio { command, args } => serde_json::json!({
+        McpServerTransport::Stdio { command, args, .. } => serde_json::json!({
             "command": command,
             "args": args
         }),
@@ -307,13 +402,22 @@ fn apply_claude_native_mcp_lockdown(
     let mut mcp_servers = serde_json::Map::new();
     mcp_servers.insert(agent_id.to_string(), primary);
     for server in additional_servers {
-        let mut config = serde_json::Map::new();
-        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
-        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
-        if !server.env.is_empty() {
-            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
-        }
-        mcp_servers.insert(server.name.clone(), serde_json::Value::Object(config));
+        let config = match server.transport() {
+            McpServerTransport::Http { url, .. } => serde_json::json!({
+                "type": "http",
+                "url": url,
+            }),
+            McpServerTransport::Stdio { command, args, env } => {
+                let mut config = serde_json::Map::new();
+                config.insert("command".to_string(), serde_json::Value::String(command.to_string()));
+                config.insert("args".to_string(), serde_json::to_value(args).expect("server args should serialize"));
+                if !env.is_empty() {
+                    config.insert("env".to_string(), serde_json::to_value(env).expect("server env should serialize"));
+                }
+                serde_json::Value::Object(config)
+            }
+        };
+        mcp_servers.insert(server.name.clone(), config);
     }
     let config = serde_json::json!({ "mcpServers": mcp_servers }).to_string();
     ensure_flag(args, "--strict-mcp-config", 0);
@@ -341,25 +445,36 @@ fn apply_codex_native_mcp_lockdown(
 
     let base = format!("mcp_servers.{agent_id}");
     match transport {
-        McpServerTransport::Http(endpoint) => {
-            ensure_codex_config_override(args, &format!("{base}.url"), &toml_string(endpoint));
+        McpServerTransport::Http { url, .. } => {
+            ensure_codex_config_override(args, &format!("{base}.url"), &toml_string(url));
         }
-        McpServerTransport::Stdio { command, args: stdio_args } => {
+        McpServerTransport::Stdio { command, args: stdio_args, env } => {
             ensure_codex_config_override(args, &format!("{base}.command"), &toml_string(command));
             let toml_args =
                 format!("[{}]", stdio_args.iter().map(|arg| toml_string(arg)).collect::<Vec<_>>().join(", "));
             ensure_codex_config_override(args, &format!("{base}.args"), &toml_args);
+            for (key, value) in env {
+                ensure_codex_config_override(args, &format!("{base}.env.{key}"), &toml_string(value));
+            }
         }
     }
     ensure_codex_config_override(args, &format!("{base}.enabled"), "true");
 
     for server in additional_servers {
         let sbase = format!("mcp_servers.{}", server.name);
-        ensure_codex_config_override(args, &format!("{sbase}.command"), &toml_string(&server.command));
-        let toml_args = format!("[{}]", server.args.iter().map(|arg| toml_string(arg)).collect::<Vec<_>>().join(", "));
-        ensure_codex_config_override(args, &format!("{sbase}.args"), &toml_args);
-        for (key, value) in &server.env {
-            ensure_codex_config_override(args, &format!("{sbase}.env.{key}"), &toml_string(value));
+        match server.transport() {
+            McpServerTransport::Http { url, .. } => {
+                ensure_codex_config_override(args, &format!("{sbase}.url"), &toml_string(url));
+            }
+            McpServerTransport::Stdio { command, args: server_args, env } => {
+                ensure_codex_config_override(args, &format!("{sbase}.command"), &toml_string(command));
+                let toml_args =
+                    format!("[{}]", server_args.iter().map(|arg| toml_string(arg)).collect::<Vec<_>>().join(", "));
+                ensure_codex_config_override(args, &format!("{sbase}.args"), &toml_args);
+                for (key, value) in env {
+                    ensure_codex_config_override(args, &format!("{sbase}.env.{key}"), &toml_string(value));
+                }
+            }
         }
         ensure_codex_config_override(args, &format!("{sbase}.enabled"), "true");
     }
@@ -381,30 +496,45 @@ fn apply_gemini_native_mcp_lockdown(
     let allowed_csv = allowed_names.join(",");
     ensure_flag_value(args, "--allowed-mcp-server-names", &allowed_csv, 0);
     let primary = match transport {
-        McpServerTransport::Http(endpoint) => serde_json::json!({
+        McpServerTransport::Http { url, .. } => serde_json::json!({
             "type": "http",
-            "url": endpoint
+            "url": url
         }),
-        McpServerTransport::Stdio { command, args } => serde_json::json!({
+        McpServerTransport::Stdio { command, args, env } => serde_json::json!({
             "type": "stdio",
             "command": command,
             "args": args,
-            "env": {
-                "AO_MCP_SCHEMA_DRAFT": "draft07"
+            "env": if env.is_empty() {
+                serde_json::json!({
+                    "AO_MCP_SCHEMA_DRAFT": "draft07"
+                })
+            } else {
+                let mut merged = env.clone();
+                merged.entry("AO_MCP_SCHEMA_DRAFT".to_string()).or_insert_with(|| "draft07".to_string());
+                serde_json::to_value(merged).expect("server env should serialize")
             }
         }),
     };
     let mut mcp_servers = serde_json::Map::new();
     mcp_servers.insert(agent_id.to_string(), primary);
     for server in additional_servers {
-        let mut config = serde_json::Map::new();
-        config.insert("type".to_string(), serde_json::Value::String("stdio".to_string()));
-        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
-        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
-        if !server.env.is_empty() {
-            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
-        }
-        mcp_servers.insert(server.name.clone(), serde_json::Value::Object(config));
+        let config = match server.transport() {
+            McpServerTransport::Http { url, .. } => serde_json::json!({
+                "type": "http",
+                "url": url,
+            }),
+            McpServerTransport::Stdio { command, args, env } => {
+                let mut config = serde_json::Map::new();
+                config.insert("type".to_string(), serde_json::Value::String("stdio".to_string()));
+                config.insert("command".to_string(), serde_json::Value::String(command.to_string()));
+                config.insert("args".to_string(), serde_json::to_value(args).expect("server args should serialize"));
+                if !env.is_empty() {
+                    config.insert("env".to_string(), serde_json::to_value(env).expect("server env should serialize"));
+                }
+                serde_json::Value::Object(config)
+            }
+        };
+        mcp_servers.insert(server.name.clone(), config);
     }
     let settings = serde_json::json!({
         "tools": {
@@ -429,39 +559,56 @@ fn apply_opencode_native_mcp_lockdown(
     additional_servers: &[AdditionalMcpServer],
 ) {
     let primary = match transport {
-        McpServerTransport::Http(endpoint) => serde_json::json!({
+        McpServerTransport::Http { url, .. } => serde_json::json!({
             "type": "remote",
-            "url": endpoint,
+            "url": url,
             "enabled": true
         }),
-        McpServerTransport::Stdio { command, args } => {
+        McpServerTransport::Stdio { command, args, env } => {
             let mut command_with_args = Vec::with_capacity(args.len() + 1);
             command_with_args.push(command.to_string());
             command_with_args.extend(args.iter().cloned());
-            serde_json::json!({
+            let mut config = serde_json::json!({
                 "type": "local",
                 "command": command_with_args,
                 "enabled": true
-            })
+            });
+            if !env.is_empty() {
+                config
+                    .as_object_mut()
+                    .expect("json object")
+                    .insert("env".to_string(), serde_json::to_value(env).expect("server env should serialize"));
+            }
+            config
         }
     };
     let mut mcp_entries = serde_json::Map::new();
     mcp_entries.insert(agent_id.to_string(), primary);
     for server in additional_servers {
-        let mut command_with_args = Vec::with_capacity(server.args.len() + 1);
-        command_with_args.push(server.command.clone());
-        command_with_args.extend(server.args.iter().cloned());
-        let mut config = serde_json::Map::new();
-        config.insert("type".to_string(), serde_json::Value::String("local".to_string()));
-        config.insert(
-            "command".to_string(),
-            serde_json::to_value(command_with_args).expect("server command should serialize"),
-        );
-        config.insert("enabled".to_string(), serde_json::Value::Bool(true));
-        if !server.env.is_empty() {
-            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
-        }
-        mcp_entries.insert(server.name.clone(), serde_json::Value::Object(config));
+        let config = match server.transport() {
+            McpServerTransport::Http { url, .. } => serde_json::json!({
+                "type": "remote",
+                "url": url,
+                "enabled": true,
+            }),
+            McpServerTransport::Stdio { command, args, env } => {
+                let mut command_with_args = Vec::with_capacity(args.len() + 1);
+                command_with_args.push(command.to_string());
+                command_with_args.extend(args.iter().cloned());
+                let mut config = serde_json::Map::new();
+                config.insert("type".to_string(), serde_json::Value::String("local".to_string()));
+                config.insert(
+                    "command".to_string(),
+                    serde_json::to_value(command_with_args).expect("server command should serialize"),
+                );
+                config.insert("enabled".to_string(), serde_json::Value::Bool(true));
+                if !env.is_empty() {
+                    config.insert("env".to_string(), serde_json::to_value(env).expect("server env should serialize"));
+                }
+                serde_json::Value::Object(config)
+            }
+        };
+        mcp_entries.insert(server.name.clone(), config);
     }
     let config = serde_json::json!({ "mcp": mcp_entries });
     env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config.to_string());
@@ -474,22 +621,46 @@ fn apply_oai_runner_native_mcp_lockdown(
 ) {
     let mut servers = Vec::with_capacity(additional_servers.len() + 1);
     match transport {
-        McpServerTransport::Stdio { command, args: stdio_args } => {
-            servers.push(serde_json::json!({ "command": command, "args": stdio_args }));
+        McpServerTransport::Stdio { command, args: stdio_args, env } => {
+            let mut config = serde_json::Map::new();
+            config.insert("command".to_string(), serde_json::Value::String(command.to_string()));
+            config.insert("args".to_string(), serde_json::to_value(stdio_args).expect("stdio args should serialize"));
+            if !env.is_empty() {
+                config.insert("env".to_string(), serde_json::to_value(env).expect("stdio env should serialize"));
+            }
+            servers.push(serde_json::Value::Object(config));
         }
-        McpServerTransport::Http(endpoint) => {
-            servers.push(serde_json::json!({ "url": endpoint }));
+        McpServerTransport::Http { url, auth_token } => {
+            let mut config = serde_json::Map::new();
+            config.insert("url".to_string(), serde_json::Value::String(url.to_string()));
+            if let Some(auth_token) = auth_token.filter(|value| !value.trim().is_empty()) {
+                config.insert("auth_token".to_string(), serde_json::Value::String(auth_token.to_string()));
+            }
+            servers.push(serde_json::Value::Object(config));
         }
     };
 
     for server in additional_servers {
-        let mut config = serde_json::Map::new();
-        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
-        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
-        if !server.env.is_empty() {
-            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
-        }
-        servers.push(serde_json::Value::Object(config));
+        let config = match server.transport() {
+            McpServerTransport::Http { url, auth_token } => {
+                let mut config = serde_json::Map::new();
+                config.insert("url".to_string(), serde_json::Value::String(url.to_string()));
+                if let Some(auth_token) = auth_token.filter(|value| !value.trim().is_empty()) {
+                    config.insert("auth_token".to_string(), serde_json::Value::String(auth_token.to_string()));
+                }
+                serde_json::Value::Object(config)
+            }
+            McpServerTransport::Stdio { command, args, env } => {
+                let mut config = serde_json::Map::new();
+                config.insert("command".to_string(), serde_json::Value::String(command.to_string()));
+                config.insert("args".to_string(), serde_json::to_value(args).expect("server args should serialize"));
+                if !env.is_empty() {
+                    config.insert("env".to_string(), serde_json::to_value(env).expect("server env should serialize"));
+                }
+                serde_json::Value::Object(config)
+            }
+        };
+        servers.push(config);
     }
 
     let config = serde_json::Value::Array(servers);

@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct McpRuntimeConfig {
@@ -14,11 +14,79 @@ pub struct McpRuntimeConfig {
     pub agent_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema_draft: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<McpRuntimeServerConfig>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct McpRuntimeServerConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(flatten)]
+    pub transport: McpRuntimeServerTransport,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum McpRuntimeServerTransport {
+    Stdio {
+        command: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        args: Vec<String>,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        env: BTreeMap<String, String>,
+    },
+    StreamableHttp {
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auth_token: Option<String>,
+    },
 }
 
 impl McpRuntimeConfig {
     pub fn is_http_transport(&self) -> bool {
-        self.transport.as_deref().map(|v| v.trim().to_ascii_lowercase()) == Some("http".to_string())
+        matches!(
+            self.primary_server().map(|server| server.transport),
+            Some(McpRuntimeServerTransport::StreamableHttp { .. })
+        )
+    }
+
+    pub fn resolved_servers(&self) -> Vec<McpRuntimeServerConfig> {
+        if !self.servers.is_empty() {
+            return self.servers.clone();
+        }
+
+        self.legacy_primary_server().into_iter().collect()
+    }
+
+    pub fn primary_server(&self) -> Option<McpRuntimeServerConfig> {
+        self.resolved_servers().into_iter().next()
+    }
+
+    fn legacy_primary_server(&self) -> Option<McpRuntimeServerConfig> {
+        if let Some(command) = self.stdio_command.clone().filter(|value| !value.trim().is_empty()) {
+            let args = self
+                .stdio_args_json
+                .as_deref()
+                .and_then(|value| serde_json::from_str::<Vec<String>>(value).ok())
+                .unwrap_or_default();
+
+            return Some(McpRuntimeServerConfig {
+                name: self.agent_id.clone(),
+                transport: McpRuntimeServerTransport::Stdio { command, args, env: BTreeMap::new() },
+            });
+        }
+
+        self.endpoint
+            .clone()
+            .filter(|value| !value.trim().is_empty())
+            .map(|url| McpRuntimeServerConfig {
+                name: self.agent_id.clone(),
+                transport: McpRuntimeServerTransport::StreamableHttp {
+                    url,
+                    auth_token: None,
+                },
+            })
     }
 }
 
@@ -288,6 +356,8 @@ impl PhaseCapabilities {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
     use proptest::prelude::*;
 
@@ -387,6 +457,66 @@ mod tests {
                 .expect("tool should exist in default model specs");
             assert_eq!(first_for_tool, expected);
         }
+    }
+
+    #[test]
+    fn mcp_runtime_config_prefers_explicit_servers() {
+        let config = McpRuntimeConfig {
+            endpoint: Some("http://legacy.example/mcp".to_string()),
+            transport: Some("http".to_string()),
+            servers: vec![
+                McpRuntimeServerConfig {
+                    name: Some("primary".to_string()),
+                    transport: McpRuntimeServerTransport::StreamableHttp {
+                        url: "https://primary.example/mcp".to_string(),
+                        auth_token: Some("Bearer token".to_string()),
+                    },
+                },
+                McpRuntimeServerConfig {
+                    name: Some("local".to_string()),
+                    transport: McpRuntimeServerTransport::Stdio {
+                        command: "ao".to_string(),
+                        args: vec!["mcp".to_string(), "serve".to_string()],
+                        env: BTreeMap::from([("AO_MCP_SCHEMA_DRAFT".to_string(), "draft07".to_string())]),
+                    },
+                },
+            ],
+            ..Default::default()
+        };
+
+        let servers = config.resolved_servers();
+        assert_eq!(servers.len(), 2);
+        assert!(config.is_http_transport());
+        assert!(matches!(
+            servers[0].transport,
+            McpRuntimeServerTransport::StreamableHttp { ref url, ref auth_token }
+                if url == "https://primary.example/mcp" && auth_token.as_deref() == Some("Bearer token")
+        ));
+    }
+
+    #[test]
+    fn mcp_runtime_config_reconstructs_legacy_primary_server() {
+        let config = McpRuntimeConfig {
+            stdio_command: Some("ao".to_string()),
+            stdio_args_json: Some(r#"["--project-root","/tmp/project","mcp","serve"]"#.to_string()),
+            agent_id: Some("ao".to_string()),
+            ..Default::default()
+        };
+
+        let primary = config.primary_server().expect("legacy stdio config should produce a primary server");
+        assert_eq!(primary.name.as_deref(), Some("ao"));
+        assert!(matches!(
+            primary.transport,
+            McpRuntimeServerTransport::Stdio { ref command, ref args, ref env }
+                if command == "ao"
+                    && args == &vec![
+                        "--project-root".to_string(),
+                        "/tmp/project".to_string(),
+                        "mcp".to_string(),
+                        "serve".to_string()
+                    ]
+                    && env.is_empty()
+        ));
     }
 
     proptest! {

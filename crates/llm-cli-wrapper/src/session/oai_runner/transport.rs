@@ -14,6 +14,11 @@ use crate::session::{session_event::SessionEvent, session_request::SessionReques
 
 use super::parser::parse_oai_runner_json_line;
 
+struct SessionControlEntry {
+    cancel_tx: oneshot::Sender<()>,
+    pid: Option<u32>,
+}
+
 pub(crate) async fn start_oai_runner_session(
     request: SessionRequest,
     resume_session_id: Option<String>,
@@ -58,13 +63,13 @@ pub(crate) async fn start_oai_runner_session(
 }
 
 pub(crate) async fn terminate_oai_runner_session(session_id: &str) -> Result<()> {
-    let Some(cancel_tx) = take_session(session_id) else {
-        return Err(Error::ExecutionFailed(format!(
-            "oai-runner backend does not track active child process for session '{}'",
-            session_id
-        )));
+    let Some(entry) = take_session(session_id) else {
+        return Err(Error::ExecutionFailed(format!("oai-runner backend has no active session for '{}'", session_id)));
     };
-    let _ = cancel_tx.send(());
+    let _ = entry.cancel_tx.send(());
+    if let Some(pid) = entry.pid {
+        kill_process_group(pid);
+    }
     Ok(())
 }
 
@@ -123,9 +128,16 @@ async fn run_oai_runner_session(
     #[cfg(unix)]
     command.process_group(0);
     let mut child = command.spawn()?;
-    let _ = pid_tx.send(child.id());
-
     let pid = child.id();
+    let _ = pid_tx.send(pid);
+
+    if let (Some(pid), Some(control_session_id)) = (pid, session_id.as_deref()) {
+        if !record_session_pid(control_session_id, pid) {
+            crate::session::kill_and_reap_child(&mut child).await;
+            return Err(Error::ExecutionFailed("oai-runner session cancelled".to_string()));
+        }
+    }
+
     let _ = event_tx.send(SessionEvent::Started { backend, session_id, pid }).await;
 
     if let Some(mut stdin) = child.stdin.take() {
@@ -206,14 +218,14 @@ async fn wait_for_child(
     }
 }
 
-fn session_registry() -> &'static Mutex<HashMap<String, oneshot::Sender<()>>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<String, oneshot::Sender<()>>>> = OnceLock::new();
+fn session_registry() -> &'static Mutex<HashMap<String, SessionControlEntry>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, SessionControlEntry>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn register_session(session_id: String, cancel_tx: oneshot::Sender<()>) {
     if let Ok(mut registry) = session_registry().lock() {
-        registry.insert(session_id, cancel_tx);
+        registry.insert(session_id, SessionControlEntry { cancel_tx, pid: None });
     }
 }
 
@@ -223,6 +235,69 @@ fn unregister_session(session_id: &str) {
     }
 }
 
-fn take_session(session_id: &str) -> Option<oneshot::Sender<()>> {
+fn record_session_pid(session_id: &str, pid: u32) -> bool {
+    if let Ok(mut registry) = session_registry().lock() {
+        if let Some(entry) = registry.get_mut(session_id) {
+            entry.pid = Some(pid);
+            return true;
+        }
+    }
+    false
+}
+
+fn take_session(session_id: &str) -> Option<SessionControlEntry> {
     session_registry().lock().ok().and_then(|mut registry| registry.remove(session_id))
+}
+
+fn kill_process_group(pid: u32) {
+    #[cfg(unix)]
+    {
+        let _ = std::process::Command::new("kill").args(["-9", &format!("-{}", pid)]).output();
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tokio::process::Command;
+    use tokio::sync::oneshot;
+
+    #[tokio::test]
+    async fn registry_tracks_pid_and_cancel_token() {
+        let session_id = "session-123".to_string();
+        let (cancel_tx, cancel_rx) = oneshot::channel();
+
+        register_session(session_id.clone(), cancel_tx);
+        assert!(record_session_pid(&session_id, 4242));
+
+        let entry = take_session(&session_id).expect("expected session control entry");
+        assert_eq!(entry.pid, Some(4242));
+
+        let _ = entry.cancel_tx.send(());
+        assert!(cancel_rx.await.is_ok());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn kill_process_group_terminates_child_process_group() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 60"]).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+        command.process_group(0);
+
+        let mut child = command.spawn().expect("failed to spawn test child");
+        let pid = child.id().expect("spawned child should have pid");
+
+        kill_process_group(pid);
+
+        let status = tokio::time::timeout(Duration::from_secs(5), child.wait())
+            .await
+            .expect("child should exit after process-group kill")
+            .expect("child wait should succeed");
+        assert!(!status.success());
+    }
 }

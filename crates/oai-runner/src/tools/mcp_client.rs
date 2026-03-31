@@ -11,6 +11,7 @@ use rmcp::transport::streamable_http_client::{
 use rmcp::{RoleClient, ServiceExt};
 use serde::Deserialize;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use tokio::process::Command;
 
@@ -26,6 +27,8 @@ pub enum McpServerConfig {
         command: String,
         #[serde(default)]
         args: Vec<String>,
+        #[serde(default)]
+        env: BTreeMap<String, String>,
     },
     StreamableHttp {
         url: String,
@@ -42,18 +45,19 @@ pub struct McpClient {
 
 pub async fn connect(config: &McpServerConfig) -> Result<McpClient> {
     match config {
-        McpServerConfig::Stdio { command, args } => connect_stdio(command, args).await,
+        McpServerConfig::Stdio { command, args, env } => connect_stdio(command, args, env).await,
         McpServerConfig::StreamableHttp { url, auth_token } => {
             connect_streamable_http(url, auth_token.as_deref()).await
         }
     }
 }
 
-async fn connect_stdio(command: &str, args: &[String]) -> Result<McpClient> {
+async fn connect_stdio(command: &str, args: &[String], env: &BTreeMap<String, String>) -> Result<McpClient> {
     let transport_label = format!("stdio process {}", describe_command(command, args));
 
     let mut cmd = Command::new(command);
     cmd.args(args);
+    cmd.envs(env);
 
     let transport = TokioChildProcess::new(cmd).with_context(|| {
         format!("failed to spawn {transport_label}")

@@ -146,6 +146,12 @@ async fn run_subprocess_session(
     let stdout_task = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
+            if stdout_tool == "oai-runner" {
+                for event in crate::session::oai_runner::parse_oai_runner_json_line(&line) {
+                    let _ = stdout_tx.send(event).await;
+                }
+                continue;
+            }
             match extract_text_from_line(&line, &stdout_tool) {
                 NormalizedTextEvent::TextChunk { text } => {
                     let _ = stdout_tx.send(SessionEvent::TextDelta { text }).await;

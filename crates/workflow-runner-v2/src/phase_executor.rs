@@ -17,9 +17,9 @@ use crate::phase_prompt::{
 };
 use crate::phase_targets::PhaseTargetPlanner;
 use crate::runtime_contract::{
-    apply_phase_capability_launch_flags, inject_agent_tool_policy, inject_default_stdio_mcp, inject_named_mcp_servers,
-    inject_project_mcp_servers, inject_response_schema_into_launch_args, inject_workflow_mcp_servers,
-    phase_output_json_schema_for, phase_response_json_schema_for, set_mcp_tool_policy,
+    apply_phase_capability_launch_flags, inject_agent_tool_policy, inject_default_stdio_mcp_with_config,
+    inject_named_mcp_servers, inject_project_mcp_servers, inject_response_schema_into_launch_args,
+    inject_workflow_mcp_servers, phase_output_json_schema_for, phase_response_json_schema_for, set_mcp_tool_policy,
 };
 use crate::runtime_support::{
     inject_cli_launch_env, inject_cli_launch_overrides, phase_max_continuations, phase_runner_attempts,
@@ -109,6 +109,7 @@ impl orchestrator_core::PhaseExecutor for CliPhaseExecutor {
             dispatch_input: None,
             schedule_input: None,
             routing: &routing,
+            mcp_config: None,
             phase_timeout_secs,
         })
         .await;
@@ -805,6 +806,7 @@ struct PhaseAgentParams<'a> {
     dispatch_input: Option<&'a str>,
     schedule_input: Option<&'a str>,
     routing: &'a protocol::PhaseRoutingConfig,
+    mcp_config: Option<&'a protocol::McpRuntimeConfig>,
     resolved_phase_skills: &'a skill_dispatch::ResolvedPhaseSkillSet,
     phase_timeout_secs: Option<u64>,
 }
@@ -953,6 +955,7 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
     let phase_runtime_settings = params.phase_runtime_settings;
     let overrides = params.overrides;
     let pipeline_vars = params.pipeline_vars;
+    let mcp_config = params.mcp_config;
     let base_caps = ctx.phase_capabilities(phase_id);
     let planning_caps = skill_dispatch::preview_phase_capabilities(&base_caps, params.resolved_phase_skills);
     let routing_complexity = routing_complexity(params.task_complexity);
@@ -1111,7 +1114,12 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                         &ctx.agent_runtime_config,
                     );
                     inject_cli_launch_overrides(&mut runtime_contract, &effective_tool_id, phase_runtime_settings);
-                    inject_default_stdio_mcp(&mut runtime_contract, project_root);
+                    let empty_mcp_config = protocol::McpRuntimeConfig::default();
+                    inject_default_stdio_mcp_with_config(
+                        &mut runtime_contract,
+                        project_root,
+                        mcp_config.unwrap_or(&empty_mcp_config),
+                    );
                     inject_agent_tool_policy(&mut runtime_contract, ctx, phase_id);
                     inject_project_mcp_servers(&mut runtime_contract, project_root, ctx, phase_id);
                     inject_workflow_mcp_servers(&mut runtime_contract, ctx, phase_id);
@@ -1417,6 +1425,7 @@ pub struct PhaseRunParams<'a> {
     pub dispatch_input: Option<&'a str>,
     pub schedule_input: Option<&'a str>,
     pub routing: &'a protocol::PhaseRoutingConfig,
+    pub mcp_config: Option<&'a protocol::McpRuntimeConfig>,
     pub phase_timeout_secs: Option<u64>,
 }
 
@@ -1435,6 +1444,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
     let pipeline_vars = params.pipeline_vars;
     let dispatch_input = params.dispatch_input;
     let schedule_input = params.schedule_input;
+    let mcp_config = params.mcp_config;
     let workflow_config = load_workflow_config_strict(project_root)?;
     let runtime_loaded = load_agent_runtime_config_strict(project_root)?;
     orchestrator_core::validate_workflow_and_runtime_configs_with_project_root(
@@ -1540,6 +1550,7 @@ pub async fn run_workflow_phase(params: &PhaseRunParams<'_>) -> Result<PhaseRunR
                 dispatch_input,
                 schedule_input,
                 routing: params.routing,
+                mcp_config,
                 resolved_phase_skills: &resolved_phase_skills,
                 phase_timeout_secs: params.phase_timeout_secs,
             })

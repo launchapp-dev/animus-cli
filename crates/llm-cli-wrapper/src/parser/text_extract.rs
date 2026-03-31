@@ -20,7 +20,7 @@ pub fn extract_text_from_line(line: &str, tool: &str) -> NormalizedTextEvent {
         Some(CliType::Claude) => extract_claude(&obj),
         Some(CliType::Codex) => extract_codex(&obj),
         Some(CliType::Gemini) => extract_gemini(&obj),
-        Some(CliType::OaiRunner) => extract_oai_runner(&obj),
+        Some(CliType::OaiRunner) => extract_generic(&obj),
         Some(CliType::OpenCode) => extract_opencode(&obj),
         _ => extract_generic(&obj),
     }
@@ -165,24 +165,6 @@ fn extract_gemini(obj: &Value) -> NormalizedTextEvent {
     NormalizedTextEvent::Ignored
 }
 
-fn extract_oai_runner(obj: &Value) -> NormalizedTextEvent {
-    let event_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
-    match event_type {
-        "text_chunk" => {
-            if let Some(text) = obj.get("text").and_then(Value::as_str) {
-                return NormalizedTextEvent::TextChunk { text: text.to_string() };
-            }
-        }
-        "result" => {
-            if let Some(text) = obj.get("text").and_then(Value::as_str) {
-                return NormalizedTextEvent::FinalResult { text: text.to_string() };
-            }
-        }
-        _ => {}
-    }
-    NormalizedTextEvent::Ignored
-}
-
 fn extract_opencode(obj: &Value) -> NormalizedTextEvent {
     let event_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
 
@@ -298,22 +280,22 @@ mod tests {
     }
 
     #[test]
-    fn oai_runner_text_chunk() {
+    fn oai_runner_text_chunk_is_treated_as_generic_text() {
         let line = r#"{"type":"text_chunk","text":"Hello"}"#;
         assert_eq!(extract_text_from_line(line, "oai-runner"), NormalizedTextEvent::TextChunk { text: "Hello".into() });
     }
 
     #[test]
-    fn oai_runner_result() {
+    fn oai_runner_result_is_treated_as_generic_text() {
         let line = r#"{"type":"result","text":"Final output"}"#;
         assert_eq!(
             extract_text_from_line(line, "oai-runner"),
-            NormalizedTextEvent::FinalResult { text: "Final output".into() }
+            NormalizedTextEvent::TextChunk { text: "Final output".into() }
         );
     }
 
     #[test]
-    fn oai_runner_tool_call_ignored() {
+    fn oai_runner_structured_tool_call_is_ignored_by_text_extraction() {
         let line = r#"{"type":"tool_call","tool_name":"bash","arguments":{}}"#;
         assert_eq!(extract_text_from_line(line, "oai-runner"), NormalizedTextEvent::Ignored);
     }

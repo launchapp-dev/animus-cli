@@ -274,51 +274,183 @@ pub fn inject_default_stdio_mcp(runtime_contract: &mut Value, project_root: &str
     inject_default_stdio_mcp_with_config(runtime_contract, project_root, &protocol::McpRuntimeConfig::default());
 }
 
+fn runtime_mcp_server_value(server: &protocol::McpRuntimeServerConfig) -> Value {
+    match &server.transport {
+        protocol::McpRuntimeServerTransport::Stdio { command, args, env } => serde_json::json!({
+            "command": command,
+            "args": args,
+            "env": env,
+        }),
+        protocol::McpRuntimeServerTransport::StreamableHttp { url, auth_token } => {
+            let mut value = serde_json::Map::new();
+            value.insert("url".to_string(), Value::String(url.clone()));
+            if let Some(auth_token) = auth_token.as_ref().filter(|value| !value.trim().is_empty()) {
+                value.insert("auth_token".to_string(), Value::String(auth_token.clone()));
+            }
+            Value::Object(value)
+        }
+    }
+}
+
+fn workflow_mcp_server_value(definition: &orchestrator_config::McpServerDefinition) -> Value {
+    let transport = definition.transport.as_deref().map(|value| value.trim().to_ascii_lowercase());
+    match transport.as_deref() {
+        Some("http") | Some("streamable-http") | Some("streamable_http") => {
+            let url = definition
+                .config
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .unwrap_or(definition.command.trim());
+
+            let mut value = serde_json::Map::new();
+            value.insert("url".to_string(), Value::String(url.to_string()));
+            if let Some(auth_token) = definition
+                .config
+                .get("auth_token")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                value.insert("auth_token".to_string(), Value::String(auth_token.to_string()));
+            }
+            Value::Object(value)
+        }
+        _ => serde_json::json!({
+            "command": definition.command,
+            "args": definition.args,
+            "env": definition.env,
+        }),
+    }
+}
+
+fn merge_additional_mcp_servers(runtime_contract: &mut Value, additions: serde_json::Map<String, Value>) {
+    if additions.is_empty() {
+        return;
+    }
+
+    let existing =
+        runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut servers = existing;
+    for (name, value) in additions {
+        servers.insert(name, value);
+    }
+
+    let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
+    if servers.is_empty() {
+        return;
+    }
+
+    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
+        mcp.insert("additional_servers".to_string(), Value::Object(servers));
+    }
+}
+
 pub fn inject_default_stdio_mcp_with_config(
     runtime_contract: &mut Value,
     project_root: &str,
     mcp_config: &protocol::McpRuntimeConfig,
 ) {
-    if runtime_contract.pointer("/mcp/stdio/command").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty()) {
-        return;
-    }
-
-    if mcp_config.is_http_transport() {
-        return;
-    }
-
     let supports_mcp =
         runtime_contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool).unwrap_or(false);
     if !supports_mcp {
         return;
     }
 
-    let command = mcp_config.stdio_command.clone().filter(|v| !v.trim().is_empty()).or_else(|| {
-        let exe = std::env::current_exe().ok()?;
-        let exe_dir = exe.parent()?;
-        let ao_binary = exe_dir.join("ao");
-        if ao_binary.exists() {
-            Some(ao_binary.to_string_lossy().to_string())
-        } else {
-            Some(exe.to_string_lossy().to_string())
-        }
-    });
-    let Some(command) = command else {
+    let mut resolved_servers = mcp_config.resolved_servers();
+    if resolved_servers.is_empty() {
+        let command = mcp_config.stdio_command.clone().filter(|v| !v.trim().is_empty()).or_else(|| {
+            let exe = std::env::current_exe().ok()?;
+            let exe_dir = exe.parent()?;
+            let ao_binary = exe_dir.join("ao");
+            if ao_binary.exists() {
+                Some(ao_binary.to_string_lossy().to_string())
+            } else {
+                Some(exe.to_string_lossy().to_string())
+            }
+        });
+        let Some(command) = command else {
+            return;
+        };
+
+        let args = mcp_config
+            .stdio_args_json
+            .as_deref()
+            .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
+            .unwrap_or_else(|| {
+                vec!["--project-root".to_string(), project_root.to_string(), "mcp".to_string(), "serve".to_string()]
+            });
+
+        resolved_servers.push(protocol::McpRuntimeServerConfig {
+            name: mcp_config.agent_id.clone(),
+            transport: protocol::McpRuntimeServerTransport::Stdio {
+                command,
+                args,
+                env: Default::default(),
+            },
+        });
+    }
+
+    let Some(primary_server) = resolved_servers.first().cloned() else {
         return;
     };
 
-    let args =
-        mcp_config.stdio_args_json.as_deref().and_then(|v| serde_json::from_str::<Vec<String>>(v).ok()).unwrap_or_else(
-            || vec!["--project-root".to_string(), project_root.to_string(), "mcp".to_string(), "serve".to_string()],
-        );
-
     if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
-        mcp.insert("stdio".to_string(), serde_json::json!({ "command": command, "args": args }));
+        let has_primary_stdio =
+            mcp.get("stdio").and_then(Value::as_object).and_then(|stdio| stdio.get("command")).and_then(Value::as_str)
+                .is_some_and(|v| !v.trim().is_empty());
+        let has_primary_endpoint =
+            mcp.get("endpoint").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty());
+
+        if !has_primary_stdio && !has_primary_endpoint {
+            match primary_server.transport {
+                protocol::McpRuntimeServerTransport::Stdio { command, args, env } => {
+                    let mut stdio = serde_json::Map::new();
+                    stdio.insert("command".to_string(), Value::String(command));
+                    stdio.insert(
+                        "args".to_string(),
+                        serde_json::to_value(args).expect("stdio args should serialize"),
+                    );
+                    if !env.is_empty() {
+                        stdio.insert(
+                            "env".to_string(),
+                            serde_json::to_value(env).expect("stdio env should serialize"),
+                        );
+                    }
+                    mcp.insert("stdio".to_string(), Value::Object(stdio));
+                }
+                protocol::McpRuntimeServerTransport::StreamableHttp { url, auth_token } => {
+                    mcp.insert("endpoint".to_string(), Value::String(url));
+                    if let Some(auth_token) = auth_token.filter(|value| !value.trim().is_empty()) {
+                        mcp.insert("auth_token".to_string(), Value::String(auth_token));
+                    }
+                }
+            }
+        }
+
         let has_agent_id = mcp.get("agent_id").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty());
         if !has_agent_id {
-            mcp.insert("agent_id".to_string(), serde_json::json!("ao"));
+            let agent_id = mcp_config
+                .agent_id
+                .as_deref()
+                .filter(|value| !value.trim().is_empty())
+                .or(primary_server.name.as_deref().filter(|value| !value.trim().is_empty()))
+                .unwrap_or("ao");
+            mcp.insert("agent_id".to_string(), Value::String(agent_id.to_string()));
         }
     }
+
+    let mut additions = serde_json::Map::new();
+    for (index, server) in resolved_servers.into_iter().enumerate().skip(1) {
+        let raw_name = server.name.clone().unwrap_or_else(|| format!("runtime-{}", index + 1));
+        let name = raw_name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        additions.insert(name.to_string(), runtime_mcp_server_value(&server));
+    }
+    merge_additional_mcp_servers(runtime_contract, additions);
 }
 
 pub fn inject_agent_tool_policy(runtime_contract: &mut Value, ctx: &RuntimeConfigContext, phase_id: &str) {
@@ -418,13 +550,7 @@ pub fn inject_project_mcp_servers(
             }),
         );
     }
-    let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
-    if servers.is_empty() {
-        return;
-    }
-    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
-        mcp.insert("additional_servers".to_string(), Value::Object(servers));
-    }
+    merge_additional_mcp_servers(runtime_contract, servers);
 }
 
 pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeConfigContext, phase_id: &str) {
@@ -457,30 +583,15 @@ pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeCo
         }
     }
 
-    let existing =
-        runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object).cloned().unwrap_or_default();
-    let mut servers = existing;
+    let mut servers = serde_json::Map::new();
 
     for (name, definition) in &ctx.workflow_config.config.mcp_servers {
         if !allowed_servers.is_empty() && !allowed_servers.contains(name) {
             continue;
         }
-        servers.insert(
-            name.clone(),
-            serde_json::json!({
-                "command": definition.command,
-                "args": definition.args,
-                "env": definition.env,
-            }),
-        );
+        servers.insert(name.clone(), workflow_mcp_server_value(definition));
     }
-    let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
-    if servers.is_empty() {
-        return;
-    }
-    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
-        mcp.insert("additional_servers".to_string(), Value::Object(servers));
-    }
+    merge_additional_mcp_servers(runtime_contract, servers);
 }
 
 pub fn inject_named_mcp_servers(
@@ -496,9 +607,7 @@ pub fn inject_named_mcp_servers(
 
     let project_config = protocol::Config::load_or_default(project_root)
         .map_err(|error| anyhow!("failed to load project config: {error}"))?;
-    let existing =
-        runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object).cloned().unwrap_or_default();
-    let mut servers = existing;
+    let mut servers = serde_json::Map::new();
 
     for raw_name in names {
         let name = raw_name.trim();
@@ -507,14 +616,7 @@ pub fn inject_named_mcp_servers(
         }
 
         if let Some(definition) = ctx.workflow_config.config.mcp_servers.get(name) {
-            servers.insert(
-                name.to_string(),
-                serde_json::json!({
-                    "command": definition.command,
-                    "args": definition.args,
-                    "env": definition.env,
-                }),
-            );
+            servers.insert(name.to_string(), workflow_mcp_server_value(definition));
             continue;
         }
 
@@ -537,13 +639,7 @@ pub fn inject_named_mcp_servers(
         ));
     }
 
-    let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
-    if servers.is_empty() {
-        return Ok(());
-    }
-    if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
-        mcp.insert("additional_servers".to_string(), Value::Object(servers));
-    }
+    merge_additional_mcp_servers(runtime_contract, servers);
     Ok(())
 }
 
@@ -702,6 +798,121 @@ mod tests {
         assert!(
             !args.iter().any(|value| value.as_str() == Some("--read-only")),
             "managed state mutation phases should not inject a strict read-only CLI flag"
+        );
+    }
+
+    #[test]
+    fn inject_default_stdio_mcp_with_config_projects_remote_primary_and_additional_servers() {
+        let mut runtime_contract = serde_json::json!({
+            "cli": {
+                "capabilities": {
+                    "supports_mcp": true
+                }
+            },
+            "mcp": {}
+        });
+        let mcp_config = protocol::McpRuntimeConfig {
+            agent_id: Some("ao".to_string()),
+            servers: vec![
+                protocol::McpRuntimeServerConfig {
+                    name: Some("ao".to_string()),
+                    transport: protocol::McpRuntimeServerTransport::StreamableHttp {
+                        url: "https://primary.example/mcp".to_string(),
+                        auth_token: Some("Bearer primary".to_string()),
+                    },
+                },
+                protocol::McpRuntimeServerConfig {
+                    name: Some("docs".to_string()),
+                    transport: protocol::McpRuntimeServerTransport::Stdio {
+                        command: "docs-mcp".to_string(),
+                        args: vec!["serve".to_string()],
+                        env: BTreeMap::from([("DOCS_TOKEN".to_string(), "secret".to_string())]),
+                    },
+                },
+                protocol::McpRuntimeServerConfig {
+                    name: Some("search".to_string()),
+                    transport: protocol::McpRuntimeServerTransport::StreamableHttp {
+                        url: "https://search.example/mcp".to_string(),
+                        auth_token: Some("Bearer search".to_string()),
+                    },
+                },
+            ],
+            ..Default::default()
+        };
+
+        inject_default_stdio_mcp_with_config(&mut runtime_contract, "/tmp/project", &mcp_config);
+
+        assert_eq!(
+            runtime_contract.pointer("/mcp/endpoint").and_then(Value::as_str),
+            Some("https://primary.example/mcp")
+        );
+        assert_eq!(
+            runtime_contract.pointer("/mcp/auth_token").and_then(Value::as_str),
+            Some("Bearer primary")
+        );
+        assert_eq!(runtime_contract.pointer("/mcp/agent_id").and_then(Value::as_str), Some("ao"));
+        assert_eq!(
+            runtime_contract.pointer("/mcp/additional_servers/docs/command").and_then(Value::as_str),
+            Some("docs-mcp")
+        );
+        assert_eq!(
+            runtime_contract.pointer("/mcp/additional_servers/search/url").and_then(Value::as_str),
+            Some("https://search.example/mcp")
+        );
+        assert_eq!(
+            runtime_contract.pointer("/mcp/additional_servers/search/auth_token").and_then(Value::as_str),
+            Some("Bearer search")
+        );
+    }
+
+    #[test]
+    fn inject_workflow_mcp_servers_preserves_remote_transport_definitions() {
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "docs".to_string(),
+            McpServerDefinition {
+                command: "https://docs.example/mcp".to_string(),
+                args: Vec::new(),
+                transport: Some("streamable-http".to_string()),
+                config: BTreeMap::from([(
+                    "auth_token".to_string(),
+                    Value::String("Bearer docs".to_string()),
+                )]),
+                tools: Vec::new(),
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("research".to_string(), PhaseMcpBinding { servers: vec!["docs".to_string()] });
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+        };
+
+        let mut runtime_contract = serde_json::json!({
+            "mcp": {}
+        });
+        inject_workflow_mcp_servers(&mut runtime_contract, &ctx, "research");
+
+        assert_eq!(
+            runtime_contract.pointer("/mcp/additional_servers/docs/url").and_then(Value::as_str),
+            Some("https://docs.example/mcp")
+        );
+        assert_eq!(
+            runtime_contract.pointer("/mcp/additional_servers/docs/auth_token").and_then(Value::as_str),
+            Some("Bearer docs")
         );
     }
 }

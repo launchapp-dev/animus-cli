@@ -273,7 +273,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
             dispatch_input: phase_inputs.dispatch_input.as_deref(),
             schedule_input: phase_inputs.schedule_input.as_deref(),
             routing: &routing,
-
+            mcp_config: params.mcp_config.as_ref(),
             phase_timeout_secs,
         })
         .await;
@@ -395,7 +395,7 @@ pub async fn execute_workflow(mut params: WorkflowExecuteParams) -> Result<Workf
             dispatch_input: phase_inputs.dispatch_input.as_deref(),
             schedule_input: phase_inputs.schedule_input.as_deref(),
             routing: &routing,
-
+            mcp_config: params.mcp_config.as_ref(),
             phase_timeout_secs,
         })
         .await;
