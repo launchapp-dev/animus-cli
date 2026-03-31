@@ -288,6 +288,25 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         });
         Ok(())
     }
+
+    async fn add_workflow_note(&self, id: &str, text: String, author_type: crate::types::WorkflowNoteAuthorType) -> Result<crate::types::WorkflowNote> {
+        let mut lock = self.state.write().await;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        let note = crate::types::WorkflowNote {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: chrono::Utc::now(),
+            text,
+            author_type,
+        };
+        workflow.notes.push(note.clone());
+        Ok(note)
+    }
+
+    async fn list_workflow_notes(&self, id: &str) -> Result<Vec<crate::types::WorkflowNote>> {
+        let lock = self.state.read().await;
+        let workflow = lock.workflows.get(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        Ok(workflow.notes.clone())
+    }
 }
 
 #[async_trait]
@@ -587,5 +606,26 @@ impl WorkflowServiceApi for FileServiceHub {
         manager.save(&workflow)?;
         self.state.write().await.workflows.insert(id.to_string(), workflow.clone());
         Ok(())
+    }
+
+    async fn add_workflow_note(&self, id: &str, text: String, author_type: crate::types::WorkflowNoteAuthorType) -> Result<crate::types::WorkflowNote> {
+        let manager = self.workflow_manager();
+        let mut workflow = manager.load(id)?;
+        let note = crate::types::WorkflowNote {
+            id: uuid::Uuid::new_v4().to_string(),
+            timestamp: chrono::Utc::now(),
+            text,
+            author_type,
+        };
+        workflow.notes.push(note.clone());
+        manager.save(&workflow)?;
+        self.state.write().await.workflows.insert(id.to_string(), workflow.clone());
+        Ok(note)
+    }
+
+    async fn list_workflow_notes(&self, id: &str) -> Result<Vec<crate::types::WorkflowNote>> {
+        let manager = self.workflow_manager();
+        let workflow = manager.load(id)?;
+        Ok(workflow.notes)
     }
 }

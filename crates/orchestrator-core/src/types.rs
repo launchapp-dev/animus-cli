@@ -7,9 +7,10 @@ pub use protocol::orchestrator::{
     RequirementQuerySort, RequirementRange, RiskLevel, Scope, SubjectDispatch, SubjectRef, TaskDensity, TaskQuery,
     TaskQuerySort, TaskStatus, TaskType, VisionDocument, VisionDraftInput, WorkflowCheckpoint,
     WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
-    WorkflowDecisionSource, WorkflowFilter, WorkflowMachineEvent, WorkflowMachineState, WorkflowPhaseExecution,
-    WorkflowPhaseStatus, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus, WorkflowSubject,
-    DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
+    WorkflowDecisionSource, WorkflowFilter, WorkflowMachineEvent, WorkflowMachineState, WorkflowNote,
+    WorkflowNoteAuthorType, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowQuery, WorkflowQuerySort,
+    WorkflowRunInput, WorkflowStatus, WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
 };
 
 pub use protocol::orchestrator::{

@@ -1437,6 +1437,32 @@ pub struct OrchestratorProject {
     pub archived: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkflowNoteAuthorType {
+    Cli,
+    Agent,
+    System,
+}
+
+impl WorkflowNoteAuthorType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Cli => "cli",
+            Self::Agent => "agent",
+            Self::System => "system",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowNote {
+    pub id: String,
+    pub timestamp: DateTime<Utc>,
+    pub text: String,
+    pub author_type: WorkflowNoteAuthorType,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrchestratorWorkflow {
     pub id: String,
@@ -1467,6 +1493,8 @@ pub struct OrchestratorWorkflow {
     pub total_reworks: u32,
     #[serde(default)]
     pub decision_history: Vec<WorkflowDecisionRecord>,
+    #[serde(default)]
+    pub notes: Vec<WorkflowNote>,
 }
 
 fn default_workflow_subject_ref() -> SubjectRef {

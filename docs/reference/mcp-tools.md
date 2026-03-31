@@ -68,7 +68,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 
 ---
 
-## Workflow Operations (16 tools)
+## Workflow Operations (18 tools)
 
 ### Runtime Tools (9)
 
@@ -90,6 +90,13 @@ Every tool accepts an optional `project_root` parameter to override the default 
 |---|---|---|
 | `ao.workflow.decisions` | List decisions made during workflow execution | `id`, `limit`, `offset`, `max_tokens` |
 | `ao.workflow.checkpoints.list` | List saved workflow state checkpoints | `id`, `limit`, `offset`, `max_tokens` |
+
+### Notes Tools (2)
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `ao.workflow.notes.add` | Add a note to a workflow | `id`, `text` |
+| `ao.workflow.notes.list` | List notes for a workflow | `id`, `limit`, `offset`, `max_tokens` |
 
 ### Definition Tools (5)
 

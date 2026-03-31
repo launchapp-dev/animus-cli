@@ -60,6 +60,11 @@ pub(crate) enum WorkflowCommand {
         #[command(subcommand)]
         command: WorkflowPromptCommand,
     },
+    /// Manage workflow notes and annotations.
+    Note {
+        #[command(subcommand)]
+        command: WorkflowNoteCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -366,4 +371,20 @@ pub(crate) struct WorkflowStateMachineSetArgs {
 pub(crate) struct WorkflowAgentRuntimeSetArgs {
     #[arg(long, value_name = "JSON", help = "Workflow agent-runtime configuration JSON payload.")]
     pub(crate) input_json: String,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum WorkflowNoteCommand {
+    /// Add a note to a workflow.
+    Add(WorkflowNoteAddArgs),
+    /// List notes for a workflow.
+    List(IdArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowNoteAddArgs {
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    pub(crate) id: String,
+    #[arg(long, value_name = "TEXT", help = "Note text content.")]
+    pub(crate) text: String,
 }

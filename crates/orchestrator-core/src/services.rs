@@ -31,7 +31,7 @@ use crate::types::{
     TaskCreateInput, TaskDensity, TaskDependency, TaskFilter, TaskMetadata, TaskPriorityDistribution,
     TaskPriorityPolicyReport, TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
     TaskQuery, TaskQuerySort, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
-    WorkflowFilter, WorkflowMetadata, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
+    WorkflowFilter, WorkflowMetadata, WorkflowNote, WorkflowNoteAuthorType, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
 };
 use crate::workflow::{ResumeConfig, WorkflowLifecycleExecutor, WorkflowStateManager};
 
@@ -184,6 +184,8 @@ pub trait WorkflowServiceApi: Send + Sync {
     async fn mark_merge_conflict(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn record_feedback(&self, id: &str, feedback: String) -> Result<()>;
+    async fn add_workflow_note(&self, id: &str, text: String, author_type: WorkflowNoteAuthorType) -> Result<WorkflowNote>;
+    async fn list_workflow_notes(&self, id: &str) -> Result<Vec<WorkflowNote>>;
 }
 
 #[async_trait]

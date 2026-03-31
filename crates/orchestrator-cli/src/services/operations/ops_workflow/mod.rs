@@ -502,6 +502,16 @@ pub(crate) async fn handle_workflow(
                 print_value(config::set_agent_runtime_payload(project_root, &args.input_json)?, json)
             }
         },
+        WorkflowCommand::Note { command } => match command {
+            crate::WorkflowNoteCommand::Add(args) => {
+                let note = workflows.add_workflow_note(&args.id, args.text, protocol::orchestrator::WorkflowNoteAuthorType::Cli).await?;
+                print_value(note, json)
+            }
+            crate::WorkflowNoteCommand::List(args) => {
+                let notes = workflows.list_workflow_notes(&args.id).await?;
+                print_value(notes, json)
+            }
+        },
     }
 }
 

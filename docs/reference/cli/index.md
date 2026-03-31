@@ -116,6 +116,9 @@ ao
 │   │   └── set              Replace workflow agent-runtime config JSON
 │   ├── prompt
 │   │   └── render           Render workflow phase prompt text and prompt sections
+│   ├── note
+│   │   ├── add              Add a note to a workflow
+│   │   └── list             List notes for a workflow
 │
 ├── requirements            Draft and manage project requirements
 │   ├── execute              Execute a requirement into implementation tasks and optional workflows

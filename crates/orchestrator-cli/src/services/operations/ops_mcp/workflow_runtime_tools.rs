@@ -189,6 +189,48 @@ impl AoMcpServer {
         let args = build_workflow_phase_approve_args(&input);
         self.run_tool("ao.workflow.phase.approve", args, input.project_root).await
     }
+
+    #[tool(
+        name = "ao.workflow.notes.add",
+        description = "Add a note to a workflow. Purpose: Attach timestamped text notes to workflow timeline for annotations and operator comments. Prerequisites: Workflow must exist. Example: {\"id\": \"wf-abc123\", \"text\": \"This phase needs review\"}. Sequencing: Use ao.workflow.notes.list to view all notes on a workflow.",
+        input_schema = ao_schema_for_type::<WorkflowNoteAddInput>()
+    )]
+    async fn ao_workflow_notes_add(
+        &self,
+        params: Parameters<WorkflowNoteAddInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "note".to_string(),
+            "add".to_string(),
+            "--id".to_string(),
+            input.id,
+            "--text".to_string(),
+            input.text,
+        ];
+        self.run_tool("ao.workflow.notes.add", args, input.project_root).await
+    }
+
+    #[tool(
+        name = "ao.workflow.notes.list",
+        description = "List notes for a workflow. Purpose: View all timestamped text notes attached to a workflow timeline. Prerequisites: Workflow must exist. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use ao.workflow.get to view full workflow state, or ao.workflow.notes.add to add new notes.",
+        input_schema = ao_schema_for_type::<WorkflowNoteListInput>()
+    )]
+    async fn ao_workflow_notes_list(
+        &self,
+        params: Parameters<WorkflowNoteListInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec!["workflow".to_string(), "note".to_string(), "list".to_string(), "--id".to_string(), input.id];
+        self.run_list_tool(
+            "ao.workflow.notes.list",
+            args,
+            input.project_root,
+            ListGuardInput { limit: input.limit, offset: input.offset, max_tokens: input.max_tokens },
+        )
+        .await
+    }
 }
 
 fn push_workflow_run_pipeline_arg(args: &mut Vec<String>, workflow_ref: Option<String>) {

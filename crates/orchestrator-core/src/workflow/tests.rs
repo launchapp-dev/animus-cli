@@ -37,6 +37,7 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
         rework_counts: std::collections::HashMap::new(),
         total_reworks: 0,
         decision_history: Vec::<WorkflowDecisionRecord>::new(),
+        notes: Vec::new(),
     }
 }
 

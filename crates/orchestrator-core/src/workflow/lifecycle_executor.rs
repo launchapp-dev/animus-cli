@@ -380,6 +380,7 @@ impl WorkflowLifecycleExecutor {
             rework_counts: std::collections::HashMap::new(),
             total_reworks: 0,
             decision_history: Vec::new(),
+            notes: Vec::new(),
         }
     }
 

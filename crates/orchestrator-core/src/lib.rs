@@ -93,9 +93,9 @@ pub use types::{
     TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput, WorkflowCheckpoint,
     WorkflowCheckpointMetadata, WorkflowDecisionAction, WorkflowDecisionRecord, WorkflowDecisionRisk,
     WorkflowDecisionSource, WorkflowFilter, WorkflowMachineEvent, WorkflowMachineState, WorkflowMetadata,
-    WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
-    WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT, MAX_DISPATCH_HISTORY_ENTRIES, SUBJECT_KIND_CUSTOM,
-    SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
+    WorkflowNote, WorkflowNoteAuthorType, WorkflowPhaseExecution, WorkflowPhaseStatus, WorkflowQuery, WorkflowQuerySort,
+    WorkflowRunInput, WorkflowStatus, WorkflowSubject, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
+    MAX_DISPATCH_HISTORY_ENTRIES, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
 };
 pub use workflow::{
     count_tasks_with_status, delete_requirement, delete_task, load_active_workflow_summaries, load_all_requirements,
