@@ -8,6 +8,28 @@ AO resolves behavior from project YAML, installed pack layers, scoped runtime st
 
 Repository-local AO configuration created during setup.
 
+Project-local `mcp_servers` entries support both stdio servers and remote
+streamable HTTP endpoints. Legacy stdio entries remain valid.
+
+Example:
+
+```json
+{
+  "mcp_servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "assign_to": ["swe"]
+    },
+    "docs": {
+      "url": "https://docs.example/mcp",
+      "auth_token": "Bearer <token>",
+      "assign_to": ["researcher"]
+    }
+  }
+}
+```
+
 ### `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
 
 These YAML files are the editable workflow source of truth for a project.

@@ -325,6 +325,24 @@ fn workflow_mcp_server_value(definition: &orchestrator_config::McpServerDefiniti
     }
 }
 
+fn project_mcp_server_value(entry: &protocol::ProjectMcpServerEntry) -> Value {
+    match &entry.transport {
+        protocol::ProjectMcpServerTransport::Stdio { command, args, env } => serde_json::json!({
+            "command": command,
+            "args": args,
+            "env": env,
+        }),
+        protocol::ProjectMcpServerTransport::StreamableHttp { url, auth_token } => {
+            let mut value = serde_json::Map::new();
+            value.insert("url".to_string(), Value::String(url.clone()));
+            if let Some(auth_token) = auth_token.as_ref().filter(|value| !value.trim().is_empty()) {
+                value.insert("auth_token".to_string(), Value::String(auth_token.clone()));
+            }
+            Value::Object(value)
+        }
+    }
+}
+
 fn merge_additional_mcp_servers(runtime_contract: &mut Value, additions: serde_json::Map<String, Value>) {
     if additions.is_empty() {
         return;
@@ -536,19 +554,10 @@ pub fn inject_project_mcp_servers(
     let agent_id = ctx.phase_agent_id(phase_id);
     let mut servers = serde_json::Map::new();
     for (name, entry) in &project_config.mcp_servers {
-        let assigned = entry.assign_to.is_empty()
-            || agent_id.as_deref().is_some_and(|id| entry.assign_to.iter().any(|a| a.eq_ignore_ascii_case(id)));
-        if !assigned {
+        if !entry.is_assigned_to(agent_id.as_deref()) {
             continue;
         }
-        servers.insert(
-            name.clone(),
-            serde_json::json!({
-                "command": entry.command,
-                "args": entry.args,
-                "env": entry.env,
-            }),
-        );
+        servers.insert(name.clone(), project_mcp_server_value(entry));
     }
     merge_additional_mcp_servers(runtime_contract, servers);
 }
@@ -621,14 +630,7 @@ pub fn inject_named_mcp_servers(
         }
 
         if let Some(definition) = project_config.mcp_servers.get(name) {
-            servers.insert(
-                name.to_string(),
-                serde_json::json!({
-                    "command": definition.command,
-                    "args": definition.args,
-                    "env": definition.env,
-                }),
-            );
+            servers.insert(name.to_string(), project_mcp_server_value(definition));
             continue;
         }
 
@@ -905,6 +907,63 @@ mod tests {
             "mcp": {}
         });
         inject_workflow_mcp_servers(&mut runtime_contract, &ctx, "research");
+
+        assert_eq!(
+            runtime_contract.pointer("/mcp/additional_servers/docs/url").and_then(Value::as_str),
+            Some("https://docs.example/mcp")
+        );
+        assert_eq!(
+            runtime_contract.pointer("/mcp/additional_servers/docs/auth_token").and_then(Value::as_str),
+            Some("Bearer docs")
+        );
+    }
+
+    #[test]
+    fn inject_project_mcp_servers_preserves_remote_transport_definitions() {
+        let project = tempfile::tempdir().expect("project tempdir");
+        std::fs::create_dir_all(project.path().join(".ao")).expect("project .ao dir");
+        let config = protocol::Config {
+            agent_runner_token: None,
+            mcp_servers: BTreeMap::from([(
+                "docs".to_string(),
+                protocol::ProjectMcpServerEntry {
+                    transport: protocol::ProjectMcpServerTransport::StreamableHttp {
+                        url: "https://docs.example/mcp".to_string(),
+                        auth_token: Some("Bearer docs".to_string()),
+                    },
+                    assign_to: vec!["swe".to_string()],
+                },
+            )]),
+            claude_profiles: BTreeMap::new(),
+        };
+        config.save(project.path().to_str().expect("project path should be utf-8")).expect("save project config");
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: builtin_workflow_config().schema.clone(),
+                version: builtin_workflow_config().version,
+                hash: workflow_config_hash(&builtin_workflow_config()),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: builtin_workflow_config(),
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+        };
+
+        let mut runtime_contract = serde_json::json!({
+            "mcp": {
+                "agent_id": "ao"
+            }
+        });
+        inject_project_mcp_servers(
+            &mut runtime_contract,
+            project.path().to_str().expect("project path should be utf-8"),
+            &ctx,
+            "implementation",
+        );
 
         assert_eq!(
             runtime_contract.pointer("/mcp/additional_servers/docs/url").and_then(Value::as_str),
