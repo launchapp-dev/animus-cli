@@ -4,8 +4,10 @@ use anyhow::{Context, Result};
 use protocol::RunId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 use workflow_runner_v2::phase_output::{phase_output_dir, PersistedPhaseOutput};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,6 +136,85 @@ fn ensure_safe_workflow_id(workflow_id: &str) -> Result<()> {
     Ok(())
 }
 
+fn run_ids_for_workflow(project_root: &str, workflow_id: &str) -> Result<BTreeSet<String>> {
+    let mut run_ids = BTreeSet::new();
+    let prefix = format!("wf-{workflow_id}-");
+    for runs_root in runs_root_candidates(project_root) {
+        if !runs_root.exists() {
+            continue;
+        }
+        for entry in
+            fs::read_dir(&runs_root).with_context(|| format!("failed to read run directory {}", runs_root.display()))?
+        {
+            let entry = entry?;
+            if !entry.path().is_dir() {
+                continue;
+            }
+            let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+                continue;
+            };
+            if !name.starts_with(prefix.as_str()) {
+                continue;
+            }
+            if ensure_safe_run_id(name.as_str()).is_err() {
+                continue;
+            }
+            run_ids.insert(name);
+        }
+    }
+    Ok(run_ids)
+}
+
+fn runs_root_candidates(project_root: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(scoped_parent) = run_dir(project_root, &RunId("workflow-monitor-root-probe".to_string()), None).parent() {
+        candidates.push(scoped_parent.to_path_buf());
+    }
+    candidates.push(Path::new(project_root).join(".ao").join("runs"));
+    candidates.push(Path::new(project_root).join(".ao").join("state").join("runs"));
+
+    let mut deduped = Vec::new();
+    for candidate in candidates {
+        if deduped.iter().all(|existing| existing != &candidate) {
+            deduped.push(candidate);
+        }
+    }
+    deduped
+}
+
+fn path_modified_millis(path: &Path) -> u128 {
+    fs::metadata(path)
+        .and_then(|metadata| metadata.modified())
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| duration.as_millis())
+        .unwrap_or(0)
+}
+
+fn resolve_latest_run_for_workflow(project_root: &str, workflow_id: &str) -> Result<Option<String>> {
+    let run_ids = run_ids_for_workflow(project_root, workflow_id)?;
+    let mut candidates = Vec::new();
+    for run_id in run_ids {
+        let Some(run_dir) = resolve_run_dir_for_lookup(project_root, run_id.as_str())? else {
+            continue;
+        };
+        let events_path = run_dir.join("events.jsonl");
+        let has_events = events_path.exists();
+        let modified_millis = if has_events {
+            path_modified_millis(events_path.as_path())
+        } else {
+            path_modified_millis(run_dir.as_path())
+        };
+        candidates.push((run_id, has_events, modified_millis));
+    }
+
+    candidates.sort_by(|left, right| {
+        right.1.cmp(&left.1).then_with(|| right.2.cmp(&left.2)).then_with(|| left.0.cmp(&right.0))
+    });
+
+    Ok(candidates.into_iter().next().map(|(run_id, _, _)| run_id))
+}
+
 pub(crate) fn get_phase_outputs(
     project_root: &str,
     workflow_id: &str,
@@ -221,7 +302,17 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
             }
         }
         OutputCommand::Monitor(args) => {
-            let entries = get_run_jsonl_entries(project_root, &args.run_id)?;
+            let resolved_run_id = if let Some(workflow_id) = args.workflow_id.as_deref() {
+                ensure_safe_workflow_id(workflow_id)?;
+                resolve_latest_run_for_workflow(project_root, workflow_id)?
+                    .ok_or_else(|| not_found_error(format!("no runs found for workflow {}", workflow_id)))?
+            } else if let Some(run_id) = args.run_id.as_deref() {
+                run_id.to_string()
+            } else {
+                return Err(anyhow::anyhow!("provide either --run-id or --workflow-id"));
+            };
+
+            let entries = get_run_jsonl_entries(project_root, &resolved_run_id)?;
             let mut events = Vec::new();
             for entry in entries {
                 let Ok(payload) = serde_json::from_str::<Value>(&entry.line) else {
@@ -239,7 +330,25 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
                 }
                 events.push(payload);
             }
-            print_value(events, json)
+
+            let mut result = serde_json::json!({
+                "events": events,
+            });
+
+            if let Some(workflow_id) = args.workflow_id.as_deref() {
+                let phase_outputs = get_phase_outputs(project_root, workflow_id, None)?;
+                if let Some(last_output) = phase_outputs.last() {
+                    let summary = serde_json::json!({
+                        "phase_id": last_output.phase_id,
+                        "verdict": last_output.verdict,
+                        "reason": last_output.reason,
+                        "completed_at": last_output.completed_at,
+                    });
+                    result["phase_summary"] = summary;
+                }
+            }
+
+            print_value(result, json)
         }
         OutputCommand::Cli(args) => {
             let entries = get_run_jsonl_entries(project_root, &args.run_id)?;

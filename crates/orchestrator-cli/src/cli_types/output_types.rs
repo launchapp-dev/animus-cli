@@ -57,7 +57,9 @@ pub(crate) struct OutputJsonlArgs {
 #[derive(Debug, Args)]
 pub(crate) struct OutputMonitorArgs {
     #[arg(long)]
-    pub(crate) run_id: String,
+    pub(crate) run_id: Option<String>,
+    #[arg(long)]
+    pub(crate) workflow_id: Option<String>,
     #[arg(long)]
     pub(crate) task_id: Option<String>,
     #[arg(long)]

@@ -230,7 +230,7 @@ ao
 │   ├── artifacts            List artifacts for an execution id
 │   ├── download             Download an artifact payload
 │   ├── jsonl                Read aggregated JSONL output streams for a run
-│   ├── monitor              Inspect run output with optional task/phase filtering
+│   ├── monitor              Inspect run output with optional task/phase filtering; --workflow-id resolves to active run
 │   └── cli                  Infer CLI provider details from run output
 │
 ├── mcp                      Run the AO MCP service endpoint
