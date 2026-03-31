@@ -467,13 +467,32 @@ fn apply_opencode_native_mcp_lockdown(
     env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config.to_string());
 }
 
-fn apply_oai_runner_native_mcp_lockdown(args: &mut Vec<String>, transport: McpServerTransport<'_>) {
-    let config = match transport {
+fn apply_oai_runner_native_mcp_lockdown(
+    args: &mut Vec<String>,
+    transport: McpServerTransport<'_>,
+    additional_servers: &[AdditionalMcpServer],
+) {
+    let mut servers = Vec::with_capacity(additional_servers.len() + 1);
+    match transport {
         McpServerTransport::Stdio { command, args: stdio_args } => {
-            serde_json::json!([{ "command": command, "args": stdio_args }])
+            servers.push(serde_json::json!({ "command": command, "args": stdio_args }));
         }
-        McpServerTransport::Http(_) => return,
+        McpServerTransport::Http(endpoint) => {
+            servers.push(serde_json::json!({ "url": endpoint }));
+        }
     };
+
+    for server in additional_servers {
+        let mut config = serde_json::Map::new();
+        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
+        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
+        if !server.env.is_empty() {
+            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
+        }
+        servers.push(serde_json::Value::Object(config));
+    }
+
+    let config = serde_json::Value::Array(servers);
     let insert_at = args.iter().position(|entry| entry == "run").map(|index| index + 1).unwrap_or(0);
     ensure_flag_value(args, "--mcp-config", &config.to_string(), insert_at);
 }
@@ -572,7 +591,7 @@ pub(super) fn apply_native_mcp_policy(
             info!(run_id = %run_id.0.as_str(), cli = "opencode", "Applied OpenCode native MCP policy");
         }
         "ao-oai-runner" => {
-            apply_oai_runner_native_mcp_lockdown(&mut invocation.args, transport);
+            apply_oai_runner_native_mcp_lockdown(&mut invocation.args, transport, &additional);
             info!(run_id = %run_id.0.as_str(), cli = "ao-oai-runner", "Applied AO OAI runner native MCP policy");
         }
         _ => {

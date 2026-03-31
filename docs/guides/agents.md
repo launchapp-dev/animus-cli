@@ -23,6 +23,27 @@ AO exposes 73 MCP tools organized into 8 groups:
 
 Every tool accepts an optional `project_root` parameter to specify which project to operate on. If omitted, the current working directory is used.
 
+When an agent is launched through `oai-runner`, extra MCP servers are attached
+with the runner's `--mcp-config` flag, not through workflow YAML. The runner
+accepts a JSON array of server objects with either a stdio shape or a
+streamable-http shape:
+
+```json
+[
+  {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+  },
+  {
+    "url": "http://localhost:8000/mcp",
+    "auth_token": "Bearer <token>"
+  }
+]
+```
+
+Use `auth_token` when the remote MCP server expects an auth header. This value
+is forwarded as the HTTP auth header value by `oai-runner`.
+
 ---
 
 ## Task Management (`ao.task.*`)

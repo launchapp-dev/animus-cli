@@ -4,6 +4,11 @@ All MCP tools exposed by `ao mcp serve`. These tools allow AI agents to interact
 
 Every tool accepts an optional `project_root` parameter to override the default project root.
 
+If you are wiring external MCP servers into an `oai-runner` session, see
+[oai-runner README](../../crates/oai-runner/README.md) for the runner-specific
+`--mcp-config` JSON contract. `oai-runner` supports `stdio` servers and
+`streamable-http` endpoints with optional `auth_token` support.
+
 ---
 
 ## Agent Control (3 tools)

@@ -454,6 +454,111 @@ fn native_mcp_policy_inserts_oai_runner_mcp_config_after_run_subcommand() {
     assert_eq!(mcp_idx, 1, "mcp config should follow the run subcommand");
 }
 
+#[test]
+fn native_mcp_policy_inserts_oai_runner_remote_mcp_config_for_http_transport() {
+    let mut invocation = LaunchInvocation {
+        command: "ao-oai-runner".to_string(),
+        args: vec![
+            "run".to_string(),
+            "-m".to_string(),
+            "openrouter/minimax/minimax-m2.7".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "hello".to_string(),
+        ],
+        env: Default::default(),
+        prompt_via_stdin: false,
+    };
+    let enforcement = McpToolEnforcement {
+        enabled: true,
+        endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
+        stdio: None,
+        agent_id: "ao".to_string(),
+        allowed_prefixes: vec!["ao.".to_string()],
+        tool_policy_allow: Vec::new(),
+        tool_policy_deny: Vec::new(),
+        additional_servers: Vec::new(),
+    };
+    let mut env = HashMap::new();
+    let mut cleanup = TempPathCleanup::default();
+    let run_id = RunId("run-oai-runner-http".to_string());
+
+    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+        .expect("oai-runner http policy should apply");
+
+    let mcp_idx =
+        invocation.args.iter().position(|arg| arg == "--mcp-config").expect("mcp config flag should be present");
+    assert_eq!(mcp_idx, 1, "mcp config should follow the run subcommand");
+
+    let config_json: serde_json::Value =
+        serde_json::from_str(&invocation.args[mcp_idx + 1]).expect("oai-runner mcp config should parse");
+    assert_eq!(
+        config_json
+            .get(0)
+            .and_then(|entry| entry.get("url"))
+            .and_then(serde_json::Value::as_str),
+        Some("http://127.0.0.1:3101/mcp/ao")
+    );
+}
+
+#[test]
+fn native_mcp_policy_preserves_oai_runner_additional_servers() {
+    let mut invocation = LaunchInvocation {
+        command: "ao-oai-runner".to_string(),
+        args: vec![
+            "run".to_string(),
+            "-m".to_string(),
+            "openrouter/minimax/minimax-m2.7".to_string(),
+            "--format".to_string(),
+            "json".to_string(),
+            "hello".to_string(),
+        ],
+        env: Default::default(),
+        prompt_via_stdin: false,
+    };
+    let enforcement = McpToolEnforcement {
+        enabled: true,
+        endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
+        stdio: None,
+        agent_id: "ao".to_string(),
+        allowed_prefixes: vec!["ao.".to_string()],
+        tool_policy_allow: Vec::new(),
+        tool_policy_deny: Vec::new(),
+        additional_servers: vec![AdditionalMcpServer {
+            name: "docs".to_string(),
+            command: "/usr/local/bin/docs-mcp".to_string(),
+            args: vec!["--serve".to_string()],
+            env: HashMap::from([("DOCS_TOKEN".to_string(), "secret".to_string())]),
+        }],
+    };
+    let mut env = HashMap::new();
+    let mut cleanup = TempPathCleanup::default();
+    let run_id = RunId("run-oai-runner-additional".to_string());
+
+    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+        .expect("oai-runner policy should include additional servers");
+
+    let mcp_idx =
+        invocation.args.iter().position(|arg| arg == "--mcp-config").expect("mcp config flag should be present");
+    let config_json: serde_json::Value =
+        serde_json::from_str(&invocation.args[mcp_idx + 1]).expect("oai-runner mcp config should parse");
+    assert_eq!(config_json.as_array().map(Vec::len), Some(2));
+    assert_eq!(
+        config_json
+            .get(1)
+            .and_then(|entry| entry.get("command"))
+            .and_then(serde_json::Value::as_str),
+        Some("/usr/local/bin/docs-mcp")
+    );
+    assert_eq!(
+        config_json
+            .get(1)
+            .and_then(|entry| entry.pointer("/env/DOCS_TOKEN"))
+            .and_then(serde_json::Value::as_str),
+        Some("secret")
+    );
+}
+
 fn enforcement_with_tool_policy(allow: Vec<&str>, deny: Vec<&str>) -> McpToolEnforcement {
     McpToolEnforcement {
         enabled: true,

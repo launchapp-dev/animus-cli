@@ -67,7 +67,7 @@ The binary currently exposes a single `run` subcommand.
 | `--idle-timeout` | HTTP timeout in seconds |
 | `--response-schema` | Validate final answer against a JSON schema |
 | `--read-only` | Restrict available tools |
-| `--mcp-config` | Connect extra MCP servers |
+| `--mcp-config` | Connect extra MCP servers from a JSON array of stdio or streamable-http definitions |
 | `--session-id` | Resume or persist conversation state |
 
 ## Key components
@@ -106,6 +106,31 @@ The native tool set is:
 - `execute_command`
 
 `--read-only` restricts the set to `read_file`, `list_files`, and `search_files`.
+
+### External MCP servers
+
+`--mcp-config` accepts a JSON array. Each entry must use one of these shapes:
+
+```json
+[
+  {
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-filesystem"]
+  },
+  {
+    "url": "http://localhost:8000/mcp",
+    "auth_token": "Bearer <token>"
+  }
+]
+```
+
+Supported transports:
+
+- `stdio`: provide `command` and optional `args`
+- `streamable-http`: provide `url` and, when the server expects auth, `auth_token`
+
+`auth_token` is forwarded as the HTTP auth header value used by the client. Include
+the exact value your server expects, such as a `Bearer` token when required.
 
 ## Workspace dependencies
 
