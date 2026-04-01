@@ -5,8 +5,8 @@ use anyhow::{anyhow, Result};
 use chrono::{DateTime, Duration, Utc};
 use orchestrator_core::{
     load_active_workflow_summaries, load_blocked_task_summaries, load_next_task_by_priority,
-    load_requirement_link_summaries_by_ids, load_stale_task_summaries, load_task_titles_by_ids,
-    BlockedTaskSummary, RequirementLinkSummary, StaleTaskSummary, WorkflowActivitySummary,
+    load_requirement_link_summaries_by_ids, load_stale_task_summaries, load_task_titles_by_ids, BlockedTaskSummary,
+    RequirementLinkSummary, StaleTaskSummary, WorkflowActivitySummary,
 };
 use serde::Serialize;
 
@@ -192,7 +192,8 @@ fn build_stale_items(generated_at: DateTime<Utc>, stale_tasks: Vec<StaleTaskSumm
 }
 
 fn storage_label(value: &str) -> String {
-    value.split(['_', '-'])
+    value
+        .split(['_', '-'])
         .filter(|segment| !segment.is_empty())
         .map(|segment| {
             let mut chars = segment.chars();

@@ -318,7 +318,8 @@ fn active_agent_assignments(
     task_titles: &HashMap<String, String>,
 ) -> Vec<ActiveAgentAssignment> {
     let mut running: Vec<&WorkflowActivitySummary> = workflows.iter().collect();
-    running.sort_by(|left, right| left.workflow_id.cmp(&right.workflow_id).then_with(|| left.task_id.cmp(&right.task_id)));
+    running
+        .sort_by(|left, right| left.workflow_id.cmp(&right.workflow_id).then_with(|| left.task_id.cmp(&right.task_id)));
 
     let attributed_count = active_count.min(running.len());
     let mut assignments: Vec<ActiveAgentAssignment> = running
@@ -420,7 +421,6 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
         error,
     }
 }
-
 
 async fn collect_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSnapshot> {
     let project_root = project_root.to_string();
