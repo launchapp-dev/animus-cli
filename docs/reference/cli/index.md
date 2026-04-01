@@ -241,7 +241,7 @@ ao
 │   └── open                  Open the AO web UI URL in a browser
 │
 ├── setup                    Guided onboarding and configuration wizard
-├── sync                     Sync tasks and requirements with a remote ao-sync server
+├── cloud                    Sync tasks and requirements with a remote ao-sync server
 │   ├── setup                Configure the sync server connection for this project
 │   ├── push                 Push local tasks and requirements to the sync server
 │   ├── pull                 Pull tasks and requirements from the sync server into local state

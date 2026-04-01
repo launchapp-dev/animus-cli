@@ -69,7 +69,7 @@ fn checkpoint_retention_requires_positive_keep_last_per_phase() {
 #[test]
 fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
+    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
 
     let mut on_verdict = HashMap::new();
     on_verdict.insert(
@@ -100,7 +100,7 @@ fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
 #[test]
 fn validation_rejects_zero_max_rework_attempts() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
+    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
 
     standard_pipeline.phases[1] = WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
         id: "implementation".to_string(),
@@ -247,7 +247,7 @@ fn pipeline_definition_deserializes_mixed_phase_entries() {
 #[test]
 fn resolve_workflow_skip_guards_extracts_guards_from_config() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
+    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
     standard_pipeline.phases = vec![
         "requirements".to_string().into(),
         WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
@@ -875,21 +875,21 @@ fn resolve_phase_plan_expands_sub_pipelines() {
         variables: Vec::new(),
     });
 
-    let standard = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
+    let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
     standard.phases = vec![
         WorkflowPhaseEntry::Simple("requirements".into()),
         WorkflowPhaseEntry::Simple("implementation".into()),
         WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review-cycle".into() }),
     ];
 
-    let phases = resolve_workflow_phase_plan(&config, Some("standard")).expect("should resolve");
+    let phases = resolve_workflow_phase_plan(&config, Some("standard-workflow")).expect("should resolve");
     assert_eq!(phases, vec!["requirements", "implementation", "code-review", "testing"]);
 }
 
 #[test]
 fn validate_rejects_missing_sub_pipeline_reference() {
     let mut config = builtin_workflow_config();
-    let standard = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
+    let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
     standard.phases = vec![
         WorkflowPhaseEntry::Simple("requirements".into()),
         WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "nonexistent".into() }),
@@ -907,7 +907,7 @@ fn validate_rejects_missing_sub_pipeline_reference() {
 #[test]
 fn validate_rejects_empty_post_success_target_branch() {
     let mut config = builtin_workflow_config();
-    let standard = config.workflows.iter_mut().find(|p| p.id == "standard").expect("standard workflow");
+    let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
     standard.post_success = Some(PostSuccessConfig {
         merge: Some(MergeConfig { target_branch: "".to_string(), ..MergeConfig::default() }),
     });

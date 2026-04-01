@@ -115,9 +115,9 @@ pub(crate) enum Command {
     /// Guided onboarding and configuration wizard.
     Setup(SetupArgs),
     /// Sync tasks and requirements with a remote ao-sync server.
-    Sync {
+    Cloud {
         #[command(subcommand)]
-        command: SyncCommand,
+        command: CloudCommand,
     },
     /// Run environment and configuration diagnostics.
     Doctor(DoctorArgs),

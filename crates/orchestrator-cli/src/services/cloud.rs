@@ -6,24 +6,24 @@ use protocol::orchestrator::{OrchestratorTask, RequirementItem};
 use protocol::sync_config::SyncConfig;
 use serde::{Deserialize, Serialize};
 
-use crate::{print_value, SyncCommand, SyncLinkArgs, SyncSetupArgs};
+use crate::{print_value, CloudCommand, CloudLinkArgs, CloudSetupArgs};
 
-pub(crate) async fn handle_sync(
-    command: SyncCommand,
+pub(crate) async fn handle_cloud(
+    command: CloudCommand,
     hub: Arc<FileServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
     match command {
-        SyncCommand::Setup(args) => handle_setup(args, project_root, json).await,
-        SyncCommand::Link(args) => handle_link(args, project_root, json).await,
-        SyncCommand::Push => handle_push(hub, project_root, json).await,
-        SyncCommand::Pull => handle_pull(hub, project_root, json).await,
-        SyncCommand::Status => handle_status(project_root, json).await,
+        CloudCommand::Setup(args) => handle_setup(args, project_root, json).await,
+        CloudCommand::Link(args) => handle_link(args, project_root, json).await,
+        CloudCommand::Push => handle_push(hub, project_root, json).await,
+        CloudCommand::Pull => handle_pull(hub, project_root, json).await,
+        CloudCommand::Status => handle_status(project_root, json).await,
     }
 }
 
-async fn handle_setup(args: SyncSetupArgs, project_root: &str, json: bool) -> Result<()> {
+async fn handle_setup(args: CloudSetupArgs, project_root: &str, json: bool) -> Result<()> {
     let mut global_config = SyncConfig::load_global();
     global_config.server = Some(args.server.clone());
     global_config.token = Some(args.token.clone());
@@ -58,12 +58,12 @@ async fn handle_setup(args: SyncSetupArgs, project_root: &str, json: bool) -> Re
     let result = SetupResult { server: args.server, project_id: None, project_name: None, auto_linked: false };
     if !json {
         eprintln!("Sync server configured. No matching remote project found for this repo.");
-        eprintln!("Link manually with: ao sync link --project-id <id>");
+        eprintln!("Link manually with: ao cloud link --project-id <id>");
     }
     print_value(result, json)
 }
 
-async fn handle_link(args: SyncLinkArgs, project_root: &str, json: bool) -> Result<()> {
+async fn handle_link(args: CloudLinkArgs, project_root: &str, json: bool) -> Result<()> {
     let mut config = SyncConfig::load_for_project(project_root);
     config.project_id = Some(args.project_id.clone());
     config.save_for_project(project_root)?;
@@ -79,7 +79,7 @@ async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     let project_id = config
         .project_id
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: ao sync link --project-id <id>"))?;
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: ao cloud link --project-id <id>"))?;
 
     let tasks: Vec<OrchestratorTask> = hub.tasks().list().await?;
     let requirements: Vec<RequirementItem> = hub.planning().list_requirements().await?;
@@ -130,7 +130,7 @@ async fn handle_pull(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     let project_id = config
         .project_id
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: ao sync link --project-id <id>"))?;
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: ao cloud link --project-id <id>"))?;
 
     let client = build_client(&token)?;
     let resp = client

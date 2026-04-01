@@ -1,9 +1,9 @@
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Subcommand)]
-pub(crate) enum SyncCommand {
+pub(crate) enum CloudCommand {
     /// Configure the sync server connection for this project.
-    Setup(SyncSetupArgs),
+    Setup(CloudSetupArgs),
     /// Push local tasks and requirements to the sync server.
     Push,
     /// Pull tasks and requirements from the sync server into local state.
@@ -11,11 +11,11 @@ pub(crate) enum SyncCommand {
     /// Show sync configuration and last sync status.
     Status,
     /// Link this project to a specific remote project by ID.
-    Link(SyncLinkArgs),
+    Link(CloudLinkArgs),
 }
 
 #[derive(Debug, Parser)]
-pub(crate) struct SyncSetupArgs {
+pub(crate) struct CloudSetupArgs {
     #[arg(long, help = "Sync server URL, e.g. https://ao-sync-production.up.railway.app")]
     pub(crate) server: String,
     #[arg(long, help = "Bearer token for authentication")]
@@ -23,7 +23,7 @@ pub(crate) struct SyncSetupArgs {
 }
 
 #[derive(Debug, Parser)]
-pub(crate) struct SyncLinkArgs {
+pub(crate) struct CloudLinkArgs {
     #[arg(long, help = "Remote project ID to link to")]
     pub(crate) project_id: String,
 }

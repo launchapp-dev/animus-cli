@@ -1966,8 +1966,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
-        ensure_agent_runtime_config_file(temp.path()).expect("ensure runtime config");
-        let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
+        let config = load_agent_runtime_config_or_default(temp.path());
 
         assert_eq!(config.phase_agent_id("requirements"), Some("po"));
         assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
@@ -2276,8 +2275,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
-        ensure_agent_runtime_config_file(temp.path()).expect("ensure runtime config");
-        let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
+        let config = load_agent_runtime_config_or_default(temp.path());
         assert!(config.is_structured_output_phase("code-review"));
         assert!(config.is_structured_output_phase("implementation"));
         assert!(config.is_structured_output_phase("testing"));
@@ -2289,8 +2287,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
-        ensure_agent_runtime_config_file(temp.path()).expect("ensure runtime config");
-        let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
+        let config = load_agent_runtime_config_or_default(temp.path());
         assert!(config.is_structured_output_phase(" implementation "));
         assert!(config.is_structured_output_phase(" CODE-REVIEW "));
         assert!(config.is_structured_output_phase(" testing "));
@@ -2302,8 +2299,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
-        ensure_agent_runtime_config_file(temp.path()).expect("ensure runtime config");
-        let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
+        let config = load_agent_runtime_config_or_default(temp.path());
 
         assert_eq!(config.phase_agent_id("triage"), Some("triager"));
         assert_eq!(config.phase_agent_id("refine-requirements"), Some("requirements-refiner"));

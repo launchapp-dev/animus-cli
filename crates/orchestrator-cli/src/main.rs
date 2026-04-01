@@ -101,8 +101,8 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Web { command } => {
                     services::operations::handle_web(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Sync { command } => {
-                    services::sync::handle_sync(command, hub.clone(), &project_root, cli.json).await
+                Command::Cloud { command } => {
+                    services::cloud::handle_cloud(command, hub.clone(), &project_root, cli.json).await
                 }
                 Command::Status | Command::Version => {
                     unreachable!("command handled before runtime initialization")
