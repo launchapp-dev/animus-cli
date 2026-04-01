@@ -45,7 +45,7 @@ agents:
       - Only dispatch — let the review agent handle each PR
       - Skip PRs targeting "main" — those are release PRs
       - Maximum 5 dispatches per sweep to avoid queue flooding
-    model: zai-coding-plan/glm-5
+    model: claude-haiku-4-5
     tool: claude
     # tool_profile removed — sparkcube profile not in global config
     mcp_servers: ["ao"]
@@ -95,7 +95,7 @@ agents:
       - Be concise in review comments
       - Approve and merge good PRs quickly — don't block on style nits
       - Focus on correctness, security, and breaking changes
-    model: zai-coding-plan/glm-5
+    model: claude-haiku-4-5
     tool: claude
     # tool_profile removed — sparkcube profile not in global config
     mcp_servers: ["ao"]
@@ -171,3 +171,4 @@ schedules:
     name: PR Sweep
     cron: "*/30 * * * *"
     workflow_ref: pr-sweep
+    enabled: false
