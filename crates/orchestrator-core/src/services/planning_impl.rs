@@ -173,8 +173,11 @@ impl PlanningServiceApi for FileServiceHub {
     }
 
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>> {
-        let query =
-            RequirementQuery { filter: RequirementFilter::default(), page: crate::ListPageRequest::unbounded(), sort: RequirementQuerySort::Id };
+        let query = RequirementQuery {
+            filter: RequirementFilter::default(),
+            page: crate::ListPageRequest::unbounded(),
+            sort: RequirementQuerySort::Id,
+        };
         let (ids, _) = crate::workflow::query_requirement_ids(&self.project_root, &query)?;
         crate::workflow::load_requirements_by_ids(&self.project_root, &ids)
     }

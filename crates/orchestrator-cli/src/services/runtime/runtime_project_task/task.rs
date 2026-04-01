@@ -524,7 +524,8 @@ pub(crate) async fn handle_task_stats(args: TaskStatsArgs, project_root: &str, j
     let now = Utc::now();
     let stats = orchestrator_core::load_task_statistics(Path::new(project_root))?;
     let stale_in_progress = load_stale_in_progress_summary(project_root, args.stale_threshold_hours, now)?;
-    let priority_policy = load_task_priority_policy_report(Path::new(project_root), DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
+    let priority_policy =
+        load_task_priority_policy_report(Path::new(project_root), DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT)?;
     print_value(TaskStatsOutput { stats, stale_in_progress, priority_policy }, json)
 }
 

@@ -3,8 +3,8 @@ use std::collections::{HashMap, HashSet};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
-    load_history_store, load_workflow_history_summaries, save_history_store, HistoryExecutionRecord, WorkflowHistorySummary,
-    WorkflowStateManager,
+    load_history_store, load_workflow_history_summaries, save_history_store, HistoryExecutionRecord,
+    WorkflowHistorySummary, WorkflowStateManager,
 };
 
 use crate::cli_types::HistoryCommand;
@@ -48,9 +48,7 @@ impl HistoryRecordCandidate {
 }
 
 fn parse_record_timestamp(value: Option<&str>) -> Option<DateTime<Utc>> {
-    value
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&Utc))
+    value.and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()).map(|value| value.with_timezone(&Utc))
 }
 
 fn workflow_to_history_record(workflow: orchestrator_core::OrchestratorWorkflow) -> HistoryExecutionRecord {
@@ -97,18 +95,12 @@ fn collect_execution_candidates(project_root: &str) -> Result<Vec<HistoryRecordC
     }
 
     candidates.sort_by(|left, right| {
-        right
-            .started_at
-            .cmp(&left.started_at)
-            .then_with(|| left.execution_id.cmp(&right.execution_id))
+        right.started_at.cmp(&left.started_at).then_with(|| left.execution_id.cmp(&right.execution_id))
     });
     Ok(candidates)
 }
 
-fn load_workflow_records(
-    project_root: &str,
-    workflow_ids: &[String],
-) -> HashMap<String, HistoryExecutionRecord> {
+fn load_workflow_records(project_root: &str, workflow_ids: &[String]) -> HashMap<String, HistoryExecutionRecord> {
     let manager = WorkflowStateManager::new(project_root);
     let mut records = HashMap::with_capacity(workflow_ids.len());
     for workflow_id in workflow_ids {
