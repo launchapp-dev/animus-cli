@@ -70,7 +70,7 @@ pub use services::{
     plan_task_priority_rebalance, save_schedule_state, save_trigger_state, stop_agent_runner_process, summarize_tasks,
     DaemonServiceApi, FileServiceHub, InMemoryServiceHub, PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor,
     PhaseVerdict, PlanningServiceApi, ProjectServiceApi, ReviewServiceApi, ScheduleRunState, ScheduleState, ServiceHub,
-    TaskServiceApi, TriggerRunState, TriggerState, WorkflowServiceApi,
+    TaskServiceApi, TriggerRunState, TriggerState, WebhookEvent, WorkflowServiceApi,
 };
 pub use state_machines::{
     load_state_machines_for_project, state_machines_path, write_state_machines_document, LoadedStateMachines,
@@ -121,9 +121,10 @@ pub use workflow_config::{
     validate_workflow_and_runtime_configs_with_project_root, validate_workflow_config, workflow_config_hash,
     workflow_config_path, write_workflow_config, yaml_workflows_dir, CompileYamlResult, FileWatcherTriggerConfig,
     LoadedWorkflowConfig, PhaseMcpBinding, PhaseTransitionConfig, PhaseUiDefinition, SubWorkflowRef, TriggerType,
-    WorkflowCheckpointRetentionConfig, WorkflowConfig, WorkflowConfigMetadata, WorkflowConfigSource,
-    WorkflowDefinition, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowSchedule, WorkflowTrigger, WorkflowVariable,
-    WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
+    WebhookTriggerConfig, WorkflowCheckpointRetentionConfig, WorkflowConfig, WorkflowConfigMetadata,
+    WorkflowConfigSource, WorkflowDefinition, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowSchedule,
+    WorkflowTrigger, WorkflowVariable, WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION,
+    YAML_WORKFLOWS_DIR,
 };
 pub use workflow_events::{dispatch_workflow_event, WorkflowEvent, WorkflowEventOutcome};
 pub use workflow_runner_registry::{

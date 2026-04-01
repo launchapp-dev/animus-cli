@@ -11,12 +11,12 @@ use crate::SubjectDispatch;
 pub struct TriggerDispatch;
 
 impl TriggerDispatch {
-    /// Process all due file-watcher triggers for `project_root` at `now`.
+    /// Process all due triggers for `project_root` at `now`.
     ///
-    /// For each enabled `file_watcher` trigger whose watched paths have
-    /// been modified since the last dispatch — and whose debounce window
-    /// has elapsed — `spawn_pipeline` is called and trigger state is
-    /// persisted.
+    /// Handles two trigger types:
+    /// - **file_watcher**: scans path mtimes and dispatches when files change.
+    /// - **webhook / github_webhook**: drains pending events queued by the
+    ///   HTTP handler (one dispatch per pending event).
     pub fn process_due_triggers<PipelineSpawner>(
         project_root: &str,
         now: DateTime<Utc>,
@@ -26,21 +26,37 @@ impl TriggerDispatch {
         PipelineSpawner: FnMut(&str, &SubjectDispatch) -> Result<()>,
     {
         let config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
-        let triggers: Vec<&orchestrator_core::workflow_config::WorkflowTrigger> = config
+
+        let file_watcher_triggers: Vec<&orchestrator_core::workflow_config::WorkflowTrigger> = config
             .config
             .triggers
             .iter()
             .filter(|t| t.enabled && t.trigger_type == orchestrator_core::workflow_config::TriggerType::FileWatcher)
             .collect();
 
-        if triggers.is_empty() {
+        let webhook_triggers: Vec<&orchestrator_core::workflow_config::WorkflowTrigger> = config
+            .config
+            .triggers
+            .iter()
+            .filter(|t| {
+                t.enabled
+                    && matches!(
+                        t.trigger_type,
+                        orchestrator_core::workflow_config::TriggerType::Webhook
+                            | orchestrator_core::workflow_config::TriggerType::GithubWebhook
+                    )
+            })
+            .collect();
+
+        if file_watcher_triggers.is_empty() && webhook_triggers.is_empty() {
             return Vec::new();
         }
 
         let mut state = orchestrator_core::load_trigger_state(std::path::Path::new(project_root)).unwrap_or_default();
-
         let mut outcomes = Vec::new();
-        for trigger in triggers {
+
+        // --- file_watcher processing ---
+        for trigger in file_watcher_triggers {
             let fw_config = orchestrator_core::workflow_config::FileWatcherTriggerConfig::from_value(&trigger.config);
             if fw_config.paths.is_empty() {
                 continue;
@@ -72,7 +88,6 @@ impl TriggerDispatch {
                 // A file has been modified since last check — fire the trigger.
                 let status = dispatch_trigger(&trigger.id, trigger, now, "file-watcher", &mut spawn_pipeline);
 
-                // Update state.
                 run_state.last_dispatched = Some(now);
                 run_state.last_status = status.clone();
                 run_state.dispatch_count += 1;
@@ -82,12 +97,69 @@ impl TriggerDispatch {
             }
         }
 
+        // --- webhook / github_webhook processing ---
+        // Drain pending events that were queued by the HTTP handler.
+        for trigger in webhook_triggers {
+            let run_state = state.triggers.entry(trigger.id.clone()).or_default();
+
+            if run_state.pending_events.is_empty() {
+                continue;
+            }
+
+            // Drain all pending events, dispatching one pipeline per event.
+            let pending = std::mem::take(&mut run_state.pending_events);
+            for event in pending {
+                let trigger_source = match trigger.trigger_type {
+                    orchestrator_core::workflow_config::TriggerType::GithubWebhook => "github-webhook",
+                    _ => "webhook",
+                };
+
+                // Merge the event payload into the trigger's static input.
+                let merged_input = merge_trigger_input(trigger.input.as_ref(), &event.payload);
+
+                let trigger_with_payload = orchestrator_core::workflow_config::WorkflowTrigger {
+                    input: Some(merged_input),
+                    ..trigger.clone()
+                };
+
+                let status =
+                    dispatch_trigger(&trigger.id, &trigger_with_payload, now, trigger_source, &mut spawn_pipeline);
+
+                run_state.last_dispatched = Some(now);
+                run_state.last_status = status.clone();
+                run_state.dispatch_count += 1;
+
+                outcomes.push(TriggerDispatchOutcome { trigger_id: trigger.id.clone(), status });
+            }
+        }
+
         // Persist updated state (best-effort).
-        if !outcomes.is_empty() || state.triggers.values().any(|s| s.extra.is_some()) {
+        let state_dirty = !outcomes.is_empty() || state.triggers.values().any(|s| s.extra.is_some());
+        if state_dirty {
             let _ = orchestrator_core::save_trigger_state(std::path::Path::new(project_root), &state);
         }
 
         outcomes
+    }
+}
+
+/// Merge the webhook event payload into the trigger's static input object.
+///
+/// If the trigger has a static `input` object, the event payload is nested
+/// under the key `"webhook_payload"`.  Otherwise the event payload itself
+/// becomes the task input.
+fn merge_trigger_input(
+    static_input: Option<&serde_json::Value>,
+    event_payload: &serde_json::Value,
+) -> serde_json::Value {
+    match static_input {
+        Some(serde_json::Value::Object(map)) => {
+            let mut merged = map.clone();
+            merged.insert("webhook_payload".to_string(), event_payload.clone());
+            serde_json::Value::Object(merged)
+        }
+        Some(other) => other.clone(),
+        None => event_payload.clone(),
     }
 }
 
@@ -104,7 +176,7 @@ where
     if let Some(ref workflow_ref) = trigger.workflow_ref {
         let dispatch = SubjectDispatch::for_custom(
             format!("trigger:{trigger_id}"),
-            format!("Triggered by file-watcher '{trigger_id}'"),
+            format!("Triggered by {trigger_source} '{trigger_id}'"),
             workflow_ref.clone(),
             trigger.input.clone(),
             trigger_source.to_string(),
@@ -210,6 +282,27 @@ mod tests {
                 "debounce_secs": 0
             }),
             input: None,
+        });
+        orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
+    }
+
+    fn write_webhook_trigger_config(project_root: &std::path::Path, trigger_id: &str) {
+        let mut config = orchestrator_core::builtin_workflow_config();
+        config.workflows.push(orchestrator_core::WorkflowDefinition {
+            id: "respond-to-webhook".to_string(),
+            name: "Respond To Webhook".to_string(),
+            description: String::new(),
+            phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
+            post_success: None,
+            variables: Vec::new(),
+        });
+        config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
+            id: trigger_id.to_string(),
+            trigger_type: orchestrator_core::workflow_config::TriggerType::Webhook,
+            workflow_ref: Some("respond-to-webhook".to_string()),
+            enabled: true,
+            config: json!({ "max_triggers_per_minute": 10 }),
+            input: Some(json!({ "source": "webhook" })),
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
     }
@@ -327,5 +420,76 @@ mod tests {
         );
         // File mtime > baseline → dispatch occurs
         assert_eq!(outcomes.len(), 1);
+    }
+
+    #[test]
+    fn process_due_triggers_drains_pending_webhook_events() {
+        let temp = tempdir().expect("tempdir");
+        let project_root = temp.path();
+
+        write_webhook_trigger_config(project_root, "on-webhook");
+
+        // Manually inject two pending events into TriggerState.
+        let mut state = orchestrator_core::load_trigger_state(project_root).unwrap_or_default();
+        let run_state = state.triggers.entry("on-webhook".to_string()).or_default();
+        run_state.pending_events.push(orchestrator_core::WebhookEvent {
+            event_id: "evt-001".to_string(),
+            received_at: "2026-04-01T10:00:00Z".parse().unwrap(),
+            payload: json!({ "action": "opened" }),
+        });
+        run_state.pending_events.push(orchestrator_core::WebhookEvent {
+            event_id: "evt-002".to_string(),
+            received_at: "2026-04-01T10:00:01Z".parse().unwrap(),
+            payload: json!({ "action": "closed" }),
+        });
+        orchestrator_core::save_trigger_state(project_root, &state).expect("save state");
+
+        let now: DateTime<Utc> = "2026-04-01T10:01:00Z".parse().unwrap();
+        let dispatched = Arc::new(Mutex::new(Vec::<String>::new()));
+        let dispatched_ref = dispatched.clone();
+
+        let outcomes = TriggerDispatch::process_due_triggers(
+            project_root.to_string_lossy().as_ref(),
+            now,
+            move |trigger_id, _dispatch| {
+                dispatched_ref.lock().unwrap().push(trigger_id.to_string());
+                Ok(())
+            },
+        );
+
+        // Both pending events should have been dispatched.
+        assert_eq!(outcomes.len(), 2, "both pending webhook events should dispatch");
+        assert!(outcomes.iter().all(|o| o.status == "dispatched"));
+        assert_eq!(*dispatched.lock().unwrap(), vec!["on-webhook", "on-webhook"]);
+
+        // Pending queue should now be empty.
+        let state_after = orchestrator_core::load_trigger_state(project_root).expect("load state after");
+        let run = state_after.triggers.get("on-webhook").expect("trigger state");
+        assert!(run.pending_events.is_empty(), "pending_events should be cleared after dispatch");
+        assert_eq!(run.dispatch_count, 2);
+    }
+
+    #[test]
+    fn process_due_triggers_no_dispatch_when_webhook_queue_empty() {
+        let temp = tempdir().expect("tempdir");
+        let project_root = temp.path();
+
+        write_webhook_trigger_config(project_root, "on-empty-webhook");
+
+        let now: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
+        let calls = Arc::new(Mutex::new(0usize));
+        let calls_ref = calls.clone();
+
+        let outcomes = TriggerDispatch::process_due_triggers(
+            project_root.to_string_lossy().as_ref(),
+            now,
+            move |_id, _dispatch| {
+                *calls_ref.lock().unwrap() += 1;
+                Ok(())
+            },
+        );
+
+        assert!(outcomes.is_empty(), "empty webhook queue → no dispatch");
+        assert_eq!(*calls.lock().unwrap(), 0);
     }
 }
