@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn runner_config_dir_defaults_to_project_scope() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", None);
         let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
         let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", None);
@@ -79,7 +79,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn runner_config_dir_shortens_long_unix_socket_paths() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _ao_config = EnvVarGuard::set("AO_CONFIG_DIR", None);
         let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
         let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", None);
@@ -97,7 +97,7 @@ mod tests {
 
     #[test]
     fn run_dir_defaults_to_scoped_runtime_runs_root() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("project-root");
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn run_dir_scopes_missing_project_paths_with_protocol_fallback() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("Missing Repo 2026");
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn run_dir_stays_repo_scoped_when_runner_scope_is_global() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let override_dir = temp.path().join("override-config");
@@ -252,7 +252,7 @@ mod tests {
 
     #[test]
     fn build_agent_context_accepts_managed_worktree_cwd() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
 

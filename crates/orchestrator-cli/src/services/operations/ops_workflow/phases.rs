@@ -466,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn approve_manual_phase_continues_non_terminal_workflow() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = TempDir::new().expect("temp dir");
         let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         init_git_repo(&temp);
@@ -549,7 +549,7 @@ mod tests {
 
     #[tokio::test]
     async fn reject_manual_phase_fails_workflow() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = TempDir::new().expect("temp dir");
         let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         init_git_repo(&temp);

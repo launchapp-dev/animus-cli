@@ -175,7 +175,7 @@ mod tests {
     use tempfile::TempDir;
 
     fn lock_env() -> MutexGuard<'static, ()> {
-        crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+        crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner())
     }
 
     use protocol::test_utils::EnvVarGuard;
