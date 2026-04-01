@@ -189,7 +189,7 @@ mod tests {
     #[cfg(unix)]
     async fn claude_backend_emits_metadata_and_final_text_from_fixture() {
         let backend = ClaudeSessionBackend::new();
-        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/claude_real.jsonl";
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/claude_real.jsonl");
         let request = SessionRequest {
             tool: "sh".to_string(),
             model: String::new(),
