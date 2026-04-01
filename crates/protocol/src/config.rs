@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectMcpServerEntry {
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
@@ -14,6 +15,12 @@ pub struct ProjectMcpServerEntry {
     pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub assign_to: Vec<String>,
+    /// Transport type: "stdio" (default) or "http".
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// HTTP endpoint URL. Required when transport is "http".
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

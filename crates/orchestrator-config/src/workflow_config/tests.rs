@@ -1757,6 +1757,7 @@ fn validate_rejects_invalid_unified_sections() {
             command: "".to_string(),
             args: vec!["".to_string()],
             transport: Some(" ".to_string()),
+            url: None,
             config: BTreeMap::new(),
             tools: vec!["".to_string()],
             env: BTreeMap::from([("".to_string(), "value".to_string())]),

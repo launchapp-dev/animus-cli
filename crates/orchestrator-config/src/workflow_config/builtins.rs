@@ -146,6 +146,7 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 command: "ao".to_string(),
                 args: vec!["mcp".to_string(), "serve".to_string()],
                 transport: Some("stdio".to_string()),
+                url: None,
                 config: BTreeMap::new(),
                 tools: Vec::new(),
                 env: BTreeMap::new(),

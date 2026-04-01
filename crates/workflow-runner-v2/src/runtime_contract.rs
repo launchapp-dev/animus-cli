@@ -409,14 +409,18 @@ pub fn inject_project_mcp_servers(
         if !assigned {
             continue;
         }
-        servers.insert(
-            name.clone(),
-            serde_json::json!({
-                "command": entry.command,
-                "args": entry.args,
-                "env": entry.env,
-            }),
-        );
+        let mut entry_json = serde_json::json!({
+            "command": entry.command,
+            "args": entry.args,
+            "env": entry.env,
+        });
+        if let Some(transport) = &entry.transport {
+            entry_json["transport"] = serde_json::Value::String(transport.clone());
+        }
+        if let Some(url) = &entry.url {
+            entry_json["url"] = serde_json::Value::String(url.clone());
+        }
+        servers.insert(name.clone(), entry_json);
     }
     let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
     if servers.is_empty() {
@@ -465,14 +469,18 @@ pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeCo
         if !allowed_servers.is_empty() && !allowed_servers.contains(name) {
             continue;
         }
-        servers.insert(
-            name.clone(),
-            serde_json::json!({
-                "command": definition.command,
-                "args": definition.args,
-                "env": definition.env,
-            }),
-        );
+        let mut entry_json = serde_json::json!({
+            "command": definition.command,
+            "args": definition.args,
+            "env": definition.env,
+        });
+        if let Some(transport) = &definition.transport {
+            entry_json["transport"] = serde_json::Value::String(transport.clone());
+        }
+        if let Some(url) = &definition.url {
+            entry_json["url"] = serde_json::Value::String(url.clone());
+        }
+        servers.insert(name.clone(), entry_json);
     }
     let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
     if servers.is_empty() {
@@ -507,26 +515,34 @@ pub fn inject_named_mcp_servers(
         }
 
         if let Some(definition) = ctx.workflow_config.config.mcp_servers.get(name) {
-            servers.insert(
-                name.to_string(),
-                serde_json::json!({
-                    "command": definition.command,
-                    "args": definition.args,
-                    "env": definition.env,
-                }),
-            );
+            let mut entry_json = serde_json::json!({
+                "command": definition.command,
+                "args": definition.args,
+                "env": definition.env,
+            });
+            if let Some(transport) = &definition.transport {
+                entry_json["transport"] = serde_json::Value::String(transport.clone());
+            }
+            if let Some(url) = &definition.url {
+                entry_json["url"] = serde_json::Value::String(url.clone());
+            }
+            servers.insert(name.to_string(), entry_json);
             continue;
         }
 
         if let Some(definition) = project_config.mcp_servers.get(name) {
-            servers.insert(
-                name.to_string(),
-                serde_json::json!({
-                    "command": definition.command,
-                    "args": definition.args,
-                    "env": definition.env,
-                }),
-            );
+            let mut entry_json = serde_json::json!({
+                "command": definition.command,
+                "args": definition.args,
+                "env": definition.env,
+            });
+            if let Some(transport) = &definition.transport {
+                entry_json["transport"] = serde_json::Value::String(transport.clone());
+            }
+            if let Some(url) = &definition.url {
+                entry_json["url"] = serde_json::Value::String(url.clone());
+            }
+            servers.insert(name.to_string(), entry_json);
             continue;
         }
 
@@ -569,6 +585,7 @@ mod tests {
                 command: "node".to_string(),
                 args: vec!["server.js".to_string()],
                 transport: Some("stdio".to_string()),
+                url: None,
                 config: BTreeMap::new(),
                 tools: Vec::new(),
                 env: BTreeMap::new(),

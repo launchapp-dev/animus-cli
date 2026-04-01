@@ -190,6 +190,7 @@ fn native_mcp_policy_preserves_primary_server_when_additional_server_name_collid
             command: "ao".to_string(),
             args: vec!["mcp".to_string(), "serve".to_string()],
             env: HashMap::new(),
+            url: None,
         }],
     };
     let mut env = HashMap::new();
@@ -574,6 +575,7 @@ fn claude_lockdown_includes_additional_servers() {
         command: "/usr/local/bin/db-mcp".to_string(),
         args: vec!["--port".to_string(), "5432".to_string()],
         env: HashMap::from([("DB_HOST".to_string(), "localhost".to_string())]),
+        url: None,
     }];
     apply_claude_native_mcp_lockdown(
         &mut args,
