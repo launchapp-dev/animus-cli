@@ -48,6 +48,61 @@ fn builtin_workflow_config_includes_planning_workflow_refs() {
 }
 
 #[test]
+fn standard_workflow_has_feature_branch_merge_configuration() {
+    let config = builtin_workflow_config();
+    let standard_workflow = config
+        .workflows
+        .iter()
+        .find(|w| w.id == "standard-workflow")
+        .expect("standard-workflow should exist");
+
+    // Verify post_success is configured for feature branch workflow
+    let post_success = standard_workflow
+        .post_success
+        .as_ref()
+        .expect("standard-workflow should have post_success configured");
+
+    let merge_config = post_success
+        .merge
+        .as_ref()
+        .expect("standard-workflow should have merge configuration");
+
+    // Feature branch workflow should create a PR without auto-merging
+    assert_eq!(merge_config.target_branch, "main");
+    assert!(merge_config.create_pr, "standard-workflow should create PR");
+    assert!(!merge_config.auto_merge, "standard-workflow should not auto-merge");
+    assert!(merge_config.cleanup_worktree, "standard-workflow should cleanup worktree after merge");
+    assert_eq!(merge_config.strategy, MergeStrategy::Merge, "standard-workflow should use merge strategy");
+}
+
+#[test]
+fn ui_ux_workflow_has_feature_branch_merge_configuration() {
+    let config = builtin_workflow_config();
+    let ui_ux_workflow = config
+        .workflows
+        .iter()
+        .find(|w| w.id == "ui-ux-standard")
+        .expect("ui-ux-standard should exist");
+
+    // Verify post_success is configured for feature branch workflow
+    let post_success = ui_ux_workflow
+        .post_success
+        .as_ref()
+        .expect("ui-ux-standard should have post_success configured");
+
+    let merge_config = post_success
+        .merge
+        .as_ref()
+        .expect("ui-ux-standard should have merge configuration");
+
+    // Feature branch workflow should create a PR without auto-merging
+    assert_eq!(merge_config.target_branch, "main");
+    assert!(merge_config.create_pr, "ui-ux-standard should create PR");
+    assert!(!merge_config.auto_merge, "ui-ux-standard should not auto-merge");
+    assert!(merge_config.cleanup_worktree, "ui-ux-standard should cleanup worktree after merge");
+}
+
+#[test]
 fn missing_v2_file_reports_actionable_error() {
     let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");

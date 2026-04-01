@@ -1,1 +1,20 @@
+# Default workflow reference for AO tasks
 default_workflow_ref: standard
+
+# Feature Branch Workflow Configuration
+# The standard workflow now includes automatic feature branch handling:
+# - Creates a feature branch for implementation work
+# - Prevents direct pushes to main during task execution
+# - Automatically creates a pull request after all phases succeed
+# - Requires explicit PR review and merge (auto_merge: false)
+# - Cleans up the feature branch worktree after merge
+#
+# This workflow ensures:
+# 1. Implementation happens on isolated feature branches
+# 2. All code is reviewed via pull requests
+# 3. Main branch remains protected from direct pushes
+# 4. Worktrees are cleaned up automatically to prevent stale checkouts
+#
+# To override this behavior (e.g., for quick fixes or direct merges),
+# create custom workflow definitions in .ao/workflows/ that override
+# the post_success merge configuration as needed.
