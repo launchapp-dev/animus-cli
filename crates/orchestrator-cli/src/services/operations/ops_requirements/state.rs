@@ -535,7 +535,7 @@ mod tests {
 
     #[test]
     fn load_requirements_map_falls_back_to_generated_docs_when_core_state_is_empty() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");
@@ -591,7 +591,7 @@ mod tests {
 
     #[test]
     fn write_generated_requirement_docs_prunes_stale_requirement_files() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");

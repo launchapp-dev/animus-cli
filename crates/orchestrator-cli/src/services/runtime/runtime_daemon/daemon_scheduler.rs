@@ -57,7 +57,7 @@ mod tests {
 
     #[test]
     fn runtime_options_use_workflow_daemon_auto_run_ready_when_pm_config_missing() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
 
         let home_root = tempfile::TempDir::new().expect("home temp dir");
         let _home_guard = EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
@@ -109,7 +109,7 @@ mod tests {
 
     #[test]
     fn runtime_options_keep_persisted_auto_run_ready_over_workflow_yaml() {
-        let _lock = test_env_lock().lock().expect("env lock should be available");
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
 
         let home_root = tempfile::TempDir::new().expect("home temp dir");
         let _home_guard = EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));

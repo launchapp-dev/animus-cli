@@ -527,7 +527,7 @@ mod tests {
 
     #[test]
     fn read_agent_status_reads_scoped_events_and_reports_path() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn read_agent_status_keeps_lookup_repo_scoped_under_global_runner_scope() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
