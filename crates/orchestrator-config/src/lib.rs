@@ -36,9 +36,9 @@ pub use pack_config::{
     PackWorkflows, PACK_MANIFEST_FILE_NAME, PACK_MANIFEST_SCHEMA_ID,
 };
 pub use pack_marketplace::{
-    add_marketplace_registry, clone_marketplace_pack, load_marketplace_state, remove_marketplace_registry,
-    search_marketplace_packs, sync_all_registries, sync_registry, MarketplaceEntry, MarketplaceSearchResult,
-    MarketplaceState,
+    add_marketplace_registry, clone_marketplace_pack, get_github_token, load_marketplace_state,
+    parse_github_url, remove_marketplace_registry, search_marketplace_packs, sync_all_registries, sync_github_registry,
+    sync_registry, GitHubUrlType, MarketplaceEntry, MarketplaceSearchResult, MarketplaceState,
 };
 pub use pack_registry::{
     ensure_pack_execution_requirements, load_pack_agent_runtime_overlay, load_pack_inventory,

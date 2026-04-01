@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -100,6 +101,12 @@ pub fn remove_marketplace_registry(id: &str) -> Result<()> {
 }
 
 pub fn sync_registry(id: &str, url: &str) -> Result<()> {
+    // Check if this is a GitHub URL and use GitHub-specific sync if applicable
+    if url.contains("github.com") {
+        return sync_github_registry(id, url);
+    }
+
+    // Fall back to generic git-based sync
     let cache_dir = marketplace_cache_dir();
     fs::create_dir_all(&cache_dir)?;
     let target = cache_dir.join(id);
@@ -288,4 +295,218 @@ fn chrono_timestamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     format!("{}", secs)
+}
+
+/// GitHub registry URL types
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GitHubUrlType {
+    /// HTTPS URL (e.g., https://github.com/owner/repo)
+    Https,
+    /// SSH URL (e.g., git@github.com:owner/repo.git)
+    Ssh,
+}
+
+/// Parse a GitHub URL and extract owner and repo information
+pub fn parse_github_url(url: &str) -> Result<(String, String, GitHubUrlType)> {
+    let trimmed = url.trim();
+
+    // Try HTTPS format: https://github.com/owner/repo or https://github.com/owner/repo.git
+    if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
+        let parts: Vec<&str> = rest.split('/').collect();
+        if parts.len() >= 2 {
+            let owner = parts[0].to_string();
+            let repo = parts[1].strip_suffix(".git").unwrap_or(parts[1]).to_string();
+            if !owner.is_empty() && !repo.is_empty() {
+                return Ok((owner, repo, GitHubUrlType::Https));
+            }
+        }
+    }
+
+    // Try SSH format: git@github.com:owner/repo or git@github.com:owner/repo.git
+    if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
+        let parts: Vec<&str> = rest.split('/').collect();
+        if parts.len() >= 2 {
+            let owner = parts[0].to_string();
+            let repo = parts[1].strip_suffix(".git").unwrap_or(parts[1]).to_string();
+            if !owner.is_empty() && !repo.is_empty() {
+                return Ok((owner, repo, GitHubUrlType::Ssh));
+            }
+        }
+    }
+
+    Err(anyhow!("invalid GitHub URL format: {}. Expected https://github.com/owner/repo or git@github.com:owner/repo", trimmed))
+}
+
+/// Get the GitHub token from environment variable
+pub fn get_github_token() -> Option<String> {
+    env::var("GITHUB_TOKEN").ok().filter(|token| !token.is_empty())
+}
+
+/// Prepare git credentials for GitHub authentication
+/// Returns the URL with embedded credentials if token is available, or the original URL
+fn prepare_github_git_url(url: &str, include_token: bool) -> Result<String> {
+    if !include_token {
+        return Ok(url.to_string());
+    }
+
+    let token = match get_github_token() {
+        Some(token) => token,
+        None => return Ok(url.to_string()),
+    };
+
+    // Convert to HTTPS if needed and embed token
+    if url.starts_with("git@github.com:") {
+        // Convert SSH to HTTPS with token
+        let (owner, repo, _) = parse_github_url(url)?;
+        Ok(format!("https://x-access-token:{}@github.com/{}/{}.git", token, owner, repo))
+    } else if url.starts_with("https://github.com/") {
+        // Embed token in HTTPS URL
+        if url.contains("@") {
+            // Already has authentication
+            Ok(url.to_string())
+        } else {
+            let (owner, repo, _) = parse_github_url(url)?;
+            Ok(format!("https://x-access-token:{}@github.com/{}/{}.git", token, owner, repo))
+        }
+    } else {
+        // Not a GitHub URL, return as-is
+        Ok(url.to_string())
+    }
+}
+
+/// Clone from a GitHub repository with optional token authentication
+fn git_clone_github(url: &str, target: &Path) -> Result<()> {
+    let auth_url = prepare_github_git_url(url, true)?;
+
+    let status = Command::new("git")
+        .args(["clone", "--depth", "1", &auth_url, &target.display().to_string()])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .with_context(|| format!("failed to run git clone for {}", url))?;
+
+    if !status.success() {
+        return Err(anyhow!("git clone failed for {}. Ensure GITHUB_TOKEN is set if this is a private repository.", url));
+    }
+    Ok(())
+}
+
+/// Sync a GitHub registry with optional token authentication
+pub fn sync_github_registry(id: &str, url: &str) -> Result<()> {
+    let cache_dir = marketplace_cache_dir();
+    fs::create_dir_all(&cache_dir)?;
+    let target = cache_dir.join(id);
+
+    if target.exists() {
+        let status = Command::new("git")
+            .args(["pull", "--ff-only"])
+            .current_dir(&target)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            _ => {
+                fs::remove_dir_all(&target).ok();
+                git_clone_github(url, &target)?;
+            }
+        }
+    } else {
+        git_clone_github(url, &target)?;
+    }
+
+    let mut state = load_marketplace_state()?;
+    let now = chrono_timestamp();
+    for entry in &mut state.registries {
+        if entry.id == id {
+            entry.last_synced = Some(now.clone());
+        }
+    }
+    save_marketplace_state(&state)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_github_https_url() {
+        let (owner, repo, url_type) = parse_github_url("https://github.com/AudioGenius-ai/ao-cli").unwrap();
+        assert_eq!(owner, "AudioGenius-ai");
+        assert_eq!(repo, "ao-cli");
+        assert_eq!(url_type, GitHubUrlType::Https);
+    }
+
+    #[test]
+    fn test_parse_github_https_url_with_git_suffix() {
+        let (owner, repo, url_type) =
+            parse_github_url("https://github.com/AudioGenius-ai/ao-cli.git").unwrap();
+        assert_eq!(owner, "AudioGenius-ai");
+        assert_eq!(repo, "ao-cli");
+        assert_eq!(url_type, GitHubUrlType::Https);
+    }
+
+    #[test]
+    fn test_parse_github_ssh_url() {
+        let (owner, repo, url_type) = parse_github_url("git@github.com:AudioGenius-ai/ao-cli").unwrap();
+        assert_eq!(owner, "AudioGenius-ai");
+        assert_eq!(repo, "ao-cli");
+        assert_eq!(url_type, GitHubUrlType::Ssh);
+    }
+
+    #[test]
+    fn test_parse_github_ssh_url_with_git_suffix() {
+        let (owner, repo, url_type) = parse_github_url("git@github.com:AudioGenius-ai/ao-cli.git").unwrap();
+        assert_eq!(owner, "AudioGenius-ai");
+        assert_eq!(repo, "ao-cli");
+        assert_eq!(url_type, GitHubUrlType::Ssh);
+    }
+
+    #[test]
+    fn test_parse_invalid_url() {
+        assert!(parse_github_url("https://bitbucket.com/owner/repo").is_err());
+        assert!(parse_github_url("https://github.com/owner").is_err());
+        assert!(parse_github_url("invalid-url").is_err());
+    }
+
+    #[test]
+    fn test_prepare_github_git_url_without_token() {
+        let url = "https://github.com/AudioGenius-ai/ao-cli.git";
+        let result = prepare_github_git_url(url, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), url);
+    }
+
+    #[test]
+    fn test_prepare_non_github_url() {
+        let url = "https://bitbucket.com/owner/repo.git";
+        let result = prepare_github_git_url(url, false);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), url);
+    }
+
+    #[test]
+    fn test_github_token_env_lookup() {
+        // This test just verifies the function exists and can be called
+        // The actual token comes from the GITHUB_TOKEN environment variable
+        let _token = get_github_token();
+        // Test passes if no panic occurs
+    }
+
+    #[test]
+    fn test_parse_whitespace_handling() {
+        let url_with_spaces = "  https://github.com/AudioGenius-ai/ao-cli  ";
+        let (owner, repo, _) = parse_github_url(url_with_spaces).unwrap();
+        assert_eq!(owner, "AudioGenius-ai");
+        assert_eq!(repo, "ao-cli");
+    }
+
+    #[test]
+    fn test_parse_github_url_with_multiple_path_parts() {
+        // URLs with extra path components are accepted (lenient parsing)
+        let (owner, repo, _) = parse_github_url("https://github.com/AudioGenius-ai/ao-cli/issues/123").unwrap();
+        assert_eq!(owner, "AudioGenius-ai");
+        assert_eq!(repo, "ao-cli");
+    }
 }
