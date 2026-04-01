@@ -116,6 +116,7 @@ ao
 │   │   └── set              Replace workflow agent-runtime config JSON
 │   ├── prompt
 │   │   └── render           Render workflow phase prompt text and prompt sections
+│   └── context              Get workflow pipeline context including phase outputs and verdicts
 │
 ├── requirements            Draft and manage project requirements
 │   ├── execute              Execute a requirement into implementation tasks and optional workflows

@@ -107,13 +107,8 @@ fn test_multiple_blocked_items() {
 
 #[test]
 fn test_active_workflows_filtering() {
-    let surface = build_now_surface(
-        Utc::now(),
-        None,
-        vec![active_workflow("WF-001", "TASK-001", "Task 1")],
-        vec![],
-        vec![],
-    );
+    let surface =
+        build_now_surface(Utc::now(), None, vec![active_workflow("WF-001", "TASK-001", "Task 1")], vec![], vec![]);
 
     assert_eq!(surface.active_workflows.len(), 1);
     assert_eq!(surface.active_workflows[0].id, "WF-001");

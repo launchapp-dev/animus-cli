@@ -16,6 +16,7 @@ use orchestrator_core::{
 };
 use serde_json::Value;
 use uuid::Uuid;
+use workflow_runner_v2;
 
 use self::execute::WorkflowExecuteArgs;
 use crate::{
@@ -502,6 +503,11 @@ pub(crate) async fn handle_workflow(
                 print_value(config::set_agent_runtime_payload(project_root, &args.input_json)?, json)
             }
         },
+        WorkflowCommand::Context(args) => {
+            let context = workflow_runner_v2::build_full_workflow_context(project_root, &args.id)
+                .ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            print_value(context, json)
+        }
     }
 }
 
@@ -585,7 +591,6 @@ mod tests {
         assert_eq!(dispatch.workflow_ref, orchestrator_core::workflow_ref_for_task(&task));
         assert_eq!(dispatch.trigger_source, "manual-cli-run");
     }
-
 
     #[tokio::test]
     async fn resolve_workflow_run_dispatch_from_input_accepts_legacy_workflow_run_input() {

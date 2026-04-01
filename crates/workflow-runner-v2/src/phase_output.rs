@@ -177,6 +177,28 @@ fn load_workflow_state(project_root: &str, workflow_id: &str) -> Option<orchestr
     serde_json::from_str(&contents).ok()
 }
 
+pub fn load_all_phase_outputs(
+    project_root: &str,
+    workflow_id: &str,
+    pipeline_phase_order: &[String],
+) -> Vec<PersistedPhaseOutput> {
+    let dir = phase_output_dir(project_root, workflow_id);
+    if !dir.exists() {
+        return Vec::new();
+    }
+
+    let mut outputs = Vec::new();
+    for phase_id in pipeline_phase_order {
+        let file_path = dir.join(format!("{phase_id}.json"));
+        if let Ok(contents) = std::fs::read_to_string(&file_path) {
+            if let Ok(output) = serde_json::from_str::<PersistedPhaseOutput>(&contents) {
+                outputs.push(output);
+            }
+        }
+    }
+    outputs
+}
+
 pub(crate) fn build_workflow_pipeline_context(
     project_root: &str,
     workflow_id: &str,
@@ -230,6 +252,70 @@ pub(crate) fn build_workflow_pipeline_context(
 
     let json = serde_json::to_string(&context).unwrap_or_default();
     (json, phase_order)
+}
+
+pub fn build_full_workflow_context(project_root: &str, workflow_id: &str) -> Option<serde_json::Value> {
+    let workflow = load_workflow_state(project_root, workflow_id)?;
+
+    let phase_order: Vec<String> = workflow.phases.iter().map(|p| p.phase_id.clone()).collect();
+    let all_outputs = load_all_phase_outputs(project_root, workflow_id, &phase_order);
+
+    let phase_outputs: Vec<serde_json::Value> = all_outputs
+        .iter()
+        .map(|output| {
+            let mut entry = serde_json::json!({
+                "phase_id": output.phase_id,
+                "completed_at": output.completed_at,
+            });
+            if let Some(ref verdict) = output.verdict {
+                entry["verdict"] = serde_json::Value::String(verdict.clone());
+            }
+            if let Some(confidence) = output.confidence {
+                entry["confidence"] = serde_json::Value::Number(
+                    serde_json::Number::from_f64(confidence as f64).unwrap_or(serde_json::Number::from(0)),
+                );
+            }
+            if let Some(ref reason) = output.reason {
+                entry["reason"] = serde_json::Value::String(reason.clone());
+            }
+            if !output.evidence.is_empty() {
+                entry["evidence"] = serde_json::to_value(&output.evidence).unwrap_or(serde_json::Value::Array(vec![]));
+            }
+            if let Some(ref payload) = output.payload {
+                entry["payload"] = payload.clone();
+            }
+            entry
+        })
+        .collect();
+
+    let rework_counts: serde_json::Value = workflow
+        .rework_counts
+        .iter()
+        .filter(|(_, &count)| count > 0)
+        .map(|(k, v)| (k.clone(), serde_json::Value::from(*v)))
+        .collect::<serde_json::Map<String, serde_json::Value>>()
+        .into();
+
+    let current_phase = workflow.phases.last().map(|p| {
+        let status = format!("{:?}", p.status).to_ascii_lowercase();
+        (p.phase_id.clone(), status)
+    });
+
+    let workflow_status = format!("{:?}", workflow.status).to_ascii_lowercase();
+
+    let context = serde_json::json!({
+        "workflow_id": workflow_id,
+        "subject_id": workflow.subject.id,
+        "subject_kind": workflow.subject.kind,
+        "subject_title": workflow.subject.title,
+        "workflow_status": workflow_status,
+        "current_phase": current_phase.as_ref().map(|(id, _)| id),
+        "current_phase_status": current_phase.as_ref().map(|(_, status)| status),
+        "rework_counts": rework_counts,
+        "phase_outputs": phase_outputs,
+    });
+
+    Some(context)
 }
 
 #[cfg(test)]

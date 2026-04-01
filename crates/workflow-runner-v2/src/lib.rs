@@ -28,7 +28,7 @@ pub use phase_executor::{
 };
 pub use phase_failover::{classify_phase_failure, PhaseFailureClassifier, PhaseFailureKind};
 pub use phase_git::{commit_implementation_changes, ensure_git_identity, git_has_pending_changes, is_git_repo};
-pub use phase_output::{persist_phase_output, phase_output_dir, PersistedPhaseOutput};
+pub use phase_output::{build_full_workflow_context, persist_phase_output, phase_output_dir, PersistedPhaseOutput};
 pub use phase_prompt::{
     build_phase_prompt, phase_requires_commit_message, phase_requires_commit_message_with_config, render_phase_prompt,
     PhasePromptInputs, PhasePromptParams, PhaseRenderParams, RenderedPhasePrompt,

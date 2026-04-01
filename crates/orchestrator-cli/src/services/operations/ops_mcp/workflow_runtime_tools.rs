@@ -189,6 +189,17 @@ impl AoMcpServer {
         let args = build_workflow_phase_approve_args(&input);
         self.run_tool("ao.workflow.phase.approve", args, input.project_root).await
     }
+
+    #[tool(
+        name = "ao.workflow.context",
+        description = "Get workflow pipeline context including phase outputs and verdicts. Purpose: Retrieve a unified JSON object containing current phase, subject, rework counts, active workflow status, and all persisted phase outputs with verdicts, confidence, reasoning, and evidence. Prerequisites: Workflow must exist. Example: {\"id\": \"wf-abc123\"}. Sequencing: Use ao.workflow.get to verify workflow exists first.",
+        input_schema = ao_schema_for_type::<IdInput>()
+    )]
+    async fn ao_workflow_context(&self, params: Parameters<IdInput>) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec!["workflow".to_string(), "context".to_string(), "--id".to_string(), input.id];
+        self.run_tool("ao.workflow.context", args, input.project_root).await
+    }
 }
 
 fn push_workflow_run_pipeline_arg(args: &mut Vec<String>, workflow_ref: Option<String>) {

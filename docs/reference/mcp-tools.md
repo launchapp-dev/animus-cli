@@ -68,9 +68,9 @@ Every tool accepts an optional `project_root` parameter to override the default 
 
 ---
 
-## Workflow Operations (16 tools)
+## Workflow Operations (17 tools)
 
-### Runtime Tools (9)
+### Runtime Tools (10)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -79,6 +79,7 @@ Every tool accepts an optional `project_root` parameter to override the default 
 | `ao.workflow.execute` | Execute a workflow synchronously (no daemon) | `task_id`, `workflow_ref`, `phase`, `model`, `tool`, `phase_timeout_secs`, `input_json` |
 | `ao.workflow.get` | Get full workflow state by ID | `id` |
 | `ao.workflow.list` | List workflow executions | `status`, `workflow_ref`, `task_id`, `phase_id`, `search`, `sort`, `limit`, `offset`, `max_tokens` |
+| `ao.workflow.context` | Get workflow pipeline context with phase outputs and verdicts | `id` |
 | `ao.workflow.pause` | Pause a running workflow | `id`, `confirm`, `dry_run` |
 | `ao.workflow.cancel` | Cancel a running workflow permanently | `id`, `confirm`, `dry_run` |
 | `ao.workflow.resume` | Resume a paused workflow | `id` |

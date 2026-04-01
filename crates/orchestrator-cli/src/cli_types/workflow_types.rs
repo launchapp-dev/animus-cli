@@ -60,6 +60,8 @@ pub(crate) enum WorkflowCommand {
         #[command(subcommand)]
         command: WorkflowPromptCommand,
     },
+    /// Get workflow pipeline context including phase outputs and verdicts.
+    Context(WorkflowContextArgs),
 }
 
 #[derive(Debug, Args)]
@@ -366,4 +368,10 @@ pub(crate) struct WorkflowStateMachineSetArgs {
 pub(crate) struct WorkflowAgentRuntimeSetArgs {
     #[arg(long, value_name = "JSON", help = "Workflow agent-runtime configuration JSON payload.")]
     pub(crate) input_json: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowContextArgs {
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    pub(crate) id: String,
 }

@@ -1,7 +1,7 @@
 use super::*;
-use std::collections::VecDeque;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -178,8 +178,8 @@ pub(super) fn migrate_legacy_logs_to_file(state_file: &Path, logs_file: &Path) -
 
     let contents = std::fs::read_to_string(state_file)
         .with_context(|| format!("failed to read core-state at {}", state_file.display()))?;
-    let mut raw: serde_json::Value =
-        serde_json::from_str(&contents).with_context(|| format!("failed to parse core-state at {}", state_file.display()))?;
+    let mut raw: serde_json::Value = serde_json::from_str(&contents)
+        .with_context(|| format!("failed to parse core-state at {}", state_file.display()))?;
     let Some(object) = raw.as_object_mut() else {
         return Ok(());
     };
