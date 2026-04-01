@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use rmcp::model::{CallToolRequestParams, RawContent};
 use rmcp::service::RunningService;
 use rmcp::transport::child_process::TokioChildProcess;
+use rmcp::transport::streamable_http_client::{StreamableHttpClientTransport, StreamableHttpClientTransportConfig};
 use rmcp::{RoleClient, ServiceExt};
 use serde::Deserialize;
 use std::borrow::Cow;
@@ -12,9 +13,16 @@ use crate::api::types::{FunctionSchema, ToolDefinition};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerConfig {
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// HTTP endpoint URL. When set, uses HTTP/SSE transport instead of stdio.
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Transport type hint ("stdio" or "http"). Presence of `url` takes precedence.
+    #[serde(default)]
+    pub transport: Option<String>,
 }
 
 pub struct McpClient {
@@ -23,6 +31,24 @@ pub struct McpClient {
 }
 
 pub async fn connect(config: &McpServerConfig) -> Result<McpClient> {
+    // Use HTTP transport when a URL is provided or transport is explicitly "http".
+    let use_http = config.url.is_some() || config.transport.as_deref().is_some_and(|t| t.eq_ignore_ascii_case("http"));
+
+    if use_http {
+        let url = config
+            .url
+            .as_deref()
+            .filter(|u| !u.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("HTTP MCP server config is missing 'url'"))?;
+        let transport = StreamableHttpClientTransport::with_client(
+            reqwest::Client::new(),
+            StreamableHttpClientTransportConfig::with_uri(url),
+        );
+        let service: RunningService<RoleClient, ()> =
+            ().serve(transport).await.map_err(|e| anyhow::anyhow!("failed to initialize HTTP MCP session: {}", e))?;
+        return Ok(McpClient { service, tool_names: Vec::new() });
+    }
+
     let mut cmd = Command::new(&config.command);
     for arg in &config.args {
         cmd.arg(arg);

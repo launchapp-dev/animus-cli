@@ -246,6 +246,7 @@ mod tests {
                 command: "docs-mcp".to_string(),
                 args: vec!["--serve".to_string()],
                 transport: None,
+                url: None,
                 config: BTreeMap::new(),
                 tools: Vec::new(),
                 env: BTreeMap::from([("DOCS_TOKEN".to_string(), "abc123".to_string())]),

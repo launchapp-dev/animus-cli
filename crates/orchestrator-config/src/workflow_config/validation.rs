@@ -453,17 +453,34 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
             errors.push("mcp_servers contains an empty server name".to_string());
             continue;
         }
-        if definition.command.trim().is_empty() {
-            errors.push(format!("mcp_servers['{}'].command must not be empty", name));
+        let transport = definition.transport.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        match transport {
+            Some("http") => {
+                if definition.url.as_deref().is_none_or(|u| u.trim().is_empty()) {
+                    errors.push(format!("mcp_servers['{}'].url is required when transport is \"http\"", name));
+                }
+            }
+            Some(other) if other != "stdio" => {
+                errors.push(format!(
+                    "mcp_servers['{}'].transport must be \"stdio\" or \"http\", got \"{}\"",
+                    name, other
+                ));
+            }
+            _ => {
+                // stdio (explicit or default): command is required
+                if definition.command.trim().is_empty() {
+                    errors.push(format!("mcp_servers['{}'].command must not be empty", name));
+                }
+            }
+        }
+        if definition.transport.as_deref().is_some_and(|transport| transport.trim().is_empty()) {
+            errors.push(format!("mcp_servers['{}'].transport must not be empty when set", name));
         }
         if definition.args.iter().any(|arg| arg.trim().is_empty()) {
             errors.push(format!("mcp_servers['{}'].args must not contain empty values", name));
         }
         if definition.tools.iter().any(|tool| tool.trim().is_empty()) {
             errors.push(format!("mcp_servers['{}'].tools must not contain empty values", name));
-        }
-        if definition.transport.as_deref().is_some_and(|transport| transport.trim().is_empty()) {
-            errors.push(format!("mcp_servers['{}'].transport must not be empty when set", name));
         }
         if definition.env.iter().any(|(key, value)| key.trim().is_empty() || value.trim().is_empty()) {
             errors.push(format!("mcp_servers['{}'].env must not contain empty keys or values", name));
