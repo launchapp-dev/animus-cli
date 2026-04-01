@@ -329,11 +329,16 @@ impl Default for WorkflowCheckpointRetentionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerDefinition {
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Transport type: "stdio" (default) or "http".
     #[serde(default)]
     pub transport: Option<String>,
+    /// HTTP endpoint URL. Required when transport is "http".
+    #[serde(default)]
+    pub url: Option<String>,
     #[serde(default)]
     pub config: BTreeMap<String, Value>,
     #[serde(default)]
