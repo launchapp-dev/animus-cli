@@ -27,7 +27,7 @@ fn decompress_json(data: &[u8]) -> Result<String> {
         return Ok(String::from_utf8_lossy(data).into_owned());
     }
     let decoded = zstd::decode_all(data).context("failed to decompress zstd blob")?;
-    Ok(String::from_utf8(decoded).context("decompressed data is not valid UTF-8")?)
+    String::from_utf8(decoded).context("decompressed data is not valid UTF-8")
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

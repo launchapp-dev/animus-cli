@@ -497,16 +497,18 @@ mod tests {
         ];
         truncate_to_fit(&mut messages, 100, 50);
         for (i, m) in messages.iter().enumerate() {
-            if m.role == "assistant" && m.tool_calls.is_some() {
-                let tc_ids: Vec<&str> = m.tool_calls.as_ref().unwrap().iter().map(|tc| tc.id.as_str()).collect();
-                for expected_id in &tc_ids {
-                    assert!(
-                        messages[i + 1..]
-                            .iter()
-                            .any(|m2| { m2.role == "tool" && m2.tool_call_id.as_deref() == Some(expected_id) }),
-                        "assistant with tool_calls has orphaned tool call id '{}'",
-                        expected_id
-                    );
+            if m.role == "assistant" {
+                if let Some(tool_calls) = m.tool_calls.as_ref() {
+                    let tc_ids: Vec<&str> = tool_calls.iter().map(|tc| tc.id.as_str()).collect();
+                    for expected_id in &tc_ids {
+                        assert!(
+                            messages[i + 1..]
+                                .iter()
+                                .any(|m2| { m2.role == "tool" && m2.tool_call_id.as_deref() == Some(expected_id) }),
+                            "assistant with tool_calls has orphaned tool call id '{}'",
+                            expected_id
+                        );
+                    }
                 }
             }
             if m.role == "tool" {

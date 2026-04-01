@@ -11,6 +11,12 @@ pub struct RunnerMetrics {
     total_duration_ms: AtomicU64,
 }
 
+impl Default for RunnerMetrics {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RunnerMetrics {
     pub fn new() -> Self {
         Self {

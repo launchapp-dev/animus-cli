@@ -569,6 +569,8 @@ fn load_stale_in_progress_summary(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
     use orchestrator_core::{Assignee, InMemoryServiceHub, Priority, TaskStatus};
     use tempfile::TempDir;

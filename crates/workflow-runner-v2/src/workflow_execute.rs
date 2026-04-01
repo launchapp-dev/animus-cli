@@ -592,7 +592,7 @@ async fn load_existing_workflow(
 
 fn validate_existing_workflow_subject(workflow: &OrchestratorWorkflow, params: &WorkflowExecuteParams) -> Result<()> {
     if let Some(task_id) = params.task_id.as_deref() {
-        let workflow_task_id = workflow.subject.task_id().unwrap_or_else(|| workflow.task_id.as_str());
+        let workflow_task_id = workflow.subject.task_id().unwrap_or(workflow.task_id.as_str());
         if workflow_task_id != task_id {
             return Err(anyhow!("workflow '{}' is for task '{}' not '{}'", workflow.id, workflow_task_id, task_id));
         }
@@ -1452,6 +1452,8 @@ async fn cleanup_worktree_with_fallback(
 
 #[cfg(test)]
 mod requirement_workflow_tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::{execute_workflow, workflow_exit_success, WorkflowExecuteParams};
     use orchestrator_core::{
         load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config, FileServiceHub,
@@ -1595,6 +1597,8 @@ mod requirement_workflow_tests {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
     use chrono::Utc;
     use orchestrator_core::{
@@ -1730,6 +1734,8 @@ mod tests {
 
 #[cfg(all(test, unix))]
 mod plugin_pack_fixture_tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::{execute_workflow, WorkflowExecuteParams};
     use orchestrator_config::{
         activate_pack_mcp_overlay, load_pack_manifest, load_pack_mcp_overlay, load_workflow_config_with_metadata,
@@ -2305,6 +2311,8 @@ workflows:
 
 #[cfg(test)]
 mod post_success_merge_tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
     use std::fs;
     use std::path::{Path, PathBuf};

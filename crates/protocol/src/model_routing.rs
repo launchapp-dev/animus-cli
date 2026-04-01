@@ -332,7 +332,7 @@ mod tests {
         assert!(impl_caps.writes_files);
         assert!(impl_caps.requires_commit);
         assert!(impl_caps.enforce_product_changes);
-        assert!(impl_caps.is_strictly_read_only() == false);
+        assert!(!impl_caps.is_strictly_read_only());
         assert!(!impl_caps.is_research);
 
         let research_caps = PhaseCapabilities::defaults_for_phase("research");

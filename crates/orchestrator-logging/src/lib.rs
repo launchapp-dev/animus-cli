@@ -260,7 +260,7 @@ impl Logger {
         ));
         if rotated.exists() {
             if let Ok(file) = File::open(&rotated) {
-                for line in BufReader::new(file).lines().flatten() {
+                for line in BufReader::new(file).lines().map_while(Result::ok) {
                     all_lines.push(line);
                 }
             }
@@ -269,7 +269,7 @@ impl Logger {
         // Then current file (newer entries)
         if self.path.exists() {
             if let Ok(file) = File::open(&self.path) {
-                for line in BufReader::new(file).lines().flatten() {
+                for line in BufReader::new(file).lines().map_while(Result::ok) {
                     all_lines.push(line);
                 }
             }
@@ -279,9 +279,9 @@ impl Logger {
             .iter()
             .rev()
             .filter_map(|line| serde_json::from_str::<LogEntry>(line).ok())
-            .filter(|e| category.map_or(true, |c| e.cat == c || e.cat.starts_with(c)))
-            .filter(|e| level.map_or(true, |l| (e.level as u8) >= (l as u8)))
-            .filter(|e| since.map_or(true, |s| e.ts.as_str() >= s))
+            .filter(|e| category.is_none_or(|c| e.cat == c || e.cat.starts_with(c)))
+            .filter(|e| level.is_none_or(|l| (e.level as u8) >= (l as u8)))
+            .filter(|e| since.is_none_or(|s| e.ts.as_str() >= s))
             .take(limit)
             .collect();
         entries.reverse();

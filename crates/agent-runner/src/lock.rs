@@ -130,7 +130,7 @@ pub fn acquire_runner_lock() -> Result<File> {
                 Err(e) => {
                     // Real error - propagate
                     warn!(error = %e, "Failed to remove stale lock");
-                    return Err(e);
+                    Err(e)
                 }
             }
         }

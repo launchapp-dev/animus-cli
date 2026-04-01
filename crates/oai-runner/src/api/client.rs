@@ -644,7 +644,7 @@ mod tests {
             record_failure(&state, api);
         }
         let count_at_open = state.consecutive_failures.load(Ordering::Relaxed);
-        assert_eq!(count_at_open, CIRCUIT_BREAKER_THRESHOLD as u32);
+        assert_eq!(count_at_open, CIRCUIT_BREAKER_THRESHOLD);
 
         // Enter half-open and record intermediate failure
         state.circuit_open_until.store(now_secs() - 1, Ordering::Relaxed);

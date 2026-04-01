@@ -404,6 +404,8 @@ pub(crate) async fn reject_manual_phase(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::{approve_manual_phase, reject_manual_phase};
     use crate::shared::test_env_lock;
     use orchestrator_core::{

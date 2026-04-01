@@ -9,6 +9,12 @@ use crate::sandbox::{env_sanitizer, workspace_guard};
 
 pub struct Supervisor;
 
+impl Default for Supervisor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Supervisor {
     pub fn new() -> Self {
         Self

@@ -230,7 +230,7 @@ fn render_now_surface(surface: &NowSurface) -> String {
     } else {
         output.push_str("  none\n");
     }
-    output.push_str("\n");
+    output.push('\n');
 
     output.push_str("Active Workflows\n");
     if surface.active_workflows.is_empty() {
@@ -246,7 +246,7 @@ fn render_now_surface(surface: &NowSurface) -> String {
             ));
         }
     }
-    output.push_str("\n");
+    output.push('\n');
 
     output.push_str("Blocked Items\n");
     if surface.blocked_items.is_empty() {
@@ -259,7 +259,7 @@ fn render_now_surface(surface: &NowSurface) -> String {
             }
         }
     }
-    output.push_str("\n");
+    output.push('\n');
 
     output.push_str("Stale Items (>7 days in progress)\n");
     if surface.stale_items.is_empty() {

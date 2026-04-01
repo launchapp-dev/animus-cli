@@ -168,6 +168,8 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
     use crate::services::runtime::runtime_daemon::{daemon_events_log_path, DaemonEventRecord};
     use crate::DaemonSchedulerArgs;
