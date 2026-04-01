@@ -155,7 +155,6 @@ mod tests {
 
     use super::*;
 
-
     #[tokio::test]
     async fn resolve_enqueue_dispatch_missing_subject_shows_actionable_error() {
         let temp = tempfile::tempdir().expect("tempdir");

@@ -61,9 +61,8 @@ async fn mutate_daemon_state<T>(hub: &FileServiceHub, mutator: impl FnOnce(&mut 
 }
 
 pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHealth> {
-    let state_file = protocol::scoped_state_root(project_root)
-        .unwrap_or_else(|| project_root.join(".ao"))
-        .join("core-state.json");
+    let state_file =
+        protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".ao")).join("core-state.json");
     let snapshot = state_store::load_daemon_state_snapshot(&state_file);
     let config_dir = runner_config_dir(project_root);
     let runner_connected = runner_ready_for_status(&config_dir).await;
@@ -82,7 +81,9 @@ pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHe
 
     let active_agents = match snapshot.active_process_count {
         Some(count) => count,
-        None if runner_connected => query_runner_status(&config_dir).await.map(|status| status.active_agents).unwrap_or(0),
+        None if runner_connected => {
+            query_runner_status(&config_dir).await.map(|status| status.active_agents).unwrap_or(0)
+        }
         None => 0,
     };
 
@@ -101,8 +102,9 @@ pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHe
 
     let pool_utilization_percent =
         pool_size.map(|pool_size| if pool_size == 0 { 0.0 } else { (active_agents as f64 / pool_size as f64) * 100.0 });
-    let queued_tasks =
-        crate::workflow::count_tasks_with_status(project_root, TaskStatus::Ready).map(|count| count as u32).unwrap_or(0);
+    let queued_tasks = crate::workflow::count_tasks_with_status(project_root, TaskStatus::Ready)
+        .map(|count| count as u32)
+        .unwrap_or(0);
 
     Ok(DaemonHealth {
         healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
