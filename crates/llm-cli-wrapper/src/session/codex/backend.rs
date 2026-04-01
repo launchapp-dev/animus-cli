@@ -145,7 +145,7 @@ mod tests {
     #[cfg(unix)]
     async fn codex_backend_emits_thinking_and_final_text_from_fixture() {
         let backend = CodexSessionBackend::new();
-        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/codex_real.jsonl";
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/codex_real.jsonl");
         let request = SessionRequest {
             tool: "sh".to_string(),
             model: String::new(),
