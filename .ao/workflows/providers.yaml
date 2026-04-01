@@ -4,19 +4,19 @@ agents:
       clean, tested code.
     model: kimi-code/kimi-for-coding
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
   minimax-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.
     model: minimax/MiniMax-M2.7
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
   glm-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.
     model: zai-coding-plan/glm-5-turbo
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
   gemini-default:
     system_prompt: You are an expert Rust developer working on the AO CLI workspace. Follow existing code patterns. Write
       clean, tested code.
@@ -27,7 +27,7 @@ agents:
       \ architecture, complex refactors, critical fixes. Write exceptional, production-ready code."
     model: claude-opus-4-6
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
     - ao
     - context7
@@ -45,7 +45,7 @@ agents:
       mcp_task_stats\", \"mcp_queue_stats\"]}\n\nKeep it brief. Do not modify any files or tasks.\n"
     model: minimax/MiniMax-M2.5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
   glm-smoke-test:
     system_prompt: "You are a smoke test agent running on GLM (Z-AI) via oai-runner.\nYour job is to verify the oai-runner\
       \ \u2192 Z-AI API pipeline is working.\n\nOn each run:\n1. Confirm you can read files: run `cat CLAUDE.md | head -5`\
@@ -57,7 +57,7 @@ agents:
       , \"mcp_queue_stats\"]}\n\nKeep it brief. Do not modify any files or tasks.\n"
     model: zai-coding-plan/glm-5-turbo
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
 phases:
   kimi-implementation:
     mode: agent

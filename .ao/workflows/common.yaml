@@ -39,7 +39,7 @@ agents:
   default:
     model: claude-haiku-4-5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
     - ao
     - context7
@@ -52,7 +52,7 @@ agents:
       Read the task, search the codebase, write concrete criteria, update via ao.task.update.
     model: claude-sonnet-4-6
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
     - ao
     - context7
@@ -64,7 +64,7 @@ agents:
       Use ao.task.checklist-update and ao.task.update to record your findings.
     model: claude-opus-4-6
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
     - ao
   triager:
@@ -89,7 +89,7 @@ agents:
       \ just task titles.\n- Use \"advance\" verdict after successful dispatch, \"skip\" for invalid/done/duplicate tasks.\n"
     model: claude-haiku-4-5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
     - ao
   reconciler:
@@ -116,7 +116,7 @@ agents:
       - Process leaf tasks first.\n"
     model: claude-haiku-4-5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
     - ao
   work-planner:
@@ -134,7 +134,7 @@ agents:
       \ queue first.\n"
     model: claude-haiku-4-5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
     - ao
     skills:
@@ -743,12 +743,12 @@ schedules:
 - id: work-planner
   cron: "*/30 * * * *"
   workflow_ref: work-planner
-  enabled: true
+  enabled: false
 - id: task-reconciler
   cron: "*/30 * * * *"
   workflow_ref: task-reconciler
-  enabled: true
+  enabled: false
 - id: sync-main
   cron: "*/30 * * * *"
   workflow_ref: sync-main
-  enabled: true
+  enabled: false

@@ -47,7 +47,7 @@ agents:
       - Maximum 5 dispatches per sweep to avoid queue flooding
     model: zai-coding-plan/glm-5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers: ["ao"]
     skills:
       - queue-management
@@ -97,7 +97,7 @@ agents:
       - Focus on correctness, security, and breaking changes
     model: zai-coding-plan/glm-5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers: ["ao"]
     skills:
       - code-review

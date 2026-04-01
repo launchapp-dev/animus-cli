@@ -43,7 +43,7 @@ agents:
       - Check queue before every dispatch to avoid duplicates
     model: claude-haiku-4-5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
       - ao
 
@@ -108,7 +108,7 @@ agents:
       - If the requirement status is already "refined", just verify and skip — do not re-refine
     model: claude-sonnet-4-6
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
       - ao
       - context7
@@ -173,7 +173,7 @@ agents:
       - When sending back for rework, be specific about what's wrong
     model: claude-opus-4-6
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
       - ao
       - context7
@@ -279,4 +279,4 @@ schedules:
   - id: req-dispatch
     cron: "*/10 * * * *"
     workflow_ref: req-dispatch
-    enabled: true
+    enabled: false

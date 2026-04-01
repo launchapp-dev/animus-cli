@@ -16,7 +16,7 @@ agents:
       - Only one release branch at a time.\n- Never force-push.\n"
     model: claude-haiku-4-5
     tool: claude
-    tool_profile: sparkcube
+    # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
       - ao
 
@@ -53,4 +53,4 @@ schedules:
   - id: release-manager
     cron: "0 9 * * *"
     workflow_ref: release-manager
-    enabled: true
+    enabled: false
