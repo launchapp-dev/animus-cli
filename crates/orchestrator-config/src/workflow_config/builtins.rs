@@ -116,7 +116,15 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                     "code-review".to_string().into(),
                     "testing".to_string().into(),
                 ],
-                post_success: None,
+                post_success: Some(PostSuccessConfig {
+                    merge: Some(MergeConfig {
+                        strategy: MergeStrategy::Merge,
+                        target_branch: "main".to_string(),
+                        create_pr: true,
+                        auto_merge: false,
+                        cleanup_worktree: true,
+                    }),
+                }),
                 variables: Vec::new(),
             },
             WorkflowDefinition {
@@ -133,7 +141,15 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                     "code-review".to_string().into(),
                     "testing".to_string().into(),
                 ],
-                post_success: None,
+                post_success: Some(PostSuccessConfig {
+                    merge: Some(MergeConfig {
+                        strategy: MergeStrategy::Merge,
+                        target_branch: "main".to_string(),
+                        create_pr: true,
+                        auto_merge: false,
+                        cleanup_worktree: true,
+                    }),
+                }),
                 variables: Vec::new(),
             },
         ],
