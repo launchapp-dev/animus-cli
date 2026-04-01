@@ -121,4 +121,9 @@ pub(crate) enum Command {
     },
     /// Run environment and configuration diagnostics.
     Doctor(DoctorArgs),
+    /// Inspect and manage event triggers.
+    Trigger {
+        #[command(subcommand)]
+        command: TriggerCommand,
+    },
 }

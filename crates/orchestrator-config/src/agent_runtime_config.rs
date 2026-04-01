@@ -1530,6 +1530,7 @@ pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConf
             .collect(),
         integrations: None,
         schedules: Vec::new(),
+        triggers: Vec::new(),
         daemon: None,
     };
     crate::workflow_config::write_workflow_yaml_overlay(

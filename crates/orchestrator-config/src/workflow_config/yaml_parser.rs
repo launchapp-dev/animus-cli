@@ -272,6 +272,7 @@ pub(super) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkf
         tools: config.tools.clone(),
         integrations: config.integrations.clone(),
         schedules: config.schedules.clone(),
+        triggers: config.triggers.clone(),
         daemon: config.daemon.clone(),
     }
 }
@@ -393,6 +394,7 @@ pub fn parse_yaml_workflow_config_with_base(yaml_str: &str, base: &WorkflowConfi
         tools: yaml_file.tools,
         integrations: yaml_file.integrations,
         schedules: yaml_file.schedules,
+        triggers: yaml_file.triggers,
         daemon: yaml_file.daemon,
     })
 }

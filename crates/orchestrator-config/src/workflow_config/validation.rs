@@ -609,6 +609,42 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         }
     }
 
+    let mut trigger_ids = BTreeMap::<String, usize>::new();
+    for trigger in &config.triggers {
+        if trigger.id.trim().is_empty() {
+            errors.push("triggers contains an empty trigger id".to_string());
+            continue;
+        }
+
+        let trigger_id = trigger.id.trim();
+        let normalized = trigger_id.to_ascii_lowercase();
+        if let Some(existing) = trigger_ids.insert(normalized.clone(), 1) {
+            let _ = existing;
+            errors.push(format!("duplicate trigger id '{}'", trigger_id));
+        }
+
+        if trigger.workflow_ref.is_none() {
+            errors.push(format!("triggers['{}'] must define workflow_ref", trigger_id));
+        }
+        if let Some(workflow_ref) = trigger.workflow_ref.as_deref() {
+            if workflow_ref.trim().is_empty() {
+                errors.push(format!("triggers['{}'].workflow_ref must not be empty", trigger_id));
+            } else if !config.workflows.iter().any(|workflow| workflow.id.eq_ignore_ascii_case(workflow_ref)) {
+                errors.push(format!("triggers['{}'].workflow_ref '{}' does not exist", trigger_id, workflow_ref));
+            }
+        }
+
+        if trigger.trigger_type == crate::workflow_config::TriggerType::FileWatcher {
+            let fw_config = crate::workflow_config::FileWatcherTriggerConfig::from_value(&trigger.config);
+            if fw_config.paths.is_empty() {
+                errors.push(format!(
+                    "triggers['{}'].config.paths must not be empty for file_watcher triggers",
+                    trigger_id
+                ));
+            }
+        }
+    }
+
     if let Some(daemon) = &config.daemon {
         if daemon.interval_secs == Some(0) {
             errors.push("daemon.interval_secs must be greater than zero when set".to_string());

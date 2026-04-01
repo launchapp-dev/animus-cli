@@ -38,6 +38,9 @@ where
     let headroom = schedule_headroom(args.pool_size, mode.active_process_count);
     if context.initial_preparation.schedule_plan.should_process_due_schedules {
         hooks.process_due_schedules(root, tick_time.schedule_at(), headroom);
+        // Process file-watcher triggers after schedules. Reuse the same headroom
+        // pool; the trigger hook enforces its own capacity limit.
+        hooks.process_due_triggers(root, tick_time.schedule_at(), headroom);
     }
 
     let snapshot = hooks.capture_snapshot(root).await?;

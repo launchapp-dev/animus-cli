@@ -192,6 +192,8 @@ pub(super) struct YamlWorkflowFile {
     pub(super) integrations: Option<IntegrationsConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) schedules: Vec<WorkflowSchedule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) triggers: Vec<WorkflowTrigger>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) daemon: Option<DaemonConfig>,
 }

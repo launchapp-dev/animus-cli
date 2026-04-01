@@ -19,6 +19,7 @@ mod shared_types;
 mod skill_types;
 mod sync_types;
 mod task_types;
+mod trigger_types;
 mod web_types;
 mod workflow_types;
 
@@ -43,6 +44,7 @@ pub(crate) use shared_types::*;
 pub(crate) use skill_types::*;
 pub(crate) use sync_types::*;
 pub(crate) use task_types::*;
+pub(crate) use trigger_types::*;
 pub(crate) use web_types::*;
 pub(crate) use workflow_types::*;
 
