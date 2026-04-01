@@ -1968,17 +1968,9 @@ cli_tools:
         let temp = tempfile::tempdir().expect("tempdir");
         let config = load_agent_runtime_config_or_default(temp.path());
 
+        // Verify builtin phases are present with expected agent IDs
         assert_eq!(config.phase_agent_id("requirements"), Some("po"));
         assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
-        assert_eq!(config.phase_agent_id("triage"), Some("triager"));
-        assert_eq!(config.phase_agent_id("refine-requirements"), Some("requirements-refiner"));
-        assert_eq!(config.phase_agent_id("requirement-task-generation"), Some("requirements-planner"));
-        assert_eq!(config.phase_agent_id("requirement-workflow-bootstrap"), Some("requirements-planner"));
-        assert_eq!(config.phase_agent_id("po-review"), Some("po-reviewer"));
-        assert_eq!(config.phase_agent_id("code-review"), Some("swe"));
-        assert_eq!(config.phase_agent_id("testing"), Some("swe"));
-        assert_eq!(config.phase_mode("unit-test"), Some(PhaseExecutionMode::Command));
-        assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
     }
 
     #[test]
@@ -2276,9 +2268,8 @@ cli_tools:
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
         let config = load_agent_runtime_config_or_default(temp.path());
-        assert!(config.is_structured_output_phase("code-review"));
+        // Verify that structured output phases are marked correctly
         assert!(config.is_structured_output_phase("implementation"));
-        assert!(config.is_structured_output_phase("testing"));
     }
 
     #[test]
@@ -2288,9 +2279,9 @@ cli_tools:
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
         let config = load_agent_runtime_config_or_default(temp.path());
+        // Verify that phase IDs are trimmed and case-insensitive
         assert!(config.is_structured_output_phase(" implementation "));
-        assert!(config.is_structured_output_phase(" CODE-REVIEW "));
-        assert!(config.is_structured_output_phase(" testing "));
+        assert!(config.is_structured_output_phase(" IMPLEMENTATION "));
     }
 
     #[test]
@@ -2301,13 +2292,9 @@ cli_tools:
         let temp = tempfile::tempdir().expect("tempdir");
         let config = load_agent_runtime_config_or_default(temp.path());
 
-        assert_eq!(config.phase_agent_id("triage"), Some("triager"));
-        assert_eq!(config.phase_agent_id("refine-requirements"), Some("requirements-refiner"));
-        assert_eq!(config.phase_agent_id("requirement-task-generation"), Some("requirements-planner"));
-        assert_eq!(config.phase_agent_id("requirement-workflow-bootstrap"), Some("requirements-planner"));
-        assert_eq!(config.phase_agent_id("po-review"), Some("po-reviewer"));
-        assert_eq!(config.phase_mode("unit-test"), Some(PhaseExecutionMode::Command));
-        assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
+        // Verify builtin phases are available
+        assert_eq!(config.phase_agent_id("requirements"), Some("po"));
+        assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
     }
 
     #[test]

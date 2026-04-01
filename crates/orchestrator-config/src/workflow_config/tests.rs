@@ -259,7 +259,7 @@ fn resolve_workflow_skip_guards_extracts_guards_from_config() {
         "implementation".to_string().into(),
     ];
 
-    let guards = resolve_workflow_skip_guards(&config, Some("standard"));
+    let guards = resolve_workflow_skip_guards(&config, Some("standard-workflow"));
     assert_eq!(guards.len(), 1);
     assert_eq!(guards.get("testing").unwrap(), &vec!["task_type == 'docs'".to_string()]);
 }
