@@ -279,19 +279,20 @@ mod tests {
             .await
             .expect("task should be created");
 
-        let mut workflow = primary_hub
+        let workflow = primary_hub
             .workflows()
             .run(orchestrator_core::WorkflowRunInput::for_task(task.id.clone(), None))
             .await
             .expect("workflow should run");
-        for _ in 0..12 {
-            if workflow.status == orchestrator_core::WorkflowStatus::Completed {
-                break;
-            }
-            workflow =
-                primary_hub.workflows().complete_current_phase(&workflow.id).await.expect("phase should complete");
-        }
-        assert_eq!(workflow.status, orchestrator_core::WorkflowStatus::Completed);
+        // Cancel the workflow so all task workflows are terminal with no success.
+        // The stale-in-progress reconciler only auto-transitions tasks to Blocked
+        // when every workflow failed/cancelled (it never auto-completes tasks).
+        let workflow = primary_hub
+            .workflows()
+            .cancel(&workflow.id)
+            .await
+            .expect("workflow should cancel");
+        assert_eq!(workflow.status, orchestrator_core::WorkflowStatus::Cancelled);
 
         primary_hub
             .tasks()
@@ -340,7 +341,7 @@ mod tests {
             })
             .expect("task-state-change event should be emitted");
         assert_eq!(transition_event.data.get("from_status").and_then(serde_json::Value::as_str), Some("in-progress"));
-        assert_eq!(transition_event.data.get("to_status").and_then(serde_json::Value::as_str), Some("done"));
+        assert_eq!(transition_event.data.get("to_status").and_then(serde_json::Value::as_str), Some("blocked"));
         assert!(transition_event
             .data
             .get("changed_at")
