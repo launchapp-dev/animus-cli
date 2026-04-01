@@ -329,11 +329,16 @@ impl Default for WorkflowCheckpointRetentionConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct McpServerDefinition {
+    #[serde(default)]
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Transport type: "stdio" (default) or "http".
     #[serde(default)]
     pub transport: Option<String>,
+    /// HTTP endpoint URL. Required when transport is "http".
+    #[serde(default)]
+    pub url: Option<String>,
     #[serde(default)]
     pub config: BTreeMap<String, Value>,
     #[serde(default)]
@@ -420,6 +425,100 @@ pub(crate) fn default_schedule_enabled() -> bool {
     true
 }
 
+/// Type of event trigger.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TriggerType {
+    /// Watch local filesystem paths for changes and fire on modification.
+    FileWatcher,
+    /// Inbound HTTP webhook (generic).
+    Webhook,
+    /// GitHub webhook with event filtering.
+    GithubWebhook,
+}
+
+fn default_trigger_enabled() -> bool {
+    true
+}
+
+/// An event-driven trigger that enqueues a workflow when an external event fires.
+///
+/// Triggers live in workflow YAML alongside `schedules:` and are processed each
+/// daemon tick after the cron schedule block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowTrigger {
+    /// Unique identifier for this trigger within the project.
+    pub id: String,
+    /// The kind of event source.
+    #[serde(rename = "type")]
+    pub trigger_type: TriggerType,
+    /// Workflow to enqueue when the trigger fires.
+    #[serde(default)]
+    pub workflow_ref: Option<String>,
+    /// Whether this trigger is active.
+    #[serde(default = "default_trigger_enabled")]
+    pub enabled: bool,
+    /// Type-specific configuration (paths, debounce, etc.).
+    #[serde(default)]
+    pub config: Value,
+    /// Optional static input forwarded to the spawned workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input: Option<Value>,
+}
+
+/// Parsed configuration for a `file_watcher` trigger.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FileWatcherTriggerConfig {
+    /// Glob patterns (relative to project root) to watch.
+    #[serde(default)]
+    pub paths: Vec<String>,
+    /// Debounce window in seconds before re-dispatching. Defaults to 5.
+    #[serde(default = "default_debounce_secs")]
+    pub debounce_secs: u64,
+    /// Glob patterns to ignore (relative to project root).
+    #[serde(default)]
+    pub ignore: Vec<String>,
+}
+
+pub(crate) fn default_debounce_secs() -> u64 {
+    5
+}
+
+impl FileWatcherTriggerConfig {
+    pub fn from_value(value: &Value) -> Self {
+        serde_json::from_value(value.clone()).unwrap_or_default()
+    }
+}
+
+fn default_max_triggers_per_minute() -> u32 {
+    10
+}
+
+/// Parsed configuration for a `webhook` (or `github_webhook`) trigger.
+///
+/// The daemon HTTP server registers a `POST /triggers/{id}` route for each
+/// enabled webhook trigger.  Requests are validated against an optional
+/// HMAC-SHA256 signature and rate-limited to `max_triggers_per_minute`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebhookTriggerConfig {
+    /// Environment variable whose value is used as the HMAC-SHA256 signing
+    /// secret.  When set, the handler validates the `X-AO-Signature` request
+    /// header (`sha256=<hex>`).  When absent, signature verification is
+    /// skipped.
+    #[serde(default)]
+    pub secret_env: Option<String>,
+    /// Maximum dispatches allowed in any rolling 60-second window.
+    /// Requests exceeding this limit receive HTTP 429.  Default: 10.
+    #[serde(default = "default_max_triggers_per_minute")]
+    pub max_triggers_per_minute: u32,
+}
+
+impl WebhookTriggerConfig {
+    pub fn from_value(value: &Value) -> Self {
+        serde_json::from_value(value.clone()).unwrap_or_default()
+    }
+}
+
 pub(crate) fn default_target_branch() -> String {
     "main".to_string()
 }
@@ -503,6 +602,8 @@ pub struct WorkflowConfig {
     pub integrations: Option<IntegrationsConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub schedules: Vec<WorkflowSchedule>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub triggers: Vec<WorkflowTrigger>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon: Option<DaemonConfig>,
 }

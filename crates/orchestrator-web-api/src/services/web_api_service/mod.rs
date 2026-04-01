@@ -9,6 +9,7 @@ mod reviews_handlers;
 mod skills_handlers;
 mod system_handlers;
 mod tasks_handlers;
+mod triggers_handlers;
 mod vision_handlers;
 mod workflows_handlers;
 

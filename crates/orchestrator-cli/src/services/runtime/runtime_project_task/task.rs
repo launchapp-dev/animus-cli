@@ -11,7 +11,6 @@ use orchestrator_core::{
     TaskStatus, TaskType, TaskUpdateInput, DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT,
 };
 use serde::Serialize;
-use tracing::warn;
 
 use crate::services::runtime::StaleInProgressSummary;
 use crate::{
@@ -165,7 +164,7 @@ pub(crate) async fn handle_task(
                 })
             })?;
             if should_warn_missing_linked_requirements(&input) {
-                warn!("{UNLINKED_REQUIREMENTS_WARNING}");
+                eprintln!("{UNLINKED_REQUIREMENTS_WARNING}");
             }
             print_value(tasks.create(input).await?, json)
         }
@@ -569,6 +568,8 @@ fn load_stale_in_progress_summary(
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
     use orchestrator_core::{Assignee, InMemoryServiceHub, Priority, TaskStatus};
     use tempfile::TempDir;
@@ -641,7 +642,7 @@ mod tests {
 
     #[test]
     fn infer_human_assignee_prefers_ao_assignee_user_id() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", Some("assignee-user"));
         let _ao_user = EnvVarGuard::set("AO_USER_ID", Some("ao-user"));
         let _user = EnvVarGuard::set("USER", Some("shell-user"));
@@ -655,7 +656,7 @@ mod tests {
 
     #[test]
     fn infer_human_assignee_prefers_git_identity_before_shell_user() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", None);
         let _ao_user = EnvVarGuard::set("AO_USER_ID", None);
         let _user = EnvVarGuard::set("USER", Some("shell-user"));
@@ -671,7 +672,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_task_status_in_progress_assigns_human_when_identity_is_available() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", Some("operator@example.com"));
         let _ao_user = EnvVarGuard::set("AO_USER_ID", None);
 
@@ -707,7 +708,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_task_status_in_progress_keeps_unassigned_when_identity_is_unavailable() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", None);
         let _ao_user = EnvVarGuard::set("AO_USER_ID", None);
         let _user = EnvVarGuard::set("USER", None);
@@ -745,7 +746,7 @@ mod tests {
 
     #[tokio::test]
     async fn set_task_status_non_in_progress_does_not_assign_human() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _ao_assignee = EnvVarGuard::set("AO_ASSIGNEE_USER_ID", Some("operator@example.com"));
 
         let hub = Arc::new(InMemoryServiceHub::new());

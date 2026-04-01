@@ -544,7 +544,7 @@ pub(super) fn replace_task_in_state(
 
 pub(super) fn delete_task_in_state(state: &mut super::state_store::CoreState, id: &str) -> Result<()> {
     state.tasks.remove(id).ok_or_else(|| not_found(format!("task not found: {id}")))?;
-    state.all_tasks_dirty = true;
+    state.dirty_tasks.insert(id.to_string());
     Ok(())
 }
 

@@ -88,7 +88,7 @@ mod tests {
 
     #[test]
     fn read_daemon_event_records_returns_ordered_tail_and_skips_invalid_lines() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let config_root = TempDir::new().expect("config temp dir");
         let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
@@ -119,7 +119,7 @@ mod tests {
 
     #[test]
     fn read_daemon_event_records_filters_by_project_root() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let config_root = TempDir::new().expect("config temp dir");
         let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn poll_daemon_events_returns_metadata_and_count() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let config_root = TempDir::new().expect("config temp dir");
         let _config_guard = EnvVarGuard::set("AO_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
         let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);

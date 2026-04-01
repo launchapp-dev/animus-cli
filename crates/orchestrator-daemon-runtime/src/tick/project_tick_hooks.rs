@@ -14,6 +14,12 @@ pub trait ProjectTickHooks {
     /// `Some(0)` the implementation must skip all dispatches.
     fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>, schedule_headroom: Option<usize>);
 
+    /// Process pending file-watcher trigger events, dispatching up to
+    /// `trigger_headroom` additional workflow-runner processes.  When
+    /// `trigger_headroom` is `Some(0)` the implementation must skip all
+    /// dispatches.  Default implementation is a no-op.
+    fn process_due_triggers(&mut self, _root: &str, _now: DateTime<Utc>, _trigger_headroom: Option<usize>) {}
+
     /// Return the current number of active workflow-runner child processes.
     /// Used to recompute headroom after schedule dispatches.
     fn active_process_count(&mut self) -> usize {

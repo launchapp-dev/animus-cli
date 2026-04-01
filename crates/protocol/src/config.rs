@@ -5,37 +5,22 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum ProjectMcpServerTransport {
-    Stdio {
-        command: String,
-        #[serde(default)]
-        args: Vec<String>,
-        #[serde(default)]
-        env: BTreeMap<String, String>,
-    },
-    StreamableHttp {
-        url: String,
-        #[serde(default)]
-        auth_token: Option<String>,
-    },
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProjectMcpServerEntry {
-    #[serde(flatten)]
-    pub transport: ProjectMcpServerTransport,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub env: BTreeMap<String, String>,
     #[serde(default)]
     pub assign_to: Vec<String>,
-}
-
-impl ProjectMcpServerEntry {
-    pub fn is_assigned_to(&self, agent_id: Option<&str>) -> bool {
-        self.assign_to.is_empty()
-            || agent_id
-                .is_some_and(|id| self.assign_to.iter().any(|assigned| assigned.eq_ignore_ascii_case(id)))
-    }
+    /// Transport type: "stdio" (default) or "http".
+    #[serde(default)]
+    pub transport: Option<String>,
+    /// HTTP endpoint URL. Required when transport is "http".
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -242,13 +227,9 @@ mod tests {
         let config: Config = serde_json::from_str(json).unwrap();
         assert_eq!(config.mcp_servers.len(), 1);
         let entry = &config.mcp_servers["my-db"];
-        assert!(matches!(
-            entry.transport,
-            ProjectMcpServerTransport::Stdio { ref command, ref args, ref env }
-                if command == "/usr/local/bin/db-mcp"
-                    && args == &vec!["--port".to_string(), "5432".to_string()]
-                    && env.get("DB_HOST").map(String::as_str) == Some("localhost")
-        ));
+        assert_eq!(entry.command, "/usr/local/bin/db-mcp");
+        assert_eq!(entry.args, vec!["--port", "5432"]);
+        assert_eq!(entry.env.get("DB_HOST").map(String::as_str), Some("localhost"));
         assert_eq!(entry.assign_to, vec!["swe"]);
         assert_eq!(
             config.claude_profiles["work"].env.get("CLAUDE_CONFIG_DIR").map(String::as_str),
@@ -259,50 +240,6 @@ mod tests {
         let roundtripped: Config = serde_json::from_str(&serialized).unwrap();
         assert_eq!(roundtripped.mcp_servers.len(), 1);
         assert_eq!(roundtripped.claude_profiles.len(), 1);
-    }
-
-    #[test]
-    fn config_with_remote_mcp_server_roundtrips() {
-        let json = r#"{
-            "agent_runner_token": null,
-            "mcp_servers": {
-                "docs": {
-                    "url": "https://docs.example/mcp",
-                    "auth_token": "Bearer docs",
-                    "assign_to": ["researcher"]
-                }
-            }
-        }"#;
-        let config: Config = serde_json::from_str(json).unwrap();
-        let entry = &config.mcp_servers["docs"];
-        assert!(matches!(
-            entry.transport,
-            ProjectMcpServerTransport::StreamableHttp { ref url, ref auth_token }
-                if url == "https://docs.example/mcp" && auth_token.as_deref() == Some("Bearer docs")
-        ));
-        assert_eq!(entry.assign_to, vec!["researcher"]);
-
-        let serialized = serde_json::to_string(&config).unwrap();
-        let roundtripped: Config = serde_json::from_str(&serialized).unwrap();
-        assert!(matches!(
-            roundtripped.mcp_servers["docs"].transport,
-            ProjectMcpServerTransport::StreamableHttp { ref url, ref auth_token }
-                if url == "https://docs.example/mcp" && auth_token.as_deref() == Some("Bearer docs")
-        ));
-    }
-
-    #[test]
-    fn project_mcp_server_assignment_matching_is_case_insensitive() {
-        let entry = ProjectMcpServerEntry {
-            transport: ProjectMcpServerTransport::StreamableHttp {
-                url: "https://docs.example/mcp".to_string(),
-                auth_token: None,
-            },
-            assign_to: vec!["SWE".to_string()],
-        };
-
-        assert!(entry.is_assigned_to(Some("swe")));
-        assert!(!entry.is_assigned_to(Some("research")));
     }
 
     #[test]

@@ -11,7 +11,7 @@ use serde_json::Value;
 use crate::{
     CompletedProcess, DaemonRuntimeOptions, DispatchNotice, DispatchWorkflowStart, DispatchWorkflowStartSummary,
     ProcessManager, ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput,
-    ScheduleDispatch, TaskStateChangeEvent, TickSummaryBuilder,
+    ScheduleDispatch, TaskStateChangeEvent, TickSummaryBuilder, TriggerDispatch,
 };
 
 #[async_trait::async_trait(?Send)]
@@ -203,6 +203,30 @@ where
         for outcome in outcomes {
             self.services.record_schedule_dispatch_attempt(root, &outcome.schedule_id, now, &outcome.status);
         }
+    }
+
+    fn process_due_triggers(&mut self, root: &str, now: DateTime<Utc>, trigger_headroom: Option<usize>) {
+        if trigger_headroom == Some(0) {
+            return;
+        }
+
+        let mut dispatched: usize = 0;
+        let capacity = trigger_headroom;
+
+        let _outcomes = TriggerDispatch::process_due_triggers(root, now, |_trigger_id, dispatch| {
+            if let Some(remaining) = capacity {
+                if dispatched >= remaining {
+                    return Err(anyhow::anyhow!("trigger dispatch skipped: pool at capacity"));
+                }
+            }
+            match self.process_manager.spawn_workflow_runner(dispatch, root) {
+                Ok(()) => {
+                    dispatched += 1;
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        });
     }
 
     fn active_process_count(&mut self) -> usize {

@@ -705,6 +705,7 @@ fn empty_workflow_overlay_base() -> WorkflowConfig {
         tools: BTreeMap::new(),
         integrations: None,
         schedules: Vec::new(),
+        triggers: Vec::new(),
         daemon: None,
     }
 }

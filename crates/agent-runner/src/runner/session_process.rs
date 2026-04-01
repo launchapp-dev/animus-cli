@@ -508,13 +508,15 @@ mod tests {
     #[cfg(unix)]
     async fn spawn_session_process_bridges_claude_events() {
         let run_id = RunId("run-claude".to_string());
+        let claude_fixture =
+            concat!(env!("CARGO_MANIFEST_DIR"), "/../llm-cli-wrapper/tests/fixtures/claude_real.jsonl");
         let runtime_contract = json!({
             "cli": {
                 "name": "claude",
                 "capabilities": { "supports_mcp": true },
                 "launch": {
                     "command": "sh",
-                    "args": ["-c", "cat /Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/claude_real.jsonl"],
+                    "args": ["-c", format!("cat {claude_fixture}")],
                     "prompt_via_stdin": false
                 }
             }
@@ -562,10 +564,12 @@ mod tests {
         fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let args_capture = temp_dir.join("claude.args");
         let env_capture = temp_dir.join("claude.env");
-        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/claude_real.jsonl";
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/../llm-cli-wrapper/tests/fixtures/claude_real.jsonl");
         write_capture_cli_shim(&temp_dir, "claude", fixture).expect("claude shim should exist");
 
         let run_id = RunId("run-claude-mcp".to_string());
+        let ao_binary = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/debug/ao");
+        let workspace_root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
         let runtime_contract = json!({
             "cli": {
                 "name": "claude",
@@ -587,8 +591,8 @@ mod tests {
             },
             "mcp": {
                 "stdio": {
-                    "command": "/Users/samishukri/ao-cli/target/debug/ao",
-                    "args": ["--project-root", "/Users/samishukri/ao-cli", "mcp", "serve"]
+                    "command": ao_binary,
+                    "args": ["--project-root", workspace_root, "mcp", "serve"]
                 },
                 "agent_id": "ao",
                 "enforce_only": true,
@@ -641,15 +645,12 @@ mod tests {
         let parsed: serde_json::Value =
             serde_json::from_str(args.get(mcp_idx + 1).expect("claude mcp config payload should exist"))
                 .expect("claude mcp config should parse");
-        assert_eq!(
-            parsed.pointer("/mcpServers/ao/command").and_then(serde_json::Value::as_str),
-            Some("/Users/samishukri/ao-cli/target/debug/ao")
-        );
+        assert_eq!(parsed.pointer("/mcpServers/ao/command").and_then(serde_json::Value::as_str), Some(ao_binary));
         assert_eq!(
             parsed.pointer("/mcpServers/ao/args").and_then(serde_json::Value::as_array).cloned(),
             Some(vec![
                 serde_json::Value::String("--project-root".to_string()),
-                serde_json::Value::String("/Users/samishukri/ao-cli".to_string()),
+                serde_json::Value::String(workspace_root.to_string()),
                 serde_json::Value::String("mcp".to_string()),
                 serde_json::Value::String("serve".to_string()),
             ])
@@ -660,11 +661,21 @@ mod tests {
     #[cfg(unix)]
     async fn spawn_session_process_bridges_codex_gemini_and_oai_runner_events() {
         for (tool, fixture, expect_metadata, expect_thinking) in [
-            ("codex", "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/codex_real.jsonl", true, true),
-            ("gemini", "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl", true, false),
+            (
+                "codex",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../llm-cli-wrapper/tests/fixtures/codex_real.jsonl"),
+                true,
+                true,
+            ),
+            (
+                "gemini",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../llm-cli-wrapper/tests/fixtures/gemini_real.jsonl"),
+                true,
+                false,
+            ),
             (
                 "oai-runner",
-                "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/oai_runner_real.jsonl",
+                concat!(env!("CARGO_MANIFEST_DIR"), "/../llm-cli-wrapper/tests/fixtures/oai_runner_real.jsonl"),
                 false,
                 false,
             ),
@@ -775,10 +786,12 @@ mod tests {
         fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let args_capture = temp_dir.join("gemini.args");
         let env_capture = temp_dir.join("gemini.env");
-        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl";
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/../llm-cli-wrapper/tests/fixtures/gemini_real.jsonl");
         write_capture_cli_shim(&temp_dir, "gemini", fixture).expect("gemini shim should exist");
 
         let run_id = RunId("run-gemini-mcp".to_string());
+        let ao_binary = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/debug/ao");
+        let workspace_root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
         let runtime_contract = json!({
             "cli": {
                 "name": "gemini",
@@ -794,8 +807,8 @@ mod tests {
             },
             "mcp": {
                 "stdio": {
-                    "command": "/Users/samishukri/ao-cli/target/debug/ao",
-                    "args": ["mcp", "serve", "--project-root", "/Users/samishukri/ao-cli"]
+                    "command": ao_binary,
+                    "args": ["mcp", "serve", "--project-root", workspace_root]
                 },
                 "agent_id": "ao",
                 "enforce_only": true
@@ -859,10 +872,12 @@ mod tests {
         fs::create_dir_all(&temp_dir).expect("temp dir should be created");
         let args_capture = temp_dir.join("oai-runner.args");
         let env_capture = temp_dir.join("oai-runner.env");
-        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/oai_runner_real.jsonl";
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/../llm-cli-wrapper/tests/fixtures/oai_runner_real.jsonl");
         write_capture_cli_shim(&temp_dir, "ao-oai-runner", fixture).expect("oai-runner shim should exist");
 
         let run_id = RunId("run-oai-runner-mcp".to_string());
+        let ao_binary = concat!(env!("CARGO_MANIFEST_DIR"), "/../../target/debug/ao");
+        let workspace_root = concat!(env!("CARGO_MANIFEST_DIR"), "/../..");
         let runtime_contract = json!({
             "cli": {
                 "name": "ao-oai-runner",
@@ -875,8 +890,8 @@ mod tests {
             },
             "mcp": {
                 "stdio": {
-                    "command": "/Users/samishukri/ao-cli/target/debug/ao",
-                    "args": ["mcp", "serve", "--project-root", "/Users/samishukri/ao-cli"]
+                    "command": ao_binary,
+                    "args": ["mcp", "serve", "--project-root", workspace_root]
                 },
                 "agent_id": "ao",
                 "enforce_only": true
@@ -928,7 +943,7 @@ mod tests {
     #[cfg(unix)]
     async fn spawn_session_process_resume_session_id_routes_to_backend_resume() {
         let run_id = RunId("run-resume-codex".to_string());
-        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/codex_real.jsonl";
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/../llm-cli-wrapper/tests/fixtures/codex_real.jsonl");
         let runtime_contract = json!({
             "cli": {
                 "name": "codex",

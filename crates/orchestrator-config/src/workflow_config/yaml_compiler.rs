@@ -134,6 +134,17 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         }
     }
 
+    let mut triggers = base.triggers;
+    for overlay_trigger in yaml.triggers {
+        if let Some(pos) =
+            triggers.iter().position(|trigger| trigger.id.eq_ignore_ascii_case(overlay_trigger.id.as_str()))
+        {
+            triggers[pos] = overlay_trigger;
+        } else {
+            triggers.push(overlay_trigger);
+        }
+    }
+
     let integrations = match (base.integrations, yaml.integrations) {
         (None, None) => None,
         (Some(mut base), Some(overlay)) => {
@@ -171,6 +182,7 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         tools,
         integrations,
         schedules,
+        triggers,
         daemon: yaml.daemon.or(base.daemon),
     }
 }

@@ -27,10 +27,10 @@ fn builtin_workflow_config_includes_planning_workflow_refs() {
     let config = builtin_workflow_config();
     let workflow_ids = config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
 
-    assert_eq!(config.default_workflow_ref, "standard");
+    assert_eq!(config.default_workflow_ref, "standard-workflow");
     assert!(workflow_ids.contains(&"ao.vision/draft"));
     assert!(workflow_ids.contains(&"ao.vision/refine"));
-    assert!(workflow_ids.contains(&"standard"));
+    assert!(workflow_ids.contains(&"standard-workflow"));
     assert!(workflow_ids.contains(&"ui-ux-standard"));
     assert!(workflow_ids.contains(&"builtin/vision-draft"));
     assert!(workflow_ids.contains(&"builtin/vision-refine"));
@@ -1757,6 +1757,7 @@ fn validate_rejects_invalid_unified_sections() {
             command: "".to_string(),
             args: vec!["".to_string()],
             transport: Some(" ".to_string()),
+            url: None,
             config: BTreeMap::new(),
             tools: vec!["".to_string()],
             env: BTreeMap::from([("".to_string(), "value".to_string())]),

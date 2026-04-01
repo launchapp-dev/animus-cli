@@ -13,6 +13,7 @@ async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 croner = { workspace = true }
 fs2 = "0.4"
+glob = "0.3"
 orchestrator-core = { workspace = true }
 orchestrator-logging = { workspace = true }
 protocol = { workspace = true }

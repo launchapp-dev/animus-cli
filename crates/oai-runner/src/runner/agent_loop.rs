@@ -89,11 +89,9 @@ fn load_session_messages_from(base: &Path, session_id: &str) -> Vec<ChatMessage>
         let trim_start = keep_from_start;
         let mut trim_end = messages.len().saturating_sub(keep_count);
 
-        if trim_end > trim_start && trim_end < messages.len() {
-            if messages[trim_end].role == "tool" {
-                while trim_end < messages.len() && messages[trim_end].role == "tool" {
-                    trim_end += 1;
-                }
+        if trim_end > trim_start && trim_end < messages.len() && messages[trim_end].role == "tool" {
+            while trim_end < messages.len() && messages[trim_end].role == "tool" {
+                trim_end += 1;
             }
         }
 
@@ -725,7 +723,7 @@ pub async fn run_agent_loop(
                 let query_lower = query.to_lowercase();
                 let mut matches = Vec::new();
 
-                for msg in messages.iter() {
+                for msg in &messages {
                     if let Some(content) = &msg.content {
                         for (line_num, line) in content.lines().enumerate() {
                             if line.to_lowercase().contains(&query_lower) {

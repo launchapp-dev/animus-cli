@@ -146,7 +146,7 @@ mod tests {
     #[cfg(unix)]
     async fn gemini_backend_emits_metadata_and_final_text_from_fixture() {
         let backend = GeminiSessionBackend::new();
-        let fixture = "/Users/samishukri/ao-cli/crates/llm-cli-wrapper/tests/fixtures/gemini_real.jsonl";
+        let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/gemini_real.jsonl");
         let request = SessionRequest {
             tool: "sh".to_string(),
             model: String::new(),

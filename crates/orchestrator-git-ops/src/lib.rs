@@ -27,6 +27,8 @@ pub use git_worktree::*;
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
     use orchestrator_core::InMemoryServiceHub;
     use std::sync::{Mutex, OnceLock};

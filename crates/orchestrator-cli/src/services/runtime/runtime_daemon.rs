@@ -676,7 +676,7 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
                 use std::io::{BufRead, Seek, SeekFrom};
                 let mut reader = std::io::BufReader::new(file);
                 let _ = reader.seek(SeekFrom::Start(last_pos));
-                for line in reader.lines().flatten() {
+                for line in reader.lines().map_while(Result::ok) {
                     if let Ok(entry) = serde_json::from_str::<orchestrator_logging::LogEntry>(&line) {
                         if stream_entry_matches(&entry, &args, level) {
                             print_entry(&entry);

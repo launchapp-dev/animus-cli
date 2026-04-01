@@ -244,7 +244,7 @@ mod tests {
 
     #[test]
     fn runner_config_dir_defaults_to_project_scope() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _config = EnvVarGuard::set("AO_CONFIG_DIR", None);
         let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", None);
         let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn runner_config_dir_shortens_long_unix_socket_paths() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let long_root = Path::new("/tmp").join("a".repeat(120));
         let _config = EnvVarGuard::set("AO_CONFIG_DIR", None);
         let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", None);
@@ -276,7 +276,7 @@ mod tests {
 
     #[test]
     fn build_agent_context_accepts_managed_worktree_cwd() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _config = EnvVarGuard::set("AO_CONFIG_DIR", None);
         let _runner_config = EnvVarGuard::set("AO_RUNNER_CONFIG_DIR", None);
         let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
@@ -345,7 +345,7 @@ mod tests {
 
     #[test]
     fn run_dir_stays_repo_scoped_when_runner_scope_is_global() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _scope = EnvVarGuard::set("AO_RUNNER_SCOPE", Some("global"));
         let project_root = "/tmp/project-root";
         let run_id = RunId("run-1234".to_string());
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn collect_json_payload_lines_parses_mixed_output() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let input = "plain text\n{\"key\":\"value\"}\nmore text\n[1,2,3]\n42\n";
         let rows = collect_json_payload_lines(input);
         assert_eq!(rows.len(), 2);
@@ -364,7 +364,7 @@ mod tests {
 
     #[test]
     fn claude_bypass_permissions_is_disabled_by_default() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
         let contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
@@ -381,7 +381,7 @@ mod tests {
 
     #[test]
     fn claude_bypass_permissions_respects_disable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
         let contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn claude_bypass_permissions_treats_empty_value_as_disabled() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some(""));
         let contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn inject_claude_permission_mode_override_is_disabled_by_default() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
         let contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn inject_claude_permission_mode_override_respects_enable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("true"));
         let mut contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn inject_claude_permission_mode_override_respects_disable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
         let mut contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
@@ -468,7 +468,7 @@ mod tests {
 
     #[test]
     fn inject_claude_permission_mode_override_treats_empty_toggle_as_disabled() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock should be available");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", Some(""));
         let mut contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn build_runtime_contract_with_resume_injects_claude_session_id() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _bypass = EnvVarGuard::set("AO_CLAUDE_BYPASS_PERMISSIONS", None);
         let plan = orchestrator_core::runtime_contract::CliSessionResumePlan {
             mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
@@ -518,7 +518,7 @@ mod tests {
 
     #[test]
     fn build_runtime_contract_with_resume_injects_gemini_resume_flag() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let plan = orchestrator_core::runtime_contract::CliSessionResumePlan {
             mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
             session_key: "wf:test-wf:research".to_string(),
@@ -542,7 +542,7 @@ mod tests {
 
     #[test]
     fn build_runtime_contract_with_resume_codex_uses_exec_resume_last() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let plan = orchestrator_core::runtime_contract::CliSessionResumePlan {
             mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
             session_key: "wf:test-wf:implementation".to_string(),
@@ -572,7 +572,7 @@ mod tests {
 
     #[test]
     fn build_runtime_contract_without_resume_has_no_session_metadata() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let contract =
             build_runtime_contract("claude", "claude-sonnet-4-6", "hello").expect("runtime contract should build");
         let session = contract.pointer("/cli/session");
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn authenticate_runner_stream_uses_scoped_config_dir_token() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let global_dir = TempDir::new().expect("global temp dir");
         let scoped_dir = TempDir::new().expect("scoped temp dir");
         write_config(global_dir.path(), Some("global-token"));
@@ -626,7 +626,7 @@ mod tests {
 
     #[test]
     fn authenticate_runner_stream_fails_when_scoped_token_missing() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let scoped_dir = TempDir::new().expect("scoped temp dir");
         write_config(scoped_dir.path(), None);
         let _token_override = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);

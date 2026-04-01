@@ -16,7 +16,7 @@ pub fn scoped_state_root(project_root: &Path) -> Option<PathBuf> {
     }
 
     if !scope_dir.exists() {
-        if let Err(_) = std::fs::create_dir_all(&scope_dir) {
+        if std::fs::create_dir_all(&scope_dir).is_err() {
             return Some(scope_dir);
         }
         persist_project_root_marker(&scope_dir, project_root);

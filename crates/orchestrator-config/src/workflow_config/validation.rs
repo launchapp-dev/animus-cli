@@ -453,17 +453,34 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
             errors.push("mcp_servers contains an empty server name".to_string());
             continue;
         }
-        if definition.command.trim().is_empty() {
-            errors.push(format!("mcp_servers['{}'].command must not be empty", name));
+        let transport = definition.transport.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        match transport {
+            Some("http") => {
+                if definition.url.as_deref().is_none_or(|u| u.trim().is_empty()) {
+                    errors.push(format!("mcp_servers['{}'].url is required when transport is \"http\"", name));
+                }
+            }
+            Some(other) if other != "stdio" => {
+                errors.push(format!(
+                    "mcp_servers['{}'].transport must be \"stdio\" or \"http\", got \"{}\"",
+                    name, other
+                ));
+            }
+            _ => {
+                // stdio (explicit or default): command is required
+                if definition.command.trim().is_empty() {
+                    errors.push(format!("mcp_servers['{}'].command must not be empty", name));
+                }
+            }
+        }
+        if definition.transport.as_deref().is_some_and(|transport| transport.trim().is_empty()) {
+            errors.push(format!("mcp_servers['{}'].transport must not be empty when set", name));
         }
         if definition.args.iter().any(|arg| arg.trim().is_empty()) {
             errors.push(format!("mcp_servers['{}'].args must not contain empty values", name));
         }
         if definition.tools.iter().any(|tool| tool.trim().is_empty()) {
             errors.push(format!("mcp_servers['{}'].tools must not contain empty values", name));
-        }
-        if definition.transport.as_deref().is_some_and(|transport| transport.trim().is_empty()) {
-            errors.push(format!("mcp_servers['{}'].transport must not be empty when set", name));
         }
         if definition.env.iter().any(|(key, value)| key.trim().is_empty() || value.trim().is_empty()) {
             errors.push(format!("mcp_servers['{}'].env must not contain empty keys or values", name));
@@ -588,6 +605,53 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
             let shortcut = schedule.cron.trim().to_ascii_lowercase();
             if !is_supported_shortcut_cron(shortcut.as_str()) {
                 errors.push(format!("schedules['{}'].cron shortcut '{}' is not supported", schedule_id, schedule.cron));
+            }
+        }
+    }
+
+    let mut trigger_ids = BTreeMap::<String, usize>::new();
+    for trigger in &config.triggers {
+        if trigger.id.trim().is_empty() {
+            errors.push("triggers contains an empty trigger id".to_string());
+            continue;
+        }
+
+        let trigger_id = trigger.id.trim();
+        let normalized = trigger_id.to_ascii_lowercase();
+        if let Some(existing) = trigger_ids.insert(normalized.clone(), 1) {
+            let _ = existing;
+            errors.push(format!("duplicate trigger id '{}'", trigger_id));
+        }
+
+        if trigger.workflow_ref.is_none() {
+            errors.push(format!("triggers['{}'] must define workflow_ref", trigger_id));
+        }
+        if let Some(workflow_ref) = trigger.workflow_ref.as_deref() {
+            if workflow_ref.trim().is_empty() {
+                errors.push(format!("triggers['{}'].workflow_ref must not be empty", trigger_id));
+            } else if !config.workflows.iter().any(|workflow| workflow.id.eq_ignore_ascii_case(workflow_ref)) {
+                errors.push(format!("triggers['{}'].workflow_ref '{}' does not exist", trigger_id, workflow_ref));
+            }
+        }
+
+        match trigger.trigger_type {
+            crate::workflow_config::TriggerType::FileWatcher => {
+                let fw_config = crate::workflow_config::FileWatcherTriggerConfig::from_value(&trigger.config);
+                if fw_config.paths.is_empty() {
+                    errors.push(format!(
+                        "triggers['{}'].config.paths must not be empty for file_watcher triggers",
+                        trigger_id
+                    ));
+                }
+            }
+            crate::workflow_config::TriggerType::Webhook | crate::workflow_config::TriggerType::GithubWebhook => {
+                let wh_config = crate::workflow_config::WebhookTriggerConfig::from_value(&trigger.config);
+                if wh_config.max_triggers_per_minute == 0 {
+                    errors.push(format!(
+                        "triggers['{}'].config.max_triggers_per_minute must be greater than zero",
+                        trigger_id
+                    ));
+                }
             }
         }
     }

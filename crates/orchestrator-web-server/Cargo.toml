@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 anyhow = "1"
 async-stream = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
 async-graphql = { workspace = true }
 async-graphql-axum = { workspace = true }
 axum = { workspace = true, features = ["macros"] }
@@ -16,6 +17,7 @@ orchestrator-web-api = { path = "../orchestrator-web-api" }
 orchestrator-web-contracts = { path = "../orchestrator-web-contracts" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+hmac = "0.12"
 sha2 = "0.10"
 futures-core = "0.3"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "fs"] }

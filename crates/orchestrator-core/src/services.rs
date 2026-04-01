@@ -49,6 +49,7 @@ mod schedule_state;
 mod state_store;
 mod task_impl;
 mod task_shared;
+mod trigger_state;
 mod workflow_impl;
 
 pub use phase_execution::{PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor, PhaseVerdict};
@@ -62,6 +63,7 @@ use state_store::{
 };
 pub use task_shared::task_matches_filter;
 use task_shared::*;
+pub use trigger_state::{load_trigger_state, save_trigger_state, TriggerRunState, TriggerState, WebhookEvent};
 
 pub fn evaluate_task_priority_policy(
     tasks: &[OrchestratorTask],

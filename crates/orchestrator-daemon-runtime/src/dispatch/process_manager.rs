@@ -231,6 +231,8 @@ fn latest_runner_workflow_status(events: &[RunnerEvent]) -> Option<WorkflowStatu
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::await_holding_lock)]
+
     use super::*;
     use std::env;
     use std::fs;

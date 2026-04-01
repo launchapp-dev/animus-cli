@@ -46,7 +46,6 @@ fn native_mcp_policy_rejects_unknown_cli_when_enforced() {
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: None,
-        endpoint_auth_token: None,
         stdio: Some(McpStdioConfig {
             command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
             args: vec![
@@ -55,7 +54,6 @@ fn native_mcp_policy_rejects_unknown_cli_when_enforced() {
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
-            env: HashMap::new(),
         }),
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -84,7 +82,6 @@ fn native_mcp_policy_requires_transport_when_enforced() {
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: None,
-        endpoint_auth_token: None,
         stdio: None,
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -113,7 +110,6 @@ fn native_mcp_policy_adds_codex_mcp_server_override() {
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
-        endpoint_auth_token: None,
         stdio: None,
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -143,7 +139,6 @@ fn native_mcp_policy_configures_claude_permission_mode() {
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
-        endpoint_auth_token: None,
         stdio: None,
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -177,7 +172,6 @@ fn native_mcp_policy_preserves_primary_server_when_additional_server_name_collid
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: None,
-        endpoint_auth_token: None,
         stdio: Some(McpStdioConfig {
             command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
             args: vec![
@@ -186,7 +180,6 @@ fn native_mcp_policy_preserves_primary_server_when_additional_server_name_collid
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
-            env: HashMap::new(),
         }),
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -194,11 +187,10 @@ fn native_mcp_policy_preserves_primary_server_when_additional_server_name_collid
         tool_policy_deny: Vec::new(),
         additional_servers: vec![AdditionalMcpServer {
             name: "ao".to_string(),
-            transport: AdditionalMcpServerTransport::Stdio {
-                command: "ao".to_string(),
-                args: vec!["mcp".to_string(), "serve".to_string()],
-                env: HashMap::new(),
-            },
+            command: "ao".to_string(),
+            args: vec!["mcp".to_string(), "serve".to_string()],
+            env: HashMap::new(),
+            url: None,
         }],
     };
     let mut env = HashMap::new();
@@ -250,10 +242,7 @@ fn codex_native_lockdown_disables_non_target_servers() {
 
     apply_codex_native_mcp_lockdown(
         &mut args,
-        McpServerTransport::Http {
-            url: "http://127.0.0.1:3101/mcp/ao",
-            auth_token: None,
-        },
+        McpServerTransport::Http("http://127.0.0.1:3101/mcp/ao"),
         "ao",
         &configured_servers,
         &[],
@@ -279,7 +268,6 @@ fn codex_native_lockdown_sets_stdio_transport_when_configured() {
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
-            env: &HashMap::new(),
         },
         "ao",
         &[],
@@ -305,7 +293,6 @@ fn native_mcp_policy_sets_gemini_system_settings_path_for_stdio_transport() {
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: None,
-        endpoint_auth_token: None,
         stdio: Some(McpStdioConfig {
             command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
             args: vec![
@@ -314,7 +301,6 @@ fn native_mcp_policy_sets_gemini_system_settings_path_for_stdio_transport() {
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
-            env: HashMap::new(),
         }),
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -351,7 +337,6 @@ fn native_mcp_policy_sets_gemini_http_settings_without_schema_override() {
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
-        endpoint_auth_token: None,
         stdio: None,
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -391,7 +376,6 @@ fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: None,
-        endpoint_auth_token: None,
         stdio: Some(McpStdioConfig {
             command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
             args: vec![
@@ -400,7 +384,6 @@ fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
-            env: HashMap::new(),
         }),
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -444,7 +427,6 @@ fn native_mcp_policy_inserts_oai_runner_mcp_config_after_run_subcommand() {
     let enforcement = McpToolEnforcement {
         enabled: true,
         endpoint: None,
-        endpoint_auth_token: None,
         stdio: Some(McpStdioConfig {
             command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
             args: vec![
@@ -453,7 +435,6 @@ fn native_mcp_policy_inserts_oai_runner_mcp_config_after_run_subcommand() {
                 "--project-root".to_string(),
                 "/Users/samishukri/ao-cli".to_string(),
             ],
-            env: HashMap::new(),
         }),
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string()],
@@ -474,172 +455,10 @@ fn native_mcp_policy_inserts_oai_runner_mcp_config_after_run_subcommand() {
     assert_eq!(mcp_idx, 1, "mcp config should follow the run subcommand");
 }
 
-#[test]
-fn native_mcp_policy_inserts_oai_runner_remote_mcp_config_for_http_transport() {
-    let mut invocation = LaunchInvocation {
-        command: "ao-oai-runner".to_string(),
-        args: vec![
-            "run".to_string(),
-            "-m".to_string(),
-            "openrouter/minimax/minimax-m2.7".to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-            "hello".to_string(),
-        ],
-        env: Default::default(),
-        prompt_via_stdin: false,
-    };
-    let enforcement = McpToolEnforcement {
-        enabled: true,
-        endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
-        endpoint_auth_token: None,
-        stdio: None,
-        agent_id: "ao".to_string(),
-        allowed_prefixes: vec!["ao.".to_string()],
-        tool_policy_allow: Vec::new(),
-        tool_policy_deny: Vec::new(),
-        additional_servers: Vec::new(),
-    };
-    let mut env = HashMap::new();
-    let mut cleanup = TempPathCleanup::default();
-    let run_id = RunId("run-oai-runner-http".to_string());
-
-    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
-        .expect("oai-runner http policy should apply");
-
-    let mcp_idx =
-        invocation.args.iter().position(|arg| arg == "--mcp-config").expect("mcp config flag should be present");
-    assert_eq!(mcp_idx, 1, "mcp config should follow the run subcommand");
-
-    let config_json: serde_json::Value =
-        serde_json::from_str(&invocation.args[mcp_idx + 1]).expect("oai-runner mcp config should parse");
-    assert_eq!(
-        config_json
-            .get(0)
-            .and_then(|entry| entry.get("url"))
-            .and_then(serde_json::Value::as_str),
-        Some("http://127.0.0.1:3101/mcp/ao")
-    );
-}
-
-#[test]
-fn native_mcp_policy_preserves_oai_runner_http_auth_tokens() {
-    let mut invocation = LaunchInvocation {
-        command: "ao-oai-runner".to_string(),
-        args: vec!["run".to_string(), "-m".to_string(), "openrouter/minimax/minimax-m2.7".to_string()],
-        env: Default::default(),
-        prompt_via_stdin: false,
-    };
-    let enforcement = McpToolEnforcement {
-        enabled: true,
-        endpoint: Some("https://primary.example/mcp".to_string()),
-        endpoint_auth_token: Some("Bearer primary".to_string()),
-        stdio: None,
-        agent_id: "ao".to_string(),
-        allowed_prefixes: vec!["ao.".to_string()],
-        tool_policy_allow: Vec::new(),
-        tool_policy_deny: Vec::new(),
-        additional_servers: vec![AdditionalMcpServer {
-            name: "docs".to_string(),
-            transport: AdditionalMcpServerTransport::Http {
-                url: "https://docs.example/mcp".to_string(),
-                auth_token: Some("Bearer docs".to_string()),
-            },
-        }],
-    };
-    let mut env = HashMap::new();
-    let mut cleanup = TempPathCleanup::default();
-    let run_id = RunId("run-oai-runner-http-auth".to_string());
-
-    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
-        .expect("oai-runner http policy should preserve auth tokens");
-
-    let mcp_idx =
-        invocation.args.iter().position(|arg| arg == "--mcp-config").expect("mcp config flag should be present");
-    let config_json: serde_json::Value =
-        serde_json::from_str(&invocation.args[mcp_idx + 1]).expect("oai-runner mcp config should parse");
-    assert_eq!(
-        config_json
-            .get(0)
-            .and_then(|entry| entry.get("auth_token"))
-            .and_then(serde_json::Value::as_str),
-        Some("Bearer primary")
-    );
-    assert_eq!(
-        config_json
-            .get(1)
-            .and_then(|entry| entry.get("auth_token"))
-            .and_then(serde_json::Value::as_str),
-        Some("Bearer docs")
-    );
-}
-
-#[test]
-fn native_mcp_policy_preserves_oai_runner_additional_servers() {
-    let mut invocation = LaunchInvocation {
-        command: "ao-oai-runner".to_string(),
-        args: vec![
-            "run".to_string(),
-            "-m".to_string(),
-            "openrouter/minimax/minimax-m2.7".to_string(),
-            "--format".to_string(),
-            "json".to_string(),
-            "hello".to_string(),
-        ],
-        env: Default::default(),
-        prompt_via_stdin: false,
-    };
-    let enforcement = McpToolEnforcement {
-        enabled: true,
-        endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
-        endpoint_auth_token: None,
-        stdio: None,
-        agent_id: "ao".to_string(),
-        allowed_prefixes: vec!["ao.".to_string()],
-        tool_policy_allow: Vec::new(),
-        tool_policy_deny: Vec::new(),
-        additional_servers: vec![AdditionalMcpServer {
-            name: "docs".to_string(),
-            transport: AdditionalMcpServerTransport::Stdio {
-                command: "/usr/local/bin/docs-mcp".to_string(),
-                args: vec!["--serve".to_string()],
-                env: HashMap::from([("DOCS_TOKEN".to_string(), "secret".to_string())]),
-            },
-        }],
-    };
-    let mut env = HashMap::new();
-    let mut cleanup = TempPathCleanup::default();
-    let run_id = RunId("run-oai-runner-additional".to_string());
-
-    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
-        .expect("oai-runner policy should include additional servers");
-
-    let mcp_idx =
-        invocation.args.iter().position(|arg| arg == "--mcp-config").expect("mcp config flag should be present");
-    let config_json: serde_json::Value =
-        serde_json::from_str(&invocation.args[mcp_idx + 1]).expect("oai-runner mcp config should parse");
-    assert_eq!(config_json.as_array().map(Vec::len), Some(2));
-    assert_eq!(
-        config_json
-            .get(1)
-            .and_then(|entry| entry.get("command"))
-            .and_then(serde_json::Value::as_str),
-        Some("/usr/local/bin/docs-mcp")
-    );
-    assert_eq!(
-        config_json
-            .get(1)
-            .and_then(|entry| entry.pointer("/env/DOCS_TOKEN"))
-            .and_then(serde_json::Value::as_str),
-        Some("secret")
-    );
-}
-
 fn enforcement_with_tool_policy(allow: Vec<&str>, deny: Vec<&str>) -> McpToolEnforcement {
     McpToolEnforcement {
         enabled: true,
         endpoint: Some("http://127.0.0.1:3101/mcp/ao".to_string()),
-        endpoint_auth_token: None,
         stdio: None,
         agent_id: "ao".to_string(),
         allowed_prefixes: vec!["ao.".to_string(), "mcp__ao__".to_string()],
@@ -743,43 +562,9 @@ fn resolve_enforcement_parses_additional_servers() {
     let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
     assert_eq!(enforcement.additional_servers.len(), 1);
     assert_eq!(enforcement.additional_servers[0].name, "my-db");
-    assert!(matches!(
-        enforcement.additional_servers[0].transport(),
-        McpServerTransport::Stdio { command, args, env }
-            if command == "/usr/local/bin/db-mcp"
-                && args == &vec!["--port".to_string(), "5432".to_string()]
-                && env.get("DB_HOST").map(String::as_str) == Some("localhost")
-    ));
-}
-
-#[test]
-fn resolve_enforcement_parses_remote_additional_servers_and_primary_auth_token() {
-    let contract = serde_json::json!({
-        "cli": {
-            "name": "claude",
-            "capabilities": { "supports_mcp": true, "supports_tool_use": true },
-            "launch": { "args": ["--print", "hello"] }
-        },
-        "mcp": {
-            "endpoint": "https://primary.example/mcp",
-            "auth_token": "Bearer primary",
-            "agent_id": "ao",
-            "additional_servers": {
-                "docs": {
-                    "url": "https://docs.example/mcp",
-                    "auth_token": "Bearer docs"
-                }
-            }
-        }
-    });
-    let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
-    assert_eq!(enforcement.endpoint_auth_token.as_deref(), Some("Bearer primary"));
-    assert_eq!(enforcement.additional_servers.len(), 1);
-    assert!(matches!(
-        enforcement.additional_servers[0].transport(),
-        McpServerTransport::Http { url, auth_token }
-            if url == "https://docs.example/mcp" && auth_token == Some("Bearer docs")
-    ));
+    assert_eq!(enforcement.additional_servers[0].command, "/usr/local/bin/db-mcp");
+    assert_eq!(enforcement.additional_servers[0].args, vec!["--port", "5432"]);
+    assert_eq!(enforcement.additional_servers[0].env.get("DB_HOST").map(String::as_str), Some("localhost"));
 }
 
 #[test]
@@ -787,19 +572,14 @@ fn claude_lockdown_includes_additional_servers() {
     let mut args = vec!["--print".to_string(), "hello".to_string()];
     let additional = vec![AdditionalMcpServer {
         name: "my-db".to_string(),
-        transport: AdditionalMcpServerTransport::Stdio {
-            command: "/usr/local/bin/db-mcp".to_string(),
-            args: vec!["--port".to_string(), "5432".to_string()],
-            env: HashMap::from([("DB_HOST".to_string(), "localhost".to_string())]),
-        },
+        command: "/usr/local/bin/db-mcp".to_string(),
+        args: vec!["--port".to_string(), "5432".to_string()],
+        env: HashMap::from([("DB_HOST".to_string(), "localhost".to_string())]),
+        url: None,
     }];
     apply_claude_native_mcp_lockdown(
         &mut args,
-        McpServerTransport::Stdio {
-            command: "/usr/local/bin/ao",
-            args: &["mcp".to_string(), "serve".to_string()],
-            env: &HashMap::new(),
-        },
+        McpServerTransport::Stdio { command: "/usr/local/bin/ao", args: &["mcp".to_string(), "serve".to_string()] },
         "ao",
         &additional,
     );

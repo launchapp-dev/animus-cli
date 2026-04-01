@@ -55,6 +55,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Task { command: TaskCommand::Stats(args) } => {
             services::runtime::handle_task_stats(args, &project_root, cli.json).await
         }
+        Command::Trigger { command } => services::operations::handle_trigger(command, &project_root, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -106,7 +107,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Status | Command::Version => {
                     unreachable!("command handled before runtime initialization")
                 }
-                Command::Setup(_) | Command::Doctor(_) => {
+                Command::Setup(_) | Command::Doctor(_) | Command::Trigger { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }

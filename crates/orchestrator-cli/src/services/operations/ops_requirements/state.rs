@@ -2,7 +2,10 @@ use crate::cli_types::{RequirementCreateArgs, RequirementUpdateArgs};
 use crate::{invalid_input_error, not_found_error, parse_input_json_or, COMMAND_HELP_HINT};
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
-use orchestrator_core::{RequirementItem, RequirementPriority, RequirementStatus, RequirementType};
+use orchestrator_core::{
+    delete_requirement as sqlite_delete_requirement, save_requirement as sqlite_save_requirement, RequirementItem,
+    RequirementPriority, RequirementStatus, RequirementType,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -386,6 +389,7 @@ pub(super) fn create_requirement_cli(project_root: &str, args: RequirementCreate
 
     requirements.insert(id, requirement.clone());
     save_requirements_map_to_core_state(project_root, &requirements)?;
+    let _ = sqlite_save_requirement(Path::new(project_root), &requirement);
     Ok(requirement)
 }
 
@@ -455,6 +459,7 @@ pub(super) fn update_requirement_cli(project_root: &str, args: RequirementUpdate
 
     let updated = requirement.clone();
     save_requirements_map_to_core_state(project_root, &requirements)?;
+    let _ = sqlite_save_requirement(Path::new(project_root), &updated);
     Ok(updated)
 }
 
@@ -463,7 +468,9 @@ pub(super) fn delete_requirement_cli(project_root: &str, id: &str) -> Result<()>
     if requirements.remove(id).is_none() {
         return Err(not_found_error(format!("requirement not found: {id}")));
     }
-    save_requirements_map_to_core_state(project_root, &requirements)
+    save_requirements_map_to_core_state(project_root, &requirements)?;
+    let _ = sqlite_delete_requirement(Path::new(project_root), id);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -535,7 +542,7 @@ mod tests {
 
     #[test]
     fn load_requirements_map_falls_back_to_generated_docs_when_core_state_is_empty() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");
@@ -591,7 +598,7 @@ mod tests {
 
     #[test]
     fn write_generated_requirement_docs_prunes_stale_requirement_files() {
-        let _lock = crate::shared::test_env_lock().lock().expect("env lock");
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");
