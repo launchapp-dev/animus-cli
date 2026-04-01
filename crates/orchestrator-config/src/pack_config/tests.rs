@@ -270,7 +270,7 @@ fn ensure_pack_runtime_requirements_rejects_missing_required_runtime() {
 #[cfg(unix)]
 #[test]
 fn activate_pack_mcp_overlay_validates_runtimes_before_merging() {
-    let _lock = env_lock().lock().expect("env lock should not be poisoned");
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
     write_valid_pack_fixture(temp.path());
     let _secret_guard = EnvVarGuard::set("OPENAI_API_KEY", "fixture-secret");
@@ -296,7 +296,7 @@ fn activate_pack_mcp_overlay_validates_runtimes_before_merging() {
 #[cfg(unix)]
 #[test]
 fn activate_pack_mcp_overlay_requires_declared_secrets_at_activation_time() {
-    let _lock = env_lock().lock().expect("env lock should not be poisoned");
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
     write_valid_pack_fixture(temp.path());
     let _secret_guard = EnvVarGuard::unset("OPENAI_API_KEY");

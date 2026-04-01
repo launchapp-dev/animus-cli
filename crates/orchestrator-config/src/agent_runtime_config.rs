@@ -1966,6 +1966,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
+        ensure_agent_runtime_config_file(temp.path()).expect("ensure runtime config");
         let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
 
         assert_eq!(config.phase_agent_id("requirements"), Some("po"));
@@ -2275,6 +2276,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
+        ensure_agent_runtime_config_file(temp.path()).expect("ensure runtime config");
         let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
         assert!(config.is_structured_output_phase("code-review"));
         assert!(config.is_structured_output_phase("implementation"));
@@ -2287,6 +2289,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
+        ensure_agent_runtime_config_file(temp.path()).expect("ensure runtime config");
         let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
         assert!(config.is_structured_output_phase(" implementation "));
         assert!(config.is_structured_output_phase(" CODE-REVIEW "));
@@ -2299,6 +2302,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
+        ensure_agent_runtime_config_file(temp.path()).expect("ensure runtime config");
         let config = load_agent_runtime_config(temp.path()).expect("bundled runtime defaults should load");
 
         assert_eq!(config.phase_agent_id("triage"), Some("triager"));

@@ -211,6 +211,39 @@ fn normalize_non_empty(value: Option<String>) -> Option<String> {
     value.map(|raw| raw.trim().to_string()).filter(|raw| !raw.is_empty())
 }
 
+#[derive(Debug, Clone)]
+struct MemoryMcpServer {
+    default_project_root: String,
+    tool_router: ToolRouter<Self>,
+}
+
+impl MemoryMcpServer {
+    fn memory_root(&self) -> std::path::PathBuf {
+        protocol::scoped_state_root(std::path::Path::new(&self.default_project_root))
+            .unwrap_or_else(|| std::path::PathBuf::from(&self.default_project_root).join(".ao"))
+            .join("memory")
+    }
+}
+
+#[tool_handler(router = MemoryMcpServer::tools())]
+impl ServerHandler for MemoryMcpServer {
+    fn get_info(&self) -> ServerInfo {
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+            .with_instructions("Memory context management tools for workflow phases.")
+    }
+}
+
+impl MemoryMcpServer {
+    fn tools() -> ToolRouter<Self> {
+        ToolRouter::new()
+    }
+}
+
+fn new_memory_mcp_server(default_project_root: &str) -> MemoryMcpServer {
+    let tool_router = MemoryMcpServer::tools();
+    MemoryMcpServer { default_project_root: default_project_root.to_string(), tool_router }
+}
+
 fn new_ao_mcp_server(default_project_root: &str) -> AoMcpServer {
     let tool_router = AoMcpServer::task_query_tools()
         + AoMcpServer::task_mutation_tools()
@@ -343,6 +376,11 @@ pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str) -> Resul
     match command {
         McpCommand::Serve => {
             let service = new_ao_mcp_server(project_root).serve(stdio()).await?;
+            service.waiting().await?;
+            Ok(())
+        }
+        McpCommand::Memory => {
+            let service = new_memory_mcp_server(project_root).serve(stdio()).await?;
             service.waiting().await?;
             Ok(())
         }

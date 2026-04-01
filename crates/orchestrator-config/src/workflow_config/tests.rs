@@ -1621,7 +1621,7 @@ fn write_global_claude_profile_config(config_dir: &std::path::Path, profile_name
 
 #[test]
 fn cross_validation_accepts_known_claude_tool_profile() {
-    let _lock = env_lock().lock().expect("env lock");
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
     let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", temp.path());
     write_global_claude_profile_config(temp.path(), "overflow", "/Users/test/.claude-overflow");
@@ -1650,7 +1650,7 @@ workflows:
 
 #[test]
 fn cross_validation_rejects_non_claude_tool_profile_usage() {
-    let _lock = env_lock().lock().expect("env lock");
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
     let _config_dir = EnvVarGuard::set("AO_CONFIG_DIR", temp.path());
     write_global_claude_profile_config(temp.path(), "overflow", "/Users/test/.claude-overflow");

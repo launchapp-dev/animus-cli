@@ -235,6 +235,7 @@ pub fn load_builtin_skills() -> Result<SkillSource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::{env_lock, EnvVarGuard};
     use std::fs;
     use tempfile::TempDir;
 
@@ -378,6 +379,9 @@ description: Project skill
 
     #[test]
     fn test_load_skill_sources_includes_installed_skill_snapshots() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = TempDir::new().unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let tmp = TempDir::new().unwrap();
         let state_dir = protocol::scoped_state_root(tmp.path()).unwrap_or_else(|| tmp.path().join(".ao")).join("state");
         fs::create_dir_all(&state_dir).unwrap();
@@ -414,6 +418,9 @@ description: Project skill
 
     #[test]
     fn test_load_installed_skill_entries_prefers_semver_latest() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = TempDir::new().unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
         let tmp = TempDir::new().unwrap();
         let state_dir = protocol::scoped_state_root(tmp.path()).unwrap_or_else(|| tmp.path().join(".ao")).join("state");
         fs::create_dir_all(&state_dir).unwrap();
