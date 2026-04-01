@@ -63,7 +63,7 @@ use state_store::{
 };
 pub use task_shared::task_matches_filter;
 use task_shared::*;
-pub use trigger_state::{load_trigger_state, save_trigger_state, TriggerRunState, TriggerState};
+pub use trigger_state::{load_trigger_state, save_trigger_state, TriggerRunState, TriggerState, WebhookEvent};
 
 pub fn evaluate_task_priority_policy(
     tasks: &[OrchestratorTask],

@@ -490,6 +490,35 @@ impl FileWatcherTriggerConfig {
     }
 }
 
+fn default_max_triggers_per_minute() -> u32 {
+    10
+}
+
+/// Parsed configuration for a `webhook` (or `github_webhook`) trigger.
+///
+/// The daemon HTTP server registers a `POST /triggers/{id}` route for each
+/// enabled webhook trigger.  Requests are validated against an optional
+/// HMAC-SHA256 signature and rate-limited to `max_triggers_per_minute`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebhookTriggerConfig {
+    /// Environment variable whose value is used as the HMAC-SHA256 signing
+    /// secret.  When set, the handler validates the `X-AO-Signature` request
+    /// header (`sha256=<hex>`).  When absent, signature verification is
+    /// skipped.
+    #[serde(default)]
+    pub secret_env: Option<String>,
+    /// Maximum dispatches allowed in any rolling 60-second window.
+    /// Requests exceeding this limit receive HTTP 429.  Default: 10.
+    #[serde(default = "default_max_triggers_per_minute")]
+    pub max_triggers_per_minute: u32,
+}
+
+impl WebhookTriggerConfig {
+    pub fn from_value(value: &Value) -> Self {
+        serde_json::from_value(value.clone()).unwrap_or_default()
+    }
+}
+
 pub(crate) fn default_target_branch() -> String {
     "main".to_string()
 }

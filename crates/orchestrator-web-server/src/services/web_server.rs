@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use async_stream::stream;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path as AxumPath, Query, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -18,6 +18,7 @@ use orchestrator_web_api::{WebApiError, WebApiService};
 use orchestrator_web_contracts::{http_status_for_exit_code, CliEnvelopeService, DaemonEventRecord};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{json, Value};
+use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -141,7 +142,8 @@ fn build_router(state: AppState) -> Router {
         .route("/queue/stats", get(queue_stats_handler))
         .route("/queue/reorder", post(queue_reorder_handler))
         .route("/queue/hold/{id}", post(queue_hold_handler))
-        .route("/queue/release/{id}", post(queue_release_handler));
+        .route("/queue/release/{id}", post(queue_release_handler))
+        .route("/triggers/{trigger_id}", post(trigger_webhook_handler));
 
     let gql_schema = graphql::build_schema(state.api.clone());
 
@@ -765,6 +767,103 @@ async fn queue_release_handler(
         Ok(data) => success_response(data),
         Err(error) => error_response(error),
     }
+}
+
+/// Handler for `POST /api/v1/triggers/{trigger_id}`.
+///
+/// Accepts an inbound webhook payload and queues it for the next daemon tick.
+///
+/// # Request format
+/// - Body: any JSON payload (forwarded as `webhook_payload` in the task input)
+/// - Optional header `X-AO-Signature: sha256=<hex>` for HMAC verification
+///
+/// # Response
+/// - **202 Accepted** — event queued successfully
+/// - **404 Not Found** — trigger not found or is not a webhook type
+/// - **401 Unauthorized** — HMAC signature mismatch
+/// - **429 Too Many Requests** — rate limit exceeded
+async fn trigger_webhook_handler(
+    State(state): State<AppState>,
+    AxumPath(trigger_id): AxumPath<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let project_root = state.api.project_root();
+
+    // Load trigger config to check secret_env for HMAC verification.
+    let config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
+    let trigger = config.config.triggers.iter().find(|t| t.id.eq_ignore_ascii_case(&trigger_id));
+
+    if let Some(trigger) = trigger {
+        let wh_config = orchestrator_core::WebhookTriggerConfig::from_value(&trigger.config);
+
+        // HMAC verification (only when secret_env is configured).
+        if let Some(ref secret_env_name) = wh_config.secret_env {
+            let secret = match std::env::var(secret_env_name) {
+                Ok(value) => value,
+                Err(_) => {
+                    let envelope = orchestrator_web_contracts::CliEnvelopeService::error(
+                        "configuration_error",
+                        format!("signing secret env var '{}' is not set", secret_env_name),
+                        1,
+                    );
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(envelope)).into_response();
+                }
+            };
+
+            let signature_header = headers
+                .get("x-ao-signature")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+
+            let expected_sig = compute_hmac_sha256_hex(secret.as_bytes(), &body);
+            let expected_header = format!("sha256={}", expected_sig);
+
+            if !constant_time_eq(signature_header.as_bytes(), expected_header.as_bytes()) {
+                let envelope = orchestrator_web_contracts::CliEnvelopeService::error(
+                    "unauthorized",
+                    "webhook signature verification failed",
+                    4,
+                );
+                return (StatusCode::UNAUTHORIZED, Json(envelope)).into_response();
+            }
+        }
+    }
+
+    // Parse body as JSON (or wrap raw bytes in a JSON object).
+    let payload: serde_json::Value = if body.is_empty() {
+        serde_json::Value::Object(serde_json::Map::new())
+    } else {
+        match serde_json::from_slice(&body) {
+            Ok(value) => value,
+            Err(_) => {
+                // Non-JSON body: store as base64-encoded string.
+                serde_json::json!({ "raw": String::from_utf8_lossy(&body).as_ref() })
+            }
+        }
+    };
+
+    let now = chrono::Utc::now();
+    match state.api.trigger_webhook_enqueue(&trigger_id, payload, now) {
+        Ok(data) => (StatusCode::ACCEPTED, Json(orchestrator_web_contracts::CliEnvelopeService::ok(data))).into_response(),
+        Err(error) => error_response(error),
+    }
+}
+
+/// Compute HMAC-SHA256 of `data` using `key` and return the lowercase hex string.
+fn compute_hmac_sha256_hex(key: &[u8], data: &[u8]) -> String {
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(data);
+    let result = mac.finalize().into_bytes();
+    result.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Constant-time byte slice comparison to prevent timing attacks.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b.iter()).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 async fn events_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {

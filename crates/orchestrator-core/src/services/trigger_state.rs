@@ -15,6 +15,18 @@ pub struct TriggerState {
     pub triggers: HashMap<String, TriggerRunState>,
 }
 
+/// A webhook event received via HTTP that is pending dispatch by the next
+/// daemon tick.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebhookEvent {
+    /// Unique event identifier (UUID).  Used to detect duplicate deliveries.
+    pub event_id: String,
+    /// UTC timestamp when the event was received by the HTTP handler.
+    pub received_at: DateTime<Utc>,
+    /// Raw request body forwarded as the workflow input payload.
+    pub payload: serde_json::Value,
+}
+
 /// Per-trigger run state shared across trigger types.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TriggerRunState {
@@ -30,6 +42,15 @@ pub struct TriggerRunState {
     /// Type-specific extra state (e.g. mtime for file watchers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra: Option<serde_json::Value>,
+    /// Webhook events received via HTTP and awaiting dispatch on the next tick.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_events: Vec<WebhookEvent>,
+    /// Start of the current rate-limit window (rolling 60 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rate_window_start: Option<DateTime<Utc>>,
+    /// Number of events accepted in the current rate-limit window.
+    #[serde(default)]
+    pub rate_window_count: u32,
 }
 
 fn trigger_state_path(project_root: &Path) -> PathBuf {
@@ -79,7 +100,7 @@ mod tests {
                 last_dispatched: Some(Utc::now()),
                 last_status: "dispatched".to_string(),
                 dispatch_count: 2,
-                extra: None,
+                ..Default::default()
             },
         );
 
