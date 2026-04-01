@@ -586,7 +586,6 @@ mod tests {
         assert_eq!(dispatch.trigger_source, "manual-cli-run");
     }
 
-
     #[tokio::test]
     async fn resolve_workflow_run_dispatch_from_input_accepts_legacy_workflow_run_input() {
         let hub = Arc::new(InMemoryServiceHub::new());

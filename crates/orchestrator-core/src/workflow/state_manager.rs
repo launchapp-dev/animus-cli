@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::types::{
     CheckpointReason, ListPageRequest, OrchestratorTask, OrchestratorWorkflow, RequirementFilter, RequirementItem,
-    RequirementPriority, RequirementQuery, RequirementQuerySort, TaskFilter,
-    TaskPriorityDistribution, TaskPriorityPolicyReport, TaskQuery, TaskQuerySort, TaskStatistics, TaskStatus,
-    WorkflowCheckpoint, WorkflowPhaseStatus, WorkflowStatus,
+    RequirementPriority, RequirementQuery, RequirementQuerySort, TaskFilter, TaskPriorityDistribution,
+    TaskPriorityPolicyReport, TaskQuery, TaskQuerySort, TaskStatistics, TaskStatus, WorkflowCheckpoint,
+    WorkflowPhaseStatus, WorkflowStatus,
 };
 
 pub const DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE: usize = 3;
@@ -1055,10 +1055,9 @@ fn latest_failed_phase_summary(workflow: &OrchestratorWorkflow) -> Option<Failed
 fn workflow_summary_fields(workflow: &OrchestratorWorkflow) -> WorkflowSummaryFields {
     let failed_phase = latest_failed_phase_summary(workflow);
     let phase_id = match workflow.status {
-        WorkflowStatus::Failed => failed_phase
-            .as_ref()
-            .map(|phase| phase.phase_id.clone())
-            .or_else(|| checkpoint_phase_id(workflow)),
+        WorkflowStatus::Failed => {
+            failed_phase.as_ref().map(|phase| phase.phase_id.clone()).or_else(|| checkpoint_phase_id(workflow))
+        }
         _ => workflow
             .phases
             .iter()
@@ -1272,10 +1271,7 @@ pub fn load_next_task_by_priority(project_root: &std::path::Path) -> Result<Opti
     }
 }
 
-pub fn load_task_titles_by_ids(
-    project_root: &std::path::Path,
-    task_ids: &[String],
-) -> Result<HashMap<String, String>> {
+pub fn load_task_titles_by_ids(project_root: &std::path::Path, task_ids: &[String]) -> Result<HashMap<String, String>> {
     if task_ids.is_empty() {
         return Ok(HashMap::new());
     }
@@ -1337,11 +1333,7 @@ pub fn load_stale_task_summaries(
          ORDER BY updated_at ASC, id ASC",
     )?;
     let rows = stmt.query_map([stale_before], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, Option<String>>(1)?,
-            row.get::<_, String>(2)?,
-        ))
+        Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?))
     })?;
 
     let mut stale_items = Vec::new();
@@ -1382,18 +1374,13 @@ fn supported_task_filter_sql(filter: &TaskFilter) -> Result<(String, Vec<Value>)
         params.push(Value::Text(priority.as_str().to_string()));
     }
 
-    let where_sql = if clauses.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", clauses.join(" AND "))
-    };
+    let where_sql = if clauses.is_empty() { String::new() } else { format!(" WHERE {}", clauses.join(" AND ")) };
     Ok((where_sql, params))
 }
 
 fn supported_task_sort_sql(sort: TaskQuerySort) -> Result<&'static str> {
     match sort {
-        TaskQuerySort::Priority => Ok(
-            "CASE priority
+        TaskQuerySort::Priority => Ok("CASE priority
                 WHEN 'critical' THEN 0
                 WHEN 'high' THEN 1
                 WHEN 'medium' THEN 2
@@ -1401,8 +1388,7 @@ fn supported_task_sort_sql(sort: TaskQuerySort) -> Result<&'static str> {
                 ELSE 4
              END ASC,
              updated_at DESC,
-             id ASC",
-        ),
+             id ASC"),
         TaskQuerySort::UpdatedAt => Ok("updated_at DESC, id ASC"),
         TaskQuerySort::Id => Ok("id ASC"),
         TaskQuerySort::CreatedAt => anyhow::bail!("created_at sort is not supported by the SQL-backed task query"),
@@ -1433,11 +1419,7 @@ fn supported_requirement_filter_sql(filter: &RequirementFilter) -> Result<(Strin
         params.push(Value::Text(requirement_type_str(requirement_type).to_string()));
     }
 
-    let where_sql = if clauses.is_empty() {
-        String::new()
-    } else {
-        format!(" WHERE {}", clauses.join(" AND "))
-    };
+    let where_sql = if clauses.is_empty() { String::new() } else { format!(" WHERE {}", clauses.join(" AND ")) };
     Ok((where_sql, params))
 }
 
@@ -1445,7 +1427,8 @@ fn supported_requirement_sort_sql(sort: RequirementQuerySort) -> &'static str {
     match sort {
         RequirementQuerySort::Id => "id ASC",
         RequirementQuerySort::UpdatedAt => "updated_at DESC, id ASC",
-        RequirementQuerySort::Priority => "CASE priority
+        RequirementQuerySort::Priority => {
+            "CASE priority
             WHEN 'must' THEN 0
             WHEN 'should' THEN 1
             WHEN 'could' THEN 2
@@ -1453,7 +1436,8 @@ fn supported_requirement_sort_sql(sort: RequirementQuerySort) -> &'static str {
             ELSE 4
          END ASC,
          updated_at DESC,
-         id ASC",
+         id ASC"
+        }
         RequirementQuerySort::Status => "status ASC, updated_at DESC, id ASC",
     }
 }
@@ -1604,7 +1588,10 @@ pub fn load_all_requirements(
     Ok(reqs)
 }
 
-pub fn load_requirements_by_ids(project_root: &std::path::Path, requirement_ids: &[String]) -> Result<Vec<RequirementItem>> {
+pub fn load_requirements_by_ids(
+    project_root: &std::path::Path,
+    requirement_ids: &[String],
+) -> Result<Vec<RequirementItem>> {
     if requirement_ids.is_empty() {
         return Ok(Vec::new());
     }
