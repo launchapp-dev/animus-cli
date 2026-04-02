@@ -11,6 +11,7 @@ pub mod config;
 pub mod credentials;
 pub mod daemon;
 pub mod daemon_event_record;
+pub mod deploy_config;
 pub mod error_classification;
 pub mod errors;
 pub mod model_routing;
@@ -31,6 +32,7 @@ pub use config::{
 };
 pub use daemon::*;
 pub use daemon_event_record::*;
+pub use deploy_config::DeployConfig;
 pub use error_classification::*;
 pub use errors::*;
 pub use model_routing::*;

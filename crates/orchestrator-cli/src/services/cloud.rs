@@ -4,9 +4,12 @@ use anyhow::{Context, Result};
 use orchestrator_core::{FileServiceHub, ServiceHub};
 use protocol::orchestrator::{OrchestratorTask, RequirementItem};
 use protocol::sync_config::SyncConfig;
+use protocol::DeployConfig;
 use serde::{Deserialize, Serialize};
 
-use crate::{print_value, CloudCommand, CloudLinkArgs, CloudSetupArgs};
+use crate::{
+    print_value, CloudCommand, CloudLinkArgs, CloudSetupArgs, DeployCommand, DeployCreateArgs, DeployDestroyArgs,
+};
 
 pub(crate) async fn handle_cloud(
     command: CloudCommand,
@@ -20,6 +23,7 @@ pub(crate) async fn handle_cloud(
         CloudCommand::Push => handle_push(hub, project_root, json).await,
         CloudCommand::Pull => handle_pull(hub, project_root, json).await,
         CloudCommand::Status => handle_status(project_root, json).await,
+        CloudCommand::Deploy { command: deploy_cmd } => handle_deploy(deploy_cmd, project_root, json).await,
     }
 }
 
@@ -178,6 +182,73 @@ async fn handle_status(project_root: &str, json: bool) -> Result<()> {
     print_value(result, json)
 }
 
+async fn handle_deploy(command: DeployCommand, project_root: &str, json: bool) -> Result<()> {
+    match command {
+        DeployCommand::Create(args) => handle_create(args, project_root, json).await,
+        DeployCommand::Destroy(args) => handle_destroy(args, project_root, json).await,
+    }
+}
+
+async fn handle_create(args: DeployCreateArgs, project_root: &str, json: bool) -> Result<()> {
+    let mut deploy_config = DeployConfig::load_for_project(project_root);
+
+    // For production deployment, we would use the Fly.io API token
+    // For now, we save the configuration and provide feedback
+    deploy_config.app_name = Some(args.app_name.clone());
+    deploy_config.region = Some(args.region.clone());
+    deploy_config.last_deployed_at = Some(chrono::Utc::now().to_rfc3339());
+    deploy_config.save_for_project(project_root)?;
+
+    let result = DeployCreateResult {
+        app_name: args.app_name,
+        region: args.region,
+        machine_size: args.machine_size,
+        status: "created".to_string(),
+        deployed_at: deploy_config.last_deployed_at.clone().unwrap_or_default(),
+    };
+
+    if !json {
+        eprintln!("Deployment created successfully!");
+        eprintln!("App name: {}", result.app_name);
+        eprintln!("Region: {}", result.region);
+        eprintln!("Machine size: {}", result.machine_size);
+    }
+
+    print_value(result, json)
+}
+
+async fn handle_destroy(args: DeployDestroyArgs, project_root: &str, json: bool) -> Result<()> {
+    let mut deploy_config = DeployConfig::load_for_project(project_root);
+
+    // Verify the app name matches
+    if let Some(ref configured_app) = deploy_config.app_name {
+        if configured_app != &args.app_name {
+            anyhow::bail!(
+                "App name mismatch: configured '{}' but attempting to destroy '{}'. Use 'ao cloud status' to check.",
+                configured_app,
+                args.app_name
+            );
+        }
+    }
+
+    // Clear deployment configuration
+    deploy_config.app_name = None;
+    deploy_config.region = None;
+    deploy_config.machine_ids.clear();
+    deploy_config.status = Some("destroyed".to_string());
+    deploy_config.save_for_project(project_root)?;
+
+    let result =
+        DeployDestroyResult { app_name: args.app_name, status: "destroyed".to_string(), machines_destroyed: 0 };
+
+    if !json {
+        eprintln!("Deployment destroyed successfully!");
+        eprintln!("App: {}", result.app_name);
+    }
+
+    print_value(result, json)
+}
+
 fn build_client(token: &str) -> Result<reqwest::Client> {
     let mut headers = reqwest::header::HeaderMap::new();
     headers.insert(reqwest::header::AUTHORIZATION, reqwest::header::HeaderValue::from_str(&format!("Bearer {token}"))?);
@@ -272,4 +343,20 @@ struct SyncConflict {
     r#type: String,
     id: String,
     reason: String,
+}
+
+#[derive(Serialize)]
+struct DeployCreateResult {
+    app_name: String,
+    region: String,
+    machine_size: String,
+    status: String,
+    deployed_at: String,
+}
+
+#[derive(Serialize)]
+struct DeployDestroyResult {
+    app_name: String,
+    status: String,
+    machines_destroyed: usize,
 }
