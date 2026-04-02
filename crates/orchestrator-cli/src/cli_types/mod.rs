@@ -179,4 +179,69 @@ mod tests {
             Cli::try_parse_from(["ao", "workflow", "update-definition"]).expect_err("removed command should fail");
         assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
     }
+
+    #[test]
+    fn parses_cloud_deploy_create_command() {
+        let cli = Cli::try_parse_from([
+            "ao",
+            "cloud",
+            "deploy",
+            "create",
+            "--app-name",
+            "test-app",
+            "--region",
+            "fra",
+            "--machine-size",
+            "shared-cpu-1x",
+        ])
+        .expect("cloud deploy create should parse");
+
+        match cli.command {
+            Command::Cloud { command: CloudCommand::Deploy { command: DeployCommand::Create(args) } } => {
+                assert_eq!(args.app_name, "test-app");
+                assert_eq!(args.region, "fra");
+                assert_eq!(args.machine_size, "shared-cpu-1x");
+            }
+            _ => panic!("expected cloud deploy create command"),
+        }
+    }
+
+    #[test]
+    fn parses_cloud_deploy_start_command() {
+        let cli = Cli::try_parse_from(["ao", "cloud", "deploy", "start", "--app-name", "test-app"])
+            .expect("cloud deploy start should parse");
+
+        match cli.command {
+            Command::Cloud { command: CloudCommand::Deploy { command: DeployCommand::Start(args) } } => {
+                assert_eq!(args.app_name, "test-app");
+            }
+            _ => panic!("expected cloud deploy start command"),
+        }
+    }
+
+    #[test]
+    fn parses_cloud_deploy_stop_command() {
+        let cli = Cli::try_parse_from(["ao", "cloud", "deploy", "stop", "--app-name", "test-app"])
+            .expect("cloud deploy stop should parse");
+
+        match cli.command {
+            Command::Cloud { command: CloudCommand::Deploy { command: DeployCommand::Stop(args) } } => {
+                assert_eq!(args.app_name, "test-app");
+            }
+            _ => panic!("expected cloud deploy stop command"),
+        }
+    }
+
+    #[test]
+    fn parses_cloud_deploy_status_command() {
+        let cli = Cli::try_parse_from(["ao", "cloud", "deploy", "status", "--app-name", "test-app"])
+            .expect("cloud deploy status should parse");
+
+        match cli.command {
+            Command::Cloud { command: CloudCommand::Deploy { command: DeployCommand::Status(args) } } => {
+                assert_eq!(args.app_name, "test-app");
+            }
+            _ => panic!("expected cloud deploy status command"),
+        }
+    }
 }

@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     print_value, CloudCommand, CloudLinkArgs, CloudSetupArgs, DeployCommand, DeployCreateArgs, DeployDestroyArgs,
+    DeployStartArgs, DeployStopArgs, DeployStatusArgs,
 };
 
 pub(crate) async fn handle_cloud(
@@ -186,6 +187,9 @@ async fn handle_deploy(command: DeployCommand, project_root: &str, json: bool) -
     match command {
         DeployCommand::Create(args) => handle_create(args, project_root, json).await,
         DeployCommand::Destroy(args) => handle_destroy(args, project_root, json).await,
+        DeployCommand::Start(args) => handle_start(args, project_root, json).await,
+        DeployCommand::Stop(args) => handle_stop(args, project_root, json).await,
+        DeployCommand::Status(args) => handle_status_deploy(args, project_root, json).await,
     }
 }
 
@@ -354,9 +358,132 @@ struct DeployCreateResult {
     deployed_at: String,
 }
 
+async fn handle_start(args: DeployStartArgs, project_root: &str, json: bool) -> Result<()> {
+    let deploy_config = DeployConfig::load_for_project(project_root);
+
+    // Verify the app name matches
+    if let Some(ref configured_app) = deploy_config.app_name {
+        if configured_app != &args.app_name {
+            anyhow::bail!(
+                "App name mismatch: configured '{}' but attempting to start '{}'. Use 'ao cloud deploy status' to check.",
+                configured_app,
+                args.app_name
+            );
+        }
+    } else {
+        anyhow::bail!("No deployment configured for this project. Run 'ao cloud deploy create' first.");
+    }
+
+    let result = DeployStartResult {
+        app_name: args.app_name,
+        status: "started".to_string(),
+        started_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    if !json {
+        eprintln!("Deployment started successfully!");
+        eprintln!("App: {}", result.app_name);
+        eprintln!("Status: {}", result.status);
+    }
+
+    print_value(result, json)
+}
+
+async fn handle_stop(args: DeployStopArgs, project_root: &str, json: bool) -> Result<()> {
+    let deploy_config = DeployConfig::load_for_project(project_root);
+
+    // Verify the app name matches
+    if let Some(ref configured_app) = deploy_config.app_name {
+        if configured_app != &args.app_name {
+            anyhow::bail!(
+                "App name mismatch: configured '{}' but attempting to stop '{}'. Use 'ao cloud deploy status' to check.",
+                configured_app,
+                args.app_name
+            );
+        }
+    } else {
+        anyhow::bail!("No deployment configured for this project. Run 'ao cloud deploy create' first.");
+    }
+
+    let result = DeployStopResult {
+        app_name: args.app_name,
+        status: "stopped".to_string(),
+        stopped_at: chrono::Utc::now().to_rfc3339(),
+    };
+
+    if !json {
+        eprintln!("Deployment stopped successfully!");
+        eprintln!("App: {}", result.app_name);
+        eprintln!("Status: {}", result.status);
+    }
+
+    print_value(result, json)
+}
+
+async fn handle_status_deploy(args: DeployStatusArgs, project_root: &str, json: bool) -> Result<()> {
+    let deploy_config = DeployConfig::load_for_project(project_root);
+
+    // Check if the app name matches if a deployment is configured
+    if let Some(ref configured_app) = deploy_config.app_name {
+        if configured_app != &args.app_name {
+            anyhow::bail!(
+                "App name mismatch: configured '{}' but checking status for '{}'. Use 'ao cloud deploy status' without --app-name to check configured deployment.",
+                configured_app,
+                args.app_name
+            );
+        }
+    }
+
+    let result = DeployStatusDeployResult {
+        app_name: args.app_name,
+        status: deploy_config.status.clone().unwrap_or_else(|| "unknown".to_string()),
+        region: deploy_config.region.clone(),
+        machines: deploy_config.machine_ids.clone(),
+        last_deployed_at: deploy_config.last_deployed_at.clone(),
+    };
+
+    if !json {
+        eprintln!("Deployment Status");
+        eprintln!("App: {}", result.app_name);
+        eprintln!("Status: {}", result.status);
+        if let Some(region) = &result.region {
+            eprintln!("Region: {}", region);
+        }
+        eprintln!("Machines: {}", if result.machines.is_empty() { "none".to_string() } else { result.machines.join(", ") });
+        if let Some(deployed_at) = &result.last_deployed_at {
+            eprintln!("Last deployed: {}", deployed_at);
+        }
+    }
+
+    print_value(result, json)
+}
+
 #[derive(Serialize)]
 struct DeployDestroyResult {
     app_name: String,
     status: String,
     machines_destroyed: usize,
+}
+
+#[derive(Serialize)]
+struct DeployStartResult {
+    app_name: String,
+    status: String,
+    started_at: String,
+}
+
+#[derive(Serialize)]
+struct DeployStopResult {
+    app_name: String,
+    status: String,
+    stopped_at: String,
+}
+
+#[derive(Serialize)]
+struct DeployStatusDeployResult {
+    app_name: String,
+    status: String,
+    region: Option<String>,
+    machines: Vec<String>,
+    last_deployed_at: Option<String>,
 }

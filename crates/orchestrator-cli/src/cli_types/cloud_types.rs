@@ -25,6 +25,12 @@ pub(crate) enum DeployCommand {
     Create(DeployCreateArgs),
     /// Destroy an existing deployment
     Destroy(DeployDestroyArgs),
+    /// Start a created deployment
+    Start(DeployStartArgs),
+    /// Stop a running deployment
+    Stop(DeployStopArgs),
+    /// Show deployment state
+    Status(DeployStatusArgs),
 }
 
 #[derive(Debug, Parser)]
@@ -54,5 +60,23 @@ pub(crate) struct DeployCreateArgs {
 #[derive(Debug, Parser)]
 pub(crate) struct DeployDestroyArgs {
     #[arg(long, help = "Application name of the deployment to destroy")]
+    pub(crate) app_name: String,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct DeployStartArgs {
+    #[arg(long, help = "Application name of the deployment to start")]
+    pub(crate) app_name: String,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct DeployStopArgs {
+    #[arg(long, help = "Application name of the deployment to stop")]
+    pub(crate) app_name: String,
+}
+
+#[derive(Debug, Parser)]
+pub(crate) struct DeployStatusArgs {
+    #[arg(long, help = "Application name to check status for")]
     pub(crate) app_name: String,
 }
