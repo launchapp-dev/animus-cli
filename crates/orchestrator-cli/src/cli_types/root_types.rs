@@ -3,7 +3,7 @@ use clap::{Parser, Subcommand};
 use super::*;
 
 #[derive(Debug, Parser)]
-#[command(name = "animus", about = "Agent Orchestrator CLI", version)]
+#[command(name = "animus", about = "Animus — the spirit that drives your agents", version)]
 pub(crate) struct Cli {
     #[arg(long, global = true, help = "Emit machine-readable JSON output using the ao.cli.v1 envelope.")]
     pub(crate) json: bool,
@@ -21,7 +21,7 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
-    /// Show the installed `ao` version.
+    /// Show the installed `animus` version.
     Version,
     /// Manage daemon lifecycle and automation settings.
     Daemon {
@@ -102,12 +102,12 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: OutputCommand,
     },
-    /// Run the AO MCP service endpoint.
+    /// Run the Animus MCP service endpoint.
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
     },
-    /// Serve and open the AO web UI.
+    /// Serve and open the Animus web UI.
     Web {
         #[command(subcommand)]
         command: WebCommand,

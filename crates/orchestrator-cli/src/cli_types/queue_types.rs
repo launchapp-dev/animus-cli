@@ -11,9 +11,9 @@ pub(crate) enum QueueCommand {
     /// Enqueue a subject dispatch for a task, requirement, or custom title.
     ///
     /// Examples:
-    ///   ao queue enqueue --task-id TASK-001
-    ///   ao queue enqueue --requirement-id REQ-042 --workflow-ref ops
-    ///   ao queue enqueue --title "Investigate flaky test" --description "Suite fails intermittently on CI"
+    ///   animus queue enqueue --task-id TASK-001
+    ///   animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
+    ///   animus queue enqueue --title "Investigate flaky test" --description "Suite fails intermittently on CI"
     Enqueue(QueueEnqueueArgs),
     /// Hold a queued subject.
     Hold(QueueSubjectArgs),

@@ -1,10 +1,10 @@
-/// End-to-end test for session continuation via `ao agent run`.
+/// End-to-end test for session continuation via `animus agent run`.
 ///
 /// Tests that an agent can be invoked, then re-invoked with the same session ID
 /// and the second invocation has context from the first (proving session resume works).
 ///
 /// Prerequisites:
-///   - Agent runner must be running (`ao runner start`) or will auto-start
+///   - Agent runner must be running (`animus runner start`) or will auto-start
 ///   - CLI tools must be installed (claude, codex, gemini)
 ///   - API credentials must be configured for each tool
 ///   - Set `AO_E2E_SESSION_CONTINUATION=1` to enable (skipped by default)
@@ -165,7 +165,7 @@ fn build_launch_args(tool: &str, model: &str, prompt: &str, session_id: Option<&
     })
 }
 
-/// Parsed result from an `ao --json agent run` invocation.
+/// Parsed result from an `animus --json agent run` invocation.
 struct AgentRunResult {
     exit_code: Option<i32>,
     agent_text: String,
@@ -201,7 +201,7 @@ fn run_agent(
         .arg("--runtime-contract-json")
         .arg(serde_json::to_string(&contract)?)
         .output()
-        .with_context(|| format!("failed to execute: ao agent run --tool {}", tool))?;
+        .with_context(|| format!("failed to execute: animus agent run --tool {}", tool))?;
 
     let raw_stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let raw_stderr = String::from_utf8_lossy(&output.stderr).to_string();

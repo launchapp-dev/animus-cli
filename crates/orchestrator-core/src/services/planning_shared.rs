@@ -50,7 +50,7 @@ pub(super) fn draft_requirements_and_record(
     codebase_insight: Option<&CodebaseInsight>,
 ) -> Result<(Vec<String>, usize)> {
     let Some(vision) = lock.vision.clone() else {
-        return Err(not_found("vision not found; run `ao vision draft` first"));
+        return Err(not_found("vision not found; run `animus vision draft` first"));
     };
 
     if !input.append_only {
@@ -526,9 +526,9 @@ pub(super) fn execute_requirements_and_record(
 
     if selected_requirements.is_empty() {
         let guidance = if input.include_wont {
-            "run `ao requirements draft` first"
+            "run `animus requirements draft` first"
         } else {
-            "run `ao requirements draft` first or pass `--include-wont true` to include out-of-scope requirements"
+            "run `animus requirements draft` first or pass `--include-wont true` to include out-of-scope requirements"
         };
         return Err(anyhow!("no requirements matched; {guidance}"));
     }
@@ -538,7 +538,7 @@ pub(super) fn execute_requirements_and_record(
     if !missing_constraints.is_empty() {
         return Err(anyhow!(
             "vision constraints missing from requirements: {}. \
-Run `ao requirements draft`/`ao requirements refine` (or upsert explicit constraint requirements) before execution",
+Run `animus requirements draft`/`animus requirements refine` (or upsert explicit constraint requirements) before execution",
             missing_constraints.join(" | ")
         ));
     }

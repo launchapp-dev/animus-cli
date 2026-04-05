@@ -47,7 +47,7 @@ impl CliHarness {
         }
 
         let payload = serde_json::from_slice::<Value>(&output.stdout)
-            .with_context(|| format!("failed to parse json output from ao command: {}", args.join(" ")))?;
+            .with_context(|| format!("failed to parse json output from animus command: {}", args.join(" ")))?;
 
         if payload.get("schema").and_then(Value::as_str) != Some(CLI_SCHEMA_ID) {
             anyhow::bail!("unexpected schema for command {}: {}", args.join(" "), payload);
@@ -69,7 +69,7 @@ impl CliHarness {
 
         if output.status.success() {
             anyhow::bail!(
-                "expected command to fail but it succeeded: ao --json --project-root {} {}\nstdout:\n{}\nstderr:\n{}",
+                "expected command to fail but it succeeded: animus --json --project-root {} {}\nstdout:\n{}\nstderr:\n{}",
                 self.project_root.path().display(),
                 args.join(" "),
                 String::from_utf8_lossy(&output.stdout),
@@ -78,7 +78,7 @@ impl CliHarness {
         }
 
         let payload = serde_json::from_slice::<Value>(&output.stderr)
-            .with_context(|| format!("failed to parse json error output from ao command: {}", args.join(" ")))?;
+            .with_context(|| format!("failed to parse json error output from animus command: {}", args.join(" ")))?;
 
         if payload.get("schema").and_then(Value::as_str) != Some(CLI_SCHEMA_ID) {
             anyhow::bail!("unexpected schema for failing command {}: {}", args.join(" "), payload);
@@ -106,6 +106,6 @@ impl CliHarness {
             .env("AGENT_ORCHESTRATOR_CONFIG_DIR", self.config_root.path())
             .env("AO_SKIP_RUNNER_START", "1")
             .output()
-            .with_context(|| format!("failed to execute ao command: {}", args.join(" ")))
+            .with_context(|| format!("failed to execute animus command: {}", args.join(" ")))
     }
 }

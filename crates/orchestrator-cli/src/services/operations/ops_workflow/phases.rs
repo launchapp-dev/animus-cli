@@ -163,7 +163,7 @@ pub(crate) fn preview_phase_removal(project_root: &str, phase_id: &str) -> Resul
         serde_json::json!({"phase_id": &normalized_phase_id}),
         "workflow.phases.remove",
         vec!["remove phase runtime definition".to_string()],
-        &format!("rerun 'ao workflow phases remove --phase {} --confirm {}' to apply", phase_id, phase_id),
+        &format!("rerun 'animus workflow phases remove --phase {} --confirm {}' to apply", phase_id, phase_id),
     );
     if let Some(obj) = envelope.as_object_mut() {
         obj.insert("can_remove".to_string(), serde_json::json!(true));

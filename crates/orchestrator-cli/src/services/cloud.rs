@@ -84,7 +84,7 @@ async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     let project_id = config
         .project_id
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: ao cloud link --project-id <id>"))?;
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
 
     let tasks: Vec<OrchestratorTask> = hub.tasks().list().await?;
     let requirements: Vec<RequirementItem> = hub.planning().list_requirements().await?;
@@ -135,7 +135,7 @@ async fn handle_pull(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     let project_id = config
         .project_id
         .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: ao cloud link --project-id <id>"))?;
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
 
     let client = build_client(&token)?;
     let resp = client

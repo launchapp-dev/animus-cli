@@ -219,7 +219,7 @@ async fn resolve_workflow_run_dispatch_from_raw_input(
     }
 
     if let Some(input) = upgrade_legacy_workflow_run_input(raw)
-        .with_context(|| "invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema")?
+        .with_context(|| "invalid --input-json payload for workflow run; run 'animus workflow run --help' for schema")?
     {
         return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
     }
@@ -228,7 +228,7 @@ async fn resolve_workflow_run_dispatch_from_raw_input(
         return resolve_workflow_run_dispatch_from_input(hub, project_root, input).await;
     }
 
-    Err(anyhow!("invalid --input-json payload for workflow run; run 'ao workflow run --help' for schema"))
+    Err(anyhow!("invalid --input-json payload for workflow run; run 'animus workflow run --help' for schema"))
 }
 
 pub(crate) fn resolve_requirement_workflow_ref(project_root: &str) -> Result<String> {
@@ -391,7 +391,7 @@ pub(crate) async fn handle_workflow(
                         serde_json::json!({"id": &workflow_id}),
                         "workflow.pause",
                         vec!["pause workflow execution".to_string()],
-                        &format!("rerun 'ao workflow pause --id {} --confirm {}' to apply", workflow_id, workflow_id),
+                        &format!("rerun 'animus workflow pause --id {} --confirm {}' to apply", workflow_id, workflow_id),
                     ),
                     json,
                 );
@@ -416,7 +416,7 @@ pub(crate) async fn handle_workflow(
                         serde_json::json!({"id": &workflow_id}),
                         "workflow.cancel",
                         vec!["cancel workflow execution".to_string()],
-                        &format!("rerun 'ao workflow cancel --id {} --confirm {}' to apply", workflow_id, workflow_id),
+                        &format!("rerun 'animus workflow cancel --id {} --confirm {}' to apply", workflow_id, workflow_id),
                     ),
                     json,
                 );
@@ -447,7 +447,7 @@ pub(crate) async fn handle_workflow(
             WorkflowPhasesCommand::Upsert(args) => {
                 let definition: orchestrator_core::PhaseExecutionDefinition =
                     serde_json::from_str(&args.input_json).with_context(|| {
-                        "invalid --input-json payload for workflow phases upsert; run 'ao workflow phases upsert --help' for schema"
+                        "invalid --input-json payload for workflow phases upsert; run 'animus workflow phases upsert --help' for schema"
                     })?;
                 print_value(phases::upsert_phase_definition(project_root, &args.phase, definition)?, json)
             }
@@ -472,7 +472,7 @@ pub(crate) async fn handle_workflow(
             WorkflowDefinitionsCommand::Upsert(args) => {
                 let workflow: orchestrator_core::WorkflowDefinition =
                     serde_json::from_str(&args.input_json).with_context(|| {
-                        "invalid --input-json payload for workflow definitions upsert; run 'ao workflow definitions upsert --help' for schema"
+                        "invalid --input-json payload for workflow definitions upsert; run 'animus workflow definitions upsert --help' for schema"
                     })?;
                 print_value(phases::upsert_pipeline(project_root, workflow)?, json)
             }
