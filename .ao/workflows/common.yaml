@@ -9,32 +9,6 @@ mcp_servers:
     args:
     - -y
     - '@upstash/context7-mcp'
-  rust-docs:
-    command: npx
-    args:
-    - -y
-    - rust-docs-mcp-server
-  github:
-    command: npx
-    args:
-    - -y
-    - 'gh-cli-mcp'
-  sequential-thinking:
-    command: npx
-    args:
-    - -y
-    - '@modelcontextprotocol/server-sequential-thinking'
-  memory:
-    command: npx
-    args:
-    - -y
-    - '@modelcontextprotocol/server-memory'
-  filesystem:
-    command: npx
-    args:
-    - -y
-    - '@modelcontextprotocol/server-filesystem'
-    - /Users/samishukri/ao-cli
 agents:
   default:
     model: claude-haiku-4-5
@@ -43,8 +17,6 @@ agents:
     mcp_servers:
     - ao
     - context7
-    - rust-docs
-    - sequential-thinking
   requirements-refiner:
     system_prompt: |
       You are a requirements analyst for the ao-cli Rust workspace.
@@ -56,7 +28,6 @@ agents:
     mcp_servers:
     - ao
     - context7
-    - rust-docs
   po-reviewer:
     system_prompt: |
       You are a Product Owner reviewing completed development work.

@@ -112,7 +112,7 @@ agents:
     mcp_servers:
       - ao
       - context7
-      - rust-docs
+      - context7
 
   req-reviewer:
     system_prompt: |
@@ -177,7 +177,7 @@ agents:
     mcp_servers:
       - ao
       - context7
-      - rust-docs
+      - context7
 
 phases:
   req-dispatch:

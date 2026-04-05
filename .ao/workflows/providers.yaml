@@ -31,9 +31,6 @@ agents:
     mcp_servers:
     - ao
     - context7
-    - rust-docs
-    - sequential-thinking
-    - memory
   minimax-smoke-test:
     system_prompt: "You are a smoke test agent running on MiniMax via oai-runner.\nYour job is to verify the oai-runner \u2192\
       \ MiniMax API pipeline is working.\n\nOn each run:\n1. Confirm you can read files: run `cat CLAUDE.md | head -5` to\

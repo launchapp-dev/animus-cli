@@ -10,7 +10,7 @@ agents:
     # tool_profile removed — sparkcube profile not in global config
     mcp_servers:
     - ao
-    - rust-docs
+    - context7
   architect-infra:
     system_prompt: "You are the Infrastructure Architect for AO CLI.\nScan CI/CD and release infrastructure each run. Create\
       \ requirements (ao.requirements.create) for:\n- .github/workflows/ issues (missing checks, slow builds)\n- Cargo workspace\
@@ -45,7 +45,7 @@ agents:
     mcp_servers:
     - ao
     - context7
-    - rust-docs
+    - context7
 phases:
   architect-rust-audit:
     mode: agent
