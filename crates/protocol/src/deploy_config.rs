@@ -85,13 +85,17 @@ impl DeployConfig {
 
     pub fn fly_token(&self) -> anyhow::Result<String> {
         self.fly_token.clone().ok_or_else(|| {
-            anyhow::anyhow!("Fly.io token not configured. Provide --fly-token or set via: ao cloud deploy --fly-token <token>")
+            anyhow::anyhow!(
+                "Fly.io token not configured. Provide --fly-token or set via: ao cloud deploy --fly-token <token>"
+            )
         })
     }
 
     pub fn app_name(&self) -> anyhow::Result<String> {
         self.app_name.clone().ok_or_else(|| {
-            anyhow::anyhow!("Application name not configured. Provide --app-name or set via: ao cloud deploy --app-name <name>")
+            anyhow::anyhow!(
+                "Application name not configured. Provide --app-name or set via: ao cloud deploy --app-name <name>"
+            )
         })
     }
 }

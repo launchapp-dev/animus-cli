@@ -334,7 +334,10 @@ pub fn parse_github_url(url: &str) -> Result<(String, String, GitHubUrlType)> {
         }
     }
 
-    Err(anyhow!("invalid GitHub URL format: {}. Expected https://github.com/owner/repo or git@github.com:owner/repo", trimmed))
+    Err(anyhow!(
+        "invalid GitHub URL format: {}. Expected https://github.com/owner/repo or git@github.com:owner/repo",
+        trimmed
+    ))
 }
 
 /// Get the GitHub token from environment variable
@@ -386,7 +389,10 @@ fn git_clone_github(url: &str, target: &Path) -> Result<()> {
         .with_context(|| format!("failed to run git clone for {}", url))?;
 
     if !status.success() {
-        return Err(anyhow!("git clone failed for {}. Ensure GITHUB_TOKEN is set if this is a private repository.", url));
+        return Err(anyhow!(
+            "git clone failed for {}. Ensure GITHUB_TOKEN is set if this is a private repository.",
+            url
+        ));
     }
     Ok(())
 }
@@ -440,8 +446,7 @@ mod tests {
 
     #[test]
     fn test_parse_github_https_url_with_git_suffix() {
-        let (owner, repo, url_type) =
-            parse_github_url("https://github.com/AudioGenius-ai/ao-cli.git").unwrap();
+        let (owner, repo, url_type) = parse_github_url("https://github.com/AudioGenius-ai/ao-cli.git").unwrap();
         assert_eq!(owner, "AudioGenius-ai");
         assert_eq!(repo, "ao-cli");
         assert_eq!(url_type, GitHubUrlType::Https);

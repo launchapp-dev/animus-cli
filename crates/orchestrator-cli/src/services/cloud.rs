@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     print_value, CloudCommand, CloudLinkArgs, CloudSetupArgs, DeployCommand, DeployCreateArgs, DeployDestroyArgs,
-    DeployStartArgs, DeployStopArgs, DeployStatusArgs,
+    DeployStartArgs, DeployStatusArgs, DeployStopArgs,
 };
 
 pub(crate) async fn handle_cloud(
@@ -449,7 +449,10 @@ async fn handle_status_deploy(args: DeployStatusArgs, project_root: &str, json: 
         if let Some(region) = &result.region {
             eprintln!("Region: {}", region);
         }
-        eprintln!("Machines: {}", if result.machines.is_empty() { "none".to_string() } else { result.machines.join(", ") });
+        eprintln!(
+            "Machines: {}",
+            if result.machines.is_empty() { "none".to_string() } else { result.machines.join(", ") }
+        );
         if let Some(deployed_at) = &result.last_deployed_at {
             eprintln!("Last deployed: {}", deployed_at);
         }

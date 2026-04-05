@@ -50,22 +50,14 @@ fn builtin_workflow_config_includes_planning_workflow_refs() {
 #[test]
 fn standard_workflow_has_feature_branch_merge_configuration() {
     let config = builtin_workflow_config();
-    let standard_workflow = config
-        .workflows
-        .iter()
-        .find(|w| w.id == "standard-workflow")
-        .expect("standard-workflow should exist");
+    let standard_workflow =
+        config.workflows.iter().find(|w| w.id == "standard-workflow").expect("standard-workflow should exist");
 
     // Verify post_success is configured for feature branch workflow
-    let post_success = standard_workflow
-        .post_success
-        .as_ref()
-        .expect("standard-workflow should have post_success configured");
+    let post_success =
+        standard_workflow.post_success.as_ref().expect("standard-workflow should have post_success configured");
 
-    let merge_config = post_success
-        .merge
-        .as_ref()
-        .expect("standard-workflow should have merge configuration");
+    let merge_config = post_success.merge.as_ref().expect("standard-workflow should have merge configuration");
 
     // Feature branch workflow should create a PR without auto-merging
     assert_eq!(merge_config.target_branch, "main");
@@ -78,22 +70,14 @@ fn standard_workflow_has_feature_branch_merge_configuration() {
 #[test]
 fn ui_ux_workflow_has_feature_branch_merge_configuration() {
     let config = builtin_workflow_config();
-    let ui_ux_workflow = config
-        .workflows
-        .iter()
-        .find(|w| w.id == "ui-ux-standard")
-        .expect("ui-ux-standard should exist");
+    let ui_ux_workflow =
+        config.workflows.iter().find(|w| w.id == "ui-ux-standard").expect("ui-ux-standard should exist");
 
     // Verify post_success is configured for feature branch workflow
-    let post_success = ui_ux_workflow
-        .post_success
-        .as_ref()
-        .expect("ui-ux-standard should have post_success configured");
+    let post_success =
+        ui_ux_workflow.post_success.as_ref().expect("ui-ux-standard should have post_success configured");
 
-    let merge_config = post_success
-        .merge
-        .as_ref()
-        .expect("ui-ux-standard should have merge configuration");
+    let merge_config = post_success.merge.as_ref().expect("ui-ux-standard should have merge configuration");
 
     // Feature branch workflow should create a PR without auto-merging
     assert_eq!(merge_config.target_branch, "main");
@@ -124,7 +108,8 @@ fn checkpoint_retention_requires_positive_keep_last_per_phase() {
 #[test]
 fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
+    let standard_pipeline =
+        config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
 
     let mut on_verdict = HashMap::new();
     on_verdict.insert(
@@ -155,7 +140,8 @@ fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
 #[test]
 fn validation_rejects_zero_max_rework_attempts() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
+    let standard_pipeline =
+        config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
 
     standard_pipeline.phases[1] = WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
         id: "implementation".to_string(),
@@ -302,7 +288,8 @@ fn pipeline_definition_deserializes_mixed_phase_entries() {
 #[test]
 fn resolve_workflow_skip_guards_extracts_guards_from_config() {
     let mut config = builtin_workflow_config();
-    let standard_pipeline = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
+    let standard_pipeline =
+        config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
     standard_pipeline.phases = vec![
         "requirements".to_string().into(),
         WorkflowPhaseEntry::Rich(WorkflowPhaseConfig {
