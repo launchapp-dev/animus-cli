@@ -29,7 +29,7 @@ fn is_enabled() -> bool {
 }
 
 fn ao_binary() -> PathBuf {
-    assert_cmd::cargo::cargo_bin!("ao").to_path_buf()
+    assert_cmd::cargo::cargo_bin!("animus").to_path_buf()
 }
 
 fn project_root() -> String {

@@ -13,7 +13,7 @@ pub struct CliHarness {
 
 impl CliHarness {
     pub fn new() -> Result<Self> {
-        let binary_path = assert_cmd::cargo::cargo_bin!("ao").to_path_buf();
+        let binary_path = assert_cmd::cargo::cargo_bin!("animus").to_path_buf();
         let project_root = tempfile::tempdir().context("failed to create project root tempdir")?;
         let config_root = tempfile::tempdir().context("failed to create config root tempdir")?;
         Ok(Self { binary_path, project_root, config_root })

@@ -3,7 +3,7 @@ use std::process::Command;
 
 #[test]
 fn help_includes_top_level_usage() -> Result<(), Box<dyn std::error::Error>> {
-    let binary = assert_cmd::cargo::cargo_bin!("ao");
+    let binary = assert_cmd::cargo::cargo_bin!("animus");
     let output = Command::new(binary).arg("--help").output()?;
     assert!(output.status.success(), "help command should succeed");
     let stdout = String::from_utf8(output.stdout)?;
@@ -15,7 +15,7 @@ fn help_includes_top_level_usage() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn std::error::Error>> {
-    let binary = assert_cmd::cargo::cargo_bin!("ao");
+    let binary = assert_cmd::cargo::cargo_bin!("animus");
 
     let top_level_help = Command::new(&binary).arg("--help").output()?;
     assert!(top_level_help.status.success(), "top-level help should succeed");
@@ -88,7 +88,7 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
 
 #[test]
 fn help_surfaces_accepted_values_and_confirmation_guidance() -> Result<(), Box<dyn std::error::Error>> {
-    let binary = assert_cmd::cargo::cargo_bin!("ao");
+    let binary = assert_cmd::cargo::cargo_bin!("animus");
 
     let task_help = Command::new(&binary).args(["task", "list", "--help"]).output()?;
     assert!(task_help.status.success(), "task list help should succeed");
@@ -186,7 +186,7 @@ fn help_surfaces_accepted_values_and_confirmation_guidance() -> Result<(), Box<d
 
 #[test]
 fn help_uses_explicit_value_names_and_repeatable_flag_guidance() -> Result<(), Box<dyn std::error::Error>> {
-    let binary = assert_cmd::cargo::cargo_bin!("ao");
+    let binary = assert_cmd::cargo::cargo_bin!("animus");
 
     let task_update_help = Command::new(&binary).args(["task", "update", "--help"]).output()?;
     assert!(task_update_help.status.success(), "task update help should succeed");
@@ -240,7 +240,7 @@ fn help_uses_explicit_value_names_and_repeatable_flag_guidance() -> Result<(), B
 
 #[test]
 fn version_subcommand_supports_json_output() -> Result<(), Box<dyn std::error::Error>> {
-    let binary = assert_cmd::cargo::cargo_bin!("ao");
+    let binary = assert_cmd::cargo::cargo_bin!("animus");
     let output = Command::new(binary).args(["--json", "version"]).output()?;
     assert!(output.status.success(), "version command should succeed");
 
@@ -256,7 +256,7 @@ fn version_subcommand_supports_json_output() -> Result<(), Box<dyn std::error::E
 
 #[test]
 fn invalid_arguments_include_usage_and_help_hint() -> Result<(), Box<dyn std::error::Error>> {
-    let binary = assert_cmd::cargo::cargo_bin!("ao");
+    let binary = assert_cmd::cargo::cargo_bin!("animus");
     let output = Command::new(binary).args(["task", "list", "--bogus"]).output()?;
 
     assert!(!output.status.success(), "unknown argument should produce a failing exit code");
