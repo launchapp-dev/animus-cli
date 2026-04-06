@@ -24,7 +24,7 @@
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samishukri/animus/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
 ```
 
 The upstream installer currently targets macOS. On Linux and Windows, use a release archive or build from source.
@@ -34,10 +34,10 @@ The upstream installer currently targets macOS. On Linux and Windows, use a rele
 
 ```bash
 # Specific version
-ANIMUS_VERSION=v0.0.11 curl -fsSL https://raw.githubusercontent.com/samishukri/animus/main/install.sh | bash
+AO_VERSION=v0.3.0 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
 
 # Custom directory
-ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/samishukri/animus/main/install.sh | bash
+AO_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
 ```
 
 </details>
@@ -386,7 +386,7 @@ This project is licensed under the [Elastic License 2.0 (ELv2)](LICENSE). You ma
 **Update**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/samishukri/animus/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
 ```
 
 **Uninstall**

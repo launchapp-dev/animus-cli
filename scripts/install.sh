@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# AO CLI Installer for macOS
-# Usage: curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao-cli/main/scripts/install.sh | bash
+# Animus CLI Installer for macOS
+# Usage: curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
 
 REPO="launchapp-dev/ao"
 INSTALL_DIR="${AO_INSTALL_DIR:-${HOME}/.local/bin}"
-BINARIES=(ao agent-runner llm-cli-wrapper)
+BINARIES=(animus agent-runner llm-cli-wrapper ao-oai-runner ao-workflow-runner)
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
@@ -60,7 +60,7 @@ main() {
   target="$(detect_arch)"
   version="$(detect_version)"
 
-  info "Installing AO CLI ${version} for ${target}"
+  info "Installing Animus CLI ${version} for ${target}"
 
   archive_name="ao-${version}-${target}.tar.gz"
   archive_url="https://github.com/${REPO}/releases/download/${version}/${archive_name}"
@@ -94,6 +94,7 @@ main() {
     if [[ ! -f "${stage_dir}/${bin}" ]]; then
       error "Binary '${bin}' not found in archive"
     fi
+    rm -f "${INSTALL_DIR}/${bin}"
     cp "${stage_dir}/${bin}" "${INSTALL_DIR}/${bin}"
     chmod +x "${INSTALL_DIR}/${bin}"
     if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign &>/dev/null; then
@@ -101,10 +102,15 @@ main() {
     fi
   done
 
+  # Create 'ao' as a symlink to 'animus' for backwards compatibility
+  rm -f "${INSTALL_DIR}/ao"
+  ln -s "${INSTALL_DIR}/animus" "${INSTALL_DIR}/ao"
+
   info "Installed to ${INSTALL_DIR}:"
   for bin in "${BINARIES[@]}"; do
     printf '  %s\n' "${INSTALL_DIR}/${bin}"
   done
+  printf '  %s → %s (symlink)\n' "${INSTALL_DIR}/ao" "animus"
 
   if ! echo "${PATH}" | tr ':' '\n' | grep -qxF "${INSTALL_DIR}"; then
     warn "${INSTALL_DIR} is not in your PATH"
@@ -119,7 +125,14 @@ main() {
     echo ""
   fi
 
-  if command -v ao &>/dev/null; then
+  if command -v animus &>/dev/null; then
+    info "Verifying installation..."
+    animus --version
+    echo ""
+    info "Run 'animus doctor' in a git repo to check prerequisites"
+    info "Run 'animus setup' to initialize a project"
+    info "'ao' is also available as an alias"
+  elif command -v ao &>/dev/null; then
     info "Verifying installation..."
     ao --version
     echo ""
@@ -127,7 +140,7 @@ main() {
     info "Run 'ao setup' to initialize a project"
   else
     echo ""
-    info "Restart your shell, then run 'ao --version' to verify"
+    info "Restart your shell, then run 'animus --version' to verify"
   fi
 
   echo ""
