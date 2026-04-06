@@ -44,10 +44,7 @@ async fn handle_login(args: CloudLoginArgs, json: bool) -> Result<()> {
 
     // Step 2: Open browser to the cloud CLI auth endpoint
     // Flow: /api/cli/auth/start → GitHub OAuth → /api/cli/auth/complete → localhost:19823/callback?token=TOKEN
-    let auth_url = format!(
-        "{}/api/cli/auth/start?port={}&state={}",
-        server, port, urlencoding::encode(&state),
-    );
+    let auth_url = format!("{}/api/cli/auth/start?port={}&state={}", server, port, urlencoding::encode(&state),);
 
     if args.no_browser {
         if !json {
