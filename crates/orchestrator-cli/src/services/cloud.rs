@@ -398,21 +398,50 @@ async fn handle_deploy(command: DeployCommand, project_root: &str, json: bool) -
 }
 
 async fn handle_create(args: DeployCreateArgs, project_root: &str, json: bool) -> Result<()> {
-    let mut deploy_config = DeployConfig::load_for_project(project_root);
+    let config = SyncConfig::load_for_project(project_root);
+    let server = config.server_url()?;
+    let token = config.bearer_token()?;
+    let project_id = config
+        .project_id
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
 
-    // For production deployment, we would use the Fly.io API token
-    // For now, we save the configuration and provide feedback
+    let client = build_client(&token)?;
+    let create_request = CreateDaemonRequest {
+        app_name: args.app_name.clone(),
+        region: args.region.clone(),
+        machine_size: args.machine_size.clone(),
+    };
+
+    let resp = client
+        .post(&format!("{}/api/cli/projects/{}/daemons", server.trim_end_matches('/'), project_id))
+        .json(&create_request)
+        .send()
+        .await
+        .context("Failed to connect to daemon creation endpoint")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Daemon creation failed ({status}): {body}");
+    }
+
+    let daemon_resp: DaemonResponse = resp.json().await.context("Failed to parse daemon response")?;
+
+    // Save daemon ID locally for future reference
+    let mut deploy_config = DeployConfig::load_for_project(project_root);
     deploy_config.app_name = Some(args.app_name.clone());
     deploy_config.region = Some(args.region.clone());
     deploy_config.last_deployed_at = Some(chrono::Utc::now().to_rfc3339());
+    deploy_config.machine_ids.push(daemon_resp.daemon_id.clone());
     deploy_config.save_for_project(project_root)?;
 
     let result = DeployCreateResult {
         app_name: args.app_name,
         region: args.region,
         machine_size: args.machine_size,
-        status: "created".to_string(),
-        deployed_at: deploy_config.last_deployed_at.clone().unwrap_or_default(),
+        status: daemon_resp.status,
+        deployed_at: daemon_resp.created_at,
     };
 
     if !json {
@@ -426,28 +455,62 @@ async fn handle_create(args: DeployCreateArgs, project_root: &str, json: bool) -
 }
 
 async fn handle_destroy(args: DeployDestroyArgs, project_root: &str, json: bool) -> Result<()> {
-    let mut deploy_config = DeployConfig::load_for_project(project_root);
+    let config = SyncConfig::load_for_project(project_root);
+    let server = config.server_url()?;
+    let token = config.bearer_token()?;
+    let project_id = config
+        .project_id
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
+
+    let deploy_config = DeployConfig::load_for_project(project_root);
 
     // Verify the app name matches
     if let Some(ref configured_app) = deploy_config.app_name {
         if configured_app != &args.app_name {
             anyhow::bail!(
-                "App name mismatch: configured '{}' but attempting to destroy '{}'. Use 'ao cloud status' to check.",
+                "App name mismatch: configured '{}' but attempting to destroy '{}'. Use 'ao cloud deploy status' to check.",
                 configured_app,
                 args.app_name
             );
         }
+    } else {
+        anyhow::bail!("No deployment configured for this project. Run 'ao cloud deploy create' first.");
     }
 
-    // Clear deployment configuration
+    // Get the daemon ID from local config
+    let daemon_id = deploy_config
+        .machine_ids
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No daemon ID found in local configuration"))?;
+
+    let client = build_client(&token)?;
+    let resp = client
+        .delete(&format!(
+            "{}/api/cli/projects/{}/daemons/{}",
+            server.trim_end_matches('/'),
+            project_id,
+            daemon_id
+        ))
+        .send()
+        .await
+        .context("Failed to connect to daemon destruction endpoint")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Daemon destruction failed ({status}): {body}");
+    }
+
+    // Clear deployment configuration locally
+    let mut deploy_config = DeployConfig::load_for_project(project_root);
     deploy_config.app_name = None;
     deploy_config.region = None;
     deploy_config.machine_ids.clear();
     deploy_config.status = Some("destroyed".to_string());
     deploy_config.save_for_project(project_root)?;
 
-    let result =
-        DeployDestroyResult { app_name: args.app_name, status: "destroyed".to_string(), machines_destroyed: 0 };
+    let result = DeployDestroyResult { app_name: args.app_name, status: "destroyed".to_string(), machines_destroyed: 1 };
 
     if !json {
         eprintln!("Deployment destroyed successfully!");
@@ -455,6 +518,23 @@ async fn handle_destroy(args: DeployDestroyArgs, project_root: &str, json: bool)
     }
 
     print_value(result, json)
+}
+
+#[derive(Serialize)]
+struct CreateDaemonRequest {
+    app_name: String,
+    region: String,
+    machine_size: String,
+}
+
+#[derive(Deserialize)]
+struct DaemonResponse {
+    daemon_id: String,
+    app_name: String,
+    region: String,
+    status: String,
+    created_at: String,
+    updated_at: Option<String>,
 }
 
 fn build_client(token: &str) -> Result<reqwest::Client> {
@@ -653,6 +733,14 @@ struct DeployCreateResult {
 }
 
 async fn handle_start(args: DeployStartArgs, project_root: &str, json: bool) -> Result<()> {
+    let config = SyncConfig::load_for_project(project_root);
+    let server = config.server_url()?;
+    let token = config.bearer_token()?;
+    let project_id = config
+        .project_id
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
+
     let deploy_config = DeployConfig::load_for_project(project_root);
 
     // Verify the app name matches
@@ -668,10 +756,36 @@ async fn handle_start(args: DeployStartArgs, project_root: &str, json: bool) -> 
         anyhow::bail!("No deployment configured for this project. Run 'ao cloud deploy create' first.");
     }
 
+    // Get the daemon ID from local config
+    let daemon_id = deploy_config
+        .machine_ids
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No daemon ID found in local configuration"))?;
+
+    let client = build_client(&token)?;
+    let resp = client
+        .post(&format!(
+            "{}/api/cli/projects/{}/daemons/{}/start",
+            server.trim_end_matches('/'),
+            project_id,
+            daemon_id
+        ))
+        .send()
+        .await
+        .context("Failed to connect to daemon start endpoint")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Daemon start failed ({status}): {body}");
+    }
+
+    let daemon_resp: DaemonResponse = resp.json().await.context("Failed to parse daemon response")?;
+
     let result = DeployStartResult {
         app_name: args.app_name,
-        status: "started".to_string(),
-        started_at: chrono::Utc::now().to_rfc3339(),
+        status: daemon_resp.status,
+        started_at: daemon_resp.updated_at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
     };
 
     if !json {
@@ -684,6 +798,14 @@ async fn handle_start(args: DeployStartArgs, project_root: &str, json: bool) -> 
 }
 
 async fn handle_stop(args: DeployStopArgs, project_root: &str, json: bool) -> Result<()> {
+    let config = SyncConfig::load_for_project(project_root);
+    let server = config.server_url()?;
+    let token = config.bearer_token()?;
+    let project_id = config
+        .project_id
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
+
     let deploy_config = DeployConfig::load_for_project(project_root);
 
     // Verify the app name matches
@@ -699,10 +821,36 @@ async fn handle_stop(args: DeployStopArgs, project_root: &str, json: bool) -> Re
         anyhow::bail!("No deployment configured for this project. Run 'ao cloud deploy create' first.");
     }
 
+    // Get the daemon ID from local config
+    let daemon_id = deploy_config
+        .machine_ids
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No daemon ID found in local configuration"))?;
+
+    let client = build_client(&token)?;
+    let resp = client
+        .post(&format!(
+            "{}/api/cli/projects/{}/daemons/{}/stop",
+            server.trim_end_matches('/'),
+            project_id,
+            daemon_id
+        ))
+        .send()
+        .await
+        .context("Failed to connect to daemon stop endpoint")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Daemon stop failed ({status}): {body}");
+    }
+
+    let daemon_resp: DaemonResponse = resp.json().await.context("Failed to parse daemon response")?;
+
     let result = DeployStopResult {
         app_name: args.app_name,
-        status: "stopped".to_string(),
-        stopped_at: chrono::Utc::now().to_rfc3339(),
+        status: daemon_resp.status,
+        stopped_at: daemon_resp.updated_at.unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
     };
 
     if !json {
@@ -715,24 +863,61 @@ async fn handle_stop(args: DeployStopArgs, project_root: &str, json: bool) -> Re
 }
 
 async fn handle_status_deploy(args: DeployStatusArgs, project_root: &str, json: bool) -> Result<()> {
+    let config = SyncConfig::load_for_project(project_root);
+    let server = config.server_url()?;
+    let token = config.bearer_token()?;
+    let project_id = config
+        .project_id
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
+
     let deploy_config = DeployConfig::load_for_project(project_root);
 
     // Check if the app name matches if a deployment is configured
     if let Some(ref configured_app) = deploy_config.app_name {
         if configured_app != &args.app_name {
             anyhow::bail!(
-                "App name mismatch: configured '{}' but checking status for '{}'. Use 'ao cloud deploy status' without --app-name to check configured deployment.",
+                "App name mismatch: configured '{}' but checking status for '{}'. Use 'ao cloud deploy status --app-name {}' to check configured deployment.",
                 configured_app,
-                args.app_name
+                args.app_name,
+                configured_app
             );
         }
+    } else {
+        anyhow::bail!("No deployment configured for this project. Run 'ao cloud deploy create' first.");
     }
+
+    // Get the daemon ID from local config
+    let daemon_id = deploy_config
+        .machine_ids
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("No daemon ID found in local configuration"))?;
+
+    let client = build_client(&token)?;
+    let resp = client
+        .get(&format!(
+            "{}/api/cli/projects/{}/daemons/{}",
+            server.trim_end_matches('/'),
+            project_id,
+            daemon_id
+        ))
+        .send()
+        .await
+        .context("Failed to connect to daemon status endpoint")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Daemon status check failed ({status}): {body}");
+    }
+
+    let daemon_resp: DaemonResponse = resp.json().await.context("Failed to parse daemon response")?;
 
     let result = DeployStatusDeployResult {
         app_name: args.app_name,
-        status: deploy_config.status.clone().unwrap_or_else(|| "unknown".to_string()),
+        status: daemon_resp.status,
         region: deploy_config.region.clone(),
-        machines: deploy_config.machine_ids.clone(),
+        machines: vec![daemon_resp.daemon_id],
         last_deployed_at: deploy_config.last_deployed_at.clone(),
     };
 
