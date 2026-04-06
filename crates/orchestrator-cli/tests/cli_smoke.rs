@@ -7,7 +7,7 @@ fn help_includes_top_level_usage() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new(binary).arg("--help").output()?;
     assert!(output.status.success(), "help command should succeed");
     let stdout = String::from_utf8(output.stdout)?;
-    assert!(stdout.contains("Agent Orchestrator CLI"), "help output should include CLI title");
+    assert!(stdout.contains("Animus — the spirit that drives your agents"), "help output should include CLI title");
     assert!(stdout.contains("Usage: ao [OPTIONS] <COMMAND>"), "help output should include usage line");
     assert!(stdout.contains("status"), "help output should include status command");
     Ok(())

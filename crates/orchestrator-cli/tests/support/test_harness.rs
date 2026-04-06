@@ -37,7 +37,7 @@ impl CliHarness {
 
         if !output.status.success() {
             anyhow::bail!(
-                "command failed ({:?}): ao --json --project-root {} {}\nstdout:\n{}\nstderr:\n{}",
+                "command failed ({:?}): animus --json --project-root {} {}\nstdout:\n{}\nstderr:\n{}",
                 output.status.code(),
                 self.project_root.path().display(),
                 args.join(" "),
