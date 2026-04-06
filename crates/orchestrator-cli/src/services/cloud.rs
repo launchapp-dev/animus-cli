@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use orchestrator_core::{FileServiceHub, ServiceHub};
@@ -8,8 +9,8 @@ use protocol::DeployConfig;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    print_value, CloudCommand, CloudLinkArgs, CloudSetupArgs, DeployCommand, DeployCreateArgs, DeployDestroyArgs,
-    DeployStartArgs, DeployStatusArgs, DeployStopArgs,
+    print_value, CloudCommand, CloudLinkArgs, CloudLoginArgs, CloudSetupArgs, DeployCommand, DeployCreateArgs,
+    DeployDestroyArgs, DeployStartArgs, DeployStatusArgs, DeployStopArgs,
 };
 
 pub(crate) async fn handle_cloud(
@@ -19,6 +20,7 @@ pub(crate) async fn handle_cloud(
     json: bool,
 ) -> Result<()> {
     match command {
+        CloudCommand::Login(args) => handle_login(args, json).await,
         CloudCommand::Setup(args) => handle_setup(args, project_root, json).await,
         CloudCommand::Link(args) => handle_link(args, project_root, json).await,
         CloudCommand::Push => handle_push(hub, project_root, json).await,
@@ -26,6 +28,102 @@ pub(crate) async fn handle_cloud(
         CloudCommand::Status => handle_status(project_root, json).await,
         CloudCommand::Deploy { command: deploy_cmd } => handle_deploy(deploy_cmd, project_root, json).await,
     }
+}
+
+async fn handle_login(args: CloudLoginArgs, json: bool) -> Result<()> {
+    let server = args.server.unwrap_or_else(|| "https://api.animus.cloud".to_string());
+    let server = server.trim_end_matches('/');
+
+    // Step 1: Initiate device auth flow
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(&format!("{}/api/cli/auth/initiate", server))
+        .send()
+        .await
+        .context("Failed to connect to auth server")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Auth initiation failed ({status}): {body}");
+    }
+
+    let auth_response: AuthInitiateResponse = resp.json().await.context("Failed to parse auth response")?;
+
+    // Step 2: Open browser or print URL
+    let auth_url = &auth_response.auth_url;
+    if args.no_browser {
+        if !json {
+            eprintln!("Open the following URL in your browser to authenticate:");
+            eprintln!("{}", auth_url);
+            eprintln!("Device code: {}", auth_response.device_code);
+        }
+    } else {
+        // Attempt to open browser
+        let _ = open_browser(auth_url);
+        if !json {
+            eprintln!("Opening browser for authentication...");
+            eprintln!("If browser did not open, visit: {}", auth_url);
+        }
+    }
+
+    // Step 3: Poll for completion
+    let max_attempts = 120; // 2 minutes with 1 second polling
+    let poll_interval = Duration::from_secs(1);
+
+    for attempt in 0..max_attempts {
+        tokio::time::sleep(poll_interval).await;
+
+        let resp = client
+            .post(&format!("{}/api/cli/auth/complete", server))
+            .json(&AuthCompleteRequest { device_code: auth_response.device_code.clone() })
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                let complete_response: AuthCompleteResponse =
+                    r.json().await.context("Failed to parse completion response")?;
+
+                // Step 4: Store token in SyncConfig
+                let mut config = SyncConfig::load_global();
+                config.server = Some(server.to_string());
+                config.token = Some(complete_response.token.clone());
+                config.save_global()?;
+
+                let result = LoginResult {
+                    authenticated: true,
+                    server: server.to_string(),
+                    message: "Successfully authenticated with animus cloud".to_string(),
+                };
+
+                if !json {
+                    eprintln!("✓ Authentication successful!");
+                    eprintln!("Server: {}", server);
+                }
+
+                return print_value(result, json);
+            }
+            Ok(r) if r.status().as_u16() == 400 => {
+                // Not yet complete, continue polling
+                continue;
+            }
+            Ok(r) => {
+                let status = r.status();
+                let body = r.text().await.unwrap_or_default();
+                anyhow::bail!("Auth completion failed ({status}): {body}");
+            }
+            Err(e) if attempt < max_attempts - 1 => {
+                // Network error, retry
+                continue;
+            }
+            Err(e) => {
+                anyhow::bail!("Auth completion request failed: {}", e);
+            }
+        }
+    }
+
+    anyhow::bail!("Authentication timeout - user did not complete login within 2 minutes")
 }
 
 async fn handle_setup(args: CloudSetupArgs, project_root: &str, json: bool) -> Result<()> {
@@ -489,4 +587,57 @@ struct DeployStatusDeployResult {
     region: Option<String>,
     machines: Vec<String>,
     last_deployed_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct AuthInitiateResponse {
+    device_code: String,
+    auth_url: String,
+}
+
+#[derive(Serialize)]
+struct AuthCompleteRequest {
+    device_code: String,
+}
+
+#[derive(Deserialize)]
+struct AuthCompleteResponse {
+    token: String,
+}
+
+#[derive(Serialize)]
+struct LoginResult {
+    authenticated: bool,
+    server: String,
+    message: String,
+}
+
+fn open_browser(url: &str) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open").arg(url).spawn()?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Try xdg-open first, then firefox, then chromium
+        let _ = std::process::Command::new("xdg-open").arg(url).spawn().or_else(|_| {
+            std::process::Command::new("firefox")
+                .arg(url)
+                .spawn()
+                .or_else(|_| std::process::Command::new("chromium").arg(url).spawn())
+        });
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("cmd").args(&["/C", "start", url]).spawn()?;
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        // On other platforms, just return Ok (user will need to visit URL manually)
+    }
+
+    Ok(())
 }
