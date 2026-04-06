@@ -180,8 +180,12 @@ async fn handle_link(args: CloudLinkArgs, project_root: &str, json: bool) -> Res
         let origin_url = get_git_origin(project_root)
             .ok_or_else(|| anyhow::anyhow!("Could not detect git remote. Run: animus cloud link --project-id <id>"))?;
 
-        let (owner, repo) = parse_github_repo(&origin_url)
-            .ok_or_else(|| anyhow::anyhow!("Could not parse GitHub repo from remote URL: {}. Run: animus cloud link --project-id <id>", origin_url))?;
+        let (owner, repo) = parse_github_repo(&origin_url).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Could not parse GitHub repo from remote URL: {}. Run: animus cloud link --project-id <id>",
+                origin_url
+            )
+        })?;
 
         // Call /api/cli/projects/ensure to check for GitHub App installation
         let client = build_client(&token)?;
@@ -192,23 +196,22 @@ async fn handle_link(args: CloudLinkArgs, project_root: &str, json: bool) -> Res
             urlencoding(&repo)
         );
 
-        let resp = client
-            .post(&ensure_url)
-            .send()
-            .await
-            .context("Failed to connect to projects endpoint")?;
+        let resp = client.post(&ensure_url).send().await.context("Failed to connect to projects endpoint")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             if status.as_u16() == 404 {
-                anyhow::bail!("No GitHub App installation found for {}/{}. Run: animus cloud link --project-id <id>", owner, repo);
+                anyhow::bail!(
+                    "No GitHub App installation found for {}/{}. Run: animus cloud link --project-id <id>",
+                    owner,
+                    repo
+                );
             }
             anyhow::bail!("Project detection failed ({status}): {body}");
         }
 
-        let body = resp.json::<EnsureProjectResponse>().await
-            .context("Failed to parse projects response")?;
+        let body = resp.json::<EnsureProjectResponse>().await.context("Failed to parse projects response")?;
         body.project_id
     };
 
