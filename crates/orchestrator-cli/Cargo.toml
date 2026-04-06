@@ -9,10 +9,6 @@ default-run = "animus"
 name = "animus"
 path = "src/main.rs"
 
-[[bin]]
-name = "ao"
-path = "src/main.rs"
-
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
