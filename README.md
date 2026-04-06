@@ -11,7 +11,7 @@
 <br/>
 
 
-<a href="https://github.com/samishukri/ao-cli/releases/latest"><img src="https://img.shields.io/github/v/release/samishukri/animus?style=for-the-badge&color=1f6feb&labelColor=0d1117&logo=github&logoColor=f0f6fc" alt="Release" /></a>
+<a href="https://github.com/samishukri/launchapp-dev/ao/releases/latest"><img src="https://img.shields.io/github/v/release/samishukri/animus?style=for-the-badge&color=1f6feb&labelColor=0d1117&logo=github&logoColor=f0f6fc" alt="Release" /></a>
 &nbsp;
 <img src="https://img.shields.io/badge/rust-100%25-f0f6fc?style=for-the-badge&labelColor=0d1117&logo=rust&logoColor=f0f6fc" alt="Rust" />
 &nbsp;
