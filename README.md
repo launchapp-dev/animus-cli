@@ -198,7 +198,7 @@ schedules:
 
 ## The Full Agent Team
 
-AO doesn't run one agent. It runs an **entire product organization**:
+Animus doesn't run one agent. It runs an **entire product organization**:
 
 ```
   ┌─────────────────────────────────────────────────────────────────┐
