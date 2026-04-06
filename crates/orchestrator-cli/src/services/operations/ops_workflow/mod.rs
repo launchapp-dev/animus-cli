@@ -391,7 +391,10 @@ pub(crate) async fn handle_workflow(
                         serde_json::json!({"id": &workflow_id}),
                         "workflow.pause",
                         vec!["pause workflow execution".to_string()],
-                        &format!("rerun 'animus workflow pause --id {} --confirm {}' to apply", workflow_id, workflow_id),
+                        &format!(
+                            "rerun 'animus workflow pause --id {} --confirm {}' to apply",
+                            workflow_id, workflow_id
+                        ),
                     ),
                     json,
                 );
@@ -416,7 +419,10 @@ pub(crate) async fn handle_workflow(
                         serde_json::json!({"id": &workflow_id}),
                         "workflow.cancel",
                         vec!["cancel workflow execution".to_string()],
-                        &format!("rerun 'animus workflow cancel --id {} --confirm {}' to apply", workflow_id, workflow_id),
+                        &format!(
+                            "rerun 'animus workflow cancel --id {} --confirm {}' to apply",
+                            workflow_id, workflow_id
+                        ),
                     ),
                     json,
                 );
