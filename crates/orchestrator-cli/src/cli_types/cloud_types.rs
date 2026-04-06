@@ -10,7 +10,7 @@ pub(crate) enum CloudCommand {
     Push,
     /// Pull tasks and requirements from the sync server into local state.
     Pull,
-    /// Show sync configuration and last sync status.
+    /// Show sync configuration, cloud projects, daemon states, and active workflows.
     Status,
     /// Link this project to a specific remote project by ID.
     Link(CloudLinkArgs),

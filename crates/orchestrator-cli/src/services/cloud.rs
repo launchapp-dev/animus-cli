@@ -378,13 +378,52 @@ async fn handle_pull(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
 
 async fn handle_status(project_root: &str, json: bool) -> Result<()> {
     let config = SyncConfig::load_for_project(project_root);
+
+    // Try to fetch cloud status if configured
+    let (projects, daemons, workflows) = if config.is_configured() {
+        match fetch_cloud_status(&config).await {
+            Ok((projects, daemons, workflows)) => (Some(projects), Some(daemons), Some(workflows)),
+            Err(_) => {
+                // Fall back gracefully if cloud API is unavailable
+                (None, None, None)
+            }
+        }
+    } else {
+        (None, None, None)
+    };
+
     let result = StatusResult {
         configured: config.is_configured(),
         server: config.server.clone(),
         project_id: config.project_id.clone(),
         last_synced_at: config.last_synced_at.clone(),
+        cloud_projects: projects,
+        cloud_daemons: daemons,
+        active_workflows: workflows,
     };
     print_value(result, json)
+}
+
+async fn fetch_cloud_status(config: &SyncConfig) -> Result<(Vec<CloudProject>, Vec<CloudDaemon>, Vec<CloudWorkflow>)> {
+    let server = config.server_url()?;
+    let token = config.bearer_token()?;
+
+    let client = build_client(&token)?;
+    let resp = client
+        .get(&format!("{}/api/cli/status", server.trim_end_matches('/')))
+        .send()
+        .await
+        .context("Failed to connect to cloud status endpoint")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Cloud status check failed ({status}): {body}");
+    }
+
+    let cloud_response: CloudStatusResponse = resp.json().await.context("Failed to parse cloud status response")?;
+
+    Ok((cloud_response.projects, cloud_response.daemons, cloud_response.workflows))
 }
 
 async fn handle_deploy(command: DeployCommand, project_root: &str, json: bool) -> Result<()> {
@@ -683,6 +722,48 @@ struct StatusResult {
     server: Option<String>,
     project_id: Option<String>,
     last_synced_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cloud_projects: Option<Vec<CloudProject>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cloud_daemons: Option<Vec<CloudDaemon>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    active_workflows: Option<Vec<CloudWorkflow>>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct CloudProject {
+    id: String,
+    name: String,
+    created_at: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct CloudDaemon {
+    id: String,
+    project_id: String,
+    app_name: String,
+    status: String,
+    region: String,
+    machine_size: String,
+    created_at: String,
+    updated_at: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+struct CloudWorkflow {
+    id: String,
+    name: String,
+    project_id: String,
+    status: String,
+    started_at: String,
+    completed_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct CloudStatusResponse {
+    projects: Vec<CloudProject>,
+    daemons: Vec<CloudDaemon>,
+    workflows: Vec<CloudWorkflow>,
 }
 
 #[derive(Deserialize)]

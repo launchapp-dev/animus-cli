@@ -246,7 +246,7 @@ ao
 │   ├── setup                Configure the sync server connection for this project
 │   ├── push                 Push local tasks, requirements, and workflow config to the sync server
 │   ├── pull                 Pull tasks and requirements from the sync server into local state
-│   ├── status               Show sync configuration and last sync status
+│   ├── status               Show sync configuration, cloud projects, daemon states, and active workflows
 │   ├── link                 Link this project (auto-detects from git remote or uses explicit project ID)
 │   └── deploy               Manage deployments on ao-cloud
 │
