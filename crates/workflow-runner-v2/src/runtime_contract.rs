@@ -682,14 +682,8 @@ mod tests {
                 }
             }
         });
-        inject_named_mcp_servers(
-            &mut runtime_contract,
-            "/path/to/project",
-            &ctx,
-            "requirements",
-            &["ao".to_string()],
-        )
-        .expect("named MCP injection should succeed");
+        inject_named_mcp_servers(&mut runtime_contract, "/path/to/project", &ctx, "requirements", &["ao".to_string()])
+            .expect("named MCP injection should succeed");
 
         assert!(
             runtime_contract.pointer("/mcp/additional_servers").is_none(),

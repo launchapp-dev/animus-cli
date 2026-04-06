@@ -276,9 +276,7 @@ fn codex_native_lockdown_sets_stdio_transport_when_configured() {
 
     let joined = args.join(" ");
     assert!(joined.contains("mcp_servers.ao.command=\"/path/to/ao/target/debug/ao\""));
-    assert!(
-        joined.contains("mcp_servers.ao.args=[\"--project-root\", \"/path/to/project\", \"mcp\", \"serve\"]")
-    );
+    assert!(joined.contains("mcp_servers.ao.args=[\"--project-root\", \"/path/to/project\", \"mcp\", \"serve\"]"));
     assert!(joined.contains("mcp_servers.ao.enabled=true"));
 }
 
