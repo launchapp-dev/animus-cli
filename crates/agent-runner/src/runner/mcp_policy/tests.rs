@@ -47,10 +47,10 @@ fn native_mcp_policy_rejects_unknown_cli_when_enforced() {
         enabled: true,
         endpoint: None,
         stdio: Some(McpStdioConfig {
-            command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
+            command: "/path/to/ao/target/debug/ao".to_string(),
             args: vec![
                 "--project-root".to_string(),
-                "/Users/samishukri/ao-cli".to_string(),
+                "/path/to/project".to_string(),
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
@@ -173,10 +173,10 @@ fn native_mcp_policy_preserves_primary_server_when_additional_server_name_collid
         enabled: true,
         endpoint: None,
         stdio: Some(McpStdioConfig {
-            command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
+            command: "/path/to/ao/target/debug/ao".to_string(),
             args: vec![
                 "--project-root".to_string(),
-                "/Users/samishukri/ao-cli".to_string(),
+                "/path/to/project".to_string(),
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
@@ -209,13 +209,13 @@ fn native_mcp_policy_preserves_primary_server_when_additional_server_name_collid
 
     assert_eq!(
         parsed.pointer("/mcpServers/ao/command").and_then(serde_json::Value::as_str),
-        Some("/Users/samishukri/ao-cli/target/debug/ao")
+        Some("/path/to/ao/target/debug/ao")
     );
     assert_eq!(
         parsed.pointer("/mcpServers/ao/args").and_then(serde_json::Value::as_array).cloned(),
         Some(vec![
             serde_json::Value::String("--project-root".to_string()),
-            serde_json::Value::String("/Users/samishukri/ao-cli".to_string()),
+            serde_json::Value::String("/path/to/project".to_string()),
             serde_json::Value::String("mcp".to_string()),
             serde_json::Value::String("serve".to_string()),
         ])
@@ -261,10 +261,10 @@ fn codex_native_lockdown_sets_stdio_transport_when_configured() {
     apply_codex_native_mcp_lockdown(
         &mut args,
         McpServerTransport::Stdio {
-            command: "/Users/samishukri/ao-cli/target/debug/ao",
+            command: "/path/to/ao/target/debug/ao",
             args: &[
                 "--project-root".to_string(),
-                "/Users/samishukri/ao-cli".to_string(),
+                "/path/to/project".to_string(),
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
@@ -275,9 +275,9 @@ fn codex_native_lockdown_sets_stdio_transport_when_configured() {
     );
 
     let joined = args.join(" ");
-    assert!(joined.contains("mcp_servers.ao.command=\"/Users/samishukri/ao-cli/target/debug/ao\""));
+    assert!(joined.contains("mcp_servers.ao.command=\"/path/to/ao/target/debug/ao\""));
     assert!(
-        joined.contains("mcp_servers.ao.args=[\"--project-root\", \"/Users/samishukri/ao-cli\", \"mcp\", \"serve\"]")
+        joined.contains("mcp_servers.ao.args=[\"--project-root\", \"/path/to/project\", \"mcp\", \"serve\"]")
     );
     assert!(joined.contains("mcp_servers.ao.enabled=true"));
 }
@@ -294,10 +294,10 @@ fn native_mcp_policy_sets_gemini_system_settings_path_for_stdio_transport() {
         enabled: true,
         endpoint: None,
         stdio: Some(McpStdioConfig {
-            command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
+            command: "/path/to/ao/target/debug/ao".to_string(),
             args: vec![
                 "--project-root".to_string(),
-                "/Users/samishukri/ao-cli".to_string(),
+                "/path/to/project".to_string(),
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
@@ -377,10 +377,10 @@ fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
         enabled: true,
         endpoint: None,
         stdio: Some(McpStdioConfig {
-            command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
+            command: "/path/to/ao/target/debug/ao".to_string(),
             args: vec![
                 "--project-root".to_string(),
-                "/Users/samishukri/ao-cli".to_string(),
+                "/path/to/project".to_string(),
                 "mcp".to_string(),
                 "serve".to_string(),
             ],
@@ -403,7 +403,7 @@ fn native_mcp_policy_sets_opencode_local_mcp_command_array() {
     assert_eq!(parsed.pointer("/mcp/ao/type").and_then(serde_json::Value::as_str), Some("local"));
     assert_eq!(
         parsed.pointer("/mcp/ao/command/0").and_then(serde_json::Value::as_str),
-        Some("/Users/samishukri/ao-cli/target/debug/ao")
+        Some("/path/to/ao/target/debug/ao")
     );
     assert_eq!(parsed.pointer("/mcp/ao/command/4").and_then(serde_json::Value::as_str), Some("serve"));
     assert!(parsed.pointer("/mcp/ao/args").is_none());
@@ -428,12 +428,12 @@ fn native_mcp_policy_inserts_oai_runner_mcp_config_after_run_subcommand() {
         enabled: true,
         endpoint: None,
         stdio: Some(McpStdioConfig {
-            command: "/Users/samishukri/ao-cli/target/debug/ao".to_string(),
+            command: "/path/to/ao/target/debug/ao".to_string(),
             args: vec![
                 "mcp".to_string(),
                 "serve".to_string(),
                 "--project-root".to_string(),
-                "/Users/samishukri/ao-cli".to_string(),
+                "/path/to/project".to_string(),
             ],
         }),
         agent_id: "ao".to_string(),

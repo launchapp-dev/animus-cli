@@ -1,17 +1,17 @@
 <div align="center">
 
-![header](https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,50:161b22,100:1f6feb&height=200&section=header&text=AO&fontSize=90&fontColor=f0f6fc&animation=fadeIn&fontAlignY=35&desc=Autonomous%20Agent%20Orchestrator&descAlignY=55&descSize=22&descColor=8b949e)
+![header](https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,50:161b22,100:1f6feb&height=200&section=header&text=Animus&fontSize=90&fontColor=f0f6fc&animation=fadeIn&fontAlignY=35&desc=Autonomous%20Agent%20Orchestrator&descAlignY=55&descSize=22&descColor=8b949e)
 
 <br/>
 
-[![Typing SVG](https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=500&size=20&duration=3000&pause=1500&color=58A6FF&center=true&vCenter=true&multiline=true&repeat=true&random=false&width=700&height=80&lines=Define+your+engineering+team+as+YAML.;Dispatch+tasks+to+AI+agents+across+isolated+worktrees.;Review%2C+merge%2C+and+ship+%E2%80%94+while+you+sleep.)](https://github.com/launchapp-dev/ao)
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=500&size=20&duration=3000&pause=1500&color=58A6FF&center=true&vCenter=true&multiline=true&repeat=true&random=false&width=700&height=80&lines=Define+your+engineering+team+as+YAML.;Dispatch+tasks+to+AI+agents+across+isolated+worktrees.;Review%2C+merge%2C+and+ship+%E2%80%94+while+you+sleep.)](https://github.com/samishukri/animus)
 
 <br/>
 <br/>
 <br/>
 
 
-<a href="https://github.com/launchapp-dev/ao/releases/latest"><img src="https://img.shields.io/github/v/release/launchapp-dev/ao?style=for-the-badge&color=1f6feb&labelColor=0d1117&logo=github&logoColor=f0f6fc" alt="Release" /></a>
+<a href="https://github.com/samishukri/animus/releases/latest"><img src="https://img.shields.io/github/v/release/samishukri/animus?style=for-the-badge&color=1f6feb&labelColor=0d1117&logo=github&logoColor=f0f6fc" alt="Release" /></a>
 &nbsp;
 <img src="https://img.shields.io/badge/rust-100%25-f0f6fc?style=for-the-badge&labelColor=0d1117&logo=rust&logoColor=f0f6fc" alt="Rust" />
 &nbsp;
@@ -24,7 +24,7 @@
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/samishukri/animus/main/install.sh | bash
 ```
 
 The upstream installer currently targets macOS. On Linux and Windows, use a release archive or build from source.
@@ -34,10 +34,10 @@ The upstream installer currently targets macOS. On Linux and Windows, use a rele
 
 ```bash
 # Specific version
-AO_VERSION=v0.0.11 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
+ANIMUS_VERSION=v0.0.11 curl -fsSL https://raw.githubusercontent.com/samishukri/animus/main/install.sh | bash
 
 # Custom directory
-AO_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
+ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/samishukri/animus/main/install.sh | bash
 ```
 
 </details>
@@ -57,15 +57,15 @@ npm install -g @google/gemini-cli           # Gemini
 
 ---
 
-## What is AO?
+## What is Animus?
 
-AO turns a single YAML file into an autonomous software delivery pipeline.
+Animus turns a single YAML file into an autonomous software delivery pipeline.
 
-You define agents, wire them into phases, compose phases into workflows, schedule everything with cron — and AO's daemon handles the rest: dispatching tasks to AI agents in isolated git worktrees, managing quality gates, and merging the results.
+You define agents, wire them into phases, compose phases into workflows, schedule everything with cron — and Animus's daemon handles the rest: dispatching tasks to AI agents in isolated git worktrees, managing quality gates, and merging the results.
 
 ```
                 ┌──────────────────────────────────────────────────┐
-                │               AO Daemon (Rust)                   │
+                │            Animus Daemon (Rust)                  │
                 │                                                  │
   ┌────────┐    │    ┌───────────┐    ┌───────────┐    ┌────────┐ │    ┌────────┐
   │ Tasks  │───▶│───▶│  Dispatch │───▶│  Agents   │───▶│ Phases │─│──▶│  PRs   │
@@ -86,13 +86,13 @@ You define agents, wire them into phases, compose phases into workflows, schedul
 
 ```bash
 cd your-project                          # any git repo
-ao doctor                                # check prerequisites
-ao setup                                 # initialize .ao/
+animus doctor                            # check prerequisites
+animus setup                             # initialize .ao/
 
-ao task create --title "Add rate limiting" --task-type feature --priority high
-ao workflow run --task-id TASK-001        # run once
+animus task create --title "Add rate limiting" --task-type feature --priority high
+animus workflow run --task-id TASK-001   # run once
 
-ao daemon start --autonomous             # or go fully autonomous
+animus daemon start --autonomous         # or go fully autonomous
 ```
 
 ---
@@ -112,7 +112,7 @@ agents:
   default:
     model: claude-sonnet-4-6
     tool: claude
-    mcp_servers: ["ao", "context7"]
+    mcp_servers: ["animus", "context7"]
 
   work-planner:
     system_prompt: |
@@ -264,11 +264,11 @@ Every task gets its own git worktree. Agents work in parallel on separate branch
 
 ## Claude Code Integration
 
-Install [**AO Skills**](https://github.com/launchapp-dev/ao-skills) for deep AO integration inside Claude Code:
+Install [**Animus Skills**](https://github.com/samishukri/animus-skills) for deep Animus integration inside Claude Code:
 
 ```bash
-git clone https://github.com/launchapp-dev/ao-skills.git ~/ao-skills
-claude --plugin-dir ~/ao-skills
+git clone https://github.com/samishukri/animus-skills.git ~/animus-skills
+claude --plugin-dir ~/animus-skills
 ```
 
 <table>
@@ -279,7 +279,7 @@ claude --plugin-dir ~/ao-skills
 
 | Command | What it does |
 |:---|:---|
-| `/setup-ao` | Initialize AO in your project |
+| `/setup-animus` | Initialize Animus in your project |
 | `/getting-started` | Install, concepts, first task |
 | `/workflow-authoring` | Write custom YAML workflows |
 | `/pack-authoring` | Build workflow packs |
@@ -298,7 +298,7 @@ claude --plugin-dir ~/ao-skills
 | `daemon-operations` | Daemon monitoring and troubleshooting |
 | `workflow-patterns` | Patterns from 150+ autonomous PRs |
 | `agent-personas` | PO, architect, auditor agents |
-| `mcp-tools` | Complete `ao.*` tool reference |
+| `mcp-tools` | Complete `animus.*` tool reference |
 
 </td>
 </tr>
@@ -309,25 +309,25 @@ claude --plugin-dir ~/ao-skills
 ## CLI
 
 ```
-ao task          Create, list, update, prioritize tasks
-ao workflow      Run and manage multi-phase workflows
-ao daemon        Start/stop the autonomous scheduler
-ao queue         Inspect and manage the dispatch queue
-ao agent         Control agent runner processes
-ao output        Stream and inspect agent output
-ao doctor        Health checks and auto-remediation
-ao setup         Interactive project initialization
-ao requirements  Manage product requirements
-ao mcp           Start AO as an MCP server
-ao web           Launch the embedded web dashboard
-ao status        Project overview at a glance
+animus task          Create, list, update, prioritize tasks
+animus workflow      Run and manage multi-phase workflows
+animus daemon        Start/stop the autonomous scheduler
+animus queue         Inspect and manage the dispatch queue
+animus agent         Control agent runner processes
+animus output        Stream and inspect agent output
+animus doctor        Health checks and auto-remediation
+animus setup         Interactive project initialization
+animus requirements  Manage product requirements
+animus mcp           Start Animus as an MCP server
+animus web           Launch the embedded web dashboard
+animus status        Project overview at a glance
 ```
 
 ---
 
 ## Architecture
 
-AO is a Rust-only workspace with 17 crates. The major crates are:
+Animus is a Rust-only workspace with 17 crates. The major crates are:
 
 - `orchestrator-cli` - CLI commands and dispatch
 - `orchestrator-core` - services, state, and workflow lifecycle
@@ -386,17 +386,17 @@ This project is licensed under the [Elastic License 2.0 (ELv2)](LICENSE). You ma
 **Update**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/launchapp-dev/ao/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/samishukri/animus/main/install.sh | bash
 ```
 
 **Uninstall**
 
 ```bash
-rm -f ~/.local/bin/ao \
+rm -f ~/.local/bin/animus \
   ~/.local/bin/agent-runner \
   ~/.local/bin/llm-cli-wrapper \
-  ~/.local/bin/ao-oai-runner \
-  ~/.local/bin/ao-workflow-runner
+  ~/.local/bin/animus-oai-runner \
+  ~/.local/bin/animus-workflow-runner
 ```
 
 <br/>

@@ -643,8 +643,8 @@ mod tests {
             "mcp": {
                 "agent_id": "ao",
                 "stdio": {
-                    "command": "/Users/samishukri/ao-cli/target/debug/ao",
-                    "args": ["--project-root", "/Users/samishukri/ao-cli", "mcp", "serve"]
+                    "command": "/path/to/ao/target/debug/ao",
+                    "args": ["--project-root", "/path/to/project", "mcp", "serve"]
                 }
             }
         });
@@ -677,14 +677,14 @@ mod tests {
             "mcp": {
                 "agent_id": "ao",
                 "stdio": {
-                    "command": "/Users/samishukri/ao-cli/target/debug/ao",
-                    "args": ["--project-root", "/Users/samishukri/ao-cli", "mcp", "serve"]
+                    "command": "/path/to/ao/target/debug/ao",
+                    "args": ["--project-root", "/path/to/project", "mcp", "serve"]
                 }
             }
         });
         inject_named_mcp_servers(
             &mut runtime_contract,
-            "/Users/samishukri/ao-cli",
+            "/path/to/project",
             &ctx,
             "requirements",
             &["ao".to_string()],

@@ -3,7 +3,7 @@ use std::process::Stdio;
 
 #[tokio::main]
 async fn main() {
-    let path = "/Users/samishukri/.local/bin/claude";
+    let path = "/usr/local/bin/claude";
     let args = vec!["Say hello"];
     
     println!("Testing spawn with path: {:?}", path);
