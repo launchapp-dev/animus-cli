@@ -212,12 +212,14 @@ fn normalize_non_empty(value: Option<String>) -> Option<String> {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct MemoryMcpServer {
     default_project_root: String,
     tool_router: ToolRouter<Self>,
 }
 
 impl MemoryMcpServer {
+    #[allow(dead_code)]
     fn memory_root(&self) -> std::path::PathBuf {
         protocol::scoped_state_root(std::path::Path::new(&self.default_project_root))
             .unwrap_or_else(|| std::path::PathBuf::from(&self.default_project_root).join(".ao"))
