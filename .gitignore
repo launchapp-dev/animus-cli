@@ -39,5 +39,15 @@ docs/.vitepress/dist/
 # Claude Code worktrees
 .claude/worktrees/
 
+# Claude Code local settings
+.claude/settings.local.json
+
 # Managed worktree MCP fallback config
 /.mcp.json
+
+# Local Cargo cache config
+.cargo/config.local.toml
+
+# Test result artifacts with hardcoded local paths
+TEST_RESULTS*.md
+/crates/llm-cli-wrapper/TEST_RESULTS*.md

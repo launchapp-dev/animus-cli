@@ -782,7 +782,8 @@ mod tests {
 
         std::env::remove_var("AO_SKIP_RUNNER_START");
         std::env::remove_var("AGENT_RUNNER_TOKEN");
-        std::env::set_current_dir("/Users/samishukri/ao-cli").ok();
+        // Preserve current directory for test environment
+        let test_cwd = std::env::current_dir().ok();
 
         let expected_build_id = runner_binary_build_id(&_binary);
         let startup_result = ensure_agent_runner_running(&project_root).await;
@@ -820,7 +821,8 @@ mod tests {
 
         std::env::remove_var("AO_SKIP_RUNNER_START");
         std::env::remove_var("AGENT_RUNNER_TOKEN");
-        std::env::set_current_dir("/Users/samishukri/ao-cli").ok();
+        // Preserve current directory for test environment
+        let test_cwd2 = std::env::current_dir().ok();
 
         let second_startup_result = ensure_agent_runner_running(&project_root).await;
 
