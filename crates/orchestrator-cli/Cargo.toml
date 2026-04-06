@@ -40,6 +40,7 @@ libc = "0.2"
 fs2 = "0.4"
 reqwest = { version = "0.12", features = ["json"] }
 urlencoding = "2"
+base64 = "0.22"
 colored = "3.0"
 tracing = "0.1"
 
