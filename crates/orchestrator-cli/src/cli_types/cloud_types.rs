@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum CloudCommand {
-    /// Authenticate with animus cloud using device auth flow.
+    /// Authenticate with Animus Cloud via browser OAuth.
     Login(CloudLoginArgs),
     /// Configure the sync server connection for this project.
     Setup(CloudSetupArgs),
@@ -23,7 +23,7 @@ pub(crate) enum CloudCommand {
 
 #[derive(Debug, Parser)]
 pub(crate) struct CloudLoginArgs {
-    #[arg(long, help = "Animus cloud server URL (defaults to https://api.animus.cloud)")]
+    #[arg(long, env = "ANIMUS_CLOUD_URL", help = "Animus Cloud URL [default: https://animus.launchapp.dev] [env: ANIMUS_CLOUD_URL]")]
     pub(crate) server: Option<String>,
     #[arg(long, help = "Skip opening browser (print URL instead)")]
     pub(crate) no_browser: bool,
