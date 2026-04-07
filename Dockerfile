@@ -1,52 +1,61 @@
-# ── Stage 1: Build AO from source ─────────────────────────────────────────────
+# ── Stage 1: Build all daemon binaries ─────────────────────────────────────────
 FROM rust:1.85-bookworm AS builder
 
+ARG TARGETARCH=amd64
+ARG BUILDARCH=amd64
+
 WORKDIR /src
+
+# Copy workspace and crates
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo .cargo
 COPY crates crates
 
-RUN cargo build --release \
+# Build daemon binaries with optimized release profile
+# Uses workspace settings: strip=true, lto=thin, codegen-units=1, opt-level=z
+RUN cargo build --release --locked \
     -p orchestrator-cli \
     -p agent-runner \
-    -p llm-cli-wrapper \
-    -p oai-runner \
-    -p workflow-runner-v2
+    -p llm-cli-wrapper
 
-# ── Stage 2: Runtime ──────────────────────────────────────────────────────────
+# Verify binaries exist
+RUN ls -lh target/release/animus target/release/agent-runner target/release/llm-cli-wrapper
+
+# ── Stage 2: Minimal runtime image ──────────────────────────────────────────────
 FROM debian:bookworm-slim
 
+# Install minimal runtime dependencies
+# ca-certificates: for HTTPS/TLS
+# openssl: for cryptographic operations
+# git: for git operations (protocol requirements)
+# openssh-client: for SSH-based git operations
+# curl: for HTTP requests
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     git \
     openssh-client \
     openssl \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# Node.js 22 — required for Claude Code, Codex, and Gemini CLIs
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
-
-# Agent CLIs
-RUN npm install -g \
-    @anthropic-ai/claude-code \
-    @openai/codex \
-    @google/gemini-cli
-
-# AO binaries
-COPY --from=builder /src/target/release/ao                  /usr/local/bin/ao
-COPY --from=builder /src/target/release/agent-runner         /usr/local/bin/agent-runner
-COPY --from=builder /src/target/release/llm-cli-wrapper      /usr/local/bin/llm-cli-wrapper
-COPY --from=builder /src/target/release/oai-runner           /usr/local/bin/oai-runner
-COPY --from=builder /src/target/release/ao-workflow-runner   /usr/local/bin/ao-workflow-runner
-
+# Create .ao directory for state
 RUN mkdir -p /root/.ao
 
-VOLUME ["/root/.ao", "/workspace"]
+# Copy binaries from builder
+COPY --from=builder /src/target/release/animus /usr/local/bin/animus
+COPY --from=builder /src/target/release/agent-runner /usr/local/bin/agent-runner
+COPY --from=builder /src/target/release/llm-cli-wrapper /usr/local/bin/llm-cli-wrapper
 
+# Create working directory
 WORKDIR /workspace
 
-ENTRYPOINT ["ao"]
-CMD ["--help"]
+# Expose daemon port (for web server if enabled)
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD animus status 2>/dev/null || exit 1
+
+# Default entrypoint
+ENTRYPOINT ["animus"]
+CMD ["daemon", "start"]
