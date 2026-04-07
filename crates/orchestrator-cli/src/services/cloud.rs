@@ -261,14 +261,17 @@ async fn handle_link(args: CloudLinkArgs, project_root: &str, json: bool) -> Res
 
         // Call /api/cli/projects/ensure to check for GitHub App installation
         let client = build_client(&token)?;
-        let ensure_url = format!(
-            "{}/api/cli/projects/ensure?owner={}&repo={}",
-            server.trim_end_matches('/'),
-            urlencoding(&owner),
-            urlencoding(&repo)
-        );
+        let ensure_url = format!("{}/api/cli/projects/ensure", server.trim_end_matches('/'));
 
-        let resp = client.post(&ensure_url).send().await.context("Failed to connect to projects endpoint")?;
+        let request_body =
+            EnsureProjectRequest { org_id: owner.clone(), name: repo.clone(), repo_url: origin_url.clone() };
+
+        let resp = client
+            .post(&ensure_url)
+            .json(&request_body)
+            .send()
+            .await
+            .context("Failed to connect to projects endpoint")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -835,6 +838,14 @@ struct ProjectResponse {
 struct ProjectInfo {
     id: String,
     name: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EnsureProjectRequest {
+    org_id: String,
+    name: String,
+    repo_url: String,
 }
 
 #[derive(Deserialize)]
