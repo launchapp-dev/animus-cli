@@ -24,19 +24,26 @@ RUN ls -lh target/release/animus target/release/agent-runner target/release/llm-
 # ── Stage 2: Minimal runtime image ──────────────────────────────────────────────
 FROM debian:bookworm-slim
 
-# Install minimal runtime dependencies
-# ca-certificates: for HTTPS/TLS
-# openssl: for cryptographic operations
-# git: for git operations (protocol requirements)
-# openssh-client: for SSH-based git operations
-# curl: for HTTP requests
+# Install runtime dependencies + Node.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     git \
     openssh-client \
     openssl \
+    unzip \
+    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+
+# Install AI coding tools
+RUN npm install -g @anthropic-ai/claude-code @openai/codex \
+    && npm cache clean --force
+
+# Install OpenCode (Go binary)
+RUN ARCH=$(dpkg --print-architecture) \
+    && curl -fsSL "https://github.com/opencode-ai/opencode/releases/latest/download/opencode_linux_${ARCH}" -o /usr/local/bin/opencode \
+    && chmod +x /usr/local/bin/opencode
 
 # Create .ao directory for state
 RUN mkdir -p /root/.ao
