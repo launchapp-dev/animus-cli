@@ -342,64 +342,56 @@ async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
 
-    let tasks: Vec<OrchestratorTask> = hub.tasks().list().await?;
-    let requirements: Vec<RequirementItem> = hub.planning().list_requirements().await?;
-    let tasks_count = tasks.len();
-    let reqs_count = requirements.len();
+    // Build .ao/ config bundle
+    let config_bundle = build_config_bundle(project_root)?;
+    let config_files_count = config_bundle.file_count();
+
+    if config_bundle.is_empty() {
+        anyhow::bail!("No .ao/ config found to push. Create .ao/workflows/ first.");
+    }
+
+    // Get current git ref
+    let git_ref = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(project_root)
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string());
 
     let client = build_client(&token)?;
+
+    // Push config to POST /api/configs/push
+    let push_body = serde_json::json!({
+        "projectId": project_id,
+        "configData": config_bundle,
+        "gitRef": git_ref,
+    });
+
     let resp = client
-        .post(&format!("{}/api/projects/{}/sync", server.trim_end_matches('/'), project_id))
-        .json(&SyncRequest { tasks, requirements, since: config.last_synced_at.clone() })
+        .post(&format!("{}/api/configs/push", server.trim_end_matches('/')))
+        .json(&push_body)
         .send()
         .await
-        .context("Failed to connect to sync server")?;
+        .context("Failed to push config to cloud")?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Sync push failed ({status}): {body}");
-    }
-
-    let sync_resp: SyncResponse = resp.json().await.context("Failed to parse sync response")?;
-
-    // Push config bundle to cloud
-    let config_bundle = build_config_bundle(project_root)?;
-    let config_files_count = config_bundle.file_count();
-
-    if !config_bundle.is_empty() {
-        let config_resp = client
-            .post(&format!("{}/api/projects/{}/configs", server.trim_end_matches('/'), project_id))
-            .json(&config_bundle)
-            .send()
-            .await
-            .context("Failed to connect to configs endpoint")?;
-
-        if !config_resp.status().is_success() {
-            let status = config_resp.status();
-            let body = config_resp.text().await.unwrap_or_default();
-            anyhow::bail!("Config push failed ({status}): {body}");
-        }
+        anyhow::bail!("Config push failed ({status}): {body}");
     }
 
     let mut config = SyncConfig::load_for_project(project_root);
-    config.last_synced_at = Some(sync_resp.server_time.clone());
+    config.last_synced_at = Some(chrono::Utc::now().to_rfc3339());
     config.save_for_project(project_root)?;
 
     let result = PushResult {
-        tasks_sent: tasks_count,
-        requirements_sent: reqs_count,
+        tasks_sent: 0,
+        requirements_sent: 0,
         config_files_sent: config_files_count,
-        conflicts: sync_resp.conflicts.len(),
-        server_time: sync_resp.server_time,
+        conflicts: 0,
+        server_time: chrono::Utc::now().to_rfc3339(),
     };
-
-    if !json && !sync_resp.conflicts.is_empty() {
-        eprintln!("Conflicts ({}):", sync_resp.conflicts.len());
-        for c in &sync_resp.conflicts {
-            eprintln!("  {} {}: {}", c.r#type, c.id, c.reason);
-        }
-    }
 
     print_value(result, json)
 }
