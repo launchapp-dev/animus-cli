@@ -162,10 +162,22 @@ async fn handle_login(args: CloudLoginArgs, json: bool) -> Result<()> {
 
     let token_data: TokenResponse = token_resp.json().await.context("Failed to parse token response")?;
 
-    // Step 6: Store access token
+    // Step 6: Store access token and refresh token with expiration
     let mut config = SyncConfig::load_global();
     config.server = Some(server.to_string());
     config.token = Some(token_data.access_token.clone());
+
+    // Store refresh token if provided
+    if let Some(ref refresh_token) = token_data.refresh_token {
+        config.refresh_token = Some(refresh_token.clone());
+    }
+
+    // Calculate and store token expiration time
+    if let Some(expires_in) = token_data.expires_in {
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(expires_in as i64);
+        config.access_token_expires_at = Some(expires_at.to_rfc3339());
+    }
+
     config.save_global()?;
 
     let result = LoginResult {
@@ -240,9 +252,9 @@ async fn handle_setup(args: CloudSetupArgs, project_root: &str, json: bool) -> R
 }
 
 async fn handle_link(args: CloudLinkArgs, project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(&mut config).await?;
 
     let project_id = if let Some(ref id) = args.project_id {
         // Explicit project_id provided
@@ -337,9 +349,9 @@ fn build_config_bundle(project_root: &str) -> Result<ConfigBundle> {
 }
 
 async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(&mut config).await?;
     let project_id = config
         .project_id
         .as_ref()
@@ -400,9 +412,9 @@ async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
 }
 
 async fn handle_pull(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(&mut config).await?;
     let project_id = config
         .project_id
         .as_ref()
@@ -444,11 +456,11 @@ async fn handle_pull(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
 }
 
 async fn handle_status(project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
 
     // Try to fetch cloud status if configured
     let (projects, daemons, workflows) = if config.is_configured() {
-        match fetch_cloud_status(&config).await {
+        match fetch_cloud_status(&mut config).await {
             Ok((projects, daemons, workflows)) => (Some(projects), Some(daemons), Some(workflows)),
             Err(_) => {
                 // Fall back gracefully if cloud API is unavailable
@@ -471,9 +483,9 @@ async fn handle_status(project_root: &str, json: bool) -> Result<()> {
     print_value(result, json)
 }
 
-async fn fetch_cloud_status(config: &SyncConfig) -> Result<(Vec<CloudProject>, Vec<CloudDaemon>, Vec<CloudWorkflow>)> {
+async fn fetch_cloud_status(config: &mut SyncConfig) -> Result<(Vec<CloudProject>, Vec<CloudDaemon>, Vec<CloudWorkflow>)> {
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(config).await?;
 
     let client = build_client(&token)?;
     let resp = client
@@ -504,9 +516,9 @@ async fn handle_deploy(command: DeployCommand, project_root: &str, json: bool) -
 }
 
 async fn handle_create(args: DeployCreateArgs, project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(&mut config).await?;
     let project_id = config
         .project_id
         .as_ref()
@@ -561,9 +573,9 @@ async fn handle_create(args: DeployCreateArgs, project_root: &str, json: bool) -
 }
 
 async fn handle_destroy(args: DeployDestroyArgs, project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(&mut config).await?;
     let project_id = config
         .project_id
         .as_ref()
@@ -637,6 +649,67 @@ struct DaemonResponse {
     status: String,
     created_at: String,
     updated_at: Option<String>,
+}
+
+/// Refresh the OAuth access token using the refresh token if needed.
+/// Returns true if the token was refreshed, false if it's still valid.
+async fn refresh_access_token(config: &mut SyncConfig) -> Result<bool> {
+    if !config.needs_token_refresh() {
+        return Ok(false);
+    }
+
+    if !config.can_refresh_token() {
+        anyhow::bail!("Token has expired and cannot be refreshed. Please log in again with: animus cloud login");
+    }
+
+    let server = config.server.as_ref().ok_or_else(|| anyhow::anyhow!("Server URL not configured"))?.to_string();
+    let refresh_token = config.refresh_token.as_ref().ok_or_else(|| anyhow::anyhow!("Refresh token not available"))?.clone();
+    let client_id = "animus-cli";
+
+    let http_client = reqwest::Client::new();
+    let token_resp = http_client
+        .post(&format!("{}/api/auth/oauth2/token", server))
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", refresh_token.as_str()),
+            ("client_id", client_id),
+        ])
+        .send()
+        .await
+        .context("Failed to refresh access token")?;
+
+    if !token_resp.status().is_success() {
+        let status = token_resp.status();
+        let body = token_resp.text().await.unwrap_or_default();
+        anyhow::bail!("Token refresh failed ({status}): {body}. Please log in again with: animus cloud login");
+    }
+
+    let token_data: TokenResponse = token_resp.json().await.context("Failed to parse token response")?;
+
+    // Update the configuration with the new access token
+    config.token = Some(token_data.access_token.clone());
+
+    // Update refresh token if a new one was provided
+    if let Some(ref new_refresh_token) = token_data.refresh_token {
+        config.refresh_token = Some(new_refresh_token.clone());
+    }
+
+    // Update expiration time
+    if let Some(expires_in) = token_data.expires_in {
+        let expires_at = chrono::Utc::now() + chrono::Duration::seconds(expires_in as i64);
+        config.access_token_expires_at = Some(expires_at.to_rfc3339());
+    }
+
+    // Save the updated configuration
+    config.save_global()?;
+
+    Ok(true)
+}
+
+/// Get a valid access token, refreshing if necessary.
+async fn get_valid_token(config: &mut SyncConfig) -> Result<String> {
+    refresh_access_token(config).await?;
+    config.bearer_token()
 }
 
 fn build_client(token: &str) -> Result<reqwest::Client> {
@@ -885,9 +958,9 @@ struct DeployCreateResult {
 }
 
 async fn handle_start(args: DeployStartArgs, project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(&mut config).await?;
     let project_id = config
         .project_id
         .as_ref()
@@ -945,9 +1018,9 @@ async fn handle_start(args: DeployStartArgs, project_root: &str, json: bool) -> 
 }
 
 async fn handle_stop(args: DeployStopArgs, project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(&mut config).await?;
     let project_id = config
         .project_id
         .as_ref()
@@ -1005,9 +1078,9 @@ async fn handle_stop(args: DeployStopArgs, project_root: &str, json: bool) -> Re
 }
 
 async fn handle_status_deploy(args: DeployStatusArgs, project_root: &str, json: bool) -> Result<()> {
-    let config = SyncConfig::load_for_project(project_root);
+    let mut config = SyncConfig::load_for_project(project_root);
     let server = config.server_url()?;
-    let token = config.bearer_token()?;
+    let token = get_valid_token(&mut config).await?;
     let project_id = config
         .project_id
         .as_ref()
