@@ -351,6 +351,53 @@ jobs:
           path: ao-${{ steps.version.outputs.value }}-${{ matrix.target }}.${{ matrix.archive_ext }}
           if-no-files-found: error
 
+  docker-publish:
+    name: Publish Docker image (tags only)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compute image tags
+        id: image-tags
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME}"
+          REGISTRY="registry.fly.io"
+          REPOSITORY="ao-daemon"
+
+          TAGS="${REGISTRY}/${REPOSITORY}:${VERSION}"
+          TAGS="${TAGS},${REGISTRY}/${REPOSITORY}:latest"
+
+          echo "tags=${TAGS}" >> "${GITHUB_OUTPUT}"
+          echo "Computed tags: ${TAGS}"
+
+      - name: Log in to Fly.io registry
+        uses: docker/login-action@v3
+        with:
+          registry: registry.fly.io
+          username: ${{ secrets.FLY_REGISTRY_USERNAME }}
+          password: ${{ secrets.FLY_REGISTRY_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: ${{ steps.image-tags.outputs.tags }}
+          platforms: linux/amd64
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   publish:
     name: Publish GitHub release (tags only)
     runs-on: ubuntu-latest
