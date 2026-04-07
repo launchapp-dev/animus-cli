@@ -483,7 +483,9 @@ async fn handle_status(project_root: &str, json: bool) -> Result<()> {
     print_value(result, json)
 }
 
-async fn fetch_cloud_status(config: &mut SyncConfig) -> Result<(Vec<CloudProject>, Vec<CloudDaemon>, Vec<CloudWorkflow>)> {
+async fn fetch_cloud_status(
+    config: &mut SyncConfig,
+) -> Result<(Vec<CloudProject>, Vec<CloudDaemon>, Vec<CloudWorkflow>)> {
     let server = config.server_url()?;
     let token = get_valid_token(config).await?;
 
@@ -663,17 +665,14 @@ async fn refresh_access_token(config: &mut SyncConfig) -> Result<bool> {
     }
 
     let server = config.server.as_ref().ok_or_else(|| anyhow::anyhow!("Server URL not configured"))?.to_string();
-    let refresh_token = config.refresh_token.as_ref().ok_or_else(|| anyhow::anyhow!("Refresh token not available"))?.clone();
+    let refresh_token =
+        config.refresh_token.as_ref().ok_or_else(|| anyhow::anyhow!("Refresh token not available"))?.clone();
     let client_id = "animus-cli";
 
     let http_client = reqwest::Client::new();
     let token_resp = http_client
         .post(&format!("{}/api/auth/oauth2/token", server))
-        .form(&[
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token.as_str()),
-            ("client_id", client_id),
-        ])
+        .form(&[("grant_type", "refresh_token"), ("refresh_token", refresh_token.as_str()), ("client_id", client_id)])
         .send()
         .await
         .context("Failed to refresh access token")?;
