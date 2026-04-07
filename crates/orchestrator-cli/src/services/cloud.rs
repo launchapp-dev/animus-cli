@@ -310,7 +310,7 @@ async fn handle_link(args: CloudLinkArgs, project_root: &str, json: bool) -> Res
     print_value(result, json)
 }
 
-fn build_config_bundle(project_root: &str) -> Result<ConfigBundle> {
+async fn build_config_bundle(hub: Arc<FileServiceHub>, project_root: &str) -> Result<ConfigBundle> {
     let mut bundle = ConfigBundle::new();
     let ao_dir = PathBuf::from(project_root).join(".ao");
 
@@ -345,6 +345,16 @@ fn build_config_bundle(project_root: &str) -> Result<ConfigBundle> {
         }
     }
 
+    // Collect tasks
+    if let Ok(tasks) = hub.tasks().list().await {
+        bundle.set_tasks(tasks);
+    }
+
+    // Collect requirements
+    if let Ok(requirements) = hub.planning().list_requirements().await {
+        bundle.set_requirements(requirements);
+    }
+
     Ok(bundle)
 }
 
@@ -357,9 +367,11 @@ async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("No project linked. Run: animus cloud link --project-id <id>"))?;
 
-    // Build .ao/ config bundle
-    let config_bundle = build_config_bundle(project_root)?;
+    // Build .ao/ config bundle with tasks and requirements
+    let config_bundle = build_config_bundle(hub.clone(), project_root).await?;
     let config_files_count = config_bundle.file_count();
+    let tasks_count = config_bundle.task_count();
+    let requirements_count = config_bundle.requirement_count();
 
     if config_bundle.is_empty() {
         anyhow::bail!("No .ao/ config found to push. Create .ao/workflows/ first.");
@@ -401,8 +413,8 @@ async fn handle_push(hub: Arc<FileServiceHub>, project_root: &str, json: bool) -
     config.save_for_project(project_root)?;
 
     let result = PushResult {
-        tasks_sent: 0,
-        requirements_sent: 0,
+        tasks_sent: tasks_count,
+        requirements_sent: requirements_count,
         config_files_sent: config_files_count,
         conflicts: 0,
         server_time: chrono::Utc::now().to_rfc3339(),
