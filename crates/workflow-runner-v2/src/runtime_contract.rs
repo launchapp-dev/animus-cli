@@ -148,13 +148,7 @@ pub fn phase_decision_json_schema_for(ctx: &RuntimeConfigContext, phase_id: &str
         orchestrator_core::WorkflowDecisionRisk::Medium => vec!["low", "medium"],
         orchestrator_core::WorkflowDecisionRisk::High => vec!["low", "medium", "high"],
     };
-    let evidence_kind_schema = if contract.required_evidence.is_empty() {
-        serde_json::json!({ "type": "string" })
-    } else {
-        serde_json::json!({
-            "enum": contract.required_evidence.iter().map(|kind| serde_json::to_value(kind).unwrap_or(serde_json::json!("custom"))).collect::<Vec<_>>()
-        })
-    };
+    let evidence_kind_schema = serde_json::json!({ "type": "string" });
 
     let mut schema = serde_json::json!({
         "type": "object",
@@ -714,5 +708,99 @@ mod tests {
             !args.iter().any(|value| value.as_str() == Some("--read-only")),
             "managed state mutation phases should not inject a strict read-only CLI flag"
         );
+    }
+
+    #[test]
+    fn phase_decision_json_schema_accepts_any_evidence_kind() {
+        let workflow_config = builtin_workflow_config();
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+        };
+
+        // Test with implementation phase which has required_evidence set
+        let schema = phase_decision_json_schema_for(&ctx, "implementation")
+            .expect("should generate schema")
+            .expect("schema should exist for implementation phase");
+
+        // Get the evidence kind schema from the decision schema
+        let evidence_kind_schema = schema
+            .pointer("/properties/evidence/items/properties/kind")
+            .expect("evidence kind schema should exist");
+
+        // Verify that the kind field accepts any string, not just required kinds
+        assert_eq!(
+            evidence_kind_schema.get("type"),
+            Some(&Value::String("string".to_string())),
+            "evidence kind should accept any string type"
+        );
+
+        // Verify there's no enum constraint that would restrict to specific kinds
+        assert!(
+            evidence_kind_schema.get("enum").is_none(),
+            "evidence kind should not have enum constraint - agents should be able to use custom evidence kinds like bug_confirmed, fix_identified, etc"
+        );
+    }
+
+    #[test]
+    fn phase_decision_validates_custom_evidence_kinds_like_bug_confirmed() {
+        use crate::phase_executor::validate_basic_json_schema;
+
+        let workflow_config = builtin_workflow_config();
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+        };
+
+        let schema = phase_decision_json_schema_for(&ctx, "implementation")
+            .expect("should generate schema")
+            .expect("schema should exist for implementation phase");
+
+        // Test that a phase decision with custom evidence kinds (bug_confirmed, fix_identified)
+        // is now accepted by the schema - this was the issue in TASK-222
+        let decision_with_custom_evidence = serde_json::json!({
+            "kind": "phase_decision",
+            "phase_id": "implementation",
+            "verdict": "advance",
+            "confidence": 0.95,
+            "risk": "low",
+            "reason": "Issue found and fixed",
+            "evidence": [
+                {
+                    "kind": "bug_confirmed",
+                    "description": "Found and documented the bug"
+                },
+                {
+                    "kind": "fix_identified",
+                    "description": "Implemented a fix for the issue"
+                }
+            ]
+        });
+
+        // This should validate successfully now
+        validate_basic_json_schema(&decision_with_custom_evidence, &schema)
+            .expect("phase decision with custom evidence kinds should validate");
     }
 }
