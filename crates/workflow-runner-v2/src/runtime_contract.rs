@@ -150,9 +150,15 @@ pub fn phase_decision_json_schema_for(ctx: &RuntimeConfigContext, phase_id: &str
     };
     let evidence_kind_schema = serde_json::json!({ "type": "string" });
 
+    // Build required fields — evidence is only required if there are required evidence types
+    let mut required_fields = vec!["kind", "phase_id", "verdict", "confidence", "risk", "reason"];
+    if !contract.required_evidence.is_empty() {
+        required_fields.push("evidence");
+    }
+
     let mut schema = serde_json::json!({
         "type": "object",
-        "required": ["kind", "phase_id", "verdict", "confidence", "risk", "reason", "evidence"],
+        "required": required_fields.iter().map(|s| Value::String(s.to_string())).collect::<Vec<_>>(),
         "properties": {
             "kind": { "const": "phase_decision" },
             "phase_id": { "const": phase_id },
@@ -801,5 +807,53 @@ mod tests {
         // This should validate successfully now
         validate_basic_json_schema(&decision_with_custom_evidence, &schema)
             .expect("phase decision with custom evidence kinds should validate");
+    }
+
+    #[test]
+    fn phase_decision_evidence_field_optional_when_no_required_evidence() {
+        use crate::phase_executor::validate_basic_json_schema;
+
+        let workflow_config = builtin_workflow_config();
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+        };
+
+        let schema = phase_decision_json_schema_for(&ctx, "implementation")
+            .expect("should generate schema")
+            .expect("schema should exist for implementation phase");
+
+        // Verify that evidence is NOT in the required fields when required_evidence is empty
+        let required_fields = schema.get("required").and_then(Value::as_array).expect("required should be an array");
+        let required_field_strings: Vec<&str> =
+            required_fields.iter().filter_map(|v| v.as_str()).collect();
+
+        assert!(!required_field_strings.contains(&"evidence"), "evidence should not be required when required_evidence is empty");
+        assert!(required_field_strings.contains(&"verdict"), "verdict should be required");
+        assert!(required_field_strings.contains(&"confidence"), "confidence should be required");
+
+        // Test that a phase decision WITHOUT evidence field validates successfully
+        let decision_without_evidence = serde_json::json!({
+            "kind": "phase_decision",
+            "phase_id": "implementation",
+            "verdict": "advance",
+            "confidence": 0.95,
+            "risk": "low",
+            "reason": "Implementation complete"
+        });
+
+        validate_basic_json_schema(&decision_without_evidence, &schema)
+            .expect("phase decision without evidence field should validate when no required evidence types");
     }
 }
