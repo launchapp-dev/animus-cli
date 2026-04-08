@@ -367,9 +367,7 @@
         "additionalProperties": true
       },
       "decision_contract": {
-        "required_evidence": [
-          "files_modified"
-        ],
+        "required_evidence": [],
         "min_confidence": 0.7,
         "max_risk": "medium",
         "allow_missing_decision": true
