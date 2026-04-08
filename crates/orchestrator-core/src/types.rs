@@ -143,6 +143,37 @@ mod tests {
     }
 
     #[test]
+    fn phase_decision_no_changes_needed_evidence_serializes() {
+        let decision = PhaseDecision {
+            kind: "phase_decision".to_string(),
+            phase_id: "implementation".to_string(),
+            verdict: PhaseDecisionVerdict::Advance,
+            confidence: 0.95,
+            risk: WorkflowDecisionRisk::Low,
+            reason: "Code review complete, no changes needed".to_string(),
+            evidence: vec![PhaseEvidence {
+                kind: PhaseEvidenceKind::NoChangesNeeded,
+                description: "Code already meets all requirements and passes all checks".to_string(),
+                file_path: None,
+                value: None,
+            }],
+            guardrail_violations: vec![],
+            commit_message: None,
+            target_phase: None,
+        };
+
+        let serialized = serde_json::to_value(&decision).expect("phase decision should serialize successfully");
+
+        assert_eq!(serialized["kind"], "phase_decision");
+        assert_eq!(serialized["verdict"], "advance");
+        assert_eq!(serialized["evidence"][0]["kind"], "no_changes_needed");
+        assert_eq!(
+            serialized["evidence"][0]["description"],
+            "Code already meets all requirements and passes all checks"
+        );
+    }
+
+    #[test]
     fn task_status_deserializes_contract_aliases_and_helpers_stay_consistent() {
         let backlog_alias: TaskStatus = serde_json::from_str("\"todo\"").expect("todo should map to backlog");
         let in_progress_kebab: TaskStatus = serde_json::from_str("\"in-progress\"").expect("kebab case should parse");

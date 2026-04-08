@@ -193,10 +193,10 @@ pub(crate) fn render_phase_prompt_with_ctx_overrides(
         }
     } else if let Some(contract) = phase_decision_contract.as_ref() {
         let required_evidence = if contract.required_evidence.is_empty() {
-            "- Include evidence entries when they materially support your verdict.".to_string()
+            "- Include evidence entries when they materially support your verdict.\n  - If you analyzed code/files but did not modify any files, include evidence with kind \"no_changes_needed\" explaining why (e.g., \"code already meets requirements\", \"no issues found\", \"working as designed\").".to_string()
         } else {
             format!(
-                "- Evidence must include these kinds when applicable: {}.",
+                "- Evidence must include these kinds when applicable: {}.\n  - If you analyzed code/files but did not modify any files, include evidence with kind \"no_changes_needed\" explaining why (e.g., \"code already meets requirements\", \"no issues found\", \"working as designed\").",
                 contract
                     .required_evidence
                     .iter()
@@ -531,7 +531,7 @@ pub(crate) fn phase_safety_rules(caps: &protocol::PhaseCapabilities) -> &'static
 
 pub(crate) fn phase_action_rule(caps: &protocol::PhaseCapabilities) -> &'static str {
     if caps.writes_files {
-        return "Requirements:\n- Make concrete file changes in this repository.";
+        return "Requirements:\n- Make concrete file changes in this repository.\n- When you analyze code but determine no changes are needed, explain why in your phase decision evidence (use kind \"no_changes_needed\").";
     }
 
     if caps.mutates_state {

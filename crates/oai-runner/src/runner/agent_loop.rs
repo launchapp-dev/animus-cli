@@ -265,6 +265,8 @@ pub async fn run_agent_loop(
     };
     let api_tools = if needs_tool_name_sanitization { &sanitized_tools } else { effective_tools };
 
+    let mut file_modification_tool_calls: Vec<(String, String)> = Vec::new();
+
     for turn in 0..max_turns {
         if cancel_token.is_cancelled() {
             eprintln!("[oai-runner] Cancelled by signal");
@@ -578,6 +580,10 @@ pub async fn run_agent_loop(
                 match executor::execute_tool(&tool_name, &tc.function.arguments, working_dir).await {
                     Ok(r) => {
                         output.tool_result(&tool_name, &r);
+                        // Track file modification tools
+                        if matches!(tool_name.as_str(), "write_file" | "edit_file") {
+                            file_modification_tool_calls.push((tool_name.clone(), r.clone()));
+                        }
                         r
                     }
                     Err(e) => {
