@@ -214,22 +214,52 @@ impl DoctorReport {
             None,
         ));
 
+        let agent_runner_available = binary_in_path("agent-runner");
         #[cfg(unix)]
         let runner_socket_path = protocol::Config::global_config_dir().join("agent-runner.sock");
         #[cfg(unix)]
-        checks.push(build_check(
-            "runner_socket_available",
-            if runner_socket_path.exists() { DoctorCheckStatus::Ok } else { DoctorCheckStatus::Warn },
-            if runner_socket_path.exists() {
-                format!("runner socket detected at {}", runner_socket_path.display())
+        {
+            let socket_exists = runner_socket_path.exists();
+            let check_status = if socket_exists {
+                DoctorCheckStatus::Ok
+            } else if agent_runner_available {
+                DoctorCheckStatus::Warn
             } else {
-                format!("runner socket not found at {}", runner_socket_path.display())
-            },
-            "start_runner",
-            true,
-            "start or connect to agent runner",
-            Some("ao agent runner-status --start-runner"),
-        ));
+                DoctorCheckStatus::Warn
+            };
+
+            let details = if socket_exists {
+                format!("runner socket detected at {}", runner_socket_path.display())
+            } else if agent_runner_available {
+                format!(
+                    "runner socket not found at {} (agent-runner binary found, run `ao daemon start --help` to start)",
+                    runner_socket_path.display()
+                )
+            } else {
+                format!(
+                    "runner socket not found at {}, and agent-runner binary not in PATH",
+                    runner_socket_path.display()
+                )
+            };
+
+            checks.push(build_check(
+                "runner_socket_available",
+                check_status,
+                details,
+                "start_runner",
+                true,
+                if agent_runner_available {
+                    "start agent runner via daemon"
+                } else {
+                    "ensure agent-runner is installed and in PATH, or available in daemon binary bundle"
+                },
+                if agent_runner_available {
+                    Some("ao daemon start")
+                } else {
+                    Some("verify agent-runner installation or check daemon build configuration")
+                },
+            ));
+        }
 
         #[cfg(not(unix))]
         checks.push(build_check(
@@ -239,7 +269,7 @@ impl DoctorReport {
             "start_runner",
             true,
             "start or connect to agent runner",
-            Some("ao agent runner-status --start-runner"),
+            Some("ao daemon start"),
         ));
 
         let result = derive_result(&checks);

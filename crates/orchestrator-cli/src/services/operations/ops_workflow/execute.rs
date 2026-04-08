@@ -40,6 +40,9 @@ pub(crate) async fn handle_workflow_execute(
     }
     let vars = super::parse_workflow_vars(&args.vars)?;
 
+    // Ensure daemon and agent-runner are started before workflow execution
+    hub.daemon().start(Default::default()).await?;
+
     let task_id_for_sync = args.task_id.clone();
     let phase_filter = args.phase.clone();
 
