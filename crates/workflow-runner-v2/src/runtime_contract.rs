@@ -735,9 +735,8 @@ mod tests {
             .expect("schema should exist for implementation phase");
 
         // Get the evidence kind schema from the decision schema
-        let evidence_kind_schema = schema
-            .pointer("/properties/evidence/items/properties/kind")
-            .expect("evidence kind schema should exist");
+        let evidence_kind_schema =
+            schema.pointer("/properties/evidence/items/properties/kind").expect("evidence kind schema should exist");
 
         // Verify that the kind field accepts any string, not just required kinds
         assert_eq!(
