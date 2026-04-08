@@ -77,6 +77,13 @@ pub(crate) fn apply_doctor_fixes(project_root: &str, report: &DoctorReport) -> V
         actions.push(skipped_action("create_default_daemon_config", "daemon config remediation not required"));
     }
 
+    if remediation_needed(report, "start_runner") {
+        actions.push(skipped_action(
+            "start_runner",
+            "agent-runner will be started automatically on next workflow/agent run; to start manually run `ao daemon start`",
+        ));
+    }
+
     actions
 }
 
