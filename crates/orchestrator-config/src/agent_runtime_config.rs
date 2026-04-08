@@ -1213,7 +1213,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                         "additionalProperties": true
                     })),
                     decision_contract: Some(PhaseDecisionContract {
-                        required_evidence: vec![crate::types::PhaseEvidenceKind::FilesModified],
+                        required_evidence: Vec::new(),
                         min_confidence: 0.7,
                         max_risk: crate::types::WorkflowDecisionRisk::Medium,
                         allow_missing_decision: true,
@@ -2174,7 +2174,7 @@ cli_tools:
         );
         assert_eq!(
             config.phase_decision_contract("implementation").map(|contract| contract.required_evidence.clone()),
-            Some(vec![crate::types::PhaseEvidenceKind::FilesModified])
+            Some(Vec::new())
         );
     }
 
