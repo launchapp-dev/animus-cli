@@ -1319,7 +1319,11 @@ fn e2e_task_status_force_flag_allows_skip_transitions() -> Result<()> {
     // Try to transition backlog → done without force (should fail)
     let invalid_transition = harness.run_json_err(&["task", "status", "--id", &task_id, "--status", "done"])?;
     let error_message = invalid_transition.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
-    assert!(error_message.contains("cannot transition to done"), "expected state machine validation error, got: {}", error_message);
+    assert!(
+        error_message.contains("cannot transition to done"),
+        "expected state machine validation error, got: {}",
+        error_message
+    );
 
     // Retry with --force flag (should succeed)
     let forced_status = harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "done", "--force"])?;
