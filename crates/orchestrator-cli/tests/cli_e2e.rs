@@ -1306,3 +1306,28 @@ fn e2e_git_repo_init_failure_is_reported_and_not_registered() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn e2e_task_status_force_flag_allows_skip_transitions() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let created = harness.run_json_ok(&["task", "create", "--title", "Force Status Test"])?;
+    let task_id =
+        created.pointer("/data/id").and_then(Value::as_str).context("task create should return data.id")?.to_string();
+    assert_eq!(created.pointer("/data/status").and_then(Value::as_str), Some("backlog"));
+
+    // Try to transition backlog → done without force (should fail)
+    let invalid_transition = harness.run_json_err(&["task", "status", "--id", &task_id, "--status", "done"])?;
+    let error_message = invalid_transition.pointer("/error/message").and_then(Value::as_str).unwrap_or_default();
+    assert!(error_message.contains("cannot transition to done"), "expected state machine validation error, got: {}", error_message);
+
+    // Retry with --force flag (should succeed)
+    let forced_status = harness.run_json_ok(&["task", "status", "--id", &task_id, "--status", "done", "--force"])?;
+    assert_eq!(forced_status.pointer("/data/status").and_then(Value::as_str), Some("done"));
+
+    // Verify task is in done state
+    let fetched = harness.run_json_ok(&["task", "get", "--id", &task_id])?;
+    assert_eq!(fetched.pointer("/data/status").and_then(Value::as_str), Some("done"));
+
+    Ok(())
+}

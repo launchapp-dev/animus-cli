@@ -276,7 +276,7 @@ pub(crate) async fn handle_task(
                     &args.id,
                     status,
                     Path::new(project_root),
-                    true, // validate: true for CLI commands
+                    !args.force, // validate unless --force is used
                 )
                 .await?,
                 json,

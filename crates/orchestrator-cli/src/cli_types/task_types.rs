@@ -324,4 +324,6 @@ pub(crate) struct TaskStatusArgs {
     pub(crate) id: String,
     #[arg(short, long, value_name = "STATUS", help = TASK_STATUS_HELP)]
     pub(crate) status: String,
+    #[arg(long, default_value_t = false, help = "Skip state machine validation; allows transitions like backlog→done or blocked→in-progress for testing/dev workflows.")]
+    pub(crate) force: bool,
 }
