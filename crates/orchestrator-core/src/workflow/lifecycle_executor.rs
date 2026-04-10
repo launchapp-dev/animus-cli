@@ -154,6 +154,11 @@ impl WorkflowLifecycleExecutor {
         }
     }
 
+    pub fn with_verdict_routing_config(mut self, verdict_routing: VerdictRouting) -> Self {
+        self.verdict_routing = verdict_routing;
+        self
+    }
+
     pub fn with_retry_configs(mut self, configs: HashMap<String, PhaseRetryConfig>) -> Self {
         self.retry_configs = configs;
         self

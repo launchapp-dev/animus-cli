@@ -432,6 +432,8 @@ impl WorkflowServiceApi for FileServiceHub {
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         let retry_configs = load_phase_retry_configs(self.project_root.as_path());
         let workflow_config = crate::load_workflow_config_or_default(self.project_root.as_path());
+        let verdict_routing =
+            crate::resolve_workflow_verdict_routing(&workflow_config.config, workflow.workflow_ref.as_deref());
         let skip_guards =
             crate::resolve_workflow_skip_guards(&workflow_config.config, workflow.workflow_ref.as_deref());
         let executor = WorkflowLifecycleExecutor::with_state_machines(
@@ -441,6 +443,7 @@ impl WorkflowServiceApi for FileServiceHub {
             )?,
             state_machines,
         )
+        .with_verdict_routing_config(verdict_routing)
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         executor.mark_current_phase_success_with_decision(&mut workflow, decision);
