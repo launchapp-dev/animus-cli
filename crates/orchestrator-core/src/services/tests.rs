@@ -2,7 +2,8 @@ use super::*;
 use crate::types::{
     ArchitectureEntity, ListPageRequest, Priority, RequirementFilter, RequirementItem, RequirementPriority,
     RequirementQuery, RequirementQuerySort, RequirementStatus, RequirementType, TaskCreateInput, TaskQuery,
-    TaskQuerySort, TaskType, WorkflowFilter, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
+    TaskQuerySort, TaskType, WorkflowDecisionRisk, WorkflowFilter, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput,
+    WorkflowStatus,
 };
 
 fn scoped_ao_root(project_root: &std::path::Path) -> std::path::PathBuf {
@@ -640,6 +641,94 @@ async fn file_hub_persists_workflows_with_machine_state() {
     assert_eq!(loaded.id, workflow.id);
     assert_eq!(loaded.status, WorkflowStatus::Running);
     assert_eq!(loaded.machine_state, crate::types::WorkflowMachineState::RunPhase);
+}
+
+#[tokio::test]
+async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let mut workflow_config = crate::load_workflow_config(temp.path()).expect("load workflow config");
+    for (phase_id, label, category) in [
+        ("implement", "Implement", "build"),
+        ("qa-review", "QA Review", "qa"),
+        ("push-branch", "Push Branch", "git"),
+    ] {
+        workflow_config.phase_catalog.insert(
+            phase_id.to_string(),
+            crate::PhaseUiDefinition {
+                label: label.to_string(),
+                description: String::new(),
+                category: category.to_string(),
+                icon: None,
+                docs_url: None,
+                tags: Vec::new(),
+                visible: true,
+            },
+        );
+    }
+    workflow_config.workflows.push(crate::WorkflowDefinition {
+        id: "routed-rework".to_string(),
+        name: "Routed Rework".to_string(),
+        description: "Regression test for file-backed rework routing".to_string(),
+        phases: vec![
+            "implement".to_string().into(),
+            crate::WorkflowPhaseEntry::Rich(crate::WorkflowPhaseConfig {
+                id: "qa-review".to_string(),
+                skip_if: Vec::new(),
+                max_rework_attempts: 3,
+                on_verdict: std::collections::HashMap::from([(
+                    "rework".to_string(),
+                    crate::PhaseTransitionConfig {
+                        target: "implement".to_string(),
+                        guard: None,
+                        allow_agent_target: false,
+                        allowed_targets: Vec::new(),
+                    },
+                )]),
+            }),
+            "push-branch".to_string().into(),
+        ],
+        post_success: None,
+        variables: Vec::new(),
+    });
+    crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
+
+    let hub = file_hub(temp.path()).expect("create hub");
+    let workflow = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-routed-rework".to_string(), Some("routed-rework".to_string())),
+    )
+    .await
+    .expect("run workflow");
+
+    let workflow =
+        WorkflowServiceApi::complete_current_phase(&hub, &workflow.id).await.expect("complete implement phase");
+    assert_eq!(workflow.current_phase.as_deref(), Some("qa-review"));
+    assert_eq!(workflow.current_phase_index, 1);
+
+    let workflow = WorkflowServiceApi::complete_current_phase_with_decision(
+        &hub,
+        &workflow.id,
+        Some(crate::PhaseDecision {
+            kind: "phase_result".to_string(),
+            phase_id: "qa-review".to_string(),
+            verdict: crate::PhaseDecisionVerdict::Rework,
+            reason: "needs fixes".to_string(),
+            confidence: 0.9,
+            risk: WorkflowDecisionRisk::Medium,
+            evidence: Vec::new(),
+            guardrail_violations: Vec::new(),
+            commit_message: None,
+            target_phase: None,
+        }),
+    )
+    .await
+    .expect("qa review should request rework");
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.current_phase.as_deref(), Some("implement"));
+    assert_eq!(workflow.current_phase_index, 0);
+    assert_eq!(workflow.phases[0].status, crate::types::WorkflowPhaseStatus::Running);
+    assert_eq!(workflow.decision_history.last().and_then(|entry| entry.target_phase.as_deref()), Some("implement"));
 }
 
 #[tokio::test]
