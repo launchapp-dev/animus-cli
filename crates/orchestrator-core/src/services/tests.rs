@@ -647,11 +647,9 @@ async fn file_hub_persists_workflows_with_machine_state() {
 async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
     let temp = tempfile::tempdir().expect("tempdir");
     let mut workflow_config = crate::load_workflow_config(temp.path()).expect("load workflow config");
-    for (phase_id, label, category) in [
-        ("implement", "Implement", "build"),
-        ("qa-review", "QA Review", "qa"),
-        ("push-branch", "Push Branch", "git"),
-    ] {
+    for (phase_id, label, category) in
+        [("implement", "Implement", "build"), ("qa-review", "QA Review", "qa"), ("push-branch", "Push Branch", "git")]
+    {
         workflow_config.phase_catalog.insert(
             phase_id.to_string(),
             crate::PhaseUiDefinition {
