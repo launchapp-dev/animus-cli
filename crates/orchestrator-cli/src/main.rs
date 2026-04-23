@@ -40,6 +40,7 @@ async fn run(cli: Cli) -> Result<()> {
     let runtime_config = RuntimeConfig { project_root: cli.project_root.clone(), ..RuntimeConfig::default() };
     let (project_root, _) = resolve_project_root(&runtime_config);
     match cli.command {
+        Command::Init(args) => services::operations::handle_init(args, &project_root, cli.json).await,
         Command::Setup(args) => services::operations::handle_setup(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
         Command::Pack { command } => services::operations::handle_pack(command, &project_root, cli.json).await,
@@ -107,7 +108,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Status | Command::Version => {
                     unreachable!("command handled before runtime initialization")
                 }
-                Command::Setup(_) | Command::Doctor(_) | Command::Trigger { .. } => {
+                Command::Init(_) | Command::Setup(_) | Command::Doctor(_) | Command::Trigger { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }

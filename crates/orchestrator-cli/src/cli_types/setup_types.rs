@@ -7,7 +7,10 @@ pub(crate) struct SetupArgs {
         help = "Run without prompts. Requires explicit --auto-merge, --auto-pr, and --auto-commit-before-merge values."
     )]
     pub(crate) non_interactive: bool,
-    #[arg(long, help = "Preview setup changes without writing config.")]
+    #[arg(
+        long,
+        help = "Preview setup changes without writing config. In non-interactive contexts, unspecified values default to the current daemon config."
+    )]
     pub(crate) plan: bool,
     #[arg(long, action = ArgAction::Set)]
     pub(crate) auto_merge: Option<bool>,

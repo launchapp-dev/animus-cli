@@ -1,0 +1,6 @@
+workflows:
+  - id: standard-workflow
+    name: Conductor Delivery Workflow
+    description: Default task delivery wrapper for projects using a conductor/planner loop.
+    phases:
+      - workflow_ref: ao.task/standard

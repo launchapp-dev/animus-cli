@@ -4,6 +4,7 @@ pub mod pack_config;
 pub mod pack_marketplace;
 pub mod pack_registry;
 pub mod pack_selection;
+pub mod project_template;
 pub mod skill_definition;
 pub mod skill_resolution;
 pub mod skill_scoping;
@@ -50,6 +51,13 @@ pub use pack_registry::{
 pub use pack_selection::{
     load_pack_selection_state, pack_selection_path, save_pack_selection_state, PackSelectionEntry, PackSelectionSource,
     PackSelectionState, PACK_SELECTION_FILE_NAME, PACK_SELECTION_SCHEMA_ID,
+};
+pub use project_template::{
+    list_bundled_project_templates, load_bundled_project_template, load_project_template_from_dir,
+    load_project_template_from_file, parse_project_template_manifest, LoadedProjectTemplate, ProjectTemplateDaemon,
+    ProjectTemplateFile, ProjectTemplateManifest, ProjectTemplatePack, ProjectTemplateSource,
+    ProjectTemplateSourceKind, ProjectTemplateSourceMode, ProjectTemplateSummary, PROJECT_TEMPLATE_MANIFEST_FILE_NAME,
+    PROJECT_TEMPLATE_MANIFEST_SCHEMA_ID,
 };
 pub use skill_definition::*;
 pub use workflow_config::*;

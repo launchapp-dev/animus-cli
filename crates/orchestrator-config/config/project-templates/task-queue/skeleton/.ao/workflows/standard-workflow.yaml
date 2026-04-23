@@ -1,0 +1,6 @@
+workflows:
+  - id: standard-workflow
+    name: Task Queue Delivery Workflow
+    description: Default queue-driven task delivery wrapper.
+    phases:
+      - workflow_ref: ao.task/standard

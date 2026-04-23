@@ -1,0 +1,20 @@
+schema = "animus.template.v1"
+id = "task-queue"
+version = "0.1.0"
+title = "Task Queue Pattern"
+description = "Execution-first project shape for teams that already have tasks and want a clean queue-driven delivery loop."
+pattern = "task-queue"
+next_steps = [
+  "animus workflow list",
+  "animus task create --title \"Add your first task\" --task-type feature --priority high",
+  "animus daemon start --autonomous",
+]
+
+[source]
+mode = "copy"
+root = "skeleton"
+
+[daemon]
+auto_merge = true
+auto_pr = true
+auto_commit_before_merge = true

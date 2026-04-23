@@ -8,7 +8,7 @@ fn help_includes_top_level_usage() -> Result<(), Box<dyn std::error::Error>> {
     assert!(output.status.success(), "help command should succeed");
     let stdout = String::from_utf8(output.stdout)?;
     assert!(stdout.contains("Animus — the spirit that drives your agents"), "help output should include CLI title");
-    assert!(stdout.contains("Usage: ao [OPTIONS] <COMMAND>"), "help output should include usage line");
+    assert!(stdout.contains("Usage: animus [OPTIONS] <COMMAND>"), "help output should include usage line");
     assert!(stdout.contains("status"), "help output should include status command");
     Ok(())
 }
@@ -35,6 +35,10 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
     assert!(
         top_level_stdout.contains("Search, install, update, and publish versioned skills"),
         "top-level help should describe skill command"
+    );
+    assert!(
+        top_level_stdout.contains("Initialize an Animus project from a template"),
+        "top-level help should describe init command"
     );
 
     let workflow_help = Command::new(&binary).args(["workflow", "--help"]).output()?;
@@ -82,6 +86,13 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
     assert!(skill_stdout.contains("install"), "skill help should include install command");
     assert!(skill_stdout.contains("update"), "skill help should include update command");
     assert!(skill_stdout.contains("publish"), "skill help should include publish command");
+
+    let init_help = Command::new(&binary).args(["init", "--help"]).output()?;
+    assert!(init_help.status.success(), "init help should succeed");
+    let init_stdout = String::from_utf8(init_help.stdout)?;
+    assert!(init_stdout.contains("--template <TEMPLATE_ID>"), "init help should explain bundled template selection");
+    assert!(init_stdout.contains("--path <PATH>"), "init help should explain local template loading");
+    assert!(init_stdout.contains("--non-interactive"), "init help should explain non-interactive mode");
 
     Ok(())
 }
@@ -246,7 +257,7 @@ fn version_subcommand_supports_json_output() -> Result<(), Box<dyn std::error::E
 
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout)?;
     assert_eq!(payload.get("schema").and_then(|value| value.as_str()), Some(CLI_SCHEMA_ID));
-    assert_eq!(payload.pointer("/data/binary").and_then(|value| value.as_str()), Some("ao"));
+    assert_eq!(payload.pointer("/data/binary").and_then(|value| value.as_str()), Some("animus"));
     assert!(
         payload.pointer("/data/version").and_then(|value| value.as_str()).is_some(),
         "version payload should include data.version"
@@ -262,7 +273,7 @@ fn invalid_arguments_include_usage_and_help_hint() -> Result<(), Box<dyn std::er
     assert!(!output.status.success(), "unknown argument should produce a failing exit code");
     let stderr = String::from_utf8(output.stderr)?;
     assert!(stderr.contains("unexpected argument '--bogus' found"), "stderr should identify the unexpected argument");
-    assert!(stderr.contains("Usage: ao task list [OPTIONS]"), "stderr should include command usage");
+    assert!(stderr.contains("Usage: animus task list [OPTIONS]"), "stderr should include command usage");
     assert!(stderr.contains("For more information, try '--help'."), "stderr should include a hint to use --help");
 
     Ok(())

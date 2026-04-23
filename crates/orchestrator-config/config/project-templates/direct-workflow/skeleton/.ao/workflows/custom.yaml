@@ -1,0 +1,7 @@
+default_workflow_ref: standard-workflow
+
+# Pattern: direct-workflow
+# Default workflows are designed for explicit, human-triggered runs.
+tools_allowlist:
+  - cargo
+  - animus

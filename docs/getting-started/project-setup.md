@@ -1,20 +1,23 @@
 # Project Setup
 
-## What `ao setup` Does
+## What `animus init` Does
 
-`ao setup` initializes both the project-local AO config and the repo-scoped runtime state that AO uses while the repository is active.
+`animus init` is the primary first-run command for a repository. It initializes both the project-local Animus config and the repo-scoped runtime state that Animus uses while the repository is active, then applies a bundled or local project template on top of that bootstrap.
 
 On first run it:
 
 1. resolves the project root
 2. creates `.ao/` if it does not exist
 3. provisions repo-scoped state under `~/.ao/<repo-scope>/`
-4. writes project config and default workflow YAML scaffolding
-5. creates the default state-machine config if it is missing
+4. writes project config and baseline workflow scaffolding
+5. copies template workflow wrappers into `.ao/workflows/`
+6. creates the default state-machine config if it is missing
+
+`animus setup` still exists as a lower-level bootstrap wizard. Use it when you only want the baseline repo wiring without selecting a template.
 
 ## Project-Local Files
 
-These files live in the repository and are the authored configuration surface:
+These files live in the repository and are the authored configuration surface. The exact workflow set depends on the selected template:
 
 ```text
 .ao/
@@ -23,7 +26,8 @@ These files live in the repository and are the authored configuration surface:
     ├── custom.yaml
     ├── standard-workflow.yaml
     ├── hotfix-workflow.yaml
-    └── research-workflow.yaml
+    ├── research-workflow.yaml
+    └── conductor-workflow.yaml   # template-specific example
 ```
 
 Supported but not created by default:
@@ -33,11 +37,11 @@ Supported but not created by default:
 .ao/plugins/<pack-id>/
 ```
 
-Use the YAML files in `.ao/workflows/` or `.ao/workflows.yaml` to define repository-specific workflows and defaults. AO does not ship bundled workflows.
+Use the YAML files in `.ao/workflows/` or `.ao/workflows.yaml` to define repository-specific workflows and defaults. Bundled templates ship curated workflow wrappers, and local templates can add their own starter files the same way.
 
 ## Repo-Scoped Runtime State
 
-AO keeps mutable runtime data outside the repository under:
+Animus keeps mutable runtime data outside the repository under:
 
 ```text
 ~/.ao/<repo-scope>/
@@ -85,7 +89,7 @@ Some of these files appear lazily, only after the corresponding subsystem runs.
 
 ## Workflow Sources
 
-AO resolves workflows from these layers:
+Animus resolves workflows from these layers:
 
 1. project overrides in `.ao/plugins/<pack-id>/`
 2. project YAML in `.ao/workflows.yaml` and `.ao/workflows/*.yaml`
@@ -93,13 +97,13 @@ AO resolves workflows from these layers:
 
 ## Mutation Policy
 
-Do not hand-edit AO-managed JSON state. Use:
+Do not hand-edit Animus-managed JSON state. Use:
 
-- `ao task ...`
-- `ao requirements ...`
-- `ao workflow ...`
-- `ao pack ...`
-- AO MCP tools
+- `animus task ...`
+- `animus requirements ...`
+- `animus workflow ...`
+- `animus pack ...`
+- Animus MCP tools
 
 ## Next Steps
 

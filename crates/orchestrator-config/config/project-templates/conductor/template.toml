@@ -1,0 +1,20 @@
+schema = "animus.template.v1"
+id = "conductor"
+version = "0.1.0"
+title = "Conductor Pattern"
+description = "Planning-heavy project shape with requirement planning wrappers alongside the default task delivery workflows."
+pattern = "conductor"
+next_steps = [
+  "animus workflow list",
+  "animus requirements create --title \"New capability\" --priority must --acceptance-criterion \"Describe the expected outcome\"",
+  "animus requirements execute --id REQ-001",
+]
+
+[source]
+mode = "copy"
+root = "skeleton"
+
+[daemon]
+auto_merge = false
+auto_pr = true
+auto_commit_before_merge = false

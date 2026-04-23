@@ -16,8 +16,14 @@
 <img src="https://img.shields.io/badge/rust-100%25-f0f6fc?style=for-the-badge&labelColor=0d1117&logo=rust&logoColor=f0f6fc" alt="Rust" />
 &nbsp;
 <img src="https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-f0f6fc?style=for-the-badge&labelColor=0d1117&logo=apple&logoColor=f0f6fc" alt="Platforms" />
+&nbsp;
+<a href="https://github.com/launchapp-dev/awesome-ai-coding-tools"><img src="https://awesome.re/mentioned-badge-flat.svg" alt="Mentioned in Awesome AI Coding Tools" /></a>
 
 </div>
+
+<p align="center">
+<sub>AI agent orchestrator | autonomous coding agents | multi-model AI dev team | Claude + Gemini + GPT workflow automation | MCP integration | YAML-driven CI for AI | Rust CLI</sub>
+</p>
 
 <br/>
 
@@ -87,7 +93,7 @@ You define agents, wire them into phases, compose phases into workflows, schedul
 ```bash
 cd your-project                          # any git repo
 animus doctor                            # check prerequisites and auto-remediate
-animus setup                             # initialize .ao/ with your agents and workflows
+animus init --template task-queue --non-interactive  # initialize .ao/ with a queue-first workflow template
 
 # Option 1: Run workflows on demand
 animus task create --title "Add rate limiting" --task-type feature --priority high
@@ -351,7 +357,8 @@ animus agent         Control agent runner processes
 animus output        Stream and inspect agent output
 animus doctor        Health checks, auto-remediation, and troubleshooting (v0.3.0+)
 animus cloud         Sync state, manage webhooks, and access cloud dashboard (v0.3.0+)
-animus setup         Interactive project initialization
+animus init          Initialize a project from a bundled or local template
+animus setup         Lower-level bootstrap and configuration wizard
 animus requirements  Manage product requirements
 animus mcp           Start Animus as an MCP server
 animus web           Launch the embedded web dashboard

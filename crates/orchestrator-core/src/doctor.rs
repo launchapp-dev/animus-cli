@@ -116,7 +116,7 @@ impl DoctorReport {
             },
             match ao_dir_state {
                 DirectoryState::NotDirectory => None,
-                _ => Some("ao doctor --fix"),
+                _ => Some("animus doctor --fix"),
             },
         ));
 
@@ -153,7 +153,7 @@ impl DoctorReport {
                 "create_default_daemon_config",
                 true,
                 "create daemon config with default values",
-                Some("ao doctor --fix"),
+                Some("animus doctor --fix"),
             )
         } else {
             match std::fs::read_to_string(&daemon_config_path) {
@@ -232,7 +232,7 @@ impl DoctorReport {
                 format!("runner socket detected at {}", runner_socket_path.display())
             } else if agent_runner_available {
                 format!(
-                    "runner socket not found at {} (agent-runner binary found, run `ao daemon start --help` to start)",
+                    "runner socket not found at {} (agent-runner binary found, run `animus daemon start --help` to start)",
                     runner_socket_path.display()
                 )
             } else {
@@ -254,7 +254,7 @@ impl DoctorReport {
                     "ensure agent-runner is installed and in PATH, or available in daemon binary bundle"
                 },
                 if agent_runner_available {
-                    Some("ao daemon start")
+                    Some("animus daemon start")
                 } else {
                     Some("verify agent-runner installation or check daemon build configuration")
                 },
@@ -269,7 +269,7 @@ impl DoctorReport {
             "start_runner",
             true,
             "start or connect to agent runner",
-            Some("ao daemon start"),
+            Some("animus daemon start"),
         ));
 
         let result = derive_result(&checks);
@@ -334,7 +334,7 @@ fn build_scoped_file_check(check_id: &str, expected_path: &Path) -> DoctorCheck 
         "bootstrap_project_state",
         true,
         "create baseline AO state/config files",
-        Some("ao doctor --fix"),
+        Some("animus doctor --fix"),
     )
 }
 
@@ -362,7 +362,7 @@ fn build_ao_file_check(check_id: &str, expected_path: &Path, ao_dir_state: Direc
         "bootstrap_project_state",
         true,
         "create baseline AO state/config files",
-        Some("ao doctor --fix"),
+        Some("animus doctor --fix"),
     )
 }
 

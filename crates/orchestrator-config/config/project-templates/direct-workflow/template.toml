@@ -1,0 +1,20 @@
+schema = "animus.template.v1"
+id = "direct-workflow"
+version = "0.1.0"
+title = "Direct Workflow Pattern"
+description = "Human-driven project shape focused on explicit workflow runs instead of a standing conductor or aggressive queue automation."
+pattern = "direct-workflow"
+next_steps = [
+  "animus workflow list",
+  "animus task create --title \"Add your first task\" --task-type feature --priority high",
+  "animus workflow run --task-id TASK-001 --sync",
+]
+
+[source]
+mode = "copy"
+root = "skeleton"
+
+[daemon]
+auto_merge = false
+auto_pr = false
+auto_commit_before_merge = false

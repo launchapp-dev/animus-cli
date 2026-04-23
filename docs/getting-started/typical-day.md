@@ -1,17 +1,17 @@
-# A Typical Day Using AO
+# A Typical Day Using Animus
 
-AO is built for continuous, autonomous execution. You define work (requirements or tasks), mark it ready, and the daemon picks it up automatically.
+Animus is built for continuous, autonomous execution. You define work (requirements or tasks), mark it ready, and the daemon picks it up automatically.
 
 ## The Autonomous Workflow
 
 ```mermaid
 flowchart TB
     IDEA["Your Idea"]
-    --> REQ["ao requirements create"]
-    --> EXECUTE["ao requirements execute --id REQ-001"]
+    --> REQ["animus requirements create"]
+    --> EXECUTE["animus requirements execute --id REQ-001"]
     --> TASKS["Tasks materialized & queued"]
-    --> READY["ao task status ... --status ready"]
-    --> DAEMON["ao daemon start --autonomous"]
+    --> READY["animus task status ... --status ready"]
+    --> DAEMON["animus daemon start --autonomous"]
 
     DAEMON --> LOOP{"Ready task in queue?"}
     LOOP -->|"yes"| WORKFLOW["Spawn workflow runner"]
@@ -27,13 +27,13 @@ flowchart TB
 
 ```bash
 # Option A: Start with a product requirement
-ao requirements create \
+animus requirements create \
   --title "Rate limiting" \
   --priority must \
   --acceptance-criterion "Requests above the threshold are delayed or rejected"
 
 # Option B: Create a task directly
-ao task create \
+animus task create \
   --title "Add rate limiting" \
   --task-type feature \
   --priority high
@@ -44,7 +44,7 @@ ao task create \
 If you created a requirement, execute it to generate tasks:
 
 ```bash
-ao requirements execute --id REQ-001
+animus requirements execute --id REQ-001
 ```
 
 If you created a task directly, you can skip this step.
@@ -52,8 +52,8 @@ If you created a task directly, you can skip this step.
 ### 3. Start the daemon (autonomous mode)
 
 ```bash
-ao task status --id TASK-001 --status ready
-ao daemon start --autonomous
+animus task status --id TASK-001 --status ready
+animus daemon start --autonomous
 ```
 
 The daemon now continuously polls for ready tasks and executes them. It runs in the background and persists across restarts.
@@ -61,11 +61,11 @@ The daemon now continuously polls for ready tasks and executes them. It runs in 
 ### 4. Monitor progress
 
 ```bash
-ao now
-ao daemon health
-ao workflow list
-ao output tail
-ao status
+animus now
+animus daemon health
+animus workflow list
+animus output tail
+animus status
 ```
 
 ## Testing Workflows (Debug Mode)
@@ -74,7 +74,7 @@ If you need to test a workflow definition, agent prompt, or MCP tool before enab
 
 ```bash
 # Run a single workflow synchronously in your terminal for debugging
-ao workflow run --task-id TASK-001 --sync
+animus workflow run --task-id TASK-001 --sync
 ```
 
 The `--sync` flag is a development and debugging tool—it blocks until the workflow completes in the terminal. Once the workflow definition is validated, enable autonomous execution above.
@@ -92,7 +92,7 @@ The daemon does not own task semantics, requirement semantics, or AI logic. That
 
 ## Architecture: Separation of Concerns
 
-AO splits responsibilities to keep concerns clean:
+Animus splits responsibilities to keep concerns clean:
 
 - **Project configuration** (`.ao/`) stays in your repository, versioned with your code
 - **Runtime state** (`~/.ao/<repo-scope>/`) lives outside, persisted across runs

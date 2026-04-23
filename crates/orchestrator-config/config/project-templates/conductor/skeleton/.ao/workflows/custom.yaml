@@ -1,0 +1,7 @@
+default_workflow_ref: standard-workflow
+
+# Pattern: conductor
+# Use `conductor-workflow` to translate requirements into queued delivery work.
+tools_allowlist:
+  - cargo
+  - animus

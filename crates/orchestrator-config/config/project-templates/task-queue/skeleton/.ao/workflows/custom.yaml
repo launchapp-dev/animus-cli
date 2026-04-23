@@ -1,0 +1,7 @@
+default_workflow_ref: standard-workflow
+
+# Pattern: task-queue
+# Use this when tasks already exist and you want a predictable delivery loop.
+tools_allowlist:
+  - cargo
+  - animus

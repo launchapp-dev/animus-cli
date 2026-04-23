@@ -1,0 +1,6 @@
+workflows:
+  - id: research-workflow
+    name: Direct Workflow Research
+    description: Refine or inspect tasks before choosing an execution path.
+    phases:
+      - workflow_ref: ao.task/refine

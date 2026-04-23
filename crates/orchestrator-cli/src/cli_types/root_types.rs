@@ -112,6 +112,8 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: WebCommand,
     },
+    /// Initialize an Animus project from a template.
+    Init(InitArgs),
     /// Guided onboarding and configuration wizard.
     Setup(SetupArgs),
     /// Sync tasks and requirements with a remote ao-sync server.

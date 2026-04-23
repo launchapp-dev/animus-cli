@@ -7,10 +7,22 @@ use std::collections::HashMap;
 use test_harness::CliHarness;
 
 #[test]
-fn setup_guided_mode_requires_interactive_terminal() -> Result<()> {
+fn setup_guided_plan_is_available_without_a_tty() -> Result<()> {
     let harness = CliHarness::new()?;
 
-    let (payload, status) = harness.run_json_err_with_exit(&["setup", "--plan"])?;
+    let payload = harness.run_json_ok(&["setup", "--plan"])?;
+    assert_eq!(payload.pointer("/data/stage").and_then(Value::as_str), Some("plan"));
+    assert_eq!(payload.pointer("/data/mode").and_then(Value::as_str), Some("guided"));
+    assert_eq!(payload.pointer("/data/apply/applied").and_then(Value::as_bool), Some(false));
+
+    Ok(())
+}
+
+#[test]
+fn setup_guided_apply_still_requires_interactive_terminal() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let (payload, status) = harness.run_json_err_with_exit(&["setup"])?;
     assert_eq!(status, 2);
     assert_eq!(payload.pointer("/error/code").and_then(Value::as_str), Some("invalid_input"));
     assert!(payload
@@ -201,11 +213,23 @@ fn doctor_fix_skips_manual_ao_directory_repair() -> Result<()> {
     let fixed = harness.run_json_ok(&["doctor", "--fix"])?;
     assert_eq!(fixed.pointer("/data/fix/applied").and_then(Value::as_bool), Some(false));
     let actions = fixed.pointer("/data/fix/actions").and_then(Value::as_array).expect("fix actions should be an array");
-    assert_eq!(actions.len(), 2);
-    assert!(actions.iter().all(|action| {
+    assert_eq!(actions.len(), 3);
+    assert!(actions.iter().any(|action| {
         matches!(
             (action.get("id").and_then(Value::as_str), action.get("status").and_then(Value::as_str)),
-            (Some("bootstrap_project_state" | "create_default_daemon_config"), Some("skipped"))
+            (Some("bootstrap_project_state"), Some("failed"))
+        )
+    }));
+    assert!(actions.iter().any(|action| {
+        matches!(
+            (action.get("id").and_then(Value::as_str), action.get("status").and_then(Value::as_str)),
+            (Some("create_default_daemon_config"), Some("skipped"))
+        )
+    }));
+    assert!(actions.iter().any(|action| {
+        matches!(
+            (action.get("id").and_then(Value::as_str), action.get("status").and_then(Value::as_str)),
+            (Some("start_runner"), Some("skipped"))
         )
     }));
     assert!(harness.project_root().join(".ao").is_file());

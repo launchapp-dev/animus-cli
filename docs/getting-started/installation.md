@@ -28,7 +28,8 @@ Prebuilt releases are published at:
 
 Download the archive for your platform, extract it, and place these binaries on your `PATH`:
 
-- `ao`
+- `animus`
+- `ao` (compatibility alias)
 - `agent-runner`
 - `llm-cli-wrapper`
 - `ao-oai-runner`
@@ -68,15 +69,15 @@ cargo run -p orchestrator-cli -- --help
 ## Verify Installation
 
 ```bash
-ao --version
-ao doctor
+animus --version
+animus doctor
 ```
 
-Run `ao doctor` inside a git repository to verify the local environment and AO prerequisites.
+Run `animus doctor` inside a git repository to verify the local environment and Animus prerequisites.
 
 ## Prerequisites
 
-AO itself is a Rust application, but autonomous workflows need at least one supported AI coding CLI on your `PATH`:
+Animus itself is a Rust application, but autonomous workflows need at least one supported AI coding CLI on your `PATH`:
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 - [OpenAI Codex CLI](https://github.com/openai/codex)

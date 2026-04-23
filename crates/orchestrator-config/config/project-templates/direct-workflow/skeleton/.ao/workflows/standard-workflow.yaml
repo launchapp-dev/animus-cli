@@ -1,0 +1,6 @@
+workflows:
+  - id: standard-workflow
+    name: Direct Workflow Delivery
+    description: Human-driven default wrapper with stronger review gates.
+    phases:
+      - workflow_ref: ao.task/gated

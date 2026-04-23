@@ -59,6 +59,7 @@ This page clarifies which AO features are **shipped and stable**, **in-flight (p
 | Skill Management (`ao skill`) | **Shipped** | Search, install, update, and publish versioned skills |
 | Model Management (`ao model`) | **Shipped** | Check model availability, validate model selection, view model roster |
 | History and Error Inspection | **Shipped** | Inspect execution history and recorded operational errors |
+| Template-Driven Project Init | **In-Flight** | `animus init` supports bundled and local copy templates plus daemon defaults; registry-backed templates and richer template management are still planned |
 
 ### Observability and Output
 

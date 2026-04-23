@@ -207,6 +207,9 @@ fn resolve_non_interactive_desired_config(args: &SetupArgs) -> Result<DesiredDae
 
 fn resolve_guided_desired_config(args: &SetupArgs, current: &DaemonProjectConfig) -> Result<DesiredDaemonConfig> {
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
+        if args.plan {
+            return Ok(guided_plan_desired_config(args, current));
+        }
         return Err(crate::invalid_input_error(
             "guided setup must be run in an interactive terminal; rerun with --non-interactive and explicit --auto-* values"
         ));
@@ -233,6 +236,14 @@ fn resolve_guided_desired_config(args: &SetupArgs, current: &DaemonProjectConfig
     };
 
     Ok(DesiredDaemonConfig { auto_merge_enabled, auto_pr_enabled, auto_commit_before_merge })
+}
+
+fn guided_plan_desired_config(args: &SetupArgs, current: &DaemonProjectConfig) -> DesiredDaemonConfig {
+    DesiredDaemonConfig {
+        auto_merge_enabled: args.auto_merge.unwrap_or(current.auto_merge_enabled),
+        auto_pr_enabled: args.auto_pr.unwrap_or(current.auto_pr_enabled),
+        auto_commit_before_merge: args.auto_commit_before_merge.unwrap_or(current.auto_commit_before_merge),
+    }
 }
 
 fn prompt_bool(prompt: &str, default: bool) -> Result<bool> {
@@ -321,6 +332,25 @@ mod tests {
     }
 
     #[test]
+    fn guided_plan_uses_current_values_for_unspecified_fields() {
+        let args = SetupArgs {
+            non_interactive: false,
+            plan: true,
+            auto_merge: None,
+            auto_pr: Some(true),
+            auto_commit_before_merge: None,
+            doctor_fix: false,
+        };
+        let current =
+            DaemonProjectConfig { auto_merge_enabled: true, auto_pr_enabled: false, auto_commit_before_merge: false };
+
+        let desired = guided_plan_desired_config(&args, &current);
+        assert!(desired.auto_merge_enabled);
+        assert!(desired.auto_pr_enabled);
+        assert!(!desired.auto_commit_before_merge);
+    }
+
+    #[test]
     fn daemon_field_plan_marks_changed_and_unchanged_values() {
         let current = DaemonProjectConfig::default();
         let desired =
@@ -368,7 +398,7 @@ mod tests {
                         id: "auto_fix".to_string(),
                         available: true,
                         details: "automatic remediation".to_string(),
-                        command: Some("ao doctor --fix".to_string()),
+                        command: Some("animus doctor --fix".to_string()),
                     },
                 },
                 DoctorCheck {
@@ -379,7 +409,7 @@ mod tests {
                         id: "auto_fix".to_string(),
                         available: true,
                         details: "automatic remediation".to_string(),
-                        command: Some("ao doctor --fix".to_string()),
+                        command: Some("animus doctor --fix".to_string()),
                     },
                 },
             ],
