@@ -1,4 +1,5 @@
 use clap::{Args, Subcommand};
+use std::path::PathBuf;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SkillCommand {
@@ -59,8 +60,10 @@ pub(crate) struct SkillSearchArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SkillInstallArgs {
-    #[arg(long, help = "Skill name to resolve and install.")]
-    pub(crate) name: String,
+    #[arg(long, help = "Skill name to resolve and install; optional with --path.")]
+    pub(crate) name: Option<String>,
+    #[arg(long, help = "Install a local Markdown skill file, skill folder, or directory of skill folders.")]
+    pub(crate) path: Option<PathBuf>,
     #[arg(long, help = "Optional version constraint (semver req).")]
     pub(crate) version: Option<String>,
     #[arg(long, help = "Optional source constraint.")]

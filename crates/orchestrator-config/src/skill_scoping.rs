@@ -7,7 +7,10 @@ use anyhow::Result;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
-use crate::skill_definition::{parse_skill_manifest, SkillDefinition};
+use crate::skill_definition::{
+    parse_skill_manifest, validate_skill_definition, SkillActivation, SkillDefinition, SkillModelPreference,
+    SkillPrompt,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SkillSourceOrigin {
@@ -52,6 +55,24 @@ struct InstalledSkillRegistryStateV1 {
     installed: Vec<InstalledSkillRecord>,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+struct MarkdownSkillFrontmatter {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    version: Option<String>,
+    #[serde(default)]
+    metadata: MarkdownSkillMetadata,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct MarkdownSkillMetadata {
+    #[serde(default)]
+    version: Option<String>,
+}
+
 pub fn load_skill_sources(project_root: &Path, user_config_dir: Option<&Path>) -> Result<Vec<SkillSource>> {
     let mut sources = Vec::new();
 
@@ -79,22 +100,29 @@ pub fn load_skill_sources(project_root: &Path, user_config_dir: Option<&Path>) -
         Some(dir) => dir.join("config").join("skill_definitions"),
         None => user_skills_dir(),
     };
-    if user_dir.is_dir() {
-        let skills = load_skills_from_directory(&user_dir)?;
-        if !skills.is_empty() {
-            sources.push(SkillSource { origin: SkillSourceOrigin::User, skills });
-        }
+    let user_markdown_dir = match user_config_dir {
+        Some(dir) => dir.join("skills"),
+        None => user_markdown_skills_dir(),
+    };
+    let user_skills = merge_skill_scope_sources(&user_markdown_dir, &user_dir)?;
+    if !user_skills.is_empty() {
+        sources.push(SkillSource { origin: SkillSourceOrigin::User, skills: user_skills });
     }
 
     let proj_dir = project_skills_dir(project_root);
-    if proj_dir.is_dir() {
-        let skills = load_skills_from_directory(&proj_dir)?;
-        if !skills.is_empty() {
-            sources.push(SkillSource { origin: SkillSourceOrigin::Project, skills });
-        }
+    let project_markdown_dir = project_markdown_skills_dir(project_root);
+    let project_skills = merge_skill_scope_sources(&project_markdown_dir, &proj_dir)?;
+    if !project_skills.is_empty() {
+        sources.push(SkillSource { origin: SkillSourceOrigin::Project, skills: project_skills });
     }
 
     Ok(sources)
+}
+
+fn merge_skill_scope_sources(markdown_dir: &Path, yaml_dir: &Path) -> Result<BTreeMap<String, SkillDefinition>> {
+    let mut skills = load_markdown_skills_from_directory(markdown_dir)?;
+    skills.extend(load_skills_from_directory(yaml_dir)?);
+    Ok(skills)
 }
 
 fn installed_skills_registry_path(project_root: &Path) -> PathBuf {
@@ -181,13 +209,137 @@ pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDe
     Ok(skills)
 }
 
+fn load_markdown_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDefinition>> {
+    let mut skills = BTreeMap::new();
+
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(skills),
+    };
+
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(_) => continue,
+        };
+        let path = markdown_skill_file_for_path(&entry.path());
+        if !path.is_file() {
+            continue;
+        }
+
+        match load_markdown_skill_file(&path) {
+            Ok(skill) => {
+                skills.insert(skill.name.clone(), skill);
+            }
+            Err(error) => {
+                eprintln!("warning: could not parse markdown skill {}: {}", path.display(), error);
+            }
+        }
+    }
+
+    Ok(skills)
+}
+
+pub fn markdown_skill_file_for_path(path: &Path) -> PathBuf {
+    if path.is_dir() {
+        path.join("SKILL.md")
+    } else {
+        path.to_path_buf()
+    }
+}
+
+pub fn load_markdown_skill_file(path: &Path) -> Result<SkillDefinition> {
+    let content = fs::read_to_string(path)?;
+    let default_name = markdown_skill_default_name(path);
+    parse_markdown_skill_definition(&content, &default_name)
+}
+
+fn markdown_skill_default_name(path: &Path) -> String {
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+    let candidate = if file_name.eq_ignore_ascii_case("SKILL.md") {
+        path.parent().and_then(|parent| parent.file_name()).and_then(|name| name.to_str())
+    } else {
+        path.file_stem().and_then(|name| name.to_str())
+    };
+
+    candidate.filter(|name| !name.trim().is_empty()).unwrap_or("unknown").to_string()
+}
+
+pub fn parse_markdown_skill_definition(content: &str, default_name: &str) -> Result<SkillDefinition> {
+    let normalized = content.replace("\r\n", "\n");
+    let normalized = normalized.trim_start_matches('\u{feff}');
+    let (frontmatter, body) = split_markdown_frontmatter(normalized);
+    let metadata = match frontmatter {
+        Some(frontmatter) => serde_yaml::from_str::<MarkdownSkillFrontmatter>(frontmatter)?,
+        None => MarkdownSkillFrontmatter::default(),
+    };
+
+    let name =
+        metadata.name.as_deref().map(str::trim).filter(|value| !value.is_empty()).unwrap_or(default_name).to_string();
+    let description = metadata.description.unwrap_or_default().trim().to_string();
+    let prompt_body = body.trim();
+
+    let skill = SkillDefinition {
+        name,
+        version: metadata.version.or(metadata.metadata.version),
+        description,
+        category: None,
+        activation: SkillActivation::default(),
+        prompt: SkillPrompt {
+            system: (!prompt_body.is_empty()).then(|| prompt_body.to_string()),
+            prefix: None,
+            suffix: None,
+            directives: Vec::new(),
+        },
+        tool_policy: None,
+        model: SkillModelPreference::default(),
+        mcp_servers: Vec::new(),
+        timeout_secs: None,
+        capabilities: BTreeMap::new(),
+        extra_args: Vec::new(),
+        env: BTreeMap::new(),
+        codex_config_overrides: Vec::new(),
+        adapters: BTreeMap::new(),
+        tags: Vec::new(),
+    };
+    validate_skill_definition(&skill)?;
+    Ok(skill)
+}
+
+fn split_markdown_frontmatter(content: &str) -> (Option<&str>, &str) {
+    let Some(rest) = content.strip_prefix("---\n") else {
+        return (None, content);
+    };
+
+    if let Some(idx) = rest.find("\n---\n") {
+        let frontmatter = &rest[..idx];
+        let body = &rest[idx + 5..];
+        return (Some(frontmatter), body);
+    }
+
+    if let Some(frontmatter) = rest.strip_suffix("\n---") {
+        return (Some(frontmatter), "");
+    }
+
+    (None, content)
+}
+
 pub fn project_skills_dir(project_root: &Path) -> PathBuf {
     project_root.join(".ao").join("config").join("skill_definitions")
+}
+
+pub fn project_markdown_skills_dir(project_root: &Path) -> PathBuf {
+    project_root.join(".ao").join("skills")
 }
 
 pub fn user_skills_dir() -> PathBuf {
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
     Path::new(&home).join(".ao").join("config").join("skill_definitions")
+}
+
+pub fn user_markdown_skills_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    Path::new(&home).join(".ao").join("skills")
 }
 
 const BUILTIN_SKILL_YAMLS: &[(&str, &str)] = &[
@@ -312,9 +464,66 @@ description: A standalone skill
     }
 
     #[test]
+    fn test_load_markdown_skills_from_directory_with_frontmatter() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("rust-skills");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: rust-skills
+description: Rust-specific guidance
+metadata:
+  version: "1.2.3"
+---
+
+# Rust Skill
+
+Use this skill when editing Rust code.
+"#,
+        )
+        .unwrap();
+
+        let skills = load_markdown_skills_from_directory(tmp.path()).unwrap();
+        let skill = skills.get("rust-skills").expect("markdown skill should load");
+        assert_eq!(skill.description, "Rust-specific guidance");
+        assert_eq!(skill.version.as_deref(), Some("1.2.3"));
+        assert!(skill.prompt.system.as_deref().is_some_and(|body| body.contains("# Rust Skill")));
+    }
+
+    #[test]
+    fn test_load_markdown_skills_from_directory_with_direct_md_file() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("review.md"),
+            r#"---
+description: Review guidance
+---
+
+# Review Skill
+
+Check behavior before style.
+"#,
+        )
+        .unwrap();
+
+        let skills = load_markdown_skills_from_directory(tmp.path()).unwrap();
+        let skill = skills.get("review").expect("direct markdown skill should load");
+        assert_eq!(skill.name, "review");
+        assert_eq!(skill.description, "Review guidance");
+        assert!(skill.prompt.system.as_deref().is_some_and(|body| body.contains("Check behavior before style.")));
+    }
+
+    #[test]
     fn test_project_skills_dir() {
         let dir = project_skills_dir(Path::new("/repo"));
         assert_eq!(dir, PathBuf::from("/repo/.ao/config/skill_definitions"));
+    }
+
+    #[test]
+    fn test_project_markdown_skills_dir() {
+        let dir = project_markdown_skills_dir(Path::new("/repo"));
+        assert_eq!(dir, PathBuf::from("/repo/.ao/skills"));
     }
 
     #[test]
@@ -375,6 +584,33 @@ description: Project skill
         let project_source = sources.iter().find(|s| s.origin == SkillSourceOrigin::Project);
         assert!(project_source.is_some());
         assert!(project_source.unwrap().skills.contains_key("proj"));
+    }
+
+    #[test]
+    fn test_load_skill_sources_with_project_markdown_skills() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = project_markdown_skills_dir(tmp.path()).join("rust-skills");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            r#"---
+name: rust-skills
+description: Rust local skill
+---
+
+# Rust Local Skill
+
+Prefer borrowing over cloning.
+"#,
+        )
+        .unwrap();
+
+        let sources = load_skill_sources(tmp.path(), None).unwrap();
+        let project_source = sources.iter().find(|source| source.origin == SkillSourceOrigin::Project);
+        let project_source = project_source.expect("project markdown source should be present");
+        let skill = project_source.skills.get("rust-skills").expect("markdown skill should resolve");
+        assert_eq!(skill.description, "Rust local skill");
+        assert!(skill.prompt.system.as_deref().is_some_and(|body| body.contains("Prefer borrowing over cloning")));
     }
 
     #[test]

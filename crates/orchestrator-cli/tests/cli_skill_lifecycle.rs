@@ -122,6 +122,54 @@ fn skill_search_is_deterministic_for_identical_inputs() -> Result<()> {
 }
 
 #[test]
+fn skill_install_path_copies_markdown_skill_to_project_skills() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let source_dir = harness.project_root().join("external-skills").join("rust-skills");
+    fs::create_dir_all(source_dir.join("rules")).context("failed to create local skill fixture")?;
+    fs::write(
+        source_dir.join("SKILL.md"),
+        r#"---
+name: rust-skills
+description: Rust guidance
+metadata:
+  version: "1.0.0"
+---
+
+# Rust Guidance
+
+Prefer borrowing over cloning.
+"#,
+    )
+    .context("failed to write local skill fixture")?;
+    fs::write(source_dir.join("rules").join("borrow.md"), "Borrow before cloning.\n")
+        .context("failed to write local skill reference")?;
+
+    let source_arg = source_dir.to_string_lossy().to_string();
+    let installed = harness.run_json_ok(&["skill", "install", "--path", source_arg.as_str()])?;
+    assert_eq!(installed.pointer("/data/installed/0/name").and_then(Value::as_str), Some("rust-skills"));
+    assert_eq!(installed.pointer("/data/installed/0/changed").and_then(Value::as_bool), Some(true));
+
+    let installed_skill = harness.project_root().join(".ao").join("skills").join("rust-skills");
+    assert!(installed_skill.join("SKILL.md").exists(), "install --path should materialize the skill under .ao/skills");
+    assert!(
+        installed_skill.join("rules").join("borrow.md").exists(),
+        "install --path should preserve sibling skill files"
+    );
+
+    let shown = harness.run_json_ok(&["skill", "show", "--name", "rust-skills"])?;
+    assert_eq!(shown.pointer("/data/source").and_then(Value::as_str), Some("project"));
+    assert!(
+        shown
+            .pointer("/data/prompt/system")
+            .and_then(Value::as_str)
+            .is_some_and(|body| body.contains("Prefer borrowing over cloning.")),
+        "installed markdown skill should resolve as prompt content"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn skill_error_contract_maps_invalid_not_found_and_conflict() -> Result<()> {
     let harness = CliHarness::new()?;
 

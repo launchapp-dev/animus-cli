@@ -3,13 +3,17 @@ use crate::cli_types::{
     SkillRegistryRemoveArgs, SkillSearchArgs, SkillShowArgs, SkillUpdateArgs,
 };
 use crate::{conflict_error, invalid_input_error, not_found_error, print_value, unavailable_error};
-use anyhow::Result;
+use anyhow::{Context, Result};
+use orchestrator_config::skill_definition::SkillDefinition;
 use orchestrator_config::skill_resolution::{list_available_skills, resolve_skill};
-use orchestrator_config::skill_scoping::load_skill_sources;
+use orchestrator_config::skill_scoping::{
+    load_markdown_skill_file, load_skill_sources, markdown_skill_file_for_path, project_markdown_skills_dir,
+};
 use semver::Version;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 mod model;
 mod resolver;
@@ -175,6 +179,140 @@ fn build_integrity(name: &str, version: &str, source: &str, artifact: &str) -> S
     format!("sha256:{:x}", digest)
 }
 
+fn skill_install_root(project_root: &str) -> PathBuf {
+    project_markdown_skills_dir(Path::new(project_root))
+}
+
+fn render_skill_definition_as_markdown(definition: &SkillDefinition) -> Result<String> {
+    let mut frontmatter = String::new();
+    frontmatter.push_str("name: ");
+    frontmatter.push_str(&serde_json::to_string(&definition.name)?);
+    frontmatter.push('\n');
+    if !definition.description.trim().is_empty() {
+        frontmatter.push_str("description: ");
+        frontmatter.push_str(&serde_json::to_string(&definition.description)?);
+        frontmatter.push('\n');
+    }
+    if let Some(version) = definition.version.as_deref().filter(|value| !value.trim().is_empty()) {
+        frontmatter.push_str("version: ");
+        frontmatter.push_str(&serde_json::to_string(version)?);
+        frontmatter.push('\n');
+    }
+
+    let body =
+        definition.prompt.system.as_deref().filter(|value| !value.trim().is_empty()).map(str::trim).unwrap_or("");
+
+    Ok(format!("---\n{}---\n\n{}\n", frontmatter, body))
+}
+
+fn write_bytes_if_changed(path: &Path, bytes: &[u8]) -> Result<bool> {
+    if path.exists() && fs::read(path).with_context(|| format!("failed to read {}", path.display()))? == bytes {
+        return Ok(false);
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(path, bytes).with_context(|| format!("failed to write {}", path.display()))?;
+    Ok(true)
+}
+
+fn write_skill_definition_file(project_root: &str, definition: &SkillDefinition) -> Result<bool> {
+    let path = skill_install_root(project_root).join(&definition.name).join("SKILL.md");
+    let rendered = render_skill_definition_as_markdown(definition)?;
+    write_bytes_if_changed(&path, rendered.as_bytes())
+}
+
+fn discover_local_markdown_skill_files(path: &Path) -> Result<Vec<PathBuf>> {
+    let direct = markdown_skill_file_for_path(path);
+    if direct.is_file() {
+        return Ok(vec![direct]);
+    }
+    if !path.is_dir() {
+        return Err(not_found_error(format!("skill path not found: {}", path.display())));
+    }
+
+    let mut files = Vec::new();
+    for entry in fs::read_dir(path).with_context(|| format!("failed to read {}", path.display()))? {
+        let entry = entry?;
+        let candidate = markdown_skill_file_for_path(&entry.path());
+        if candidate.is_file() {
+            files.push(candidate);
+        }
+    }
+    files.sort();
+
+    if files.is_empty() {
+        return Err(not_found_error(format!("no Markdown skills found in {}", path.display())));
+    }
+
+    Ok(files)
+}
+
+fn copy_dir_recursive_if_changed(source: &Path, destination: &Path) -> Result<bool> {
+    if source.canonicalize().ok().as_ref() == destination.canonicalize().ok().as_ref() {
+        return Ok(false);
+    }
+
+    let mut changed = false;
+    fs::create_dir_all(destination).with_context(|| format!("failed to create {}", destination.display()))?;
+    for entry in fs::read_dir(source).with_context(|| format!("failed to read {}", source.display()))? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            changed |= copy_dir_recursive_if_changed(&source_path, &destination_path)?;
+        } else if source_path.is_file() {
+            let bytes = fs::read(&source_path).with_context(|| format!("failed to read {}", source_path.display()))?;
+            changed |= write_bytes_if_changed(&destination_path, &bytes)?;
+        }
+    }
+    Ok(changed)
+}
+
+fn install_local_markdown_skills(
+    path: &Path,
+    name_filter: Option<&str>,
+    project_root: &str,
+) -> Result<Vec<serde_json::Value>> {
+    let name_filter = name_filter.map(str::trim).filter(|value| !value.is_empty());
+    let files = discover_local_markdown_skill_files(path)?;
+    let mut installed = Vec::new();
+
+    for file in files {
+        let definition = load_markdown_skill_file(&file)?;
+        if name_filter.is_some_and(|name| name != definition.name) {
+            continue;
+        }
+
+        let destination = skill_install_root(project_root).join(&definition.name);
+        let changed = if file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("SKILL.md"))
+        {
+            let source_dir = file.parent().context("skill file should have parent directory")?;
+            copy_dir_recursive_if_changed(source_dir, &destination)?
+        } else {
+            let bytes = fs::read(&file).with_context(|| format!("failed to read {}", file.display()))?;
+            write_bytes_if_changed(&destination.join("SKILL.md"), &bytes)?
+        };
+
+        installed.push(serde_json::json!({
+            "name": definition.name,
+            "description": definition.description,
+            "path": destination.join("SKILL.md"),
+            "changed": changed,
+            "type": "markdown",
+        }));
+    }
+
+    if installed.is_empty() {
+        return Err(not_found_error(format!("skill not found in path: {}", name_filter.unwrap_or_default())));
+    }
+
+    Ok(installed)
+}
+
 fn handle_search(args: SkillSearchArgs, project_root: &str, json: bool) -> Result<()> {
     let query = args.query.map(|value| value.to_ascii_lowercase());
     let source_filter = args.source.as_deref().map(|s| s.trim().to_ascii_lowercase());
@@ -256,7 +394,18 @@ fn handle_search(args: SkillSearchArgs, project_root: &str, json: bool) -> Resul
 }
 
 fn handle_install(args: SkillInstallArgs, project_root: &str, json: bool) -> Result<()> {
-    let name = sanitize_required(&args.name, "skill name")?;
+    if let Some(path) = args.path.as_deref() {
+        let installed = install_local_markdown_skills(path, args.name.as_deref(), project_root)?;
+        return print_value(
+            serde_json::json!({
+                "installed": installed,
+                "install_root": skill_install_root(project_root),
+            }),
+            json,
+        );
+    }
+
+    let name = sanitize_required(args.name.as_deref().unwrap_or_default(), "skill name")?;
     let mut registry_state = load_skill_registry_state(project_root)?;
     ensure_registry_available(&registry_state, args.registry.as_deref())?;
     let mut lock_state = load_skill_lock_state(project_root)?;
@@ -290,6 +439,13 @@ fn handle_install(args: SkillInstallArgs, project_root: &str, json: bool) -> Res
 
     let registry_changed = save_skill_registry_state_if_changed(project_root, &registry_state)?;
     let lock_changed = save_skill_lock_state_if_changed(project_root, &lock_state)?;
+    let skill_file_changed = resolution
+        .selected
+        .definition
+        .as_ref()
+        .map(|definition| write_skill_definition_file(project_root, definition))
+        .transpose()?
+        .unwrap_or(false);
 
     print_value(
         serde_json::json!({
@@ -298,6 +454,7 @@ fn handle_install(args: SkillInstallArgs, project_root: &str, json: bool) -> Res
             "used_project_default": resolution.used_project_default,
             "registry_changed": registry_changed,
             "lock_changed": lock_changed,
+            "skill_file_changed": skill_file_changed,
         }),
         json,
     )
@@ -392,6 +549,7 @@ fn handle_update(args: SkillUpdateArgs, project_root: &str, json: bool) -> Resul
     }
 
     let mut updated_entries = Vec::new();
+    let mut skill_file_changed = false;
     for (name, installed_source) in targets {
         let lock_pin = find_lock_pin(&lock_state, &name, Some(installed_source.as_str()));
         let project_default = find_project_default(&registry_state, &name);
@@ -422,6 +580,9 @@ fn handle_update(args: SkillUpdateArgs, project_root: &str, json: bool) -> Resul
             args.registry.clone().or(Some(resolution.selected.registry.clone())),
             args.allow_prerelease,
         );
+        if let Some(definition) = resolution.selected.definition.as_ref() {
+            skill_file_changed |= write_skill_definition_file(project_root, definition)?;
+        }
         updated_entries.push(serde_json::json!({
             "name": resolution.selected.name,
             "version": resolution.selected.version,
@@ -440,6 +601,7 @@ fn handle_update(args: SkillUpdateArgs, project_root: &str, json: bool) -> Resul
             "updated": updated_entries,
             "registry_changed": registry_changed,
             "lock_changed": lock_changed,
+            "skill_file_changed": skill_file_changed,
         }),
         json,
     )

@@ -643,6 +643,64 @@ workflows:
 }
 
 #[test]
+fn yaml_compile_resolves_project_markdown_skills() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let skills_dir = temp.path().join(".ao").join("skills").join("project-markdown-skill");
+    fs::create_dir_all(&skills_dir).expect("create project markdown skills dir");
+    fs::write(
+        skills_dir.join("SKILL.md"),
+        r#"---
+name: project-markdown-skill
+description: Project markdown validation fixture
+---
+
+# Project Markdown Skill
+
+Use this when reviewing Rust changes.
+"#,
+    )
+    .expect("write project markdown skill");
+
+    let ao_dir = temp.path().join(".ao");
+    fs::create_dir_all(&ao_dir).expect("create .ao dir");
+    fs::write(
+        ao_dir.join("workflows.yaml"),
+        r#"
+phase_catalog:
+  project-phase:
+    label: Project Phase
+    category: verification
+phases:
+  project-phase:
+    mode: agent
+    agent_id: project-agent
+agents:
+  project-agent:
+    description: Project agent
+    system_prompt: Project prompt
+    skills:
+      - project-markdown-skill
+workflows:
+  - id: project-markdown-skill-test
+    name: Project Markdown Skill Test
+    phases:
+      - project-phase
+"#,
+    )
+    .expect("write workflow yaml");
+
+    let result = compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
+    let config = result.expect("should have config");
+    assert!(
+        config
+            .agent_profiles
+            .get("project-agent")
+            .is_some_and(|profile| profile.skills == vec!["project-markdown-skill"]),
+        "project markdown skill reference should remain intact"
+    );
+}
+
+#[test]
 fn validate_and_compile_yaml_validates_and_reloads() {
     let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");

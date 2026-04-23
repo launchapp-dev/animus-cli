@@ -105,7 +105,7 @@ agents:
 | `tool` | string | no | CLI tool to invoke (claude, codex, gemini, etc.) |
 | `tool_profile` | string | no | Named global Claude profile to resolve into launch env; only valid for `claude` |
 | `mcp_servers` | string[] | no | Names of `mcp_servers` entries this agent can use |
-| `skills` | string[] | no | Skill identifiers to attach |
+| `skills` | string[] | no | Skill identifiers to attach. Skills resolve from built-ins, `.ao/config/skill_definitions/*.yml`, and Markdown skills such as `.ao/skills/<name>/SKILL.md` or `.ao/skills/<name>.md` |
 | `capabilities` | map\<string, bool\> | no | Capability flags |
 | `tool_policy` | object | no | Tool access control policy |
 
@@ -149,7 +149,7 @@ phases:
 | `agent` | string | no | Agent profile name to use for the phase |
 | `directive` | string | no | Phase-specific instruction appended to the prompt contract |
 | `system_prompt` | string | no | Phase-specific system prompt |
-| `skills` | string[] | no | Skill identifiers to resolve, validate, and apply at phase runtime |
+| `skills` | string[] | no | Skill identifiers to resolve, validate, and apply at phase runtime. Markdown skills in `.ao/skills` are loaded as prompt-only skills |
 | `runtime` | object | no | Tool/model/runtime overrides for the phase |
 | `capabilities` | object | no | Structured phase capability flags |
 | `output_contract` | object | no | Structured result contract for the phase |
