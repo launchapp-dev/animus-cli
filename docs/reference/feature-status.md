@@ -16,7 +16,7 @@ This page clarifies which Animus features are **shipped and stable**, **in-fligh
 |---------|--------|-------------|
 | Task CRUD | **Shipped** | Create, read, update, delete, list, and filter tasks with full lifecycle support |
 | Task Dependencies | **Shipped** | Define task precedence edges and enforce execution order |
-| Task Status Lifecycle | **Shipped** | Progress tasks through backlog → todo → ready → in_progress → done/cancelled states |
+| Task Status Lifecycle | **Shipped** | Progress tasks through backlog → ready → in-progress → blocked/on-hold → done/cancelled states (`todo` remains an input alias for `backlog`) |
 | Task Prioritization | **Shipped** | Set and rebalance task priority with budget policies |
 | Task Blockers | **Shipped** | Mark tasks as blocked with reasons and automatic unblock detection |
 | Requirements as First-Class | **Shipped** | Define requirements as `kind=requirement` subjects and link workflow execution through the unified subject surface |
