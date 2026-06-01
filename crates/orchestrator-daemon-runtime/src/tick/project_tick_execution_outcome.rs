@@ -1,4 +1,4 @@
-use workflow_runner_v2::PhaseExecutionEvent;
+use animus_runtime_shared::PhaseExecutionEvent;
 
 use crate::DispatchWorkflowStartSummary;
 

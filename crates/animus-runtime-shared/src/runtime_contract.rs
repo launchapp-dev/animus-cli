@@ -1,8 +1,50 @@
+use std::sync::{OnceLock, RwLock};
+
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use tracing::warn;
 
 use crate::config_context::RuntimeConfigContext;
+
+type MemoryMcpStdioCommandOverride = Box<dyn Fn() -> Option<String> + Send + Sync>;
+
+static MEMORY_MCP_STDIO_COMMAND_OVERRIDE: OnceLock<RwLock<Option<MemoryMcpStdioCommandOverride>>> = OnceLock::new();
+
+fn override_slot() -> &'static RwLock<Option<MemoryMcpStdioCommandOverride>> {
+    MEMORY_MCP_STDIO_COMMAND_OVERRIDE.get_or_init(|| RwLock::new(None))
+}
+
+pub fn install_memory_mcp_stdio_command_override(resolver: Option<MemoryMcpStdioCommandOverride>) {
+    if let Ok(mut guard) = override_slot().write() {
+        *guard = resolver;
+    }
+}
+
+fn memory_mcp_stdio_command_override() -> Option<String> {
+    override_slot().read().ok().and_then(|guard| guard.as_ref().and_then(|resolver| resolver()))
+}
+
+pub fn validate_basic_json_schema(instance: &Value, schema: &Value) -> Result<()> {
+    let validator = jsonschema::validator_for(schema).map_err(|e| anyhow!("invalid JSON Schema: {}", e))?;
+
+    let errors: Vec<String> = validator
+        .iter_errors(instance)
+        .map(|e| {
+            let path = e.instance_path().to_string();
+            if path.is_empty() {
+                format!("{}", e)
+            } else {
+                format!("at '{}': {}", path, e)
+            }
+        })
+        .collect();
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!("schema validation failed: {}", errors.join("; ")))
+    }
+}
 
 fn merge_schema_into(base: &mut Value, overlay: &Value) -> Result<()> {
     if let Some(extra_properties) = overlay.get("properties").and_then(Value::as_object) {
@@ -287,12 +329,34 @@ pub fn inject_default_stdio_mcp_with_config(
         return;
     }
 
+    // Codex P2 follow-up: when the host supplies a non-empty `endpoint` (even
+    // without an explicit `transport: "http"`), prefer it. The agent runner
+    // resolves stdio before endpoint, so injecting a stdio command alongside
+    // a host-supplied endpoint silently shadows the endpoint. The stdio
+    // command must only be injected when the host has NOT requested an
+    // endpoint AND has not explicitly supplied its own stdio command.
+    let host_supplied_endpoint = mcp_config.endpoint.as_deref().map(str::trim).is_some_and(|value| !value.is_empty());
+    let host_supplied_stdio_command =
+        mcp_config.stdio_command.as_deref().map(str::trim).is_some_and(|value| !value.is_empty());
+    if host_supplied_endpoint && !host_supplied_stdio_command {
+        return;
+    }
+
     let supports_mcp =
         runtime_contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool).unwrap_or(false);
     if !supports_mcp {
         return;
     }
 
+    // TODO(codex-p2): in the standalone plugin, `current_exe()` is
+    // `animus-workflow-runner-default`, not the Animus CLI. If a sibling
+    // `animus` binary is not found and `mcp_config.stdio_command` is
+    // empty, this would fall back to launching THIS plugin with `mcp serve`
+    // args, which it doesn't understand — startup would hang. v0.5 mitigation:
+    // refuse the fallback and require the daemon to supply
+    // `mcp_config.stdio_command`. Track in v0.6 by extending
+    // `mcp_config` with a "host CLI path" field provided by the host on
+    // every workflow_runner call.
     let command = mcp_config.stdio_command.clone().filter(|v| !v.trim().is_empty()).or_else(|| {
         let exe = std::env::current_exe().ok()?;
         let exe_dir = exe.parent()?;
@@ -300,7 +364,8 @@ pub fn inject_default_stdio_mcp_with_config(
         if ao_binary.exists() {
             Some(ao_binary.to_string_lossy().to_string())
         } else {
-            Some(exe.to_string_lossy().to_string())
+            // Refuse to recursively launch ourselves (codex P2 round 2).
+            None
         }
     });
     let Some(command) = command else {
@@ -624,13 +689,28 @@ pub fn inject_memory_mcp_for_capable_agent(
 }
 
 fn current_ao_command() -> Option<String> {
+    // Codex P2 #4: prefer the host-supplied
+    // `init_extensions.memory_mcp_stdio_command` override before falling
+    // back to sibling-binary discovery. Standalone plugin deployments
+    // (no co-located `animus` CLI) can now inject memory MCP by setting
+    // the init extension on `InitializeParams`.
+    if let Some(command) = memory_mcp_stdio_command_override() {
+        return Some(command);
+    }
+
     let exe = std::env::current_exe().ok()?;
     let exe_dir = exe.parent()?;
     let ao_binary = exe_dir.join("animus");
     if ao_binary.exists() {
         Some(ao_binary.to_string_lossy().to_string())
     } else {
-        Some(exe.to_string_lossy().to_string())
+        // codex P2 round 3: do NOT fall back to launching THIS plugin as
+        // the memory MCP server — the binary speaks JSON-RPC, not the
+        // memory MCP CLI. Return None so the caller can omit the memory
+        // MCP injection instead of starting a recursive workflow-runner
+        // process. The daemon SHOULD supply an explicit `stdio_command`
+        // when memory MCP is required.
+        None
     }
 }
 
@@ -807,9 +887,20 @@ mod tests {
 
     #[test]
     fn inject_memory_mcp_added_when_capability_enabled() {
+        // v0.5 plugin: when no sibling `animus` binary is co-located,
+        // `current_ao_command()` returns `None` (codex P2 round 3) and the
+        // memory MCP injection is skipped. To exercise the success path
+        // here we drop a stub `animus` next to the test binary so the
+        // discovery hits it. This stub does not need to be executable —
+        // `Path::exists()` is the only check.
         let workflow_config = workflow_config_with_phase_agent("research", "default");
         let agent_runtime_config = agent_runtime_config_with_memory("default", true);
         let ctx = RuntimeConfigContext { agent_runtime_config, workflow_config };
+
+        let exe = std::env::current_exe().expect("test binary path");
+        let exe_dir = exe.parent().expect("test binary parent dir");
+        let sibling = exe_dir.join("animus");
+        let _ = std::fs::write(&sibling, b"#!/bin/sh\n");
 
         let mut runtime_contract = serde_json::json!({
             "cli": { "capabilities": { "supports_mcp": true } },
@@ -824,6 +915,8 @@ mod tests {
         let args = entry.pointer("/args").and_then(Value::as_array).expect("args");
         assert!(args.iter().any(|value| value.as_str() == Some("mcp")));
         assert!(args.iter().any(|value| value.as_str() == Some("memory")));
+
+        let _ = std::fs::remove_file(&sibling);
     }
 
     #[test]
@@ -932,7 +1025,7 @@ mod tests {
 
     #[test]
     fn phase_decision_validates_custom_evidence_kinds_like_bug_confirmed() {
-        use crate::phase_executor::validate_basic_json_schema;
+        use crate::runtime_contract::validate_basic_json_schema;
 
         let workflow_config = builtin_workflow_config();
 
@@ -983,7 +1076,7 @@ mod tests {
 
     #[test]
     fn phase_decision_evidence_field_optional_when_no_required_evidence() {
-        use crate::phase_executor::validate_basic_json_schema;
+        use crate::runtime_contract::validate_basic_json_schema;
 
         let workflow_config = builtin_workflow_config();
 
@@ -1029,5 +1122,166 @@ mod tests {
 
         validate_basic_json_schema(&decision_without_evidence, &schema)
             .expect("phase decision without evidence field should validate when no required evidence types");
+    }
+
+    /// Codex P2 #4: when the daemon supplies `init_extensions.memory_mcp_stdio_command`,
+    /// the plugin uses that explicit binary path instead of probing for a
+    /// sibling `animus`. Exercises the override path via `install_plugin_state`.
+    ///
+    /// IMPORTANT: this test does NOT delete the sibling `animus` stub created
+    /// by `inject_memory_mcp_added_when_capability_enabled` — both tests run
+    /// in parallel under default `cargo test` and racing on the shared
+    /// `target/debug/deps/animus` path causes a flake. The init-extension
+    /// override path takes precedence over sibling discovery, so the test
+    /// can assert override behaviour without touching the sibling at all.
+    #[test]
+    fn inject_memory_mcp_uses_init_extension_stdio_command_override() {
+        let stub_command = "/opt/host/bin/host-supplied-memory-mcp";
+        let stub_owned = stub_command.to_string();
+        install_memory_mcp_stdio_command_override(Some(Box::new(move || Some(stub_owned.clone()))));
+
+        let workflow_config = workflow_config_with_phase_agent("research", "default");
+        let agent_runtime_config = agent_runtime_config_with_memory("default", true);
+        let ctx = RuntimeConfigContext { agent_runtime_config, workflow_config };
+
+        let mut runtime_contract = serde_json::json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": { "agent_id": "animus" }
+        });
+        inject_memory_mcp_for_capable_agent(&mut runtime_contract, "/tmp/project", &ctx, "research");
+
+        let entry = runtime_contract
+            .pointer("/mcp/additional_servers/animus.memory")
+            .expect("animus.memory server entry should be injected when init-extension override is set");
+        assert_eq!(
+            entry.pointer("/command").and_then(Value::as_str),
+            Some(stub_command),
+            "init-extension stdio command override must be used"
+        );
+
+        install_memory_mcp_stdio_command_override(None);
+    }
+
+    /// Codex P2 #1 follow-up: host-supplied `endpoint` and `agent_id` must
+    /// reach the runtime contract via `build_runtime_contract_with_resume_and_mcp_config`,
+    /// not just the stdio injection path. Pre-fix the wire-through only
+    /// covered stdio_command; HTTP endpoints stayed at the default.
+    #[test]
+    fn build_runtime_contract_with_resume_and_mcp_config_honors_endpoint_and_agent_id() {
+        let mcp_config = protocol::McpRuntimeConfig {
+            endpoint: Some("https://host.example.com/mcp".to_string()),
+            agent_id: Some("custom-agent".to_string()),
+            ..Default::default()
+        };
+        let runtime_contract = crate::ipc::build_runtime_contract_with_resume_and_mcp_config(
+            "codex",
+            "claude-sonnet-4-6",
+            "the prompt",
+            None,
+            &mcp_config,
+        )
+        .expect("runtime contract should build");
+
+        assert_eq!(
+            runtime_contract.pointer("/mcp/endpoint").and_then(Value::as_str),
+            Some("https://host.example.com/mcp"),
+            "host-supplied mcp_config.endpoint must reach /mcp/endpoint"
+        );
+        assert_eq!(
+            runtime_contract.pointer("/mcp/agent_id").and_then(Value::as_str),
+            Some("custom-agent"),
+            "host-supplied mcp_config.agent_id must reach /mcp/agent_id"
+        );
+    }
+
+    /// Codex P2 round 7: when the host supplies only `mcp_config.stdio_command`
+    /// (no endpoint), `build_runtime_contract` would leave `mcp.enforce_only`
+    /// at `false` because that helper keys enforcement on the endpoint. The
+    /// agent runner then skips native MCP setup and the stdio config is
+    /// ignored. Asserts the new ipc wrapper flips `enforce_only` to true and
+    /// seeds the allowed-tool prefixes when a stdio command is supplied.
+    #[test]
+    fn host_supplied_stdio_command_enables_mcp_enforcement() {
+        let mcp_config = protocol::McpRuntimeConfig {
+            stdio_command: Some("/opt/host/bin/host-mcp".to_string()),
+            ..Default::default()
+        };
+        let runtime_contract = crate::ipc::build_runtime_contract_with_resume_and_mcp_config(
+            "codex",
+            "claude-sonnet-4-6",
+            "the prompt",
+            None,
+            &mcp_config,
+        )
+        .expect("runtime contract should build");
+
+        assert_eq!(
+            runtime_contract.pointer("/mcp/enforce_only").and_then(Value::as_bool),
+            Some(true),
+            "host-supplied stdio_command must enable mcp.enforce_only so the agent runner performs native MCP setup"
+        );
+        let prefixes =
+            runtime_contract.pointer("/mcp/allowed_tool_prefixes").and_then(Value::as_array).expect("prefixes");
+        assert!(!prefixes.is_empty(), "allowed_tool_prefixes must be seeded when enforce_only is true");
+    }
+
+    /// Codex P2 round 4: when the host sends `mcp_config.endpoint` without
+    /// `transport: "http"`, stdio injection must NOT silently shadow the
+    /// host-supplied endpoint. Pre-fix, the runtime contract ended up with
+    /// both `/mcp/endpoint` and `/mcp/stdio` set; the agent runner resolves
+    /// stdio first, so the endpoint was effectively ignored in co-located
+    /// deployments with a sibling `animus` binary.
+    #[test]
+    fn host_supplied_endpoint_suppresses_default_stdio_injection() {
+        let mut runtime_contract = serde_json::json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": { "endpoint": "https://host.example.com/mcp" }
+        });
+        let mcp_config = protocol::McpRuntimeConfig {
+            endpoint: Some("https://host.example.com/mcp".to_string()),
+            ..Default::default()
+        };
+        inject_default_stdio_mcp_with_config(&mut runtime_contract, "/tmp/project", &mcp_config);
+        assert!(
+            runtime_contract.pointer("/mcp/stdio").is_none(),
+            "stdio injection must be skipped when the host supplied an endpoint, so the endpoint is not shadowed"
+        );
+        assert_eq!(
+            runtime_contract.pointer("/mcp/endpoint").and_then(Value::as_str),
+            Some("https://host.example.com/mcp"),
+            "host-supplied endpoint must remain on the contract"
+        );
+    }
+
+    /// Codex P2 #1 (mcp_config wire-through): when the host supplies a
+    /// non-default `McpRuntimeConfig` with an explicit `stdio_command`, the
+    /// stdio injection must honor it instead of falling back to a sibling
+    /// `animus` binary search. Asserts the runtime config visible at the
+    /// phase execution layer reflects the host-supplied override.
+    #[test]
+    fn inject_default_stdio_mcp_with_config_honors_host_supplied_stdio_command() {
+        let mut runtime_contract = serde_json::json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": {}
+        });
+        let mcp_config = protocol::McpRuntimeConfig {
+            stdio_command: Some("/opt/host/bin/host-mcp".to_string()),
+            stdio_args_json: Some(serde_json::to_string(&vec!["--from-host", "--json"]).unwrap()),
+            ..Default::default()
+        };
+        inject_default_stdio_mcp_with_config(&mut runtime_contract, "/tmp/project", &mcp_config);
+
+        assert_eq!(
+            runtime_contract.pointer("/mcp/stdio/command").and_then(Value::as_str),
+            Some("/opt/host/bin/host-mcp"),
+            "host-supplied stdio_command must be threaded into /mcp/stdio/command"
+        );
+        let args = runtime_contract.pointer("/mcp/stdio/args").and_then(Value::as_array).expect("stdio args");
+        let arg_strings: Vec<&str> = args.iter().filter_map(|value| value.as_str()).collect();
+        assert_eq!(
+            arg_strings,
+            vec!["--from-host", "--json"],
+            "host-supplied stdio_args_json must override the project-root fallback"
+        );
     }
 }

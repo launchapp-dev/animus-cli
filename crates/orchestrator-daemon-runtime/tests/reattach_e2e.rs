@@ -1,6 +1,6 @@
 //! v0.5.1 P2 #6.2 round-3: end-to-end checks that prove the daemon-restart
 //! survivability story holds for the reattach back-channel pair
-//! (`workflow_runner_v2::reattach::ReattachListenerEmitter` +
+//! (`animus_runtime_shared::reattach::ReattachListenerEmitter` +
 //! `orchestrator_daemon_runtime::dispatch::reattach::try_reattach`).
 //!
 //! These integration tests do NOT spawn `animus-workflow-runner`; instead
@@ -15,15 +15,15 @@ use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
 use animus_control_protocol::types::WorkflowEvent;
+use animus_runtime_shared::reattach::ReattachListenerEmitter;
+use animus_runtime_shared::workflow_event_emitter::{
+    RuntimeWorkflowEvent, RuntimeWorkflowEventKind, WorkflowEventEmitter,
+};
 use chrono::Utc;
 use orchestrator_daemon_runtime::control::{SubscriberItem, WorkflowEventBroadcaster, WorkflowEventFilter};
 use orchestrator_daemon_runtime::reattach::try_reattach;
 use tempfile::TempDir;
 use tokio::time::{timeout, Duration};
-use workflow_runner_v2::reattach::ReattachListenerEmitter;
-use workflow_runner_v2::workflow_event_emitter::{
-    RuntimeWorkflowEvent, RuntimeWorkflowEventKind, WorkflowEventEmitter,
-};
 
 fn sample(workflow_id: &str, phase: &str) -> RuntimeWorkflowEvent {
     RuntimeWorkflowEvent {

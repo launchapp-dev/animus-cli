@@ -29,13 +29,15 @@ impl NotificationLog {
         let dir = workflow_run_dir(scoped_root, workflow_id);
         std::fs::create_dir_all(&dir)?;
         let path = dir.join("notifications.jsonl");
-        let (starting_seq, valid_bytes) = scan_max_seq_and_valid_bytes(&path)?;
+        let (active_seq, valid_bytes) = scan_max_seq_and_valid_bytes(&path)?;
         if let Ok(metadata) = std::fs::metadata(&path) {
             if metadata.len() > valid_bytes {
                 let truncate = OpenOptions::new().write(true).open(&path)?;
                 truncate.set_len(valid_bytes)?;
             }
         }
+        let rotated_seq = scan_max_seq_in_rotated(&dir)?;
+        let starting_seq = active_seq.max(rotated_seq);
         let file = OpenOptions::new().create(true).append(true).open(&path)?;
         Ok(Self { path, seq: AtomicU64::new(starting_seq), file: Mutex::new(BufWriter::new(file)) })
     }
@@ -45,6 +47,7 @@ impl NotificationLog {
     }
 
     pub fn append(&self, phase: &str, notification: &Value) -> io::Result<()> {
+        let mut guard = self.file.lock().map_err(|_| io::Error::other("notification log mutex poisoned"))?;
         let next = self.seq.fetch_add(1, Ordering::SeqCst) + 1;
         let record = TimestampedNotification {
             seq: next,
@@ -53,7 +56,6 @@ impl NotificationLog {
             notification: notification.clone(),
         };
         let line = serde_json::to_string(&record).map_err(io::Error::other)?;
-        let mut guard = self.file.lock().map_err(|_| io::Error::other("notification log mutex poisoned"))?;
         guard.write_all(line.as_bytes())?;
         guard.write_all(b"\n")?;
         guard.flush()?;
@@ -71,51 +73,70 @@ impl NotificationLog {
         }
         let mut guard = self.file.lock().map_err(|_| io::Error::other("notification log mutex poisoned"))?;
         guard.flush()?;
-        drop(guard);
 
         let parent = self.path.parent().ok_or_else(|| io::Error::other("notification log path has no parent"))?;
         let next_rotation = next_rotation_index(parent)?;
         let rotated = parent.join(format!("notifications.{next_rotation}.jsonl"));
         std::fs::rename(&self.path, &rotated)?;
         let file = OpenOptions::new().create(true).append(true).open(&self.path)?;
-        let mut guard = self.file.lock().map_err(|_| io::Error::other("notification log mutex poisoned"))?;
         *guard = BufWriter::new(file);
         Ok(())
     }
 
     pub fn tail(scoped_root: &Path, workflow_id: &str, from_seq: u64) -> io::Result<Vec<TimestampedNotification>> {
-        let path = workflow_run_dir(scoped_root, workflow_id).join("notifications.jsonl");
-        let file = match File::open(&path) {
-            Ok(f) => f,
+        let dir = workflow_run_dir(scoped_root, workflow_id);
+        let mut rotated_paths: Vec<(u64, PathBuf)> = Vec::new();
+        match std::fs::read_dir(&dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry?;
+                    let name = entry.file_name();
+                    let Some(name) = name.to_str() else { continue };
+                    let Some(rest) = name.strip_prefix("notifications.") else {
+                        continue;
+                    };
+                    if let Some(idx) = rest.strip_suffix(".jsonl").and_then(|s| s.parse::<u64>().ok()) {
+                        rotated_paths.push((idx, entry.path()));
+                    }
+                }
+            }
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(err) => return Err(err),
-        };
-        let reader = BufReader::new(file);
+        }
+        rotated_paths.sort_by_key(|(idx, _)| *idx);
+
+        let mut paths_to_read: Vec<PathBuf> = rotated_paths.into_iter().map(|(_, path)| path).collect();
+        paths_to_read.push(dir.join("notifications.jsonl"));
+
         let mut out = Vec::new();
-        let mut buf = String::new();
-        let mut reader = reader;
-        loop {
-            buf.clear();
-            let read = reader.read_line(&mut buf)?;
-            if read == 0 {
-                break;
-            }
-            if !buf.ends_with('\n') {
-                // Drop incomplete trailing line: crash mid-write left a partial record on disk,
-                // and silently skipping it is the only way to keep replay idempotent without
-                // surfacing a corruption alarm to every reader.
-                break;
-            }
-            let trimmed = buf.trim_end_matches('\n').trim_end_matches('\r');
-            if trimmed.is_empty() {
-                continue;
-            }
-            let record: TimestampedNotification = match serde_json::from_str(trimmed) {
-                Ok(r) => r,
-                Err(_) => continue,
+        for path in paths_to_read {
+            let file = match File::open(&path) {
+                Ok(f) => f,
+                Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+                Err(err) => return Err(err),
             };
-            if record.seq > from_seq {
-                out.push(record);
+            let mut reader = BufReader::new(file);
+            let mut buf = String::new();
+            loop {
+                buf.clear();
+                let read = reader.read_line(&mut buf)?;
+                if read == 0 {
+                    break;
+                }
+                if !buf.ends_with('\n') {
+                    break;
+                }
+                let trimmed = buf.trim_end_matches('\n').trim_end_matches('\r');
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let record: TimestampedNotification = match serde_json::from_str(trimmed) {
+                    Ok(r) => r,
+                    Err(_) => continue,
+                };
+                if record.seq > from_seq {
+                    out.push(record);
+                }
             }
         }
         Ok(out)
@@ -147,6 +168,31 @@ fn next_rotation_index(parent: &Path) -> io::Result<u64> {
         }
     }
     Ok(max_idx + 1)
+}
+
+fn scan_max_seq_in_rotated(dir: &Path) -> io::Result<u64> {
+    let mut max_seq = 0u64;
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(0),
+        Err(err) => return Err(err),
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        let Some(rest) = name.strip_prefix("notifications.") else {
+            continue;
+        };
+        if rest.strip_suffix(".jsonl").and_then(|s| s.parse::<u64>().ok()).is_none() {
+            continue;
+        }
+        let (file_max, _bytes) = scan_max_seq_and_valid_bytes(&entry.path())?;
+        if file_max > max_seq {
+            max_seq = file_max;
+        }
+    }
+    Ok(max_seq)
 }
 
 fn scan_max_seq_and_valid_bytes(path: &Path) -> io::Result<(u64, u64)> {

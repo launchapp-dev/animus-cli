@@ -1,11 +1,11 @@
 //! Daemon-side reattach client for v0.5.1 P2 #6.2 round-3.
 //!
-//! Pairs with [`workflow_runner_v2::reattach::ReattachListenerEmitter`]: the
+//! Pairs with [`animus_runtime_shared::reattach::ReattachListenerEmitter`]: the
 //! runner binds a `UnixListener` at a deterministic path advertised via the
 //! spawn record's `stdio_socket_path`. On daemon startup, after the orphan
 //! scan reports each live orphan, this module opens a `UnixStream` to that
 //! path, spawns a reader task that translates newline-JSON
-//! [`workflow_runner_v2::WireWorkflowEvent`] frames into wire
+//! [`animus_runtime_shared::WireWorkflowEvent`] frames into wire
 //! [`animus_control_protocol::types::WorkflowEvent`] and forwards them into
 //! the daemon's [`crate::control::WorkflowEventBroadcaster`].
 //!
@@ -227,7 +227,7 @@ impl WorkflowEventBroadcasterLike for BroadcasterEmitter {
 
 #[cfg(unix)]
 fn forward_line(broadcaster: &WorkflowEventBroadcaster, line: &str, socket: &Path) {
-    let wire: workflow_runner_v2::workflow_event_emitter::WireWorkflowEvent = match serde_json::from_str(line) {
+    let wire: animus_runtime_shared::workflow_event_emitter::WireWorkflowEvent = match serde_json::from_str(line) {
         Ok(value) => value,
         Err(error) => {
             tracing::warn!(

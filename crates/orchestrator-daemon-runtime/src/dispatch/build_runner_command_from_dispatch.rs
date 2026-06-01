@@ -61,6 +61,26 @@ fn resolve_workflow_runner_binary_for(project_root: Option<&str>) -> PathBuf {
         }
     }
 
+    // v0.5.1 round-5: primary resolution path is kind-based plugin
+    // discovery. Walk the installed plugin manifests and pick the first
+    // one whose `plugin_kind == "workflow_runner"`. This lets operators
+    // install a workflow_runner plugin under any binary name (not just
+    // `animus-workflow-runner-default`) and have the daemon dispatch
+    // through it.
+    let probe_root = project_root
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+    if let Ok(plugins) = orchestrator_plugin_host::discover_by_kind(probe_root, "workflow_runner") {
+        // `discover_by_kind` preserves PluginDiscovery's precedence order
+        // (explicit registry config → project-local install dir → global
+        // install dir → ANIMUS_PLUGIN_PATH → optional $PATH), so picking
+        // the first match here matches what `animus daemon preflight`
+        // surfaces. Sorting by name would break that contract.
+        if let Some(first) = plugins.into_iter().next() {
+            return first.path;
+        }
+    }
+
     // v0.5.1 round-4 fold-in: the in-tree `animus-workflow-runner` binary
     // was removed. The replacement is the plugin-installed binary
     // `animus-workflow-runner-default` from

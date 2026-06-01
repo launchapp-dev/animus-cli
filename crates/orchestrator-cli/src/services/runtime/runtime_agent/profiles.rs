@@ -61,7 +61,7 @@ pub(super) fn handle_agent_get(args: AgentGetArgs, project_root: &str, json_outp
 
 pub(super) fn handle_agent_memory_get(args: AgentMemoryGetArgs, project_root: &str, json_output: bool) -> Result<()> {
     ensure_agent_exists(project_root, &args.agent)?;
-    let memory = workflow_runner_v2::load_agent_memory(project_root, &args.agent)?;
+    let memory = animus_runtime_shared::load_agent_memory(project_root, &args.agent)?;
     print_value(memory, json_output)
 }
 
@@ -72,7 +72,7 @@ pub(super) fn handle_agent_memory_append(
 ) -> Result<()> {
     ensure_agent_exists(project_root, &args.agent)?;
     let memory =
-        workflow_runner_v2::append_agent_memory(project_root, &args.agent, &args.text, args.source.as_deref())?;
+        animus_runtime_shared::append_agent_memory(project_root, &args.agent, &args.text, args.source.as_deref())?;
     print_value(memory, json_output)
 }
 
@@ -82,7 +82,7 @@ pub(super) fn handle_agent_memory_clear(
     json_output: bool,
 ) -> Result<()> {
     ensure_agent_exists(project_root, &args.agent)?;
-    let memory = workflow_runner_v2::clear_agent_memory(project_root, &args.agent)?;
+    let memory = animus_runtime_shared::clear_agent_memory(project_root, &args.agent)?;
     print_value(memory, json_output)
 }
 
@@ -94,7 +94,7 @@ pub(super) fn handle_agent_message_list(
     if let Some(agent) = args.agent.as_deref() {
         ensure_agent_exists(project_root, agent)?;
     }
-    let messages = workflow_runner_v2::list_agent_messages(
+    let messages = animus_runtime_shared::list_agent_messages(
         project_root,
         args.channel.as_deref(),
         args.agent.as_deref(),
@@ -141,7 +141,7 @@ pub(super) fn handle_agent_message_send(
         }
     }
 
-    let message = workflow_runner_v2::send_agent_message(
+    let message = animus_runtime_shared::send_agent_message(
         project_root,
         &args.channel,
         &args.from,

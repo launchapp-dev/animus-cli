@@ -164,7 +164,7 @@ impl ProcessManager {
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
             }
-            command.env(workflow_runner_v2::reattach::ANIMUS_WORKFLOW_REATTACH_SOCKET_ENV, path.as_os_str());
+            command.env(animus_runtime_shared::reattach::ANIMUS_WORKFLOW_REATTACH_SOCKET_ENV, path.as_os_str());
         }
 
         // Bind the subprocess workflow_events back-channel before fork so the

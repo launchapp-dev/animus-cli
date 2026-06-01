@@ -28,16 +28,16 @@ use std::time::SystemTime;
 use super::canonicalize_lossy;
 use super::daemon_run_host::DefaultDaemonRunHost;
 use super::daemon_scheduler::{runtime_options_from_cli, slim_project_tick_driver, SlimProjectTickDriver};
+use animus_runtime_shared::persist_resumed_phase_completion;
+use animus_runtime_shared::phase_session::{
+    list_running_checkpoints, update_session_blocked, update_session_completed, update_session_running_after_resume,
+    SessionCheckpoint,
+};
 use orchestrator_session_host::{
     canonical_tool_alias, discover_provider_plugins, PluginSessionBackend, ResumeAgentOutcome,
 };
 use std::collections::HashMap;
 use std::path::Path;
-use workflow_runner_v2::persist_resumed_phase_completion;
-use workflow_runner_v2::phase_session::{
-    list_running_checkpoints, update_session_blocked, update_session_completed, update_session_running_after_resume,
-    SessionCheckpoint,
-};
 
 pub(super) enum ResumeLookup {
     NotInstalled,
@@ -121,9 +121,9 @@ fn phase_requires_explicit_decision_for_resume_in_workflow(
     phase_id: &str,
     workflow_ref: Option<&str>,
 ) -> bool {
-    let ctx = workflow_runner_v2::config_context::RuntimeConfigContext::load(project_root);
+    let ctx = animus_runtime_shared::config_context::RuntimeConfigContext::load(project_root);
 
-    if workflow_runner_v2::phase_prompt::phase_requires_commit_message_with_ctx(&ctx, phase_id) {
+    if animus_runtime_shared::phase_prompt::phase_requires_commit_message_with_ctx(&ctx, phase_id) {
         return true;
     }
 
@@ -1243,10 +1243,10 @@ mod tests {
     mod resumable_orphan_shielding {
         use super::super::resumable_workflow_ids_for_project;
         use super::*;
-        use serde_json::json;
-        use workflow_runner_v2::phase_session::{
+        use animus_runtime_shared::phase_session::{
             update_provider_session_id, update_session_running, write_session_pending,
         };
+        use serde_json::json;
 
         // Codex round-4 P2: daemon restart MUST shield workflows with a
         // resumable provider session id from the orphan-recovery sweep.
@@ -1326,16 +1326,16 @@ mod tests {
             auto_resume_running_checkpoints, ResumeLookup, ResumeProviderRegistry, ResumedOutcomeApplier,
             ResumedOutcomeApplyResult,
         };
+        use animus_runtime_shared::phase_session::{
+            read_checkpoint, update_provider_session_id, update_session_running, update_session_running_after_resume,
+            write_session_pending, SessionCheckpoint, SessionCheckpointStatus,
+        };
         use async_trait::async_trait;
         use orchestrator_session_host::ResumeAgentOutcome;
         use serde_json::json;
         use std::collections::HashMap;
         use std::sync::Mutex;
         use tempfile::TempDir;
-        use workflow_runner_v2::phase_session::{
-            read_checkpoint, update_provider_session_id, update_session_running, update_session_running_after_resume,
-            write_session_pending, SessionCheckpoint, SessionCheckpointStatus,
-        };
 
         enum Script {
             Resumed { new_session_id: Option<String> },
@@ -1716,16 +1716,16 @@ mod tests {
 
     mod apply_resumed_outcome {
         use super::super::{apply_resumed_outcome_in_tree, ResumedOutcomeApplyResult};
+        use animus_runtime_shared::phase_session::{
+            read_checkpoint, update_provider_session_id, update_session_running, write_session_pending,
+            SessionCheckpointStatus,
+        };
+        use animus_runtime_shared::{is_phase_completed, read_persisted_decision};
         use orchestrator_core::{services::ServiceHub, FileServiceHub};
         use protocol::test_utils::EnvVarGuard;
         use serde_json::json;
         use std::sync::{Arc, Mutex, MutexGuard};
         use tempfile::TempDir;
-        use workflow_runner_v2::phase_session::{
-            read_checkpoint, update_provider_session_id, update_session_running, write_session_pending,
-            SessionCheckpointStatus,
-        };
-        use workflow_runner_v2::{is_phase_completed, read_persisted_decision};
 
         fn lock_env() -> MutexGuard<'static, ()> {
             static LOCK: Mutex<()> = Mutex::new(());

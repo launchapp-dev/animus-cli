@@ -63,7 +63,7 @@ pub fn write_session_pending(
     run_id: &str,
     request: Option<Value>,
 ) -> io::Result<SessionCheckpoint> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fault"))]
     test_fault::maybe_fail(test_fault::FaultOp::Pending)?;
     let path = phase_session_path(scoped_root, workflow_id, phase_id);
     if let Some(parent) = path.parent() {
@@ -91,7 +91,7 @@ pub fn write_session_pending(
 // runner persists after the plugin's first response); callers should
 // invoke `update_provider_session_id` separately once it is known.
 pub fn update_session_running(scoped_root: &Path, workflow_id: &str, phase_id: &str) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fault"))]
     test_fault::maybe_fail(test_fault::FaultOp::Running)?;
     mutate(scoped_root, workflow_id, phase_id, |checkpoint| {
         checkpoint.status = SessionCheckpointStatus::Running;
@@ -131,7 +131,7 @@ pub fn update_session_running_after_resume(
 }
 
 pub fn update_session_completed(scoped_root: &Path, workflow_id: &str, phase_id: &str) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fault"))]
     test_fault::maybe_fail(test_fault::FaultOp::Completed)?;
     mutate(scoped_root, workflow_id, phase_id, |checkpoint| {
         checkpoint.status = SessionCheckpointStatus::Completed;
@@ -151,7 +151,7 @@ pub fn update_session_blocked(scoped_root: &Path, workflow_id: &str, phase_id: &
 // Blocked so `list_running_checkpoints` does not surface it for daemon-restart
 // auto-resume — the run is over, not paused waiting for input.
 pub fn update_session_failed(scoped_root: &Path, workflow_id: &str, phase_id: &str, reason: &str) -> io::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fault"))]
     test_fault::maybe_fail(test_fault::FaultOp::Failed)?;
     mutate(scoped_root, workflow_id, phase_id, |checkpoint| {
         checkpoint.status = SessionCheckpointStatus::Failed;
@@ -286,7 +286,7 @@ fn sanitize(value: &str) -> String {
 /// [`crate::phase_executor`] can assert that the dispatcher treats each
 /// checkpoint failure as FATAL — without resorting to chmod games on the
 /// tempdir, which are platform-fragile and race the parent-directory fsync.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fault"))]
 pub mod test_fault {
     use std::cell::Cell;
     use std::io;

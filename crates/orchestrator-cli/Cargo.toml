@@ -40,7 +40,7 @@ which = "8"
 orchestrator-session-host = { workspace = true }
 orchestrator-daemon-runtime = { workspace = true }
 orchestrator-notifications = { workspace = true }
-workflow-runner-v2 = { path = "../workflow-runner-v2" }
+animus-runtime-shared = { workspace = true }
 orchestrator-config = { workspace = true }
 dirs = "6.0"
 uuid = { version = "1", features = ["v4"] }

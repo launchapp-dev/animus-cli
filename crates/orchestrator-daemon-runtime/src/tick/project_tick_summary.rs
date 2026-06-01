@@ -1,6 +1,6 @@
+use animus_runtime_shared::PhaseExecutionEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use workflow_runner_v2::PhaseExecutionEvent;
 
 use crate::DispatchSelectionSource;
 

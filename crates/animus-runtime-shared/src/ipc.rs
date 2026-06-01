@@ -1,3 +1,11 @@
+// Allow unused: this file is the agent-runner Unix-socket bridge lifted
+// from `workflow-runner-v2` and is consumed by `phase_executor`. A handful
+// of helpers (build_runtime_contract, ensure_safe_run_id) are exercised in
+// `phase_executor` tests but appear unused in non-test builds. Keeping the
+// file byte-identical with the source crate avoids drift while the API is
+// still public to lifted call sites.
+#![allow(dead_code)]
+
 #[cfg(unix)]
 use std::hash::{Hash, Hasher};
 use std::io::Write;
@@ -7,7 +15,9 @@ use anyhow::{anyhow, Result};
 use orchestrator_core::runtime_contract;
 use protocol::{AgentRunEvent, IpcAuthRequest, IpcAuthResult, OutputStreamType, RunId, MAX_UNIX_SOCKET_PATH_LEN};
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use std::io;
+
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::time::{sleep, Duration};
 
 fn scoped_ao_root(project_root: &Path) -> Option<PathBuf> {
@@ -176,19 +186,37 @@ where
         .await
         .map_err(|error| anyhow!("failed to send runner auth payload: {error}"))?;
 
-    let mut line = String::new();
-    let read_len = tokio::time::timeout(Duration::from_secs(2), async {
-        let mut reader = BufReader::new(stream);
-        reader.read_line(&mut line).await
+    // Read the auth response one byte at a time so we never buffer bytes
+    // belonging to the first event frame that follows the auth `\n`.
+    // BufReader on a temporary would discard those bytes when dropped,
+    // intermittently dropping the runner's first event under packet
+    // coalescing.
+    let mut line_bytes: Vec<u8> = Vec::new();
+    let read_result = tokio::time::timeout(Duration::from_secs(2), async {
+        let mut byte = [0u8; 1];
+        loop {
+            let n = stream.read(&mut byte).await?;
+            if n == 0 {
+                return Ok::<bool, io::Error>(false);
+            }
+            line_bytes.push(byte[0]);
+            if byte[0] == b'\n' {
+                return Ok::<bool, io::Error>(true);
+            }
+            if line_bytes.len() > 64 * 1024 {
+                return Err(io::Error::other("runner auth response exceeded 64KiB without newline"));
+            }
+        }
     })
     .await
     .map_err(|_| anyhow!("timed out waiting for runner auth response"))?
     .map_err(|error| anyhow!("failed to read runner auth response: {error}"))?;
 
-    if read_len == 0 {
+    if !read_result {
         return Err(anyhow!("runner closed connection before auth completed",));
     }
 
+    let line = String::from_utf8(line_bytes).map_err(|error| anyhow!("runner auth response was not UTF-8: {error}"))?;
     let response: IpcAuthResult = serde_json::from_str(line.trim())
         .map_err(|error| anyhow!("received malformed runner auth response: {error}"))?;
     if response.ok {
@@ -218,11 +246,39 @@ pub fn build_runtime_contract_with_resume(
     prompt: &str,
     resume_plan: Option<&orchestrator_core::runtime_contract::CliSessionResumePlan>,
 ) -> Option<Value> {
-    let mcp_config = protocol::McpRuntimeConfig::default();
-    let mcp_endpoint = mcp_config.endpoint.clone();
-    let mcp_agent_id = mcp_config.agent_id.clone();
+    build_runtime_contract_with_resume_and_mcp_config(
+        tool,
+        model,
+        prompt,
+        resume_plan,
+        &protocol::McpRuntimeConfig::default(),
+    )
+}
 
-    let runtime_contract = runtime_contract::build_runtime_contract(
+/// Variant of [`build_runtime_contract_with_resume`] that threads
+/// host-supplied `mcp_config.endpoint` and `mcp_config.agent_id` into the
+/// runtime contract. Used by the phase execution path so a per-call
+/// `WorkflowExecuteRequest.mcp_config` can reach the spawned agent.
+/// (Codex P2 #1 follow-up — covers non-stdio fields too.)
+pub fn build_runtime_contract_with_resume_and_mcp_config(
+    tool: &str,
+    model: &str,
+    prompt: &str,
+    resume_plan: Option<&orchestrator_core::runtime_contract::CliSessionResumePlan>,
+    mcp_config: &protocol::McpRuntimeConfig,
+) -> Option<Value> {
+    // Codex P3 follow-up: trim blank endpoints / agent ids to `None` so they
+    // don't enable `mcp.enforce_only` without a usable transport, which
+    // would break phase execution in standalone deployments without a
+    // stdio command or sibling binary.
+    let mcp_endpoint =
+        mcp_config.endpoint.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    let mcp_agent_id =
+        mcp_config.agent_id.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    let mcp_stdio_command =
+        mcp_config.stdio_command.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+
+    let mut runtime_contract = runtime_contract::build_runtime_contract(
         tool,
         model,
         prompt,
@@ -231,6 +287,25 @@ pub fn build_runtime_contract_with_resume(
         mcp_endpoint.as_deref(),
         mcp_agent_id.as_deref(),
     )?;
+
+    // Codex P2 round 7: `build_runtime_contract` only enables
+    // `mcp.enforce_only` when an `endpoint` is set, but a host-supplied
+    // `stdio_command` is also a fully-formed MCP transport — without
+    // enforce_only the agent runner skips native MCP setup and the stdio
+    // config is ignored. Flip the flag (and seed the allowed-tool prefixes)
+    // when the host supplied a usable stdio command but no endpoint.
+    if mcp_endpoint.is_none() && mcp_stdio_command.is_some() {
+        let cli_supports_mcp =
+            runtime_contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool).unwrap_or(false);
+        if cli_supports_mcp {
+            if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
+                mcp.insert("enforce_only".to_string(), Value::Bool(true));
+                let agent_id_for_prefixes = mcp_agent_id.as_deref().unwrap_or("animus");
+                let prefixes = protocol::default_allowed_tool_prefixes(agent_id_for_prefixes);
+                mcp.insert("allowed_tool_prefixes".to_string(), serde_json::json!(prefixes));
+            }
+        }
+    }
     Some(runtime_contract)
 }
 

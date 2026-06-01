@@ -1,25 +1,33 @@
+//! `animus-runtime-shared` — runtime helpers shared by Animus's
+//! `workflow_runner` plugins (e.g. `animus-workflow-runner-default`) and the
+//! kernel daemon (`animus-cli`).
+//!
+//! The crate's role is to dedupe the modules that BOTH the plugin and the
+//! kernel daemon need to understand byte-identically: phase session/output
+//! state on disk, agent memory documents, the runtime contract construction,
+//! the runner Unix-socket IPC bridge, workflow event emitters, and the
+//! reattach back-channel.
+//!
+//! Heavy execution machinery (`phase_executor`, `workflow_execute`,
+//! `phase_targets`, `phase_failover`, `phase_command`, `skill_dispatch`,
+//! `direct_exec`) is plugin-private and intentionally NOT here.
+
 pub mod agent_state;
 pub mod config_context;
-pub mod direct_exec;
 pub mod ensure_execution_cwd;
 pub mod ipc;
 pub mod metrics_hook;
 pub mod notification_log;
 pub mod payload_traversal;
-pub mod phase_command;
-pub mod phase_executor;
-pub mod phase_failover;
 pub mod phase_git;
+pub mod phase_metadata;
 pub mod phase_output;
 pub mod phase_prompt;
 pub mod phase_session;
-pub mod phase_targets;
 pub mod reattach;
 pub mod runtime_contract;
 pub mod runtime_support;
-pub mod skill_dispatch;
 pub mod workflow_event_emitter;
-pub mod workflow_execute;
 pub mod workflow_helpers;
 pub mod workflow_merge_recovery;
 
@@ -32,28 +40,26 @@ pub use ipc::*;
 pub use payload_traversal::{
     fallback_implementation_commit_message, parse_commit_message_from_text, parse_phase_decision_from_text,
 };
-pub use phase_executor::{
-    load_agent_runtime_config, run_workflow_phase, CliPhaseExecutor, PhaseExecuteOverrides, PhaseExecutionMetadata,
-    PhaseExecutionOutcome, PhaseExecutionSignal, PhaseRunParams, PhaseRunResult,
-};
-pub use phase_failover::{classify_phase_failure, PhaseFailureClassifier, PhaseFailureKind};
 pub use phase_git::{commit_implementation_changes, ensure_git_identity, git_has_pending_changes, is_git_repo};
+pub use phase_metadata::{PhaseExecutionMetadata, PhaseExecutionOutcome, PhaseExecutionSignal};
 pub use phase_output::{
     is_phase_completed, persist_phase_output, persist_resumed_phase_completion, phase_completion_marker_path,
     phase_output_dir, read_persisted_decision, write_phase_completion_marker, PersistedDecisionReadError,
     PersistedPhaseOutput, PhaseCompletionMarker,
 };
 pub use phase_prompt::{
-    build_phase_prompt, phase_requires_commit_message, phase_requires_commit_message_with_config, render_phase_prompt,
-    PhasePromptInputs, PhasePromptParams, PhaseRenderParams, RenderedPhasePrompt,
+    build_phase_prompt, phase_requires_commit_message, phase_requires_commit_message_with_config,
+    phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt,
+    render_phase_prompt_with_ctx, render_phase_prompt_with_ctx_overrides, PhasePromptInputs, PhasePromptParams,
+    PhaseRenderParams, RenderedPhasePrompt,
 };
-pub use phase_targets::PhaseTargetPlanner;
+pub use runtime_contract::{install_memory_mcp_stdio_command_override, validate_basic_json_schema};
 pub use runtime_support::*;
 pub use workflow_event_emitter::{
-    NoopWorkflowEventEmitter, RuntimeWorkflowEvent, RuntimeWorkflowEventKind, SharedWorkflowEventEmitter,
-    SubprocessPipeEmitter, WireWorkflowEvent, WorkflowEventEmitter, ANIMUS_WORKFLOW_EVENT_PIPE_ENV,
+    FanoutEmitter, NoopWorkflowEventEmitter, RuntimeWorkflowEvent, RuntimeWorkflowEventKind,
+    SharedWorkflowEventEmitter, SubprocessPipeEmitter, WireWorkflowEvent, WorkflowEventEmitter,
+    ANIMUS_WORKFLOW_EVENT_PIPE_ENV,
 };
-pub use workflow_execute::{execute_workflow, PhaseEvent, WorkflowExecuteParams, WorkflowExecuteResult};
 pub use workflow_helpers::{
     task_requires_research, workflow_has_active_research, workflow_has_completed_research, PhaseExecutionEvent,
 };
@@ -71,19 +77,15 @@ pub(crate) mod test_env {
         static HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
         HOME.get_or_init(|| {
             let home_dir = std::env::temp_dir()
-                .join(format!("animus-workflow-runner-v2-test-home-{}", std::process::id()))
+                .join(format!("animus-runtime-shared-test-home-{}", std::process::id()))
                 .join("home");
-            std::fs::create_dir_all(&home_dir).expect("create shared workflow-runner-v2 test home");
+            std::fs::create_dir_all(&home_dir).expect("create shared animus-runtime-shared test home");
             std::env::set_var("HOME", &home_dir);
             home_dir
         })
     }
 
-    /// Process-wide lock for tests that depend on `protocol::scoped_state_root`. Hold the guard
-    /// for the entirety of the test body. Diagnosed cause: under parallel cargo-test execution,
-    /// scope-dir state in `~/.animus/.../` accumulates from many concurrent tempdirs and triggers
-    /// `find_existing_scope_by_origin` collisions / partial state visibility that flips
-    /// scoped_state_root's resolved path between writes and reads. Serializing avoids the race.
+    /// Process-wide lock for tests that depend on `protocol::scoped_state_root`.
     pub fn scoped_state_serializer() -> MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         stable_test_home();

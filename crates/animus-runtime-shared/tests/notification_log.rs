@@ -1,9 +1,9 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 
+use animus_runtime_shared::notification_log::{workflow_run_dir, NotificationLog};
 use serde_json::json;
 use tempfile::TempDir;
-use workflow_runner_v2::notification_log::{workflow_run_dir, NotificationLog};
 
 #[test]
 fn notification_log_appends_and_tails_with_seq_correlation() {

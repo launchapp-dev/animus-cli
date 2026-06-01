@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::phase_executor::PhaseExecutionOutcome;
+use crate::phase_metadata::PhaseExecutionOutcome;
 
 const MAX_PRIOR_CONTEXT_CHARS: usize = 8000;
 
@@ -113,17 +113,24 @@ pub fn read_persisted_decision(
         other => return Err(PersistedDecisionReadError::UnknownVerdict(other.to_string())),
     };
 
+    let risk = match output.risk.as_deref().map(str::to_ascii_lowercase).as_deref() {
+        Some("low") | None => orchestrator_core::WorkflowDecisionRisk::Low,
+        Some("medium") => orchestrator_core::WorkflowDecisionRisk::Medium,
+        Some("high") => orchestrator_core::WorkflowDecisionRisk::High,
+        Some(other) => return Err(PersistedDecisionReadError::Malformed(format!("unknown risk value {other:?}"))),
+    };
+
     Ok(PhaseDecision {
         kind: "phase_decision".to_string(),
         phase_id: output.phase_id,
         verdict,
         confidence: output.confidence.unwrap_or(1.0),
-        risk: orchestrator_core::WorkflowDecisionRisk::Low,
+        risk,
         reason: output.reason.unwrap_or_default(),
         evidence: output.evidence,
         guardrail_violations: output.guardrail_violations,
         commit_message: output.commit_message,
-        target_phase: None,
+        target_phase: output.target_phase,
     })
 }
 
@@ -137,6 +144,10 @@ pub struct PersistedPhaseOutput {
     pub confidence: Option<f32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_phase: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit_message: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -163,29 +174,40 @@ pub fn persist_phase_output(
     attempt: u32,
     outcome: &PhaseExecutionOutcome,
 ) -> anyhow::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "test-fault"))]
     test_fault::maybe_fail()?;
     let dir = phase_output_dir(project_root, workflow_id);
     std::fs::create_dir_all(&dir)?;
 
-    let (verdict, confidence, reason, commit_message, evidence, guardrail_violations, payload) = match outcome {
-        PhaseExecutionOutcome::Completed { commit_message, phase_decision, result_payload } => {
-            let (v, c, r, ev, gv) = match phase_decision {
-                Some(decision) => (
-                    Some(format!("{:?}", decision.verdict).to_ascii_lowercase()),
-                    Some(decision.confidence),
-                    if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
-                    decision.evidence.clone(),
-                    decision.guardrail_violations.clone(),
-                ),
-                None => (Some("advance".to_string()), None, None, Vec::new(), Vec::new()),
-            };
-            (v, c, r, commit_message.clone(), ev, gv, result_payload.clone())
-        }
-        PhaseExecutionOutcome::ManualPending { instructions, .. } => {
-            (Some("manual_pending".to_string()), None, Some(instructions.clone()), None, Vec::new(), Vec::new(), None)
-        }
-    };
+    let (verdict, confidence, reason, risk, target_phase, commit_message, evidence, guardrail_violations, payload) =
+        match outcome {
+            PhaseExecutionOutcome::Completed { commit_message, phase_decision, result_payload } => {
+                let (v, c, r, risk, target, ev, gv) = match phase_decision {
+                    Some(decision) => (
+                        Some(format!("{:?}", decision.verdict).to_ascii_lowercase()),
+                        Some(decision.confidence),
+                        if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
+                        Some(format!("{:?}", decision.risk).to_ascii_lowercase()),
+                        decision.target_phase.clone(),
+                        decision.evidence.clone(),
+                        decision.guardrail_violations.clone(),
+                    ),
+                    None => (Some("advance".to_string()), None, None, None, None, Vec::new(), Vec::new()),
+                };
+                (v, c, r, risk, target, commit_message.clone(), ev, gv, result_payload.clone())
+            }
+            PhaseExecutionOutcome::ManualPending { instructions, .. } => (
+                Some("manual_pending".to_string()),
+                None,
+                Some(instructions.clone()),
+                None,
+                None,
+                None,
+                Vec::new(),
+                Vec::new(),
+                None,
+            ),
+        };
 
     let output = PersistedPhaseOutput {
         phase_id: phase_id.to_string(),
@@ -193,6 +215,8 @@ pub fn persist_phase_output(
         verdict,
         confidence,
         reason,
+        risk,
+        target_phase,
         commit_message,
         evidence,
         guardrail_violations,
@@ -218,7 +242,9 @@ pub fn persist_phase_output(
     // logic could find a completion marker without the sibling
     // <phase>.json (or vice versa) after a kernel panic.
     orchestrator_store::fsync_rename(&tmp_path, &file_path)?;
-    write_phase_completion_marker(project_root, workflow_id, phase_id, attempt)?;
+    if !matches!(outcome, PhaseExecutionOutcome::ManualPending { .. }) {
+        write_phase_completion_marker(project_root, workflow_id, phase_id, attempt)?;
+    }
     Ok(())
 }
 
@@ -397,7 +423,7 @@ pub(crate) fn build_workflow_pipeline_context(
 /// `io::ErrorKind::PermissionDenied`; the matching workflow_execute test
 /// then verifies that the surrounding scheduler does NOT advance the
 /// workflow state when persistence fails.
-#[cfg(test)]
+#[cfg(any(test, feature = "test-fault"))]
 pub mod test_fault {
     use std::cell::Cell;
 
@@ -558,6 +584,8 @@ mod tests {
                 reason: Some("Found patterns".to_string()),
                 commit_message: None,
                 evidence: vec![],
+                risk: None,
+                target_phase: None,
                 guardrail_violations: vec![],
                 payload: None,
             },
@@ -569,6 +597,8 @@ mod tests {
                 reason: Some("Implemented".to_string()),
                 commit_message: Some("feat: add feature".to_string()),
                 evidence: vec![],
+                risk: None,
+                target_phase: None,
                 guardrail_violations: vec![],
                 payload: None,
             },
@@ -719,6 +749,8 @@ mod tests {
                 reason: Some(long_reason),
                 commit_message: None,
                 evidence: vec![],
+                risk: None,
+                target_phase: None,
                 guardrail_violations: vec![],
                 payload: None,
             },
@@ -730,6 +762,8 @@ mod tests {
                 reason: Some("Recent work".to_string()),
                 commit_message: None,
                 evidence: vec![],
+                risk: None,
+                target_phase: None,
                 guardrail_violations: vec![],
                 payload: None,
             },

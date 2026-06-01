@@ -6,11 +6,11 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::time::Duration;
 
+use animus_runtime_shared::workflow_event_emitter::SharedWorkflowEventEmitter;
 use anyhow::Context;
 use anyhow::Result;
 use orchestrator_core::DaemonStatus;
 use tokio::time::sleep;
-use workflow_runner_v2::workflow_event_emitter::SharedWorkflowEventEmitter;
 
 use crate::control::{BroadcastWorkflowEventEmitter, WorkflowEventBroadcaster};
 use crate::run_plugin_preflight;
@@ -30,7 +30,7 @@ use crate::TriggerSupervisorSink;
 /// Process-global holder for the daemon's broadcast-backed
 /// [`SharedWorkflowEventEmitter`]. Installed by [`run_daemon`] at startup
 /// (after [`WorkflowEventBroadcaster`] construction) and consumed by any
-/// in-process call site that builds [`workflow_runner_v2::WorkflowExecuteParams`]
+/// in-process call site that builds [`animus_runtime_shared::WorkflowExecuteParams`]
 /// inside the daemon process.
 ///
 /// SUBPROCESS GAP: workflow runs launched via `animus-workflow-runner` (the

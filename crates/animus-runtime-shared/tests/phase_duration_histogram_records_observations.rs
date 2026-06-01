@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use workflow_runner_v2::metrics_hook::{install_histogram_observer, observe_phase_duration};
+use animus_runtime_shared::metrics_hook::{install_histogram_observer, observe_phase_duration};
 
 type RecordedObservation = (String, Vec<(String, String)>, Duration);
 

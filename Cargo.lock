@@ -169,6 +169,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "animus-runtime-shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dirs 5.0.1",
+ "jsonschema",
+ "orchestrator-config",
+ "orchestrator-core",
+ "orchestrator-store",
+ "protocol",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "animus-session-backend"
 version = "0.1.13"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
@@ -2179,6 +2202,7 @@ dependencies = [
  "animus-log-storage-protocol",
  "animus-plugin-protocol 0.1.0",
  "animus-queue-protocol",
+ "animus-runtime-shared",
  "animus-session-backend",
  "animus-subject-protocol 0.1.13",
  "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
@@ -2220,7 +2244,6 @@ dependencies = [
  "uuid",
  "webbrowser",
  "which",
- "workflow-runner-v2",
 ]
 
 [[package]]
@@ -2280,6 +2303,7 @@ dependencies = [
  "animus-log-storage-protocol",
  "animus-plugin-protocol 0.1.0",
  "animus-queue-protocol",
+ "animus-runtime-shared",
  "animus-subject-protocol 0.1.13",
  "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
  "animus-workflow-runner-protocol",
@@ -2305,13 +2329,13 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
- "workflow-runner-v2",
 ]
 
 [[package]]
 name = "orchestrator-git-ops"
 version = "0.1.0"
 dependencies = [
+ "animus-runtime-shared",
  "anyhow",
  "chrono",
  "orchestrator-core",
@@ -2321,7 +2345,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
- "workflow-runner-v2",
 ]
 
 [[package]]
@@ -4752,34 +4775,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "workflow-runner-v2"
-version = "0.1.1"
-dependencies = [
- "agent-runner",
- "anyhow",
- "assert_cmd",
- "async-trait",
- "chrono",
- "clap",
- "dirs 5.0.1",
- "jsonschema",
- "orchestrator-config",
- "orchestrator-core",
- "orchestrator-logging",
- "orchestrator-store",
- "protocol",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

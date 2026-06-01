@@ -12,14 +12,14 @@ use crate::{invalid_input_error, AgentControlActionArg, AgentRunArgs};
 use protocol::AgentControlAction;
 
 #[cfg(test)]
-pub(crate) use workflow_runner_v2::ipc::build_runtime_contract_with_resume;
-pub(crate) use workflow_runner_v2::ipc::{
+pub(crate) use animus_runtime_shared::ipc::build_runtime_contract_with_resume;
+pub(crate) use animus_runtime_shared::ipc::{
     append_line, build_runtime_contract, collect_json_payload_lines, connect_runner, event_matches_run, run_dir,
     runner_config_dir, write_json_line,
 };
 
 pub(crate) fn ensure_safe_run_id(run_id: &str) -> Result<()> {
-    workflow_runner_v2::ipc::ensure_safe_run_id(run_id).map_err(|e| invalid_input_error(e.to_string()))
+    animus_runtime_shared::ipc::ensure_safe_run_id(run_id).map_err(|e| invalid_input_error(e.to_string()))
 }
 
 impl From<AgentControlActionArg> for AgentControlAction {
@@ -404,7 +404,7 @@ mod tests {
         let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", Some("true"));
         let mut contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        workflow_runner_v2::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
+        animus_runtime_shared::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
         let args = contract
             .pointer("/cli/launch/args")
             .and_then(Value::as_array)
@@ -422,7 +422,7 @@ mod tests {
         let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
         let mut contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        workflow_runner_v2::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
+        animus_runtime_shared::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
         let args = contract
             .pointer("/cli/launch/args")
             .and_then(Value::as_array)
@@ -440,7 +440,7 @@ mod tests {
         let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", Some(""));
         let mut contract =
             build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        workflow_runner_v2::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
+        animus_runtime_shared::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
         let args = contract
             .pointer("/cli/launch/args")
             .and_then(Value::as_array)
@@ -584,7 +584,7 @@ mod tests {
                 write_json_line(&mut server, &protocol::IpcAuthResult::ok()).await.expect("write auth response");
             });
 
-            workflow_runner_v2::ipc::authenticate_runner_stream(&mut client, scoped_dir.path())
+            animus_runtime_shared::ipc::authenticate_runner_stream(&mut client, scoped_dir.path())
                 .await
                 .expect("authenticate runner stream");
 
@@ -602,7 +602,7 @@ mod tests {
         let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
         runtime.block_on(async {
             let (mut client, _server) = tokio::io::duplex(256);
-            let error = workflow_runner_v2::ipc::authenticate_runner_stream(&mut client, scoped_dir.path())
+            let error = animus_runtime_shared::ipc::authenticate_runner_stream(&mut client, scoped_dir.path())
                 .await
                 .expect_err("authentication should fail without runner token");
             assert!(

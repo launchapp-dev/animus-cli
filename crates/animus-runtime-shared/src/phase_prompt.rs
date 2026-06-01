@@ -112,7 +112,7 @@ pub fn render_phase_prompt_with_ctx(
     render_phase_prompt_with_ctx_overrides(ctx, params, inputs, None, None)
 }
 
-pub(crate) fn render_phase_prompt_with_ctx_overrides(
+pub fn render_phase_prompt_with_ctx_overrides(
     ctx: &RuntimeConfigContext,
     params: &PhaseRenderParams<'_>,
     inputs: PhasePromptInputs,
@@ -686,7 +686,7 @@ pub fn phase_requires_commit_message_with_ctx(ctx: &RuntimeConfigContext, phase_
         .unwrap_or_else(|| phase_requires_commit_message(phase_id))
 }
 
-pub(crate) fn phase_result_kind_for_ctx(ctx: &RuntimeConfigContext, phase_id: &str) -> String {
+pub fn phase_result_kind_for_ctx(ctx: &RuntimeConfigContext, phase_id: &str) -> String {
     ctx.phase_output_contract(phase_id)
         .map(|contract| contract.kind.clone())
         .filter(|kind| !kind.trim().is_empty())

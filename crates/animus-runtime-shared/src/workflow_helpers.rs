@@ -1,4 +1,4 @@
-use crate::phase_executor::PhaseExecutionMetadata;
+use crate::phase_metadata::PhaseExecutionMetadata;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

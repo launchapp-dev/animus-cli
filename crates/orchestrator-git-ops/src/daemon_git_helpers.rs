@@ -101,7 +101,7 @@ pub fn path_is_within_root(path: &Path, root: &Path) -> bool {
 }
 
 pub fn is_git_repo(project_root: &str) -> bool {
-    ::workflow_runner_v2::is_git_repo(project_root)
+    ::animus_runtime_shared::is_git_repo(project_root)
 }
 
 pub fn git_ref_exists(project_root: &str, reference: &str) -> bool {

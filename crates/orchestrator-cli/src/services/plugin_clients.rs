@@ -8,7 +8,7 @@
 //!
 //! Wave 3 of the v0.5 release routes `workflow/execute`, `workflow/run_phase`,
 //! and `queue/*` RPCs through plugin host calls instead of the in-tree
-//! `workflow_runner_v2` crate and the `orchestrator_daemon_runtime::queue`
+//! `animus_runtime_shared` crate and the `orchestrator_daemon_runtime::queue`
 //! module. This module provides thin per-call wrappers that:
 //!
 //! 1. Discover whether a `workflow_runner` / `queue` plugin is installed.
@@ -20,7 +20,7 @@
 //!
 //! Each entry point returns `Ok(None)` when no matching plugin is installed
 //! so existing callers fall back to the in-tree code path. The in-tree
-//! `workflow_runner_v2` crate and `orchestrator_daemon_runtime::queue` module
+//! `animus_runtime_shared` crate and `orchestrator_daemon_runtime::queue` module
 //! are intentionally retained in v0.5 — deletion is a v0.5.x follow-up after
 //! preflight confirms the plugin-only path is stable. (See
 //! `docs/architecture/v0.5-execution-plan.md` "Wave 3 — Out of scope" for the
@@ -138,7 +138,7 @@ async fn shutdown_quiet(host: PluginHost) {
 /// Wrapper around the v0.5 `workflow/execute` RPC.
 ///
 /// Returns `Ok(None)` if no `workflow_runner` plugin is installed; callers
-/// fall back to the in-tree `workflow_runner_v2::execute_workflow`.
+/// fall back to the in-tree `animus_runtime_shared::execute_workflow`.
 pub async fn call_workflow_execute(
     project_root: &Path,
     request: &workflow_proto::WorkflowExecuteRequest,
