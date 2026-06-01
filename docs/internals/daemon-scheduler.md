@@ -42,14 +42,19 @@ Subjects are ordered by priority. The `plan_ready_dispatch()` function in `crate
 
 ## Process Manager
 
-`ProcessManager` in `crates/orchestrator-daemon-runtime/src/dispatch/process_manager.rs` tracks spawned `animus-workflow-runner` child processes.
+`ProcessManager` in `crates/orchestrator-daemon-runtime/src/dispatch/process_manager.rs`
+tracks spawned workflow-runner child processes. The resolver prefers the
+external `animus-workflow-runner-default` executable and falls back to legacy
+`animus-workflow-runner` / `ao-workflow-runner` names for older installs.
 
 Responsibilities:
 - **Spawn** -- Build the runner command from a `SubjectDispatch`, spawn it as a tokio `Child` process with piped stderr
 - **Poll** -- Check which child processes have exited, collecting their exit status and stderr output as `CompletedProcess` entries
 - **Track** -- Maintain a list of active `WorkflowProcess` entries with subject ID, task ID, workflow ref, and child handle
 
-The runner command is constructed by `build_runner_command_from_dispatch()` which translates dispatch parameters into CLI arguments for the `animus-workflow-runner` binary.
+The runner command is constructed by `build_runner_command_from_dispatch()`
+which translates dispatch parameters into CLI arguments for the resolved
+workflow-runner executable.
 
 ## Capacity Rules
 

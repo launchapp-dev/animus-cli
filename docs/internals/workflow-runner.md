@@ -1,8 +1,10 @@
 # Workflow Runner Internals
 
-The `workflow-runner-v2` crate provides both a library and the standalone
-`animus-workflow-runner` binary. It executes workflow phases by coordinating
-with the agent runner and managing the workflow lifecycle.
+The `workflow-runner-v2` crate is library-only. It provides the shared workflow
+execution code that the daemon-facing runner binaries use, with
+`animus-workflow-runner-default` as the preferred out-of-tree executable and
+legacy `animus-workflow-runner` / `ao-workflow-runner` names retained only as
+fallback resolution targets for older installs.
 
 ## YAML Resolution
 

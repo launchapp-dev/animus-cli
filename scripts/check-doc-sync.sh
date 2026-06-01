@@ -98,4 +98,45 @@ extract_mcp_docs > "$tmp_dir/mcp-docs.txt"
 check_surface "CLI command tree" "$tmp_dir/cli-source.txt" "$tmp_dir/cli-docs.txt"
 check_surface "MCP tool reference" "$tmp_dir/mcp-source.txt" "$tmp_dir/mcp-docs.txt"
 
+assert_contains() {
+  local file="$1"
+  local pattern="$2"
+  local label="$3"
+  if ! rg -q --fixed-strings "$pattern" "$file"; then
+    echo "Doc drift detected for $label."
+    echo "Expected to find: $pattern"
+    echo "File: $file"
+    return 1
+  fi
+}
+
+assert_not_contains() {
+  local file="$1"
+  local pattern="$2"
+  local label="$3"
+  if rg -q --fixed-strings "$pattern" "$file"; then
+    echo "Doc drift detected for $label."
+    echo "Unexpected stale text: $pattern"
+    echo "File: $file"
+    return 1
+  fi
+}
+
+assert_contains \
+  "$repo_root/docs/architecture/full-system-architecture.md" \
+  '`animus-workflow-runner-default`' \
+  "workflow runner architecture inventory"
+assert_not_contains \
+  "$repo_root/docs/architecture/full-system-architecture.md" \
+  '| `animus-workflow-runner` | `workflow-runner-v2` |' \
+  "workflow runner architecture inventory"
+assert_contains \
+  "$repo_root/docs/guides/ci-cd.md" \
+  '`animus-workflow-runner-default`' \
+  "workflow runner CI inventory"
+assert_not_contains \
+  "$repo_root/docs/guides/ci-cd.md" \
+  '| `animus-workflow-runner` | `workflow-runner-v2` |' \
+  "workflow runner CI inventory"
+
 echo "CLI command tree and MCP tool reference are in sync."
