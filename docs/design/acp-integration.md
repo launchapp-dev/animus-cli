@@ -361,7 +361,7 @@ Add ACP server settings to `.animus/config.json` and `~/.animus/<repo-scope>/acp
 - **Rust SDK** (if available) for closer integration with Animus core
 
 **IDE Extension Architecture:**
-- VS Code: Use TypeScript SDK to build extension in `crates/vscode-acp-extension`
+- VS Code: Use the TypeScript SDK to build an out-of-tree extension package; do not add editor-extension code under `crates/` in this Rust-only workspace
 - JetBrains: Use Kotlin/Java SDK to build plugin
 - Cursor: Leverage existing ACP client (if available)
 
