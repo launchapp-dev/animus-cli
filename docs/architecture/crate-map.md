@@ -16,7 +16,7 @@ responsibility. `Cargo.toml` is the source of truth for membership.
 | Crate | Responsibility |
 |---|---|
 | `orchestrator-daemon-runtime` | Daemon queue, scheduling, subject dispatch, trigger handling, and runtime supervision |
-| `workflow-runner-v2` | Workflow phase execution, checkpoint persistence, and runtime contracts |
+| `animus-runtime-shared` | Shared workflow execution helpers, runtime contracts, agent memory wiring, and runner IPC utilities consumed by daemon code and external `workflow_runner` plugins |
 | `agent-runner` | Runner process that launches and supervises provider sessions |
 | `oai-runner` | OpenAI-compatible runner binary |
 

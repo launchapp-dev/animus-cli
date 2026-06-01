@@ -35,6 +35,7 @@ The workspace is a Cargo workspace of 17 crates. The core orchestrator crates ar
 ```text
 crates/
 ├── agent-runner/
+├── animus-runtime-shared/
 ├── animus-plugin-protocol/
 ├── animus-plugin-runtime/
 ├── oai-runner/
@@ -49,8 +50,7 @@ crates/
 ├── orchestrator-providers/
 ├── orchestrator-session-host/
 ├── orchestrator-store/
-├── protocol/
-└── workflow-runner-v2/
+└── protocol/
 ```
 
 Repo-local but not current workspace members:

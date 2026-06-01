@@ -207,7 +207,7 @@ The `animus.memory.*` tools are exposed in two places, with different gating:
 - **Spawned workflow agents**: the memory MCP server is injected into a phase's runtime
   contract only when the active agent profile has `capabilities.memory: true`. Profiles with
   the capability absent or set to `false` do not see the memory tools in their tool list.
-  See `crates/workflow-runner-v2/src/runtime_contract.rs::inject_memory_mcp_for_capable_agent`.
+  See `crates/animus-runtime-shared/src/runtime_contract.rs::inject_memory_mcp_for_capable_agent`.
 
 ---
 

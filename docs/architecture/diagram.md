@@ -46,7 +46,7 @@ flowchart TB
         CTRL["Control RPC server<br/>(Unix socket: ~/.animus/scope/control.sock)<br/>NDJSON JSON-RPC"]:::daemon
         ROUTER["Subject router"]:::daemon
         SCHED["Scheduler / workflow dispatch"]:::daemon
-        WR["workflow-runner-v2"]:::daemon
+        WR["workflow_runner plugin<br/>+ animus-runtime-shared"]:::daemon
         PHOST["Plugin host<br/>(orchestrator-plugin-host<br/>+ orchestrator-session-host)"]:::daemon
         BCAST["Notification broadcaster<br/>(WorkflowEvent / AgentNotification)"]:::daemon
     end

@@ -28,7 +28,7 @@ web stack (transport + UI) lives in external plugins under
 [`launchapp-dev`](https://github.com/launchapp-dev). The workspace also depends
 on external protocol crates from that repo. The authoritative pins live in
 `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`; current builds mix the
-legacy `v0.1.13` wire crates with the newer `v0.5.1`
+legacy `v0.1.13` wire crates with newer `v0.5.x`
 queue/workflow/subject protocol crates.
 
 Current workspace members from `Cargo.toml`:
@@ -36,6 +36,7 @@ Current workspace members from `Cargo.toml`:
 ```text
 crates/
 ├── agent-runner/                # Runner process that launches and supervises AI CLIs
+├── animus-runtime-shared/       # Shared workflow execution/runtime-contract/IPC helpers used by daemon and workflow_runner plugins
 ├── animus-plugin-protocol/      # In-tree stdio plugin protocol types
 ├── animus-plugin-runtime/       # Runtime helpers for plugin implementations
 ├── oai-runner/                  # OpenAI-compatible runner implementation
@@ -50,8 +51,7 @@ crates/
 ├── orchestrator-providers/      # Built-in provider integrations and routing
 ├── orchestrator-session-host/   # Session backend layer + provider/plugin execution bridge
 ├── orchestrator-store/          # Shared state/storage path helpers
-├── protocol/                    # Shared protocol/config/runtime types
-└── workflow-runner-v2/          # Workflow execution runtime and phase output persistence
+└── protocol/                    # Shared protocol/config/runtime types
 ```
 
 Repo-local but not current workspace members:
@@ -64,7 +64,7 @@ Runtime-critical binaries and supporting crates must stay healthy:
 - `agent-runner`
 - `oai-runner`
 - `orchestrator-logging`
-- `workflow-runner-v2`
+- `animus-runtime-shared`
 - `orchestrator-daemon-runtime`
 
 Do not add desktop shell frameworks or their transitive equivalents.

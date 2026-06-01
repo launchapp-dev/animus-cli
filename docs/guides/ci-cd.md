@@ -46,9 +46,11 @@ The runtime binary set is:
 | `animus-oai-runner` | `oai-runner` | OpenAI-compatible runner |
 | `animus-workflow-runner-default` | external `workflow_runner` plugin | Preferred workflow phase execution binary required by daemon preflight |
 
-`workflow-runner-v2` is now library-only and does not ship an in-tree binary.
-Legacy `animus-workflow-runner` and `ao-workflow-runner` names remain fallback
-resolution targets for older environments.
+`animus-runtime-shared` now holds the in-tree shared workflow execution code,
+and the workflow phase execution binary is supplied by an external
+`workflow_runner` plugin. Legacy `animus-workflow-runner` and
+`ao-workflow-runner` names remain fallback resolution targets for older
+environments.
 
 ## Testing
 

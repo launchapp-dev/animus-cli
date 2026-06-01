@@ -20,7 +20,7 @@ observability, and extension rules, see
 | Service bootstrap and state | [`crates/orchestrator-core/src/services.rs`](../../crates/orchestrator-core/src/services.rs) |
 | Workflow config loading | [`crates/orchestrator-config/src/workflow_config/`](../../crates/orchestrator-config/src/workflow_config/) |
 | Shared config and scope types | [`crates/protocol/src/config.rs`](../../crates/protocol/src/config.rs), [`crates/protocol/src/repository_scope.rs`](../../crates/protocol/src/repository_scope.rs) |
-| Workflow execution | [`crates/workflow-runner-v2/src/workflow_execute.rs`](../../crates/workflow-runner-v2/src/workflow_execute.rs) |
+| Workflow execution helpers | [`crates/animus-runtime-shared/src/`](../../crates/animus-runtime-shared/src/) |
 | Daemon runtime | [`crates/orchestrator-daemon-runtime/src/`](../../crates/orchestrator-daemon-runtime/src/) |
 | Plugin host | [`crates/orchestrator-plugin-host/src/`](../../crates/orchestrator-plugin-host/src/) |
 | Provider session bridge | [`crates/orchestrator-session-host/src/`](../../crates/orchestrator-session-host/src/) |
@@ -36,7 +36,7 @@ flowchart TB
     CFG["orchestrator-config"]
     STORE["orchestrator-store"]
     DAEMON["orchestrator-daemon-runtime"]
-    WFR["workflow-runner-v2"]
+    WFR["animus-runtime-shared<br/>+ workflow_runner plugin"]
     AR["agent-runner"]
     SESSION["orchestrator-session-host"]
     PHOST["orchestrator-plugin-host"]
@@ -66,7 +66,7 @@ flowchart TB
 |---|---|---|
 | Interface | `orchestrator-cli` | CLI, MCP server, JSON output, operations, `animus web` plugin launch |
 | Services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` | Bootstrap, config, state mutation APIs, workflow config, atomic persistence |
-| Runtime | `orchestrator-daemon-runtime`, `workflow-runner-v2`, `agent-runner` | Queue scheduling, workflow phase execution, runner IPC and process orchestration |
+| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and runner IPC/process orchestration |
 | Providers | `orchestrator-session-host`, `oai-runner`, `orchestrator-providers` | Provider plugin sessions, OpenAI-compatible runner, compatibility helpers |
 | Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
 | Support | `orchestrator-git-ops`, `orchestrator-notifications`, `orchestrator-logging`, `protocol` | Worktrees, notifications, tracing, shared types |
@@ -140,8 +140,8 @@ discover installed `transport_backend` and `web_ui` plugins.
 ## Execution Pipeline
 
 1. A subject or queue entry selects work.
-2. The daemon starts a workflow run through `workflow-runner-v2`.
-3. The workflow runner resolves phase configuration and runtime contracts.
+2. The daemon starts a workflow run through an installed `workflow_runner` plugin.
+3. Shared `animus-runtime-shared` logic resolves phase configuration and runtime contracts inside that plugin.
 4. Agent phases call `agent-runner`.
 5. `agent-runner` delegates provider execution to `orchestrator-session-host`.
 6. `orchestrator-session-host` discovers and drives a provider plugin through
