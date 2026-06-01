@@ -1,15 +1,20 @@
 [package]
 name = "workflow-runner-v2"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
+
+# The binary entrypoint moved out-of-tree to
+# `launchapp-dev/animus-workflow-runner-default` v0.3.0. This crate is now
+# library-only; the 3 ao-cli daemon crates (orchestrator-daemon-runtime,
+# orchestrator-cli, orchestrator-git-ops) still import its IPC contract
+# types, phase_session, runtime_support, reattach back-channel constants,
+# and agent-memory helpers from here. The lib code is duplicated with the
+# plugin repo and will be deduplicated by extracting a shared
+# `animus-runtime-shared` crate as a v0.6 follow-up.
 
 [lib]
 name = "workflow_runner_v2"
 path = "src/lib.rs"
-
-[[bin]]
-name = "animus-workflow-runner"
-path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0"
