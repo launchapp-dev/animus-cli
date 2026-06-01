@@ -88,10 +88,16 @@ delegates to installed `transport_backend` and `web_ui` plugins.
 
 ```bash
 npm install
+npm run docs:check-sync
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
 ```
+
+Run `npm run docs:check-sync` whenever the CLI command tree or MCP surface
+changes. It compares `crates/orchestrator-cli/src/cli_types/root_types.rs` and
+`crates/orchestrator-cli/src/services/operations/ops_mcp/` against the
+reference docs and fails on drift.
 
 Protocol schema exports live at the repo root:
 
