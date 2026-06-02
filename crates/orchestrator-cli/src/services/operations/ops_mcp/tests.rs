@@ -3,7 +3,8 @@ use crate::services::runtime::daemon_events_log_path;
 use crate::services::runtime::DaemonEventRecord;
 use chrono::{Duration, Utc};
 use protocol::CLI_SCHEMA_ID;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
 use tempfile::TempDir;
 
 use protocol::test_utils::EnvVarGuard;
@@ -105,6 +106,32 @@ fn sample_cli_failure_result() -> CliExecutionResult {
         stdout_json: None,
         stderr_json: None,
     }
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn read_doc(relative_path: &str) -> String {
+    let path = repo_root().join(relative_path);
+    std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+}
+
+fn live_builtin_tool_names() -> BTreeSet<String> {
+    let server = new_ao_mcp_server("/tmp/project");
+    server.tool_router.list_all().into_iter().map(|tool| tool.name.to_string()).collect()
+}
+
+fn documented_reference_tool_names() -> BTreeSet<String> {
+    read_doc("docs/reference/mcp-tools.md")
+        .lines()
+        .filter_map(|line| {
+            if !line.starts_with("| `animus.") {
+                return None;
+            }
+            line.split('`').nth(1).map(str::to_string)
+        })
+        .collect()
 }
 
 #[test]
@@ -211,6 +238,29 @@ fn validate_workflow_run_multiple_rejects_over_max() {
         .collect();
     let err = validate_workflow_run_multiple_input("animus.workflow.run-multiple", &runs).unwrap_err();
     assert!(err.contains("exceeds maximum"), "expected max-size error, got: {err}");
+}
+
+#[test]
+fn mcp_reference_table_matches_live_builtin_tools() {
+    let documented = documented_reference_tool_names();
+    let live = live_builtin_tool_names();
+    assert_eq!(documented, live, "docs/reference/mcp-tools.md drifted from the live AoMcpServer tool router");
+}
+
+#[test]
+fn mcp_docs_publish_the_live_builtin_tool_count() {
+    let live_count = live_builtin_tool_names().len();
+    let reference = read_doc("docs/reference/mcp-tools.md");
+    let guide = read_doc("docs/guides/agents.md");
+
+    assert!(
+        reference.contains(&format!("registers {live_count} built-in tools")),
+        "docs/reference/mcp-tools.md should publish the live built-in tool count ({live_count})"
+    );
+    assert!(
+        guide.contains(&format!("Animus currently exposes **{live_count} built-in MCP tools**")),
+        "docs/guides/agents.md should publish the live built-in tool count ({live_count})"
+    );
 }
 
 #[test]

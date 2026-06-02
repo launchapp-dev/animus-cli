@@ -52,7 +52,32 @@ pub(crate) use workflow_types::*;
 mod tests {
     use super::*;
     use clap::error::ErrorKind;
+    use clap::CommandFactory;
     use clap::Parser;
+    use std::path::PathBuf;
+
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+    }
+
+    fn read_doc(relative_path: &str) -> String {
+        let path = repo_root().join(relative_path);
+        std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
+    }
+
+    fn documented_top_level_commands() -> Vec<String> {
+        read_doc("docs/reference/cli/index.md")
+            .lines()
+            .filter(|line| line.starts_with("├── ") || line.starts_with("└── "))
+            .filter_map(|line| {
+                let entry = line
+                    .strip_prefix("├── ")
+                    .or_else(|| line.strip_prefix("└── "))
+                    .expect("prefix already checked");
+                entry.split_whitespace().next().map(str::to_string)
+            })
+            .collect()
+    }
 
     #[test]
     fn agent_run_help_includes_actionable_field_descriptions() {
@@ -226,5 +251,22 @@ mod tests {
     fn rejects_removed_now_command() {
         let error = Cli::try_parse_from(["animus", "now"]).expect_err("legacy now command should be removed");
         assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
+    }
+
+    #[test]
+    fn cli_reference_top_level_tree_matches_live_clap_commands() {
+        let mut command = Cli::command();
+        command.build();
+
+        let mut actual: Vec<String> = command.get_subcommands().map(|subcommand| subcommand.get_name().to_string()).collect();
+        let mut documented = documented_top_level_commands();
+
+        actual.sort();
+        documented.sort();
+
+        assert_eq!(
+            documented, actual,
+            "docs/reference/cli/index.md top-level command tree drifted from Cli::command()"
+        );
     }
 }
