@@ -1,13 +1,11 @@
 {
   "mcpServers": {
-    "ao": {
+    "animus": {
       "args": [
-        "--project-root",
-        "/Users/samishukri/ao-cli",
         "mcp",
         "serve"
       ],
-      "command": "/Users/samishukri/ao-cli/target/debug/ao"
+      "command": "target/debug/animus"
     }
   }
 }

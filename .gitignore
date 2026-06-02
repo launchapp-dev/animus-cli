@@ -36,6 +36,10 @@ node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 
+# Python build artifacts
+__pycache__/
+*.pyc
+
 # Claude Code worktrees
 .claude/worktrees/
 

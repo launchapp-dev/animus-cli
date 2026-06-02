@@ -135,7 +135,7 @@ cmd_create() {
     echo "Hand each agent the table row matching its name. Each agent prompt MUST start with:"
     echo ""
     echo "  Work DIRECTLY in <WORKTREE_PATH> (cd at startup). Commit on the current"
-    echo "  branch (already <BRANCH>). Do not touch /Users/samishukri/ao-cli/ or any"
+    echo "  branch (already <BRANCH>). Do not touch ${REPO_ROOT}/ or any"
     echo "  sibling worktree under ${WT_ROOT}/. Push is handled by the orchestrator"
     echo "  via 'dispatch-wave.sh merge'."
 

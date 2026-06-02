@@ -128,7 +128,7 @@ const initialFeedback: FeedbackRecord[] = [
   {
     id: "fb-task016-0008",
     timestamp: "2026-02-25T18:24:12Z",
-    actor: "sam.ishukri",
+    actor: "demo.user",
     action: "daemon.clear_logs",
     method: "DELETE",
     path: "/api/v1/daemon/logs",
@@ -140,7 +140,7 @@ const initialFeedback: FeedbackRecord[] = [
   {
     id: "fb-task016-0007",
     timestamp: "2026-02-25T18:22:07Z",
-    actor: "sam.ishukri",
+    actor: "demo.user",
     action: "daemon.resume",
     method: "POST",
     path: "/api/v1/daemon/resume",
@@ -256,7 +256,7 @@ export function DaemonActionSafeguardsWireframe() {
       ? {
           id: `fb-${correlationId}`,
           timestamp: new Date().toISOString(),
-          actor: "sam.ishukri",
+          actor: "demo.user",
           action: action.action,
           method: action.method,
           path: action.path,
@@ -268,7 +268,7 @@ export function DaemonActionSafeguardsWireframe() {
       : {
           id: `fb-${correlationId}`,
           timestamp: new Date().toISOString(),
-          actor: "sam.ishukri",
+          actor: "demo.user",
           action: action.action,
           method: action.method,
           path: action.path,

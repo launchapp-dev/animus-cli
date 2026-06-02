@@ -4,7 +4,7 @@
 - Workflow phase: `requirements`
 - Workflow ID: `2525eccd-7658-4192-a0a0-e843a04c30e1`
 - Task: `TASK-022`
-- Project root: `/Users/samishukri/ao-cli`
+- Project root: `/path/to/animus`
 
 ## Objective
 Deliver a production-ready AO onboarding flow that provides:

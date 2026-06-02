@@ -18,7 +18,7 @@ Snapshot date: `2026-02-27`.
 
 Observed baseline mismatch:
 - Task description baseline: `25/45` tasks marked `high` (`55.56%`).
-- Current canonical project root (`/Users/samishukri/ao-cli`) baseline from
+- Current canonical project root (`/path/to/animus`) baseline from
   `ao task stats --json`: `28/57` tasks marked `high` (`49.12%`).
 - Active tasks (`in-progress|blocked`): `11` total, `4` high (`36.36%`), still
   above a `20%` high-priority budget.

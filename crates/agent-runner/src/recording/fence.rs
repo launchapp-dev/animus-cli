@@ -475,7 +475,7 @@ mod tests {
 
     #[test]
     fn key_format_is_stable() {
-        let k = IdempotencyKey::new("samishukri__ao-cli", "wf-XYZ", "implementation", 0);
-        assert_eq!(k.as_str(), "samishukri__ao-cli:wf-XYZ:implementation:0");
+        let k = IdempotencyKey::new("scope__animus", "wf-XYZ", "implementation", 0);
+        assert_eq!(k.as_str(), "scope__animus:wf-XYZ:implementation:0");
     }
 }
