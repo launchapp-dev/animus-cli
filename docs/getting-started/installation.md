@@ -49,7 +49,11 @@ Download the archive for your platform, extract it, and place these binaries on 
 - `animus`
 - `agent-runner`
 - `animus-oai-runner`
-- `animus-workflow-runner` (v0.4.16+ name; the v0.4.x `ao-workflow-runner` is created as a back-compat symlink by `scripts/install.sh`)
+
+Current release archives do **not** bundle a workflow-runner executable. The
+daemon's workflow phase execution binary now comes from the external
+`launchapp-dev/animus-workflow-runner-default` plugin, installed via
+`animus plugin install-defaults` or `animus plugin install ...`.
 
 (The v0.4.11 `llm-cli-wrapper` binary was removed in v0.4.12 — the crate
 was deleted and its functionality folded into `agent-runner` and the
