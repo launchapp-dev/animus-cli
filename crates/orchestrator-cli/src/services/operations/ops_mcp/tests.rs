@@ -252,6 +252,8 @@ fn mcp_docs_publish_the_live_builtin_tool_count() {
     let live_count = live_builtin_tool_names().len();
     let reference = read_doc("docs/reference/mcp-tools.md");
     let guide = read_doc("docs/guides/agents.md");
+    let docs_home = read_doc("docs/index.md");
+    let guides_index = read_doc("docs/guides/index.md");
 
     assert!(
         reference.contains(&format!("registers {live_count} built-in tools")),
@@ -260,6 +262,14 @@ fn mcp_docs_publish_the_live_builtin_tool_count() {
     assert!(
         guide.contains(&format!("Animus currently exposes **{live_count} built-in MCP tools**")),
         "docs/guides/agents.md should publish the live built-in tool count ({live_count})"
+    );
+    assert!(
+        docs_home.contains(&format!("{live_count} built-in MCP tools")),
+        "docs/index.md should publish the live built-in tool count ({live_count})"
+    );
+    assert!(
+        guides_index.contains(&format!("all {live_count} built-in MCP tools")),
+        "docs/guides/index.md should publish the live built-in tool count ({live_count})"
     );
 }
 
