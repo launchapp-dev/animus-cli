@@ -57,12 +57,14 @@ JSON stores for operational records such as:
 
 - `pack-selection.v1.json`
 - `schedule-state.json`
-- `reviews.json`
 - `handoffs.json`
 - `history.json`
 - `errors.json`
-- `qa-results.json`
-- `qa-review-approvals.json`
+- `agent-handoffs/<workflow-id>/<root-run-id>.jsonl`
+
+The `state/` directory is intentionally open-ended: new runtime stores may be
+added over time, but the current domain-state JSON helpers back `handoffs`,
+`history`, and `errors`.
 
 ## File Locking
 

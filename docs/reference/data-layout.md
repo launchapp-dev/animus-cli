@@ -65,12 +65,10 @@ Mutable runtime state lives outside the repo:
 ├── state/
 │   ├── pack-selection.v1.json
 │   ├── schedule-state.json
-│   ├── reviews.json
 │   ├── handoffs.json
 │   ├── history.json
 │   ├── errors.json
-│   ├── qa-results.json
-│   └── qa-review-approvals.json
+│   └── ...
 └── worktrees/
 ```
 
@@ -90,6 +88,10 @@ Key points:
 - `runner/config.json` stores the runner auth token for the resolved runner
   scope, and `runner/agent-runner.sock` is the default Unix socket path used
   by scoped runner clients
+- `state/handoffs.json`, `state/history.json`, and `state/errors.json` are the
+  current domain-state JSON stores persisted under the repo-scoped runtime root
+- other files under `state/` may appear over time as specific subsystems persist
+  additional runtime state
 - `worktrees/` stores managed task worktrees for that repository scope
 
 ## Machine-Wide Layout
@@ -102,6 +104,8 @@ Animus also uses machine-wide directories that are not tied to one repository:
 ├── credentials.json
 ├── daemon-events.jsonl
 ├── cli-tracker.json
+├── agent-runner.sock
+├── runner-config.json
 ├── packs/
 │   └── <pack-id>/<version>/         # installed packs
 ├── plugins/
@@ -119,6 +123,9 @@ Notes:
 
 - `~/.animus/packs/` holds machine-installed packs only. Current builds do not
   ship bundled pack content or bundled skill fallback.
+- `~/.animus/agent-runner.sock` and `~/.animus/runner-config.json` are the
+  legacy machine-global runner socket/config paths still used when commands run
+  with global runner scope.
 - `~/.animus/template-registries/<registry-id>/` is pinned to a specific commit by default
   (v0.4.0 supply-chain hardening). `animus init --update-registry` fetches HEAD and re-pins.
 - `~/.animus/plugins/` is the install target for `animus plugin install --path` and
