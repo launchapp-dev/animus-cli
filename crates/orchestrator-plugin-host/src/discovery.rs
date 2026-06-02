@@ -255,6 +255,19 @@ pub fn discover_plugins(project_root: impl Into<PathBuf>) -> Result<Vec<Discover
     PluginDiscovery::new().with_project_root(project_root).discover()
 }
 
+/// Discover all installed plugins whose manifest `plugin_kind` equals
+/// `kind` (case-sensitive — match the wire constants exactly:
+/// `"workflow_runner"`, `"subject_backend"`, `"provider"`, `"transport"`,
+/// etc.). Skips plugins whose `--manifest` probe failed (those surface as
+/// [`DiscoveryWarning`]s on a full [`discover_plugins`] call).
+///
+/// Errors only when discovery itself fails (config read, registry parse).
+/// An empty `Vec` means "no plugins of that kind installed".
+pub fn discover_by_kind(project_root: impl Into<PathBuf>, kind: &str) -> Result<Vec<DiscoveredPlugin>> {
+    let plugins = discover_plugins(project_root)?;
+    Ok(plugins.into_iter().filter(|p| p.manifest.plugin_kind == kind).collect())
+}
+
 /// Probe a plugin binary's `--manifest` output.
 ///
 /// This is the security-sensitive entry point for plugin discovery: it
@@ -584,6 +597,59 @@ mod tests {
             !PluginDiscovery::default().include_system_path,
             "PluginDiscovery::default() must not opt into $PATH scanning"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discover_by_kind_filters_to_matching_plugin_kind() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        let mk = |name: &str, kind: &str| -> PathBuf {
+            let path = temp.path().join(name);
+            let manifest = serde_json::json!({
+                "name": name,
+                "version": "0.1.0",
+                "plugin_kind": kind,
+                "description": "test",
+                "protocol_version": "1.0.0",
+                "capabilities": []
+            });
+            fs::write(&path, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+            let mut perms = fs::metadata(&path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&path, perms).expect("chmod");
+            path
+        };
+
+        let wf_plugin = mk("a-workflow-runner-default", "workflow_runner");
+        let subj_plugin = mk("b-subject-default", "subject_backend");
+
+        let config_path = temp.path().join("plugins.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "plugins:\n  a-workflow-runner-default:\n    binary: {}\n  b-subject-default:\n    binary: {}\n",
+                wf_plugin.to_string_lossy(),
+                subj_plugin.to_string_lossy()
+            ),
+        )
+        .expect("write config");
+
+        let by_kind = PluginDiscovery::new()
+            .with_config_path(config_path)
+            .discover()
+            .expect("discover")
+            .into_iter()
+            .filter(|p| p.manifest.plugin_kind == "workflow_runner")
+            .collect::<Vec<_>>();
+
+        assert_eq!(by_kind.len(), 1, "exactly one workflow_runner plugin");
+        assert_eq!(by_kind[0].name, "a-workflow-runner-default");
     }
 
     #[test]

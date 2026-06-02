@@ -1,8 +1,10 @@
 # Workflow Runner Internals
 
-The `workflow-runner-v2` crate provides both a library and the standalone
-`animus-workflow-runner` binary. It executes workflow phases by coordinating
-with the agent runner and managing the workflow lifecycle.
+The in-tree workflow execution helpers now live in `animus-runtime-shared`.
+External `workflow_runner` plugins, with `animus-workflow-runner-default` as
+the preferred executable, consume those shared modules to execute workflow
+phases. Legacy `animus-workflow-runner` / `ao-workflow-runner` names remain
+fallback resolution targets for older installs.
 
 ## YAML Resolution
 
@@ -67,7 +69,7 @@ When a phase fails, the runner checks whether rework is allowed:
 ## IPC Client
 
 The workflow runner connects to the agent runner via the IPC client defined in
-`crates/workflow-runner-v2/src/ipc.rs`.
+`crates/animus-runtime-shared/src/ipc.rs`.
 By default, that client resolves its config dir to
 `~/.animus/<repo-scope>/runner/` and then connects/authenticates using the
 token from `runner/config.json`. The connection flow:
@@ -80,7 +82,7 @@ token from `runner/config.json`. The connection flow:
 
 ## Runtime Contract Construction
 
-The runtime contract is assembled inside `workflow-runner-v2` before the agent
+The runtime contract is assembled via `animus-runtime-shared` before the agent
 request is sent:
 
 - **Tool** -- Which CLI tool to use (claude, codex, gemini, opencode), resolved from phase config or agent profile

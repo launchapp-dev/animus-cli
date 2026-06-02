@@ -28,7 +28,7 @@ Every public surface uses the `animus` name:
 | Pack ids | `animus.*` | `animus.task`, `animus.review`, `animus.requirement` |
 | JSON output schema envelope | `animus.cli.v1` | every `--json` response carries `"schema": "animus.cli.v1"` |
 | Plugin protocol host name | `animus` | host announces itself as `animus` on `initialize` |
-| Rust workspace crates (in-tree) | `orchestrator-*` (existing) and `animus-*` (new) | `orchestrator-cli`, `orchestrator-core`, `animus-provider-mock`, `animus-plugin-smoke` |
+| Rust workspace crates (in-tree) | `orchestrator-*` (existing) and `animus-*` (new) | `orchestrator-cli`, `orchestrator-core`, `animus-plugin-protocol`, `animus-plugin-runtime` |
 | Standalone plugin repos | `animus-{kind}-{name}` | `animus-subject-linear`, `animus-provider-claude`, `animus-trigger-slack` |
 | Standalone plugin binaries | `animus-{kind}-{name}` | the binary name matches the repo name |
 | Standalone plugin crates | `animus-{kind}-{name}` | published to crates.io under the same name |

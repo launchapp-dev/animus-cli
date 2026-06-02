@@ -68,6 +68,8 @@ Expected output when satisfied:
 ```
 Daemon preflight OK
   provider:      5 installed (claude, codex, gemini, opencode, oai)
+  workflow:      1 installed (animus-workflow-runner-default)
+  queue:         1 installed (animus-queue-default)
   subject:       5 installed (default, requirements, linear, sqlite, markdown)
   transport+ui:  3 installed (transport-http, transport-graphql, web-ui)
 ```
@@ -87,9 +89,11 @@ error: daemon preflight failed
   fix: animus plugin install-defaults
 ```
 
-The daemon stops shipping with bundled providers, subjects, or
-transports as of v0.4.12. The startup preflight refuses to boot
-without at least one provider and one subject backend installed.
+The daemon stops shipping with bundled providers, workflow runners,
+queues, subjects, or transports as of v0.4.12/v0.5. The startup
+preflight refuses to boot without at least one provider, a
+`workflow_runner` plugin, a `queue` plugin, and the required subject
+backends installed.
 
 Fix:
 

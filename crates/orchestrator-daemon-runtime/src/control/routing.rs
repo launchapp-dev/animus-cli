@@ -136,19 +136,17 @@ pub trait WorkflowRouting: Send + Sync {
 
 /// `queue/*` dispatcher used by [`super::InProcessSurface`].
 ///
-/// Wraps the CLI's existing `queue_snapshot` / `enqueue_subject_dispatch`
-/// / `hold_subject` / `release_subject` / `drop_subject` /
-/// `reorder_subjects` / `queue_stats` helpers behind a transport-agnostic
-/// interface, mirroring the [`PluginRouting`] and [`WorkflowRouting`]
-/// pattern. Implementations live in `orchestrator-cli` so the
-/// daemon-runtime crate doesn't grow a dependency on
-/// `orchestrator-core`'s service hub.
+/// Forwards each control-protocol queue verb to the installed `queue`
+/// plugin via `animus-queue-protocol` RPCs, mirroring the
+/// [`PluginRouting`] and [`WorkflowRouting`] pattern. Implementations
+/// live in `orchestrator-cli` so the daemon-runtime crate doesn't grow
+/// a dependency on `orchestrator-core`'s service hub.
 ///
 /// The wire-side [`QueueEntry`] schema is intentionally leaner than the
-/// in-tree [`crate::QueueEntrySnapshot`] — wire callers get a stable id
-/// + subject_id + status + priority + enqueued_at, with the rich
-/// dispatch payload surfacing only on the CLI's local path. Adapters
-/// map the in-tree DispatchQueueEntry into the wire shape best-effort.
+/// queue plugin's [`animus_queue_protocol::QueueEntry`] — wire callers
+/// get a stable id + subject_id + status + priority + enqueued_at, with
+/// the rich dispatch payload surfacing only on the CLI's local path.
+/// Adapters map the plugin's entry shape into the wire shape best-effort.
 #[async_trait]
 pub trait QueueRouting: Send + Sync {
     /// `queue/list` — page through queue entries filtered by status.

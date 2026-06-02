@@ -1,0 +1,50 @@
+schema = "animus.flavor.v1"
+id = "default"
+version = "0.5.0"
+title = "Animus Default"
+description = "Curated bundle for solo founders and small studios running a portfolio of projects."
+
+[providers]
+required = ["launchapp-dev/animus-provider-claude"]
+recommended = ["launchapp-dev/animus-provider-codex", "launchapp-dev/animus-provider-ollama"]
+
+[subjects]
+required = ["launchapp-dev/animus-subject-default"]
+recommended = [
+    "launchapp-dev/animus-subject-requirements",
+    "launchapp-dev/animus-subject-linear",
+    "launchapp-dev/animus-subject-sqlite",
+    "launchapp-dev/animus-subject-markdown",
+    "launchapp-dev/animus-subject-github",
+]
+
+[transports]
+required = ["launchapp-dev/animus-transport-http"]
+recommended = ["launchapp-dev/animus-transport-graphql"]
+
+[ui]
+recommended = ["launchapp-dev/animus-web-ui"]
+
+[triggers]
+recommended = ["launchapp-dev/animus-trigger-cron", "launchapp-dev/animus-trigger-webhook"]
+
+[workflow_runner]
+required = ["launchapp-dev/animus-workflow-runner-default"]
+
+[queue]
+required = ["launchapp-dev/animus-queue-default"]
+
+[durable_store]
+recommended = ["launchapp-dev/animus-step-durable-dbos"]
+
+[memory_store]
+recommended = ["launchapp-dev/animus-memory-zep"]
+
+[packs]
+recommended = ["launchapp-dev/animus-pack-engineering-backlog"]
+
+[defaults]
+model_routing = "engineering-portfolio"
+cost_ceiling_daily_usd = 50
+execution = "local"
+cloud = "optional"

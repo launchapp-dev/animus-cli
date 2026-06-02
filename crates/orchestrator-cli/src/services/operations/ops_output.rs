@@ -1,12 +1,12 @@
 use crate::cli_types::OutputCommand;
 use crate::{ensure_safe_run_id, not_found_error, print_value, run_dir};
+use animus_runtime_shared::phase_output::{phase_output_dir, PersistedPhaseOutput};
 use anyhow::{Context, Result};
 use protocol::RunId;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
-use workflow_runner_v2::phase_output::{phase_output_dir, PersistedPhaseOutput};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ArtifactInfoCli {
@@ -500,6 +500,8 @@ mod tests {
             reason: Some("Implemented".to_string()),
             commit_message: Some("feat: implement contract".to_string()),
             evidence: Vec::new(),
+            risk: None,
+            target_phase: None,
             guardrail_violations: Vec::new(),
             payload: Some(serde_json::json!({
                 "kind": "implementation_result",
@@ -515,6 +517,8 @@ mod tests {
             reason: Some("Tests failed".to_string()),
             commit_message: None,
             evidence: Vec::new(),
+            risk: None,
+            target_phase: None,
             guardrail_violations: Vec::new(),
             payload: Some(serde_json::json!({
                 "kind": "phase_result",

@@ -1,19 +1,23 @@
 name: Protocol Drift
 
-# Fails fast if the in-tree `animus-plugin-protocol` or
-# `animus-subject-protocol` crates diverge from the published
-# `launchapp-dev/animus-protocol` crates. Plugin authors depend on the
-# published crates, so any in-tree-only addition that hasn't yet shipped
-# as a standalone release means plugins built against the published crates
-# can send wire shapes the in-tree host won't understand — or vice versa.
+# Fails fast if the in-tree `animus-plugin-protocol` crate diverges from
+# the published `launchapp-dev/animus-protocol` crate. Plugin authors
+# depend on the published crate, so any in-tree-only addition that hasn't
+# yet shipped as a standalone release means plugins built against the
+# published crate can send wire shapes the in-tree host won't understand —
+# or vice versa.
 #
-# The job clones the standalone repo at the pinned tag, exports the paths
-# to both `animus-plugin-protocol/src/lib.rs` and
-# `animus-subject-protocol/src/lib.rs`, and runs the
+# The job clones the standalone repo at the pinned tag, exports the path
+# to `animus-plugin-protocol/src/lib.rs`, and runs the
 # `crates/orchestrator-plugin-host/tests/protocol_drift.rs` integration
-# tests. Those tests parse both crates with `syn`, extract their public
-# surface, and panic if anything diverges that isn't on the test's
-# `expected_in_tree_only` / `expected_drift` allowlists.
+# test. The test parses both crates with `syn`, extracts their public
+# surface, and panics if anything diverges that isn't on the test's
+# `expected_in_tree_only` allowlist.
+#
+# Note: the corresponding `animus-subject-protocol` drift gate was
+# retired in v0.5 when the in-tree mirror at
+# `crates/animus-subject-protocol/` was deleted. The CLI and daemon now
+# consume the subject crate exclusively from the published git tag.
 
 on:
   pull_request:
@@ -58,7 +62,7 @@ jobs:
           ref: ${{ env.STANDALONE_TAG }}
           path: animus-protocol
 
-      - name: Verify standalone lib.rs files are present
+      - name: Verify standalone lib.rs file is present
         run: |
           set -euo pipefail
           STANDALONE_LIB="$GITHUB_WORKSPACE/animus-protocol/animus-plugin-protocol/src/lib.rs"
@@ -67,12 +71,6 @@ jobs:
             exit 1
           fi
           echo "Resolved standalone plugin lib.rs at $STANDALONE_LIB"
-          STANDALONE_SUBJECT_LIB="$GITHUB_WORKSPACE/animus-protocol/animus-subject-protocol/src/lib.rs"
-          if [ ! -f "$STANDALONE_SUBJECT_LIB" ]; then
-            echo "::error::standalone animus-subject-protocol/src/lib.rs not found at $STANDALONE_SUBJECT_LIB"
-            exit 1
-          fi
-          echo "Resolved standalone subject lib.rs at $STANDALONE_SUBJECT_LIB"
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -86,6 +84,5 @@ jobs:
         working-directory: ao-cli
         env:
           ANIMUS_STANDALONE_PROTOCOL_PATH: ${{ github.workspace }}/animus-protocol/animus-plugin-protocol/src/lib.rs
-          ANIMUS_STANDALONE_SUBJECT_PATH: ${{ github.workspace }}/animus-protocol/animus-subject-protocol/src/lib.rs
         run: |
           cargo test --locked -p orchestrator-plugin-host --test protocol_drift -- --nocapture

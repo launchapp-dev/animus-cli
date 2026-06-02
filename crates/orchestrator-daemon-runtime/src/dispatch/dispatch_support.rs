@@ -220,6 +220,7 @@ mod tests {
             total_agents_spawned: Some(1),
             total_agents_completed: Some(0),
             total_agents_failed: Some(0),
+            flavor: None,
         };
 
         assert_eq!(ready_dispatch_limit(10, &health), 2);

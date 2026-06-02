@@ -721,7 +721,6 @@ workflows:
     assert_eq!(standard.name, "Compiled Standard");
 }
 
-
 fn make_pipeline(id: &str, phases: Vec<WorkflowPhaseEntry>) -> WorkflowDefinition {
     WorkflowDefinition {
         id: id.to_string(),

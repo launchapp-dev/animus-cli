@@ -18,11 +18,11 @@
 use std::sync::Arc;
 
 use animus_control_protocol::types::WorkflowEvent;
+use animus_runtime_shared::workflow_event_emitter::{RuntimeWorkflowEvent, WorkflowEventEmitter};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use tokio::sync::mpsc;
-use workflow_runner_v2::workflow_event_emitter::{RuntimeWorkflowEvent, WorkflowEventEmitter};
 
 const DEFAULT_SUBSCRIBER_BUFFER: usize = 256;
 
@@ -297,7 +297,7 @@ impl WorkflowEventBroadcaster {
     }
 }
 
-/// Adapter that implements [`workflow_runner_v2::WorkflowEventEmitter`] by
+/// Adapter that implements [`animus_runtime_shared::WorkflowEventEmitter`] by
 /// translating each [`RuntimeWorkflowEvent`] into a wire-shape
 /// [`WorkflowEvent`] and fanning it out through a
 /// [`WorkflowEventBroadcaster`]. The daemon constructs one at startup and
@@ -501,8 +501,8 @@ mod tests {
 
     #[tokio::test]
     async fn broadcast_emitter_translates_runtime_phase_failed_to_wire_phase_failed() {
+        use animus_runtime_shared::workflow_event_emitter::{RuntimeWorkflowEvent, RuntimeWorkflowEventKind};
         use chrono::Utc;
-        use workflow_runner_v2::workflow_event_emitter::{RuntimeWorkflowEvent, RuntimeWorkflowEventKind};
 
         let bus = WorkflowEventBroadcaster::new();
         let emitter = BroadcastWorkflowEventEmitter::new(bus.clone());

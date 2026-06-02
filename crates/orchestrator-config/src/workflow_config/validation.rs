@@ -180,7 +180,12 @@ fn validate_claude_profile_selection(
     }
 }
 
-fn validate_skill_references(field_path: &str, skills: &[String], _project_root: Option<&Path>, errors: &mut Vec<String>) {
+fn validate_skill_references(
+    field_path: &str,
+    skills: &[String],
+    _project_root: Option<&Path>,
+    errors: &mut Vec<String>,
+) {
     for skill_name in skills {
         if skill_name.trim().is_empty() {
             errors.push(format!("{field_path} must not contain empty values"));

@@ -90,8 +90,7 @@ root = "skills"
     let path = pack.path().to_string_lossy().into_owned();
 
     harness.run_json_ok(&["pack", "install", "--path", &path])?;
-    let (payload, status) =
-        harness.run_json_err_with_exit(&["pack", "install", "--path", &path])?;
+    let (payload, status) = harness.run_json_err_with_exit(&["pack", "install", "--path", &path])?;
 
     assert_eq!(status, 4, "conflict should exit with code 4");
     assert_error_envelope(&payload, "conflict", 4);

@@ -1,5 +1,7 @@
 use std::collections::HashSet;
 #[cfg(unix)]
+use std::path::Path;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::{Arc, Mutex};
@@ -32,6 +34,8 @@ struct WorkflowProcess {
     #[cfg(unix)]
     #[allow(dead_code)]
     event_pipe: Option<SubprocessEventPipe>,
+    agent_session_id: Option<String>,
+    project_root: Option<std::path::PathBuf>,
 }
 
 pub struct ProcessManager {
@@ -137,8 +141,31 @@ impl ProcessManager {
 
         let std_cmd =
             build_runner_command(dispatch, project_root, self.phase_routing.as_ref(), self.mcp_config.as_ref());
+        let command_line: Vec<String> = std::iter::once(std_cmd.get_program().to_string_lossy().into_owned())
+            .chain(std_cmd.get_args().map(|a| a.to_string_lossy().into_owned()))
+            .collect();
         let mut command = Command::from(std_cmd);
         command.stdout(Stdio::null()).stderr(Stdio::piped());
+
+        // v0.5.1 P2 #6.2: pre-allocate the agent session id BEFORE spawn so
+        // we can wire the reattach-socket path the runner will bind into
+        // the spawn env. Keep the id SHORT (`agent-<8-hex-uuid>`) so the
+        // resulting socket path fits within SUN_LEN (~100 bytes on macOS,
+        // ~108 on Linux) even when scoped state lives under a deep home
+        // path. We carry the dispatch subject id in the spawn record for
+        // human-readable correlation; the on-disk id stays compact.
+        let project_root_path = std::path::Path::new(project_root).to_path_buf();
+        let short_uuid = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
+        let pending_session_id = format!("agent-{short_uuid}");
+        #[cfg(unix)]
+        let reattach_socket_path = reattach_socket_path_for(&project_root_path, &pending_session_id);
+        #[cfg(unix)]
+        if let Some(path) = reattach_socket_path.as_ref() {
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            command.env(animus_runtime_shared::reattach::ANIMUS_WORKFLOW_REATTACH_SOCKET_ENV, path.as_os_str());
+        }
 
         // Bind the subprocess workflow_events back-channel before fork so the
         // env var we set on the child points to a listener that's already
@@ -147,6 +174,25 @@ impl ProcessManager {
         // falls back to its noop emitter.
         #[cfg(unix)]
         let event_pipe = self.bind_event_pipe_for(dispatch, &mut command);
+
+        // v0.5.1 P2 #6.2: put the runner in its own process group so a
+        // SIGTERM/SIGINT delivered to the daemon CLI's terminal foreground
+        // group does not propagate to the runner. Without this an operator
+        // hitting Ctrl-C on `animus daemon run` would also kill every
+        // in-flight workflow runner; with it, the runner keeps streaming
+        // events into `decisions.jsonl` (and its reattach socket) until it
+        // finishes naturally or the next daemon start reattaches.
+        //
+        // `process_group(0)` is the safe equivalent of `setpgid(0,0)` in
+        // `pre_exec`; the workspace-wide `deny(unsafe_code)` lint forbids
+        // the latter so we lean on tokio's safe wrapper. A full `setsid`
+        // (new SESSION, not just new pgid) would also detach from the
+        // controlling terminal — left as a v0.6 hardening item; for the
+        // daemon-restart-survivability gate, the new-pgid is enough.
+        #[cfg(unix)]
+        {
+            command.process_group(0);
+        }
 
         let mut child = command.spawn().context("failed to spawn animus-workflow-runner")?;
 
@@ -171,6 +217,31 @@ impl ProcessManager {
         let workflow_ref = dispatch.workflow_ref.clone();
         let schedule_id = dispatch.schedule_id().map(String::from);
 
+        let pid = child.id();
+        let agent_session_id = pid.map(|pid_value| {
+            let id = pending_session_id.clone();
+            #[cfg(unix)]
+            let socket_for_record = reattach_socket_path.as_ref().map(|p| p.display().to_string());
+            #[cfg(not(unix))]
+            let socket_for_record: Option<String> = None;
+            let record = super::agent_record::build_record(
+                id.clone(),
+                pid_value,
+                dispatch,
+                command_line.clone(),
+                socket_for_record,
+            );
+            if let Err(error) = super::agent_record::write_record(&project_root_path, &record) {
+                tracing::warn!(
+                    target: "animus.runtime.agent_record",
+                    %error,
+                    agent_session_id = %id,
+                    "failed to write agent spawn record (best-effort; v0.6 reattach scaffolding)"
+                );
+            }
+            id
+        });
+
         self.processes.push(WorkflowProcess {
             subject_key: dispatch.subject_key(),
             subject_id: dispatch.subject_id().to_string(),
@@ -184,6 +255,8 @@ impl ProcessManager {
             stderr_reader,
             #[cfg(unix)]
             event_pipe,
+            agent_session_id,
+            project_root: Some(project_root_path),
         });
 
         Ok(())
@@ -268,6 +341,7 @@ impl ProcessManager {
                     // emitted right before timeout-kill is lost.
                     #[cfg(unix)]
                     drain_event_pipe(&mut process.event_pipe).await;
+                    cleanup_agent_record(&process);
                     completed.push(CompletedProcess {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
@@ -290,6 +364,7 @@ impl ProcessManager {
                     Err(error) => {
                         #[cfg(unix)]
                         drain_event_pipe(&mut process.event_pipe).await;
+                        cleanup_agent_record(&process);
                         completed.push(CompletedProcess {
                             subject_id: process.subject_key,
                             subject_kind: Some(process.subject_kind),
@@ -320,6 +395,7 @@ impl ProcessManager {
                     // `workflow_events` batch sitting in the socket buffer.
                     #[cfg(unix)]
                     drain_event_pipe(&mut process.event_pipe).await;
+                    cleanup_agent_record(&process);
                     let exit_code = status.code();
                     let events = parse_runner_events(&process.stderr_lines);
                     let workflow_id = latest_runner_workflow_id(&events);
@@ -348,6 +424,7 @@ impl ProcessManager {
                 Err(error) => {
                     #[cfg(unix)]
                     drain_event_pipe(&mut process.event_pipe).await;
+                    cleanup_agent_record(&process);
                     completed.push(CompletedProcess {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
@@ -378,6 +455,12 @@ impl ProcessManager {
     }
 }
 
+fn cleanup_agent_record(process: &WorkflowProcess) {
+    if let (Some(project_root), Some(id)) = (process.project_root.as_ref(), process.agent_session_id.as_ref()) {
+        super::agent_record::delete_record(project_root, id);
+    }
+}
+
 /// Default per-process directory for per-run event-pipe socket files.
 /// Picked under `$TMPDIR/animus-event-pipes/<pid>/` so the path stays well
 /// under SUN_LEN on macOS / Linux even when the project root is deep, and
@@ -385,6 +468,46 @@ impl ProcessManager {
 #[cfg(unix)]
 fn default_event_pipe_root() -> std::path::PathBuf {
     std::env::temp_dir().join("animus-event-pipes").join(std::process::id().to_string())
+}
+
+/// v0.5.1 P2 #6.2: pick a deterministic, daemon-restart-stable socket path
+/// for the runner's reattach listener. Lives under the scoped state root
+/// when one is available so the orphan scan can discover it by reading the
+/// spawn record alone. Falls back to `$TMPDIR` when scoped state is missing
+/// (tests with no git context); reattach across restarts is unreachable in
+/// that fallback mode but local first-spawn streaming still works.
+///
+/// SUN_LEN (104 on macOS, 108 on Linux) caps the absolute socket path,
+/// so we use a short suffix (`r.sock`) and prefer `$TMPDIR/animus-reattach`
+/// when the canonical path would overflow the limit.
+#[cfg(unix)]
+fn reattach_socket_path_for(project_root: &Path, agent_session_id: &str) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    // macOS SUN_LEN is 104; subtract one NUL byte. Linux SUN_LEN is 108.
+    // Pick the tighter (macOS) limit so paths that fit on macOS also work
+    // on Linux. The kernel rejects bind() above this without a useful
+    // error so we proactively switch to the fallback tmpdir-based path.
+    const MAX_UNIX_SOCKET_PATH_BYTES: usize = 103;
+    let scoped_path = protocol::scoped_state_root(project_root)
+        .map(|root| root.join("runs").join("_pending").join("agents").join(format!("{agent_session_id}.r.sock")));
+    if let Some(path) = scoped_path.as_ref() {
+        if path.as_os_str().as_bytes().len() <= MAX_UNIX_SOCKET_PATH_BYTES {
+            return Some(path.clone());
+        }
+    }
+    let fallback = std::env::temp_dir()
+        .join("animus-reattach")
+        .join(std::process::id().to_string())
+        .join(format!("{agent_session_id}.r.sock"));
+    if fallback.as_os_str().as_bytes().len() <= MAX_UNIX_SOCKET_PATH_BYTES {
+        Some(fallback)
+    } else {
+        // Path too long even for the fallback location; skip the reattach
+        // socket entirely rather than handing the runner a path it cannot
+        // bind. First-spawn streaming via the legacy event pipe still
+        // works because its root selection already handles SUN_LEN.
+        None
+    }
 }
 
 async fn drain_stderr_reader(handle: &mut Option<JoinHandle<()>>) {
@@ -428,6 +551,7 @@ mod tests {
     #![allow(clippy::await_holding_lock)]
 
     use super::*;
+    use protocol::SubjectDispatchExt;
     use std::env;
     use std::fs;
     use std::sync::Mutex;
@@ -493,6 +617,63 @@ mod tests {
         let expected = crate::quotas::runtime_quotas().workflow_concurrency_max;
         assert_eq!(cap, expected, "ProcessManager cap must match the live RuntimeQuotas value");
         assert!(cap > 0, "default workflow concurrency must be > 0; got {cap}");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_workflow_runner_persists_reattach_socket_path_in_record() {
+        // v0.5.1 P2 #6.2 round-3: after spawn, the AgentSpawnRecord written
+        // under `runs/_pending/agents/<id>.json` must carry a non-None
+        // `stdio_socket_path` so the next daemon start's orphan-scan +
+        // reattach pass can find the runner's reattach listener.
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let temp_dir = TempDir::new().expect("temp directory");
+        let runner_path = temp_dir.path().join("animus-workflow-runner");
+        // Sleep long enough that the record is on disk before check_running drains it.
+        let runner_payload = "#!/bin/sh\nsleep 3\nexit 0\n";
+        fs::write(&runner_path, runner_payload).expect("write runner");
+        let mut permissions = fs::metadata(&runner_path).expect("meta").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&runner_path, permissions).expect("perm");
+
+        let runner_override = runner_path.to_string_lossy();
+        let _runner_guard = EnvVarGuard::set("ANIMUS_WORKFLOW_RUNNER_BIN", Some(runner_override.as_ref()));
+
+        // Use the temp dir as the project root so the spawn record lands
+        // under a path we can inspect.
+        let mut manager = ProcessManager::new();
+        let dispatch = SubjectDispatch::for_task("TASK-REATTACH", "standard");
+        manager
+            .spawn_workflow_runner(&dispatch, temp_dir.path().to_string_lossy().as_ref())
+            .expect("spawn must succeed");
+
+        // Find the just-written record.
+        let agents_dir = protocol::scoped_state_root(temp_dir.path())
+            .map(|scope| scope.join("runs").join("_pending").join("agents"));
+        let dir = agents_dir.expect("scoped state root must resolve under test home");
+        // Records appear under either the scoped root or, in degraded test
+        // homes, may not exist if pid was None. Either is acceptable, but
+        // when the record is present `stdio_socket_path` must be Some.
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().and_then(|s| s.to_str()) != Some("json") {
+                    continue;
+                }
+                let raw = std::fs::read_to_string(&path).expect("read record");
+                let record: crate::dispatch::agent_record::AgentSpawnRecord =
+                    serde_json::from_str(&raw).expect("parse record");
+                assert!(
+                    record.stdio_socket_path.is_some(),
+                    "spawn record must carry the reattach socket path so v0.5.1 reattach can find the runner (record: {raw})"
+                );
+                let socket = record.stdio_socket_path.unwrap();
+                assert!(socket.ends_with(".r.sock"), "socket path must use the .r.sock suffix; got {socket}");
+            }
+        }
+
+        let _ = manager.check_running().await;
     }
 
     #[tokio::test]

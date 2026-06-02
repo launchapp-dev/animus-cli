@@ -119,4 +119,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SubjectCommand,
     },
+    /// Inspect or install Animus flavor manifests (`flavors/<name>.toml`).
+    Flavor {
+        #[command(subcommand)]
+        command: FlavorCommand,
+    },
 }

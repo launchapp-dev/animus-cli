@@ -124,8 +124,8 @@ fn normalize_key(s: &str) -> String {
         let next = chars.get(i + 1).copied();
         if c.is_ascii_uppercase() {
             let after_lower_or_digit = matches!(prev, Some(p) if p.is_ascii_lowercase() || p.is_ascii_digit());
-            let acronym_to_word = matches!(prev, Some(p) if p.is_ascii_uppercase())
-                && matches!(next, Some(n) if n.is_ascii_lowercase());
+            let acronym_to_word =
+                matches!(prev, Some(p) if p.is_ascii_uppercase()) && matches!(next, Some(n) if n.is_ascii_lowercase());
             if (after_lower_or_digit || acronym_to_word) && !out.ends_with('_') {
                 out.push('_');
             }
@@ -139,19 +139,12 @@ fn normalize_key(s: &str) -> String {
 fn secret_keys() -> &'static Vec<String> {
     static KEYS: OnceLock<Vec<String>> = OnceLock::new();
     KEYS.get_or_init(|| {
-        let from_env = std::env::var(REDACT_KEYS_ENV).ok().map(|raw| {
-            raw.split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(normalize_key)
-                .collect::<Vec<_>>()
-        });
+        let from_env = std::env::var(REDACT_KEYS_ENV)
+            .ok()
+            .map(|raw| raw.split(',').map(str::trim).filter(|s| !s.is_empty()).map(normalize_key).collect::<Vec<_>>());
         match from_env {
             Some(list) if !list.is_empty() => list,
-            _ => DEFAULT_SECRET_KEYS
-                .iter()
-                .map(|s| normalize_key(s))
-                .collect(),
+            _ => DEFAULT_SECRET_KEYS.iter().map(|s| normalize_key(s)).collect(),
         }
     })
 }
@@ -180,9 +173,7 @@ fn matches_at_word_boundary(haystack: &str, needle: &str) -> bool {
 /// field whose value must be redacted regardless of content.
 fn is_secret_key(key: &str) -> bool {
     let norm = normalize_key(key);
-    secret_keys()
-        .iter()
-        .any(|needle| matches_at_word_boundary(&norm, needle))
+    secret_keys().iter().any(|needle| matches_at_word_boundary(&norm, needle))
 }
 
 /// Internal helper: check key against an explicit needle list. Used by
@@ -192,9 +183,7 @@ fn is_secret_key(key: &str) -> bool {
 #[cfg(test)]
 fn is_secret_key_with(key: &str, needles: &[String]) -> bool {
     let norm = normalize_key(key);
-    needles
-        .iter()
-        .any(|needle| matches_at_word_boundary(&norm, needle))
+    needles.iter().any(|needle| matches_at_word_boundary(&norm, needle))
 }
 
 #[cfg(test)]
@@ -411,11 +400,7 @@ mod tests {
         e.meta = Some(json!({ "safe": { "password": "hunter2" } }));
         redact_log_entry(&mut e);
         let meta = e.meta.as_ref().unwrap();
-        let val = meta
-            .get("safe")
-            .and_then(|v| v.get("password"))
-            .and_then(|v| v.as_str())
-            .unwrap();
+        let val = meta.get("safe").and_then(|v| v.get("password")).and_then(|v| v.as_str()).unwrap();
         assert_eq!(val, REDACTED_PLACEHOLDER);
         assert!(!serde_json::to_string(meta).unwrap().contains("hunter2"));
     }
@@ -437,28 +422,12 @@ mod tests {
         }));
         redact_log_entry(&mut e);
         let meta = e.meta.as_ref().unwrap();
-        for key in [
-            "privateKey",
-            "signingKey",
-            "accessToken",
-            "apiKey",
-            "secretKey",
-            "bearerToken",
-        ] {
-            let val = meta.get(key).and_then(|v| v.as_str()).unwrap_or_else(|| {
-                panic!("missing key {key} in {meta:?}")
-            });
+        for key in ["privateKey", "signingKey", "accessToken", "apiKey", "secretKey", "bearerToken"] {
+            let val = meta.get(key).and_then(|v| v.as_str()).unwrap_or_else(|| panic!("missing key {key} in {meta:?}"));
             assert_eq!(val, REDACTED_PLACEHOLDER, "camelCase key {key} not redacted");
         }
         let dumped = serde_json::to_string(meta).unwrap();
-        for leak in [
-            "BEGIN PRIVATE KEY",
-            "sig-abc",
-            "tok-xyz",
-            "ak-123",
-            "sk-deadbeef",
-            "bt-xyz",
-        ] {
+        for leak in ["BEGIN PRIVATE KEY", "sig-abc", "tok-xyz", "ak-123", "sk-deadbeef", "bt-xyz"] {
             assert!(!dumped.contains(leak), "leak {leak} in {dumped}");
         }
     }
@@ -474,9 +443,7 @@ mod tests {
         redact_log_entry(&mut e);
         let meta = e.meta.as_ref().unwrap();
         for key in ["X-API-Key", "access-token", "Authorization"] {
-            let val = meta.get(key).and_then(|v| v.as_str()).unwrap_or_else(|| {
-                panic!("missing key {key} in {meta:?}")
-            });
+            let val = meta.get(key).and_then(|v| v.as_str()).unwrap_or_else(|| panic!("missing key {key} in {meta:?}"));
             assert_eq!(val, REDACTED_PLACEHOLDER, "key {key} not redacted");
         }
         let dumped = serde_json::to_string(meta).unwrap();
@@ -514,11 +481,7 @@ mod tests {
         }));
         let before = e.meta.clone();
         redact_log_entry(&mut e);
-        assert_eq!(
-            e.meta, before,
-            "token-count observability fields must NOT be redacted: {:?}",
-            e.meta
-        );
+        assert_eq!(e.meta, before, "token-count observability fields must NOT be redacted: {:?}", e.meta);
     }
 
     #[test]
@@ -555,17 +518,11 @@ mod tests {
             "api_key": "kept-because-override-replaces-defaults",
         });
         redact_json_value_with(&mut value, &needles);
-        assert_eq!(
-            value.get("custom_field").and_then(|v| v.as_str()).unwrap(),
-            REDACTED_PLACEHOLDER
-        );
+        assert_eq!(value.get("custom_field").and_then(|v| v.as_str()).unwrap(), REDACTED_PLACEHOLDER);
         // Override replaces defaults — api_key is no longer in the
         // secret-key list, so its value is processed by the content
         // regex path only (which doesn't match the bare value).
-        assert_eq!(
-            value.get("api_key").and_then(|v| v.as_str()).unwrap(),
-            "kept-because-override-replaces-defaults"
-        );
+        assert_eq!(value.get("api_key").and_then(|v| v.as_str()).unwrap(), "kept-because-override-replaces-defaults");
     }
 
     #[test]
@@ -597,13 +554,8 @@ mod tests {
         redact_log_entry(&mut e);
         let meta = e.meta.as_ref().unwrap();
         for key in ["APIToken", "APISecret", "XApiKey"] {
-            let val = meta.get(key).and_then(|v| v.as_str()).unwrap_or_else(|| {
-                panic!("missing key {key} in {meta:?}")
-            });
-            assert_eq!(
-                val, REDACTED_PLACEHOLDER,
-                "acronym-prefixed key {key} not redacted"
-            );
+            let val = meta.get(key).and_then(|v| v.as_str()).unwrap_or_else(|| panic!("missing key {key} in {meta:?}"));
+            assert_eq!(val, REDACTED_PLACEHOLDER, "acronym-prefixed key {key} not redacted");
         }
         let dumped = serde_json::to_string(meta).unwrap();
         for leak in ["tok-acr", "sec-acr", "xk-acr"] {

@@ -4,7 +4,7 @@ use croner::parser::{CronParser, Seconds, Year};
 use tracing::warn;
 
 use super::ScheduleDispatchOutcome;
-use crate::SubjectDispatch;
+use crate::{SubjectDispatch, SubjectDispatchExt};
 
 pub struct ScheduleDispatch;
 

@@ -16,19 +16,20 @@ COPY .cargo .cargo
 COPY crates crates
 
 # Build daemon binaries with optimized release profile
-# Uses workspace settings: strip=true, lto=thin, codegen-units=1, opt-level=z
+# Uses workspace settings: strip=true, lto=thin, codegen-units=1, opt-level=z.
+# As of the v0.5.1 round-4 fold-in the in-tree workflow runner binary was
+# deleted; the daemon scheduler now spawns `animus-workflow-runner-default`
+# from the installed plugin. The image installs that plugin in stage 2.
 RUN cargo build --release --locked \
     -p orchestrator-cli \
     -p agent-runner \
-    -p oai-runner \
-    -p workflow-runner-v2
+    -p oai-runner
 
 # Verify binaries exist
 RUN ls -lh \
     target/release/animus \
     target/release/agent-runner \
-    target/release/animus-oai-runner \
-    target/release/animus-workflow-runner
+    target/release/animus-oai-runner
 
 # ── Stage 2: Minimal runtime image ──────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -65,14 +66,15 @@ RUN mkdir -p /root/.animus /root/.animus/plugins
 COPY --from=builder /src/target/release/animus /usr/local/bin/animus
 COPY --from=builder /src/target/release/agent-runner /usr/local/bin/agent-runner
 COPY --from=builder /src/target/release/animus-oai-runner /usr/local/bin/animus-oai-runner
-COPY --from=builder /src/target/release/animus-workflow-runner /usr/local/bin/animus-workflow-runner
 
-# Back-compat symlink: v0.4.x daemons spawned `ao-workflow-runner`. The
-# v0.4.16+ daemon prefers `animus-workflow-runner` but the resolver still
-# probes the legacy name. Keep the symlink in the image so an inadvertent
-# downgrade (older daemon image + newer plugins) keeps working until the
-# image is rebuilt against the latest release.
-RUN ln -s animus-workflow-runner /usr/local/bin/ao-workflow-runner
+# Install the workflow runner plugin. As of v0.5.1 round-4 fold-in this
+# binary is the out-of-tree `animus-workflow-runner-default` plugin and
+# the daemon's `resolve_workflow_runner_binary` looks for it in
+# `~/.animus/plugins/`. The image MUST ship this plugin — without it the
+# daemon's preflight refuses to start. Fail the image build hard so a
+# transient release-download error never produces a broken image.
+RUN animus plugin install launchapp-dev/animus-workflow-runner-default --yes \
+    && test -x /root/.animus/plugins/animus-workflow-runner-default
 
 # Create working directory
 WORKDIR /workspace

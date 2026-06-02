@@ -284,7 +284,7 @@ pub fn install_workflow_runner_metrics_bridge() {
     fn observer(name: &str, labels: &[(&str, &str)], duration: Duration) {
         observe_labeled(name, labels, duration);
     }
-    let _ = workflow_runner_v2::metrics_hook::install_histogram_observer(observer);
+    let _ = animus_runtime_shared::metrics_hook::install_histogram_observer(observer);
 }
 
 /// Build a label-formatted metric key, e.g.

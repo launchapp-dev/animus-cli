@@ -17,6 +17,7 @@ use orchestrator_core::{
     ListPageRequest, OrchestratorTask, WorkflowEvent, WorkflowFilter, WorkflowQuery, WorkflowResumeManager,
     WorkflowRunInput, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
 };
+use protocol::SubjectDispatchExt;
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -841,7 +842,6 @@ fn parse_wire_workflow_status(raw: &str) -> Result<Option<animus_control_protoco
     };
     Ok(Some(value))
 }
-
 
 #[cfg(test)]
 mod tests {

@@ -203,6 +203,106 @@ impl DefaultDaemonRunHost {
                     }))
                     .emit();
             }
+            DaemonRunEvent::OrphanAgentScan {
+                detected_count,
+                cleaned_count,
+                unparseable_count,
+                unix_scan_supported,
+                ..
+            } => {
+                if !unix_scan_supported {
+                    self.logger
+                        .warn("reconciliation", "orphan agent scan skipped (not implemented on this platform)")
+                        .emit();
+                } else {
+                    let summary = format!(
+                        "orphan agent scan: detected={detected_count} cleaned={cleaned_count} unparseable={unparseable_count}"
+                    );
+                    self.logger
+                        .info("reconciliation", summary)
+                        .meta(json!({
+                            "detected_count": detected_count,
+                            "cleaned_count": cleaned_count,
+                            "unparseable_count": unparseable_count,
+                        }))
+                        .emit();
+                }
+            }
+            DaemonRunEvent::OrphanAgentDetected {
+                agent_session_id,
+                pid,
+                subject_id,
+                subject_kind,
+                workflow_ref,
+                task_id,
+                command_line,
+                started_at,
+                record_path,
+                ..
+            } => {
+                self.logger
+                    .warn("reconciliation", format!("orphan agent detected: session={agent_session_id} pid={pid}"))
+                    .meta(json!({
+                        "kind": "orphan_agent_detected",
+                        "agent_session_id": agent_session_id,
+                        "pid": pid,
+                        "subject_id": subject_id,
+                        "subject_kind": subject_kind,
+                        "workflow_ref": workflow_ref,
+                        "task_id": task_id,
+                        "command_line": command_line,
+                        "started_at": started_at,
+                        "record_path": record_path,
+                    }))
+                    .emit();
+            }
+            DaemonRunEvent::OrphanAgentCleanup { agent_session_id, pid, record_path, .. } => {
+                self.logger
+                    .info("reconciliation", format!("orphan agent cleanup: session={agent_session_id} pid={pid}"))
+                    .meta(json!({
+                        "kind": "orphan_agent_cleanup",
+                        "agent_session_id": agent_session_id,
+                        "pid": pid,
+                        "record_path": record_path,
+                    }))
+                    .emit();
+            }
+            DaemonRunEvent::OrphanAgentRecordUnparseable { record_path, error, .. } => {
+                self.logger
+                    .warn("reconciliation", format!("orphan agent record unparseable: {record_path}"))
+                    .meta(json!({
+                        "kind": "orphan_agent_record_unparseable",
+                        "record_path": record_path,
+                        "error": error,
+                    }))
+                    .emit();
+            }
+            DaemonRunEvent::OrphanAgentReattached { agent_session_id, pid, socket_path, .. } => {
+                self.logger
+                    .info("reconciliation", format!("orphan agent reattached: session={agent_session_id} pid={pid}"))
+                    .meta(json!({
+                        "kind": "orphan_agent_reattached",
+                        "agent_session_id": agent_session_id,
+                        "pid": pid,
+                        "socket_path": socket_path,
+                    }))
+                    .emit();
+            }
+            DaemonRunEvent::OrphanAgentReattachFailed { agent_session_id, pid, socket_path, error, .. } => {
+                self.logger
+                    .warn(
+                        "reconciliation",
+                        format!("orphan agent reattach failed: session={agent_session_id} pid={pid}"),
+                    )
+                    .meta(json!({
+                        "kind": "orphan_agent_reattach_failed",
+                        "agent_session_id": agent_session_id,
+                        "pid": pid,
+                        "socket_path": socket_path,
+                        "error": error,
+                    }))
+                    .emit();
+            }
         }
     }
 
@@ -558,6 +658,89 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
                     "auto_install": auto_install,
                 }),
             ),
+            DaemonRunEvent::OrphanAgentScan {
+                project_root,
+                detected_count,
+                cleaned_count,
+                unparseable_count,
+                unix_scan_supported,
+            } => self.emit_daemon_event_with_notifications(
+                "orphan-agent-scan",
+                Some(project_root),
+                json!({
+                    "detected_count": detected_count,
+                    "cleaned_count": cleaned_count,
+                    "unparseable_count": unparseable_count,
+                    "unix_scan_supported": unix_scan_supported,
+                }),
+            ),
+            DaemonRunEvent::OrphanAgentDetected {
+                project_root,
+                agent_session_id,
+                pid,
+                subject_id,
+                subject_kind,
+                workflow_ref,
+                task_id,
+                command_line,
+                started_at,
+                record_path,
+            } => self.emit_daemon_event_with_notifications(
+                "orphan-agent-detected",
+                Some(project_root),
+                json!({
+                    "agent_session_id": agent_session_id,
+                    "pid": pid,
+                    "subject_id": subject_id,
+                    "subject_kind": subject_kind,
+                    "workflow_ref": workflow_ref,
+                    "task_id": task_id,
+                    "command_line": command_line,
+                    "started_at": started_at,
+                    "record_path": record_path,
+                }),
+            ),
+            DaemonRunEvent::OrphanAgentCleanup { project_root, agent_session_id, pid, record_path } => self
+                .emit_daemon_event_with_notifications(
+                    "orphan-agent-cleanup",
+                    Some(project_root),
+                    json!({
+                        "agent_session_id": agent_session_id,
+                        "pid": pid,
+                        "record_path": record_path,
+                    }),
+                ),
+            DaemonRunEvent::OrphanAgentRecordUnparseable { project_root, record_path, error } => self
+                .emit_daemon_event_with_notifications(
+                    "orphan-agent-record-unparseable",
+                    Some(project_root),
+                    json!({
+                        "record_path": record_path,
+                        "error": error,
+                    }),
+                ),
+            DaemonRunEvent::OrphanAgentReattached { project_root, agent_session_id, pid, socket_path } => self
+                .emit_daemon_event_with_notifications(
+                    "orphan-agent-reattached",
+                    Some(project_root),
+                    json!({
+                        "agent_session_id": agent_session_id,
+                        "pid": pid,
+                        "socket_path": socket_path,
+                    }),
+                ),
+            DaemonRunEvent::OrphanAgentReattachFailed { project_root, agent_session_id, pid, socket_path, error } => {
+                self.emit_daemon_event_with_notifications(
+                    "orphan-agent-reattach-failed",
+                    Some(project_root),
+                    json!({
+                        "agent_session_id": agent_session_id,
+                        "pid": pid,
+                        "socket_path": socket_path,
+                        "error": error,
+                    }),
+                )
+            }
         }
     }
 

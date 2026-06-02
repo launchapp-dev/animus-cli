@@ -1,12 +1,12 @@
 # Installation
 
-Current workspace CLI version: **v0.4.19**. See [CHANGELOG.md](../../CHANGELOG.md)
+Current workspace CLI version: **v0.4.20**. See [CHANGELOG.md](../../CHANGELOG.md)
 for release notes and
 [`docs/migration/v0.4.11-to-v0.4.12.md`](../migration/v0.4.11-to-v0.4.12.md)
 if you are upgrading from an earlier v0.4.x.
 
 > **Since v0.4.12, the first-run flow is plugin-first.** The daemon no longer ships with
-> bundled providers or subject backends. After installing the `animus`
+> bundled providers, workflow runners, queues, or subject backends. After installing the `animus`
 > binary you must run `animus plugin install-defaults --include-subjects --include-transports`
 > once before `animus daemon start` will boot. The command is idempotent and
 > the plugins live in `~/.animus/plugins/` (shared across projects).
@@ -24,7 +24,7 @@ Options:
 
 ```bash
 # Install a specific release
-ANIMUS_VERSION=v0.4.19 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
+ANIMUS_VERSION=v0.4.20 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 
 # Install into a custom directory
 ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
@@ -49,7 +49,11 @@ Download the archive for your platform, extract it, and place these binaries on 
 - `animus`
 - `agent-runner`
 - `animus-oai-runner`
-- `animus-workflow-runner` (v0.4.16+ name; the v0.4.x `ao-workflow-runner` is created as a back-compat symlink by `scripts/install.sh`)
+
+Current release archives do **not** bundle a workflow-runner executable. The
+daemon's workflow phase execution binary now comes from the external
+`launchapp-dev/animus-workflow-runner-default` plugin, installed via
+`animus plugin install-defaults` or `animus plugin install ...`.
 
 (The v0.4.11 `llm-cli-wrapper` binary was removed in v0.4.12 — the crate
 was deleted and its functionality folded into `agent-runner` and the
@@ -115,6 +119,8 @@ This installs the curated defaults from
 `crates/orchestrator-core/src/plugin_registry.rs`:
 
 - 5 providers (`animus-provider-claude`, `animus-provider-codex`, `animus-provider-gemini`, `animus-provider-opencode`, `animus-provider-oai`) — daemon requires at least one
+- 1 workflow runner (`animus-workflow-runner-default`) — daemon preflight requires it
+- 1 queue plugin (`animus-queue-default`) — daemon preflight requires it
 - 5 subject backends (`animus-subject-default`, `animus-subject-requirements`, `animus-subject-linear`, `animus-subject-sqlite`, `animus-subject-markdown`) — daemon requires `default` for `kind=task` and `requirements` for `kind=requirement`
 - 3 transport + UI plugins (`animus-transport-http`, `animus-transport-graphql`, `animus-web-ui`) — required for `animus web serve`
 
@@ -137,6 +143,10 @@ animus plugin install launchapp-dev/animus-subject-requirements
 animus plugin install launchapp-dev/animus-subject-linear
 animus plugin install launchapp-dev/animus-subject-sqlite
 animus plugin install launchapp-dev/animus-subject-markdown
+
+# Workflow runner + queue (required by daemon preflight)
+animus plugin install launchapp-dev/animus-workflow-runner-default
+animus plugin install launchapp-dev/animus-queue-default
 
 # Transport + web UI (required for `animus web serve`)
 animus plugin install launchapp-dev/animus-transport-http

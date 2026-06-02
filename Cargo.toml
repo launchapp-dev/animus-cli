@@ -3,7 +3,6 @@ members = [
   "crates/agent-runner",
   "crates/animus-plugin-protocol",
   "crates/animus-plugin-runtime",
-  "crates/animus-subject-protocol",
   "crates/protocol",
   "crates/orchestrator-daemon-runtime",
   "crates/orchestrator-notifications",
@@ -15,7 +14,7 @@ members = [
   "crates/orchestrator-store",
   "crates/orchestrator-cli",
   "crates/oai-runner",
-  "crates/workflow-runner-v2",
+  "crates/animus-runtime-shared",
   "crates/orchestrator-providers",
   "crates/orchestrator-session-host",
 ]
@@ -38,7 +37,7 @@ categories = ["command-line-utilities", "development-tools"]
 animus-plugin-protocol = { path = "crates/animus-plugin-protocol" }
 animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
 animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
-animus-subject-protocol = { path = "crates/animus-subject-protocol" }
+animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.0" }
 protocol = { path = "crates/protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-notifications = { path = "crates/orchestrator-notifications" }
@@ -50,6 +49,11 @@ orchestrator-core = { path = "crates/orchestrator-core" }
 orchestrator-providers = { path = "crates/orchestrator-providers" }
 orchestrator-session-host = { path = "crates/orchestrator-session-host" }
 orchestrator-store = { path = "crates/orchestrator-store" }
+# v0.5.1 round-5 fold-in: the in-tree `workflow-runner-v2` lib was deleted
+# in favour of `animus-runtime-shared`. The crate is also published as
+# `launchapp-dev/animus-runtime-shared` v0.1.0 for the plugin to consume;
+# inside this workspace it lives vendored under `crates/animus-runtime-shared`.
+animus-runtime-shared = { path = "crates/animus-runtime-shared" }
 croner = "3.0.1"
 
 [profile.release]
@@ -57,6 +61,7 @@ strip = true
 lto = "thin"
 codegen-units = 1
 opt-level = "z"
+
 
 [workspace.lints.rust]
 unsafe_code = "deny"

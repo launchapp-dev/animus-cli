@@ -235,8 +235,7 @@ Plus an integration test that:
 ```
 crates/orchestrator-daemon-runtime/src/queue/
 ├── mod.rs                          # public surface
-├── queue_service.rs                # main queue operations (enqueue/list/hold/release/etc.)
-├── dispatch_queue_store.rs         # file-locked persistence
+├── dispatch_queue_store.rs         # file-locked persistence + queue mutation helpers
 └── dispatch_queue_state.rs         # in-memory state types
 
 # Plus from src/dispatch/ — needed for the headroom/throttling reference:
@@ -321,12 +320,12 @@ async fn main() -> anyhow::Result<()> {
 
 ### Tests to port
 
-From `crates/orchestrator-daemon-runtime/src/queue/queue_service.rs` (the `#[cfg(test)] mod tests`):
-- `enqueue_subject_dispatch_is_idempotent_for_same_task_pipeline`
-- `hold_release_and_reorder_use_subject_ids`
-- `enqueue_subject_dispatch_accepts_non_task_subjects`
-- `reorder_subjects_keeps_all_entries_for_same_subject`
-- `generic_subjects_use_kind_qualified_queue_ids`
+Port the equivalent queue behavior coverage from the current in-tree queue implementation:
+- idempotent enqueue for the same task pipeline
+- hold / release / reorder behavior for subject-backed entries
+- non-task subject enqueue support
+- reorder behavior that preserves all entries for a shared subject
+- kind-qualified queue identifiers for generic subjects
 
 These use `tempdir` fixtures and are portable directly. Test harness adjustments:
 1. Replace `QueueService::new(state_path)` with `QueueBackend::new(state_path)` (or whatever the new internal name is).

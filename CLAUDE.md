@@ -25,7 +25,7 @@ architecture, command counts, routes, or state paths:
 
 Animus is a Rust-only agent orchestrator with:
 
-- a Cargo workspace with 18 current members under `crates/`, as defined in `Cargo.toml`
+- the current Cargo workspace members under `crates/`, as defined in `Cargo.toml`
 - the CLI binary named `animus`
 - a visible CLI surface that includes `project` and `queue`
 - scoped runtime state under `~/.animus/<repo-scope>/`
@@ -33,12 +33,12 @@ Animus is a Rust-only agent orchestrator with:
 - the web UI now ships as the standalone `launchapp-dev/animus-web-ui` plugin (paired with `animus-transport-http` + `animus-transport-graphql`); the old in-tree web stack is no longer part of the current Cargo workspace
 - a stdio plugin host (`orchestrator-plugin-host`) for subject, provider, transport, and trigger plugins, plus a typed `HostError::ConnectionLost` + `classify(&HostError) -> RetryDecision` API for supervised restart decisions
 - a daemon-side workflow event broadcaster that emits `phase_started` / `phase_completed` / `workflow_completed` / `workflow_failed` on the `workflow/events` ControlClient subscription (animus-protocol v0.1.10)
-- the v0.4.x plugin extraction **complete**: 18 standalone repositories live at <https://github.com/launchapp-dev> covering protocol, providers (claude / codex / gemini / opencode / oai), subject backends (default / requirements / linear / sqlite / markdown), transports (http / graphql), web UI, triggers (webhook / slack), log storage, the conformance testkit, the release-automation scripts, and the plugin template. Only `animus-provider-mock` and `animus-plugin-smoke` remain in-tree, as test fixtures.
+- the v0.4.x plugin extraction **complete**: 18 standalone repositories live at <https://github.com/launchapp-dev> covering protocol, providers (claude / codex / gemini / opencode / oai), subject backends (default / requirements / linear / sqlite / markdown), transports (http / graphql), web UI, triggers (webhook / slack), log storage, the conformance testkit, the release-automation scripts, and the plugin template.
 - the v0.4.x **pack** extraction is complete: `animus.core-skills`, `animus.task`, `animus.requirement`, and `animus.review` live as `launchapp-dev/animus-pack-{core-skills,task,requirement,review}` with v0.1.0/v0.1.1 GitHub releases. The in-tree `crates/orchestrator-config/config/bundled-packs/` directory, `pack_config/bundled.rs`, `BUILTIN_SKILL_YAMLS`, and the matching workflow-ref constants in `phase_plan.rs` were all removed. `animus init` no longer auto-materializes any pack; it surfaces the recommended pack list via `recommended_install` (read from `crates/orchestrator-cli/config/default-install.json`).
 
 Do not reintroduce stale claims such as:
 
-- stale workspace-count summaries that do not match `Cargo.toml`'s current 18 members
+- stale workspace-count summaries that do not match `Cargo.toml`'s current 17 members
 - "plugin extraction in flux" or "in progress" framing — extraction is complete as of v0.4.12
 - `PROJECT_ROOT` or "last-project-root registry" resolution rules
 - removed crates like `llm-mcp-server`, `llm-cli-wrapper`, `orchestrator-web-api`, `orchestrator-web-contracts`, or in-tree `animus-provider-{claude,codex,gemini,opencode,oai}`. `orchestrator-web-server` still exists in-repo but is not a current workspace member
@@ -60,7 +60,6 @@ Runtime and provider layer:
 
 - `crates/agent-runner`
 - `crates/oai-runner`
-- `crates/workflow-runner-v2`
 - `crates/orchestrator-daemon-runtime`
 - `crates/orchestrator-providers`
 - `crates/orchestrator-git-ops`
@@ -73,12 +72,9 @@ Plugin host + protocol:
 - `crates/orchestrator-plugin-host`
 - `crates/animus-plugin-protocol`
 - `crates/animus-plugin-runtime`
-- `crates/animus-subject-protocol`
 
 Repo-local fixtures / legacy dirs (not current workspace members):
 
-- `crates/animus-plugin-smoke`
-- `crates/animus-provider-mock`
 - `crates/orchestrator-web-server`
 
 Web surface ships out-of-tree as the `launchapp-dev/animus-web-ui` plugin together
@@ -128,7 +124,7 @@ but write new features against the scoped runtime root.
 - Everything is `animus`. New MCP tools are named `animus.<group>.<verb>`, env vars are `ANIMUS_*`, state paths are `.animus/` or `~/.animus/<repo-scope>/`, pack ids are `animus.*`. The CLI is invoked via `animus`. The legacy `ao.*` surfaces were dropped in v0.4.0 (no aliases). See [docs/architecture/naming-contract.md](docs/architecture/naming-contract.md).
 - Workflow YAML supports `${VAR}` env-var interpolation for non-secret config (URLs, team IDs, feature flags), with `${VAR:-default}` and `${VAR:?error}` fallback shapes; substitution happens before YAML parsing, and unset required vars fail with file path + line number. API keys and other credentials do NOT belong in workflow YAML — each plugin reads its own secrets from the daemon's process environment (e.g. `LINEAR_API_TOKEN`, `OPENAI_API_KEY`). See `docs/reference/configuration.md#workflow-yaml-interpolation-non-secret-config`.
 - Plugin kill-switches: `ANIMUS_DAEMON_DISABLE_TRIGGERS=1` skips the trigger plugin supervisor on daemon start (and interrupts in-progress restart backoff); `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` skips subject plugin discovery entirely. `ANIMUS_PROVIDER_DISABLE_PLUGIN` was removed in v0.4.12 — there is no in-tree provider fallback anymore; `SessionBackendResolver` now hard-errors with an actionable install command when a requested provider plugin is missing. The legacy `ANIMUS_DAEMON_DISABLE_BUILTIN_TASK_ADAPTER` and `ANIMUS_DAEMON_DISABLE_BUILTIN_REQUIREMENTS_ADAPTER` env vars are also no-ops as of v0.4.12 — the in-tree adapters were deleted. Both active kill-switches require a daemon restart to take effect. Documented in `docs/reference/configuration.md#plugin-kill-switches`.
-- Plugin preflight: as of v0.4.12 the daemon refuses to start when required-role plugins are missing. Use `animus plugin install-defaults` ahead of time or pass `animus daemon start --auto-install` to install recommended defaults on the fly. `--skip-preflight` is the dev escape hatch. Run `animus daemon preflight` for a standalone report.
+- Plugin preflight: as of v0.4.12 the daemon refuses to start when required-role plugins are missing. As of the v0.5 P2 Wave C fold-in, `workflow_runner` and `queue` join the required-role set alongside `at_least_one_provider`, `subject_kind:task`, and `subject_kind:requirement`. The v0.5 reference impls are `launchapp-dev/animus-workflow-runner-default` (v0.4.0+) and `launchapp-dev/animus-queue-default` (v0.2.0+). Use `animus plugin install-defaults` ahead of time or pass `animus daemon start --auto-install` to install recommended defaults on the fly. `--skip-preflight` is the dev escape hatch (no in-tree fallback runs in production; the daemon will fail at the first plugin RPC if the plugin really is missing). Run `animus daemon preflight` for a standalone report. The in-tree workflow runner BINARY was deleted in the v0.5.1 round-4 fold-in and the `workflow-runner-v2` LIB CRATE was deleted in the v0.5.1 round-5 fold-in — its modules now live out-of-tree as `launchapp-dev/animus-runtime-shared` v0.1.0 (path-deped locally until that repo is published). The daemon scheduler resolves the workflow_runner binary via kind-based plugin discovery (`orchestrator_plugin_host::discover_by_kind("workflow_runner")`) with binary-name fallback for back-compat.
 - Prefer narrow verification over full-workspace rebuilds while iterating.
 
 ## Implementation Landmarks
@@ -151,7 +147,6 @@ Workflow and runtime config:
 
 - `crates/orchestrator-config/src/workflow_config/`
 - `crates/orchestrator-config/src/agent_runtime_config.rs`
-- `crates/workflow-runner-v2/src/`
 
 Plugin host + preflight:
 
@@ -172,7 +167,7 @@ Visible top-level command groups currently include:
 - `agent`, `project`, `queue`, `workflow`, `subject`
 - `history`, `git`, `skill`, `model`, `runner`
 - `status`, `output`, `mcp`, `web`, `init`, `doctor`
-- `pack`, `plugin` (with `install`, `install-defaults`, `list`, `info`, ...), `trigger`, `logs`
+- `pack`, `plugin` (with `install`, `install-defaults`, `list`, `info`, ...), `trigger`, `logs`, `flavor`
 
 Hidden but implemented: none currently.
 

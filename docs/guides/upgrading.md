@@ -57,8 +57,10 @@ You can list which projects have a running daemon by checking
 
 From v0.4.12 onward, `animus daemon preflight` reports which plugins are
 installed, which roles are required by the daemon, and the exact
-`animus plugin install ...` command for any missing plugin. It exits
-non-zero if any required role is unsatisfied, which is handy for scripting:
+`animus plugin install ...` command for any missing plugin. In the current
+v0.5 plugin-only path that includes: at least one provider, a `workflow_runner`
+plugin, a `queue` plugin, and subject backends for `task` and `requirement`.
+It exits non-zero if any required role is unsatisfied, which is handy for scripting:
 
 ```bash
 if ! animus daemon preflight --json | jq -e '.summary.status == "ok"' >/dev/null; then

@@ -1,7 +1,7 @@
 //! DEPRECATED: Will be replaced by GitProvider trait. See providers/git.rs
 use super::*;
 
-pub(crate) use ::workflow_runner_v2::MergeConflictContext;
+pub(crate) use ::animus_runtime_shared::MergeConflictContext;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]

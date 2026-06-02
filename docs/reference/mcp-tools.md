@@ -1,6 +1,11 @@
 # MCP Tools Reference
 
-All MCP tools exposed by `animus mcp serve`. These tools allow AI agents to interact with the Animus orchestrator over the Model Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input and returning structured results.
+All MCP tools exposed by `animus mcp serve`. The current top-level server
+registers 77 built-in tools across daemon, queue, agent, output, runner,
+workflow, plugin, skill, subject, logs, and top-level memory families. These
+tools allow AI agents to interact with the Animus orchestrator over the Model
+Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
+and returning structured results.
 
 Most project-scoped tools accept an optional `project_root` parameter to override
 the server default. Marketplace tools may omit `project_root` because they
@@ -39,7 +44,7 @@ can claim their own `kind`.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `auto_run_ready`, `auto_merge`, `auto_pr`, `auto_commit_before_merge`, `auto_prune_worktrees_after_merge`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `idle_timeout_secs`, `skip_runner`, `autonomous`, `runner_scope`, `project_root` |
+| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `auto_run_ready`, `auto_merge`, `auto_pr`, `auto_commit_before_merge`, `auto_prune_worktrees_after_merge`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `idle_timeout_secs`, `skip_runner`, `autonomous`, `auto_install`, `skip_preflight`, `runner_scope`, `project_root` |
 | `animus.daemon.stop` | Stop the daemon gracefully | `project_root` |
 | `animus.daemon.status` | Check if daemon is running and view basic state | `project_root` |
 | `animus.daemon.health` | Get detailed health metrics (active agents, queue, capacity) | `project_root` |
@@ -88,7 +93,7 @@ bounded fetch for recent entries, not a live stream.
 
 ## Workflow Operations (16 tools)
 
-### Runtime Tools (9)
+### Runtime & Inspection Tools (11)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -100,18 +105,13 @@ bounded fetch for recent entries, not a live stream.
 | `animus.workflow.pause` | Pause a running workflow | `id`, `confirm`, `dry_run`, `project_root` |
 | `animus.workflow.cancel` | Cancel a running workflow permanently | `id`, `confirm`, `dry_run`, `project_root` |
 | `animus.workflow.resume` | Resume a paused workflow | `id`, `project_root` |
+| `animus.workflow.decisions` | List decisions made during workflow execution | `id`, `limit`, `offset`, `max_tokens`, `project_root` |
+| `animus.workflow.checkpoints.list` | List saved workflow state checkpoints | `id`, `limit`, `offset`, `max_tokens`, `project_root` |
 | `animus.workflow.phase.approve` | Approve a gated workflow phase | `workflow_id`, `phase_id` (alias: `phase`), `feedback` (alias: `note`), `project_root` |
 
 `animus workflow phase reject` exists in the CLI, but there is currently no
 matching built-in MCP tool. MCP callers can approve pending gates, but gate
 rejection remains a CLI-only action.
-
-### Decision & Checkpoint Tools (2)
-
-| Tool | Description | Key Parameters |
-|---|---|---|
-| `animus.workflow.decisions` | List decisions made during workflow execution | `id`, `limit`, `offset`, `max_tokens`, `project_root` |
-| `animus.workflow.checkpoints.list` | List saved workflow state checkpoints | `id`, `limit`, `offset`, `max_tokens`, `project_root` |
 
 ### Definition Tools (5)
 
@@ -207,7 +207,7 @@ The `animus.memory.*` tools are exposed in two places, with different gating:
 - **Spawned workflow agents**: the memory MCP server is injected into a phase's runtime
   contract only when the active agent profile has `capabilities.memory: true`. Profiles with
   the capability absent or set to `false` do not see the memory tools in their tool list.
-  See `crates/workflow-runner-v2/src/runtime_contract.rs::inject_memory_mcp_for_capable_agent`.
+  See `crates/animus-runtime-shared/src/runtime_contract.rs::inject_memory_mcp_for_capable_agent`.
 
 ---
 

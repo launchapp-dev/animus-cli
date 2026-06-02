@@ -111,7 +111,5 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
 
 pub fn builtin_workflow_config() -> WorkflowConfig {
     static BUILTIN_CONFIG: OnceLock<WorkflowConfig> = OnceLock::new();
-    BUILTIN_CONFIG
-        .get_or_init(builtin_workflow_config_base)
-        .clone()
+    BUILTIN_CONFIG.get_or_init(builtin_workflow_config_base).clone()
 }

@@ -39,13 +39,25 @@ fn subject_plugin(name: &str, kinds: &[&str]) -> InstalledPluginSummary {
     }
 }
 
+fn workflow_runner_plugin(name: &str) -> InstalledPluginSummary {
+    InstalledPluginSummary {
+        name: name.to_string(),
+        plugin_kind: "workflow_runner".to_string(),
+        subject_kinds: Vec::new(),
+    }
+}
+
+fn queue_plugin(name: &str) -> InstalledPluginSummary {
+    InstalledPluginSummary { name: name.to_string(), plugin_kind: "queue".to_string(), subject_kinds: Vec::new() }
+}
+
 #[tokio::test]
 async fn preflight_with_no_plugins_and_no_auto_install_reports_missing_with_fix_commands() {
     let spec = PluginPreflightSpec::daemon_default();
     let result = PluginPreflightRunner::run(&spec, Vec::new(), None).await.expect("preflight run");
 
     assert!(!result.is_ok(), "preflight should fail when no plugins installed");
-    assert_eq!(result.missing.len(), 3, "all three roles should be missing");
+    assert_eq!(result.missing.len(), 5, "all five roles should be missing");
 
     let provider_missing = result.missing.iter().find(|m| m.role == "at_least_one_provider").expect("provider role");
     assert!(provider_missing.fix_command.contains("animus plugin install"));
@@ -119,12 +131,58 @@ async fn preflight_satisfied_when_subject_backend_covers_all_required_kinds() {
     let installed = vec![
         provider_plugin("animus-provider-claude"),
         subject_plugin("animus-subject-native", &["task", "requirement"]),
+        workflow_runner_plugin("animus-workflow-runner-default"),
+        queue_plugin("animus-queue-default"),
     ];
     let result = PluginPreflightRunner::run(&spec, installed, None).await.expect("preflight run");
 
     assert!(result.is_ok(), "all roles satisfied");
     assert_eq!(result.missing.len(), 0);
-    assert_eq!(result.satisfied.len(), 3);
+    assert_eq!(result.satisfied.len(), 5);
+}
+
+#[tokio::test]
+async fn preflight_refuses_when_workflow_runner_or_queue_plugin_missing() {
+    let spec = PluginPreflightSpec::daemon_default();
+    // Subjects + provider present; workflow_runner + queue missing.
+    let installed = vec![
+        provider_plugin("animus-provider-claude"),
+        subject_plugin("animus-subject-native", &["task", "requirement"]),
+    ];
+    let result = PluginPreflightRunner::run(&spec, installed, None).await.expect("preflight run");
+
+    assert!(!result.is_ok(), "preflight must refuse-to-start when workflow_runner or queue missing");
+    let missing_labels: Vec<&str> = result.missing.iter().map(|m| m.role.as_str()).collect();
+    assert!(missing_labels.contains(&"workflow_runner"));
+    assert!(missing_labels.contains(&"queue"));
+
+    let wf = result.missing.iter().find(|m| m.role == "workflow_runner").unwrap();
+    assert!(
+        wf.fix_command.contains("animus-workflow-runner-default"),
+        "workflow_runner fix command should point at the curated default plugin, got: {}",
+        wf.fix_command
+    );
+    let q = result.missing.iter().find(|m| m.role == "queue").unwrap();
+    assert!(
+        q.fix_command.contains("animus-queue-default"),
+        "queue fix command should point at the curated default plugin, got: {}",
+        q.fix_command
+    );
+}
+
+#[test]
+fn install_target_for_resolves_workflow_runner_and_queue_roles() {
+    let spec = PluginPreflightSpec::daemon_default();
+    let wf = spec.install_target_for("workflow_runner").expect("workflow_runner role mapped");
+    assert!(
+        wf.starts_with("launchapp-dev/animus-workflow-runner-default@"),
+        "workflow_runner role must map to the curated default workflow-runner plugin, got: {wf}"
+    );
+    let q = spec.install_target_for("queue").expect("queue role mapped");
+    assert!(
+        q.starts_with("launchapp-dev/animus-queue-default@"),
+        "queue role must map to the curated default queue plugin, got: {q}"
+    );
 }
 
 // Codex round-4 P2: curated provider repos (launchapp-dev/animus-provider-*)

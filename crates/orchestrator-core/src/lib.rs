@@ -6,6 +6,7 @@ pub mod daemon_tick_metrics;
 pub mod doctor;
 pub mod domain_state;
 pub mod execution_projection;
+pub mod flavor;
 pub mod model_quality;
 pub mod plugin_preflight;
 pub mod plugin_registry;
@@ -47,6 +48,10 @@ pub use execution_projection::{
     project_task_status, project_task_terminal_workflow_status, project_task_workflow_start, ExecutionProjector,
     ExecutionProjectorRegistry, WORKFLOW_RUNNER_BLOCKED_PREFIX,
 };
+pub use flavor::{
+    list_available_flavor_names, load_flavor, locate_flavor_manifest, FlavorDefaults, FlavorManifest,
+    FlavorRoleSection, DEFAULT_FLAVOR_ID, FLAVOR_SCHEMA_V1,
+};
 pub use model_quality::{
     is_model_suppressed_for_phase, load_model_quality_ledger, model_quality_ledger_path, record_model_phase_outcome,
     ModelQualityLedger, ModelQualityRecord, MODEL_QUALITY_LEDGER_FILE_NAME,
@@ -69,8 +74,9 @@ pub use plugin_preflight::{
     DEFAULT_REQUIREMENT_BACKEND_REPO, DEFAULT_TASK_BACKEND_REPO,
 };
 pub use plugin_registry::{
-    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, DEFAULT_OAI_AGENT_PLUGINS,
-    DEFAULT_PROVIDER_PLUGINS, DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS,
+    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, resolve_tag_for_slug,
+    DEFAULT_OAI_AGENT_PLUGINS, DEFAULT_PROVIDER_PLUGINS, DEFAULT_QUEUE_PLUGINS, DEFAULT_SUBJECT_PLUGINS,
+    DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 pub use runtime_contract::{
     build_cli_launch_contract, build_runtime_contract, cli_capabilities_for_tool, cli_capabilities_from_config,

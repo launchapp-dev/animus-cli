@@ -26,6 +26,11 @@ struct StatusDashboard {
     schema: &'static str,
     project_root: String,
     generated_at: DateTime<Utc>,
+    /// v0.5: active flavor id (typically `"default"`). Sourced from
+    /// `flavors/<name>.toml` discovery; `None` when no flavor manifest
+    /// is found. Exposed for `animus status --json | jq '.flavor'`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    flavor: Option<String>,
     daemon: DaemonStatusSlice,
     active_agents: ActiveAgentsSlice,
     task_summary: TaskSummarySlice,
@@ -213,6 +218,13 @@ pub(crate) async fn handle_status(project_root: &str, json: bool) -> Result<()> 
         schema: STATUS_SCHEMA,
         project_root: project_root.to_string(),
         generated_at: Utc::now(),
+        flavor: orchestrator_core::flavor::load_flavor_in(
+            std::path::Path::new(project_root),
+            orchestrator_core::flavor::DEFAULT_FLAVOR_ID,
+        )
+        .ok()
+        .flatten()
+        .map(|m| m.id),
         daemon: build_daemon_slice(daemon_health.as_ref(), daemon_error.clone()),
         active_agents: build_active_agents_slice(
             daemon_health.as_ref(),

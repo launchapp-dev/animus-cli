@@ -48,7 +48,7 @@ fn memory_project_root(default: &str, override_value: Option<String>) -> String 
         .unwrap_or_else(|| default.to_string())
 }
 
-fn entry_to_json(entry: &workflow_runner_v2::AgentMemoryEntry) -> Value {
+fn entry_to_json(entry: &animus_runtime_shared::AgentMemoryEntry) -> Value {
     serde_json::json!({
         "id": entry.id,
         "text": entry.text,
@@ -57,7 +57,7 @@ fn entry_to_json(entry: &workflow_runner_v2::AgentMemoryEntry) -> Value {
     })
 }
 
-fn document_to_json(document: &workflow_runner_v2::AgentMemoryDocument) -> Value {
+fn document_to_json(document: &animus_runtime_shared::AgentMemoryDocument) -> Value {
     serde_json::json!({
         "agent_id": document.agent_id,
         "updated_at": document.updated_at,
@@ -93,7 +93,7 @@ impl MemoryMcpServer {
             return structured_err("animus.memory.get", "agent_id must not be empty".to_string());
         }
         let project_root = memory_project_root(&self.default_project_root, input.project_root);
-        match workflow_runner_v2::load_agent_memory(&project_root, &agent_id) {
+        match animus_runtime_shared::load_agent_memory(&project_root, &agent_id) {
             Ok(document) => {
                 let mut payload = document_to_json(&document);
                 if let Some(entry_id) = input.entry_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
@@ -125,7 +125,7 @@ impl MemoryMcpServer {
             return structured_err("animus.memory.list", "agent_id must not be empty".to_string());
         }
         let project_root = memory_project_root(&self.default_project_root, input.project_root);
-        match workflow_runner_v2::load_agent_memory(&project_root, &agent_id) {
+        match animus_runtime_shared::load_agent_memory(&project_root, &agent_id) {
             Ok(document) => {
                 let prefix = input.prefix.as_deref().map(str::trim).map(ToOwned::to_owned);
                 let mut entries: Vec<Value> = document
@@ -165,7 +165,8 @@ impl MemoryMcpServer {
             return structured_err("animus.memory.append", "agent_id must not be empty".to_string());
         }
         let project_root = memory_project_root(&self.default_project_root, input.project_root);
-        match workflow_runner_v2::append_agent_memory(&project_root, &agent_id, &input.text, input.source.as_deref()) {
+        match animus_runtime_shared::append_agent_memory(&project_root, &agent_id, &input.text, input.source.as_deref())
+        {
             Ok(document) => {
                 let latest = document.entries.last().map(entry_to_json).unwrap_or(Value::Null);
                 let payload = serde_json::json!({
@@ -201,7 +202,7 @@ impl MemoryMcpServer {
             );
         }
         if delete_all {
-            match workflow_runner_v2::clear_agent_memory(&project_root, &agent_id) {
+            match animus_runtime_shared::clear_agent_memory(&project_root, &agent_id) {
                 Ok(document) => {
                     let payload = serde_json::json!({
                         "agent_id": document.agent_id,
@@ -215,7 +216,7 @@ impl MemoryMcpServer {
             }
         } else {
             let entry_id = entry_id.expect("entry_id checked above");
-            match workflow_runner_v2::delete_agent_memory_entry(&project_root, &agent_id, &entry_id) {
+            match animus_runtime_shared::delete_agent_memory_entry(&project_root, &agent_id, &entry_id) {
                 Ok((document, removed)) => {
                     let payload = serde_json::json!({
                         "agent_id": document.agent_id,
@@ -246,7 +247,7 @@ impl AoMcpServer {
             return structured_err("animus.memory.get", "agent_id must not be empty".to_string());
         }
         let project_root = memory_project_root(&self.default_project_root, input.project_root);
-        match workflow_runner_v2::load_agent_memory(&project_root, &agent_id) {
+        match animus_runtime_shared::load_agent_memory(&project_root, &agent_id) {
             Ok(document) => {
                 let mut payload = document_to_json(&document);
                 if let Some(entry_id) = input.entry_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
@@ -278,7 +279,7 @@ impl AoMcpServer {
             return structured_err("animus.memory.list", "agent_id must not be empty".to_string());
         }
         let project_root = memory_project_root(&self.default_project_root, input.project_root);
-        match workflow_runner_v2::load_agent_memory(&project_root, &agent_id) {
+        match animus_runtime_shared::load_agent_memory(&project_root, &agent_id) {
             Ok(document) => {
                 let prefix = input.prefix.as_deref().map(str::trim).map(ToOwned::to_owned);
                 let mut entries: Vec<Value> = document
@@ -318,7 +319,8 @@ impl AoMcpServer {
             return structured_err("animus.memory.append", "agent_id must not be empty".to_string());
         }
         let project_root = memory_project_root(&self.default_project_root, input.project_root);
-        match workflow_runner_v2::append_agent_memory(&project_root, &agent_id, &input.text, input.source.as_deref()) {
+        match animus_runtime_shared::append_agent_memory(&project_root, &agent_id, &input.text, input.source.as_deref())
+        {
             Ok(document) => {
                 let latest = document.entries.last().map(entry_to_json).unwrap_or(Value::Null);
                 let payload = serde_json::json!({
@@ -354,7 +356,7 @@ impl AoMcpServer {
             );
         }
         if delete_all {
-            match workflow_runner_v2::clear_agent_memory(&project_root, &agent_id) {
+            match animus_runtime_shared::clear_agent_memory(&project_root, &agent_id) {
                 Ok(document) => {
                     let payload = serde_json::json!({
                         "agent_id": document.agent_id,
@@ -368,7 +370,7 @@ impl AoMcpServer {
             }
         } else {
             let entry_id = entry_id.expect("entry_id checked above");
-            match workflow_runner_v2::delete_agent_memory_entry(&project_root, &agent_id, &entry_id) {
+            match animus_runtime_shared::delete_agent_memory_entry(&project_root, &agent_id, &entry_id) {
                 Ok((document, removed)) => {
                     let payload = serde_json::json!({
                         "agent_id": document.agent_id,

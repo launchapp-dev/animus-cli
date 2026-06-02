@@ -6,11 +6,23 @@ on:
     paths:
       - 'docs/**'
       - 'package.json'
+      - 'package-lock.json'
+      - 'vercel.json'
+      - 'scripts/check-doc-sync.sh'
+      - 'crates/orchestrator-cli/src/cli_types/root_types.rs'
+      - 'crates/orchestrator-cli/src/services/operations/ops_mcp.rs'
+      - 'crates/orchestrator-cli/src/services/operations/ops_mcp/**'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
       - 'docs/**'
       - 'package.json'
+      - 'package-lock.json'
+      - 'vercel.json'
+      - 'scripts/check-doc-sync.sh'
+      - 'crates/orchestrator-cli/src/cli_types/root_types.rs'
+      - 'crates/orchestrator-cli/src/services/operations/ops_mcp.rs'
+      - 'crates/orchestrator-cli/src/services/operations/ops_mcp/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -33,5 +45,7 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - run: npm run docs:check-sync
 
       - run: npm run docs:build

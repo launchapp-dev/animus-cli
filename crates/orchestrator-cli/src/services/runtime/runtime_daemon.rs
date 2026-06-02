@@ -1345,7 +1345,16 @@ mod tests {
     }
 
     fn stream_args() -> DaemonStreamArgs {
-        DaemonStreamArgs { cat: None, level: None, workflow: None, run: None, tail: 20, no_follow: true, pretty: false, full: false }
+        DaemonStreamArgs {
+            cat: None,
+            level: None,
+            workflow: None,
+            run: None,
+            tail: 20,
+            no_follow: true,
+            pretty: false,
+            full: false,
+        }
     }
 
     fn log_entry(ts: &str, workflow_id: Option<&str>, workflow_ref: Option<&str>, run_id: Option<&str>) -> LogEntry {

@@ -62,9 +62,8 @@ pub trait DaemonRunHooks {
     /// Provide a `queue/*` routing handle for the control-RPC surface.
     /// Defaults to `None`, which leaves the daemon's
     /// `InProcessSurface` returning `NotSupported` for queue/* methods.
-    /// The CLI binary builds an implementation that delegates back to
-    /// its in-tree queue helpers (`queue_snapshot`,
-    /// `enqueue_subject_dispatch`, etc.).
+    /// The CLI binary builds an implementation that delegates to the
+    /// installed `queue` plugin via `animus-queue-protocol` RPCs.
     fn queue_routing(&self) -> Option<Arc<dyn QueueRouting>> {
         None
     }

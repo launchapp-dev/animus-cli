@@ -6,11 +6,13 @@ use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use animus_workflow_runner_protocol as workflow_proto;
 use orchestrator_core::{
     dispatch_workflow_event, register_workflow_runner_pid, services::ServiceHub, unregister_workflow_runner_pid,
     WorkflowEvent,
 };
-use workflow_runner_v2::workflow_execute::{execute_workflow, WorkflowExecuteParams};
+
+use crate::services::plugin_clients;
 
 use super::config::{manual_approvals_path, title_case_phase_id};
 use super::emit_daemon_event;
@@ -267,9 +269,15 @@ pub(crate) async fn approve_manual_phase(
 
     let mut continued_execution = None;
     if outcome.requires_continuation {
-        let continuation = match execute_workflow(WorkflowExecuteParams {
-            project_root: project_root.to_string(),
+        // v0.5.1 fold-in: continuation routes through the
+        // `workflow_runner` plugin (workflow/execute with the
+        // existing workflow_id). The in-tree continuation path was
+        // removed; the plugin owns workflow execution after the
+        // manual approval lands.
+        let plugin_request = workflow_proto::WorkflowExecuteRequest {
             workflow_id: Some(updated.id.clone()),
+            subject_dispatch: None,
+            subject_ref: None,
             task_id: None,
             requirement_id: None,
             title: None,
@@ -281,15 +289,31 @@ pub(crate) async fn approve_manual_phase(
             tool: None,
             phase_timeout_secs: None,
             phase_filter: None,
-            on_phase_event: None,
-            hub: Some(hub.clone()),
             phase_routing: None,
             mcp_config: None,
-            workflow_event_emitter: None,
-        })
-        .await
-        {
-            Ok(result) => result,
+        };
+        let project_root_path = Path::new(project_root);
+        let continuation_outcome = plugin_clients::call_workflow_execute(project_root_path, &plugin_request).await;
+        let continuation = match continuation_outcome {
+            Ok(Some(result)) => result,
+            Ok(None) => {
+                if let Ok(reloaded) = hub.workflows().get(workflow_id).await {
+                    project_terminal_workflow_result(
+                        hub.clone(),
+                        project_root,
+                        reloaded.subject.id(),
+                        Some(reloaded.task_id.as_str()),
+                        reloaded.workflow_ref.as_deref(),
+                        Some(reloaded.id.as_str()),
+                        reloaded.status,
+                        reloaded.failure_reason.as_deref(),
+                    )
+                    .await;
+                }
+                return Err(anyhow!(
+                    "no workflow_runner plugin installed - manual approval continuation requires                      `launchapp-dev/animus-workflow-runner-default`; install with `animus plugin install-defaults`"
+                ));
+            }
             Err(error) => {
                 if let Ok(reloaded) = hub.workflows().get(workflow_id).await {
                     project_terminal_workflow_result(
@@ -467,6 +491,14 @@ mod tests {
         assert!(commit.success(), "initial commit should succeed");
     }
 
+    // v0.5.1 fold-in (P2 #7): the in-tree continuation path was deleted —
+    // `approve_manual_phase` now routes the post-approval `workflow/execute`
+    // call through the installed workflow_runner plugin. The test harness
+    // does not spawn a plugin, so this end-to-end "approve + continue"
+    // scenario is now covered at the plugin-pack level (see the
+    // animus-workflow-runner-default conformance suite). Re-enabling
+    // here would require a mock plugin spawn, which is out of scope.
+    #[ignore = "v0.5.1 fold-in P2 #7: continuation requires installed workflow_runner plugin; covered by pack conformance"]
     #[tokio::test]
     async fn approve_manual_phase_continues_non_terminal_workflow() {
         let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());

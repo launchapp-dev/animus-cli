@@ -13,7 +13,7 @@ security boundary, see [Plugin System](plugin-system.md).
 
 | Area | Source |
 |---|---|
-| Normalized schema and Rust trait | [`crates/animus-subject-protocol/src/lib.rs`](../../crates/animus-subject-protocol/src/lib.rs) |
+| Normalized schema and Rust trait | External `animus-subject-protocol` dependency pinned in `Cargo.toml` (canonical source: `launchapp-dev/animus-protocol`) |
 | Kind router | [`crates/orchestrator-plugin-host/src/subject_router.rs`](../../crates/orchestrator-plugin-host/src/subject_router.rs) |
 | Daemon subject plugin dispatch | [`crates/orchestrator-daemon-runtime/src/subject_dispatch.rs`](../../crates/orchestrator-daemon-runtime/src/subject_dispatch.rs) |
 | CLI subject command dispatch | [`crates/orchestrator-cli/src/services/operations/ops_subject.rs`](../../crates/orchestrator-cli/src/services/operations/ops_subject.rs) |

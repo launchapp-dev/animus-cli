@@ -14,6 +14,7 @@ version = "0.1.0"
 dependencies = [
  "animus-session-backend",
  "anyhow",
+ "async-trait",
  "chrono",
  "dirs 6.0.0",
  "fs2",
@@ -122,6 +123,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "animus-plugin-protocol"
+version = "0.1.14"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.0#70a2c1db5004ababa228df1dad347d5feb7a8a7b"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "animus-plugin-protocol"
+version = "0.1.14"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "animus-plugin-runtime"
 version = "0.1.0"
 dependencies = [
@@ -133,6 +154,41 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "animus-queue-protocol"
+version = "0.2.0"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
+dependencies = [
+ "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "animus-runtime-shared"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dirs 5.0.1",
+ "jsonschema",
+ "orchestrator-config",
+ "orchestrator-core",
+ "orchestrator-store",
+ "protocol",
+ "regex",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -153,22 +209,6 @@ dependencies = [
 
 [[package]]
 name = "animus-subject-protocol"
-version = "0.1.0"
-dependencies = [
- "animus-plugin-protocol 0.1.0",
- "anyhow",
- "async-trait",
- "chrono",
- "futures-core",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "animus-subject-protocol"
 version = "0.1.13"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
 dependencies = [
@@ -177,6 +217,38 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-core",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "animus-subject-protocol"
+version = "0.1.14"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.0#70a2c1db5004ababa228df1dad347d5feb7a8a7b"
+dependencies = [
+ "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.0)",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures-core",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "animus-subject-protocol"
+version = "0.1.14"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
+dependencies = [
+ "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures-core",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -195,6 +267,18 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "animus-workflow-runner-protocol"
+version = "0.2.0"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
+dependencies = [
+ "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2112,13 +2196,17 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchestrator-cli"
-version = "0.4.20"
+version = "0.5.0"
 dependencies = [
  "animus-control-protocol",
  "animus-log-storage-protocol",
  "animus-plugin-protocol 0.1.0",
+ "animus-queue-protocol",
+ "animus-runtime-shared",
  "animus-session-backend",
  "animus-subject-protocol 0.1.13",
+ "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-workflow-runner-protocol",
  "anyhow",
  "assert_cmd",
  "async-trait",
@@ -2156,7 +2244,6 @@ dependencies = [
  "uuid",
  "webbrowser",
  "which",
- "workflow-runner-v2",
 ]
 
 [[package]]
@@ -2200,6 +2287,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "toml 1.1.2+spec-1.1.0",
  "tracing",
  "uuid",
  "which",
@@ -2210,10 +2298,15 @@ dependencies = [
 name = "orchestrator-daemon-runtime"
 version = "0.1.0"
 dependencies = [
+ "agent-runner",
  "animus-control-protocol",
  "animus-log-storage-protocol",
  "animus-plugin-protocol 0.1.0",
+ "animus-queue-protocol",
+ "animus-runtime-shared",
  "animus-subject-protocol 0.1.13",
+ "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-workflow-runner-protocol",
  "anyhow",
  "async-trait",
  "chrono",
@@ -2236,13 +2329,13 @@ dependencies = [
  "tokio-stream",
  "tracing",
  "uuid",
- "workflow-runner-v2",
 ]
 
 [[package]]
 name = "orchestrator-git-ops"
 version = "0.1.0"
 dependencies = [
+ "animus-runtime-shared",
  "anyhow",
  "chrono",
  "orchestrator-core",
@@ -2252,7 +2345,6 @@ dependencies = [
  "tempfile",
  "tokio",
  "uuid",
- "workflow-runner-v2",
 ]
 
 [[package]]
@@ -2509,6 +2601,7 @@ dependencies = [
 name = "protocol"
 version = "0.1.0"
 dependencies = [
+ "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.0)",
  "anyhow",
  "chrono",
  "dirs 6.0.0",
@@ -4682,34 +4775,6 @@ dependencies = [
  "serde_json",
  "unicode-xid",
  "wasmparser",
-]
-
-[[package]]
-name = "workflow-runner-v2"
-version = "0.1.0"
-dependencies = [
- "agent-runner",
- "anyhow",
- "assert_cmd",
- "async-trait",
- "chrono",
- "clap",
- "dirs 5.0.1",
- "jsonschema",
- "orchestrator-config",
- "orchestrator-core",
- "orchestrator-logging",
- "orchestrator-store",
- "protocol",
- "regex",
- "serde",
- "serde_json",
- "sha2",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

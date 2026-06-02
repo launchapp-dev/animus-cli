@@ -1,3 +1,4 @@
+pub mod agent_record;
 mod build_runner_command_from_dispatch;
 mod completed_process;
 
@@ -24,6 +25,7 @@ mod dispatch_workflow_start_summary;
 pub mod event_pipe;
 mod process_manager;
 mod ready_dispatch_plan;
+pub mod reattach;
 
 pub use build_runner_command_from_dispatch::{build_runner_command, build_runner_command_from_dispatch};
 pub use completed_process::CompletedProcess;

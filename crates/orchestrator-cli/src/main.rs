@@ -145,6 +145,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Trigger { command } => services::operations::handle_trigger(command, &project_root, cli.json).await,
         Command::Logs { command } => services::operations::handle_logs(command, &project_root, cli.json).await,
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
+        Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -188,7 +189,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Doctor(_)
                 | Command::Trigger { .. }
                 | Command::Logs { .. }
-                | Command::Subject { .. } => {
+                | Command::Subject { .. }
+                | Command::Flavor { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }

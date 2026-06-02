@@ -119,7 +119,7 @@ ACP includes first-class support for planning workflows:
 
 Animus is a Rust-only agent orchestrator with:
 
-- **Rust-only Cargo workspace** (18 current workspace members) with clean separation of concerns
+- **Rust-only Cargo workspace** (17 current workspace members) with clean separation of concerns
 - **CLI surface** exposing `project`, `queue`, `subject`, `workflow`, `plugin`, `mcp`, and other command groups
 - **Web UI** served through out-of-tree `transport_backend` + `web_ui` plugins resolved by `animus web`
 - **Runtime state** scoped under `~/.animus/<repo-scope>/`
@@ -361,7 +361,7 @@ Add ACP server settings to `.animus/config.json` and `~/.animus/<repo-scope>/acp
 - **Rust SDK** (if available) for closer integration with Animus core
 
 **IDE Extension Architecture:**
-- VS Code: Use TypeScript SDK to build extension in `crates/vscode-acp-extension`
+- VS Code: Use the TypeScript SDK to build an out-of-tree extension package; do not add editor-extension code under `crates/` in this Rust-only workspace
 - JetBrains: Use Kotlin/Java SDK to build plugin
 - Cursor: Leverage existing ACP client (if available)
 

@@ -4,6 +4,7 @@ pub mod ipc;
 pub mod lock;
 pub mod output;
 pub mod providers;
+pub mod recording;
 pub mod runner;
 pub mod sandbox;
 pub mod telemetry;

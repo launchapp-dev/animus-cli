@@ -5,10 +5,10 @@ use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use orchestrator_config::{
-    list_project_templates_from_default_registry_with_options,
-    load_pack_inventory, load_pack_selection_state, load_project_template_from_default_registry_with_options,
-    load_project_template_from_dir, save_pack_selection_state, LoadedProjectTemplate, PackRegistrySource,
-    PackSelectionEntry, PackSelectionSource, ProjectTemplateSourceKind, ProjectTemplateSummary, RegistrySyncOptions,
+    list_project_templates_from_default_registry_with_options, load_pack_inventory, load_pack_selection_state,
+    load_project_template_from_default_registry_with_options, load_project_template_from_dir,
+    save_pack_selection_state, LoadedProjectTemplate, PackRegistrySource, PackSelectionEntry, PackSelectionSource,
+    ProjectTemplateSourceKind, ProjectTemplateSummary, RegistrySyncOptions,
 };
 use orchestrator_core::{
     daemon_project_config_path, load_daemon_project_config, update_daemon_project_config, write_daemon_project_config,

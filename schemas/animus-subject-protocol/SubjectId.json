@@ -1,6 +1,0 @@
-{
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "SubjectId",
-  "description": "Backend-qualified identifier for a subject.\n\nConvention is `\"<backend>:<native_id>\"`, e.g. `\"linear:ENG-123\"`,\n`\"jira:PROJ-456\"`, `\"github:owner/repo#789\"`, `\"native:TASK-001\"`. The\ndaemon treats the value as opaque; only the originating backend\ninterprets the native portion.\n\nThe `backend:` prefix is reserved. Plugin authors should always emit\nprefixed ids so cross-backend collisions are impossible.",
-  "type": "string"
-}

@@ -30,14 +30,14 @@ cargo build -p agent-runner
 
 ## Workspace Structure
 
-The workspace is a Cargo workspace of 18 crates. The core orchestrator crates are:
+The workspace is a Cargo workspace of 17 crates. The core orchestrator crates are:
 
 ```text
 crates/
 ├── agent-runner/
+├── animus-runtime-shared/
 ├── animus-plugin-protocol/
 ├── animus-plugin-runtime/
-├── animus-subject-protocol/
 ├── oai-runner/
 ├── orchestrator-cli/
 ├── orchestrator-config/
@@ -50,14 +50,11 @@ crates/
 ├── orchestrator-providers/
 ├── orchestrator-session-host/
 ├── orchestrator-store/
-├── protocol/
-└── workflow-runner-v2/
+└── protocol/
 ```
 
 Repo-local but not current workspace members:
 
-- `crates/animus-plugin-smoke/`
-- `crates/animus-provider-mock/`
 - `crates/orchestrator-web-server/`
 
 `default-members` in `Cargo.toml` include:
@@ -91,21 +88,30 @@ delegates to installed `transport_backend` and `web_ui` plugins.
 
 ```bash
 npm install
+npm run docs:check-sync
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
 ```
 
+Run `npm run docs:check-sync` whenever the CLI command tree or MCP surface
+changes. It compares `crates/orchestrator-cli/src/cli_types/root_types.rs` and
+`crates/orchestrator-cli/src/services/operations/ops_mcp/` against the
+reference docs and fails on drift.
+
 Protocol schema exports live at the repo root:
 
 ```bash
 cargo run -p animus-plugin-protocol --bin animus-plugin-protocol-export-schema
-cargo run -p animus-subject-protocol --bin animus-subject-protocol-export-schema
 ```
 
-Those commands write to `/schemas/animus-plugin-protocol/` and
-`/schemas/animus-subject-protocol/` under the workspace root. Do not commit
-accidental crate-local output such as `crates/orchestrator-cli/schemas/`.
+For `animus-subject-protocol` schema exports, work in the upstream
+`launchapp-dev/animus-protocol` repository — the in-tree mirror was removed
+in v0.5 in favor of the canonical git-pinned crate.
+
+These commands write to `/schemas/animus-plugin-protocol/` under the
+workspace root. Do not commit accidental crate-local output such as
+`crates/orchestrator-cli/schemas/`.
 
 ## Project Conventions
 

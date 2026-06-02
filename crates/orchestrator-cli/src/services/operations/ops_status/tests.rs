@@ -226,6 +226,7 @@ fn render_status_dashboard_uses_required_section_order() {
         schema: STATUS_SCHEMA,
         project_root: "/tmp/project".to_string(),
         generated_at: parse_time("2026-02-27T00:00:00Z"),
+        flavor: None,
         daemon: build_daemon_slice(
             Some(&DaemonHealth {
                 healthy: true,
@@ -242,6 +243,7 @@ fn render_status_dashboard_uses_required_section_order() {
                 total_agents_spawned: None,
                 total_agents_completed: None,
                 total_agents_failed: None,
+                flavor: None,
             }),
             None,
         ),

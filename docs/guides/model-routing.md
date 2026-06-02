@@ -4,7 +4,7 @@ Animus selects a `(tool, model)` pair for each agent phase from the resolved
 agent runtime config plus any workflow or pack overrides. The current planner
 logic lives in:
 
-- `crates/workflow-runner-v2/src/phase_targets.rs`
+- `crates/animus-runtime-shared/src/config_context.rs`
 - `crates/protocol/src/model_routing.rs`
 - `crates/orchestrator-config/src/agent_runtime_config.rs`
 - `.animus/workflows.yaml` or `.animus/workflows/*.yaml`

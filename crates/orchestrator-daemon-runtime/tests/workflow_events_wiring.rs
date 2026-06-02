@@ -35,15 +35,15 @@ use animus_control_protocol::types::{
     WorkflowPauseRequest, WorkflowResumeRequest, WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
 };
 use animus_control_protocol::ControlError;
+use animus_runtime_shared::workflow_event_emitter::{
+    RuntimeWorkflowEvent, RuntimeWorkflowEventKind, WorkflowEventEmitter,
+};
 use animus_subject_protocol_wire::{Subject, SubjectChangedEvent};
 use async_trait::async_trait;
 use chrono::Utc;
 use futures_util::stream;
 use orchestrator_daemon_runtime::control::{BroadcastWorkflowEventEmitter, ControlServer, WorkflowEventBroadcaster};
 use serde_json::json;
-use workflow_runner_v2::workflow_event_emitter::{
-    RuntimeWorkflowEvent, RuntimeWorkflowEventKind, WorkflowEventEmitter,
-};
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(20);
 

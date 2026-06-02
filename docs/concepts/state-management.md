@@ -35,6 +35,8 @@ Runtime state lives under `~/.animus/<repo-scope>/`, not in the repository:
 Important runtime stores:
 
 - `workflow.db` for workflows, checkpoints, tasks, and requirements
+- `logs/` for redacted structured runtime events and run logs
+- `runner/` for repo-scoped runner auth and socket state
 - `state/` for review, history, error, schedule, QA, and pack-selection state
 - `worktrees/` for managed task worktrees
 - `docs/` for generated planning artifacts such as `product-vision.md`

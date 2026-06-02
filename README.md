@@ -39,7 +39,7 @@
 
 Open a fresh **Claude Code** (or **Codex** / **OpenCode** / **Cursor**) session and paste this. The agent installs the Animus CLI, clones `animus-skills`, runs the setup script, and adds the project section to `CLAUDE.md` / `AGENTS.md`. You'll be running workflows in about a minute.
 
-> Install Animus + Animus Skills: run **`curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash`** to install the `animus` CLI (currently `v0.4.19` in this repo), then **`animus plugin install-defaults --include-subjects --include-transports`** to pull in the provider + subject + transport plugins the daemon needs (one-time setup, idempotent). Then **`git clone --single-branch --depth 1 https://github.com/launchapp-dev/animus-skills.git ~/.claude/skills/animus-skills && cd ~/.claude/skills/animus-skills && ./setup`** to link the skills and write `.mcp.json`. Add an "Animus" section to CLAUDE.md (or AGENTS.md for Codex) listing the slash commands: `/animus-setup`, `/animus-getting-started`, `/animus-mcp-setup`, `/animus-workflow-authoring`, `/animus-pack-authoring`, `/animus-skill-authoring`, `/animus-troubleshooting`. Restart the agent so the new `animus` MCP server is picked up. From a project root, run `/animus-setup` to scaffold `.animus/` and the first workflow.
+> Install Animus + Animus Skills: run **`curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash`** to install the `animus` CLI (currently `v0.5.0` in this repo — kernel + flavors architecture), then **`animus plugin install-defaults --include-subjects --include-transports`** to pull in the provider + subject + transport + workflow_runner + queue plugins the daemon needs (one-time setup, idempotent). Then **`git clone --single-branch --depth 1 https://github.com/launchapp-dev/animus-skills.git ~/.claude/skills/animus-skills && cd ~/.claude/skills/animus-skills && ./setup`** to link the skills and write `.mcp.json`. Add an "Animus" section to CLAUDE.md (or AGENTS.md for Codex) listing the slash commands: `/animus-setup`, `/animus-getting-started`, `/animus-mcp-setup`, `/animus-workflow-authoring`, `/animus-pack-authoring`, `/animus-skill-authoring`, `/animus-troubleshooting`. Restart the agent so the new `animus` MCP server is picked up. From a project root, run `/animus-setup` to scaffold `.animus/` and the first workflow.
 
 For Codex CLI, swap the clone path to `~/.codex/skills/animus-skills` and edit `AGENTS.md` instead of `CLAUDE.md`.
 
@@ -52,14 +52,14 @@ animus plugin install-defaults --include-subjects --include-transports
 
 The upstream installer currently targets macOS. On Linux and Windows, use a release archive or build from source.
 
-The second command is **required in v0.4.12 and later** — the daemon no longer ships with bundled providers or subject backends, and will refuse to start until at least one of each is installed. The command is idempotent and skips anything already installed.
+The second command is **required in v0.4.12 and later** (and expanded in **v0.5** to include `workflow_runner` and `queue` plugins) — the daemon no longer ships with bundled providers, subject backends, workflow runners, or queue implementations. It will refuse to start until at least one of each required role is installed. The command is idempotent and skips anything already installed.
 
 <details>
 <summary><kbd>options</kbd></summary>
 
 ```bash
 # Specific version
-ANIMUS_VERSION=v0.4.19 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
+ANIMUS_VERSION=v0.5.0 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 
 # Custom directory
 ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
@@ -115,7 +115,6 @@ Use Claude, Codex, Gemini, OpenCode, Ollama, or any coding agent you already use
 Animus orchestrates — it doesn't replace your tools.
 
 - **Local-first.** Your code never leaves your machine.
-- **Cloud-optional.** Add Animus Cloud later for durability and multi-machine coordination.
 - **Plugin-first.** Works with Linear, GitHub Issues, Asana, Jira, or whatever tracker you already use.
 
 The core daemon is the orchestration runtime; providers, subject backends, triggers, transports, web UI, and log storage ship as independent `animus-*` plugins under [launchapp-dev](https://github.com/launchapp-dev). `animus plugin install <owner/repo>` pulls them in with optional cosign signature verification. The daemon discovers installed plugins at startup, exposes a Unix-socket control protocol, and the CLI, MCP server, and web transports route through that control surface.
@@ -167,9 +166,10 @@ cd your-project                                  # any git repo
 animus doctor                                    # check prerequisites and auto-remediate
 animus init --template task-queue --non-interactive   # scaffold .animus/ from the task-queue template
 
-# v0.4.12 one-time setup: install the provider + subject + transport plugins
-# (skip if you already ran this on a previous project — installed plugins
-#  live in ~/.animus/plugins/ and are shared across projects):
+# v0.5 one-time setup: install the provider + subject + transport
+# + workflow_runner + queue plugins. (Skip if you already ran this on a
+# previous project — installed plugins live in ~/.animus/plugins/ and
+# are shared across projects):
 animus plugin install-defaults --include-subjects --include-transports
 animus daemon preflight                          # verify all required plugins are present
 
@@ -187,11 +187,13 @@ animus daemon stream                             # live structured event stream
 animus plugin new --kind subject --name jira
 ```
 
-> **v0.4.12 note:** the daemon will refuse to start unless at least one
-> provider plugin and the required subject backends are installed. Run
-> `animus daemon preflight` for the exact remediation command if startup
-> fails. See [docs/migration/v0.4.11-to-v0.4.12.md](docs/migration/v0.4.11-to-v0.4.12.md)
-> for the full upgrade story from v0.4.11.
+> **v0.5 note:** the daemon will refuse to start unless plugins for all
+> required roles are installed — provider, subject backend, `workflow_runner`,
+> and `queue`. Run `animus daemon preflight` for the exact remediation
+> command if startup fails. See
+> [docs/migration/v0.4.11-to-v0.4.12.md](docs/migration/v0.4.11-to-v0.4.12.md)
+> for the upgrade story from v0.4.11; v0.5 follows the same install-defaults
+> remediation pattern.
 
 Bundled `init` templates: **`task-queue`**, **`conductor`**, **`direct-workflow`**.
 
@@ -481,32 +483,39 @@ Run `animus --help` for the full surface.
 
 **Removed in v0.4.4:** `animus task` (→ `animus subject --kind task`),
 `animus requirements` (→ `animus subject --kind requirement`),
-`animus cloud` (now an out-of-tree plugin), `animus setup`
-(→ `animus init`), `animus now` (→ `animus status`),
+`animus setup` (→ `animus init`), `animus now` (→ `animus status`),
 `animus errors` (→ `animus history`).
 
 ---
 
 ## Architecture
 
-Animus is a Rust workspace. The core crates:
+Animus v0.5 is a **kernel + flavors** architecture: a Rust workspace daemon kernel plus a curated bundle of out-of-tree plugins that ship workflow execution, queues, durable steps, and memory. The core crates:
 
 - `orchestrator-cli` — CLI commands and dispatch
 - `orchestrator-core` — services, state, and workflow lifecycle
 - `orchestrator-config` — workflow YAML scaffolding, loading, and compilation
 - `orchestrator-store` — persistence primitives
 - `protocol` — shared types and routing
-- `workflow-runner-v2` — workflow execution runtime
-- `agent-runner` — LLM CLI process management
+- `animus-runtime-shared` — workflow runtime modules consumed by both the daemon and the `workflow_runner` plugin (extracted in v0.5; published at [`launchapp-dev/animus-runtime-shared`](https://github.com/launchapp-dev/animus-runtime-shared))
+- `agent-runner` — LLM CLI process management, decision recording, and replay-from-log support
 - `orchestrator-session-host` — provider plugin session bridge
 - `oai-runner` — OpenAI-compatible runner
-- `orchestrator-daemon-runtime` — daemon scheduler, cron, event triggers
+- `orchestrator-daemon-runtime` — daemon scheduler, cron, event triggers, agent reattach socket back-channel
 - `orchestrator-providers` — provider integrations
 - `orchestrator-git-ops` — worktree and branch management
 - `orchestrator-notifications` — event streaming and notifications
 - `orchestrator-logging` — shared logging utilities
-- `orchestrator-plugin-host` / `animus-plugin-protocol` / `animus-subject-protocol` / `animus-plugin-runtime` — stdio plugin foundation
-- `animus-provider-mock` / `animus-plugin-smoke` — in-tree contract test fixtures for the plugin protocol
+- `orchestrator-plugin-host` / `animus-plugin-protocol` / `animus-plugin-runtime` — stdio plugin foundation
+- external [`launchapp-dev/animus-protocol`](https://github.com/launchapp-dev/animus-protocol) `v0.5.1` workspace — the four new plugin-kind protocol crates (`workflow_runner`, `queue`, `durable_store`, `memory_store`) plus the extended `animus-plugin-protocol`, the re-homed `animus-subject-protocol`, and the generic `animus-plugin-runtime` shell
+- `crates/orchestrator-web-server/` — legacy in-repo web-server directory retained outside the current Cargo workspace
+
+**v0.5 reference plugins** (install via `animus plugin install-defaults`):
+
+- [`animus-workflow-runner-default`](https://github.com/launchapp-dev/animus-workflow-runner-default) `v0.4.1` — Rust workflow_runner plugin
+- [`animus-queue-default`](https://github.com/launchapp-dev/animus-queue-default) `v0.2.0` — Rust queue plugin with atomic `queue/lease` + `queue/release_pending`
+- [`animus-step-durable-dbos`](https://github.com/launchapp-dev/animus-step-durable-dbos) `v0.2.0` — Postgres + DBOS-backed durable_store
+- [`animus-memory-zep`](https://github.com/launchapp-dev/animus-memory-zep) `v0.1.0` — Zep Cloud memory_store
 
 See [`docs/architecture/full-system-architecture.md`](docs/architecture/full-system-architecture.md),
 [`docs/architecture/runtime-architecture.md`](docs/architecture/runtime-architecture.md),

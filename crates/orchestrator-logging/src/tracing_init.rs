@@ -57,7 +57,7 @@ pub fn init_daemon_tracing() {
 
 /// Initialize tracing for workflow runner components.
 pub fn init_workflow_tracing() {
-    init_tracing("info,workflow_runner_v2=debug,orchestrator_providers=debug")
+    init_tracing("info,animus_runtime_shared=debug,orchestrator_providers=debug")
 }
 
 /// Initialize tracing for agent runner components.

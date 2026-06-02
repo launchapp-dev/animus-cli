@@ -16,7 +16,7 @@ set -euo pipefail
 
 REPO="launchapp-dev/animus-cli"
 INSTALL_DIR="${ANIMUS_INSTALL_DIR:-${HOME}/.local/bin}"
-BINARIES=(animus agent-runner animus-oai-runner animus-workflow-runner)
+BINARIES=(animus agent-runner animus-oai-runner)
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
@@ -104,14 +104,17 @@ main() {
 
   mkdir -p "${INSTALL_DIR}"
 
-  # During the v0.4.x → v0.5 rename rollout the release archive may ship the
-  # legacy `ao-workflow-runner` name OR the new `animus-workflow-runner` name
-  # depending on whether the publishing pipeline has caught up. Map the
-  # legacy filename onto the new name so this installer keeps working against
-  # already-published v0.4.x archives (and ANIMUS_VERSION-pinned downgrades).
-  if [[ ! -f "${stage_dir}/animus-workflow-runner" ]] && [[ -f "${stage_dir}/ao-workflow-runner" ]]; then
-    info "archive ships the legacy ao-workflow-runner name; mapping to animus-workflow-runner"
-    cp "${stage_dir}/ao-workflow-runner" "${stage_dir}/animus-workflow-runner"
+  # As of v0.5.1 round-4 fold-in the workflow runner binary moved out of
+  # this release archive to the `animus-workflow-runner-default` plugin.
+  # If a v0.4.x archive is pinned via ANIMUS_VERSION it may still ship the
+  # legacy `animus-workflow-runner` / `ao-workflow-runner` binary; we map
+  # it back onto disk under the v0.5 plugin install dir so the daemon's
+  # resolver finds it without an extra `animus plugin install` step.
+  local legacy_runner=""
+  if [[ -f "${stage_dir}/animus-workflow-runner" ]]; then
+    legacy_runner="${stage_dir}/animus-workflow-runner"
+  elif [[ -f "${stage_dir}/ao-workflow-runner" ]]; then
+    legacy_runner="${stage_dir}/ao-workflow-runner"
   fi
 
   for bin in "${BINARIES[@]}"; do
@@ -130,20 +133,26 @@ main() {
   rm -f "${INSTALL_DIR}/ao"
   ln -s "${INSTALL_DIR}/animus" "${INSTALL_DIR}/ao"
 
-  # Create 'ao-workflow-runner' as a symlink to 'animus-workflow-runner' for
-  # back-compat with v0.4.x daemons that spawned the legacy name. The
-  # v0.4.16+ daemon's runner-resolver prefers the new name but will fall
-  # back to this symlink so an in-progress upgrade (new binary, old daemon
-  # PID still spawning the old name) keeps dispatching workflows.
-  rm -f "${INSTALL_DIR}/ao-workflow-runner"
-  ln -s "${INSTALL_DIR}/animus-workflow-runner" "${INSTALL_DIR}/ao-workflow-runner"
+  # Workflow runner: prefer the v0.5 plugin install. If the archive
+  # carries the legacy runner binary, drop it next to other CLI binaries
+  # so an upgrading daemon keeps dispatching while the operator runs
+  # `animus plugin install launchapp-dev/animus-workflow-runner-default`.
+  if [[ -n "${legacy_runner}" ]]; then
+    rm -f "${INSTALL_DIR}/animus-workflow-runner"
+    cp "${legacy_runner}" "${INSTALL_DIR}/animus-workflow-runner"
+    chmod +x "${INSTALL_DIR}/animus-workflow-runner"
+    rm -f "${INSTALL_DIR}/ao-workflow-runner"
+    ln -s "${INSTALL_DIR}/animus-workflow-runner" "${INSTALL_DIR}/ao-workflow-runner"
+    warn "installed legacy workflow runner; v0.5.1+ uses the plugin — run 'animus plugin install launchapp-dev/animus-workflow-runner-default'"
+  fi
 
   info "Installed to ${INSTALL_DIR}:"
   for bin in "${BINARIES[@]}"; do
     printf '  %s\n' "${INSTALL_DIR}/${bin}"
   done
   printf '  %s → %s (symlink)\n' "${INSTALL_DIR}/ao" "animus"
-  printf '  %s → %s (back-compat symlink)\n' "${INSTALL_DIR}/ao-workflow-runner" "animus-workflow-runner"
+  printf '\nNext step: install the v0.5 workflow runner plugin:\n'
+  printf '  animus plugin install launchapp-dev/animus-workflow-runner-default\n'
 
   if ! echo "${PATH}" | tr ':' '\n' | grep -qxF "${INSTALL_DIR}"; then
     warn "${INSTALL_DIR} is not in your PATH"

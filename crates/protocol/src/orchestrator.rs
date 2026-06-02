@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -774,6 +774,13 @@ pub struct DaemonHealth {
     pub total_agents_completed: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_agents_failed: Option<u64>,
+    /// v0.5: active flavor identifier (e.g. `"default"`). Surfaced via
+    /// `animus daemon health --json | jq '.flavor'` and the unified
+    /// `animus status --json` envelope. Populated from
+    /// `flavors/<name>.toml` discovery; `None` when no flavor manifest is
+    /// installed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flavor: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1556,254 +1563,62 @@ const fn default_high_priority_budget_percent() -> u8 {
     DEFAULT_HIGH_PRIORITY_BUDGET_PERCENT
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum WorkflowSubject {
-    Task { id: String },
-    Requirement { id: String },
-    Custom { title: String, description: String },
-}
+pub use animus_subject_protocol::{
+    SubjectDispatch, SubjectRef, WorkflowSubject, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK,
+};
 
-impl WorkflowSubject {
-    pub fn id(&self) -> &str {
-        match self {
-            Self::Task { id } | Self::Requirement { id } => id,
-            Self::Custom { title, .. } => title,
-        }
-    }
-}
+pub trait SubjectDispatchExt: Sized {
+    fn for_task(task_id: impl Into<String>, workflow_ref: impl Into<String>) -> Self;
 
-pub const SUBJECT_KIND_TASK: &str = "animus.task";
-pub const SUBJECT_KIND_REQUIREMENT: &str = "animus.requirement";
-pub const SUBJECT_KIND_CUSTOM: &str = "custom";
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-struct SubjectRefData {
-    pub kind: String,
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub labels: Vec<String>,
-    #[serde(default = "default_subject_metadata", skip_serializing_if = "subject_metadata_is_empty")]
-    pub metadata: Value,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-enum SubjectRefWire {
-    Legacy(WorkflowSubject),
-    Generic(SubjectRefData),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SubjectRef {
-    pub kind: String,
-    pub id: String,
-    pub title: Option<String>,
-    pub description: Option<String>,
-    pub labels: Vec<String>,
-    pub metadata: Value,
-}
-
-impl SubjectRef {
-    pub fn new(kind: impl Into<String>, id: impl Into<String>) -> Self {
-        Self {
-            kind: kind.into(),
-            id: id.into(),
-            title: None,
-            description: None,
-            labels: Vec::new(),
-            metadata: default_subject_metadata(),
-        }
-    }
-
-    pub fn task(task_id: impl Into<String>) -> Self {
-        Self::new(SUBJECT_KIND_TASK, task_id)
-    }
-
-    pub fn requirement(requirement_id: impl Into<String>) -> Self {
-        Self::new(SUBJECT_KIND_REQUIREMENT, requirement_id)
-    }
-
-    pub fn custom(title: impl Into<String>, description: impl Into<String>) -> Self {
-        let title = title.into();
-        Self {
-            kind: SUBJECT_KIND_CUSTOM.to_string(),
-            id: title.clone(),
-            title: Some(title),
-            description: Some(description.into()),
-            labels: Vec::new(),
-            metadata: default_subject_metadata(),
-        }
-    }
-
-    pub fn kind(&self) -> &str {
-        self.kind.as_str()
-    }
-
-    pub fn id(&self) -> &str {
-        self.id.as_str()
-    }
-
-    pub fn task_id(&self) -> Option<&str> {
-        self.kind.eq_ignore_ascii_case(SUBJECT_KIND_TASK).then_some(self.id.as_str())
-    }
-
-    pub fn requirement_id(&self) -> Option<&str> {
-        self.kind.eq_ignore_ascii_case(SUBJECT_KIND_REQUIREMENT).then_some(self.id.as_str())
-    }
-
-    pub fn schedule_id(&self) -> Option<&str> {
-        self.kind.eq_ignore_ascii_case(SUBJECT_KIND_CUSTOM).then(|| self.id.strip_prefix("schedule:")).flatten()
-    }
-
-    pub fn subject_key(&self) -> String {
-        if self.kind.eq_ignore_ascii_case(SUBJECT_KIND_TASK)
-            || self.kind.eq_ignore_ascii_case(SUBJECT_KIND_REQUIREMENT)
-            || self.kind.eq_ignore_ascii_case(SUBJECT_KIND_CUSTOM)
-        {
-            return self.id.clone();
-        }
-
-        format!("{}::{}", self.kind, self.id)
-    }
-
-    pub fn to_workflow_subject(&self) -> WorkflowSubject {
-        if self.kind.eq_ignore_ascii_case(SUBJECT_KIND_TASK) {
-            return WorkflowSubject::Task { id: self.id.clone() };
-        }
-        if self.kind.eq_ignore_ascii_case(SUBJECT_KIND_REQUIREMENT) {
-            return WorkflowSubject::Requirement { id: self.id.clone() };
-        }
-
-        WorkflowSubject::Custom {
-            title: self.title.clone().unwrap_or_else(|| self.id.clone()),
-            description: self.description.clone().unwrap_or_default(),
-        }
-    }
-
-    fn from_workflow_subject(subject: WorkflowSubject) -> Self {
-        match subject {
-            WorkflowSubject::Task { id } => Self::task(id),
-            WorkflowSubject::Requirement { id } => Self::requirement(id),
-            WorkflowSubject::Custom { title, description } => Self::custom(title, description),
-        }
-    }
-
-    fn can_serialize_as_legacy(&self) -> bool {
-        self.labels.is_empty()
-            && subject_metadata_is_empty(&self.metadata)
-            && (self.kind.eq_ignore_ascii_case(SUBJECT_KIND_TASK)
-                || self.kind.eq_ignore_ascii_case(SUBJECT_KIND_REQUIREMENT)
-                || self.kind.eq_ignore_ascii_case(SUBJECT_KIND_CUSTOM))
-    }
-
-    fn into_wire(self) -> SubjectRefWire {
-        if self.can_serialize_as_legacy() {
-            SubjectRefWire::Legacy(self.to_workflow_subject())
-        } else {
-            SubjectRefWire::Generic(SubjectRefData {
-                kind: self.kind,
-                id: self.id,
-                title: self.title,
-                description: self.description,
-                labels: self.labels,
-                metadata: self.metadata,
-            })
-        }
-    }
-}
-
-impl Serialize for SubjectRef {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        self.clone().into_wire().serialize(serializer)
-    }
-}
-
-impl<'de> Deserialize<'de> for SubjectRef {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let wire = SubjectRefWire::deserialize(deserializer)?;
-        Ok(match wire {
-            SubjectRefWire::Legacy(subject) => SubjectRef::from_workflow_subject(subject),
-            SubjectRefWire::Generic(data) => SubjectRef {
-                kind: data.kind,
-                id: data.id,
-                title: data.title,
-                description: data.description,
-                labels: data.labels,
-                metadata: data.metadata,
-            },
-        })
-    }
-}
-
-fn default_subject_metadata() -> Value {
-    Value::Object(serde_json::Map::new())
-}
-
-fn subject_metadata_is_empty(value: &Value) -> bool {
-    matches!(value, Value::Null) || value.as_object().is_some_and(|object| object.is_empty())
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SubjectDispatch {
-    pub subject: SubjectRef,
-    pub workflow_ref: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub input: Option<Value>,
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    pub vars: HashMap<String, String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub priority: Option<String>,
-    pub trigger_source: String,
-    pub requested_at: DateTime<Utc>,
-}
-
-impl SubjectDispatch {
-    pub fn for_subject_with_metadata(
-        subject: SubjectRef,
+    fn for_task_with_metadata(
+        task_id: impl Into<String>,
         workflow_ref: impl Into<String>,
         trigger_source: impl Into<String>,
         requested_at: DateTime<Utc>,
-    ) -> Self {
-        Self {
-            subject,
-            workflow_ref: workflow_ref.into(),
-            input: None,
-            vars: HashMap::new(),
-            priority: None,
-            trigger_source: trigger_source.into(),
-            requested_at,
-        }
+    ) -> Self;
+
+    fn for_requirement(
+        requirement_id: impl Into<String>,
+        workflow_ref: impl Into<String>,
+        trigger_source: impl Into<String>,
+    ) -> Self;
+
+    fn for_custom(
+        title: impl Into<String>,
+        description: impl Into<String>,
+        workflow_ref: impl Into<String>,
+        input: Option<Value>,
+        trigger_source: impl Into<String>,
+    ) -> Self;
+
+    fn to_workflow_run_input(&self) -> WorkflowRunInput;
+}
+
+impl SubjectDispatchExt for SubjectDispatch {
+    fn for_task(task_id: impl Into<String>, workflow_ref: impl Into<String>) -> Self {
+        <Self as SubjectDispatchExt>::for_task_with_metadata(task_id, workflow_ref, "ready-queue", Utc::now())
     }
 
-    pub fn for_task(task_id: impl Into<String>, workflow_ref: impl Into<String>) -> Self {
-        Self::for_task_with_metadata(task_id, workflow_ref, "ready-queue", Utc::now())
-    }
-
-    pub fn for_task_with_metadata(
+    fn for_task_with_metadata(
         task_id: impl Into<String>,
         workflow_ref: impl Into<String>,
         trigger_source: impl Into<String>,
         requested_at: DateTime<Utc>,
     ) -> Self {
-        Self::for_subject_with_metadata(SubjectRef::task(task_id), workflow_ref, trigger_source, requested_at)
+        SubjectDispatch::for_subject_with_metadata(
+            SubjectRef::task(task_id),
+            workflow_ref,
+            trigger_source,
+            requested_at,
+        )
     }
 
-    pub fn for_requirement(
+    fn for_requirement(
         requirement_id: impl Into<String>,
         workflow_ref: impl Into<String>,
         trigger_source: impl Into<String>,
     ) -> Self {
-        Self::for_subject_with_metadata(
+        SubjectDispatch::for_subject_with_metadata(
             SubjectRef::requirement(requirement_id),
             workflow_ref,
             trigger_source,
@@ -1811,58 +1626,23 @@ impl SubjectDispatch {
         )
     }
 
-    pub fn for_custom(
+    fn for_custom(
         title: impl Into<String>,
         description: impl Into<String>,
         workflow_ref: impl Into<String>,
         input: Option<Value>,
         trigger_source: impl Into<String>,
     ) -> Self {
-        let mut dispatch = Self::for_subject_with_metadata(
+        let dispatch = SubjectDispatch::for_subject_with_metadata(
             SubjectRef::custom(title, description),
             workflow_ref,
             trigger_source,
             Utc::now(),
         );
-        dispatch.input = input;
-        dispatch
+        dispatch.with_input(input)
     }
 
-    pub fn subject_id(&self) -> &str {
-        self.subject.id()
-    }
-
-    pub fn subject_kind(&self) -> &str {
-        self.subject.kind()
-    }
-
-    pub fn subject_key(&self) -> String {
-        self.subject.subject_key()
-    }
-
-    pub fn task_id(&self) -> Option<&str> {
-        self.subject.task_id()
-    }
-
-    pub fn requirement_id(&self) -> Option<&str> {
-        self.subject.requirement_id()
-    }
-
-    pub fn schedule_id(&self) -> Option<&str> {
-        self.subject.schedule_id()
-    }
-
-    pub fn with_input(mut self, input: Option<Value>) -> Self {
-        self.input = input;
-        self
-    }
-
-    pub fn with_vars(mut self, vars: HashMap<String, String>) -> Self {
-        self.vars = vars;
-        self
-    }
-
-    pub fn to_workflow_run_input(&self) -> WorkflowRunInput {
+    fn to_workflow_run_input(&self) -> WorkflowRunInput {
         let mut input = match self.subject.kind() {
             SUBJECT_KIND_TASK => WorkflowRunInput::for_task(self.subject.id.clone(), Some(self.workflow_ref.clone())),
             SUBJECT_KIND_REQUIREMENT => {

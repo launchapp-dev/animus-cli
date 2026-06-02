@@ -29,8 +29,9 @@ such as `animus.plugin.install` and `animus.plugin.uninstall` can still take
 `project_root` so project-local `.animus/plugins.lock` updates stay scoped to
 the target repo when present.
 
-The total includes both the legacy `animus.agent.memory.*` tools and the newer
-top-level `animus.memory.*` surface exposed by `animus mcp serve`.
+The total includes both the CLI-shaped `animus.agent.memory.*` wrappers and the
+top-level `animus.memory.*` document-oriented surface composed into
+`animus mcp serve`.
 
 ## Subject Operations
 
@@ -115,13 +116,19 @@ dispatch control.
 
 ```json
 {}                                          // animus.daemon.status / health / agents
-{ "autonomous": true, "pool_size": 3 }      // animus.daemon.start
+{ "autonomous": true, "pool_size": 3, "auto_install": true } // animus.daemon.start
+{ "skip_preflight": true }                  // animus.daemon.start (dev escape hatch)
 { "auto_run_ready": true, "pool_size": 4 }  // animus.daemon.config-set
 { "limit": 50 }                              // animus.daemon.events
 { "project_root": "/repo" }                  // animus.queue.list / stats
 { "subject_id": "task:TASK-001" }            // animus.queue.hold / release / drop
 { "subject_ids": ["task:TASK-003", "task:TASK-001"] } // animus.queue.reorder
 ```
+
+`animus.daemon.start` runs the same startup plugin preflight as the CLI. Use
+`auto_install` when you want the daemon to remediate missing required plugins
+from its recommended defaults before continuing; use `skip_preflight` only for
+dev or intentionally degraded runs.
 
 ## Output, Logs, and Runner Operations
 

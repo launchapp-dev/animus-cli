@@ -2,11 +2,13 @@
 //!
 //! Every Animus plugin — providers (LLM CLIs), subject backends (Linear, Jira,
 //! GitHub Issues, ...), trigger backends (Slack, webhooks, ...), and any future
-//! plugin kind — speaks the same newline-delimited JSON-RPC 2.0 protocol over
-//! stdin/stdout. This crate defines the language-neutral wire shapes the host
-//! and plugin agree on: the request/response envelope, error codes, the
-//! `initialize`/`initialized`/`health/check` lifecycle, plugin kinds, and the
-//! capability declarations exchanged during the handshake.
+//! plugin kind — speaks the same JSON-RPC 2.0 protocol over stdin/stdout. The
+//! canonical framing is one JSON value per line (NDJSON), and current host-side
+//! readers also tolerate pretty-printed multi-line frames from plugins for
+//! forward compatibility. This crate defines the language-neutral wire shapes
+//! the host and plugin agree on: the request/response envelope, error codes,
+//! the `initialize`/`initialized`/`health/check` lifecycle, plugin kinds, and
+//! the capability declarations exchanged during the handshake.
 //!
 //! Plugin compatibility is intentionally defined by these wire shapes rather
 //! than by Rust crate linkage. A Python or TypeScript plugin that emits the

@@ -56,7 +56,7 @@ The workspace is organized into functional crates:
 
 - **Core orchestration**: `orchestrator-cli`, `orchestrator-core`, `orchestrator-config`, `orchestrator-store`
 - **Runtime & agents**: `agent-runner`, `workflow-runner-v2`, `orchestrator-daemon-runtime`, `orchestrator-session-host`
-- **Plugin host**: `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-subject-protocol`
+- **Plugin host**: `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime`
 - **Utilities**: `orchestrator-providers`, `orchestrator-git-ops`, `orchestrator-notifications`, `protocol`
 - **Web stack**: shipped as external plugins (`launchapp-dev/animus-transport-http`, `animus-transport-graphql`, `animus-web-ui`). Install with `animus plugin install-defaults --include-transports`.
 

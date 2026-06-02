@@ -122,7 +122,7 @@ note.
 ### v0.4.0
 
 Stdio plugin host foundation. The daemon learned to spawn plugin
-subprocesses, speak JSON-RPC over stdin/stdout, and dispatch
+subprocesses, speak JSON-RPC over stdin/stdout (canonical NDJSON framing), and dispatch
 phase-execution through them. Subject backends and providers became
 the first plugin kinds. Eight repos went live in the
 `launchapp-dev/animus-*` namespace.
@@ -162,7 +162,7 @@ deleted in a single commit:
 
 - `animus task` → `animus subject --kind task`
 - `animus requirements` → `animus subject --kind requirement`
-- `animus cloud` → out-of-tree plugin (TBD)
+- `animus cloud` → retired
 - `animus setup` → `animus init` (the supported onboarding entry point)
 - `animus now` → folded into `animus status`
 - `animus errors` → folded into `animus history`

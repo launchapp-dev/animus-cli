@@ -44,7 +44,13 @@ The runtime binary set is:
 | `animus` | `orchestrator-cli` | Main CLI |
 | `agent-runner` | `agent-runner` | Daemon agent runner |
 | `animus-oai-runner` | `oai-runner` | OpenAI-compatible runner |
-| `animus-workflow-runner` | `workflow-runner-v2` | Workflow phase execution runner (v0.4.x `ao-workflow-runner` is preserved as a back-compat symlink) |
+| `animus-workflow-runner-default` | external `workflow_runner` plugin | Preferred workflow phase execution binary required by daemon preflight |
+
+`animus-runtime-shared` now holds the in-tree shared workflow execution code,
+and the workflow phase execution binary is supplied by an external
+`workflow_runner` plugin. Legacy `animus-workflow-runner` and
+`ao-workflow-runner` names remain fallback resolution targets for older
+environments.
 
 ## Testing
 

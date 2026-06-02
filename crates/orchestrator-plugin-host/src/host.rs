@@ -12,7 +12,7 @@ use anyhow::{anyhow, Result};
 use semver::Version;
 use serde_json::Value;
 use thiserror::Error;
-use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::process::Child;
 use tokio::sync::{broadcast, oneshot, Mutex};
 use tokio::task::JoinHandle;
@@ -965,37 +965,70 @@ async fn drain_pending(inner: &PluginHostInner) {
 
 /// Single-reader router: own the transport's read half, demultiplex
 /// inbound frames to pending awaiters and notification subscribers.
+///
+/// Streaming JSON-RPC frame reader. Issue #241: reads raw bytes into a
+/// buffer and peels off complete JSON values with
+/// `serde_json::Deserializer`, independent of newline framing. Accepts
+/// both the canonical NDJSON wire form and pretty-printed multi-line
+/// frames for forward-compat with hosts that emit indented JSON-RPC.
 async fn reader_loop(
-    reader: Box<dyn AsyncRead + Send + Unpin>,
+    mut reader: Box<dyn AsyncRead + Send + Unpin>,
     inner: Arc<PluginHostInner>,
     notifications_tx: broadcast::Sender<RpcNotification>,
 ) {
-    let mut buf_reader = BufReader::new(reader);
-    let mut line = String::new();
+    let mut buffer: Vec<u8> = Vec::with_capacity(8 * 1024);
+    let mut chunk = [0u8; 4096];
     loop {
-        line.clear();
-        match buf_reader.read_line(&mut line).await {
+        let n = match reader.read(&mut chunk).await {
             Ok(0) => {
                 debug!(plugin = %inner.name, "plugin stdout reached EOF; draining pending awaiters");
                 break;
             }
-            Ok(_) => {
-                let trimmed = line.trim();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let frame: Value = match serde_json::from_str(trimmed) {
-                    Ok(value) => value,
-                    Err(error) => {
-                        tracing::error!(plugin = %inner.name, %error, "malformed JSON frame from plugin; skipping");
-                        continue;
-                    }
-                };
-                handle_frame(&inner, &notifications_tx, frame).await;
-            }
+            Ok(n) => n,
             Err(error) => {
                 tracing::error!(plugin = %inner.name, %error, "plugin stdout read error; tearing down router");
                 break;
+            }
+        };
+        buffer.extend_from_slice(&chunk[..n]);
+
+        loop {
+            // Skip leading whitespace before attempting to deserialize.
+            let leading_ws = buffer.iter().take_while(|b| b.is_ascii_whitespace()).count();
+            if leading_ws > 0 {
+                buffer.drain(..leading_ws);
+            }
+            if buffer.is_empty() {
+                break;
+            }
+
+            let mut stream = serde_json::Deserializer::from_slice(&buffer).into_iter::<Value>();
+            match stream.next() {
+                Some(Ok(frame)) => {
+                    let consumed = stream.byte_offset();
+                    drop(stream);
+                    buffer.drain(..consumed);
+                    handle_frame(&inner, &notifications_tx, frame).await;
+                }
+                Some(Err(error)) if error.is_eof() => {
+                    // Need more bytes for the current frame.
+                    break;
+                }
+                Some(Err(error)) => {
+                    tracing::error!(plugin = %inner.name, %error, "malformed JSON frame from plugin; skipping");
+                    // Recover by discarding bytes up to the next newline
+                    // so we can keep parsing any valid frames already
+                    // buffered. If no newline is in sight, wait for more
+                    // bytes — clearing the buffer here would drop unread
+                    // partial frames the plugin may complete on its next
+                    // write.
+                    if let Some(pos) = buffer.iter().position(|b| *b == b'\n') {
+                        buffer.drain(..=pos);
+                        continue;
+                    }
+                    break;
+                }
+                None => break,
             }
         }
     }
@@ -1122,6 +1155,38 @@ mod tests {
         let host = PluginHost::from_streams("test", host_reader, host_writer);
         let result = host.handshake().await.expect("handshake should succeed");
 
+        assert_eq!(result.plugin_info.name, "test");
+    }
+
+    /// Issue #241: reader_loop must accept pretty-printed multi-line
+    /// JSON-RPC frames, not just NDJSON. This test drives the host
+    /// against a plugin stub that writes its initialize response as a
+    /// pretty-printed value (containing literal newlines mid-frame).
+    #[tokio::test]
+    async fn reader_loop_accepts_pretty_printed_multi_line_response() {
+        let (host_reader, mut plugin_writer) = duplex(8192);
+        let (plugin_reader, host_writer) = duplex(8192);
+
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(plugin_reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read initialize");
+            let request: RpcRequest = serde_json::from_str(line.trim()).expect("parse initialize");
+
+            let response = ok_initialize_response(request.id, PROTOCOL_VERSION);
+            let pretty = serde_json::to_string_pretty(&response).expect("pretty json");
+            assert!(pretty.contains('\n'), "test setup expected multi-line frame");
+            // Write the pretty-printed frame WITHOUT a trailing newline.
+            // The streaming reader must peel it off purely by parsing.
+            plugin_writer.write_all(pretty.as_bytes()).await.expect("write pretty response");
+
+            // Drain the host's `initialized` notification so the duplex
+            // doesn't block the handshake on backpressure.
+            let _ = reader.read_line(&mut line).await;
+        });
+
+        let host = PluginHost::from_streams("test", host_reader, host_writer);
+        let result = host.handshake().await.expect("handshake should succeed against multi-line frame");
         assert_eq!(result.plugin_info.name, "test");
     }
 

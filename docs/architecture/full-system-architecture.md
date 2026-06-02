@@ -9,7 +9,7 @@ If this document and code disagree, trust the code. The fastest source checks
 are `Cargo.toml`, `crates/orchestrator-cli/src/cli_types/root_types.rs`,
 `crates/orchestrator-core/src/config.rs`, `crates/orchestrator-core/src/services.rs`,
 `crates/orchestrator-daemon-runtime/src/lib.rs`, and
-`crates/workflow-runner-v2/src/lib.rs`.
+`crates/animus-runtime-shared/src/lib.rs`.
 
 ## Architecture Goals
 
@@ -30,19 +30,24 @@ The core goals are:
 
 ## Workspace Inventory
 
-`Cargo.toml` currently declares 18 workspace members.
+`Cargo.toml` currently declares 17 workspace members.
 
 | Group | Crates |
 |---|---|
 | CLI | `orchestrator-cli` |
 | Core services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` |
-| Runtime | `orchestrator-daemon-runtime`, `workflow-runner-v2`, `agent-runner` |
+| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` |
 | Provider/session | `orchestrator-session-host`, `orchestrator-providers`, `oai-runner` |
-| Plugin foundation | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-subject-protocol`, `animus-plugin-runtime` |
+| Plugin foundation | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` |
 | Support | `orchestrator-git-ops`, `orchestrator-notifications`, `orchestrator-logging`, `protocol` |
 
-Repo-local but not current workspace members: `animus-provider-mock`,
-`animus-plugin-smoke`, and `orchestrator-web-server`.
+The workspace also depends on external `launchapp-dev/animus-protocol` crates.
+The authoritative dependency pins live in the repo's `Cargo.toml` files,
+especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
+current runtime mixes legacy `v0.1.13` provider/session wire crates with newer
+`v0.5.x` queue/workflow/subject protocol crates.
+
+Repo-local but not current workspace members: `crates/orchestrator-web-server/`.
 
 The release/runtime binary set is:
 
@@ -51,7 +56,13 @@ The release/runtime binary set is:
 | `animus` | `orchestrator-cli` | User-facing CLI, MCP endpoint, operations |
 | `agent-runner` | `agent-runner` | Agent execution service |
 | `animus-oai-runner` | `oai-runner` | OpenAI-compatible runner |
-| `animus-workflow-runner` | `workflow-runner-v2` | Workflow phase execution runner (v0.4.x `ao-workflow-runner` retained as installer-created back-compat symlink) |
+| `animus-workflow-runner-default` | external `workflow_runner` plugin | Preferred workflow phase execution binary launched by daemon dispatch and required by plugin preflight |
+
+`animus-runtime-shared` is the in-tree shared workflow execution/runtime
+library. The actual workflow phase execution binary now comes from an installed
+`workflow_runner` plugin. Historical `animus-workflow-runner` and
+`ao-workflow-runner` binary names still exist only as fallback resolution
+targets for older installs.
 
 ## Process Topology
 
@@ -63,7 +74,7 @@ flowchart TB
     CTRL["daemon control socket"]
     CORE["FileServiceHub<br/>orchestrator-core"]
     DAEMON["daemon runtime"]
-    WFR["animus-workflow-runner"]
+    WFR["animus-workflow-runner-default<br/>(preferred)"]
     AR["agent-runner"]
     SESSION["orchestrator-session-host"]
     PHOST["orchestrator-plugin-host"]
@@ -138,6 +149,8 @@ Scoped runtime state in `~/.animus/<repo-scope>/`:
 - `config/`
 - `daemon/`
 - `docs/`
+- `logs/`
+- `runner/`
 - `state/`
 - `worktrees/`
 
@@ -195,8 +208,8 @@ Animus currently has these main domain concepts:
 | Subject | Generic unit of dispatchable work, routed by kind | subject backend plugins, `animus-subject-protocol` |
 | Task | Default subject kind for local task work | `animus-subject-default` plugin and compatibility services |
 | Requirement | Requirement subject and planning unit | requirements plugin and planning services |
-| Workflow | Multi-phase automation plan | `orchestrator-core`, `workflow-runner-v2` |
-| Phase | One step in a workflow, command or agent backed | `workflow-runner-v2` |
+| Workflow | Multi-phase automation plan | `orchestrator-core`, `animus-runtime-shared`, external `workflow_runner` plugins |
+| Phase | One step in a workflow, command or agent backed | `animus-runtime-shared`, external `workflow_runner` plugins |
 | Queue entry | Pending/held/assigned dispatch unit | `orchestrator-daemon-runtime::queue` |
 | Trigger | Event source that can enqueue or dispatch work | trigger plugins and daemon schedule runtime |
 | Execution fact | Runtime fact emitted by workflow execution | `protocol`, execution projection |
@@ -251,18 +264,21 @@ The high-level daemon loop is:
 3. Resolve queue and subject state.
 4. Apply capacity limits and schedule headroom.
 5. Build a ready dispatch plan.
-6. Spawn `animus-workflow-runner` processes for selected work.
+6. Spawn the resolved workflow-runner executable for selected work, preferring
+   `animus-workflow-runner-default` and falling back to legacy names only for
+   older installs.
 7. Process due triggers when capacity allows.
 8. Capture workflow events, completion, and terminal projection.
 9. Persist metrics, logs, and queue state.
 
-The process manager owns active workflow children. Workflow execution details
-stay in `workflow-runner-v2`.
+The process manager owns active workflow children. Shared workflow execution
+details stay in `animus-runtime-shared` and the installed `workflow_runner`
+plugin implementation.
 
 ## Workflow Runner
 
-`workflow-runner-v2` is the execution host for workflow phases. Its module split
-is architectural:
+The installed `workflow_runner` plugin is the execution host for workflow
+phases. The shared `animus-runtime-shared` module split remains architectural:
 
 - `workflow_execute`: top-level workflow execution
 - `phase_executor`: phase execution orchestration
@@ -387,7 +403,7 @@ Observability spans several layers:
 
 - daemon event log and health snapshots
 - daemon control streaming
-- workflow event pipe from `workflow-runner-v2`
+- workflow event pipe from the installed `workflow_runner` plugin via shared `animus-runtime-shared` helpers
 - runner event persistence
 - output inspection via `animus output`
 - history inspection via `animus history`
@@ -419,7 +435,7 @@ See [Plugin Signing](plugin-signing.md) and [Plugin Host Concurrency](plugin-hos
 | Area | Model |
 |---|---|
 | Daemon | tick loop plus child process supervision |
-| Workflow runner | phase execution with explicit event emission and persisted markers |
+| Workflow runner plugin | phase execution with explicit event emission and persisted markers |
 | Agent runner | IPC server with live/finished run maps |
 | Plugin host | single stdout reader task, pending response map, notification broadcast |
 | Provider sessions | active session map so cancel reaches the owning plugin host |
@@ -490,7 +506,7 @@ Use this checklist for architecture-affecting changes:
 cargo animus-bin-check
 cargo test -p orchestrator-cli
 cargo test -p orchestrator-daemon-runtime
-cargo test -p workflow-runner-v2
+cargo test -p animus-runtime-shared
 cargo test -p agent-runner
 cargo test -p orchestrator-plugin-host
 cargo test -p orchestrator-session-host

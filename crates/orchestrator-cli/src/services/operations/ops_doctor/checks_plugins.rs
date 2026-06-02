@@ -47,6 +47,8 @@ pub(crate) fn run(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
             RequiredRole::AtLeastOneProvider => summaries.iter().any(|s| s.is_provider()),
             RequiredRole::SubjectKind(kind) => summaries.iter().any(|s| s.covers_subject_kind(kind)),
             RequiredRole::TransportEnabled => true,
+            RequiredRole::WorkflowRunner => summaries.iter().any(|s| s.is_workflow_runner()),
+            RequiredRole::Queue => summaries.iter().any(|s| s.is_queue()),
         };
         if !satisfied {
             missing_roles.push(label);

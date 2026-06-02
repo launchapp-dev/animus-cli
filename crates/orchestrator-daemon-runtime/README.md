@@ -4,7 +4,7 @@ Core runtime engine for the Animus daemon tick loop, queue, scheduling, and proc
 
 ## Overview
 
-`orchestrator-daemon-runtime` provides the continuous runtime machinery behind `ao daemon ...`. It owns the daemon lifecycle loop, the dispatch queue, schedule evaluation, ready-dispatch planning, spawned workflow-runner process tracking, and reconciliation of completed work back into Animus state.
+`orchestrator-daemon-runtime` provides the continuous runtime machinery behind `animus daemon ...`. It owns the daemon lifecycle loop, the dispatch queue, schedule evaluation, ready-dispatch planning, spawned workflow-runner process tracking, and reconciliation of completed work back into Animus state.
 
 ## Targets
 

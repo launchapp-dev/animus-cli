@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use tracing::warn;
 
 use super::TriggerDispatchOutcome;
-use crate::SubjectDispatch;
+use crate::{SubjectDispatch, SubjectDispatchExt};
 
 pub struct TriggerDispatch;
 

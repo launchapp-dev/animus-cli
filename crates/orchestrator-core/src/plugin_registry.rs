@@ -24,6 +24,21 @@ pub const DEFAULT_PROVIDER_PLUGINS: &[(&str, &str)] = &[
     ("launchapp-dev/animus-provider-oai", "v0.2.2"),
 ];
 
+/// v0.5 workflow_runner + queue plugins installed as part of the default
+/// flavor. Required for `animus daemon start` once the plugin-only path
+/// is the default (deletion gate in Wave 3 "Out of scope").
+pub const DEFAULT_WORKFLOW_RUNNER_PLUGINS: &[(&str, &str)] =
+    &[("launchapp-dev/animus-workflow-runner-default", "v0.4.1")];
+
+/// v0.5 queue plugin. See [`DEFAULT_WORKFLOW_RUNNER_PLUGINS`].
+pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.2.0")];
+
+/// v0.5 durable-store plugin (DBOS Option A).
+pub const DEFAULT_DURABLE_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-step-durable-dbos", "v0.2.0")];
+
+/// v0.5 memory-store plugin (Zep Cloud).
+pub const DEFAULT_MEMORY_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-memory-zep", "v0.1.0")];
+
 /// Optional add-on opted in by `--include-oai-agent`.
 pub const DEFAULT_OAI_AGENT_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-provider-oai-agent", "v0.1.3")];
 
@@ -49,6 +64,29 @@ pub const DEFAULT_TRANSPORT_PLUGINS: &[(&str, &str)] = &[
 /// `animus plugin install`.
 pub fn format_repo_spec(entry: (&str, &str)) -> String {
     format!("{}@{}", entry.0, entry.1)
+}
+
+/// Look up the curated pin for a plugin slug across every default table.
+/// Returns `None` for slugs the curated registry does not yet pin (e.g.
+/// the v0.5 `default` flavor lists `animus-provider-ollama` and the
+/// v0.5 trigger plugins ahead of their first curated release). Callers
+/// should treat `None` as "skip with a warning, don't fail".
+pub fn resolve_tag_for_slug(slug: &str) -> Option<&'static str> {
+    for table in [
+        DEFAULT_PROVIDER_PLUGINS,
+        DEFAULT_OAI_AGENT_PLUGINS,
+        DEFAULT_SUBJECT_PLUGINS,
+        DEFAULT_TRANSPORT_PLUGINS,
+        DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+        DEFAULT_QUEUE_PLUGINS,
+        DEFAULT_DURABLE_STORE_PLUGINS,
+        DEFAULT_MEMORY_STORE_PLUGINS,
+    ] {
+        if let Some((_, tag)) = table.iter().find(|(s, _)| *s == slug) {
+            return Some(*tag);
+        }
+    }
+    None
 }
 
 /// Repo+tag spec for the default provider that preflight should install

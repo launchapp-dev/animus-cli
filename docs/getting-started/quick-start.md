@@ -49,7 +49,7 @@ animus daemon start --autonomous
 ```
 
 If your environment is incomplete and you want the daemon to fix missing
-plugins on startup:
+plugins on startup, including the required `workflow_runner` / `queue` roles:
 
 ```bash
 animus daemon start --autonomous --auto-install

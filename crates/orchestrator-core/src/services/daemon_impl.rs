@@ -128,7 +128,16 @@ pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHe
         total_agents_spawned: None,
         total_agents_completed: None,
         total_agents_failed: None,
+        flavor: active_flavor_for_project(project_root),
     })
+}
+
+/// v0.5: probe the working tree for an `animus.flavor.v1` manifest and
+/// return its `id`. v0.5 always emits `"default"` when the canonical
+/// manifest at `flavors/default.toml` is found; absent installs return
+/// `None` so consumers can distinguish "not configured" from "default".
+fn active_flavor_for_project(project_root: &Path) -> Option<String> {
+    crate::flavor::load_flavor_in(project_root, crate::flavor::DEFAULT_FLAVOR_ID).ok().flatten().map(|m| m.id)
 }
 
 #[async_trait]
@@ -202,6 +211,7 @@ impl DaemonServiceApi for InMemoryServiceHub {
             total_agents_spawned: None,
             total_agents_completed: None,
             total_agents_failed: None,
+            flavor: crate::flavor::load_flavor(crate::flavor::DEFAULT_FLAVOR_ID).ok().flatten().map(|m| m.id),
         })
     }
 
@@ -443,6 +453,7 @@ impl DaemonServiceApi for FileServiceHub {
             total_agents_spawned: None,
             total_agents_completed: None,
             total_agents_failed: None,
+            flavor: active_flavor_for_project(&self.project_root),
         })
     }
 

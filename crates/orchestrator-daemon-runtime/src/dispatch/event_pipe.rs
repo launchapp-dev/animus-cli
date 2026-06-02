@@ -12,9 +12,9 @@
 //!    (falls back to `~/.animus/runs/.../events.pipe` when scoped state is
 //!    unavailable, e.g. tests with no git context).
 //! 3. The path is exposed via the env var
-//!    [`workflow_runner_v2::workflow_event_emitter::ANIMUS_WORKFLOW_EVENT_PIPE_ENV`]
+//!    [`animus_runtime_shared::workflow_event_emitter::ANIMUS_WORKFLOW_EVENT_PIPE_ENV`]
 //!    on the spawn command; the runner reads it on startup and builds a
-//!    [`workflow_runner_v2::SubprocessPipeEmitter`].
+//!    [`animus_runtime_shared::SubprocessPipeEmitter`].
 //! 4. A reader task per-spawn accepts the (single) inbound connection,
 //!    reads newline-delimited JSON frames, deserializes to
 //!    [`WireWorkflowEvent`], and forwards each into the broadcaster as a
@@ -33,9 +33,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 #[cfg(unix)]
-use tokio::task::JoinHandle;
+use animus_runtime_shared::workflow_event_emitter::{WireWorkflowEvent, ANIMUS_WORKFLOW_EVENT_PIPE_ENV};
 #[cfg(unix)]
-use workflow_runner_v2::workflow_event_emitter::{WireWorkflowEvent, ANIMUS_WORKFLOW_EVENT_PIPE_ENV};
+use tokio::task::JoinHandle;
 
 #[cfg(unix)]
 use crate::control::WorkflowEventBroadcaster;
@@ -381,12 +381,12 @@ impl SubprocessEventPipe {
 mod tests {
     use super::*;
     use crate::control::{SubscriberItem, WorkflowEventBroadcaster, WorkflowEventFilter};
+    use animus_runtime_shared::workflow_event_emitter::WireWorkflowEvent;
     use chrono::Utc;
     use serde_json::json;
     use std::io::Write;
     use std::os::unix::net::UnixStream;
     use tempfile::tempdir;
-    use workflow_runner_v2::workflow_event_emitter::WireWorkflowEvent;
 
     fn unwrap_event(item: SubscriberItem) -> animus_control_protocol::types::WorkflowEvent {
         match item {

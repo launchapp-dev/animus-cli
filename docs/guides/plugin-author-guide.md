@@ -18,7 +18,9 @@ and publishing a plugin. It assumes you have read the
 
 A plugin is a standalone executable that:
 
-- Speaks **newline-delimited JSON-RPC 2.0** over `stdin`/`stdout`.
+- Speaks **JSON-RPC 2.0 over `stdin`/`stdout`**. The canonical wire form is
+  one JSON value per line (NDJSON); current host-side readers also accept
+  pretty-printed multi-line frames from plugins.
 - Declares a **plugin kind** (`provider`, `subject_backend`,
   `trigger_backend`, `transport_backend`, `log_storage_backend`, or
   `custom`). The kind tells the daemon which method family the plugin
@@ -33,8 +35,10 @@ A plugin is a standalone executable that:
 The wire shapes — request/response envelopes, error codes, handshake,
 plugin kinds, capability flags — live in
 [`crates/animus-plugin-protocol/src/lib.rs`](../../crates/animus-plugin-protocol/src/lib.rs).
-A working reference plugin in ~180 lines of Rust is
-[`crates/animus-plugin-smoke/src/main.rs`](../../crates/animus-plugin-smoke/src/main.rs).
+For a current starter implementation, scaffold from the official
+[`launchapp-dev/animus-plugin-template`](https://github.com/launchapp-dev/animus-plugin-template)
+and compare against the maintained first-party plugin repos under
+[`launchapp-dev`](https://github.com/launchapp-dev?q=animus&type=all&language=&sort=).
 
 Plugin compatibility is defined by the wire shapes, not by Rust crate
 linkage. A Python or TypeScript plugin that emits the same JSON over
@@ -85,16 +89,16 @@ stdout and exits 0. The manifest must declare:
 - `notification_buffer_size` (optional): broadcast channel size hint
   for chatty plugins
 
-Example from `animus-plugin-smoke`:
+Example manifest:
 
 ```json
 {
-  "name": "animus-plugin-smoke",
+  "name": "animus-subject-my-tickets",
   "version": "0.1.0",
   "plugin_kind": "subject_backend",
-  "description": "End-to-end smoke plugin for Animus plugin host verification",
+  "description": "Subject backend for a custom ticket system",
   "protocol_version": "1.0.0",
-  "capabilities": ["initialize", "$/ping", "smoke/get", "health/check"]
+  "capabilities": ["initialize", "$/ping", "task/list", "task/get", "task/update", "health/check"]
 }
 ```
 
@@ -158,6 +162,12 @@ Current host routing sends kind-scoped methods such as `task/list` or
 `linear.issue/get`; keep the advertised `subject_kinds` in sync with the methods
 your backend handles.
 
+For project-scoped runtime plugins, inspect `InitializeParams.init_extensions`
+instead of inventing your own per-request project-root field. Current hosts send
+`project_binding` and may also send `memory_mcp_stdio_command` with the absolute
+path to the host `animus` binary for memory-sidecar launches. Unrecognized
+extensions are not errors; ignore them to stay forward-compatible.
+
 When the daemon spawns a subject backend, it pins the plugin cwd to the resolved
 `project_root`. If your backend stores repo-local state via relative paths, keep
 that contract intentional and document it; if you need some other base path,
@@ -201,7 +211,6 @@ stream into the normalized `SessionEvent` shape.
 - [`launchapp-dev/animus-provider-gemini`](https://github.com/launchapp-dev/animus-provider-gemini)
 - [`launchapp-dev/animus-provider-opencode`](https://github.com/launchapp-dev/animus-provider-opencode)
 - [`launchapp-dev/animus-provider-oai`](https://github.com/launchapp-dev/animus-provider-oai)
-- In-tree test fixture: [`crates/animus-provider-mock/src/main.rs`](../../crates/animus-provider-mock/src/main.rs)
 
 ### Trait
 
@@ -230,9 +239,7 @@ your CLI's event stream into:
 - `SessionEvent::Metadata { metadata }` — model, usage, etc.
 - `SessionEvent::Finished { exit_code }` — final event
 
-The 86-line
-[`animus-provider-mock`](../../crates/animus-provider-mock/src/main.rs)
-shows the full lifecycle without any CLI integration.
+Use the maintained provider repos above as the current lifecycle references.
 
 ### Cancel routing (v0.4.x)
 

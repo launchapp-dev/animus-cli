@@ -8,7 +8,18 @@ pub use runner::{PluginInstaller, PluginPreflightRunner};
 use animus_plugin_protocol::{PLUGIN_KIND_PROVIDER, PLUGIN_KIND_SUBJECT_BACKEND};
 use serde::{Deserialize, Serialize};
 
-use crate::plugin_registry::{default_provider_repo_spec, default_subject_repo_for_kind};
+use crate::plugin_registry::{
+    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, DEFAULT_QUEUE_PLUGINS,
+    DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+};
+
+/// Plugin-kind wire value for `workflow_runner`. Kept local because the
+/// in-tree `animus-plugin-protocol` crate is still on protocol v1.0 and
+/// does not export it; the v0.5 protocol crate defines it as the wire
+/// literal.
+const PLUGIN_KIND_WORKFLOW_RUNNER: &str = "workflow_runner";
+/// Plugin-kind wire value for `queue`. See [`PLUGIN_KIND_WORKFLOW_RUNNER`].
+const PLUGIN_KIND_QUEUE: &str = "queue";
 
 /// Default provider repo spec preflight should auto-install when
 /// `at_least_one_provider` is unsatisfied. Resolved at call time from the
@@ -32,6 +43,21 @@ pub fn default_requirement_backend_repo() -> String {
         .expect("requirement subject kind must have a curated default backend (animus-subject-requirements)")
 }
 
+/// Default repo spec preflight should auto-install when the
+/// `workflow_runner` role is unsatisfied.
+pub fn default_workflow_runner_repo() -> String {
+    let first =
+        DEFAULT_WORKFLOW_RUNNER_PLUGINS.first().copied().expect("DEFAULT_WORKFLOW_RUNNER_PLUGINS must be non-empty");
+    format_repo_spec(first)
+}
+
+/// Default repo spec preflight should auto-install when the `queue` role
+/// is unsatisfied.
+pub fn default_queue_repo() -> String {
+    let first = DEFAULT_QUEUE_PLUGINS.first().copied().expect("DEFAULT_QUEUE_PLUGINS must be non-empty");
+    format_repo_spec(first)
+}
+
 /// Compatibility shim: legacy string-typed export still pinned at the
 /// historical Claude provider tag for any out-of-tree code that imported
 /// `DEFAULT_PROVIDER_REPO` directly. New code should call
@@ -51,6 +77,8 @@ pub enum RequiredRole {
     AtLeastOneProvider,
     SubjectKind(String),
     TransportEnabled,
+    WorkflowRunner,
+    Queue,
 }
 
 impl RequiredRole {
@@ -59,6 +87,8 @@ impl RequiredRole {
             RequiredRole::AtLeastOneProvider => "at_least_one_provider".to_string(),
             RequiredRole::SubjectKind(kind) => format!("subject_kind:{kind}"),
             RequiredRole::TransportEnabled => "transport_enabled".to_string(),
+            RequiredRole::WorkflowRunner => "workflow_runner".to_string(),
+            RequiredRole::Queue => "queue".to_string(),
         }
     }
 }
@@ -77,12 +107,16 @@ impl PluginPreflightSpec {
                 RequiredRole::AtLeastOneProvider,
                 RequiredRole::SubjectKind("task".to_string()),
                 RequiredRole::SubjectKind("requirement".to_string()),
+                RequiredRole::WorkflowRunner,
+                RequiredRole::Queue,
             ],
             auto_install: false,
             auto_install_defaults: vec![
                 ("at_least_one_provider".to_string(), default_provider_repo()),
                 ("subject_kind:task".to_string(), default_task_backend_repo()),
                 ("subject_kind:requirement".to_string(), default_requirement_backend_repo()),
+                ("workflow_runner".to_string(), default_workflow_runner_repo()),
+                ("queue".to_string(), default_queue_repo()),
             ],
         }
     }
@@ -151,6 +185,14 @@ impl InstalledPluginSummary {
 
     pub fn is_subject_backend(&self) -> bool {
         self.plugin_kind == PLUGIN_KIND_SUBJECT_BACKEND
+    }
+
+    pub fn is_workflow_runner(&self) -> bool {
+        self.plugin_kind == PLUGIN_KIND_WORKFLOW_RUNNER
+    }
+
+    pub fn is_queue(&self) -> bool {
+        self.plugin_kind == PLUGIN_KIND_QUEUE
     }
 
     pub fn covers_subject_kind(&self, kind: &str) -> bool {

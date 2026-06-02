@@ -23,12 +23,20 @@ orchestrator-session-host = { workspace = true }
 animus-plugin-protocol = { workspace = true }
 animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
 animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
-# We use Subject / SubjectChangedEvent from the same v0.1.10 surface the
+# We use Subject / SubjectChangedEvent from the same v0.1.13 surface the
 # control-protocol references. Pulled from the same git tag so the
-# protocol versions stay in lockstep; the in-tree
-# `animus-subject-protocol` 0.1.0 remains the version subject backends /
-# inproc adapters use, and the daemon translates at the boundary.
+# protocol versions stay in lockstep; subject backends / inproc adapters
+# pin the matching upstream version, and the daemon translates at the
+# boundary.
 animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
+# v0.5 plugin protocol crates used by `plugin_clients` for routing
+# `queue/*` and `workflow/*` RPCs through installed plugins.
+# `protocol::SubjectDispatch` (re-exported from `animus-subject-protocol`)
+# remains the canonical type; `services::plugin_clients` serializes via
+# the v0.5 types over the wire.
+animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.1" }
+animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.1" }
+animus-subject-protocol-v05 = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.1" }
 protocol = { workspace = true }
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }
@@ -38,7 +46,8 @@ tokio = { version = "1", features = ["io-util", "process", "rt", "macros", "net"
 tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
-workflow-runner-v2 = { path = "../workflow-runner-v2" }
+animus-runtime-shared = { workspace = true }
+agent-runner = { path = "../agent-runner" }
 
 [dev-dependencies]
 protocol = { workspace = true, features = ["test-utils"] }
@@ -52,7 +61,7 @@ futures-util = "0.3"
 serde_json = "1.0"
 uuid = { version = "1", features = ["v4"] }
 animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
-workflow-runner-v2 = { path = "../workflow-runner-v2" }
+animus-runtime-shared = { workspace = true }
 
 [lints]
 workspace = true

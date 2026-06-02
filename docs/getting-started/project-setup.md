@@ -43,6 +43,8 @@ files.
 ├── config/
 ├── daemon/
 ├── docs/
+├── logs/
+├── runner/
 ├── state/
 └── worktrees/
 ```

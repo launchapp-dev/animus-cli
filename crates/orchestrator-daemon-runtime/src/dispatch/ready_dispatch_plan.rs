@@ -65,7 +65,7 @@ pub(crate) fn plan_ready_dispatch(
 #[cfg(test)]
 mod tests {
     use chrono::{TimeZone, Utc};
-    use protocol::SubjectDispatch;
+    use protocol::{SubjectDispatch, SubjectDispatchExt};
 
     use super::*;
 

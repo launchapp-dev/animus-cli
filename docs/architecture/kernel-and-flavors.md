@@ -295,7 +295,7 @@ accidental coupling.
 
 | Candidate plugin kind | Today | Why it should be pluggable |
 | --- | --- | --- |
-| `state-store`           | Scoped JSON under `~/.animus/<repo-scope>/` | SQLite, Postgres, DBOS, Animus Cloud, self-hosted — users will want choices |
+| `state-store`           | Scoped JSON under `~/.animus/<repo-scope>/` | SQLite, Postgres, DBOS, self-hosted — users will want choices |
 | `step-store` / `checkpoint` | Implicit; no durable-step semantics | DBOS-backed (Option A in the DBOS analysis), Temporal, custom — required for crash-safe phase resumption |
 | `workflow-runner`       | `workflow-runner-v2` crate | Multiple workflow execution models: in-process (today), DBOS-driven (Option B in the DBOS analysis), Temporal, future |
 | `agent-process-manager` | `agent-runner` crate | Local subprocess (today), detached/`nohup` (required for crash-safe agent reattach), cloud runners, sandboxes |
@@ -401,15 +401,16 @@ sequencing visible so future scope-creep can be checked against the plan.
 
 - **v0.5 (now):** Kernel + default flavor for portfolio builders. Validate
   the wedge. Maintenance pack as the next visible default-flavor add-on.
-- **v0.6.x:** Animus Cloud (durability, multi-machine coordination, team
-  dashboards). Opt-in compute. Local stays default.
+- **v0.6.x:** Durability and multi-machine coordination land as plugin
+  kinds (state-store, step-store, agent-process-manager). Local stays
+  default; hosted backends are opt-in and out-of-tree.
 - **v0.7.x:** Second flavor emerges from customer pull. Most likely candidate
   given the AI-accelerated-maintenance thesis: an "Animus Maintenance"
   flavor for teams with neglected codebases. Plugin signing and trust
   controls harden.
 - **v0.8.x and beyond:** Plugin marketplace with monetization hooks (rev share
   on third-party plugins). Community-built flavors. Enterprise self-hosted
-  Cloud + SSO + audit.
+  control plane + SSO + audit.
 
 Each rung earns the next. Skipping ahead breaks the kernel/flavor discipline.
 
@@ -477,8 +478,8 @@ even though they are interesting:
 - Second flavor (enterprise, maintenance-focused, etc.) — deferred until
   customer pull is real
 - Plugin marketplace, plugin monetization — design hooks now, ship later
-- Self-hosted Animus Cloud — Cloud itself ships in v0.6.x; self-host is
-  later
+- Hosted control plane and self-hosted variants — deferred until durability
+  and coordination plugin kinds land
 - Migration of every existing in-tree concept to the kernel boundary — only
   the boundary needs to be documented; the migration can be incremental
 - Animus's own git service — deferred to long-term roadmap

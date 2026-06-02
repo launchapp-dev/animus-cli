@@ -27,17 +27,24 @@ pub use dispatch::{
     CompletedProcess, CompletionReconciliationPlan, DispatchNotice, DispatchNoticeSink, DispatchSelectionSource,
     DispatchWorkflowStart, DispatchWorkflowStartSummary, PlannedDispatchStart, ProcessManager, TickBudget,
 };
+/// v0.5.1 P2 #6.2 round-3: daemon-side reattach client surface, exposed for
+/// integration tests and out-of-tree daemons that want to call
+/// [`reattach::try_reattach`] directly. The orphan-scan startup path uses it
+/// internally; consumers should typically rely on `OrphanAgentReattached` /
+/// `OrphanAgentReattachFailed` events instead of driving it by hand.
+pub mod reattach {
+    pub use crate::dispatch::reattach::*;
+}
 pub use log_storage::{
     clear_log_storage_handle, current_log_storage_handle, discover_log_storage_backends, install_log_storage_handle,
     log_storage_disable_env_set, resolve_log_storage_dispatch, spawn_log_storage_supervisor, LogStorageDispatch,
     LogStorageHandle, LogStorageResolution, LogStorageSupervisorOutcome, LOG_STORAGE_DISABLE_ENV,
 };
-pub use protocol::{RunnerEvent, SubjectDispatch, SubjectExecutionFact};
+pub use protocol::{RunnerEvent, SubjectDispatch, SubjectDispatchExt, SubjectExecutionFact};
 pub use queue::{
-    dispatch_queue_state_path, drop_subject, enqueue_subject_dispatch, hold_subject, load_dispatch_queue_state,
-    mark_dispatch_queue_entry_assigned, queue_snapshot, queue_stats, release_subject,
-    remove_terminal_dispatch_queue_entry_non_fatal, reorder_subjects, save_dispatch_queue_state, DispatchQueueEntry,
-    DispatchQueueEntryStatus, DispatchQueueState, QueueEnqueueResult, QueueEntrySnapshot, QueueSnapshot, QueueStats,
+    dispatch_queue_state_path, load_dispatch_queue_state, mark_dispatch_queue_entry_assigned,
+    remove_terminal_dispatch_queue_entry_non_fatal, save_dispatch_queue_state, DispatchQueueEntry,
+    DispatchQueueEntryStatus, DispatchQueueState,
 };
 pub use quotas::{install_runtime_quotas, runtime_quotas, RuntimeQuotas};
 pub use schedule::{

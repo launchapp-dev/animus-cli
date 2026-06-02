@@ -6,11 +6,11 @@ use std::sync::OnceLock;
 use std::sync::RwLock;
 use std::time::Duration;
 
+use animus_runtime_shared::workflow_event_emitter::SharedWorkflowEventEmitter;
 use anyhow::Context;
 use anyhow::Result;
 use orchestrator_core::DaemonStatus;
 use tokio::time::sleep;
-use workflow_runner_v2::workflow_event_emitter::SharedWorkflowEventEmitter;
 
 use crate::control::{BroadcastWorkflowEventEmitter, WorkflowEventBroadcaster};
 use crate::run_plugin_preflight;
@@ -30,7 +30,7 @@ use crate::TriggerSupervisorSink;
 /// Process-global holder for the daemon's broadcast-backed
 /// [`SharedWorkflowEventEmitter`]. Installed by [`run_daemon`] at startup
 /// (after [`WorkflowEventBroadcaster`] construction) and consumed by any
-/// in-process call site that builds [`workflow_runner_v2::WorkflowExecuteParams`]
+/// in-process call site that builds [`animus_runtime_shared::WorkflowExecuteParams`]
 /// inside the daemon process.
 ///
 /// SUBPROCESS GAP: workflow runs launched via `animus-workflow-runner` (the
@@ -227,6 +227,8 @@ where
                 orphaned_workflows_recovered: startup_orphans,
             })?;
         }
+
+        emit_orphan_agent_scan_events(project_root, &primary_root, hooks)?;
     }
 
     discover_plugins_for_daemon(project_root, &primary_root, hooks)?;
@@ -239,6 +241,15 @@ where
     let workflow_event_broadcaster = WorkflowEventBroadcaster::new();
     install_workflow_event_emitter(BroadcastWorkflowEventEmitter::new(workflow_event_broadcaster.clone()));
     install_workflow_event_broadcaster(workflow_event_broadcaster.clone());
+
+    // v0.5.1 P2 #6.2 round-3: now that the broadcaster is live, attempt to
+    // reattach to any live orphan agents detected by the earlier startup
+    // scan. Best-effort: a failure here is logged and the rest of daemon
+    // startup proceeds. Stub `if options.startup_cleanup` guards parity
+    // with the orphan-scan trigger.
+    if options.startup_cleanup {
+        attempt_orphan_agent_reattach(project_root, &primary_root, workflow_event_broadcaster.clone(), hooks)?;
+    }
 
     let control_server_handle =
         start_control_server_for_daemon(project_root, &primary_root, hooks, workflow_event_broadcaster.clone()).await;
@@ -622,6 +633,151 @@ async fn start_control_server_for_daemon<H: DaemonRunHooks>(
             None
         }
     }
+}
+
+/// v0.5.1 P2 #6.2 round-3: walk the orphan scan once more and try to
+/// reconnect to each live orphan's reattach socket. Emits
+/// [`DaemonRunEvent::OrphanAgentReattached`] / [`DaemonRunEvent::OrphanAgentReattachFailed`]
+/// per orphan. The returned `ReattachConnection`s are held in a process
+/// vector so the reader tasks survive the function return; we don't try
+/// to address graceful per-orphan shutdown today.
+fn attempt_orphan_agent_reattach<H: DaemonRunHooks>(
+    project_root: &str,
+    primary_root: &str,
+    broadcaster: Arc<WorkflowEventBroadcaster>,
+    hooks: &mut H,
+) -> Result<()> {
+    let report = crate::dispatch::agent_record::scan_orphans_for_project(Path::new(project_root)).unwrap_or_default();
+    if report.detected.is_empty() {
+        return Ok(());
+    }
+
+    let connections = orphan_reattach_connections();
+    for detected in &report.detected {
+        let Some(record_path) = std::fs::read_to_string(&detected.record_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<crate::dispatch::agent_record::AgentSpawnRecord>(&raw).ok())
+            .and_then(|rec| rec.stdio_socket_path)
+        else {
+            hooks.handle_event(DaemonRunEvent::OrphanAgentReattachFailed {
+                project_root: primary_root.to_string(),
+                agent_session_id: detected.agent_session_id.clone(),
+                pid: detected.pid,
+                socket_path: None,
+                error: "spawn record has no stdio_socket_path (pre-v0.5.1 record or fallback path)".to_string(),
+            })?;
+            continue;
+        };
+
+        #[cfg(unix)]
+        {
+            let socket = std::path::PathBuf::from(&record_path);
+            match crate::dispatch::reattach::try_reattach(&socket, broadcaster.clone()) {
+                Ok(conn) => {
+                    hooks.handle_event(DaemonRunEvent::OrphanAgentReattached {
+                        project_root: primary_root.to_string(),
+                        agent_session_id: detected.agent_session_id.clone(),
+                        pid: detected.pid,
+                        socket_path: record_path.clone(),
+                    })?;
+                    if let Ok(mut guard) = connections.lock() {
+                        guard.push(conn);
+                    }
+                }
+                Err(err) => {
+                    hooks.handle_event(DaemonRunEvent::OrphanAgentReattachFailed {
+                        project_root: primary_root.to_string(),
+                        agent_session_id: detected.agent_session_id.clone(),
+                        pid: detected.pid,
+                        socket_path: Some(record_path),
+                        error: format!("{err}"),
+                    })?;
+                }
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            let _ = broadcaster;
+            hooks.handle_event(DaemonRunEvent::OrphanAgentReattachFailed {
+                project_root: primary_root.to_string(),
+                agent_session_id: detected.agent_session_id.clone(),
+                pid: detected.pid,
+                socket_path: Some(record_path),
+                error: "reattach is not supported on this platform (Unix only)".to_string(),
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Process-global retention point for active orphan reattach connections.
+/// The reader tasks live on tokio's runtime; holding the `JoinHandle`
+/// keeps the handle around for future graceful-shutdown hooks (and avoids
+/// surprising operators who would expect a Drop to terminate forwarding).
+#[cfg(unix)]
+fn orphan_reattach_connections() -> &'static std::sync::Mutex<Vec<crate::dispatch::reattach::ReattachConnection>> {
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Vec<crate::dispatch::reattach::ReattachConnection>>> =
+        std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+#[cfg(not(unix))]
+fn orphan_reattach_connections() -> &'static std::sync::Mutex<Vec<()>> {
+    static SLOT: std::sync::OnceLock<std::sync::Mutex<Vec<()>>> = std::sync::OnceLock::new();
+    SLOT.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn emit_orphan_agent_scan_events<H: DaemonRunHooks>(
+    project_root: &str,
+    primary_root: &str,
+    hooks: &mut H,
+) -> Result<()> {
+    let unix_supported = cfg!(unix);
+    let report = crate::dispatch::agent_record::scan_orphans_for_project(Path::new(project_root)).unwrap_or_default();
+
+    for detected in &report.detected {
+        hooks.handle_event(DaemonRunEvent::OrphanAgentDetected {
+            project_root: primary_root.to_string(),
+            agent_session_id: detected.agent_session_id.clone(),
+            pid: detected.pid,
+            subject_id: detected.subject_id.clone(),
+            subject_kind: detected.subject_kind.clone(),
+            workflow_ref: detected.workflow_ref.clone(),
+            task_id: detected.task_id.clone(),
+            command_line: detected.command_line.clone(),
+            started_at: detected.started_at.clone(),
+            record_path: detected.record_path.display().to_string(),
+        })?;
+    }
+
+    for cleaned in &report.cleaned {
+        hooks.handle_event(DaemonRunEvent::OrphanAgentCleanup {
+            project_root: primary_root.to_string(),
+            agent_session_id: cleaned.agent_session_id.clone(),
+            pid: cleaned.pid,
+            record_path: cleaned.record_path.display().to_string(),
+        })?;
+    }
+
+    for unparseable in &report.unparseable {
+        hooks.handle_event(DaemonRunEvent::OrphanAgentRecordUnparseable {
+            project_root: primary_root.to_string(),
+            record_path: unparseable.path.display().to_string(),
+            error: unparseable.error.clone(),
+        })?;
+    }
+
+    hooks.handle_event(DaemonRunEvent::OrphanAgentScan {
+        project_root: primary_root.to_string(),
+        detected_count: report.detected.len(),
+        cleaned_count: report.cleaned.len(),
+        unparseable_count: report.unparseable.len(),
+        unix_scan_supported: unix_supported,
+    })?;
+
+    Ok(())
 }
 
 fn discover_plugins_for_daemon<H: DaemonRunHooks>(project_root: &str, primary_root: &str, hooks: &mut H) -> Result<()> {

@@ -1,6 +1,6 @@
 # Crate Map
 
-The Animus workspace is a Cargo workspace of 18 crates organized by runtime
+The Animus workspace is a Cargo workspace of 17 crates organized by runtime
 responsibility. `Cargo.toml` is the source of truth for membership.
 
 ## Foundation
@@ -16,7 +16,7 @@ responsibility. `Cargo.toml` is the source of truth for membership.
 | Crate | Responsibility |
 |---|---|
 | `orchestrator-daemon-runtime` | Daemon queue, scheduling, subject dispatch, trigger handling, and runtime supervision |
-| `workflow-runner-v2` | Workflow phase execution, checkpoint persistence, and runtime contracts |
+| `animus-runtime-shared` | Shared workflow execution helpers, runtime contracts, agent memory wiring, and runner IPC utilities consumed by daemon code and external `workflow_runner` plugins |
 | `agent-runner` | Runner process that launches and supervises provider sessions |
 | `oai-runner` | OpenAI-compatible runner binary |
 
@@ -38,20 +38,19 @@ responsibility. `Cargo.toml` is the source of truth for membership.
 | `orchestrator-plugin-host` | Plugin discovery, install lockfiles, manifest probes, stdio host, router, and signature verification |
 | `orchestrator-session-host` | Provider plugin session bridge used by `agent-runner` |
 | `animus-plugin-protocol` | In-tree copy of the stdio plugin protocol types |
-| `animus-subject-protocol` | Normalized subject schema, subject backend trait, and subject errors |
 | `animus-plugin-runtime` | Runtime helper crate for plugin implementations |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates
-for provider/session contracts, currently through `animus-provider-protocol` and
-`animus-session-backend` in `Cargo.toml`.
+for provider/session contracts plus queue/workflow/subject plugin routing,
+currently through `animus-provider-protocol`, `animus-session-backend`,
+`animus-queue-protocol`, `animus-workflow-runner-protocol`, and
+`animus-subject-protocol` in the root and crate-local `Cargo.toml` pins.
 
-## Repo-Local Fixtures
+## Repo-Local Directories Outside The Workspace
 
 | Crate | Responsibility |
 |---|---|
-| `animus-provider-mock` | Mock provider plugin for contract and e2e tests |
-| `animus-plugin-smoke` | Smoke-test plugin for host and protocol behavior |
-| `orchestrator-web-server` | Legacy in-repo web server directory retained outside the current Cargo workspace |
+| `crates/orchestrator-web-server/` | Legacy in-repo web server directory retained outside the current Cargo workspace |
 
 ## Web
 

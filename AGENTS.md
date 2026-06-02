@@ -23,18 +23,22 @@ Do not keep outdated counts or removed crates alive in docs.
 
 ## Workspace
 
-18-crate Rust workspace. Main binary: `animus` (`crates/orchestrator-cli`). The
+Rust Cargo workspace with the current members listed below. Main binary: `animus` (`crates/orchestrator-cli`). The
 web stack (transport + UI) lives in external plugins under
-[`launchapp-dev`](https://github.com/launchapp-dev).
+[`launchapp-dev`](https://github.com/launchapp-dev). The workspace also depends
+on external protocol crates from that repo. The authoritative pins live in
+`Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`; current builds mix the
+legacy `v0.1.13` wire crates with newer `v0.5.x`
+queue/workflow/subject protocol crates.
 
 Current workspace members from `Cargo.toml`:
 
 ```text
 crates/
 ├── agent-runner/                # Runner process that launches and supervises AI CLIs
+├── animus-runtime-shared/       # Shared workflow execution/runtime-contract/IPC helpers used by daemon and workflow_runner plugins
 ├── animus-plugin-protocol/      # In-tree stdio plugin protocol types
 ├── animus-plugin-runtime/       # Runtime helpers for plugin implementations
-├── animus-subject-protocol/     # Subject backend trait and normalized subject schema
 ├── oai-runner/                  # OpenAI-compatible runner implementation
 ├── orchestrator-cli/            # Main `animus` binary
 ├── orchestrator-config/         # Workflow, pack, and template config loading
@@ -47,14 +51,11 @@ crates/
 ├── orchestrator-providers/      # Built-in provider integrations and routing
 ├── orchestrator-session-host/   # Session backend layer + provider/plugin execution bridge
 ├── orchestrator-store/          # Shared state/storage path helpers
-├── protocol/                    # Shared protocol/config/runtime types
-└── workflow-runner-v2/          # Workflow execution runtime and phase output persistence
+└── protocol/                    # Shared protocol/config/runtime types
 ```
 
 Repo-local but not current workspace members:
 
-- `crates/animus-plugin-smoke/`
-- `crates/animus-provider-mock/`
 - `crates/orchestrator-web-server/`
 
 Runtime-critical binaries and supporting crates must stay healthy:
@@ -63,7 +64,7 @@ Runtime-critical binaries and supporting crates must stay healthy:
 - `agent-runner`
 - `oai-runner`
 - `orchestrator-logging`
-- `workflow-runner-v2`
+- `animus-runtime-shared`
 - `orchestrator-daemon-runtime`
 
 Do not add desktop shell frameworks or their transitive equivalents.
@@ -111,6 +112,8 @@ Scoped runtime state in `~/.animus/<repo-scope>/`:
 - `config/`
 - `daemon/`
 - `docs/`
+- `logs/`
+- `runner/`
 - `state/`
 - `worktrees/`
 
@@ -156,6 +159,7 @@ Visible top-level commands:
 - `trigger`
 - `logs`
 - `subject`
+- `flavor`
 
 Use these reference docs instead of hand-maintained summaries:
 

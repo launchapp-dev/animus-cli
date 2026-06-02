@@ -55,13 +55,6 @@ use std::path::PathBuf;
 /// `animus-plugin-protocol/src/lib.rs`.
 const STANDALONE_ENV: &str = "ANIMUS_STANDALONE_PROTOCOL_PATH";
 
-/// Identifier used by the GH Actions workflow to point at the standalone
-/// `animus-subject-protocol/src/lib.rs`. Mirrors `STANDALONE_ENV` for the
-/// subject wire crate, which the CLI and daemon now consume from the
-/// published `launchapp-dev/animus-protocol` repo (see
-/// `crates/orchestrator-cli/Cargo.toml` + `crates/orchestrator-daemon-runtime/Cargo.toml`).
-const STANDALONE_SUBJECT_ENV: &str = "ANIMUS_STANDALONE_SUBJECT_PATH";
-
 /// Resolve the in-tree crate's `lib.rs` deterministically. `CARGO_MANIFEST_DIR`
 /// is provided by cargo at test compile time and points at the
 /// orchestrator-plugin-host crate root.
@@ -69,10 +62,9 @@ fn in_tree_lib_rs() -> PathBuf {
     in_tree_sibling_crate_lib_rs("animus-plugin-protocol")
 }
 
-/// Resolve the `src/lib.rs` of a workspace-sibling crate. Both
-/// `animus-plugin-protocol` and `animus-subject-protocol` live next to
-/// `orchestrator-plugin-host` in `crates/`, so we walk up one level from
-/// `CARGO_MANIFEST_DIR` and join the sibling crate's source path.
+/// Resolve the `src/lib.rs` of a workspace-sibling crate. `animus-plugin-protocol`
+/// lives next to `orchestrator-plugin-host` in `crates/`, so we walk up one
+/// level from `CARGO_MANIFEST_DIR` and join the sibling crate's source path.
 fn in_tree_sibling_crate_lib_rs(crate_name: &str) -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     manifest_dir
@@ -397,105 +389,8 @@ fn protocol_public_surface_does_not_drift_against_standalone() {
     }
 }
 
-/// Subject-protocol drift gate.
-///
-/// Mirrors `protocol_public_surface_does_not_drift_against_standalone` for the
-/// `animus-subject-protocol` crate. The standalone crate at
-/// `launchapp-dev/animus-protocol/animus-subject-protocol` is the version
-/// the CLI and daemon depend on (see `orchestrator-cli/Cargo.toml` and
-/// `orchestrator-daemon-runtime/Cargo.toml`), so any in-tree-only addition
-/// here would silently diverge from the wire shape installed plugins use.
-///
-/// Skipped locally when `ANIMUS_STANDALONE_SUBJECT_PATH` is unset; CI sets
-/// it via `.github/workflows/protocol-drift.yml`.
-#[test]
-fn protocol_drift_subject() {
-    let Ok(standalone_path) = std::env::var(STANDALONE_SUBJECT_ENV) else {
-        eprintln!(
-            "protocol_drift_subject: {STANDALONE_SUBJECT_ENV} not set — skipping. CI sets this; \
-             to run locally export {STANDALONE_SUBJECT_ENV}=path/to/animus-protocol/animus-subject-protocol/src/lib.rs"
-        );
-        return;
-    };
-    let standalone_path = PathBuf::from(standalone_path);
-    assert!(
-        standalone_path.exists(),
-        "standalone subject-protocol path does not exist: {}",
-        standalone_path.display()
-    );
-
-    let in_tree_path = in_tree_sibling_crate_lib_rs("animus-subject-protocol");
-    assert!(in_tree_path.exists(), "in-tree subject-protocol lib.rs missing: {}", in_tree_path.display());
-
-    let in_tree = parse_public_surface(&in_tree_path);
-    let standalone = parse_public_surface(&standalone_path);
-    let mut findings: Vec<DriftFinding> = Vec::new();
-    diff_surfaces(&in_tree, &standalone, "", &mut findings);
-
-    // Allowlist for items present in one tree only by design.
-    //
-    // The in-tree subject-protocol crate currently lags the upstream
-    // standalone crate (the standalone added `SubjectAttachment` /
-    // `StatusDispatchHint` / `Subject::native_status` etc. ahead of the
-    // in-tree mirror catching up). Until the in-tree crate is re-synced
-    // we accept those as "only in standalone" so the test guards against
-    // *new* drift instead of failing on the existing gap.
-    //
-    // Drop entries from this list as the in-tree crate catches up.
-    let expected_drift: &[&str] = &[
-        // Standalone-only enum variants from the flexible-status + attachment
-        // expansion shipped after the in-tree fork point. The in-tree crate
-        // will adopt them when subject-protocol is re-synced.
-        "BackendError.Unsupported",
-        "ChangeKind.AttachmentAdded",
-        "ChangeKind.AttachmentRemoved",
-        "ChangeKind.DispatchLabelChanged",
-        // Standalone-only fields on existing types from the same wave.
-        "Subject.attachments",
-        "SubjectChangedEvent.previous_dispatch_label",
-        "SubjectChangedEvent.previous_native_status",
-        "SubjectFilter.dispatch_label",
-        "SubjectFilter.has_attachment_kind",
-        "SubjectFilter.native_status",
-        // Standalone-only delete-subject method. The in-tree crate has no
-        // delete API yet; gated behind the standalone resync.
-        "DeleteSubjectRequest",
-        "DeleteSubjectResponse",
-        "METHOD_SUBJECT_DELETE",
-        // Standalone-only types and fields from the original flexible-status
-        // commit. Already in production via plugins built against the
-        // standalone crate; will land in-tree when subject-protocol resyncs.
-        "SubjectAttachment",
-        "StatusDispatchHint",
-        "Subject.native_status",
-        "Subject.status_metadata",
-        "SubjectSchema.status_dispatch_hints",
-    ];
-
-    // We only suppress *standalone-ahead* findings — i.e. items that exist
-    // only in the standalone crate or as variants/fields only in
-    // standalone. Anything else on the same path (in-tree-only, type
-    // drift, kind mismatch) still fails the gate, so an accidental
-    // in-tree addition under an allowlisted path can't slip through.
-    let unexpected_findings: Vec<&DriftFinding> = findings
-        .iter()
-        .filter(|f| {
-            let path_allowed = expected_drift.iter().any(|allowed| f.path == *allowed);
-            let is_standalone_ahead = f.detail.starts_with("only in standalone")
-                || f.detail.starts_with("field only in standalone")
-                || f.detail.starts_with("variant only in standalone");
-            !(path_allowed && is_standalone_ahead)
-        })
-        .collect();
-
-    if !unexpected_findings.is_empty() {
-        let report: Vec<String> =
-            unexpected_findings.iter().map(|f| format!("  - {} :: {}", f.path, f.detail)).collect();
-        panic!(
-            "animus-subject-protocol drift detected between in-tree and standalone crates:\n{}\n\n\
-             If the divergence is intentional, add the item path to expected_drift \
-             with a tracking note (and cut a standalone release to remove it).",
-            report.join("\n")
-        );
-    }
-}
+// `protocol_drift_subject` was removed when the in-tree
+// `crates/animus-subject-protocol/` mirror was deleted (v0.5 P2 fold-in).
+// The CLI and daemon now consume `animus-subject-protocol` exclusively
+// from the published `launchapp-dev/animus-protocol` git tag, so there is
+// no second source of truth left in-tree to drift against.
