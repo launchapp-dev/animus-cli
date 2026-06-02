@@ -248,9 +248,9 @@ animus
 > former `animus task ...` tree and `animus subject --kind requirement`
 > for the former `animus requirements ...` tree. `animus setup` was
 > folded into `animus init`, `animus now` into `animus status`, and
-> `animus errors` into `animus history`. `animus cloud` was retired —
-> cloud sync ships as a separate plugin. See the v0.4.4 entry in
-> [CHANGELOG.md](../../../CHANGELOG.md) for the full surface map.
+> `animus errors` into `animus history`. `animus cloud` was retired.
+> See the v0.4.4 entry in [CHANGELOG.md](../../../CHANGELOG.md) for the
+> full surface map.
 
 ## Selected Command Flags
 

@@ -320,9 +320,9 @@ commitment. Concretely:
   `checkpoint` — can be added without modifying the kernel beyond a typed
   enum extension. The kernel-and-flavors doc has been updated to reflect this.
 - **Future scope candidate:** `animus-step-durable` (Option A) is a strong
-  candidate for v0.6.x or v0.7.x once Animus Cloud and the maintenance pack
-  ship. Option B is later still and gated on solving detached agent execution
-  as a standalone feature.
+  candidate for v0.6.x or v0.7.x once the durability plugin kinds and the
+  maintenance pack ship. Option B is later still and gated on solving
+  detached agent execution as a standalone feature.
 
 When the durable-step plugin work eventually starts, this document is the
 canonical design sketch to begin from.

@@ -162,7 +162,7 @@ deleted in a single commit:
 
 - `animus task` → `animus subject --kind task`
 - `animus requirements` → `animus subject --kind requirement`
-- `animus cloud` → out-of-tree plugin (TBD)
+- `animus cloud` → retired
 - `animus setup` → `animus init` (the supported onboarding entry point)
 - `animus now` → folded into `animus status`
 - `animus errors` → folded into `animus history`
