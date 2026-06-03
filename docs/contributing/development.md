@@ -30,19 +30,18 @@ cargo build -p agent-runner
 
 ## Workspace Structure
 
-The workspace is a Cargo workspace of 17 crates. The core orchestrator crates are:
+The workspace is a Cargo workspace of 15 crates. The current workspace members are:
 
 ```text
 crates/
 ├── agent-runner/
-├── animus-runtime-shared/
 ├── animus-plugin-protocol/
 ├── animus-plugin-runtime/
+├── animus-runtime-shared/
 ├── orchestrator-cli/
 ├── orchestrator-config/
 ├── orchestrator-core/
 ├── orchestrator-daemon-runtime/
-├── orchestrator-git-ops/
 ├── orchestrator-logging/
 ├── orchestrator-notifications/
 ├── orchestrator-plugin-host/
