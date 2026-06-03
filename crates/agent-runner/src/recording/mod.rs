@@ -27,19 +27,44 @@
 //! - Compaction: re-running a failed workflow archives the prior log via
 //!   [`archive_decision_log`] before starting a new one.
 //!
-//! Out-of-boundary gaps deferred to v0.6+:
-//! - Tool side-effects outside the recording boundary are not re-asserted on
-//!   replay; replay yields recorded results without re-executing tools.
+//! v0.5.1 production hardening (this round):
+//! - **Real DBOS plugin client**: [`dbos_client::DbosDurableStoreClient`]
+//!   is the single production-facing [`fence::DurableStoreClient`] impl.
+//!   It discovers the installed `launchapp-dev/animus-step-durable-dbos`
+//!   plugin and speaks its `durable/*` JSON-RPC surface
+//!   (`begin_workflow_run` / `begin_step` / `commit_step` /
+//!   `abandon_step` / `query_run`). The in-memory `MockDurableStore`
+//!   that used to live next to the trait is now gated behind `#[cfg(test)]`
+//!   inside `fence::test_doubles` — no production caller can reach it.
+//! - **Out-of-boundary side-effect re-assertion on replay**: [`side_effect`]
+//!   submodule. Producers can record a `DecisionEvent::ToolSideEffect`
+//!   alongside `ToolResult` for tools that mutate state outside the
+//!   recording boundary (filesystem writes, shell command exit codes
+//!   landing in files, etc.). Replay calls [`side_effect::assert_side_effect`]
+//!   on each such event; mismatch raises `ReplayDivergenceError` to the
+//!   operator without re-executing the tool. The replay invariant
+//!   "recorded result is authoritative; never re-execute" is preserved.
+//! - **Long-term decision-log compaction**: [`sweeper::compact_and_expire`]
+//!   compresses archived `*.jsonl.bak` files older than 24h to
+//!   `*.jsonl.bak.zst` (zstd level 3) and deletes archives older than
+//!   `ANIMUS_DECISION_LOG_EXPIRY_DAYS` (default 7 days). The reader
+//!   ([`ReplaySource::open`]) transparently decompresses `.zst` archives
+//!   so historical replays still work. The daemon calls
+//!   `compact_and_expire` once on startup; no new background task.
+//!
+//! Out-of-boundary gaps still deferred to v0.6+:
 //! - Provider-shape normalization is documented but not enforced beyond the
 //!   `provider_id` mismatch guard. A long-tail of provider streaming
 //!   variations (vendor-specific tool-call envelopes, mid-stream tool result
 //!   chunking) is still provider-specific in the captured `serde_json::Value`.
-//! - Long-term log compression and 7-day expiry of completed logs.
-//! - Real DBOS plugin RPC binding: [`fence::DurableStoreClient`] is the
-//!   trait the agent-runner is wired against; ao-cli does not yet ship a
-//!   concrete client to `launchapp-dev/animus-step-durable-dbos`. The
-//!   integration is exercised end-to-end via [`fence::MockDurableStore`];
-//!   production wiring is gated on the DBOS plugin's transport surface.
+//! - Built-in classification of out-of-boundary tools: today producers
+//!   must opt in by emitting `ToolSideEffect`. A v0.6+ catalogue of
+//!   known-out-of-boundary tool names (Bash, Write, Edit, fetch, etc.)
+//!   would let replay auto-classify without producer cooperation.
+//! - Side-effect kinds beyond `file_exists` / `file_absent` (e.g. process
+//!   exit-code, network endpoint reachability). The
+//!   [`side_effect::SideEffectAssertion`] enum is open-ended; v0.6 adds
+//!   variants as concrete tool classes need them.
 //!
 //! ### Provider streaming shapes (informational)
 //!
@@ -56,7 +81,10 @@
 //! `provider_id` so a Claude-recorded session is never fed to a Codex
 //! reader expecting OpenAI delta shape.
 
+pub mod dbos_client;
 pub mod fence;
+pub mod side_effect;
+pub mod sweeper;
 pub mod tail;
 
 use std::fs::{File, OpenOptions};
@@ -94,6 +122,11 @@ pub enum DecisionEvent {
     ResponseChunk { timestamp_ms: u64, stream: String, text: String },
     ToolCall { timestamp_ms: u64, name: String, args: Value },
     ToolResult { timestamp_ms: u64, name: String, result: Value },
+    /// Producer-emitted structured post-condition for a tool call whose
+    /// effects sit outside the recording boundary. Consumed by
+    /// [`side_effect::assert_side_effect`] at replay time. See the
+    /// `side_effect` submodule for the architectural rationale.
+    ToolSideEffect { timestamp_ms: u64, name: String, assertion: side_effect::SideEffectAssertion },
     Metadata { timestamp_ms: u64, payload: Value },
     Error { timestamp_ms: u64, message: String },
     Finished { timestamp_ms: u64, exit_code: Option<i32> },
@@ -122,6 +155,9 @@ impl DecisionEvent {
     }
     pub fn tool_result(name: impl Into<String>, result: Value) -> Self {
         Self::ToolResult { timestamp_ms: Self::now_ms(), name: name.into(), result }
+    }
+    pub fn tool_side_effect(name: impl Into<String>, assertion: side_effect::SideEffectAssertion) -> Self {
+        Self::ToolSideEffect { timestamp_ms: Self::now_ms(), name: name.into(), assertion }
     }
     pub fn metadata(payload: Value) -> Self {
         Self::Metadata { timestamp_ms: Self::now_ms(), payload }
@@ -301,7 +337,7 @@ pub fn archive_decision_log(path: impl AsRef<Path>) -> std::io::Result<Option<Pa
     };
     let mut archive = parent.join(format!("decisions-{ts}.jsonl.bak"));
     let mut suffix: u32 = 1;
-    while archive.exists() {
+    while archive.exists() || archive.with_extension("bak.zst").exists() {
         archive = parent.join(format!("decisions-{ts}-{suffix}.jsonl.bak"));
         suffix = suffix.saturating_add(1);
         if suffix > 10_000 {
@@ -327,11 +363,25 @@ pub struct ReplaySource {
 impl ReplaySource {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
-        let file = File::open(path).with_context(|| format!("open replay session {}", path.display()))?;
-        let reader = BufReader::new(file);
         let mut events = Vec::new();
         let mut truncated_tail = false;
-        let lines: Vec<String> = reader.lines().collect::<std::io::Result<_>>().context("read replay session")?;
+        let lines: Vec<String> = if Self::is_zstd_archive(path) {
+            // Transparent decompression for archived `.bak.zst` files
+            // produced by [`sweeper::compact_and_expire`]. Decompress
+            // into memory and split by newlines (decision logs are
+            // bounded by the per-run lifetime, not the lifetime of the
+            // sweep, so the decompressed footprint is the original log
+            // size — fine for human-scale runs).
+            let raw = sweeper::decompress_zst_into(path)
+                .with_context(|| format!("decompress archive {}", path.display()))?;
+            raw.split(|&b| b == b'\n')
+                .map(|line| String::from_utf8_lossy(line).into_owned())
+                .collect()
+        } else {
+            let file = File::open(path).with_context(|| format!("open replay session {}", path.display()))?;
+            let reader = BufReader::new(file);
+            reader.lines().collect::<std::io::Result<_>>().context("read replay session")?
+        };
         let total = lines.len();
         for (idx, line) in lines.into_iter().enumerate() {
             if line.trim().is_empty() {
@@ -355,6 +405,13 @@ impl ReplaySource {
         }
         let provider_id = extract_provider_id(&events);
         Ok(Self { events: events.into_iter(), truncated_tail, provider_id })
+    }
+
+    fn is_zstd_archive(path: &Path) -> bool {
+        path.file_name()
+            .and_then(|s| s.to_str())
+            .map(|name| name.ends_with(".jsonl.bak.zst"))
+            .unwrap_or(false)
     }
 
     pub fn truncated_tail(&self) -> bool {
@@ -709,5 +766,59 @@ mod tests {
         let dir = TempDir::new().expect("tempdir");
         let path = dir.path().join("decisions.jsonl");
         assert!(archive_decision_log(&path).expect("noop").is_none());
+    }
+
+    #[test]
+    fn replay_source_reads_through_compressed_archive() {
+        // End-to-end: record some events, archive, compress via the
+        // sweeper, then re-open via ReplaySource (which must
+        // transparently decompress).
+        use crate::recording::sweeper::{compact_and_expire, SweepPolicy};
+        let dir = TempDir::new().expect("tempdir");
+        let runs_root = dir.path().join("runs");
+        let run_dir = runs_root.join("run-zst");
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let path = run_dir.join("decisions.jsonl");
+        let recorder = Recorder::create_with_durability(&path, Durability::FlushOnly).expect("recorder");
+        recorder.record(&DecisionEvent::prompt("m", "p", None)).unwrap();
+        recorder.record(&DecisionEvent::finished(Some(0))).unwrap();
+        drop(recorder);
+        let archive = archive_decision_log(&path).expect("archive").expect("got path");
+        // Backdate the archive so the sweeper compresses it.
+        let when = std::time::SystemTime::now() - std::time::Duration::from_secs(48 * 3600);
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&archive)
+            .expect("reopen for utime")
+            .set_modified(when)
+            .expect("set mtime");
+        let report = compact_and_expire(&runs_root, SweepPolicy::default()).expect("sweep");
+        assert_eq!(report.compressed, 1);
+        let zst = archive.with_extension("bak.zst");
+        assert!(zst.exists(), "compressed archive must exist");
+        // Now open via ReplaySource — it must transparently decompress.
+        let events = ReplaySource::open(&zst).expect("replay through zstd").drain();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], DecisionEvent::Prompt { .. }));
+        assert!(matches!(events[1], DecisionEvent::Finished { exit_code: Some(0), .. }));
+    }
+
+    #[test]
+    fn tool_side_effect_event_round_trips() {
+        let (_dir, path) = tmp_log();
+        let recorder = Recorder::create_with_durability(&path, Durability::FlushOnly).expect("recorder");
+        let assertion = side_effect::SideEffectAssertion::FileExists { path: std::path::PathBuf::from("/abs/written") };
+        recorder.record(&DecisionEvent::tool_side_effect("Write", assertion.clone())).unwrap();
+        recorder.record(&DecisionEvent::finished(Some(0))).unwrap();
+        drop(recorder);
+        let events = ReplaySource::open(&path).expect("replay").drain();
+        assert_eq!(events.len(), 2);
+        match &events[0] {
+            DecisionEvent::ToolSideEffect { name, assertion: round_tripped, .. } => {
+                assert_eq!(name, "Write");
+                assert_eq!(round_tripped, &assertion);
+            }
+            other => panic!("expected ToolSideEffect, got {other:?}"),
+        }
     }
 }

@@ -21,13 +21,13 @@
 //!
 //! Idempotency key shape: `<repo_scope>:<workflow_id>:<phase_id>:<model_call_index>`.
 //!
-//! Production wiring gap: ao-cli does not yet ship a concrete client to the
-//! `launchapp-dev/animus-step-durable-dbos` plugin. The fence integration is
-//! defined here against the [`DurableStoreClient`] trait and exercised
-//! end-to-end via [`MockDurableStore`]. The DBOS plugin's RPC surface plugs
-//! in by implementing [`DurableStoreClient`] in a follow-up.
+//! Production wiring: ao-cli ships a single production-facing
+//! [`DurableStoreClient`] impl: [`super::dbos_client::DbosDurableStoreClient`].
+//! It binds the `launchapp-dev/animus-step-durable-dbos` plugin over
+//! stdio JSON-RPC. The trait stays so test isolation can swap in a
+//! lightweight in-memory double (test-only `MockDurableStore`) without
+//! coupling the unit tests to the plugin lifecycle.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -69,11 +69,12 @@ pub enum FenceState {
     PriorError { message: String },
 }
 
-/// Trait the fence integration is wired against. Production implementations
-/// bridge to the DBOS plugin's RPC surface; tests use [`MockDurableStore`].
+/// Trait the fence integration is wired against. Production callers
+/// use [`super::dbos_client::DbosDurableStoreClient`]; tests swap in a
+/// `#[cfg(test)]` in-memory double (see `test_doubles` below).
 ///
 /// All methods are async to permit network-backed implementations; the
-/// mock implementation completes synchronously.
+/// in-memory double completes synchronously.
 #[async_trait::async_trait]
 pub trait DurableStoreClient: Send + Sync {
     /// Look up the current fence state for `key`.
@@ -181,112 +182,120 @@ pub async fn wait_for_completion<C: DurableStoreClient + ?Sized>(
     }
 }
 
-/// In-memory mock for tests and the test harness.
-pub struct MockDurableStore {
-    state: tokio::sync::Mutex<std::collections::HashMap<String, MockEntry>>,
-    counter: std::sync::atomic::AtomicU64,
-    /// Diagnostic counter: how many times `step_begin` succeeded. Used by
-    /// tests to assert "the model was called exactly N times".
-    pub begins: std::sync::atomic::AtomicU64,
-}
+#[cfg(test)]
+mod test_doubles {
+    //! In-memory `DurableStoreClient` impl used by the fence unit tests.
+    //! Not compiled into the production binary — the only production-facing
+    //! impl is [`super::super::dbos_client::DbosDurableStoreClient`].
 
-#[derive(Debug, Clone)]
-enum MockEntry {
-    InProgress { reservation_id: String },
-    Success { response: Value },
-    Error { message: String },
-}
+    use std::sync::Arc;
 
-impl Default for MockDurableStore {
-    fn default() -> Self {
-        Self {
-            state: tokio::sync::Mutex::new(std::collections::HashMap::new()),
-            counter: std::sync::atomic::AtomicU64::new(0),
-            begins: std::sync::atomic::AtomicU64::new(0),
-        }
-    }
-}
+    use anyhow::Result;
+    use serde_json::Value;
 
-impl MockDurableStore {
-    pub fn new() -> Arc<Self> {
-        Arc::new(Self::default())
+    use super::{DurableStoreClient, FenceState, IdempotencyKey};
+
+    pub(super) struct MockDurableStore {
+        state: tokio::sync::Mutex<std::collections::HashMap<String, MockEntry>>,
+        counter: std::sync::atomic::AtomicU64,
+        pub(super) begins: std::sync::atomic::AtomicU64,
     }
 
-    pub async fn force_success(&self, key: &IdempotencyKey, response: Value) {
-        let mut guard = self.state.lock().await;
-        guard.insert(key.0.clone(), MockEntry::Success { response });
+    #[derive(Debug, Clone)]
+    enum MockEntry {
+        InProgress { reservation_id: String },
+        Success { response: Value },
+        Error { message: String },
     }
 
-    pub async fn force_error(&self, key: &IdempotencyKey, message: &str) {
-        let mut guard = self.state.lock().await;
-        guard.insert(key.0.clone(), MockEntry::Error { message: message.to_string() });
-    }
-
-    pub async fn force_in_progress(&self, key: &IdempotencyKey) -> String {
-        let mut guard = self.state.lock().await;
-        let id = format!("res-{}", self.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
-        guard.insert(key.0.clone(), MockEntry::InProgress { reservation_id: id.clone() });
-        id
-    }
-}
-
-#[async_trait::async_trait]
-impl DurableStoreClient for MockDurableStore {
-    async fn step_query(&self, key: &IdempotencyKey) -> Result<FenceState> {
-        let guard = self.state.lock().await;
-        Ok(match guard.get(&key.0) {
-            None => FenceState::Absent,
-            Some(MockEntry::InProgress { reservation_id }) => {
-                FenceState::InProgress { reservation_id: reservation_id.clone() }
+    impl Default for MockDurableStore {
+        fn default() -> Self {
+            Self {
+                state: tokio::sync::Mutex::new(std::collections::HashMap::new()),
+                counter: std::sync::atomic::AtomicU64::new(0),
+                begins: std::sync::atomic::AtomicU64::new(0),
             }
-            Some(MockEntry::Success { response }) => FenceState::PriorSuccess { response: response.clone() },
-            Some(MockEntry::Error { message }) => FenceState::PriorError { message: message.clone() },
-        })
-    }
-
-    async fn step_begin(&self, key: &IdempotencyKey) -> Result<String> {
-        let mut guard = self.state.lock().await;
-        if let Some(existing) = guard.get(&key.0) {
-            anyhow::bail!("step_begin on already-present key {}: {:?}", key, existing);
         }
-        let id = format!("res-{}", self.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
-        guard.insert(key.0.clone(), MockEntry::InProgress { reservation_id: id.clone() });
-        self.begins.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Ok(id)
     }
 
-    async fn step_complete(&self, reservation_id: &str, response: Value) -> Result<()> {
-        let mut guard = self.state.lock().await;
-        let Some((key, entry)) = guard
-            .iter()
-            .find(|(_, v)| matches!(v, MockEntry::InProgress { reservation_id: rid } if rid == reservation_id))
-            .map(|(k, _)| (k.clone(), ()))
-        else {
-            anyhow::bail!("step_complete on unknown reservation {}", reservation_id);
-        };
-        let _ = entry;
-        guard.insert(key, MockEntry::Success { response });
-        Ok(())
+    impl MockDurableStore {
+        pub(super) fn new() -> Arc<Self> {
+            Arc::new(Self::default())
+        }
+
+        pub(super) async fn force_error(&self, key: &IdempotencyKey, message: &str) {
+            let mut guard = self.state.lock().await;
+            guard.insert(key.0.clone(), MockEntry::Error { message: message.to_string() });
+        }
+
+        pub(super) async fn force_in_progress(&self, key: &IdempotencyKey) -> String {
+            let mut guard = self.state.lock().await;
+            let id = format!("res-{}", self.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+            guard.insert(key.0.clone(), MockEntry::InProgress { reservation_id: id.clone() });
+            id
+        }
     }
 
-    async fn step_fail(&self, reservation_id: &str, error: &str) -> Result<()> {
-        let mut guard = self.state.lock().await;
-        let Some(key) = guard
-            .iter()
-            .find(|(_, v)| matches!(v, MockEntry::InProgress { reservation_id: rid } if rid == reservation_id))
-            .map(|(k, _)| k.clone())
-        else {
-            anyhow::bail!("step_fail on unknown reservation {}", reservation_id);
-        };
-        guard.insert(key, MockEntry::Error { message: error.to_string() });
-        Ok(())
+    #[async_trait::async_trait]
+    impl DurableStoreClient for MockDurableStore {
+        async fn step_query(&self, key: &IdempotencyKey) -> Result<FenceState> {
+            let guard = self.state.lock().await;
+            Ok(match guard.get(&key.0) {
+                None => FenceState::Absent,
+                Some(MockEntry::InProgress { reservation_id }) => {
+                    FenceState::InProgress { reservation_id: reservation_id.clone() }
+                }
+                Some(MockEntry::Success { response }) => FenceState::PriorSuccess { response: response.clone() },
+                Some(MockEntry::Error { message }) => FenceState::PriorError { message: message.clone() },
+            })
+        }
+
+        async fn step_begin(&self, key: &IdempotencyKey) -> Result<String> {
+            let mut guard = self.state.lock().await;
+            if let Some(existing) = guard.get(&key.0) {
+                anyhow::bail!("step_begin on already-present key {}: {:?}", key, existing);
+            }
+            let id = format!("res-{}", self.counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst));
+            guard.insert(key.0.clone(), MockEntry::InProgress { reservation_id: id.clone() });
+            self.begins.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(id)
+        }
+
+        async fn step_complete(&self, reservation_id: &str, response: Value) -> Result<()> {
+            let mut guard = self.state.lock().await;
+            let Some((key, entry)) = guard
+                .iter()
+                .find(|(_, v)| matches!(v, MockEntry::InProgress { reservation_id: rid } if rid == reservation_id))
+                .map(|(k, _)| (k.clone(), ()))
+            else {
+                anyhow::bail!("step_complete on unknown reservation {}", reservation_id);
+            };
+            let _ = entry;
+            guard.insert(key, MockEntry::Success { response });
+            Ok(())
+        }
+
+        async fn step_fail(&self, reservation_id: &str, error: &str) -> Result<()> {
+            let mut guard = self.state.lock().await;
+            let Some(key) = guard
+                .iter()
+                .find(|(_, v)| matches!(v, MockEntry::InProgress { reservation_id: rid } if rid == reservation_id))
+                .map(|(k, _)| k.clone())
+            else {
+                anyhow::bail!("step_fail on unknown reservation {}", reservation_id);
+            };
+            guard.insert(key, MockEntry::Error { message: error.to_string() });
+            Ok(())
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::test_doubles::MockDurableStore;
     use super::*;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
 
     #[tokio::test]
     async fn fresh_key_runs_model_and_commits_success() {
