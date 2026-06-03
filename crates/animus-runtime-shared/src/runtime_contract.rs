@@ -20,8 +20,17 @@ pub fn install_memory_mcp_stdio_command_override(resolver: Option<MemoryMcpStdio
     }
 }
 
+/// Resolves the daemon-supplied animus CLI path for memory MCP injection.
+/// Order: (1) in-process init-extension override (`install_memory_mcp_stdio_command_override`,
+/// used by the plugin handshake path), (2) `ANIMUS_HOST_CLI_PATH` env var
+/// (used by the daemon's `ProcessManager` direct-spawn path). Returns `None`
+/// when neither is set so callers skip memory MCP injection rather than
+/// recursively launching the workflow_runner as its own MCP server.
 fn memory_mcp_stdio_command_override() -> Option<String> {
-    override_slot().read().ok().and_then(|guard| guard.as_ref().and_then(|resolver| resolver()))
+    if let Some(command) = override_slot().read().ok().and_then(|guard| guard.as_ref().and_then(|resolver| resolver())) {
+        return Some(command);
+    }
+    std::env::var("ANIMUS_HOST_CLI_PATH").ok().filter(|value| !value.trim().is_empty())
 }
 
 pub fn validate_basic_json_schema(instance: &Value, schema: &Value) -> Result<()> {
@@ -348,26 +357,11 @@ pub fn inject_default_stdio_mcp_with_config(
         return;
     }
 
-    // TODO(codex-p2): in the standalone plugin, `current_exe()` is
-    // `animus-workflow-runner-default`, not the Animus CLI. If a sibling
-    // `animus` binary is not found and `mcp_config.stdio_command` is
-    // empty, this would fall back to launching THIS plugin with `mcp serve`
-    // args, which it doesn't understand — startup would hang. v0.5 mitigation:
-    // refuse the fallback and require the daemon to supply
-    // `mcp_config.stdio_command`. Track in v0.6 by extending
-    // `mcp_config` with a "host CLI path" field provided by the host on
-    // every workflow_runner call.
-    let command = mcp_config.stdio_command.clone().filter(|v| !v.trim().is_empty()).or_else(|| {
-        let exe = std::env::current_exe().ok()?;
-        let exe_dir = exe.parent()?;
-        let ao_binary = exe_dir.join("animus");
-        if ao_binary.exists() {
-            Some(ao_binary.to_string_lossy().to_string())
-        } else {
-            // Refuse to recursively launch ourselves (codex P2 round 2).
-            None
-        }
-    });
+    let command = mcp_config
+        .stdio_command
+        .clone()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(memory_mcp_stdio_command_override);
     let Some(command) = command else {
         return;
     };
@@ -689,35 +683,14 @@ pub fn inject_memory_mcp_for_capable_agent(
 }
 
 fn current_ao_command() -> Option<String> {
-    // Codex P2 #4: prefer the host-supplied
-    // `init_extensions.memory_mcp_stdio_command` override before falling
-    // back to sibling-binary discovery. Standalone plugin deployments
-    // (no co-located `animus` CLI) can now inject memory MCP by setting
-    // the init extension on `InitializeParams`.
-    if let Some(command) = memory_mcp_stdio_command_override() {
-        return Some(command);
-    }
-
-    let exe = std::env::current_exe().ok()?;
-    let exe_dir = exe.parent()?;
-    let ao_binary = exe_dir.join("animus");
-    if ao_binary.exists() {
-        Some(ao_binary.to_string_lossy().to_string())
-    } else {
-        // codex P2 round 3: do NOT fall back to launching THIS plugin as
-        // the memory MCP server — the binary speaks JSON-RPC, not the
-        // memory MCP CLI. Return None so the caller can omit the memory
-        // MCP injection instead of starting a recursive workflow-runner
-        // process. The daemon SHOULD supply an explicit `stdio_command`
-        // when memory MCP is required.
-        None
-    }
+    memory_mcp_stdio_command_override()
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
+    use std::sync::Mutex;
 
     use orchestrator_config::McpServerDefinition;
     use orchestrator_core::{
@@ -726,6 +699,11 @@ mod tests {
     };
 
     use super::*;
+
+    fn memory_mcp_override_lock() -> &'static Mutex<()> {
+        static LOCK: std::sync::OnceLock<Mutex<()>> = std::sync::OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn inject_workflow_mcp_servers_includes_phase_bound_pack_servers() {
@@ -887,20 +865,15 @@ mod tests {
 
     #[test]
     fn inject_memory_mcp_added_when_capability_enabled() {
-        // v0.5 plugin: when no sibling `animus` binary is co-located,
-        // `current_ao_command()` returns `None` (codex P2 round 3) and the
-        // memory MCP injection is skipped. To exercise the success path
-        // here we drop a stub `animus` next to the test binary so the
-        // discovery hits it. This stub does not need to be executable —
-        // `Path::exists()` is the only check.
+        // v0.5.1 #5c: sibling-binary discovery removed. Memory MCP injection
+        // requires the daemon to supply `init_extensions.memory_mcp_stdio_command`
+        // via `install_memory_mcp_stdio_command_override`.
+        let _guard = memory_mcp_override_lock().lock().unwrap_or_else(|p| p.into_inner());
         let workflow_config = workflow_config_with_phase_agent("research", "default");
         let agent_runtime_config = agent_runtime_config_with_memory("default", true);
         let ctx = RuntimeConfigContext { agent_runtime_config, workflow_config };
 
-        let exe = std::env::current_exe().expect("test binary path");
-        let exe_dir = exe.parent().expect("test binary parent dir");
-        let sibling = exe_dir.join("animus");
-        let _ = std::fs::write(&sibling, b"#!/bin/sh\n");
+        install_memory_mcp_stdio_command_override(Some(Box::new(|| Some("/opt/host/bin/animus".to_string()))));
 
         let mut runtime_contract = serde_json::json!({
             "cli": { "capabilities": { "supports_mcp": true } },
@@ -912,11 +885,42 @@ mod tests {
             .pointer("/mcp/additional_servers/animus.memory")
             .expect("animus.memory server entry should be injected for capability=true");
         assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("stdio"));
+        assert_eq!(entry.pointer("/command").and_then(Value::as_str), Some("/opt/host/bin/animus"));
         let args = entry.pointer("/args").and_then(Value::as_array).expect("args");
         assert!(args.iter().any(|value| value.as_str() == Some("mcp")));
         assert!(args.iter().any(|value| value.as_str() == Some("memory")));
 
-        let _ = std::fs::remove_file(&sibling);
+        install_memory_mcp_stdio_command_override(None);
+    }
+
+    #[test]
+    fn inject_memory_mcp_omitted_when_init_extension_absent() {
+        // v0.5.1 #5c: absent init-extension override → no recursive
+        // self-launch fallback. Caller must skip memory MCP injection.
+        let _guard = memory_mcp_override_lock().lock().unwrap_or_else(|p| p.into_inner());
+        install_memory_mcp_stdio_command_override(None);
+        let prior_env = std::env::var("ANIMUS_HOST_CLI_PATH").ok();
+        std::env::remove_var("ANIMUS_HOST_CLI_PATH");
+
+        let workflow_config = workflow_config_with_phase_agent("research", "default");
+        let agent_runtime_config = agent_runtime_config_with_memory("default", true);
+        let ctx = RuntimeConfigContext { agent_runtime_config, workflow_config };
+
+        let mut runtime_contract = serde_json::json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": { "agent_id": "animus" }
+        });
+        inject_memory_mcp_for_capable_agent(&mut runtime_contract, "/tmp/project", &ctx, "research");
+
+        assert!(
+            runtime_contract.pointer("/mcp/additional_servers").is_none(),
+            "without init-extension override, memory MCP injection must be skipped (no sibling-binary fallback)"
+        );
+
+        match prior_env {
+            Some(value) => std::env::set_var("ANIMUS_HOST_CLI_PATH", value),
+            None => std::env::remove_var("ANIMUS_HOST_CLI_PATH"),
+        }
     }
 
     #[test]
@@ -1126,16 +1130,11 @@ mod tests {
 
     /// Codex P2 #4: when the daemon supplies `init_extensions.memory_mcp_stdio_command`,
     /// the plugin uses that explicit binary path instead of probing for a
-    /// sibling `animus`. Exercises the override path via `install_plugin_state`.
-    ///
-    /// IMPORTANT: this test does NOT delete the sibling `animus` stub created
-    /// by `inject_memory_mcp_added_when_capability_enabled` — both tests run
-    /// in parallel under default `cargo test` and racing on the shared
-    /// `target/debug/deps/animus` path causes a flake. The init-extension
-    /// override path takes precedence over sibling discovery, so the test
-    /// can assert override behaviour without touching the sibling at all.
+    /// sibling `animus`. v0.5.1 #5c removed the sibling-discovery fallback
+    /// entirely; the override is now the only source of truth.
     #[test]
     fn inject_memory_mcp_uses_init_extension_stdio_command_override() {
+        let _guard = memory_mcp_override_lock().lock().unwrap_or_else(|p| p.into_inner());
         let stub_command = "/opt/host/bin/host-supplied-memory-mcp";
         let stub_owned = stub_command.to_string();
         install_memory_mcp_stdio_command_override(Some(Box::new(move || Some(stub_owned.clone()))));
