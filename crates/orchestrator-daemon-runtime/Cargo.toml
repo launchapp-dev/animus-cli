@@ -34,9 +34,9 @@ animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "htt
 # `protocol::SubjectDispatch` (re-exported from `animus-subject-protocol`)
 # remains the canonical type; `services::plugin_clients` serializes via
 # the v0.5 types over the wire.
-animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.1" }
-animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.1" }
-animus-subject-protocol-v05 = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.1" }
+animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.3" }
+animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.3" }
+animus-subject-protocol-v05 = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.3" }
 protocol = { workspace = true }
 regex = "1"
 serde = { version = "1.0", features = ["derive"] }

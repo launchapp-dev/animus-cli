@@ -31,7 +31,7 @@ pub const DEFAULT_WORKFLOW_RUNNER_PLUGINS: &[(&str, &str)] =
     &[("launchapp-dev/animus-workflow-runner-default", "v0.4.1")];
 
 /// v0.5 queue plugin. See [`DEFAULT_WORKFLOW_RUNNER_PLUGINS`].
-pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.2.0")];
+pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.3.0")];
 
 /// v0.5 durable-store plugin (DBOS Option A).
 pub const DEFAULT_DURABLE_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-step-durable-dbos", "v0.2.0")];
