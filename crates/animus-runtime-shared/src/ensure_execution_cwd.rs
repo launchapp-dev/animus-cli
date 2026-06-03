@@ -1,5 +1,5 @@
 use anyhow::Result;
-use orchestrator_core::{providers::SubjectContext, services::ServiceHub, SubjectRef};
+use orchestrator_core::{services::ServiceHub, subject_adapter::SubjectContext, SubjectRef};
 use std::sync::Arc;
 
 pub async fn ensure_execution_cwd(

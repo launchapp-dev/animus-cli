@@ -31,15 +31,15 @@ uuid = { version = "1", features = ["v4", "serde"] }
 interprocess = "2.4"
 
 # When vendored inside the ao-cli workspace this crate uses the in-tree
-# `protocol` / `orchestrator-core` / `orchestrator-config` /
-# `orchestrator-store` workspace members. The out-of-tree
-# `launchapp-dev/animus-runtime-shared` repo replaces these with `git` deps
-# pinned to a `launchapp-dev/animus-cli` rev — keep both in sync when
-# pushing a new shared-crate version.
+# `protocol` / `orchestrator-core` / `orchestrator-config` workspace
+# members. The out-of-tree `launchapp-dev/animus-runtime-shared` repo
+# replaces these with `git` deps pinned to a `launchapp-dev/animus-cli`
+# rev — keep both in sync when pushing a new shared-crate version.
+# (v0.5.3 surface-shrink: `orchestrator-store` was folded into
+# `orchestrator-core::store`; `fsync_rename` is re-exported from there.)
 protocol            = { workspace = true }
 orchestrator-core   = { workspace = true }
 orchestrator-config = { workspace = true }
-orchestrator-store  = { workspace = true }
 
 [features]
 # Exposes the `phase_session::test_fault` and `phase_output::test_fault`

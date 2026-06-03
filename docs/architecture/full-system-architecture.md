@@ -30,14 +30,14 @@ The core goals are:
 
 ## Workspace Inventory
 
-`Cargo.toml` currently declares 15 workspace members.
+`Cargo.toml` currently declares 13 workspace members.
 
 | Group | Crates |
 |---|---|
 | CLI | `orchestrator-cli` |
-| Core services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` |
+| Core services | `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config` |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` |
-| Provider/session | `orchestrator-session-host`, `orchestrator-providers` |
+| Provider/session | `orchestrator-session-host` |
 | Plugin foundation | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` |
 | Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` |
 
@@ -128,7 +128,8 @@ Every command starts in `orchestrator-cli`:
 
 Project root behavior is owned by `orchestrator-core/src/config.rs`. Bootstrap
 and state persistence are owned by `orchestrator-core/src/services.rs` and
-`orchestrator-store`.
+`orchestrator-core/src/store/` (folded in from the former `orchestrator-store`
+crate in v0.5.3).
 
 ## State and Configuration
 
@@ -494,7 +495,7 @@ sequenceDiagram
 - CLI surface docs must follow `root_types.rs` and generated reference docs.
 - MCP docs must follow the actual operation modules and tool registry.
 - Plugin defaults must follow `orchestrator-core::plugin_registry`.
-- State layout must follow `protocol` and `orchestrator-store`.
+- State layout must follow `protocol` and `orchestrator-core::store`.
 - Web behavior is plugin-hosted, not bundled.
 - Provider execution is plugin-hosted, not in-tree fallback.
 - Subject execution is kind-routed through plugins.

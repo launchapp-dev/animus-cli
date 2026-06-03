@@ -131,6 +131,7 @@ pub trait PlanningServiceApi: Send + Sync {
     async fn execute_requirements(&self, input: RequirementsExecutionInput) -> Result<RequirementsExecutionResult>;
 }
 
+pub mod adapter;
 pub mod builtin;
 pub mod git;
 pub mod plugins {
@@ -140,12 +141,11 @@ pub mod plugins {
         PluginHost, PluginRegistry, StdioTransport, SubjectRouter,
     };
 }
-pub mod subject_adapter;
 
-pub use builtin::{BuiltinRequirementsPlanningService, BuiltinRequirementsProvider, BuiltinTaskProvider};
-pub use git::{BuiltinGitProvider, CreatePrInput, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo};
-pub use subject_adapter::{
+pub use adapter::{
     builtin_subject_adapter_registry, BuiltinCustomSubjectAdapter, BuiltinProjectAdapter,
     BuiltinRequirementSubjectAdapter, BuiltinSubjectResolver, BuiltinTaskSubjectAdapter, SubjectAdapter,
     SubjectAdapterRegistry,
 };
+pub use builtin::{BuiltinRequirementsPlanningService, BuiltinRequirementsProvider, BuiltinTaskProvider};
+pub use git::{BuiltinGitProvider, CreatePrInput, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo};

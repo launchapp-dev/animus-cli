@@ -56,7 +56,7 @@ pub fn write_phase_completion_marker(
     // even though the data file is fully on disk. ~5-50ms on SSD —
     // negligible vs. the cost of replaying a completed phase or, worse,
     // double-running one.
-    orchestrator_store::fsync_rename(&tmp_path, &final_path)?;
+    orchestrator_core::store::fsync_rename(&tmp_path, &final_path)?;
     Ok(())
 }
 
@@ -241,7 +241,7 @@ pub fn persist_phase_output(
     // change is durable across power loss. Without this the recovery
     // logic could find a completion marker without the sibling
     // <phase>.json (or vice versa) after a kernel panic.
-    orchestrator_store::fsync_rename(&tmp_path, &file_path)?;
+    orchestrator_core::store::fsync_rename(&tmp_path, &file_path)?;
     if !matches!(outcome, PhaseExecutionOutcome::ManualPending { .. }) {
         write_phase_completion_marker(project_root, workflow_id, phase_id, attempt)?;
     }

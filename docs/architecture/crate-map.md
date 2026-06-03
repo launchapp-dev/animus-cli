@@ -1,6 +1,6 @@
 # Crate Map
 
-The Animus workspace is a Cargo workspace of 15 crates organized by runtime
+The Animus workspace is a Cargo workspace of 13 crates organized by runtime
 responsibility. `Cargo.toml` is the source of truth for membership.
 
 ## Foundation
@@ -8,7 +8,6 @@ responsibility. `Cargo.toml` is the source of truth for membership.
 | Crate | Responsibility |
 |---|---|
 | `protocol` | Shared protocol, config, repository-scope, and CLI JSON envelope types |
-| `orchestrator-store` | Atomic persistence helpers and repo-scoped state directory support |
 | `orchestrator-logging` | Shared tracing, log path, and runtime log plumbing |
 
 ## Runtime
@@ -29,10 +28,9 @@ binary inside the installed plugin (see `crates/orchestrator-core/src/runtime_co
 | Crate | Responsibility |
 |---|---|
 | `orchestrator-cli` | Main `animus` binary, clap surface, MCP server, output formatting, and operations |
-| `orchestrator-core` | Domain services, bootstrap, state mutation APIs, plugin registry, and preflight |
+| `orchestrator-core` | Domain services, bootstrap, state mutation APIs, plugin registry, preflight, the `subject_adapter` adapter layer (folded in from the former `orchestrator-providers` crate in v0.5.3), and the `store` atomic-persistence helpers (folded in from the former `orchestrator-store` crate in v0.5.3) |
 | `orchestrator-config` | Workflow YAML loading, pack loading, scaffolding, and phase plan resolution |
 | `orchestrator-notifications` | Notification/runtime integration support |
-| `orchestrator-providers` | Provider-facing adapter glue and compatibility helpers |
 
 ## Plugin Runtime
 

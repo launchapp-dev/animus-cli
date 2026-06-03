@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-pub use orchestrator_store::{project_state_dir, read_json_or_default, write_json_atomic, write_json_pretty};
+pub use crate::store::{project_state_dir, read_json_or_default, write_json_atomic, write_json_pretty};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

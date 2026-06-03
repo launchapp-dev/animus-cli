@@ -32,9 +32,8 @@ observability, and extension rules, see
 flowchart TB
     OP["operator / automation"]
     CLI["orchestrator-cli<br/>animus"]
-    CORE["orchestrator-core<br/>FileServiceHub"]
+    CORE["orchestrator-core<br/>FileServiceHub<br/>(incl. subject_adapter + store)"]
     CFG["orchestrator-config"]
-    STORE["orchestrator-store"]
     DAEMON["orchestrator-daemon-runtime"]
     WFR["animus-runtime-shared<br/>+ workflow_runner plugin"]
     AR["agent-runner"]
@@ -48,9 +47,8 @@ flowchart TB
     CLI --> CORE
     CLI --> DAEMON
     CORE --> CFG
-    CORE --> STORE
     CORE --> LOCAL
-    STORE --> STATE
+    CORE --> STATE
     DAEMON --> WFR
     WFR --> AR
     AR --> SESSION
@@ -65,9 +63,9 @@ flowchart TB
 | Layer | Crates | Responsibility |
 |---|---|---|
 | Interface | `orchestrator-cli` | CLI, MCP server, JSON output, operations, `animus web` plugin launch |
-| Services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` | Bootstrap, config, state mutation APIs, workflow config, atomic persistence |
+| Services | `orchestrator-core` (includes the `subject_adapter` and `store` modules), `orchestrator-config` | Bootstrap, config, state mutation APIs, workflow config, atomic persistence, subject-backend adapters |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and runner IPC/process orchestration |
-| Providers | `orchestrator-session-host`, `orchestrator-providers` | Provider plugin sessions, compatibility helpers (the OpenAI-compatible runner ships out-of-tree as `launchapp-dev/animus-provider-oai-agent`) |
+| Providers | `orchestrator-session-host` | Provider plugin sessions (the OpenAI-compatible runner ships out-of-tree as `launchapp-dev/animus-provider-oai-agent`; provider/session compatibility helpers folded into `orchestrator-core::subject_adapter` in v0.5.3) |
 | Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
 | Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` | Notifications, tracing, shared types |
 

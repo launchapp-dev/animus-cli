@@ -1,5 +1,5 @@
 use super::*;
-use orchestrator_providers::TaskServiceApi as ProviderTaskServiceApi;
+use crate::subject_adapter::TaskServiceApi as ProviderTaskServiceApi;
 
 fn task_filter_can_use_db_predicates(filter: &TaskFilter) -> bool {
     filter.risk.is_none()
@@ -17,7 +17,7 @@ fn task_query_can_use_db_page(query: &TaskQuery) -> bool {
 #[async_trait]
 impl TaskServiceApi for InMemoryServiceHub {
     fn task_provider(&self) -> Arc<dyn TaskProvider> {
-        Arc::new(crate::providers::BuiltinTaskProvider::new(Arc::new(self.clone())))
+        Arc::new(crate::subject_adapter::BuiltinTaskProvider::new(Arc::new(self.clone())))
     }
 
     async fn list(&self) -> Result<Vec<OrchestratorTask>> {
@@ -126,7 +126,7 @@ impl TaskServiceApi for InMemoryServiceHub {
 #[async_trait]
 impl TaskServiceApi for FileServiceHub {
     fn task_provider(&self) -> Arc<dyn TaskProvider> {
-        Arc::new(crate::providers::BuiltinTaskProvider::new(Arc::new(self.clone())))
+        Arc::new(crate::subject_adapter::BuiltinTaskProvider::new(Arc::new(self.clone())))
     }
 
     async fn list(&self) -> Result<Vec<OrchestratorTask>> {

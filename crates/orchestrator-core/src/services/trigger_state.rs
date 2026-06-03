@@ -79,7 +79,7 @@ pub fn save_trigger_state(project_root: &Path, state: &TriggerState) -> Result<(
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create trigger state directory {}", parent.display()))?;
     }
-    orchestrator_store::write_json_pretty(&path, state)
+    crate::store::write_json_pretty(&path, state)
         .with_context(|| format!("failed to write trigger state to {}", path.display()))
 }
 

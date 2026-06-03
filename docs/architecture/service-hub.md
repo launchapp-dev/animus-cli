@@ -67,7 +67,7 @@ graph TD
     MEM["InMemoryServiceHub"]
     APIS["Service API traits"]
     STATE["CoreState + workflow.db"]
-    STORE["orchestrator-store"]
+    STORE["orchestrator-core::store"]
 
     CLI --> HUB
     HUB --> FILE

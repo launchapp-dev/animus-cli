@@ -60,7 +60,7 @@ pub fn save_schedule_state(project_root: &Path, state: &ScheduleState) -> Result
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create schedule state directory {}", parent.display()))?;
     }
-    orchestrator_store::write_json_pretty(&path, state)
+    crate::store::write_json_pretty(&path, state)
         .with_context(|| format!("failed to write schedule state to {}", path.display()))
 }
 
