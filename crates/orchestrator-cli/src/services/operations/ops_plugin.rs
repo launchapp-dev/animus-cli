@@ -28,7 +28,7 @@ use orchestrator_plugin_host::{
     DiscoverySource, DiscoveryWarning, LockEntry, LockVerifyResult, PluginDiscovery, PluginHost, PluginLockfile,
     PluginSpawnOptions, PolicyMode as PluginPolicyMode,
 };
-use orchestrator_session_host::is_reserved_provider_tool;
+use orchestrator_plugin_host::session::is_reserved_provider_tool;
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};

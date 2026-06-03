@@ -1,7 +1,7 @@
 //! Host-side glue that wires the upstream `SessionBackend` trait (re-exported from
 //! `animus_session_backend::session`) to the Animus STDIO plugin protocol.
 //!
-//! This crate exists to keep the published `animus-session-backend` crate
+//! This module exists to keep the published `animus-session-backend` crate
 //! small. The pieces here — `PluginSessionBackend` (per-session map + cancel
 //! routing + notification forwarding) and the plugin-discovery-aware
 //! `SessionBackendResolver` — are daemon-side adapters that depend on the

@@ -38,8 +38,7 @@ binary inside the installed plugin (see `crates/orchestrator-core/src/runtime_co
 
 | Crate | Responsibility |
 |---|---|
-| `orchestrator-plugin-host` | Plugin discovery, install lockfiles, manifest probes, stdio host, router, and signature verification |
-| `orchestrator-session-host` | Provider plugin session bridge used by `agent-runner` |
+| `orchestrator-plugin-host` | Plugin discovery, install lockfiles, manifest probes, stdio host, router, signature verification, and the `session` provider-plugin bridge |
 | `animus-plugin-protocol` | In-tree copy of the stdio plugin protocol types |
 | `animus-plugin-runtime` | Runtime helper crate for plugin implementations |
 

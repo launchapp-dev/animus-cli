@@ -20,7 +20,6 @@ libc = "0.2"
 orchestrator-core = { workspace = true }
 orchestrator-logging = { workspace = true }
 orchestrator-plugin-host = { workspace = true }
-orchestrator-session-host = { workspace = true }
 animus-plugin-protocol = { workspace = true }
 animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
 animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }

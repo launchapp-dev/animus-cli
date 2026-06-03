@@ -30,7 +30,6 @@ graph TD
     DAEMON[orchestrator-daemon-runtime]
     WR[animus-runtime-shared]
     AR[agent-runner]
-    SESSION[orchestrator-session-host]
     PLUGIN_HOST[orchestrator-plugin-host]
     PLUGIN_PROTO[animus-plugin-protocol]
     PLUGIN_RUNTIME[animus-plugin-runtime]
@@ -44,7 +43,6 @@ graph TD
     CLI --> WR
     CLI --> NOTIF
     CLI --> PLUGIN_HOST
-    CLI --> SESSION
     CLI --> PROTO
 
     DAEMON --> CORE
@@ -58,11 +56,8 @@ graph TD
     WR --> CONFIG
     WR --> PROTO
 
-    AR --> SESSION
+    AR --> PLUGIN_HOST
     AR --> PROTO
-
-    SESSION --> PLUGIN_HOST
-    SESSION --> PLUGIN_PROTO
 
     PLUGIN_HOST --> PLUGIN_PROTO
     PLUGIN_HOST --> SUBJECT_PROTO
@@ -111,4 +106,4 @@ surface.
 - [Runtime Topology Diagram](diagram.md) -- High-level Mermaid diagram of operators, daemon, plugins, and external systems with design rationale
 - [Crate Map](crate-map.md) -- All workspace crates grouped by responsibility with descriptions
 - [ServiceHub Pattern](service-hub.md) -- Dependency injection via the `ServiceHub` trait
-- [Provider Session Host](llm-cli-wrapper-session-backends.md) -- Historical session-backend design notes plus the current `orchestrator-session-host` provider-plugin boundary
+- [Provider Session Host](llm-cli-wrapper-session-backends.md) -- Historical session-backend design notes plus the current `orchestrator-plugin-host::session` provider-plugin boundary

@@ -22,8 +22,7 @@ observability, and extension rules, see
 | Shared config and scope types | [`crates/protocol/src/config.rs`](../../crates/protocol/src/config.rs), [`crates/protocol/src/repository_scope.rs`](../../crates/protocol/src/repository_scope.rs) |
 | Workflow execution helpers | [`crates/animus-runtime-shared/src/`](../../crates/animus-runtime-shared/src/) |
 | Daemon runtime | [`crates/orchestrator-daemon-runtime/src/`](../../crates/orchestrator-daemon-runtime/src/) |
-| Plugin host | [`crates/orchestrator-plugin-host/src/`](../../crates/orchestrator-plugin-host/src/) |
-| Provider session bridge | [`crates/orchestrator-session-host/src/`](../../crates/orchestrator-session-host/src/) |
+| Plugin host (incl. provider session bridge) | [`crates/orchestrator-plugin-host/src/`](../../crates/orchestrator-plugin-host/src/) |
 | Web plugin resolution | [`crates/orchestrator-cli/src/services/operations/ops_web.rs`](../../crates/orchestrator-cli/src/services/operations/ops_web.rs) |
 
 ## System Shape
@@ -38,7 +37,6 @@ flowchart TB
     DAEMON["orchestrator-daemon-runtime"]
     WFR["animus-runtime-shared<br/>+ workflow_runner plugin"]
     AR["agent-runner"]
-    SESSION["orchestrator-session-host"]
     PHOST["orchestrator-plugin-host"]
     PLUGINS["provider / subject / trigger / transport plugins"]
     STATE["~/.animus/<repo-scope>"]
@@ -53,8 +51,7 @@ flowchart TB
     STORE --> STATE
     DAEMON --> WFR
     WFR --> AR
-    AR --> SESSION
-    SESSION --> PHOST
+    AR --> PHOST
     DAEMON --> PHOST
     CLI --> PHOST
     PHOST --> PLUGINS
@@ -67,8 +64,8 @@ flowchart TB
 | Interface | `orchestrator-cli` | CLI, MCP server, JSON output, operations, `animus web` plugin launch |
 | Services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` | Bootstrap, config, state mutation APIs, workflow config, atomic persistence |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and runner IPC/process orchestration |
-| Providers | `orchestrator-session-host`, `orchestrator-providers` | Provider plugin sessions, compatibility helpers (the OpenAI-compatible runner ships out-of-tree as `launchapp-dev/animus-provider-oai-agent`) |
-| Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
+| Providers | `orchestrator-providers` | Compatibility helpers (the OpenAI-compatible runner ships out-of-tree as `launchapp-dev/animus-provider-oai-agent`) |
+| Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers, and the `session` provider-plugin bridge |
 | Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` | Notifications, tracing, shared types |
 
 ## Startup Flow
@@ -143,8 +140,8 @@ discover installed `transport_backend` and `web_ui` plugins.
 2. The daemon starts a workflow run through an installed `workflow_runner` plugin.
 3. Shared `animus-runtime-shared` logic resolves phase configuration and runtime contracts inside that plugin.
 4. Agent phases call `agent-runner`.
-5. `agent-runner` delegates provider execution to `orchestrator-session-host`.
-6. `orchestrator-session-host` discovers and drives a provider plugin through
+5. `agent-runner` delegates provider execution to `orchestrator-plugin-host::session`.
+6. The `session` module discovers and drives a provider plugin through
    `orchestrator-plugin-host`.
 7. Events flow back through the runner, workflow state, daemon output, and logs.
 8. Terminal state is persisted in scoped runtime state and surfaced through CLI,
@@ -176,7 +173,7 @@ Plugin environments are cleared before spawn. Plugin behavior is documented in
 The key runtime split is:
 
 - subject and trigger plugins are daemon-facing
-- provider plugins are session-host-facing
+- provider plugins are `orchestrator-plugin-host::session`-facing
 - transport and web UI plugins are `animus web`-facing
 - log storage plugins are runtime logging-facing
 
@@ -198,6 +195,5 @@ Use source checks for architecture-affecting changes:
 ```bash
 cargo animus-bin-check
 cargo test -p orchestrator-plugin-host
-cargo test -p orchestrator-session-host
 cargo test -p orchestrator-cli
 ```

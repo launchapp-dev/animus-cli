@@ -47,7 +47,6 @@ crates/
 ├── orchestrator-notifications/  # Notification/runtime integration support
 ├── orchestrator-plugin-host/    # Plugin discovery, install, and stdio host
 ├── orchestrator-providers/      # Built-in provider integrations and routing
-├── orchestrator-session-host/   # Session backend layer + provider/plugin execution bridge
 ├── orchestrator-store/          # Shared state/storage path helpers
 └── protocol/                    # Shared protocol/config/runtime types
 ```

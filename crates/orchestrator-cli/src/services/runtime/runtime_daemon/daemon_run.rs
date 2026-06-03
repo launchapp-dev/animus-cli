@@ -33,7 +33,7 @@ use animus_runtime_shared::phase_session::{
     list_running_checkpoints, update_session_blocked, update_session_completed, update_session_running_after_resume,
     SessionCheckpoint,
 };
-use orchestrator_session_host::{
+use orchestrator_plugin_host::session::{
     canonical_tool_alias, discover_provider_plugins, PluginSessionBackend, ResumeAgentOutcome,
 };
 use std::collections::HashMap;
@@ -197,7 +197,7 @@ impl ResumeProviderRegistry for ProductionResumeProviderRegistry {
         // but the installed first-party plugin registers under
         // `provider_tool = "oai"`. The normal session resolver
         // canonicalizes aliases before lookup (see
-        // `orchestrator_session_host::canonical_tool_alias` and
+        // `orchestrator_plugin_host::session::canonical_tool_alias` and
         // `SessionBackendResolver::resolve`); restart-resume must mirror
         // that or it mis-classifies an installed plugin as
         // `NotInstalled` and blocks the checkpoint with a misleading
@@ -1331,7 +1331,7 @@ mod tests {
             write_session_pending, SessionCheckpoint, SessionCheckpointStatus,
         };
         use async_trait::async_trait;
-        use orchestrator_session_host::ResumeAgentOutcome;
+        use orchestrator_plugin_host::session::ResumeAgentOutcome;
         use serde_json::json;
         use std::collections::HashMap;
         use std::sync::Mutex;

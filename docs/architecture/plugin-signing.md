@@ -162,7 +162,7 @@ runtime, the session resolver also emits a `warn!` so the shadow is visible in
 daemon logs even if the install bypass was used.
 
 The reserved list lives in
-`crates/orchestrator-session-host/src/session_backend_resolver.rs` as
+`crates/orchestrator-plugin-host/src/session/session_backend_resolver.rs` as
 `RESERVED_PROVIDER_TOOLS`.
 
 ### Trusted orgs (TOFU)

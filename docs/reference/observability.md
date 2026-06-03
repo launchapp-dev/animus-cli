@@ -90,7 +90,7 @@ and let operators pick their preferred shape.
 
 The metrics layer reserves room for `phase_duration_seconds{phase_name}` and
 `plugin_request_duration_seconds{plugin,method}` — observing these from the
-workflow runner / session-host crates is a future enhancement. Histograms
+workflow runner / plugin-host session module is a future enhancement. Histograms
 emitted via `orchestrator_daemon_runtime::metrics::observe` will show up
 here automatically once the call sites are wired.
 
@@ -98,7 +98,7 @@ Bucket layout: 1ms, 5ms, 10ms, 50ms, 100ms, 500ms, 1s, 2.5s, 5s, 10s, +Inf.
 
 ### Plugin invocation metrics
 
-The session-host crate (which dispatches LLM provider calls) does not yet
+The plugin-host session module (which dispatches LLM provider calls) does not yet
 emit `plugin_invocations_total` directly — adding it requires a cross-crate
 dependency that the v0.4.12 timeline does not justify. As a stand-in,
 operators can derive an "invocations" view from

@@ -654,7 +654,7 @@ impl PluginHost {
     /// Typed variant of [`PluginHost::request`]: surfaces process-death
     /// (`HostError::ConnectionLost`) and plugin-side RPC errors
     /// (`HostError::Rpc(_)`) as distinct enum variants. The dispatcher
-    /// classifier in `orchestrator-session-host` matches on this enum to
+    /// classifier in the `session` module matches on this enum to
     /// decide whether a retry-once is safe.
     pub async fn request_typed(&self, method: impl Into<String>, params: Option<Value>) -> Result<Value, HostError> {
         let method = method.into();

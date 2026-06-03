@@ -47,7 +47,7 @@ flowchart TB
         ROUTER["Subject router"]:::daemon
         SCHED["Scheduler / workflow dispatch"]:::daemon
         WR["workflow_runner plugin<br/>+ animus-runtime-shared"]:::daemon
-        PHOST["Plugin host<br/>(orchestrator-plugin-host<br/>+ orchestrator-session-host)"]:::daemon
+        PHOST["Plugin host<br/>(orchestrator-plugin-host<br/>incl. session module)"]:::daemon
         BCAST["Notification broadcaster<br/>(WorkflowEvent / AgentNotification)"]:::daemon
     end
 

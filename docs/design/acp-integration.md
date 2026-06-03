@@ -281,7 +281,7 @@ A new HTTP/WebSocket server exposing ACP:
 | `orchestrator-config` | Load/persist session config, interpret mode/settings |
 | `orchestrator-core` + CLI git/worktree operations | Map `fs/*` ACP operations to git-tracked file changes |
 | `animus-runtime-shared` + external `workflow_runner` plugin | Delegate task execution to the installed runner, stream output |
-| `orchestrator-session-host` | Bridge provider/plugin execution and session backends |
+| `orchestrator-plugin-host::session` | Bridge provider/plugin execution and session backends |
 | `orchestrator-cli` | Reuse CLI/MCP operation wiring and output contracts |
 | `orchestrator-store` | Persist session state at `~/.animus/<repo-scope>/sessions/` |
 

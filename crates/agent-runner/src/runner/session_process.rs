@@ -1,7 +1,7 @@
 use super::launch::{is_ai_cli_tool, LaunchInvocation};
 use animus_session_backend::session::{SessionEvent, SessionRequest};
 use anyhow::{anyhow, bail, Context, Result};
-use orchestrator_session_host::SessionBackendResolver;
+use orchestrator_plugin_host::session::SessionBackendResolver;
 use protocol::{
     AgentRunEvent, ArtifactInfo, ArtifactType, OutputStreamType, RunId, Timestamp, TokenUsage, ToolCallInfo,
     ToolResultInfo,

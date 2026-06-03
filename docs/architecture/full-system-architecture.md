@@ -37,8 +37,8 @@ The core goals are:
 | CLI | `orchestrator-cli` |
 | Core services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` |
-| Provider/session | `orchestrator-session-host`, `orchestrator-providers` |
-| Plugin foundation | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` |
+| Provider helpers | `orchestrator-providers` |
+| Plugin foundation | `orchestrator-plugin-host` (includes the `session` provider-plugin bridge), `animus-plugin-protocol`, `animus-plugin-runtime` |
 | Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
@@ -76,7 +76,6 @@ flowchart TB
     DAEMON["daemon runtime"]
     WFR["animus-workflow-runner-default<br/>(preferred)"]
     AR["agent-runner"]
-    SESSION["orchestrator-session-host"]
     PHOST["orchestrator-plugin-host"]
     PROVIDERS["provider plugins"]
     SUBJECTS["subject_backend plugins"]
@@ -100,8 +99,7 @@ flowchart TB
     DAEMON --> TRIGGERS
     DAEMON --> WFR
     WFR --> AR
-    AR --> SESSION
-    SESSION --> PHOST
+    AR --> PHOST
     PHOST --> PROVIDERS
     CLI --> WEB
 ```
@@ -311,11 +309,11 @@ back into workflow state and, where configured, subject state.
 - telemetry
 
 Provider-specific session behavior is not implemented directly in daemon-core.
-The runner delegates provider sessions through `orchestrator-session-host`.
+The runner delegates provider sessions through `orchestrator-plugin-host::session`.
 
 ## Provider Session Host
 
-`orchestrator-session-host` resolves installed provider plugins and adapts them
+The `orchestrator-plugin-host::session` module resolves installed provider plugins and adapts them
 to the external `animus-session-backend` contract. It owns:
 
 - provider plugin discovery
@@ -511,7 +509,6 @@ cargo test -p orchestrator-daemon-runtime
 cargo test -p animus-runtime-shared
 cargo test -p agent-runner
 cargo test -p orchestrator-plugin-host
-cargo test -p orchestrator-session-host
 ```
 
 For docs-only architecture changes, at minimum run:

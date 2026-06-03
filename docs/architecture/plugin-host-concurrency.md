@@ -10,8 +10,8 @@ responses, and notifications can share one process without losing messages.
 |---|---|
 | Host/router implementation | [`crates/orchestrator-plugin-host/src/host.rs`](../../crates/orchestrator-plugin-host/src/host.rs) |
 | Subject kind router | [`crates/orchestrator-plugin-host/src/subject_router.rs`](../../crates/orchestrator-plugin-host/src/subject_router.rs) |
-| Provider plugin backend | [`crates/orchestrator-session-host/src/plugin_backend.rs`](../../crates/orchestrator-session-host/src/plugin_backend.rs) |
-| Provider supervisor | [`crates/orchestrator-session-host/src/plugin_supervisor.rs`](../../crates/orchestrator-session-host/src/plugin_supervisor.rs) |
+| Provider plugin backend | [`crates/orchestrator-plugin-host/src/session/plugin_backend.rs`](../../crates/orchestrator-plugin-host/src/session/plugin_backend.rs) |
+| Provider supervisor | [`crates/orchestrator-plugin-host/src/session/plugin_supervisor.rs`](../../crates/orchestrator-plugin-host/src/session/plugin_supervisor.rs) |
 | Concurrency tests | [`crates/orchestrator-plugin-host/tests/concurrency.rs`](../../crates/orchestrator-plugin-host/tests/concurrency.rs) |
 
 ## Runtime Contract
@@ -85,7 +85,7 @@ behavior:
 
 ```bash
 cargo test -p orchestrator-plugin-host --test concurrency
-cargo test -p orchestrator-session-host
+cargo test -p orchestrator-plugin-host --test plugin_supervisor
 ```
 
 Run the runtime binary set before release:

@@ -37,7 +37,6 @@ animus-subject-protocol-v05 = { package = "animus-subject-protocol", git = "http
 protocol = { path = "../protocol" }
 animus-session-backend = { workspace = true }
 which = "8"
-orchestrator-session-host = { workspace = true }
 orchestrator-daemon-runtime = { workspace = true }
 orchestrator-notifications = { workspace = true }
 animus-runtime-shared = { workspace = true }

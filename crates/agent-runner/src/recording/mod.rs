@@ -71,7 +71,7 @@
 //! | provider     | response chunk shape           | tool call shape                              |
 //! | ------------ | ------------------------------- | ---------------------------------------------- |
 //! | claude       | `{"text":"…","stream":"stdout"}` | `ToolCallInfo { tool_name, parameters, ts }`   |
-//! | codex        | newline-delimited text chunks   | text-encoded; rebuilt by orchestrator-session-host |
+//! | codex        | newline-delimited text chunks   | text-encoded; rebuilt by orchestrator-plugin-host::session |
 //! | gemini       | grouped chunks per response     | `ToolCallInfo`-compatible                      |
 //! | opencode     | identical to claude             | identical to claude                            |
 //! | oai          | OpenAI-format SSE deltas        | `ToolCallInfo`-compatible                      |

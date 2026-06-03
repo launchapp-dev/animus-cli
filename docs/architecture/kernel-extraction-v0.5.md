@@ -418,6 +418,6 @@ These are out of v0.5 scope and explicitly NOT to be lifted in this round:
 - `orchestrator-git-ops` crate (becomes command-phase patterns in workflow YAML packs)
 - `orchestrator-logging` crate (becomes `telemetry_sink` plugin in v0.6)
 - Anything in `orchestrator-providers` (already plugin-shaped; no work needed)
-- Anything in `orchestrator-session-host` (subsumed by provider plugins individually)
+- Anything in the `orchestrator-plugin-host::session` module (subsumed by provider plugins individually; folded in from the former `orchestrator-session-host` crate)
 
 Wave 2A agents must resist the urge to extract these. They will produce confusing PRs that break v0.5 scope.

@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::time::{Duration, Instant};
 
-use orchestrator_session_host::DispatchObserver;
+use orchestrator_plugin_host::session::DispatchObserver;
 use serde::{Deserialize, Serialize};
 
 /// Fixed bucket upper bounds in seconds, log-distributed from 1ms to 10s.
@@ -253,12 +253,12 @@ pub fn snapshot() -> MetricsSnapshot {
 }
 
 /// Implements [`DispatchObserver`] by routing per-call duration samples
-/// emitted by [`orchestrator_session_host::PluginSessionBackend`] into the
+/// emitted by [`orchestrator_plugin_host::session::PluginSessionBackend`] into the
 /// daemon-runtime global metrics registry as
 /// `plugin_request_duration_seconds{plugin=...,method=...}` histogram
-/// observations. The session-host crate cannot depend on daemon-runtime
-/// directly, so the observer trait lives there and the metrics-aware
-/// implementation is wired here.
+/// observations. The plugin-host session module cannot depend on
+/// daemon-runtime directly, so the observer trait lives there and the
+/// metrics-aware implementation is wired here.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct MetricsObserver;
 
