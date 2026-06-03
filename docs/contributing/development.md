@@ -89,15 +89,22 @@ delegates to installed `transport_backend` and `web_ui` plugins.
 ```bash
 npm install
 npm run docs:check-sync
+cargo test -p orchestrator-cli cli_reference_top_level_tree_matches_live_clap_commands -- --nocapture
+cargo test -p orchestrator-cli mcp_reference_table_matches_live_builtin_tools -- --nocapture
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
+npx vercel --yes --prod
 ```
 
 Run `npm run docs:check-sync` whenever the CLI command tree or MCP surface
 changes. It compares `crates/orchestrator-cli/src/cli_types/root_types.rs` and
 `crates/orchestrator-cli/src/services/operations/ops_mcp/` against the
 reference docs and fails on drift.
+
+For a full drift check, also run the `orchestrator-cli` tests that assert the
+published CLI tree and MCP tool table match the live clap/MCP registries before
+deploying the docs site to Vercel.
 
 Protocol schema exports live at the repo root:
 
