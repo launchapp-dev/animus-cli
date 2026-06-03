@@ -217,13 +217,19 @@ impl DbosDurableStoreClient {
     /// Best-effort shutdown of the underlying plugin process. After
     /// `shutdown` further calls to `step_*` will re-spawn the plugin.
     pub async fn shutdown(&self) {
-        let mut guard = self.inner.host.lock().await;
-        if let Some(host) = guard.take() {
+        // Lock order: host BEFORE init. `ensure_workflow_run` mirrors this
+        // ordering (see below) so the AB-BA deadlock codex flagged for v0.5.1
+        // is ruled out by construction. We also hold host across the init
+        // reset so a concurrent step can't slip in, re-init on the old host,
+        // and have its init bit silently survive our shutdown.
+        let mut host_guard = self.inner.host.lock().await;
+        let mut init_guard = self.inner.workflow_run_initialized.lock().await;
+        *init_guard = false;
+        if let Some(host) = host_guard.take() {
             if let Err(err) = host.shutdown().await {
                 tracing::warn!(plugin = %self.inner.plugin_label, %err, "durable_store plugin shutdown errored");
             }
         }
-        *self.inner.workflow_run_initialized.lock().await = false;
     }
 
     async fn ensure_host(&self) -> Result<()> {
@@ -270,12 +276,18 @@ impl DbosDurableStoreClient {
     }
 
     async fn ensure_workflow_run(&self) -> Result<()> {
+        // ensure_host briefly takes/releases host; after it returns the
+        // host slot is populated. We then re-take host, then init, so the
+        // critical section that runs begin_workflow_run holds locks in the
+        // same order as `shutdown` (host BEFORE init). Without this order,
+        // shutdown can race a step and either deadlock or leave the init
+        // bit set across a host swap.
+        self.ensure_host().await?;
+        let host_guard = self.inner.host.lock().await;
         let mut init_guard = self.inner.workflow_run_initialized.lock().await;
         if *init_guard {
             return Ok(());
         }
-        self.ensure_host().await?;
-        let host_guard = self.inner.host.lock().await;
         let host = host_guard.as_ref().ok_or_else(|| anyhow!("durable_store host not initialized after ensure_host"))?;
         let req = BeginWorkflowRunRequest { run_id: &self.inner.run_id, phase_id: &self.inner.phase_id, inputs: None };
         let params = serde_json::to_value(&req).context("encode BeginWorkflowRunRequest")?;

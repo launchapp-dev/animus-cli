@@ -59,28 +59,51 @@ pub async fn dispatch_queued_entries_via_runner(
                 // Within-batch dedupe: the queue's `exclude_subjects` filter
                 // honors the snapshot we sent at lease time, but multiple
                 // pending entries for the same subject (different
-                // workflow_refs) can still be returned in one batch. Cancel
-                // duplicates so only the first entry per subject_key starts.
+                // workflow_refs) can still be returned in one batch. Release
+                // the duplicate back to Pending so it runs on a later tick
+                // after the first entry's workflow finishes.
                 if plugin_owned_subject_keys.contains(&subject_key) {
                     warn!(
                         actor = protocol::ACTOR_DAEMON,
                         subject_key = %subject_key,
                         entry_id = %entry.entry_id,
-                        "queue/lease returned duplicate subject within batch; closing extra entry as cancelled"
+                        "queue/lease returned duplicate subject within batch; releasing extra entry back to pending"
                     );
-                    let req = QueueCompletionRequest {
-                        entry_id: entry.entry_id.clone(),
-                        status: queue_proto::completion_status::CANCELLED.to_string(),
-                        workflow_ref: None,
-                        workflow_id: None,
-                    };
-                    if let Err(error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
+                    if let Err(error) = plugin_clients::call_queue_release_pending(
+                        project_root_path,
+                        &entry.entry_id,
+                        "within-batch-duplicate-subject",
+                    )
+                    .await
+                    {
+                        // Older queue plugins (pre-v0.2.0 of animus-queue-default) don't
+                        // implement queue/release_pending — they'd return method-not-found
+                        // and we'd strand the entry as Assigned forever. Fall back to
+                        // completion(CANCELLED) so old plugins at least move the entry to
+                        // a terminal state. This trades silently dropping legitimate
+                        // queued work (the codex-v1 P1 we just fixed) for not stranding
+                        // the queue on old plugins; preflight already requires queue
+                        // v0.2.0+ for v0.5 so production should rarely hit this path.
                         warn!(
                             actor = protocol::ACTOR_DAEMON,
                             entry_id = %entry.entry_id,
                             error = %error,
-                            "queue plugin queue/completion (within-batch duplicate) failed; entry may be stranded as Assigned"
+                            "queue plugin queue/release_pending failed; falling back to completion(cancelled)"
                         );
+                        let req = QueueCompletionRequest {
+                            entry_id: entry.entry_id.clone(),
+                            status: queue_proto::completion_status::CANCELLED.to_string(),
+                            workflow_ref: None,
+                            workflow_id: None,
+                        };
+                        if let Err(completion_error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
+                            warn!(
+                                actor = protocol::ACTOR_DAEMON,
+                                entry_id = %entry.entry_id,
+                                error = %completion_error,
+                                "queue plugin queue/completion fallback (within-batch duplicate) also failed; entry may be stranded as Assigned"
+                            );
+                        }
                     }
                     continue;
                 }
