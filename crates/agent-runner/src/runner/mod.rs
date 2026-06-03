@@ -366,6 +366,18 @@ async fn drive_replay(
                     let _ = event_tx.send(AgentRunEvent::ToolResult { run_id: run_id.clone(), result_info }).await;
                 }
             }
+            crate::recording::DecisionEvent::ToolSideEffect { name, assertion, .. } => {
+                if let Err(err) = crate::recording::side_effect::assert_side_effect(&name, &assertion) {
+                    let _ = event_tx
+                        .send(AgentRunEvent::Error {
+                            run_id: run_id.clone(),
+                            error: format!("Replay divergence: {err}"),
+                        })
+                        .await;
+                    terminal = Some(AgentStatus::Failed);
+                    break;
+                }
+            }
             crate::recording::DecisionEvent::Error { message, .. } => {
                 let _ = event_tx.send(AgentRunEvent::Error { run_id: run_id.clone(), error: message }).await;
                 terminal = Some(AgentStatus::Failed);
@@ -883,5 +895,100 @@ mod tests {
         }
         assert!(saw_call, "replay must yield AgentRunEvent::ToolCall");
         assert!(saw_result, "replay must yield AgentRunEvent::ToolResult");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn replay_surfaces_divergence_when_tool_side_effect_file_missing() {
+        use crate::recording::side_effect::SideEffectAssertion;
+        use crate::recording::{DecisionEvent, Recorder};
+        use protocol::{AgentRunRequest, ModelId, PROTOCOL_VERSION};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("tempdir");
+        let replay_path = dir.path().join("decisions.jsonl");
+        let recorder = Recorder::create_at(&replay_path).expect("recorder");
+        // Reference a path that does NOT exist at replay time.
+        let missing = dir.path().join("ghost.txt");
+        let assertion = SideEffectAssertion::FileExists { path: missing.clone() };
+        recorder.record(&DecisionEvent::prompt("m", "p", None)).unwrap();
+        recorder.record(&DecisionEvent::tool_side_effect("Write", assertion)).unwrap();
+        recorder.record(&DecisionEvent::finished(Some(0))).unwrap();
+        drop(recorder);
+
+        let (cleanup_tx, _cleanup_rx) = mpsc::channel::<CleanupMessage>(4);
+        let mut runner = Runner::new(cleanup_tx);
+        let req = AgentRunRequest {
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            run_id: RunId("replay-divergence".to_string()),
+            model: ModelId("m".to_string()),
+            context: serde_json::json!({"replay_session_path": replay_path.to_string_lossy()}),
+            timeout_secs: None,
+        };
+        let (event_tx, _event_rx) = mpsc::channel::<AgentRunEvent>(16);
+        let mut broadcast_rx = runner.handle_run_request(req, event_tx);
+
+        let mut saw_divergence = false;
+        while let Ok(evt) = tokio::time::timeout(std::time::Duration::from_secs(5), broadcast_rx.recv()).await {
+            let evt = match evt {
+                Ok(e) => e,
+                Err(_) => break,
+            };
+            if let AgentRunEvent::Error { error, .. } = evt {
+                if error.contains("Replay divergence") {
+                    saw_divergence = true;
+                    break;
+                }
+            }
+        }
+        assert!(saw_divergence, "replay must surface divergence error when asserted file is missing");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn replay_passes_when_tool_side_effect_file_still_present() {
+        use crate::recording::side_effect::SideEffectAssertion;
+        use crate::recording::{DecisionEvent, Recorder};
+        use protocol::{AgentRunRequest, ModelId, PROTOCOL_VERSION};
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().expect("tempdir");
+        let replay_path = dir.path().join("decisions.jsonl");
+        let recorder = Recorder::create_at(&replay_path).expect("recorder");
+        let present = dir.path().join("still-there.txt");
+        std::fs::write(&present, b"yo").unwrap();
+        let assertion = SideEffectAssertion::FileExists { path: present };
+        recorder.record(&DecisionEvent::prompt("m", "p", None)).unwrap();
+        recorder.record(&DecisionEvent::tool_side_effect("Write", assertion)).unwrap();
+        recorder.record(&DecisionEvent::finished(Some(0))).unwrap();
+        drop(recorder);
+
+        let (cleanup_tx, _cleanup_rx) = mpsc::channel::<CleanupMessage>(4);
+        let mut runner = Runner::new(cleanup_tx);
+        let req = AgentRunRequest {
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            run_id: RunId("replay-clean".to_string()),
+            model: ModelId("m".to_string()),
+            context: serde_json::json!({"replay_session_path": replay_path.to_string_lossy()}),
+            timeout_secs: None,
+        };
+        let (event_tx, _event_rx) = mpsc::channel::<AgentRunEvent>(16);
+        let mut broadcast_rx = runner.handle_run_request(req, event_tx);
+
+        let mut finished_ok = false;
+        while let Ok(evt) = tokio::time::timeout(std::time::Duration::from_secs(5), broadcast_rx.recv()).await {
+            let evt = match evt {
+                Ok(e) => e,
+                Err(_) => break,
+            };
+            match evt {
+                AgentRunEvent::Error { error, .. } => panic!("unexpected error: {error}"),
+                AgentRunEvent::Finished { exit_code, .. } => {
+                    assert_eq!(exit_code, Some(0));
+                    finished_ok = true;
+                    break;
+                }
+                _ => {}
+            }
+        }
+        assert!(finished_ok, "clean assertion must let replay complete normally");
     }
 }
