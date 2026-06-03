@@ -33,7 +33,7 @@ use animus_runtime_shared::phase_session::{
     list_running_checkpoints, update_session_blocked, update_session_completed, update_session_running_after_resume,
     SessionCheckpoint,
 };
-use orchestrator_session_host::{
+use orchestrator_plugin_host::session::{
     canonical_tool_alias, discover_provider_plugins, PluginSessionBackend, ResumeAgentOutcome,
 };
 use std::collections::HashMap;
@@ -1331,7 +1331,7 @@ mod tests {
             write_session_pending, SessionCheckpoint, SessionCheckpointStatus,
         };
         use async_trait::async_trait;
-        use orchestrator_session_host::ResumeAgentOutcome;
+        use orchestrator_plugin_host::session::ResumeAgentOutcome;
         use serde_json::json;
         use std::collections::HashMap;
         use std::sync::Mutex;

@@ -4,6 +4,7 @@ mod discovery;
 mod host;
 pub mod lockfile;
 mod registry;
+pub mod session;
 pub mod signature_verifier;
 mod subject_router;
 mod transport;

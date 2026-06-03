@@ -37,8 +37,7 @@ The core goals are:
 | CLI | `orchestrator-cli` |
 | Core services | `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config` |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` |
-| Provider/session | `orchestrator-session-host` |
-| Plugin foundation | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` |
+| Plugin foundation | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-protocol`, `animus-plugin-runtime` |
 | Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.

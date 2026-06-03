@@ -45,7 +45,6 @@ crates/
 ├── orchestrator-logging/
 ├── orchestrator-notifications/
 ├── orchestrator-plugin-host/
-├── orchestrator-session-host/
 └── protocol/
 ```
 

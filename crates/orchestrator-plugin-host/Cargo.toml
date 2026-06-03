@@ -15,8 +15,11 @@ test-support = []
 [dependencies]
 anyhow = "1.0"
 animus-plugin-protocol = { workspace = true }
+animus-session-backend = { workspace = true }
+async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6.0"
+orchestrator-logging = { workspace = true }
 semver = "1"
 sha2 = "0.10"
 thiserror = "2"
@@ -24,8 +27,9 @@ toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_yaml = "0.9"
-tokio = { version = "1", features = ["io-util", "process", "rt", "macros", "time", "sync"] }
+tokio = { version = "1", features = ["io-util", "process", "rt", "rt-multi-thread", "macros", "time", "sync"] }
 tracing = "0.1"
+uuid = { version = "1.6", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -35,6 +39,7 @@ tempfile = "3"
 syn = { version = "2", features = ["full", "extra-traits", "parsing"] }
 proc-macro2 = "1"
 regex = "1"
+animus-session-backend = { workspace = true }
 
 [lints]
 workspace = true

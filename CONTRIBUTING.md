@@ -55,8 +55,8 @@ cargo animus-lint
 The workspace is organized into functional crates:
 
 - **Core orchestration**: `orchestrator-cli`, `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config`
-- **Runtime & agents**: `agent-runner`, `animus-runtime-shared`, `orchestrator-daemon-runtime`, `orchestrator-session-host`
-- **Plugin host**: `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime`
+- **Runtime & agents**: `agent-runner`, `animus-runtime-shared`, `orchestrator-daemon-runtime`
+- **Plugin host**: `orchestrator-plugin-host` (includes `session::*` folded in v0.5.3), `animus-plugin-protocol`, `animus-plugin-runtime`
 - **Utilities**: `orchestrator-notifications`, `protocol`
 - **Web stack**: shipped as external plugins (`launchapp-dev/animus-transport-http`, `animus-transport-graphql`, `animus-web-ui`). Install with `animus plugin install-defaults --include-transports`.
 

@@ -19,7 +19,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use animus_session_backend::session::{SessionEvent, SessionRequest};
-use orchestrator_session_host::SessionBackendResolver;
+use orchestrator_plugin_host::session::SessionBackendResolver;
 use serde_json::json;
 use tokio::time::timeout;
 

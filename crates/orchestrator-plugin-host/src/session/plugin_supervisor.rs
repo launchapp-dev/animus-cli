@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use orchestrator_plugin_host::HostError;
+use crate::HostError;
 
 #[derive(Debug, Clone)]
 pub struct SupervisorConfig {
@@ -199,7 +199,7 @@ pub fn classify(err: &HostError) -> RetryDecision {
 /// `request_typed` returns (success OR failure) so out-of-tree consumers
 /// (e.g. the daemon-runtime metrics layer) can wire a
 /// `plugin_request_duration_seconds` histogram without
-/// `orchestrator-session-host` having to depend on the daemon runtime
+/// `orchestrator-plugin-host` having to depend on the daemon runtime
 /// directly.
 ///
 /// The default [`NoopDispatchObserver`] is a no-op so callers that don't

@@ -45,8 +45,7 @@ crates/
 ├── orchestrator-daemon-runtime/ # Daemon queue and scheduling runtime
 ├── orchestrator-logging/        # Shared tracing and log file utilities
 ├── orchestrator-notifications/  # Notification/runtime integration support
-├── orchestrator-plugin-host/    # Plugin discovery, install, and stdio host
-├── orchestrator-session-host/   # Session backend layer + provider/plugin execution bridge
+├── orchestrator-plugin-host/    # Plugin discovery, install, stdio host, session backend bridge (folded in v0.5.3)
 └── protocol/                    # Shared protocol/config/runtime types
 ```
 

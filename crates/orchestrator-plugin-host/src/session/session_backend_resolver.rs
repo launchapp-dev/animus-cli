@@ -7,7 +7,7 @@ use animus_session_backend::session::{
     session_backend::SessionBackend, session_request::SessionRequest, session_run::SessionRun,
 };
 
-use crate::plugin_backend::{discover_provider_plugins, PluginSessionBackend};
+use super::plugin_backend::{discover_provider_plugins, PluginSessionBackend};
 
 /// Provider tool names that historically mapped to in-tree (built-in) backends.
 ///
@@ -192,7 +192,7 @@ mod tests {
         let mut resolver = SessionBackendResolver::new();
         resolver.plugin_providers.insert(
             "mock".to_string(),
-            std::sync::Arc::new(crate::plugin_backend::PluginSessionBackend::new(
+            std::sync::Arc::new(super::super::plugin_backend::PluginSessionBackend::new(
                 "animus-provider-mock",
                 PathBuf::from("/tmp/animus-provider-mock"),
                 "mock",
@@ -210,7 +210,7 @@ mod tests {
         let mut resolver = SessionBackendResolver::new();
         resolver.plugin_providers.insert(
             "claude".to_string(),
-            std::sync::Arc::new(crate::plugin_backend::PluginSessionBackend::new(
+            std::sync::Arc::new(super::super::plugin_backend::PluginSessionBackend::new(
                 "animus-provider-claude",
                 PathBuf::from("/tmp/animus-provider-claude"),
                 "claude",
@@ -244,7 +244,7 @@ mod tests {
         let mut resolver = SessionBackendResolver::new();
         resolver.plugin_providers.insert(
             "oai".to_string(),
-            std::sync::Arc::new(crate::plugin_backend::PluginSessionBackend::new(
+            std::sync::Arc::new(super::super::plugin_backend::PluginSessionBackend::new(
                 "animus-provider-oai",
                 PathBuf::from("/tmp/animus-provider-oai"),
                 "oai",

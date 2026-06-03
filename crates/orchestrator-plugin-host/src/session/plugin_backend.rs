@@ -14,14 +14,14 @@ use std::time::{Duration, Instant};
 use animus_plugin_protocol::{EnvRequirement, RpcError, RpcNotification};
 use async_trait::async_trait;
 use orchestrator_logging::Logger;
-use orchestrator_plugin_host::{
+use crate::{
     HostError, PluginHost, PluginSpawnOptions, PluginStderrSink, PLUGIN_BASE_ENV_ALLOWLIST,
 };
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
-use crate::plugin_supervisor::{
+use super::plugin_supervisor::{
     classify, DispatchObserver, NoopDispatchObserver, PluginSupervisor, RetryDecision, SupervisorError,
 };
 
@@ -35,7 +35,7 @@ const DEFAULT_PLUGIN_CANCEL_TIMEOUT_SECS: u64 = 10;
 /// drop its connection.
 const PLUGIN_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
 
-use crate::error::{Error, Result};
+use super::error::{Error, Result};
 use animus_session_backend::session::{
     session_backend::SessionBackend, session_backend_info::SessionBackendInfo,
     session_backend_kind::SessionBackendKind, session_capabilities::SessionCapabilities, session_event::SessionEvent,
@@ -1138,7 +1138,7 @@ impl DiscoveredProviderPlugin {
 /// the provider-kind plugins. Provider tool name defaults to the plugin name minus the
 /// `animus-provider-` prefix.
 pub fn discover_provider_plugins(project_root: &std::path::Path) -> Vec<DiscoveredProviderPlugin> {
-    use orchestrator_plugin_host::discover_plugins;
+    use crate::discover_plugins;
     let project_root = project_root.to_path_buf();
     discover_plugins(&project_root)
         .unwrap_or_default()
@@ -1368,10 +1368,10 @@ mod tests {
     /// `classify(&HostError)` rather than the deleted `is_death_like_error`.
     /// Asserting the classifier directly here closes the type-level
     /// guarantee — if Agent A ever renames or removes `HostError` variants,
-    /// this test forces a compile failure on the session-host side.
+    /// this test forces a compile failure on the session module side.
     #[test]
     fn dispatch_uses_typed_host_error_for_retry_decision() {
-        use crate::plugin_supervisor::{classify, RetryDecision};
+        use super::super::plugin_supervisor::{classify, RetryDecision};
         assert_eq!(classify(&HostError::ConnectionLost), RetryDecision::DeathLike);
         let plugin_side = HostError::Rpc(animus_plugin_protocol::RpcError {
             code: -32602,
@@ -1383,7 +1383,7 @@ mod tests {
 
     /// The plugin runtime serializes the provider's own session_id under the
     /// top-level `session_id` key of every agent/run response (see
-    /// animus_plugin_runtime::handle_agent_run). The session-host MUST
+    /// animus_plugin_runtime::handle_agent_run). The session module MUST
     /// surface that value verbatim into the follow-up `Started` event so the
     /// agent-runner persists the plugin's real id — never the host-local
     /// control_session_id. Regression test for the codex round-3 P2 finding.

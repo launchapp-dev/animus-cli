@@ -6,10 +6,10 @@ use animus_plugin_protocol::RpcError;
 use animus_session_backend::session::session_event::SessionEvent;
 use animus_session_backend::session::session_request::SessionRequest;
 use orchestrator_plugin_host::HostError;
-use orchestrator_session_host::plugin_supervisor::{
+use orchestrator_plugin_host::session::plugin_supervisor::{
     classify, is_structured_jsonrpc_error, PluginSupervisor, RetryDecision, SupervisorConfig, SupervisorError,
 };
-use orchestrator_session_host::PluginSessionBackend;
+use orchestrator_plugin_host::session::PluginSessionBackend;
 use serde_json::json;
 
 #[cfg(unix)]
