@@ -37,13 +37,11 @@ graph TD
     OAI[oai-runner]
     PROV[orchestrator-providers]
     NOTIF[orchestrator-notifications]
-    GIT[orchestrator-git-ops]
     LOG[orchestrator-logging]
 
     CLI --> CORE
     CLI --> DAEMON
     CLI --> WR
-    CLI --> GIT
     CLI --> NOTIF
     CLI --> PLUGIN_HOST
     CLI --> SESSION
@@ -51,7 +49,6 @@ graph TD
 
     DAEMON --> CORE
     DAEMON --> WR
-    DAEMON --> GIT
     DAEMON --> NOTIF
     DAEMON --> PLUGIN_HOST
     DAEMON --> LOG
@@ -77,9 +74,6 @@ graph TD
     CORE --> PROTO
 
     OAI --> PROTO
-    GIT --> CORE
-    GIT --> WR
-    GIT --> PROTO
 
     STORE --> PROTO
     CONFIG --> PROTO

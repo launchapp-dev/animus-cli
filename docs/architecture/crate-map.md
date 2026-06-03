@@ -27,7 +27,6 @@ responsibility. `Cargo.toml` is the source of truth for membership.
 | `orchestrator-cli` | Main `animus` binary, clap surface, MCP server, output formatting, and operations |
 | `orchestrator-core` | Domain services, bootstrap, state mutation APIs, plugin registry, and preflight |
 | `orchestrator-config` | Workflow YAML loading, pack loading, scaffolding, and phase plan resolution |
-| `orchestrator-git-ops` | Branch, worktree, merge, and PR helper operations |
 | `orchestrator-notifications` | Notification/runtime integration support |
 | `orchestrator-providers` | Provider-facing adapter glue and compatibility helpers |
 

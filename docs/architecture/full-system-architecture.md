@@ -39,7 +39,7 @@ The core goals are:
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` |
 | Provider/session | `orchestrator-session-host`, `orchestrator-providers`, `oai-runner` |
 | Plugin foundation | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` |
-| Support | `orchestrator-git-ops`, `orchestrator-notifications`, `orchestrator-logging`, `protocol` |
+| Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
@@ -384,8 +384,10 @@ The daemon owns when work starts. Plugins own how external events are observed.
 
 ## Git and Worktree Architecture
 
-`orchestrator-git-ops` owns git automation helpers. Runtime worktree state lives
-under `~/.animus/<repo-scope>/worktrees/`.
+Git automation helpers (worktree create/cleanup, identity, commit detection)
+live inside the consumers that need them — primarily the workflow_runner
+plugin and the daemon dispatch path. Runtime worktree state lives under
+`~/.animus/<repo-scope>/worktrees/`.
 
 Workflow and daemon code should treat git operations as explicit boundary calls:
 

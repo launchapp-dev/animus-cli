@@ -44,7 +44,6 @@ crates/
 ├── orchestrator-config/         # Workflow, pack, and template config loading
 ├── orchestrator-core/           # Domain services, bootstrap, state mutation APIs
 ├── orchestrator-daemon-runtime/ # Daemon queue and scheduling runtime
-├── orchestrator-git-ops/        # Git/worktree automation helpers
 ├── orchestrator-logging/        # Shared tracing and log file utilities
 ├── orchestrator-notifications/  # Notification/runtime integration support
 ├── orchestrator-plugin-host/    # Plugin discovery, install, and stdio host

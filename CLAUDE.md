@@ -62,7 +62,6 @@ Runtime and provider layer:
 - `crates/oai-runner`
 - `crates/orchestrator-daemon-runtime`
 - `crates/orchestrator-providers`
-- `crates/orchestrator-git-ops`
 - `crates/orchestrator-notifications`
 - `crates/orchestrator-session-host`
 - `crates/orchestrator-logging`

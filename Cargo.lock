@@ -2358,22 +2358,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "orchestrator-git-ops"
-version = "0.1.0"
-dependencies = [
- "animus-runtime-shared",
- "anyhow",
- "chrono",
- "orchestrator-core",
- "protocol",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "orchestrator-logging"
 version = "0.1.0"
 dependencies = [
