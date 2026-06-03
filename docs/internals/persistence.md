@@ -30,8 +30,14 @@ The scope name is derived from the canonical project path and includes a sanitiz
 ├── core-state.json
 ├── resume-config.json
 ├── workflow.db
-├── config/state-machines.v1.json
+├── config/
+│   ├── state-machines.v1.json
+│   ├── workflow-config.v2.json
+│   └── agent-runtime-config.v2.json
 ├── daemon/pm-config.json
+├── docs/
+├── logs/
+├── runner/
 ├── state/
 └── worktrees/
 ```
@@ -50,6 +56,23 @@ SQLite database that stores:
 - requirements
 
 The database uses WAL mode and a short busy timeout to support concurrent access patterns during CLI and daemon activity.
+
+### `config/`
+
+Compiled runtime configuration lives under `config/`:
+
+- `state-machines.v1.json`
+- `workflow-config.v2.json`
+- `agent-runtime-config.v2.json`
+
+These files are generated runtime state, not hand-authored project config.
+
+### `logs/` and `runner/`
+
+- `daemon/pm-config.json` stores persisted daemon automation settings
+- `logs/events.jsonl` stores redacted structured runtime events for the repo scope
+- `runner/config.json` stores scoped runner config, including the runner auth token
+- `runner/agent-runner.sock` is the default scoped Unix socket path for runner clients
 
 ### `state/`
 

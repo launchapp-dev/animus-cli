@@ -190,7 +190,7 @@ Animus is one Rust binary holding the scheduler, the dispatch loop, the plugin h
 
 ### Define your team in YAML
 
-Bind models, tools, MCP servers, and system prompts to named agent profiles. Route subjects by complexity. The whole team lives in `.animus/agents.yaml` and `.animus/workflows.yaml`.
+Bind models, tools, MCP servers, and system prompts to named agent profiles. Route subjects by complexity. The authored team config lives in `.animus/workflows.yaml` plus any split files under `.animus/workflows/*.yaml`.
 
 ```yaml
 agents:
