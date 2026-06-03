@@ -431,7 +431,7 @@ pub(crate) async fn reject_manual_phase(
 mod tests {
     #![allow(clippy::await_holding_lock)]
 
-    use super::{approve_manual_phase, reject_manual_phase};
+    use super::reject_manual_phase;
     use crate::shared::test_env_lock;
     use orchestrator_core::{
         load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config, FileServiceHub,
@@ -491,96 +491,12 @@ mod tests {
         assert!(commit.success(), "initial commit should succeed");
     }
 
-    // v0.5.1 fold-in (P2 #7): the in-tree continuation path was deleted —
-    // `approve_manual_phase` now routes the post-approval `workflow/execute`
-    // call through the installed workflow_runner plugin. The test harness
-    // does not spawn a plugin, so this end-to-end "approve + continue"
-    // scenario is now covered at the plugin-pack level (see the
-    // animus-workflow-runner-default conformance suite). Re-enabling
-    // here would require a mock plugin spawn, which is out of scope.
-    #[ignore = "v0.5.1 fold-in P2 #7: continuation requires installed workflow_runner plugin; covered by pack conformance"]
-    #[tokio::test]
-    async fn approve_manual_phase_continues_non_terminal_workflow() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = TempDir::new().expect("temp dir");
-        let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
-        init_git_repo(&temp);
-        let project_root = temp.path().to_string_lossy().to_string();
-        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
-
-        let task = hub
-            .tasks()
-            .create(TaskCreateInput {
-                title: "manual approval".to_string(),
-                description: "resume before completing".to_string(),
-                task_type: Some(TaskType::Feature),
-                priority: Some(Priority::High),
-                created_by: Some("test".to_string()),
-                tags: Vec::new(),
-                linked_requirements: Vec::new(),
-                linked_architecture_entities: Vec::new(),
-            })
-            .await
-            .expect("task should be created");
-        hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await.expect("task should be in progress");
-
-        let workflow = hub
-            .workflows()
-            .run(WorkflowRunInput::for_task(task.id.clone(), None))
-            .await
-            .expect("workflow should start");
-        let current_phase = workflow.current_phase.clone().expect("workflow should have current phase");
-        let next_phase = workflow
-            .phases
-            .get(workflow.current_phase_index + 1)
-            .map(|phase| phase.phase_id.clone())
-            .expect("workflow should have a second phase");
-
-        let mut runtime = load_agent_runtime_config(temp.path()).expect("runtime config");
-        let mut current_definition =
-            runtime.phase_execution(&current_phase).cloned().expect("current phase should exist");
-        current_definition.mode = PhaseExecutionMode::Manual;
-        current_definition.agent_id = None;
-        current_definition.command = None;
-        current_definition.manual = Some(PhaseManualDefinition {
-            instructions: "Approve this step".to_string(),
-            approval_note_required: false,
-            timeout_secs: None,
-        });
-        runtime.phases.insert(current_phase.clone(), current_definition);
-
-        let mut next_definition = runtime.phase_execution(&next_phase).cloned().expect("next phase should exist");
-        next_definition.mode = PhaseExecutionMode::Manual;
-        next_definition.agent_id = None;
-        next_definition.command = None;
-        next_definition.manual = Some(PhaseManualDefinition {
-            instructions: "Approve the resumed phase".to_string(),
-            approval_note_required: false,
-            timeout_secs: None,
-        });
-        runtime.phases.insert(next_phase.clone(), next_definition);
-        write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
-
-        let paused = hub.workflows().pause(&workflow.id).await.expect("workflow should pause");
-        assert_eq!(paused.status, WorkflowStatus::Paused);
-
-        let response = approve_manual_phase(hub.clone(), &project_root, &workflow.id, &current_phase, "approved")
-            .await
-            .expect("manual approval should succeed");
-
-        let updated = hub.workflows().get(&workflow.id).await.expect("workflow should reload");
-        let completed_phase = updated
-            .phases
-            .iter()
-            .find(|phase| phase.phase_id == current_phase)
-            .expect("approved phase should remain in workflow");
-
-        assert_eq!(completed_phase.status, WorkflowPhaseStatus::Success);
-        assert_eq!(updated.status, WorkflowStatus::Paused);
-        assert_eq!(updated.current_phase.as_deref(), Some(next_phase.as_str()));
-        assert_eq!(response["continued_execution"]["workflow_status"].as_str(), Some("paused"));
-        assert_eq!(response["continued_execution"]["phase_results"][0]["phase_id"].as_str(), Some(next_phase.as_str()));
-    }
+    // v0.5.1 fold-in (P2 #7): `approve_manual_phase` post-approval continuation
+    // routes through the installed workflow_runner plugin. End-to-end coverage
+    // for "approve + continue to next non-terminal phase" lives in the
+    // `animus-workflow-runner-default` pack conformance suite. The in-tree
+    // version was deleted in v0.5.1 round-2; the ignored test was dropped in
+    // the v0.5.1 DELTA bundle as a surface-shrink.
 
     #[tokio::test]
     async fn reject_manual_phase_fails_workflow() {
