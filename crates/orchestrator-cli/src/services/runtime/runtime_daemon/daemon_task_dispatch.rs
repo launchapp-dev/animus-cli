@@ -7,6 +7,7 @@ use tracing::warn;
 
 use crate::services::plugin_clients;
 use animus_queue_protocol::{self as queue_proto, QueueCompletionRequest, QueueLeaseRequest};
+use animus_subject_protocol_v05::SubjectId as QueueSubjectId;
 
 pub async fn dispatch_queued_entries_via_runner(
     root: &str,
@@ -15,20 +16,26 @@ pub async fn dispatch_queued_entries_via_runner(
 ) -> anyhow::Result<DispatchWorkflowStartSummary> {
     let active_subject_ids = process_manager.active_subject_ids();
 
-    // v0.5.1 fold-in: queue ownership lives exclusively on the
-    // `queue` plugin role. Daemon preflight refuses to start without
-    // it, so the in-tree fallback was removed. `queue/lease` reads +
-    // transitions pending -> assigned atomically; failures defer
-    // dispatch to the next tick rather than degrading to a local
-    // store that no longer mirrors the plugin's view.
     let mut planned_starts: Vec<PlannedDispatchStart> = Vec::new();
     let mut plugin_owned_subject_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut leased_entry_ids: Vec<String> = Vec::new();
     let mut undecodable_entry_ids: Vec<String> = Vec::new();
-    let mut stranded_entry_ids: Vec<String> = Vec::new();
     let project_root_path = std::path::Path::new(root);
 
-    let lease_req = QueueLeaseRequest { max: limit, workflow_ids: None };
+    let exclude_subjects: Vec<QueueSubjectId> = active_subject_ids
+        .iter()
+        .cloned()
+        .map(QueueSubjectId::new)
+        .collect();
+    let lease_req = QueueLeaseRequest {
+        max: limit,
+        workflow_ids: None,
+        exclude_subjects: if exclude_subjects.is_empty() {
+            None
+        } else {
+            Some(exclude_subjects)
+        },
+    };
     match plugin_clients::call_queue_lease(project_root_path, &lease_req).await {
         Ok(Some(response)) => {
             for entry in response.leased {
@@ -48,21 +55,35 @@ pub async fn dispatch_queued_entries_via_runner(
                         continue;
                     }
                 };
-                if active_subject_ids.contains(&dispatch.subject_key())
-                    || plugin_owned_subject_keys.contains(&dispatch.subject_key())
-                {
+                let subject_key = dispatch.subject_key();
+                // Within-batch dedupe: the queue's `exclude_subjects` filter
+                // honors the snapshot we sent at lease time, but multiple
+                // pending entries for the same subject (different
+                // workflow_refs) can still be returned in one batch. Cancel
+                // duplicates so only the first entry per subject_key starts.
+                if plugin_owned_subject_keys.contains(&subject_key) {
                     warn!(
                         actor = protocol::ACTOR_DAEMON,
-                        subject_key = %dispatch.subject_key(),
+                        subject_key = %subject_key,
                         entry_id = %entry.entry_id,
-                        "queue/lease returned entry for already-running or already-planned subject; releasing back to pending"
+                        "queue/lease returned duplicate subject within batch; closing extra entry as cancelled"
                     );
-                    plugin_owned_subject_keys.insert(dispatch.subject_key());
-                    stranded_entry_ids.push(entry.entry_id.clone());
+                    let req = QueueCompletionRequest {
+                        entry_id: entry.entry_id.clone(),
+                        status: queue_proto::completion_status::CANCELLED.to_string(),
+                        workflow_ref: None,
+                        workflow_id: None,
+                    };
+                    if let Err(error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
+                        warn!(
+                            actor = protocol::ACTOR_DAEMON,
+                            entry_id = %entry.entry_id,
+                            error = %error,
+                            "queue plugin queue/completion (within-batch duplicate) failed; entry may be stranded as Assigned"
+                        );
+                    }
                     continue;
                 }
-
-                let subject_key = dispatch.subject_key();
                 plugin_owned_subject_keys.insert(subject_key);
                 leased_entry_ids.push(entry.entry_id.clone());
                 planned_starts
@@ -95,46 +116,6 @@ pub async fn dispatch_queued_entries_via_runner(
                 entry_id = %entry_id,
                 error = %error,
                 "queue plugin queue/completion (undecodable entry) failed"
-            );
-        }
-    }
-
-    for entry_id in &stranded_entry_ids {
-        let release_result =
-            plugin_clients::call_queue_release_pending(project_root_path, entry_id, "active-subject-already-running")
-                .await;
-        let Err(error) = release_result else {
-            continue;
-        };
-        let chain_text = error.chain().map(|c| c.to_string()).collect::<Vec<_>>().join(" | ");
-        let is_method_not_found =
-            chain_text.contains("-32601") || chain_text.to_lowercase().contains("method not found");
-        if is_method_not_found {
-            warn!(
-                actor = protocol::ACTOR_DAEMON,
-                entry_id = %entry_id,
-                "queue plugin does not implement queue/release_pending (likely pre-v0.2.0); falling back to queue/completion(cancelled). Upgrade to animus-queue-default v0.2.0 to preserve the entry for retry."
-            );
-        } else {
-            warn!(
-                actor = protocol::ACTOR_DAEMON,
-                entry_id = %entry_id,
-                error = %error,
-                "queue plugin queue/release_pending (active-subject collision) failed; falling back to queue/completion(cancelled) so the leased entry is not stranded as Assigned"
-            );
-        }
-        let req = QueueCompletionRequest {
-            entry_id: entry_id.clone(),
-            status: queue_proto::completion_status::CANCELLED.to_string(),
-            workflow_ref: None,
-            workflow_id: None,
-        };
-        if let Err(error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
-            warn!(
-                actor = protocol::ACTOR_DAEMON,
-                entry_id = %entry_id,
-                error = %error,
-                "queue plugin queue/completion fallback (active-subject collision) failed; entry may be stranded as Assigned"
             );
         }
     }

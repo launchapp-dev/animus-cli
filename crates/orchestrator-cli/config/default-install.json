@@ -43,7 +43,7 @@
       { "repo": "launchapp-dev/animus-workflow-runner-default", "tag": "v0.4.1" }
     ],
     "queues": [
-      { "repo": "launchapp-dev/animus-queue-default", "tag": "v0.2.0" }
+      { "repo": "launchapp-dev/animus-queue-default", "tag": "v0.3.0" }
     ],
     "durable_stores": [
       { "repo": "launchapp-dev/animus-step-durable-dbos", "tag": "v0.2.0" }
