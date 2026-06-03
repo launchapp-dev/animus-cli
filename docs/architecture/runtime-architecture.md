@@ -67,7 +67,7 @@ flowchart TB
 | Interface | `orchestrator-cli` | CLI, MCP server, JSON output, operations, `animus web` plugin launch |
 | Services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` | Bootstrap, config, state mutation APIs, workflow config, atomic persistence |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and runner IPC/process orchestration |
-| Providers | `orchestrator-session-host`, `oai-runner`, `orchestrator-providers` | Provider plugin sessions, OpenAI-compatible runner, compatibility helpers |
+| Providers | `orchestrator-session-host`, `orchestrator-providers` | Provider plugin sessions, compatibility helpers (the OpenAI-compatible runner ships out-of-tree as `launchapp-dev/animus-provider-oai-agent`) |
 | Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
 | Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` | Notifications, tracing, shared types |
 

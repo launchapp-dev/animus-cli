@@ -103,7 +103,7 @@ fn parse_json_file(path: &Path) -> Option<serde_json::Value> {
 pub(super) fn collect_codebase_insight(project_root: &Path) -> CodebaseInsight {
     let mut insight = CodebaseInsight::default();
 
-    for path in ["src", "crates/orchestrator-cli", "crates/agent-runner", "crates/oai-runner", "crates", "tests"] {
+    for path in ["src", "crates/orchestrator-cli", "crates/agent-runner", "crates", "tests"] {
         if project_root.join(path).exists() {
             insight.notable_paths.push(path.to_string());
         }

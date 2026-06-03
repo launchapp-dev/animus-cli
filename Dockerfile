@@ -20,16 +20,18 @@ COPY crates crates
 # As of the v0.5.1 round-4 fold-in the in-tree workflow runner binary was
 # deleted; the daemon scheduler now spawns `animus-workflow-runner-default`
 # from the installed plugin. The image installs that plugin in stage 2.
+# v0.5.2 surface-shrink: the in-tree `animus-oai-runner` binary was
+# deleted; the runtime now spawns
+# `launchapp-dev/animus-provider-oai-agent` v0.1.3 from the installed
+# plugin. The image installs that plugin in stage 2 as well.
 RUN cargo build --release --locked \
     -p orchestrator-cli \
-    -p agent-runner \
-    -p oai-runner
+    -p agent-runner
 
 # Verify binaries exist
 RUN ls -lh \
     target/release/animus \
-    target/release/agent-runner \
-    target/release/animus-oai-runner
+    target/release/agent-runner
 
 # ── Stage 2: Minimal runtime image ──────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -65,7 +67,6 @@ RUN mkdir -p /root/.animus /root/.animus/plugins
 # Copy binaries from builder
 COPY --from=builder /src/target/release/animus /usr/local/bin/animus
 COPY --from=builder /src/target/release/agent-runner /usr/local/bin/agent-runner
-COPY --from=builder /src/target/release/animus-oai-runner /usr/local/bin/animus-oai-runner
 
 # Install the workflow runner plugin. As of v0.5.1 round-4 fold-in this
 # binary is the out-of-tree `animus-workflow-runner-default` plugin and
@@ -73,8 +74,14 @@ COPY --from=builder /src/target/release/animus-oai-runner /usr/local/bin/animus-
 # `~/.animus/plugins/`. The image MUST ship this plugin — without it the
 # daemon's preflight refuses to start. Fail the image build hard so a
 # transient release-download error never produces a broken image.
+# v0.5.2 surface-shrink: same pattern for `animus-provider-oai-agent`
+# (formerly bundled as the in-tree `animus-oai-runner` binary). Without
+# the plugin the runtime contract resolver falls back to a bare PATH
+# lookup that fails inside the slim base image.
 RUN animus plugin install launchapp-dev/animus-workflow-runner-default --yes \
-    && test -x /root/.animus/plugins/animus-workflow-runner-default
+    && test -x /root/.animus/plugins/animus-workflow-runner-default \
+    && animus plugin install launchapp-dev/animus-provider-oai-agent --yes \
+    && test -x /root/.animus/plugins/animus-provider-oai-agent/bin/animus-oai-runner
 
 # Create working directory
 WORKDIR /workspace

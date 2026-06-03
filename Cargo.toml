@@ -12,7 +12,6 @@ members = [
   "crates/orchestrator-core",
   "crates/orchestrator-store",
   "crates/orchestrator-cli",
-  "crates/oai-runner",
   "crates/animus-runtime-shared",
   "crates/orchestrator-providers",
   "crates/orchestrator-session-host",
@@ -20,7 +19,6 @@ members = [
 default-members = [
   "crates/orchestrator-cli",
   "crates/agent-runner",
-  "crates/oai-runner",
 ]
 resolver = "2"
 

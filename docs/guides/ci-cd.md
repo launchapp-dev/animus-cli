@@ -43,7 +43,7 @@ The runtime binary set is:
 |--------|-------|---------|
 | `animus` | `orchestrator-cli` | Main CLI |
 | `agent-runner` | `agent-runner` | Daemon agent runner |
-| `animus-oai-runner` | `oai-runner` | OpenAI-compatible runner |
+| `animus-oai-runner` | external `launchapp-dev/animus-provider-oai-agent` plugin | OpenAI-compatible runner; install with `animus plugin install launchapp-dev/animus-provider-oai-agent` |
 | `animus-workflow-runner-default` | external `workflow_runner` plugin | Preferred workflow phase execution binary required by daemon preflight |
 
 `animus-runtime-shared` now holds the in-tree shared workflow execution code,

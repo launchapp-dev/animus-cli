@@ -34,7 +34,6 @@ graph TD
     PLUGIN_PROTO[animus-plugin-protocol]
     PLUGIN_RUNTIME[animus-plugin-runtime]
     SUBJECT_PROTO[animus-subject-protocol]
-    OAI[oai-runner]
     PROV[orchestrator-providers]
     NOTIF[orchestrator-notifications]
     LOG[orchestrator-logging]
@@ -72,8 +71,6 @@ graph TD
     CORE --> PROV
     CORE --> LOG
     CORE --> PROTO
-
-    OAI --> PROTO
 
     STORE --> PROTO
     CONFIG --> PROTO

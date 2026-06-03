@@ -38,7 +38,6 @@ crates/
 ├── animus-runtime-shared/
 ├── animus-plugin-protocol/
 ├── animus-plugin-runtime/
-├── oai-runner/
 ├── orchestrator-cli/
 ├── orchestrator-config/
 ├── orchestrator-core/
@@ -61,7 +60,6 @@ Repo-local but not current workspace members:
 
 - `orchestrator-cli`
 - `agent-runner`
-- `oai-runner`
 
 ## Key Dependencies
 
