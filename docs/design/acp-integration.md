@@ -147,7 +147,7 @@ Animus is a Rust-only agent orchestrator with:
 |---|---|
 | `executeCommand` / agent-initiated code execution | Orchestrator agent runner with sandbox isolation |
 | `fs/readTextFile`, `fs/writeTextFile` | Git-ops layer with version control integration |
-| `terminal/create`, `terminal/output` | Workflow runner v2 with subprocess management |
+| `terminal/create`, `terminal/output` | External `workflow_runner` plugin plus `animus-runtime-shared` subprocess management |
 | MCP tool server | `animus mcp serve` plus plugin-aggregated tool surfaces |
 | Session persistence | Scoped runtime state at `~/.animus/<repo-scope>/` |
 
@@ -161,7 +161,9 @@ Animus can map ACP file operations to its **git-ops layer** (`orchestrator-git-o
 
 #### Terminal Integration
 
-Animus's `workflow-runner-v2` manages subprocess execution:
+Animus delegates workflow subprocess execution to the installed
+`workflow_runner` plugin binary, with the shared execution/runtime helpers
+living in `animus-runtime-shared`:
 - `terminal/create` → Spawn workflow task subprocess
 - `terminal/output` → Stream task output to editor
 - `terminal/kill` → Terminate task execution
@@ -243,7 +245,8 @@ Animus can expose workflow execution plans through this structure, giving editor
 │  • Orchestrator-core (workflow execution)            │
 │  • Orchestrator-config (session/mode config)         │
 │  • Orchestrator-git-ops (file operations)            │
-│  • Workflow-runner-v2 (agent execution)              │
+│  • workflow_runner plugin + animus-runtime-shared    │
+│    (agent execution)                                 │
 │  • Orchestrator-providers (MCP tools)                │
 │  • Orchestrator-store (session persistence)          │
 └─────────────────────────────────────────────────────┘
@@ -277,7 +280,7 @@ A new HTTP/WebSocket server exposing ACP:
 | `orchestrator-core` | Use `FileServiceHub` to execute workflow/task operations |
 | `orchestrator-config` | Load/persist session config, interpret mode/settings |
 | `orchestrator-git-ops` | Map `fs/*` ACP operations to git-tracked file changes |
-| `workflow-runner-v2` | Delegate task execution to existing runner, stream output |
+| `animus-runtime-shared` + external `workflow_runner` plugin | Delegate task execution to the installed runner, stream output |
 | `orchestrator-session-host` | Bridge provider/plugin execution and session backends |
 | `orchestrator-cli` | Reuse CLI/MCP operation wiring and output contracts |
 | `orchestrator-store` | Persist session state at `~/.animus/<repo-scope>/sessions/` |
@@ -300,7 +303,7 @@ A new HTTP/WebSocket server exposing ACP:
 #### Phase 3: Agent-Initiated Operations (Weeks 3-4)
 - [ ] `fs/readTextFile`, `fs/writeTextFile` via git-ops
 - [ ] `requestPermission` handler with editor interaction
-- [ ] Terminal operations via workflow-runner-v2
+- [ ] Terminal operations via external `workflow_runner` plugin
 - [ ] Edge cases: permission denied, file conflicts, terminal cleanup
 
 #### Phase 4: Advanced Features (Weeks 4-5)
