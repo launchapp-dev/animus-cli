@@ -119,7 +119,7 @@ ACP includes first-class support for planning workflows:
 
 Animus is a Rust-only agent orchestrator with:
 
-- **Rust-only Cargo workspace** (15 current workspace members) with clean separation of concerns
+- **Rust-only Cargo workspace** (12 current workspace members) with clean separation of concerns
 - **CLI surface** exposing `project`, `queue`, `subject`, `workflow`, `plugin`, `mcp`, and other command groups
 - **Web UI** served through out-of-tree `transport_backend` + `web_ui` plugins resolved by `animus web`
 - **Runtime state** scoped under `~/.animus/<repo-scope>/`
