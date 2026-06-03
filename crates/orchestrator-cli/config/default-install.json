@@ -33,7 +33,8 @@
   "plugins": {
     "providers": [
       { "repo": "launchapp-dev/animus-provider-claude", "tag": "v0.2.2" },
-      { "repo": "launchapp-dev/animus-provider-codex", "tag": "v0.2.3" }
+      { "repo": "launchapp-dev/animus-provider-codex", "tag": "v0.2.3" },
+      { "repo": "launchapp-dev/animus-provider-oai-agent", "tag": "v0.1.3" }
     ],
     "subjects": [
       { "repo": "launchapp-dev/animus-subject-default", "tag": "v0.1.3" },

@@ -16,7 +16,11 @@ set -euo pipefail
 
 REPO="launchapp-dev/animus-cli"
 INSTALL_DIR="${ANIMUS_INSTALL_DIR:-${HOME}/.local/bin}"
-BINARIES=(animus agent-runner animus-oai-runner)
+# v0.5.2 surface-shrink: `animus-oai-runner` moved out-of-tree to
+# `launchapp-dev/animus-provider-oai-agent`. Legacy v0.4.x / v0.5.0
+# archives still ship the binary; the loop below maps it back onto disk
+# for upgrading users without breaking new installs.
+BINARIES=(animus agent-runner)
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
@@ -117,6 +121,16 @@ main() {
     legacy_runner="${stage_dir}/ao-workflow-runner"
   fi
 
+  # v0.5.2 surface-shrink: same pattern for `animus-oai-runner` — the
+  # binary moved out-of-tree to `launchapp-dev/animus-provider-oai-agent`.
+  # If a v0.4.x / v0.5.0 archive is pinned via ANIMUS_VERSION it still
+  # ships the binary; copy it onto disk so the daemon's runtime contract
+  # resolver finds it without an extra `animus plugin install` step.
+  local legacy_oai_runner=""
+  if [[ -f "${stage_dir}/animus-oai-runner" ]]; then
+    legacy_oai_runner="${stage_dir}/animus-oai-runner"
+  fi
+
   for bin in "${BINARIES[@]}"; do
     if [[ ! -f "${stage_dir}/${bin}" ]]; then
       error "Binary '${bin}' not found in archive"
@@ -146,6 +160,15 @@ main() {
     warn "installed legacy workflow runner; v0.5.1+ uses the plugin — run 'animus plugin install launchapp-dev/animus-workflow-runner-default'"
   fi
 
+  # OAI runner: same shape as the workflow runner above. The binary
+  # ships from `launchapp-dev/animus-provider-oai-agent` as of v0.5.2.
+  if [[ -n "${legacy_oai_runner}" ]]; then
+    rm -f "${INSTALL_DIR}/animus-oai-runner"
+    cp "${legacy_oai_runner}" "${INSTALL_DIR}/animus-oai-runner"
+    chmod +x "${INSTALL_DIR}/animus-oai-runner"
+    warn "installed legacy oai runner; v0.5.2+ uses the plugin — run 'animus plugin install launchapp-dev/animus-provider-oai-agent'"
+  fi
+
   info "Installed to ${INSTALL_DIR}:"
   for bin in "${BINARIES[@]}"; do
     printf '  %s\n' "${INSTALL_DIR}/${bin}"
@@ -153,6 +176,8 @@ main() {
   printf '  %s → %s (symlink)\n' "${INSTALL_DIR}/ao" "animus"
   printf '\nNext step: install the v0.5 workflow runner plugin:\n'
   printf '  animus plugin install launchapp-dev/animus-workflow-runner-default\n'
+  printf '\nIf you use OAI-compatible providers (MiniMax/Z.AI/OpenRouter/etc), also install:\n'
+  printf '  animus plugin install launchapp-dev/animus-provider-oai-agent\n'
 
   if ! echo "${PATH}" | tr ':' '\n' | grep -qxF "${INSTALL_DIR}"; then
     warn "${INSTALL_DIR} is not in your PATH"

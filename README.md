@@ -353,8 +353,7 @@ curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scrip
 
 ```bash
 rm -f ~/.local/bin/animus \
-  ~/.local/bin/agent-runner \
-  ~/.local/bin/animus-oai-runner
+  ~/.local/bin/agent-runner
 ```
 
 </details>

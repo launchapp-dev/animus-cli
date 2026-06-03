@@ -30,14 +30,14 @@ The core goals are:
 
 ## Workspace Inventory
 
-`Cargo.toml` currently declares 17 workspace members.
+`Cargo.toml` currently declares 15 workspace members.
 
 | Group | Crates |
 |---|---|
 | CLI | `orchestrator-cli` |
 | Core services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` |
-| Provider/session | `orchestrator-session-host`, `orchestrator-providers`, `oai-runner` |
+| Provider/session | `orchestrator-session-host`, `orchestrator-providers` |
 | Plugin foundation | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` |
 | Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` |
 
@@ -55,7 +55,7 @@ The release/runtime binary set is:
 |---|---|---|
 | `animus` | `orchestrator-cli` | User-facing CLI, MCP endpoint, operations |
 | `agent-runner` | `agent-runner` | Agent execution service |
-| `animus-oai-runner` | `oai-runner` | OpenAI-compatible runner |
+| `animus-oai-runner` | external `launchapp-dev/animus-provider-oai-agent` plugin | OpenAI-compatible runner launched via the runtime contract resolver from the installed plugin (`v0.5.2` surface-shrink) |
 | `animus-workflow-runner-default` | external `workflow_runner` plugin | Preferred workflow phase execution binary launched by daemon dispatch and required by plugin preflight |
 
 `animus-runtime-shared` is the in-tree shared workflow execution/runtime

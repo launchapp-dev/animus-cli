@@ -2110,29 +2110,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "oai-runner"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "chrono",
- "clap",
- "eventsource-stream",
- "futures-util",
- "glob",
- "jsonschema",
- "protocol",
- "reqwest 0.13.4",
- "rmcp",
- "serde",
- "serde_json",
- "tempfile",
- "tiktoken-rs",
- "tokio",
- "tokio-util",
-]
-
-[[package]]
 name = "objc2"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"

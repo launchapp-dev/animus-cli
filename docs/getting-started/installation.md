@@ -48,12 +48,16 @@ Download the archive for your platform, extract it, and place these binaries on 
 
 - `animus`
 - `agent-runner`
-- `animus-oai-runner`
 
 Current release archives do **not** bundle a workflow-runner executable. The
 daemon's workflow phase execution binary now comes from the external
 `launchapp-dev/animus-workflow-runner-default` plugin, installed via
 `animus plugin install-defaults` or `animus plugin install ...`.
+
+The `animus-oai-runner` binary also ships as the external
+`launchapp-dev/animus-provider-oai-agent` plugin as of v0.5.2 — install
+with `animus plugin install launchapp-dev/animus-provider-oai-agent` to
+route OpenAI-compatible providers (MiniMax, Z.AI, OpenRouter, etc.).
 
 (The v0.4.11 `llm-cli-wrapper` binary was removed in v0.4.12 — the crate
 was deleted and its functionality folded into `agent-runner` and the

@@ -39,7 +39,6 @@ crates/
 ├── animus-runtime-shared/       # Shared workflow execution/runtime-contract/IPC helpers used by daemon and workflow_runner plugins
 ├── animus-plugin-protocol/      # In-tree stdio plugin protocol types
 ├── animus-plugin-runtime/       # Runtime helpers for plugin implementations
-├── oai-runner/                  # OpenAI-compatible runner implementation
 ├── orchestrator-cli/            # Main `animus` binary
 ├── orchestrator-config/         # Workflow, pack, and template config loading
 ├── orchestrator-core/           # Domain services, bootstrap, state mutation APIs
@@ -53,6 +52,11 @@ crates/
 └── protocol/                    # Shared protocol/config/runtime types
 ```
 
+The OpenAI-compatible runner (formerly `crates/oai-runner/`) moved
+out-of-tree to `launchapp-dev/animus-provider-oai-agent` v0.1.3 in the
+v0.5.2 surface-shrink. Install via
+`animus plugin install launchapp-dev/animus-provider-oai-agent`.
+
 Repo-local but not current workspace members:
 
 - `crates/orchestrator-web-server/`
@@ -61,7 +65,6 @@ Runtime-critical binaries and supporting crates must stay healthy:
 
 - `orchestrator-cli`
 - `agent-runner`
-- `oai-runner`
 - `orchestrator-logging`
 - `animus-runtime-shared`
 - `orchestrator-daemon-runtime`

@@ -1,12 +1,13 @@
 # Architecture Overview
 
-Animus is a Rust-only agent orchestrator built as a Cargo workspace of 17 crates.
+Animus is a Rust-only agent orchestrator built as a Cargo workspace of 15 members.
 It provides the `animus` CLI, daemon runtime, shared workflow execution/runtime
 helpers, agent runner, MCP server, plugin host, and plugin protocol crates.
 Provider, subject, transport,
 and web UI integrations run as external stdio plugins rather than in-process
 desktop or web shell frameworks. The workspace also depends on external
-`launchapp-dev/animus-protocol` crates, including `animus-subject-protocol`.
+`launchapp-dev/animus-protocol` crates, mixing legacy `v0.1.13`
+provider/session wires with newer `v0.5.x` queue/workflow/subject protocols.
 
 Trust code and generated references over hand-maintained summaries when they
 disagree. Start with:
@@ -34,7 +35,6 @@ graph TD
     PLUGIN_PROTO[animus-plugin-protocol]
     PLUGIN_RUNTIME[animus-plugin-runtime]
     SUBJECT_PROTO[animus-subject-protocol]
-    OAI[oai-runner]
     PROV[orchestrator-providers]
     NOTIF[orchestrator-notifications]
     LOG[orchestrator-logging]
@@ -72,8 +72,6 @@ graph TD
     CORE --> PROV
     CORE --> LOG
     CORE --> PROTO
-
-    OAI --> PROTO
 
     STORE --> PROTO
     CONFIG --> PROTO

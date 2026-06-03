@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::agent_runtime_config::{builtin_agent_runtime_config, AgentRuntimeConfig, CliToolConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -133,7 +135,73 @@ pub fn cli_tool_executable(tool: &str, config: &AgentRuntimeConfig) -> String {
         .get(&normalized)
         .or_else(|| builtin.cli_tools.get(&normalized))
         .and_then(|tc| tc.executable.clone())
-        .unwrap_or_else(|| if normalized == "oai-runner" { "animus-oai-runner".to_string() } else { normalized })
+        .unwrap_or_else(|| if normalized == "oai-runner" { resolve_oai_runner_binary() } else { normalized })
+}
+
+/// v0.5.2 surface-shrink: the in-tree `animus-oai-runner` binary was
+/// deleted in favour of the out-of-tree
+/// `launchapp-dev/animus-provider-oai-agent` plugin (v0.1.3+). The plugin
+/// ships the same `animus-oai-runner` binary name; this resolver locates
+/// it via the plugin install dir before falling back to `$PATH`.
+///
+/// Resolution order:
+///   1. `$ANIMUS_OAI_RUNNER_BIN` explicit override,
+///   2. `~/.animus/plugins/animus-provider-oai-agent/bin/animus-oai-runner`
+///      (canonical plugin install path; honors `$ANIMUS_PLUGIN_DIR` and
+///      `$ANIMUS_CONFIG_DIR`),
+///   3. `~/.animus/plugins/animus-oai-runner` (legacy flat layout),
+///   4. PATH lookup of `animus-oai-runner`.
+pub fn resolve_oai_runner_binary() -> String {
+    if let Ok(path) = std::env::var("ANIMUS_OAI_RUNNER_BIN") {
+        let trimmed = path.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+
+    if let Some(install_dir) = oai_runner_plugin_install_dir() {
+        let nested = install_dir.join("animus-provider-oai-agent").join("bin").join(oai_runner_binary_name());
+        if nested.is_file() {
+            return nested.to_string_lossy().into_owned();
+        }
+        let flat = install_dir.join(oai_runner_binary_name());
+        if flat.is_file() {
+            return flat.to_string_lossy().into_owned();
+        }
+    }
+
+    oai_runner_binary_name().to_string()
+}
+
+fn oai_runner_binary_name() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "animus-oai-runner.exe"
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        "animus-oai-runner"
+    }
+}
+
+fn oai_runner_plugin_install_dir() -> Option<PathBuf> {
+    if let Ok(value) = std::env::var("ANIMUS_PLUGIN_DIR") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            return Some(PathBuf::from(trimmed));
+        }
+    }
+    let home = if let Ok(value) = std::env::var("ANIMUS_CONFIG_DIR") {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            PathBuf::from(trimmed)
+        } else {
+            PathBuf::from(std::env::var_os("HOME")?).join(".animus")
+        }
+    } else {
+        PathBuf::from(std::env::var_os("HOME")?).join(".animus")
+    };
+    Some(home.join("plugins"))
 }
 
 pub fn cli_tool_read_only_flag(tool: &str, config: &AgentRuntimeConfig) -> Option<String> {
@@ -273,7 +341,7 @@ pub fn build_cli_launch_contract(
     };
 
     let default_command = match normalized.as_str() {
-        "oai-runner" => "animus-oai-runner".to_string(),
+        "oai-runner" => resolve_oai_runner_binary(),
         _ => normalized,
     };
 
@@ -503,7 +571,13 @@ mod tests {
     fn cli_tool_flags_fall_back_to_builtin_when_project_config_omits_tool_metadata() {
         let config = AgentRuntimeConfig::default();
 
-        assert_eq!(cli_tool_executable("oai-runner", &config), "animus-oai-runner");
+        let executable = cli_tool_executable("oai-runner", &config);
+        let basename = std::path::Path::new(&executable).file_name().and_then(|n| n.to_str()).unwrap_or("");
+        assert_eq!(
+            basename,
+            super::oai_runner_binary_name(),
+            "cli_tool_executable for oai-runner must resolve to the animus-oai-runner binary, got {executable}"
+        );
         assert_eq!(cli_tool_read_only_flag("oai-runner", &config), Some("--read-only".to_string()));
         assert_eq!(cli_tool_response_schema_flag("oai-runner", &config), Some("--response-schema".to_string()));
     }

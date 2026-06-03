@@ -119,7 +119,7 @@ ACP includes first-class support for planning workflows:
 
 Animus is a Rust-only agent orchestrator with:
 
-- **Rust-only Cargo workspace** (17 current workspace members) with clean separation of concerns
+- **Rust-only Cargo workspace** (15 current workspace members) with clean separation of concerns
 - **CLI surface** exposing `project`, `queue`, `subject`, `workflow`, `plugin`, `mcp`, and other command groups
 - **Web UI** served through out-of-tree `transport_backend` + `web_ui` plugins resolved by `animus web`
 - **Runtime state** scoped under `~/.animus/<repo-scope>/`
@@ -146,14 +146,14 @@ Animus is a Rust-only agent orchestrator with:
 | ACP Capability | Animus Service |
 |---|---|
 | `executeCommand` / agent-initiated code execution | Orchestrator agent runner with sandbox isolation |
-| `fs/readTextFile`, `fs/writeTextFile` | Git-ops layer with version control integration |
+| `fs/readTextFile`, `fs/writeTextFile` | `FileServiceHub` plus CLI git/worktree operations with version-control integration |
 | `terminal/create`, `terminal/output` | External `workflow_runner` plugin plus `animus-runtime-shared` subprocess management |
 | MCP tool server | `animus mcp serve` plus plugin-aggregated tool surfaces |
 | Session persistence | Scoped runtime state at `~/.animus/<repo-scope>/` |
 
 #### File System Access & Git Safety
 
-Animus can map ACP file operations to its **git-ops layer** (`orchestrator-git-ops`):
+Animus can map ACP file operations to its current git/worktree operation layer:
 - `fs/readTextFile` → Read from working tree or staged state
 - `fs/writeTextFile` → Write to working tree (with user approval via `requestPermission`)
 - `fs/createFile` / `fs/deleteFile` → Git-tracked creation/deletion
@@ -279,7 +279,7 @@ A new HTTP/WebSocket server exposing ACP:
 |---|---|
 | `orchestrator-core` | Use `FileServiceHub` to execute workflow/task operations |
 | `orchestrator-config` | Load/persist session config, interpret mode/settings |
-| `orchestrator-git-ops` | Map `fs/*` ACP operations to git-tracked file changes |
+| `orchestrator-core` + CLI git/worktree operations | Map `fs/*` ACP operations to git-tracked file changes |
 | `animus-runtime-shared` + external `workflow_runner` plugin | Delegate task execution to the installed runner, stream output |
 | `orchestrator-session-host` | Bridge provider/plugin execution and session backends |
 | `orchestrator-cli` | Reuse CLI/MCP operation wiring and output contracts |
