@@ -31,6 +31,8 @@ fn set_session_id_on_spawn(cmd: &mut Command) {
     }
 }
 
+pub const ANIMUS_AGENT_RUN_ID_ENV: &str = "ANIMUS_AGENT_RUN_ID";
+
 struct WorkflowProcess {
     subject_key: String,
     subject_id: String,
@@ -170,6 +172,15 @@ impl ProcessManager {
         let project_root_path = std::path::Path::new(project_root).to_path_buf();
         let short_uuid = uuid::Uuid::new_v4().simple().to_string()[..8].to_string();
         let pending_session_id = format!("agent-{short_uuid}");
+        // v0.5.1 fold-in (item 2): advertise the daemon-chosen run_id to the
+        // runner so its `decisions.jsonl` lands under a path the daemon can
+        // predict from the spawn record alone. The runner is expected to
+        // honor `ANIMUS_AGENT_RUN_ID` (plugin-side change in
+        // `animus-workflow-runner-default`); older runners that ignore it
+        // still write under a self-chosen run_id, in which case
+        // `replay_gap_from_spawn_record` falls back to scanning runs/ for
+        // the most recent decisions.jsonl matching the spawn time.
+        command.env(ANIMUS_AGENT_RUN_ID_ENV, &pending_session_id);
         #[cfg(unix)]
         let reattach_socket_path = reattach_socket_path_for(&project_root_path, &pending_session_id);
         #[cfg(unix)]
@@ -226,19 +237,22 @@ impl ProcessManager {
             let socket_for_record = reattach_socket_path.as_ref().map(|p| p.display().to_string());
             #[cfg(not(unix))]
             let socket_for_record: Option<String> = None;
-            let record = super::agent_record::build_record(
+            let decisions_for_record = agent_runner::recording::decision_log_path(project_root, &id)
+                .map(|p| p.display().to_string());
+            let record = super::agent_record::build_record_with_decisions(
                 id.clone(),
                 pid_value,
                 dispatch,
                 command_line.clone(),
                 socket_for_record,
+                decisions_for_record,
             );
             if let Err(error) = super::agent_record::write_record(&project_root_path, &record) {
                 tracing::warn!(
                     target: "animus.runtime.agent_record",
                     %error,
                     agent_session_id = %id,
-                    "failed to write agent spawn record (best-effort; v0.6 reattach scaffolding)"
+                    "failed to write agent spawn record (best-effort; v0.5.1 reattach scaffolding)"
                 );
             }
             id

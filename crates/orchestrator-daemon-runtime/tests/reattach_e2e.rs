@@ -51,12 +51,12 @@ async fn first_daemon_streams_then_dies_then_second_daemon_reattaches() {
     let sock = dir.path().join("reattach.sock");
 
     // The runner binds the listener at startup.
-    let emitter = ReattachListenerEmitter::bind(&sock).expect("runner binds reattach listener");
+    let emitter = ReattachListenerEmitter::bind_path(&sock).expect("runner binds reattach listener");
 
     // Daemon #1 attaches.
     let broadcaster_a = WorkflowEventBroadcaster::new();
     let (_id_a, mut rx_a) = broadcaster_a.subscribe(WorkflowEventFilter::default());
-    let conn_a = try_reattach(&sock, broadcaster_a.clone()).expect("daemon #1 reattach connect");
+    let conn_a = try_reattach(sock.to_string_lossy().as_ref(), broadcaster_a.clone()).expect("daemon #1 reattach connect");
 
     // Give the acceptor + reader a moment to register.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -81,7 +81,7 @@ async fn first_daemon_streams_then_dies_then_second_daemon_reattaches() {
     // the still-live runner socket.
     let broadcaster_b = WorkflowEventBroadcaster::new();
     let (_id_b, mut rx_b) = broadcaster_b.subscribe(WorkflowEventFilter::default());
-    let _conn_b = try_reattach(&sock, broadcaster_b.clone()).expect("daemon #2 reattach connect");
+    let _conn_b = try_reattach(sock.to_string_lossy().as_ref(), broadcaster_b.clone()).expect("daemon #2 reattach connect");
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Runner emits a post-reattach event. Daemon #2 must see it.
@@ -98,7 +98,7 @@ async fn slow_daemon_drop_does_not_block_runner_emit() {
     // its socket buffer, the runner must NOT block on subsequent emits.
     let dir = TempDir::new().unwrap();
     let sock = dir.path().join("slow.sock");
-    let emitter = ReattachListenerEmitter::bind(&sock).expect("bind");
+    let emitter = ReattachListenerEmitter::bind_path(&sock).expect("bind");
 
     // Connect a raw daemon stream and immediately drop it without reading.
     let stream = UnixStream::connect(&sock).expect("connect");
@@ -125,11 +125,11 @@ async fn reattach_after_runner_exit_returns_eof_cleanly() {
     let dir = TempDir::new().unwrap();
     let sock = dir.path().join("exit.sock");
 
-    let emitter = ReattachListenerEmitter::bind(&sock).expect("bind");
+    let emitter = ReattachListenerEmitter::bind_path(&sock).expect("bind");
 
     let broadcaster = WorkflowEventBroadcaster::new();
     let (_id, mut rx) = broadcaster.subscribe(WorkflowEventFilter::default());
-    let _conn = try_reattach(&sock, broadcaster.clone()).expect("connect");
+    let _conn = try_reattach(sock.to_string_lossy().as_ref(), broadcaster.clone()).expect("connect");
     tokio::time::sleep(Duration::from_millis(80)).await;
 
     emitter.emit(sample("wf-exit", "first"));
@@ -140,7 +140,7 @@ async fn reattach_after_runner_exit_returns_eof_cleanly() {
     // by the emitter's Drop, and the reader task on the daemon side gets EOF.
     drop(emitter);
     // A fresh attempt to connect must fail because the socket file is gone.
-    let err = try_reattach(&sock, broadcaster).err().expect("connect after runner exit must fail");
+    let err = try_reattach(sock.to_string_lossy().as_ref(), broadcaster).err().expect("connect after runner exit must fail");
     assert!(
         err.kind() == std::io::ErrorKind::NotFound || err.kind() == std::io::ErrorKind::ConnectionRefused,
         "unexpected error kind: {err:?}"
@@ -153,7 +153,7 @@ fn multiple_daemons_can_be_attached_simultaneously() {
     // exercises the broadcast-to-all-readers semantics.
     let dir = TempDir::new().unwrap();
     let sock = dir.path().join("multi.sock");
-    let emitter = ReattachListenerEmitter::bind(&sock).expect("bind");
+    let emitter = ReattachListenerEmitter::bind_path(&sock).expect("bind");
 
     let mut s1 = UnixStream::connect(&sock).expect("connect 1");
     let mut s2 = UnixStream::connect(&sock).expect("connect 2");
@@ -186,7 +186,7 @@ fn detached_runner_survives_parent_process_death_simulation() {
     // the spawner's stack).
     let dir = TempDir::new().unwrap();
     let sock = dir.path().join("detach.sock");
-    let emitter = ReattachListenerEmitter::bind(&sock).expect("bind");
+    let emitter = ReattachListenerEmitter::bind_path(&sock).expect("bind");
     let emitter_arc: Arc<dyn WorkflowEventEmitter + Send + Sync> = emitter;
 
     // Move the emitter to a worker thread (simulating the daemon-spawned

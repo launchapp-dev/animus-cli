@@ -23,6 +23,12 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-util", "process", "time", "net", "sync"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4", "serde"] }
+# v0.5.1 fold-in (item 7): cross-platform local IPC abstraction so the
+# reattach back-channel uses ONE wire-protocol path on both Unix (domain
+# sockets) and Windows (named pipes). Surface-shrink: deletes the
+# previous `cfg(unix)`-only reattach module in favor of a shared
+# `interprocess::local_socket` server.
+interprocess = "2.4"
 
 # When vendored inside the ao-cli workspace this crate uses the in-tree
 # `protocol` / `orchestrator-core` / `orchestrator-config` /
