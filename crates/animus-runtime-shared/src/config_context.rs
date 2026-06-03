@@ -7,6 +7,7 @@
 // P2 #2.)
 
 use std::path::Path;
+use std::sync::OnceLock;
 
 use orchestrator_config::agent_runtime_config::{
     AgentRuntimeOverrides, PhaseCommandDefinition, PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode,
@@ -16,6 +17,11 @@ use orchestrator_core::AgentRuntimeConfig;
 use protocol::PhaseCapabilities;
 use serde_json::Value;
 
+fn builtin_runtime_config() -> &'static AgentRuntimeConfig {
+    static BUILTIN: OnceLock<AgentRuntimeConfig> = OnceLock::new();
+    BUILTIN.get_or_init(orchestrator_core::builtin_agent_runtime_config)
+}
+
 pub struct RuntimeConfigContext {
     pub agent_runtime_config: AgentRuntimeConfig,
     pub workflow_config: orchestrator_core::LoadedWorkflowConfig,
@@ -23,18 +29,11 @@ pub struct RuntimeConfigContext {
 
 impl RuntimeConfigContext {
     pub fn load(project_root: &str) -> Self {
-        // TODO(codex-p2): `load_agent_runtime_config_or_default` already merges
-        // project YAML overrides into the runtime config, so the YAML-wins
-        // accessors below cannot fall back to TRUE builtin runtime defaults
-        // when the project sparsely overrides a phase. Loading an
-        // unmerged builtin in addition would let accessors restore output
-        // /decision contracts after partial overrides. Deferred to v0.5.2
-        // pending an `orchestrator-core` helper that exposes the builtin
-        // config independently of project merging.
         let agent_runtime_config = orchestrator_core::load_agent_runtime_config_or_default(Path::new(project_root));
         let workflow_config = orchestrator_core::load_workflow_config_or_default(Path::new(project_root));
         Self { agent_runtime_config, workflow_config }
     }
+
 
     /// Returns the workflow YAML phase definition when present, falling
     /// back to `agent_runtime_config` so call sites can read a single
@@ -106,16 +105,31 @@ impl RuntimeConfigContext {
         {
             return caps.merge_with_defaults(phase_id);
         }
-        self.agent_runtime_config.phase_capabilities(phase_id)
+        if let Some(caps) =
+            self.agent_runtime_config.phase_execution(phase_id).and_then(|def| def.capabilities.as_ref()).cloned()
+        {
+            return caps.merge_with_defaults(phase_id);
+        }
+        builtin_runtime_config().phase_capabilities(phase_id)
     }
 
     pub fn phase_output_contract(&self, phase_id: &str) -> Option<&PhaseOutputContract> {
-        self.workflow_config
-            .config
-            .phase_definitions
-            .get(phase_id)
-            .and_then(|def| def.output_contract.as_ref())
-            .or_else(|| self.agent_runtime_config.phase_output_contract(phase_id))
+        if let Some(value) =
+            self.workflow_config.config.phase_definitions.get(phase_id).and_then(|def| def.output_contract.as_ref())
+        {
+            return Some(value);
+        }
+        if let Some(value) = self.agent_runtime_config.phase_output_contract(phase_id) {
+            return Some(value);
+        }
+        // Only fall back to the builtin contract when the agent_runtime
+        // phase also lacks an explicit `output_json_schema`. Mirror of the
+        // `phase_output_json_schema` rule: a schema-only override (custom
+        // schema, no contract) must not re-graft the builtin contract.
+        if self.agent_runtime_config.phase_output_json_schema(phase_id).is_none() {
+            return builtin_runtime_config().phase_output_contract(phase_id);
+        }
+        None
     }
 
     pub fn phase_mcp_servers(&self, phase_id: &str) -> Vec<String> {
@@ -128,12 +142,23 @@ impl RuntimeConfigContext {
     }
 
     pub fn phase_output_json_schema(&self, phase_id: &str) -> Option<&Value> {
-        self.workflow_config
-            .config
-            .phase_definitions
-            .get(phase_id)
-            .and_then(|def| def.output_json_schema.as_ref())
-            .or_else(|| self.agent_runtime_config.phase_output_json_schema(phase_id))
+        if let Some(value) =
+            self.workflow_config.config.phase_definitions.get(phase_id).and_then(|def| def.output_json_schema.as_ref())
+        {
+            return Some(value);
+        }
+        if let Some(value) = self.agent_runtime_config.phase_output_json_schema(phase_id) {
+            return Some(value);
+        }
+        // Only fall back to the builtin schema when the agent_runtime phase
+        // is a sparse YAML override that ALSO omitted `output_contract`. If
+        // the project supplied a custom contract, do not graft the builtin
+        // schema on top — it would re-inject builtin `kind`/required fields
+        // that contradict the custom contract.
+        if self.agent_runtime_config.phase_output_contract(phase_id).is_none() {
+            return builtin_runtime_config().phase_output_json_schema(phase_id);
+        }
+        None
     }
 
     pub fn phase_decision_contract(&self, phase_id: &str) -> Option<&PhaseDecisionContract> {
@@ -143,6 +168,7 @@ impl RuntimeConfigContext {
             .get(phase_id)
             .and_then(|def| def.decision_contract.as_ref())
             .or_else(|| self.agent_runtime_config.phase_decision_contract(phase_id))
+            .or_else(|| builtin_runtime_config().phase_decision_contract(phase_id))
     }
 
     pub fn phase_tool_override(&self, phase_id: &str) -> Option<String> {
@@ -349,5 +375,164 @@ mod tests {
         // No YAML directive — fall through to agent_runtime_config or default
         // string; either way it must not panic and must be non-empty.
         assert!(!ctx.phase_directive("implementation").is_empty());
+    }
+
+    /// v0.5.1 #5b: when project YAML sparsely overrides only some phase
+    /// fields, the agent_runtime_config merge replaces the entire phase
+    /// definition with the sparse YAML one. Accessors for fields the YAML
+    /// did NOT supply (e.g. `output_contract`, `decision_contract`,
+    /// `output_json_schema`) must fall back to the unmerged builtin so
+    /// real defaults are not silently dropped.
+    #[test]
+    fn sparse_yaml_override_falls_back_to_builtin_for_unspecified_contracts() {
+        let mut agent_runtime_config = builtin_agent_runtime_config();
+        let sparse = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Agent,
+            agent_id: Some("swe".to_string()),
+            directive: None,
+            system_prompt: None,
+            runtime: Some(AgentRuntimeOverrides {
+                model: Some("claude-sonnet-4-6".to_string()),
+                ..Default::default()
+            }),
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: None,
+            manual: None,
+            default_tool: None,
+            idempotency: Default::default(),
+        };
+        agent_runtime_config.phases.insert("implementation".to_string(), sparse);
+        let workflow = builtin_workflow_config();
+        let metadata = WorkflowConfigMetadata {
+            schema: workflow.schema.clone(),
+            version: workflow.version,
+            hash: workflow_config_hash(&workflow),
+            source: WorkflowConfigSource::Builtin,
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config,
+            workflow_config: LoadedWorkflowConfig { metadata, config: workflow, path: PathBuf::from("builtin") },
+        };
+
+        assert_eq!(ctx.phase_model_override("implementation").as_deref(), Some("claude-sonnet-4-6"));
+        assert!(
+            ctx.phase_output_contract("implementation").is_some(),
+            "sparse YAML override must not drop the builtin implementation output_contract"
+        );
+        assert!(
+            ctx.phase_decision_contract("implementation").is_some(),
+            "sparse YAML override must not drop the builtin implementation decision_contract"
+        );
+        assert!(
+            ctx.phase_output_json_schema("implementation").is_some(),
+            "sparse YAML override must not drop the builtin implementation output_json_schema"
+        );
+    }
+
+    /// v0.5.1 #5b round-2: when the project supplies a CUSTOM `output_contract`
+    /// for a phase but omits `output_json_schema`, the accessor must NOT
+    /// graft the builtin schema on top. Doing so would re-inject builtin
+    /// `kind`/required fields (e.g. `commit_message`) that contradict the
+    /// custom contract and break validation of custom-shaped phase output.
+    #[test]
+    fn custom_output_contract_does_not_inherit_builtin_json_schema() {
+        let mut agent_runtime_config = builtin_agent_runtime_config();
+        let custom_contract = PhaseOutputContract {
+            kind: "custom_implementation_result".to_string(),
+            required_fields: vec!["my_custom_field".to_string()],
+            fields: std::collections::BTreeMap::new(),
+        };
+        let sparse = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Agent,
+            agent_id: Some("swe".to_string()),
+            directive: None,
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: Some(custom_contract),
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: None,
+            manual: None,
+            default_tool: None,
+            idempotency: Default::default(),
+        };
+        agent_runtime_config.phases.insert("implementation".to_string(), sparse);
+        let workflow = builtin_workflow_config();
+        let metadata = WorkflowConfigMetadata {
+            schema: workflow.schema.clone(),
+            version: workflow.version,
+            hash: workflow_config_hash(&workflow),
+            source: WorkflowConfigSource::Builtin,
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config,
+            workflow_config: LoadedWorkflowConfig { metadata, config: workflow, path: PathBuf::from("builtin") },
+        };
+
+        assert_eq!(ctx.phase_output_contract("implementation").map(|c| c.kind.as_str()), Some("custom_implementation_result"));
+        assert!(
+            ctx.phase_output_json_schema("implementation").is_none(),
+            "when the project supplies a custom output_contract, the builtin json_schema must not leak in"
+        );
+    }
+
+    /// Mirror of `custom_output_contract_does_not_inherit_builtin_json_schema`:
+    /// when the project supplies a custom `output_json_schema` but omits
+    /// `output_contract`, the accessor must NOT graft the builtin contract on
+    /// top — the schema-only path is a supported configuration shape.
+    #[test]
+    fn custom_output_json_schema_does_not_inherit_builtin_output_contract() {
+        let mut agent_runtime_config = builtin_agent_runtime_config();
+        let custom_schema = serde_json::json!({
+            "type": "object",
+            "required": ["my_custom_field"],
+            "properties": { "my_custom_field": { "type": "string" } }
+        });
+        let sparse = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Agent,
+            agent_id: Some("swe".to_string()),
+            directive: None,
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: Some(custom_schema),
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: None,
+            manual: None,
+            default_tool: None,
+            idempotency: Default::default(),
+        };
+        agent_runtime_config.phases.insert("implementation".to_string(), sparse);
+        let workflow = builtin_workflow_config();
+        let metadata = WorkflowConfigMetadata {
+            schema: workflow.schema.clone(),
+            version: workflow.version,
+            hash: workflow_config_hash(&workflow),
+            source: WorkflowConfigSource::Builtin,
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config,
+            workflow_config: LoadedWorkflowConfig { metadata, config: workflow, path: PathBuf::from("builtin") },
+        };
+
+        assert!(
+            ctx.phase_output_json_schema("implementation").is_some(),
+            "custom output_json_schema must be returned"
+        );
+        assert!(
+            ctx.phase_output_contract("implementation").is_none(),
+            "when the project supplies a custom output_json_schema, the builtin output_contract must not leak in"
+        );
     }
 }

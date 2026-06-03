@@ -18,6 +18,19 @@ use crate::control::WorkflowEventBroadcaster;
 use crate::dispatch::event_pipe::SubprocessEventPipe;
 use crate::{build_runner_command, CompletedProcess, RunnerEvent};
 
+#[cfg(unix)]
+#[allow(unsafe_code)]
+fn set_session_id_on_spawn(cmd: &mut Command) {
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 struct WorkflowProcess {
     subject_key: String,
     subject_id: String,
@@ -175,23 +188,12 @@ impl ProcessManager {
         #[cfg(unix)]
         let event_pipe = self.bind_event_pipe_for(dispatch, &mut command);
 
-        // v0.5.1 P2 #6.2: put the runner in its own process group so a
-        // SIGTERM/SIGINT delivered to the daemon CLI's terminal foreground
-        // group does not propagate to the runner. Without this an operator
-        // hitting Ctrl-C on `animus daemon run` would also kill every
-        // in-flight workflow runner; with it, the runner keeps streaming
-        // events into `decisions.jsonl` (and its reattach socket) until it
-        // finishes naturally or the next daemon start reattaches.
-        //
-        // `process_group(0)` is the safe equivalent of `setpgid(0,0)` in
-        // `pre_exec`; the workspace-wide `deny(unsafe_code)` lint forbids
-        // the latter so we lean on tokio's safe wrapper. A full `setsid`
-        // (new SESSION, not just new pgid) would also detach from the
-        // controlling terminal — left as a v0.6 hardening item; for the
-        // daemon-restart-survivability gate, the new-pgid is enough.
+        // Required for daemon-restart-survivable runner; #6.2 v0.5.1.
         #[cfg(unix)]
-        {
-            command.process_group(0);
+        set_session_id_on_spawn(&mut command);
+
+        if let Ok(host_cli) = std::env::current_exe() {
+            command.env("ANIMUS_HOST_CLI_PATH", host_cli);
         }
 
         let mut child = command.spawn().context("failed to spawn animus-workflow-runner")?;
@@ -672,6 +674,55 @@ mod tests {
                 assert!(socket.ends_with(".r.sock"), "socket path must use the .r.sock suffix; got {socket}");
             }
         }
+
+        let _ = manager.check_running().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn spawn_workflow_runner_starts_in_new_session() {
+        // v0.5.1 #8: the spawn path calls `setsid()` in `pre_exec`, so the
+        // runner subprocess must end up in a different POSIX session from
+        // the test parent. This survives terminal hangups (SIGHUP) in
+        // addition to the SIGTERM-foreground-group propagation that the
+        // weaker `process_group(0)` form covered.
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        let temp_dir = TempDir::new().expect("temp dir");
+        let runner_path = temp_dir.path().join("animus-workflow-runner");
+        // Sleep long enough that the parent can `getsid(child_pid)` while
+        // the runner is still alive. 2s is plenty for an in-process probe.
+        let runner_payload = "#!/bin/sh\nsleep 2\nexit 0\n";
+        fs::write(&runner_path, runner_payload).expect("write runner");
+        let mut permissions = fs::metadata(&runner_path).expect("meta").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&runner_path, permissions).expect("perm");
+
+        let runner_override = runner_path.to_string_lossy();
+        let _runner_guard = EnvVarGuard::set("ANIMUS_WORKFLOW_RUNNER_BIN", Some(runner_override.as_ref()));
+
+        let mut manager = ProcessManager::new();
+        let dispatch = SubjectDispatch::for_task("TASK-SETSID", "standard");
+        manager
+            .spawn_workflow_runner(&dispatch, temp_dir.path().to_string_lossy().as_ref())
+            .expect("spawn must succeed");
+
+        let child_pid =
+            manager.processes.first().expect("spawned process must be tracked").child.lock().unwrap().id().unwrap();
+
+        // SAFETY: getsid(pid) is an infallible syscall with respect to
+        // memory and aliasing; -1 + EPERM is the only error mode and we
+        // assert on the value the kernel returns.
+        #[allow(unsafe_code)]
+        let child_sid = unsafe { libc::getsid(child_pid as i32) };
+        #[allow(unsafe_code)]
+        let parent_sid = unsafe { libc::getsid(0) };
+
+        assert_ne!(child_sid, -1, "getsid(child_pid) failed: {}", std::io::Error::last_os_error());
+        assert_ne!(
+            child_sid, parent_sid,
+            "runner subprocess must run in a new session (child sid={child_sid}, parent sid={parent_sid})"
+        );
 
         let _ = manager.check_running().await;
     }
