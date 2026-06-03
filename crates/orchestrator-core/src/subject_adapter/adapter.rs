@@ -12,7 +12,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
-use crate::{PlanningServiceApi, ProjectAdapter, SubjectContext, SubjectResolver, TaskServiceApi};
+use super::{PlanningServiceApi, ProjectAdapter, SubjectContext, SubjectResolver, TaskServiceApi};
 
 /// Attribute key set by the plugin subject fallback on every
 /// [`SubjectContext`] it produces. Downstream code (notably

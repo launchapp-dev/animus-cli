@@ -80,7 +80,7 @@ where
 
 // Agent memory writes use the same durable pattern as session checkpoints:
 // fsync the staged tempfile, atomic rename, then fsync the parent dir so
-// the rename survives power loss. See `orchestrator_store::fsync_rename`
+// the rename survives power loss. See `orchestrator_core::store::fsync_rename`
 // for the macOS F_FULLFSYNC caveat.
 fn write_json_atomic<T>(path: &Path, value: &T) -> Result<()>
 where
@@ -102,7 +102,7 @@ where
         file.write_all(payload.as_bytes()).with_context(|| format!("failed to write {}", tmp_path.display()))?;
         file.sync_all().with_context(|| format!("failed to fsync {}", tmp_path.display()))?;
     }
-    orchestrator_store::fsync_rename(&tmp_path, path)
+    orchestrator_core::store::fsync_rename(&tmp_path, path)
         .with_context(|| format!("failed to durably rename {} -> {}", tmp_path.display(), path.display()))?;
     Ok(())
 }

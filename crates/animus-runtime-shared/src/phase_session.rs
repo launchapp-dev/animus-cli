@@ -268,7 +268,7 @@ fn write_atomic(path: &Path, checkpoint: &SessionCheckpoint) -> io::Result<()> {
         file.write_all(&payload)?;
         file.sync_all()?;
     }
-    orchestrator_store::fsync_rename(&tmp, path)
+    orchestrator_core::store::fsync_rename(&tmp, path)
 }
 
 fn sanitize(value: &str) -> String {

@@ -4,7 +4,7 @@ Animus persists state with a mix of atomic JSON files and a repo-scoped SQLite d
 
 ## Atomic JSON Writes
 
-The low-level JSON helpers live in `crates/orchestrator-store/src/lib.rs`:
+The low-level JSON helpers live in `crates/orchestrator-core/src/store/mod.rs` (folded in from the former `orchestrator-store` crate in v0.5.3):
 
 - `write_json_atomic()`
 - `write_json_pretty()`

@@ -1,5 +1,5 @@
 use super::*;
-use crate::providers::SubjectContext;
+use crate::subject_adapter::SubjectContext;
 use crate::types::{
     Assignee, CheckpointReason, Complexity, OrchestratorTask, OrchestratorWorkflow, PhaseDecision,
     PhaseDecisionVerdict, Priority, ResourceRequirements, RiskLevel, Scope, SubjectRef, TaskMetadata, TaskStatus,

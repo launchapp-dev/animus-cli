@@ -9,15 +9,15 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use fs2::FileExt;
-use orchestrator_store::{write_json_if_missing, write_json_pretty};
+use crate::store::{write_json_if_missing, write_json_pretty};
 use protocol::{RunnerStatusRequest, RunnerStatusResponse};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
 use tokio::time::sleep;
 use uuid::Uuid;
 
-use crate::providers::{BuiltinGitProvider, GitProvider};
-use crate::providers::{
+use crate::subject_adapter::{BuiltinGitProvider, GitProvider};
+use crate::subject_adapter::{
     BuiltinProjectAdapter, BuiltinRequirementsPlanningService, BuiltinRequirementsProvider, BuiltinSubjectResolver,
     BuiltinTaskProvider, ProjectAdapter, RequirementsPlanningService, RequirementsProvider, SubjectResolver,
     TaskProvider,

@@ -38,7 +38,7 @@ Animus is a Rust-only agent orchestrator with:
 
 Do not reintroduce stale claims such as:
 
-- stale workspace-count summaries that do not match `Cargo.toml`'s current 15 members
+- stale workspace-count summaries that do not match `Cargo.toml`'s current 13 members
 - "plugin extraction in flux" or "in progress" framing — extraction is complete as of v0.4.12
 - `PROJECT_ROOT` or "last-project-root registry" resolution rules
 - removed crates like `llm-mcp-server`, `llm-cli-wrapper`, `orchestrator-web-api`, `orchestrator-web-contracts`, or in-tree `animus-provider-{claude,codex,gemini,opencode,oai}`. `orchestrator-web-server` still exists in-repo but is not a current workspace member
@@ -51,16 +51,14 @@ Do not reintroduce stale claims such as:
 Core orchestration:
 
 - `crates/orchestrator-cli`
-- `crates/orchestrator-core`
+- `crates/orchestrator-core` (includes the folded-in `subject_adapter` and `store` modules as of v0.5.3)
 - `crates/orchestrator-config`
-- `crates/orchestrator-store`
 - `crates/protocol`
 
 Runtime and provider layer:
 
 - `crates/agent-runner`
 - `crates/orchestrator-daemon-runtime`
-- `crates/orchestrator-providers`
 - `crates/orchestrator-notifications`
 - `crates/orchestrator-session-host`
 - `crates/orchestrator-logging`

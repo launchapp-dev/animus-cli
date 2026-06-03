@@ -1,5 +1,5 @@
 use super::*;
-use orchestrator_providers::PlanningServiceApi as ProviderPlanningServiceApi;
+use crate::subject_adapter::PlanningServiceApi as ProviderPlanningServiceApi;
 
 fn requirement_filter_can_use_db_predicates(filter: &RequirementFilter) -> bool {
     filter.tags.is_none() && filter.linked_task_id.is_none() && filter.search_text.is_none()
@@ -12,7 +12,7 @@ fn requirement_query_can_use_db_page(query: &RequirementQuery) -> bool {
 #[async_trait]
 impl PlanningServiceApi for InMemoryServiceHub {
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider> {
-        Arc::new(crate::providers::BuiltinRequirementsProvider::new(Arc::new(self.clone())))
+        Arc::new(crate::subject_adapter::BuiltinRequirementsProvider::new(Arc::new(self.clone())))
     }
 
     async fn draft_vision(&self, input: VisionDraftInput) -> Result<VisionDocument> {
@@ -104,7 +104,7 @@ impl PlanningServiceApi for InMemoryServiceHub {
 #[async_trait]
 impl PlanningServiceApi for FileServiceHub {
     fn requirements_provider(&self) -> Arc<dyn RequirementsProvider> {
-        Arc::new(crate::providers::BuiltinRequirementsProvider::new(Arc::new(self.clone())))
+        Arc::new(crate::subject_adapter::BuiltinRequirementsProvider::new(Arc::new(self.clone())))
     }
 
     async fn draft_vision(&self, input: VisionDraftInput) -> Result<VisionDocument> {

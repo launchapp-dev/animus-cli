@@ -41,14 +41,12 @@ crates/
 ├── animus-plugin-runtime/       # Runtime helpers for plugin implementations
 ├── orchestrator-cli/            # Main `animus` binary
 ├── orchestrator-config/         # Workflow, pack, and template config loading
-├── orchestrator-core/           # Domain services, bootstrap, state mutation APIs
+├── orchestrator-core/           # Domain services, subject_adapter, store, bootstrap, state mutation APIs
 ├── orchestrator-daemon-runtime/ # Daemon queue and scheduling runtime
 ├── orchestrator-logging/        # Shared tracing and log file utilities
 ├── orchestrator-notifications/  # Notification/runtime integration support
 ├── orchestrator-plugin-host/    # Plugin discovery, install, and stdio host
-├── orchestrator-providers/      # Built-in provider integrations and routing
 ├── orchestrator-session-host/   # Session backend layer + provider/plugin execution bridge
-├── orchestrator-store/          # Shared state/storage path helpers
 └── protocol/                    # Shared protocol/config/runtime types
 ```
 
