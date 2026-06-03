@@ -303,6 +303,33 @@ impl DefaultDaemonRunHost {
                     }))
                     .emit();
             }
+            DaemonRunEvent::OrphanAgentGapReplayed {
+                agent_session_id, emitted, next_offset, partial_tail, ..
+            } => {
+                self.logger
+                    .info(
+                        "reconciliation",
+                        format!("orphan agent gap replayed: session={agent_session_id} emitted={emitted}"),
+                    )
+                    .meta(json!({
+                        "kind": "orphan_agent_gap_replayed",
+                        "agent_session_id": agent_session_id,
+                        "emitted": emitted,
+                        "next_offset": next_offset,
+                        "partial_tail": partial_tail,
+                    }))
+                    .emit();
+            }
+            DaemonRunEvent::OrphanAgentGapReplayFailed { agent_session_id, error, .. } => {
+                self.logger
+                    .warn("reconciliation", format!("orphan agent gap replay failed: session={agent_session_id}"))
+                    .meta(json!({
+                        "kind": "orphan_agent_gap_replay_failed",
+                        "agent_session_id": agent_session_id,
+                        "error": error,
+                    }))
+                    .emit();
+            }
         }
     }
 
@@ -741,6 +768,31 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
                     }),
                 )
             }
+            DaemonRunEvent::OrphanAgentGapReplayed {
+                project_root,
+                agent_session_id,
+                emitted,
+                next_offset,
+                partial_tail,
+            } => self.emit_daemon_event_with_notifications(
+                "orphan-agent-gap-replayed",
+                Some(project_root),
+                json!({
+                    "agent_session_id": agent_session_id,
+                    "emitted": emitted,
+                    "next_offset": next_offset,
+                    "partial_tail": partial_tail,
+                }),
+            ),
+            DaemonRunEvent::OrphanAgentGapReplayFailed { project_root, agent_session_id, error } => self
+                .emit_daemon_event_with_notifications(
+                    "orphan-agent-gap-replay-failed",
+                    Some(project_root),
+                    json!({
+                        "agent_session_id": agent_session_id,
+                        "error": error,
+                    }),
+                ),
         }
     }
 

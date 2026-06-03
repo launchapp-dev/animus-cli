@@ -23,6 +23,31 @@ pub struct AgentSpawnRecord {
     pub task_id: Option<String>,
     pub command_line: Vec<String>,
     pub stdio_socket_path: Option<String>,
+    /// v0.5.1 fold-in (item 2): path to the per-agent `decisions.jsonl`
+    /// recording. The orphan-scan + reattach path uses this to replay
+    /// events that landed during the daemon-restart gap. Optional for
+    /// backward-compat with pre-fold-in records — readers should fall back
+    /// to the canonical `~/.animus/<scope>/runs/<run_id>/decisions.jsonl`
+    /// derivation when this is `None` and `run_id` is known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub decisions_jsonl_path: Option<String>,
+    /// v0.5.1 fold-in (item 2): byte offset into `decisions_jsonl_path`
+    /// at which the daemon last consumed an event. `replay_gap_from_spawn_record`
+    /// resumes from here so a daemon restart never double-emits an event
+    /// it already broadcast. Defaults to 0 when missing (pre-fold-in
+    /// records replay from the start, which is the safer fallback).
+    ///
+    /// v0.6 gap: currently the offset is only updated during the initial
+    /// reattach replay. Events delivered through the live reattach socket
+    /// AFTER reattach do NOT advance the persisted offset, so a second
+    /// crash + restart will replay (and re-broadcast) those events from
+    /// `decisions.jsonl`. Acceptable today because the lifted events are
+    /// non-terminal (`agent_finished` / `agent_error`) — subscribers may
+    /// see a duplicate but won't double-close any workflow state. The
+    /// v0.6 fix is to plumb the live emitter through `update_consumed_offset`
+    /// as events flow.
+    #[serde(default)]
+    pub last_consumed_offset: u64,
 }
 
 fn agents_dir(project_root: &std::path::Path) -> Option<PathBuf> {
@@ -58,12 +83,13 @@ pub fn delete_record(project_root: &std::path::Path, agent_session_id: &str) {
     }
 }
 
-pub fn build_record(
+pub fn build_record_with_decisions(
     agent_session_id: String,
     pid: u32,
     dispatch: &SubjectDispatch,
     command_line: Vec<String>,
     stdio_socket_path: Option<String>,
+    decisions_jsonl_path: Option<String>,
 ) -> AgentSpawnRecord {
     let started_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true);
     AgentSpawnRecord {
@@ -76,7 +102,69 @@ pub fn build_record(
         task_id: dispatch.task_id().map(String::from),
         command_line,
         stdio_socket_path,
+        decisions_jsonl_path,
+        last_consumed_offset: 0,
     }
+}
+
+/// Update the `last_consumed_offset` field on the on-disk spawn record so a
+/// subsequent daemon restart can resume gap replay where this daemon left
+/// off. Best-effort: a failed read/write is logged and silently ignored;
+/// the caller is expected to keep operating from in-memory state, and the
+/// next sweep will simply replay an extra (already-broadcast) event in the
+/// worst case.
+pub fn update_consumed_offset(project_root: &Path, agent_session_id: &str, new_offset: u64) {
+    let Some(path) = record_path(project_root, agent_session_id) else {
+        return;
+    };
+    let raw = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::debug!(
+                target: "animus.runtime.agent_record",
+                %error,
+                agent_session_id,
+                "skip update_consumed_offset; record not readable"
+            );
+            return;
+        }
+    };
+    let mut record: AgentSpawnRecord = match serde_json::from_slice(&raw) {
+        Ok(rec) => rec,
+        Err(error) => {
+            tracing::debug!(
+                target: "animus.runtime.agent_record",
+                %error,
+                agent_session_id,
+                "skip update_consumed_offset; record not parseable"
+            );
+            return;
+        }
+    };
+    if record.last_consumed_offset >= new_offset {
+        return;
+    }
+    record.last_consumed_offset = new_offset;
+    let tmp = path.with_extension("json.tmp");
+    let json = match serde_json::to_vec_pretty(&record) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            tracing::debug!(
+                target: "animus.runtime.agent_record",
+                %error,
+                agent_session_id,
+                "skip update_consumed_offset; record not serializable"
+            );
+            return;
+        }
+    };
+    if std::fs::write(&tmp, json).is_err() {
+        return;
+    }
+    if let Ok(file) = std::fs::File::open(&tmp) {
+        let _ = file.sync_all();
+    }
+    let _ = std::fs::rename(&tmp, &path);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -255,10 +343,105 @@ mod tests {
     }
 
     #[test]
+    fn pre_foldin_record_deserializes_with_default_decisions_and_offset() {
+        // Older records (written before v0.5.1 fold-in item 2) do not have
+        // `decisions_jsonl_path` or `last_consumed_offset` fields. They MUST
+        // still deserialize cleanly, with sensible defaults — otherwise an
+        // existing on-disk record from a pre-fold-in daemon would crash the
+        // post-fold-in orphan scan.
+        let raw = serde_json::json!({
+            "agent_session_id": "agent-old",
+            "pid": 4242,
+            "started_at": "2025-01-01T00:00:00Z",
+            "subject_id": "TASK-OLD",
+            "subject_kind": "task",
+            "workflow_ref": "standard",
+            "task_id": "TASK-OLD",
+            "command_line": ["/bin/echo"],
+            "stdio_socket_path": null,
+        });
+        let parsed: AgentSpawnRecord = serde_json::from_value(raw).expect("backward compat parse");
+        assert!(parsed.decisions_jsonl_path.is_none());
+        assert_eq!(parsed.last_consumed_offset, 0);
+    }
+
+    fn update_consumed_offset_at(path: &std::path::Path, new_offset: u64) {
+        // Pure-IO variant of `update_consumed_offset` for unit tests that
+        // want to avoid the `scoped_state_root` side-effect of writing
+        // under `~/.animus/`. Mirrors the production helper's contract:
+        // no-op on lowering, atomic write via rename.
+        let raw = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let mut record: AgentSpawnRecord = match serde_json::from_slice(&raw) {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        if record.last_consumed_offset >= new_offset {
+            return;
+        }
+        record.last_consumed_offset = new_offset;
+        let tmp = path.with_extension("json.tmp");
+        let json = match serde_json::to_vec_pretty(&record) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        if std::fs::write(&tmp, json).is_err() {
+            return;
+        }
+        let _ = std::fs::rename(&tmp, path);
+    }
+
+    #[test]
+    fn update_consumed_offset_helper_writes_higher_offset_to_disk() {
+        let temp = tempfile::tempdir().unwrap();
+        let dispatch = protocol::SubjectDispatch::for_task("TASK-OFFSET", "standard");
+        let record = build_record_with_decisions(
+            "agent-offset".to_string(),
+            99,
+            &dispatch,
+            vec!["/bin/echo".into()],
+            None,
+            None,
+        );
+        let path = write_record_into(temp.path(), &record).expect("write");
+        update_consumed_offset_at(&path, 1024);
+        let parsed: AgentSpawnRecord = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed.last_consumed_offset, 1024);
+    }
+
+    #[test]
+    fn update_consumed_offset_helper_never_lowers_a_higher_persisted_value() {
+        let temp = tempfile::tempdir().unwrap();
+        let dispatch = protocol::SubjectDispatch::for_task("TASK-OFFSET2", "standard");
+        let mut record = build_record_with_decisions(
+            "agent-offset2".to_string(),
+            99,
+            &dispatch,
+            vec!["/bin/echo".into()],
+            None,
+            None,
+        );
+        record.last_consumed_offset = 4096;
+        let path = write_record_into(temp.path(), &record).expect("write");
+        update_consumed_offset_at(&path, 1024);
+        let parsed: AgentSpawnRecord = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(parsed.last_consumed_offset, 4096, "offset must never go backward");
+    }
+
+    #[test]
     fn record_roundtrips_via_json_in_isolated_dir() {
         let temp = tempfile::tempdir().unwrap();
         let dispatch = protocol::SubjectDispatch::for_task("TASK-1", "standard");
-        let record = build_record("agent-xyz".to_string(), 4242, &dispatch, vec!["/bin/echo".into()], None);
+        let record = build_record_with_decisions(
+            "agent-xyz".to_string(),
+            4242,
+            &dispatch,
+            vec!["/bin/echo".into()],
+            None,
+            None,
+        );
 
         let path = write_record_into(temp.path(), &record).expect("write");
         let raw = std::fs::read(&path).unwrap();
@@ -303,7 +486,14 @@ mod tests {
 
         let dispatch = protocol::SubjectDispatch::for_task("TASK-ALIVE", "standard");
         let record =
-            build_record("agent-alive".to_string(), alive_pid, &dispatch, vec!["sleep".into(), "60".into()], None);
+            build_record_with_decisions(
+                "agent-alive".to_string(),
+                alive_pid,
+                &dispatch,
+                vec!["sleep".into(), "60".into()],
+                None,
+                None,
+            );
         let path = write_record_into(temp.path(), &record).expect("write record");
 
         let report = scan_orphans(temp.path()).expect("scan");
@@ -342,7 +532,14 @@ mod tests {
         assert!(!protocol::is_process_alive(dead_pid), "child pid should have exited");
 
         let dispatch = protocol::SubjectDispatch::for_task("TASK-DEAD", "standard");
-        let record = build_record("agent-dead".to_string(), dead_pid, &dispatch, vec!["true".into()], None);
+        let record = build_record_with_decisions(
+            "agent-dead".to_string(),
+            dead_pid,
+            &dispatch,
+            vec!["true".into()],
+            None,
+            None,
+        );
         let path = write_record_into(temp.path(), &record).expect("write record");
 
         let report = scan_orphans(temp.path()).expect("scan");
@@ -380,11 +577,12 @@ mod tests {
         let alive_pid = child.id();
 
         let dispatch = protocol::SubjectDispatch::for_task("TASK-REUSED", "standard");
-        let record = build_record(
+        let record = build_record_with_decisions(
             "agent-reused".to_string(),
             alive_pid,
             &dispatch,
             vec!["/usr/local/bin/animus-completely-other-binary".into()],
+            None,
             None,
         );
         let path = write_record_into(temp.path(), &record).expect("write record");
@@ -407,7 +605,14 @@ mod tests {
 
         let dispatch = protocol::SubjectDispatch::for_task("TASK-IDEMPOTENT", "standard");
         let record =
-            build_record("agent-idem".to_string(), alive_pid, &dispatch, vec!["sleep".into(), "60".into()], None);
+            build_record_with_decisions(
+                "agent-idem".to_string(),
+                alive_pid,
+                &dispatch,
+                vec!["sleep".into(), "60".into()],
+                None,
+                None,
+            );
         write_record_into(temp.path(), &record).expect("write record");
 
         let first = scan_orphans(temp.path()).expect("scan 1");

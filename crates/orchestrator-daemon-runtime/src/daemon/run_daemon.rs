@@ -652,13 +652,24 @@ fn attempt_orphan_agent_reattach<H: DaemonRunHooks>(
         return Ok(());
     }
 
+    let project_root_path = Path::new(project_root);
     let connections = orphan_reattach_connections();
     for detected in &report.detected {
-        let Some(record_path) = std::fs::read_to_string(&detected.record_path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<crate::dispatch::agent_record::AgentSpawnRecord>(&raw).ok())
-            .and_then(|rec| rec.stdio_socket_path)
-        else {
+        let parsed_record: Option<crate::dispatch::agent_record::AgentSpawnRecord> =
+            std::fs::read_to_string(&detected.record_path)
+                .ok()
+                .and_then(|raw| serde_json::from_str(&raw).ok());
+
+        // v0.5.1 fold-in (item 2): before opening the live socket, replay
+        // any decision-log events that landed during the daemon gap so
+        // workflow_events subscribers see them in order with anything the
+        // live socket subsequently delivers. Best-effort: failures are
+        // logged and we still try the socket reattach.
+        if let Some(record) = parsed_record.as_ref() {
+            replay_gap_for_orphan(project_root_path, primary_root, record, broadcaster.as_ref(), hooks);
+        }
+
+        let Some(record_path) = parsed_record.and_then(|rec| rec.stdio_socket_path) else {
             hooks.handle_event(DaemonRunEvent::OrphanAgentReattachFailed {
                 project_root: primary_root.to_string(),
                 agent_session_id: detected.agent_session_id.clone(),
@@ -669,63 +680,88 @@ fn attempt_orphan_agent_reattach<H: DaemonRunHooks>(
             continue;
         };
 
-        #[cfg(unix)]
-        {
-            let socket = std::path::PathBuf::from(&record_path);
-            match crate::dispatch::reattach::try_reattach(&socket, broadcaster.clone()) {
-                Ok(conn) => {
-                    hooks.handle_event(DaemonRunEvent::OrphanAgentReattached {
-                        project_root: primary_root.to_string(),
-                        agent_session_id: detected.agent_session_id.clone(),
-                        pid: detected.pid,
-                        socket_path: record_path.clone(),
-                    })?;
-                    if let Ok(mut guard) = connections.lock() {
-                        guard.push(conn);
-                    }
-                }
-                Err(err) => {
-                    hooks.handle_event(DaemonRunEvent::OrphanAgentReattachFailed {
-                        project_root: primary_root.to_string(),
-                        agent_session_id: detected.agent_session_id.clone(),
-                        pid: detected.pid,
-                        socket_path: Some(record_path),
-                        error: format!("{err}"),
-                    })?;
+        match crate::dispatch::reattach::try_reattach(&record_path, broadcaster.clone()) {
+            Ok(conn) => {
+                hooks.handle_event(DaemonRunEvent::OrphanAgentReattached {
+                    project_root: primary_root.to_string(),
+                    agent_session_id: detected.agent_session_id.clone(),
+                    pid: detected.pid,
+                    socket_path: record_path.clone(),
+                })?;
+                if let Ok(mut guard) = connections.lock() {
+                    guard.push(conn);
                 }
             }
-        }
-
-        #[cfg(not(unix))]
-        {
-            let _ = broadcaster;
-            hooks.handle_event(DaemonRunEvent::OrphanAgentReattachFailed {
-                project_root: primary_root.to_string(),
-                agent_session_id: detected.agent_session_id.clone(),
-                pid: detected.pid,
-                socket_path: Some(record_path),
-                error: "reattach is not supported on this platform (Unix only)".to_string(),
-            })?;
+            Err(err) => {
+                hooks.handle_event(DaemonRunEvent::OrphanAgentReattachFailed {
+                    project_root: primary_root.to_string(),
+                    agent_session_id: detected.agent_session_id.clone(),
+                    pid: detected.pid,
+                    socket_path: Some(record_path),
+                    error: format!("{err}"),
+                })?;
+            }
         }
     }
 
     Ok(())
 }
 
+/// v0.5.1 fold-in (item 2): adapter that lifts an `Arc<WorkflowEventBroadcaster>`
+/// into the trait shape `replay_gap_from_spawn_record` accepts, and updates
+/// the spawn record's `last_consumed_offset` so subsequent daemon starts
+/// don't replay the same events.
+fn replay_gap_for_orphan<H: DaemonRunHooks>(
+    project_root: &Path,
+    primary_root: &str,
+    record: &crate::dispatch::agent_record::AgentSpawnRecord,
+    broadcaster: &WorkflowEventBroadcaster,
+    hooks: &mut H,
+) {
+    struct Adapter<'a> {
+        inner: &'a WorkflowEventBroadcaster,
+    }
+    impl<'a> crate::dispatch::reattach::WorkflowEventBroadcasterLike for Adapter<'a> {
+        fn emit(&self, event: animus_control_protocol::types::WorkflowEvent) {
+            self.inner.emit(event);
+        }
+    }
+    let adapter = Adapter { inner: broadcaster };
+    match crate::dispatch::reattach::replay_gap_from_spawn_record(project_root, record, &adapter) {
+        Ok(Some(report)) => {
+            if report.emitted > 0 || report.next_offset != record.last_consumed_offset {
+                crate::dispatch::agent_record::update_consumed_offset(
+                    project_root,
+                    &record.agent_session_id,
+                    report.next_offset,
+                );
+            }
+            let _ = hooks.handle_event(DaemonRunEvent::OrphanAgentGapReplayed {
+                project_root: primary_root.to_string(),
+                agent_session_id: record.agent_session_id.clone(),
+                emitted: report.emitted,
+                next_offset: report.next_offset,
+                partial_tail: report.partial_tail,
+            });
+        }
+        Ok(None) => {}
+        Err(error) => {
+            let _ = hooks.handle_event(DaemonRunEvent::OrphanAgentGapReplayFailed {
+                project_root: primary_root.to_string(),
+                agent_session_id: record.agent_session_id.clone(),
+                error: format!("{error}"),
+            });
+        }
+    }
+}
+
 /// Process-global retention point for active orphan reattach connections.
-/// The reader tasks live on tokio's runtime; holding the `JoinHandle`
-/// keeps the handle around for future graceful-shutdown hooks (and avoids
+/// The reader threads run on std::thread; holding the `JoinHandle` keeps
+/// the handle around for future graceful-shutdown hooks (and avoids
 /// surprising operators who would expect a Drop to terminate forwarding).
-#[cfg(unix)]
 fn orphan_reattach_connections() -> &'static std::sync::Mutex<Vec<crate::dispatch::reattach::ReattachConnection>> {
     static SLOT: std::sync::OnceLock<std::sync::Mutex<Vec<crate::dispatch::reattach::ReattachConnection>>> =
         std::sync::OnceLock::new();
-    SLOT.get_or_init(|| std::sync::Mutex::new(Vec::new()))
-}
-
-#[cfg(not(unix))]
-fn orphan_reattach_connections() -> &'static std::sync::Mutex<Vec<()>> {
-    static SLOT: std::sync::OnceLock<std::sync::Mutex<Vec<()>>> = std::sync::OnceLock::new();
     SLOT.get_or_init(|| std::sync::Mutex::new(Vec::new()))
 }
 

@@ -212,4 +212,25 @@ pub enum DaemonRunEvent {
         socket_path: Option<String>,
         error: String,
     },
+    /// v0.5.1 fold-in (item 2): the daemon replayed events from a live
+    /// orphan's `decisions.jsonl` covering the gap since the previous
+    /// daemon last consumed an event. `emitted` is the count of synthetic
+    /// `WorkflowEvent`s lifted into the broadcaster; `next_offset` is the
+    /// new persisted `last_consumed_offset` on the spawn record.
+    OrphanAgentGapReplayed {
+        project_root: String,
+        agent_session_id: String,
+        emitted: usize,
+        next_offset: u64,
+        partial_tail: bool,
+    },
+    /// v0.5.1 fold-in (item 2): gap-replay for a live orphan failed (eg
+    /// the decisions.jsonl file was unreadable or corrupted). The reattach
+    /// socket pass still proceeds; only the gap reconstruction is skipped
+    /// for this run.
+    OrphanAgentGapReplayFailed {
+        project_root: String,
+        agent_session_id: String,
+        error: String,
+    },
 }
