@@ -30,6 +30,14 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # `interprocess::local_socket` server.
 interprocess = "2.4"
 
+# Recording layer (v0.5.x Task E1 fold-in): the decision-log recorder
+# was moved here from `agent-runner` so both the daemon and the future
+# agent-runner plugin can depend on a single canonical implementation.
+thiserror = "2"
+zstd = "0.13"
+animus-plugin-protocol   = { workspace = true }
+orchestrator-plugin-host = { workspace = true }
+
 # When vendored inside the ao-cli workspace this crate uses the in-tree
 # `protocol` / `orchestrator-core` / `orchestrator-config` workspace
 # members. The out-of-tree `launchapp-dev/animus-runtime-shared` repo

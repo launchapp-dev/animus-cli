@@ -237,8 +237,8 @@ impl ProcessManager {
             let socket_for_record = reattach_socket_path.as_ref().map(|p| p.display().to_string());
             #[cfg(not(unix))]
             let socket_for_record: Option<String> = None;
-            let decisions_for_record = agent_runner::recording::decision_log_path(project_root, &id)
-                .map(|p| p.display().to_string());
+            let decisions_for_record =
+                animus_runtime_shared::recording::decision_log_path(project_root, &id).map(|p| p.display().to_string());
             let record = super::agent_record::build_record_with_decisions(
                 id.clone(),
                 pid_value,

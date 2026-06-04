@@ -118,18 +118,48 @@ impl Durability {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum DecisionEvent {
-    Prompt { timestamp_ms: u64, model_id: String, prompt: String, runtime_contract: Option<Value> },
-    ResponseChunk { timestamp_ms: u64, stream: String, text: String },
-    ToolCall { timestamp_ms: u64, name: String, args: Value },
-    ToolResult { timestamp_ms: u64, name: String, result: Value },
+    Prompt {
+        timestamp_ms: u64,
+        model_id: String,
+        prompt: String,
+        runtime_contract: Option<Value>,
+    },
+    ResponseChunk {
+        timestamp_ms: u64,
+        stream: String,
+        text: String,
+    },
+    ToolCall {
+        timestamp_ms: u64,
+        name: String,
+        args: Value,
+    },
+    ToolResult {
+        timestamp_ms: u64,
+        name: String,
+        result: Value,
+    },
     /// Producer-emitted structured post-condition for a tool call whose
     /// effects sit outside the recording boundary. Consumed by
     /// [`side_effect::assert_side_effect`] at replay time. See the
     /// `side_effect` submodule for the architectural rationale.
-    ToolSideEffect { timestamp_ms: u64, name: String, assertion: side_effect::SideEffectAssertion },
-    Metadata { timestamp_ms: u64, payload: Value },
-    Error { timestamp_ms: u64, message: String },
-    Finished { timestamp_ms: u64, exit_code: Option<i32> },
+    ToolSideEffect {
+        timestamp_ms: u64,
+        name: String,
+        assertion: side_effect::SideEffectAssertion,
+    },
+    Metadata {
+        timestamp_ms: u64,
+        payload: Value,
+    },
+    Error {
+        timestamp_ms: u64,
+        message: String,
+    },
+    Finished {
+        timestamp_ms: u64,
+        exit_code: Option<i32>,
+    },
 }
 
 impl DecisionEvent {
@@ -372,11 +402,9 @@ impl ReplaySource {
             // bounded by the per-run lifetime, not the lifetime of the
             // sweep, so the decompressed footprint is the original log
             // size — fine for human-scale runs).
-            let raw = sweeper::decompress_zst_into(path)
-                .with_context(|| format!("decompress archive {}", path.display()))?;
-            raw.split(|&b| b == b'\n')
-                .map(|line| String::from_utf8_lossy(line).into_owned())
-                .collect()
+            let raw =
+                sweeper::decompress_zst_into(path).with_context(|| format!("decompress archive {}", path.display()))?;
+            raw.split(|&b| b == b'\n').map(|line| String::from_utf8_lossy(line).into_owned()).collect()
         } else {
             let file = File::open(path).with_context(|| format!("open replay session {}", path.display()))?;
             let reader = BufReader::new(file);
@@ -408,10 +436,7 @@ impl ReplaySource {
     }
 
     fn is_zstd_archive(path: &Path) -> bool {
-        path.file_name()
-            .and_then(|s| s.to_str())
-            .map(|name| name.ends_with(".jsonl.bak.zst"))
-            .unwrap_or(false)
+        path.file_name().and_then(|s| s.to_str()).map(|name| name.ends_with(".jsonl.bak.zst")).unwrap_or(false)
     }
 
     pub fn truncated_tail(&self) -> bool {

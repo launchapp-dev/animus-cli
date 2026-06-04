@@ -12,7 +12,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 name = "agent-runner"
 version = "0.1.0"
 dependencies = [
- "animus-plugin-protocol 0.1.0",
+ "animus-runtime-shared",
  "animus-session-backend",
  "anyhow",
  "async-trait",
@@ -25,13 +25,11 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "uuid",
  "which",
- "zstd",
 ]
 
 [[package]]
@@ -175,6 +173,7 @@ dependencies = [
 name = "animus-runtime-shared"
 version = "0.1.0"
 dependencies = [
+ "animus-plugin-protocol 0.1.0",
  "anyhow",
  "async-trait",
  "chrono",
@@ -183,15 +182,18 @@ dependencies = [
  "jsonschema",
  "orchestrator-config",
  "orchestrator-core",
+ "orchestrator-plugin-host",
  "protocol",
  "regex",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",
+ "zstd",
 ]
 
 [[package]]
@@ -2241,7 +2243,6 @@ dependencies = [
 name = "orchestrator-daemon-runtime"
 version = "0.1.0"
 dependencies = [
- "agent-runner",
  "animus-control-protocol",
  "animus-log-storage-protocol",
  "animus-plugin-protocol 0.1.0",

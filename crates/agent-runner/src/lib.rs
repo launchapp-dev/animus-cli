@@ -4,7 +4,7 @@ pub mod ipc;
 pub mod lock;
 pub mod output;
 pub mod providers;
-pub mod recording;
+pub use animus_runtime_shared::recording;
 pub mod runner;
 pub mod sandbox;
 pub mod telemetry;
