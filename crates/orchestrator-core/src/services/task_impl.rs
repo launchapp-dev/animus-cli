@@ -1,5 +1,5 @@
 use super::*;
-use crate::subject_adapter::TaskServiceApi as ProviderTaskServiceApi;
+use crate::subject_adapter::TaskAdapterApi;
 
 fn task_filter_can_use_db_predicates(filter: &TaskFilter) -> bool {
     filter.risk.is_none()
@@ -278,7 +278,7 @@ impl TaskServiceApi for FileServiceHub {
 }
 
 #[async_trait]
-impl ProviderTaskServiceApi for InMemoryServiceHub {
+impl TaskAdapterApi for InMemoryServiceHub {
     async fn list(&self) -> Result<Vec<OrchestratorTask>> {
         TaskServiceApi::list(self).await
     }
@@ -357,7 +357,7 @@ impl ProviderTaskServiceApi for InMemoryServiceHub {
 }
 
 #[async_trait]
-impl ProviderTaskServiceApi for FileServiceHub {
+impl TaskAdapterApi for FileServiceHub {
     async fn list(&self) -> Result<Vec<OrchestratorTask>> {
         TaskServiceApi::list(self).await
     }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::subject_adapter::PlanningServiceApi as ProviderPlanningServiceApi;
+use crate::subject_adapter::PlanningAdapterApi;
 
 fn requirement_filter_can_use_db_predicates(filter: &RequirementFilter) -> bool {
     filter.tags.is_none() && filter.linked_task_id.is_none() && filter.search_text.is_none()
@@ -292,7 +292,7 @@ impl PlanningServiceApi for FileServiceHub {
 }
 
 #[async_trait]
-impl ProviderPlanningServiceApi for InMemoryServiceHub {
+impl PlanningAdapterApi for InMemoryServiceHub {
     async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
         PlanningServiceApi::draft_requirements(self, input).await
     }
@@ -323,7 +323,7 @@ impl ProviderPlanningServiceApi for InMemoryServiceHub {
 }
 
 #[async_trait]
-impl ProviderPlanningServiceApi for FileServiceHub {
+impl PlanningAdapterApi for FileServiceHub {
     async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
         PlanningServiceApi::draft_requirements(self, input).await
     }

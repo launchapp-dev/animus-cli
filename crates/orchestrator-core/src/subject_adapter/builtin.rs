@@ -7,7 +7,7 @@ use protocol::orchestrator::{
     TaskStatistics, TaskStatus, TaskUpdateInput,
 };
 
-use super::{PlanningServiceApi, RequirementsPlanningService, RequirementsProvider, TaskProvider, TaskServiceApi};
+use super::{PlanningAdapterApi, RequirementsPlanningService, RequirementsProvider, TaskProvider, TaskAdapterApi};
 
 #[derive(Clone)]
 pub struct BuiltinTaskProvider<T> {
@@ -16,7 +16,7 @@ pub struct BuiltinTaskProvider<T> {
 
 impl<T> BuiltinTaskProvider<T>
 where
-    T: TaskServiceApi,
+    T: TaskAdapterApi,
 {
     #[must_use]
     pub fn new(hub: Arc<T>) -> Self {
@@ -27,7 +27,7 @@ where
 #[async_trait::async_trait]
 impl<T> TaskProvider for BuiltinTaskProvider<T>
 where
-    T: TaskServiceApi,
+    T: TaskAdapterApi,
 {
     async fn list(&self) -> Result<Vec<OrchestratorTask>> {
         self.hub.list().await
@@ -113,7 +113,7 @@ pub struct BuiltinRequirementsProvider<T> {
 
 impl<T> BuiltinRequirementsProvider<T>
 where
-    T: PlanningServiceApi,
+    T: PlanningAdapterApi,
 {
     #[must_use]
     pub fn new(hub: Arc<T>) -> Self {
@@ -124,7 +124,7 @@ where
 #[async_trait::async_trait]
 impl<T> RequirementsProvider for BuiltinRequirementsProvider<T>
 where
-    T: PlanningServiceApi,
+    T: PlanningAdapterApi,
 {
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>> {
         self.hub.list_requirements().await
@@ -150,7 +150,7 @@ pub struct BuiltinRequirementsPlanningService<T> {
 
 impl<T> BuiltinRequirementsPlanningService<T>
 where
-    T: PlanningServiceApi,
+    T: PlanningAdapterApi,
 {
     #[must_use]
     pub fn new(hub: Arc<T>) -> Self {
@@ -161,7 +161,7 @@ where
 #[async_trait::async_trait]
 impl<T> RequirementsPlanningService for BuiltinRequirementsPlanningService<T>
 where
-    T: PlanningServiceApi,
+    T: PlanningAdapterApi,
 {
     async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
         self.hub.draft_requirements(input).await

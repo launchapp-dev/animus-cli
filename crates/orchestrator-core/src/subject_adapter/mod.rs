@@ -89,7 +89,7 @@ pub trait ProjectAdapter: Send + Sync {
 }
 
 #[async_trait]
-pub trait TaskServiceApi: Send + Sync {
+pub trait TaskAdapterApi: Send + Sync {
     async fn list(&self) -> Result<Vec<OrchestratorTask>>;
     async fn list_filtered(&self, filter: TaskFilter) -> Result<Vec<OrchestratorTask>>;
     async fn list_prioritized(&self) -> Result<Vec<OrchestratorTask>>;
@@ -121,7 +121,7 @@ pub trait TaskServiceApi: Send + Sync {
 }
 
 #[async_trait]
-pub trait PlanningServiceApi: Send + Sync {
+pub trait PlanningAdapterApi: Send + Sync {
     async fn draft_requirements(&self, input: RequirementsDraftInput) -> Result<RequirementsDraftResult>;
     async fn list_requirements(&self) -> Result<Vec<RequirementItem>>;
     async fn get_requirement(&self, id: &str) -> Result<RequirementItem>;
