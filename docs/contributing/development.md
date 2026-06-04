@@ -84,6 +84,7 @@ npm install
 npm run docs:check-sync
 cargo test -p orchestrator-cli cli_reference_top_level_tree_matches_live_clap_commands -- --nocapture
 cargo test -p orchestrator-cli mcp_reference_table_matches_live_builtin_tools -- --nocapture
+cargo test -p orchestrator-cli mcp_docs_publish_the_live_builtin_tool_count -- --nocapture
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
