@@ -6,6 +6,8 @@
 
 Go to the gym. See your kids. Build the next thing. Your workforce keeps shipping.
 
+Checkout our [discord](https://discord.gg/ARrv7MTP) for questions or feedback! 
+
 [![Latest release](https://img.shields.io/github/v/release/launchapp-dev/animus-cli?style=flat-square&color=1f6feb&labelColor=0d1117&logo=github&logoColor=f0f6fc)](https://github.com/launchapp-dev/animus-cli/releases/latest) &nbsp; [![Rust](https://img.shields.io/badge/rust-100%25-f0f6fc?style=flat-square&labelColor=0d1117&logo=rust&logoColor=f0f6fc)](https://www.rust-lang.org) &nbsp; [![Platforms](https://img.shields.io/badge/macOS%20%7C%20Linux%20%7C%20Windows-f0f6fc?style=flat-square&labelColor=0d1117&logo=apple&logoColor=f0f6fc)]() &nbsp; [![License](https://img.shields.io/badge/license-Elastic--2.0-f0f6fc?style=flat-square&labelColor=0d1117)](LICENSE) &nbsp; [![Mentioned in Awesome AI Coding Tools](https://awesome.re/mentioned-badge-flat.svg)](https://github.com/launchapp-dev/awesome-ai-coding-tools)
 
 ---
