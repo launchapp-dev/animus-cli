@@ -160,7 +160,7 @@ flowchart LR
   subgraph Workflow["Execution"]
     WFR["workflow-runner"]
     AR["agent-runner"]
-    SESSION["orchestrator-session-host"]
+    SESSION["orchestrator-plugin-host::session"]
     PHOST["orchestrator-plugin-host"]
     PROVIDERS["provider plugins"]
   end

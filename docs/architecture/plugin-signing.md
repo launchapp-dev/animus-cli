@@ -157,12 +157,12 @@ get caught by this check. `--force` overrides the check and emits a
 A provider plugin whose `provider_tool` resolves to one of the reserved
 first-party provider names (`claude`, `codex`, `gemini`, `opencode`, `oai`, or
 `oai-runner`) would shadow the expected provider route. Install refuses these
-plugins by default; pass `--allow-shadow-builtin` to opt in intentionally. At
-runtime, the session resolver also emits a `warn!` so the shadow is visible in
-daemon logs even if the install bypass was used.
+plugins by default; pass `--allow-shadow-builtin` to opt in intentionally. The
+install-time gate is the primary defense now that there is no in-tree provider
+backend left to warn about at runtime.
 
 The reserved list lives in
-`crates/orchestrator-session-host/src/session_backend_resolver.rs` as
+`crates/orchestrator-plugin-host/src/session/session_backend_resolver.rs` as
 `RESERVED_PROVIDER_TOOLS`.
 
 ### Trusted orgs (TOFU)

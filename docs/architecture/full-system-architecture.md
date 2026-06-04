@@ -75,7 +75,7 @@ flowchart TB
     DAEMON["daemon runtime"]
     WFR["animus-workflow-runner-default<br/>(preferred)"]
     AR["agent-runner"]
-    SESSION["orchestrator-session-host"]
+    SESSION["orchestrator-plugin-host::session"]
     PHOST["orchestrator-plugin-host"]
     PROVIDERS["provider plugins"]
     SUBJECTS["subject_backend plugins"]

@@ -192,5 +192,29 @@ assert_not_contains \
   "$repo_root/docs/architecture/plugin-host-concurrency.md" \
   "orchestrator-session-host" \
   "plugin host concurrency stale session-host crate"
+assert_not_contains \
+  "$repo_root/docs/architecture/full-system-architecture.md" \
+  "orchestrator-session-host" \
+  "full system architecture stale session-host crate"
+assert_not_contains \
+  "$repo_root/docs/architecture/subject-dispatch-daemon.md" \
+  "orchestrator-session-host" \
+  "subject dispatch daemon stale session-host crate"
+assert_not_contains \
+  "$repo_root/docs/design/acp-integration.md" \
+  "orchestrator-session-host" \
+  "ACP integration stale session-host crate"
+assert_not_contains \
+  "$repo_root/docs/design/acp-integration.md" \
+  "orchestrator-store" \
+  "ACP integration stale orchestrator-store crate"
+assert_contains \
+  "$repo_root/docs/architecture/plugin-signing.md" \
+  '`crates/orchestrator-plugin-host/src/session/session_backend_resolver.rs`' \
+  "plugin signing reserved provider tools path"
+assert_not_contains \
+  "$repo_root/docs/architecture/plugin-signing.md" \
+  "crates/orchestrator-session-host/src/session_backend_resolver.rs" \
+  "plugin signing stale session backend resolver path"
 
 echo "CLI command tree and MCP tool reference are in sync."
