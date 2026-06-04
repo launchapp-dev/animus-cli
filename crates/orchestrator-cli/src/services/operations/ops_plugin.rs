@@ -638,20 +638,45 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
     let yaml_path = plugins_yaml_path()?;
     let mut config = load_plugins_yaml(&yaml_path)?;
     let key = serde_yaml::Value::String(plugin_name.clone());
+    let entry_for_binaries = config
+        .plugins
+        .get(&key)
+        .cloned()
+        .or_else(|| config.providers.get(&key).cloned());
     let removed_in_yaml = config.plugins.remove(&key).is_some() || config.providers.remove(&key).is_some();
     if removed_in_yaml {
         save_plugins_yaml(&yaml_path, &config)?;
     }
 
     let install_dir = install_root(req.plugin_dir.as_deref())?;
-    let installed_path = install_dir.join(&plugin_name);
-    let removed = if installed_path.exists() {
-        std::fs::remove_file(&installed_path)
-            .with_context(|| format!("failed to remove {}", installed_path.display()))?;
-        Some(installed_path.to_string_lossy().to_string())
-    } else {
-        None
-    };
+    let mut binary_names: Vec<String> = vec![plugin_name.clone()];
+    if let Some(serde_yaml::Value::Mapping(entry_map)) = entry_for_binaries {
+        let binaries_key = serde_yaml::Value::String("binaries".to_string());
+        if let Some(serde_yaml::Value::Sequence(seq)) = entry_map.get(&binaries_key) {
+            binary_names.clear();
+            for v in seq {
+                if let serde_yaml::Value::String(name) = v {
+                    binary_names.push(name.clone());
+                }
+            }
+            if binary_names.is_empty() {
+                binary_names.push(plugin_name.clone());
+            }
+        }
+    }
+
+    let primary_install_path = install_dir.join(&plugin_name);
+    let mut primary_removed: Option<String> = None;
+    for name in &binary_names {
+        let path = install_dir.join(name);
+        if path.exists() {
+            std::fs::remove_file(&path).with_context(|| format!("failed to remove {}", path.display()))?;
+            if path == primary_install_path {
+                primary_removed = Some(path.to_string_lossy().to_string());
+            }
+        }
+    }
+    let removed = primary_removed;
 
     if !removed_in_yaml && removed.is_none() {
         return Err(not_found_error(format!("plugin '{plugin_name}' is not installed")));
@@ -661,7 +686,13 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
     let project_root_pb = req.project_root.as_deref().map(std::path::PathBuf::from);
     let project_root_for_lock: Option<&std::path::Path> = project_root_pb.as_deref();
     if let Ok(mut lockfile) = PluginLockfile::load_default(project_root_for_lock) {
-        if lockfile.remove(&plugin_name).is_some() {
+        let mut changed = false;
+        for name in &binary_names {
+            if lockfile.remove(name).is_some() {
+                changed = true;
+            }
+        }
+        if changed {
             if let Err(err) = lockfile.save() {
                 tracing::warn!(path = %lockfile.path().display(), %err, "failed to persist plugin lockfile after uninstall");
             }
@@ -787,11 +818,12 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     // tempdir is reliably cleaned up whether install succeeds, errors,
     // or returns early — closing the GBs-of-`animus-plugin-install-*`
     // accumulation the old `std::env::temp_dir().join(uuid)` left behind.
-    let (source_path, default_name, provenance, _install_temp): (
+    let (source_path, default_name, provenance, _install_temp, release_assets_opt): (
         PathBuf,
         String,
         InstallProvenance,
         Option<tempfile::TempDir>,
+        Option<Vec<GithubReleaseAsset>>,
     ) = if let Some(slug) = req.source.as_deref() {
         let spec = parse_repo_spec(slug)?;
         let release = resolve_release_install(spec, req.tag.clone()).await?;
@@ -806,9 +838,16 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             owner: Some(release.owner.clone()),
             repo: Some(release.repo.clone()),
         };
-        (release.binary_path, release.plugin_name_hint, provenance, Some(release._temp_dir))
+        let release_assets = release.release_assets.clone();
+        (release.binary_path, release.plugin_name_hint, provenance, Some(release._temp_dir), Some(release_assets))
     } else if let Some(p) = req.path.as_deref() {
-        (PathBuf::from(p), String::new(), InstallProvenance { source_kind: Some("path"), ..Default::default() }, None)
+        (
+            PathBuf::from(p),
+            String::new(),
+            InstallProvenance { source_kind: Some("path"), ..Default::default() },
+            None,
+            None,
+        )
     } else if let Some(u) = req.url.as_deref() {
         let expected = req
             .sha256
@@ -821,7 +860,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             sha256_verified: Some(true),
             ..Default::default()
         };
-        (path, String::new(), provenance, Some(temp_dir))
+        (path, String::new(), provenance, Some(temp_dir), None)
     } else {
         unreachable!("validated above");
     };
@@ -969,6 +1008,123 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     // Manifest was probed against the source binary above; nothing to do here.
     let manifest = source_manifest;
 
+    // Multi-binary install: when the plugin's `plugin.toml` declares
+    // `[[binaries]]` entries beyond the primary, fetch + extract + install
+    // each as a sibling binary in the same `install_dir`. Driven entirely
+    // by the plugin.toml convention; plugins that don't declare the
+    // section keep the legacy single-binary behavior.
+    let mut installed_binary_names: Vec<String> = vec![plugin_name.clone()];
+    let mut secondary_installed: Vec<(String, PathBuf, String, Option<tempfile::TempDir>)> = Vec::new();
+    if provenance.source_kind == Some("release") {
+        if let (Some(release_assets), Some(owner), Some(repo), Some(tag)) = (
+            release_assets_opt.as_ref(),
+            provenance.owner.as_deref(),
+            provenance.repo.as_deref(),
+            provenance.release_tag.as_deref(),
+        ) {
+            let plugin_toml_text = match fetch_plugin_toml_for_release(owner, repo, tag).await {
+                Ok(t) => t,
+                Err(err) => {
+                    tracing::warn!(owner, repo, tag, %err, "failed to fetch plugin.toml; skipping multi-binary install");
+                    None
+                }
+            };
+            if let Some(text) = plugin_toml_text {
+                let binaries = parse_plugin_toml_binaries(&text)?;
+                let platform_tokens = current_platform_tokens();
+                for descriptor in binaries.iter().filter(|b| !b.primary) {
+                    if descriptor.name == plugin_name {
+                        continue;
+                    }
+                    let secondary_install_path = install_dir.join(&descriptor.name);
+                    if secondary_install_path.exists() && !req.force {
+                        return Err(invalid_input_error(format!(
+                            "secondary binary '{}' from plugin '{plugin_name}' already installed at {} (pass force=true to overwrite)",
+                            descriptor.name,
+                            secondary_install_path.display()
+                        )));
+                    }
+                    let asset = pick_release_asset_for_binary(release_assets, &descriptor.name, platform_tokens)
+                        .ok_or_else(|| {
+                            invalid_input_error(format!(
+                                "no release asset matched secondary binary '{}' for current platform '{}'. Available assets in {tag}: [{}]",
+                                descriptor.name,
+                                current_platform_label(),
+                                release_assets.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ")
+                            ))
+                        })?;
+                    let secondary_temp = create_install_staging_dir()?;
+                    let secondary_temp_path = secondary_temp.path().to_path_buf();
+                    let secondary_asset_path = secondary_temp_path.join(&asset.name);
+                    download_to_path(&asset.browser_download_url, &secondary_asset_path).await?;
+
+                    let mut expected_sha: Option<String> = None;
+                    if let Some(sidecar_asset) = find_sha256_sidecar(release_assets, &asset.name) {
+                        match download_text(&sidecar_asset.browser_download_url).await {
+                            Ok(body) => {
+                                if let Some(hex) = parse_sha256_sidecar(&body) {
+                                    expected_sha = Some(hex);
+                                }
+                            }
+                            Err(err) => {
+                                tracing::warn!(
+                                    asset = %sidecar_asset.name,
+                                    %err,
+                                    "failed to download secondary sha256 sidecar"
+                                );
+                            }
+                        }
+                    }
+                    if expected_sha.is_none() {
+                        if let Some(digest) = asset.digest.as_deref() {
+                            if let Some(hex) = parse_release_digest(digest) {
+                                expected_sha = Some(hex);
+                            }
+                        }
+                    }
+                    let computed_secondary = sha256_of_file(&secondary_asset_path)?;
+                    if let Some(expected) = expected_sha.as_ref() {
+                        if !expected.eq_ignore_ascii_case(&computed_secondary) {
+                            return Err(invalid_input_error(format!(
+                                "sha256 mismatch for secondary asset '{}': expected {expected}, computed {computed_secondary}",
+                                asset.name
+                            )));
+                        }
+                    } else {
+                        eprintln!(
+                            "warning: no sha256 sidecar or digest for secondary asset '{}'; install proceeding without checksum verification",
+                            asset.name
+                        );
+                    }
+
+                    let lower = asset.name.to_ascii_lowercase();
+                    #[allow(clippy::case_sensitive_file_extension_comparisons)]
+                    let secondary_binary_path = if lower.ends_with(".tar.gz") || lower.ends_with(".tgz") {
+                        let extract_dir = secondary_temp_path.join("extracted");
+                        extract_tarball(&secondary_asset_path, &extract_dir, &descriptor.name)?
+                    } else {
+                        secondary_asset_path.clone()
+                    };
+                    std::fs::copy(&secondary_binary_path, &secondary_install_path).with_context(|| {
+                        format!(
+                            "failed to copy {} → {}",
+                            secondary_binary_path.display(),
+                            secondary_install_path.display()
+                        )
+                    })?;
+                    ensure_executable(&secondary_install_path)?;
+                    secondary_installed.push((
+                        descriptor.name.clone(),
+                        secondary_install_path,
+                        computed_secondary,
+                        Some(secondary_temp),
+                    ));
+                    installed_binary_names.push(descriptor.name.clone());
+                }
+            }
+        }
+    }
+
     let yaml_path = plugins_yaml_path()?;
     let mut config = load_plugins_yaml(&yaml_path)?;
     let entry: serde_yaml::Mapping = {
@@ -977,6 +1133,16 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             serde_yaml::Value::String("binary".to_string()),
             serde_yaml::Value::String(installed_path.to_string_lossy().to_string()),
         );
+        if installed_binary_names.len() > 1 {
+            let mut binaries_seq = serde_yaml::Sequence::new();
+            for name in &installed_binary_names {
+                binaries_seq.push(serde_yaml::Value::String(name.clone()));
+            }
+            map.insert(
+                serde_yaml::Value::String("binaries".to_string()),
+                serde_yaml::Value::Sequence(binaries_seq),
+            );
+        }
         if let Some(m) = manifest.as_ref() {
             map.insert(serde_yaml::Value::String("name".to_string()), serde_yaml::Value::String(m.name.clone()));
         }
@@ -1063,9 +1229,18 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         version: provenance.release_tag.clone().unwrap_or_default(),
         artifact_sha256: computed_sha.clone(),
         signature_bundle_sha256: bundle_sha,
-        installed_at: recorded_at,
+        installed_at: recorded_at.clone(),
     };
     lockfile.upsert(lock_entry);
+    for (secondary_name, _path, secondary_sha, _temp) in &secondary_installed {
+        lockfile.upsert(LockEntry {
+            name: secondary_name.clone(),
+            version: provenance.release_tag.clone().unwrap_or_default(),
+            artifact_sha256: secondary_sha.clone(),
+            signature_bundle_sha256: None,
+            installed_at: recorded_at.clone(),
+        });
+    }
     if let Err(err) = lockfile.save() {
         tracing::warn!(path = %lockfile.path().display(), %err, "failed to persist plugin lockfile");
     }
@@ -1094,6 +1269,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
                     "signature_status": signature_status,
                     "force": req.force,
                     "source_kind": provenance.source_kind.unwrap_or("unknown"),
+                    "binaries": installed_binary_names.clone(),
                 }),
             ));
             match &signature_detail {
@@ -1911,6 +2087,10 @@ struct ReleaseInstall {
     owner: String,
     /// `<repo>` of the GitHub repo, for identity matching.
     repo: String,
+    /// Full set of release assets — retained so secondary-binary installs
+    /// can pick sibling `<binary>-<target>.tar.gz` archives without a
+    /// second API roundtrip. Populated only on the release source path.
+    release_assets: Vec<GithubReleaseAsset>,
     /// RAII guard for the staging directory the asset was downloaded into.
     /// All paths above point inside this guard's directory; the caller
     /// must keep `_temp_dir` alive until the binary has been copied to
@@ -1942,16 +2122,24 @@ async fn resolve_release_install(spec: RepoSpec, explicit_tag: Option<String>) -
         )));
     }
 
-    let asset = pick_release_asset(&release.assets, platform_tokens).ok_or_else(|| {
-        let available: Vec<String> = release.assets.iter().map(|a| a.name.clone()).collect();
-        invalid_input_error(format!(
-            "no release asset matched current platform '{}' (looked for any of: {}). Available assets in {}: [{}]",
-            current_platform_label(),
-            platform_tokens.join(", "),
-            release.tag_name,
-            available.join(", ")
-        ))
-    })?;
+    // Prefer assets whose name starts with `<repo>-` (the canonical plugin
+    // archive naming) so multi-binary releases — which publish sibling
+    // `<other-bin>-<target>.tar.gz` archives in the same release — don't
+    // accidentally pick a secondary binary as the primary based on GitHub's
+    // asset ordering. Fall through to the legacy prefix-agnostic picker for
+    // back-compat with releases that use a different archive base name.
+    let asset = pick_release_asset_for_binary(&release.assets, &spec.repo, platform_tokens)
+        .or_else(|| pick_release_asset(&release.assets, platform_tokens))
+        .ok_or_else(|| {
+            let available: Vec<String> = release.assets.iter().map(|a| a.name.clone()).collect();
+            invalid_input_error(format!(
+                "no release asset matched current platform '{}' (looked for any of: {}). Available assets in {}: [{}]",
+                current_platform_label(),
+                platform_tokens.join(", "),
+                release.tag_name,
+                available.join(", ")
+            ))
+        })?;
 
     // RAII staging dir — drops when `ReleaseInstall` drops. Replaces the
     // pre-fix `std::env::temp_dir().join(uuid)` that was created and
@@ -2059,6 +2247,7 @@ async fn resolve_release_install(spec: RepoSpec, explicit_tag: Option<String>) -
         bundle_path,
         owner: spec.owner.clone(),
         repo: spec.repo.clone(),
+        release_assets: release.assets.clone(),
         _temp_dir: temp_dir,
     })
 }
@@ -2068,6 +2257,109 @@ async fn resolve_release_install(spec: RepoSpec, explicit_tag: Option<String>) -
 fn find_bundle_sidecar<'a>(assets: &'a [GithubReleaseAsset], asset_name: &str) -> Option<&'a GithubReleaseAsset> {
     let bundle_name = format!("{asset_name}.bundle");
     assets.iter().find(|a| a.name.eq_ignore_ascii_case(&bundle_name))
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct BinaryDescriptor {
+    pub(crate) name: String,
+    pub(crate) primary: bool,
+}
+
+pub(crate) fn parse_plugin_toml_binaries(toml_text: &str) -> Result<Vec<BinaryDescriptor>> {
+    #[derive(serde::Deserialize)]
+    struct PluginTomlBinary {
+        name: String,
+        #[serde(default)]
+        primary: bool,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct PluginTomlRoot {
+        #[serde(default)]
+        binaries: Option<Vec<PluginTomlBinary>>,
+        #[serde(default)]
+        name: Option<String>,
+    }
+
+    let root: PluginTomlRoot = toml::from_str(toml_text).context("failed to parse plugin.toml")?;
+    let Some(binaries) = root.binaries else {
+        return Ok(Vec::new());
+    };
+    if binaries.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut out: Vec<BinaryDescriptor> = Vec::with_capacity(binaries.len());
+    let mut primary_count = 0usize;
+    for b in binaries {
+        let name = b.name.trim().to_string();
+        if name.is_empty() {
+            return Err(anyhow!("plugin.toml [[binaries]] entry has empty `name`"));
+        }
+        if !seen.insert(name.clone()) {
+            return Err(anyhow!("plugin.toml [[binaries]] entry '{name}' appears more than once"));
+        }
+        if b.primary {
+            primary_count += 1;
+        }
+        out.push(BinaryDescriptor { name, primary: b.primary });
+    }
+    if primary_count == 0 {
+        if let Some(plugin_name) = root.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            if let Some(pos) = out.iter().position(|b| b.name == plugin_name) {
+                out[pos].primary = true;
+                primary_count = 1;
+            }
+        }
+    }
+    if primary_count == 0 {
+        out[0].primary = true;
+    } else if primary_count > 1 {
+        return Err(anyhow!("plugin.toml declares more than one `primary = true` binary"));
+    }
+    Ok(out)
+}
+
+async fn fetch_plugin_toml_for_release(owner: &str, repo: &str, tag: &str) -> Result<Option<String>> {
+    let url = format!("https://raw.githubusercontent.com/{owner}/{repo}/{tag}/plugin.toml");
+    let client =
+        reqwest::Client::builder().user_agent(release_user_agent()).build().context("failed to build HTTP client")?;
+    let response = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| format!("failed to GET {url}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let response = response.error_for_status().with_context(|| format!("GET {url} returned non-success status"))?;
+    let body = response.text().await.with_context(|| format!("failed to read body from {url}"))?;
+    Ok(Some(body))
+}
+
+fn pick_release_asset_for_binary<'a>(
+    assets: &'a [GithubReleaseAsset],
+    binary_name: &str,
+    platform_tokens: &[&str],
+) -> Option<&'a GithubReleaseAsset> {
+    let prefix_lower = format!("{}-", binary_name.to_ascii_lowercase());
+    for token in platform_tokens {
+        let needle = token.to_ascii_lowercase();
+        for asset in assets {
+            let lower = asset.name.to_ascii_lowercase();
+            if lower.ends_with(".sha256") || lower.ends_with(".sha256sum") || lower.ends_with(".bundle") {
+                continue;
+            }
+            if !lower.starts_with(&prefix_lower) {
+                continue;
+            }
+            if lower.contains(&needle) {
+                return Some(asset);
+            }
+        }
+    }
+    None
 }
 
 /// Regex-escape a GitHub owner or repo segment so it can be embedded in
@@ -2878,6 +3170,161 @@ mod tests {
         let tokens: &[&str] = &["aarch64-apple-darwin"];
         let picked = pick_release_asset(&assets, tokens).expect("expected the binary asset to win");
         assert_eq!(picked.name, "animus-provider-oai-aarch64-apple-darwin.tar.gz");
+    }
+
+    // ===== Multi-binary plugin install support (v0.5.3 Task A) =====
+
+    /// Backward-compat: plugin.toml without `[[binaries]]` falls back to
+    /// single-binary install (empty descriptor list signals legacy mode).
+    #[test]
+    fn parse_plugin_toml_binaries_returns_empty_when_section_absent() {
+        let text = r#"
+schema = "animus.plugin.v1"
+name = "animus-provider-claude"
+version = "0.2.2"
+plugin_kind = "provider"
+
+[binary]
+default = "animus-provider-claude"
+"#;
+        let bins = parse_plugin_toml_binaries(text).unwrap();
+        assert!(bins.is_empty(), "no [[binaries]] section must yield single-binary legacy mode");
+    }
+
+    /// Multi-binary declaration: parses two entries and respects the
+    /// explicit `primary = true` marker.
+    #[test]
+    fn parse_plugin_toml_binaries_picks_explicit_primary() {
+        let text = r#"
+schema = "animus.plugin.v1"
+name = "animus-provider-oai-agent"
+version = "0.1.4"
+plugin_kind = "provider"
+
+[[binaries]]
+name = "animus-provider-oai-agent"
+primary = true
+
+[[binaries]]
+name = "animus-oai-runner"
+"#;
+        let bins = parse_plugin_toml_binaries(text).unwrap();
+        assert_eq!(bins.len(), 2);
+        assert_eq!(bins[0].name, "animus-provider-oai-agent");
+        assert!(bins[0].primary);
+        assert_eq!(bins[1].name, "animus-oai-runner");
+        assert!(!bins[1].primary);
+    }
+
+    /// When no entry is marked primary but one matches the plugin's `name`
+    /// field, that entry is promoted to primary automatically.
+    #[test]
+    fn parse_plugin_toml_binaries_promotes_matching_name_when_no_primary_declared() {
+        let text = r#"
+schema = "animus.plugin.v1"
+name = "animus-provider-oai-agent"
+version = "0.1.4"
+
+[[binaries]]
+name = "animus-oai-runner"
+
+[[binaries]]
+name = "animus-provider-oai-agent"
+"#;
+        let bins = parse_plugin_toml_binaries(text).unwrap();
+        let primaries: Vec<&str> = bins.iter().filter(|b| b.primary).map(|b| b.name.as_str()).collect();
+        assert_eq!(primaries, vec!["animus-provider-oai-agent"]);
+    }
+
+    /// When nothing matches and nothing is marked, fall back to the first
+    /// entry (keeps the install pipeline deterministic).
+    #[test]
+    fn parse_plugin_toml_binaries_falls_back_to_first_when_no_primary_marker() {
+        let text = r#"
+[[binaries]]
+name = "binary-one"
+
+[[binaries]]
+name = "binary-two"
+"#;
+        let bins = parse_plugin_toml_binaries(text).unwrap();
+        assert!(bins[0].primary);
+        assert!(!bins[1].primary);
+    }
+
+    /// Refuse a malformed plugin.toml that declares two primary binaries.
+    /// The install pipeline can't decide which to copy to the canonical
+    /// `<plugin_name>` path.
+    #[test]
+    fn parse_plugin_toml_binaries_rejects_multiple_primaries() {
+        let text = r#"
+[[binaries]]
+name = "one"
+primary = true
+
+[[binaries]]
+name = "two"
+primary = true
+"#;
+        let err = parse_plugin_toml_binaries(text).unwrap_err();
+        assert!(format!("{err}").contains("more than one"));
+    }
+
+    /// Refuse duplicate binary names — uninstall would otherwise
+    /// double-delete the same path.
+    #[test]
+    fn parse_plugin_toml_binaries_rejects_duplicates() {
+        let text = r#"
+[[binaries]]
+name = "same"
+
+[[binaries]]
+name = "same"
+"#;
+        let err = parse_plugin_toml_binaries(text).unwrap_err();
+        assert!(format!("{err}").contains("more than once"));
+    }
+
+    /// `pick_release_asset_for_binary` must constrain selection to assets
+    /// whose name begins with the binary name. With both `animus-provider-
+    /// oai-agent-*` and `animus-oai-runner-*` archives in the release, the
+    /// runner pick must NOT match an `animus-provider-oai-agent-*` archive.
+    #[test]
+    fn pick_release_asset_for_binary_filters_to_matching_prefix() {
+        let assets = vec![
+            asset("animus-provider-oai-agent-aarch64-apple-darwin.tar.gz"),
+            asset("animus-provider-oai-agent-aarch64-apple-darwin.tar.gz.sha256"),
+            asset("animus-oai-runner-aarch64-apple-darwin.tar.gz"),
+            asset("animus-oai-runner-aarch64-apple-darwin.tar.gz.sha256"),
+        ];
+        let tokens: &[&str] = &["aarch64-apple-darwin"];
+        let agent = pick_release_asset_for_binary(&assets, "animus-provider-oai-agent", tokens).unwrap();
+        assert_eq!(agent.name, "animus-provider-oai-agent-aarch64-apple-darwin.tar.gz");
+        let runner = pick_release_asset_for_binary(&assets, "animus-oai-runner", tokens).unwrap();
+        assert_eq!(runner.name, "animus-oai-runner-aarch64-apple-darwin.tar.gz");
+    }
+
+    /// Cosign `.bundle` sidecars must also be excluded from the binary
+    /// selection — they are sibling artifacts, not installable binaries.
+    #[test]
+    fn pick_release_asset_for_binary_excludes_bundles_and_sidecars() {
+        let assets = vec![
+            asset("animus-oai-runner-x86_64-unknown-linux-gnu.tar.gz.sha256"),
+            asset("animus-oai-runner-x86_64-unknown-linux-gnu.tar.gz.bundle"),
+            asset("animus-oai-runner-x86_64-unknown-linux-gnu.tar.gz"),
+        ];
+        let tokens: &[&str] = &["x86_64-unknown-linux-gnu"];
+        let runner = pick_release_asset_for_binary(&assets, "animus-oai-runner", tokens).unwrap();
+        assert_eq!(runner.name, "animus-oai-runner-x86_64-unknown-linux-gnu.tar.gz");
+    }
+
+    /// No matching asset for a declared secondary binary returns None so
+    /// the install pipeline can produce an actionable error.
+    #[test]
+    fn pick_release_asset_for_binary_returns_none_when_no_prefix_match() {
+        let assets = vec![asset("animus-provider-oai-agent-aarch64-apple-darwin.tar.gz")];
+        let tokens: &[&str] = &["aarch64-apple-darwin"];
+        assert!(pick_release_asset_for_binary(&assets, "animus-oai-runner", tokens).is_none());
     }
 
     #[test]
