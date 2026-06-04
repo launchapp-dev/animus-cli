@@ -232,7 +232,8 @@ pub fn load_pack_workflow_overlay(pack: &LoadedPackManifest, base: &WorkflowConf
         return Ok(None);
     }
 
-    let mut overlay = crate::workflow_config::compile_yaml_sources_confined_to_pack(base, &yaml_sources, &pack.pack_root)?;
+    let mut overlay =
+        crate::workflow_config::compile_yaml_sources_confined_to_pack(base, &yaml_sources, &pack.pack_root)?;
     if let Some(overlay) = overlay.as_mut() {
         resolve_pack_workflow_assets(pack, overlay)?;
     }

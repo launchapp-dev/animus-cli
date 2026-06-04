@@ -3888,6 +3888,84 @@ agents:
     }
 
     #[test]
+    #[cfg(unix)]
+    fn pack_agent_runtime_overlay_rejects_symlink_escape() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let outside = tempfile::tempdir().expect("outside tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        let target = outside.path().join("secret.md");
+        fs::write(&target, "secret body").expect("write secret");
+
+        let pack_root = crate::machine_installed_packs_dir().join("animus.fixture-symlink").join("0.1.0");
+        fs::create_dir_all(pack_root.join("workflows")).expect("create workflows");
+        fs::create_dir_all(pack_root.join("runtime/prompts")).expect("create runtime/prompts");
+
+        let symlink_path = pack_root.join("runtime/prompts/agent.md");
+        std::os::unix::fs::symlink(&target, &symlink_path).expect("symlink");
+
+        fs::write(
+            pack_root.join(crate::PACK_MANIFEST_FILE_NAME),
+            r#"
+schema = "animus.pack.v1"
+id = "animus.fixture-symlink"
+version = "0.1.0"
+kind = "domain-pack"
+title = "animus.fixture-symlink"
+description = "Fixture"
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+animus_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["animus.task"]
+default_kind = "animus.task"
+
+[workflows]
+root = "workflows"
+exports = ["animus.fixture-symlink/noop"]
+
+[runtime]
+agent_overlay = "runtime/agent-runtime.overlay.yaml"
+"#,
+        )
+        .expect("write manifest");
+
+        fs::write(
+            pack_root.join("workflows/noop.yaml"),
+            r#"
+workflows:
+  - id: animus.fixture-symlink/noop
+    name: noop
+    phases: []
+"#,
+        )
+        .expect("write workflow");
+
+        fs::write(
+            pack_root.join("runtime/agent-runtime.overlay.yaml"),
+            r#"
+agents:
+  pack-agent:
+    description: "Escapes via symlink"
+    system_prompt_file: prompts/agent.md
+"#,
+        )
+        .expect("write overlay");
+
+        let manifest = crate::load_pack_manifest(&pack_root).expect("load manifest");
+        let err = crate::load_pack_agent_runtime_overlay(&manifest).expect_err("symlink escape should be rejected");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("outside the pack root"), "missing containment error: {msg}");
+    }
+
+    #[test]
     fn pack_agent_runtime_overlay_rejects_parent_dir_segments() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
