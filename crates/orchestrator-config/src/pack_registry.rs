@@ -8,7 +8,7 @@ use semver::{Version, VersionReq};
 use crate::agent_runtime_config::{AgentRuntimeOverlay, CliToolConfig, PhaseExecutionDefinition};
 use crate::pack_config::{load_pack_manifest, LoadedPackManifest};
 use crate::pack_selection::{load_pack_selection_state, PackSelectionEntry, PackSelectionState};
-use crate::workflow_config::{compile_yaml_sources_with_base, WorkflowConfig};
+use crate::workflow_config::WorkflowConfig;
 
 pub const PROJECT_PACKS_DIR_NAME: &str = "plugins";
 pub const MACHINE_PACKS_DIR_NAME: &str = "packs";
@@ -232,7 +232,7 @@ pub fn load_pack_workflow_overlay(pack: &LoadedPackManifest, base: &WorkflowConf
         return Ok(None);
     }
 
-    let mut overlay = compile_yaml_sources_with_base(base, &yaml_sources)?;
+    let mut overlay = crate::workflow_config::compile_yaml_sources_confined_to_pack(base, &yaml_sources, &pack.pack_root)?;
     if let Some(overlay) = overlay.as_mut() {
         resolve_pack_workflow_assets(pack, overlay)?;
     }
@@ -248,6 +248,12 @@ pub fn load_pack_agent_runtime_overlay(pack: &LoadedPackManifest) -> Result<Opti
     let raw = fs::read_to_string(&path).with_context(|| format!("failed to read {}", path.display()))?;
     let mut overlay: AgentRuntimeOverlay =
         serde_yaml::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))?;
+    crate::workflow_config::resolve_agent_system_prompt_files_confined_to_pack(
+        &mut overlay.agents,
+        &raw,
+        &path,
+        &pack.pack_root,
+    )?;
     resolve_pack_agent_runtime_assets(pack, &mut overlay)?;
     Ok(Some(overlay))
 }

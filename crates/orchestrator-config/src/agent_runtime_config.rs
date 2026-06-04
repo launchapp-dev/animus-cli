@@ -381,6 +381,8 @@ pub struct AgentProfile {
     pub description: String,
     #[serde(default)]
     pub system_prompt: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_file: Option<String>,
     #[serde(default)]
     pub role: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -945,6 +947,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     name: None,
                     description: "Default workflow phase agent profile".to_string(),
                     system_prompt: "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.".to_string(),
+                    system_prompt_file: None,
                     role: None,
                     persona: None,
                     memory: AgentMemoryConfig::default(),
@@ -978,6 +981,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     name: None,
                     description: "Compatibility alias for the software engineer persona.".to_string(),
                     system_prompt: "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.".to_string(),
+                    system_prompt_file: None,
                     role: Some("software_engineer".to_string()),
                     persona: None,
                     memory: AgentMemoryConfig::default(),
@@ -1016,6 +1020,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     name: None,
                     description: "Engineering Manager persona for prioritization, queue management, and scheduling.".to_string(),
                     system_prompt: "You are the Engineering Manager agent. Prioritize work, manage queue health, sequence delivery safely, and keep execution plans realistic and dependency-aware.".to_string(),
+                    system_prompt_file: None,
                     role: Some("engineering_manager".to_string()),
                     persona: None,
                     memory: AgentMemoryConfig::default(),
@@ -1075,6 +1080,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     name: None,
                     description: "Product Owner persona for requirements, vision, acceptance criteria, and deliverable validation.".to_string(),
                     system_prompt: "You are the Product Owner agent. Refine requirements into clear acceptance criteria, align work to product vision, and validate deliverables against user outcomes.".to_string(),
+                    system_prompt_file: None,
                     role: Some("product_owner".to_string()),
                     persona: None,
                     memory: AgentMemoryConfig::default(),
@@ -1136,6 +1142,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     name: None,
                     description: "Software Engineer persona for implementation, testing, and code review.".to_string(),
                     system_prompt: "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.".to_string(),
+                    system_prompt_file: None,
                     role: Some("software_engineer".to_string()),
                     persona: None,
                     memory: AgentMemoryConfig::default(),
@@ -1511,6 +1518,9 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     }
     if !overlay.system_prompt.trim().is_empty() {
         base.system_prompt = overlay.system_prompt.clone();
+    }
+    if overlay.system_prompt_file.is_some() {
+        base.system_prompt_file = overlay.system_prompt_file.clone();
     }
     if overlay.role.is_some() {
         base.role = overlay.role.clone();
@@ -1905,6 +1915,13 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
 
         if profile.system_prompt.trim().is_empty() {
             return Err(anyhow!("agents['{}'].system_prompt must not be empty", agent_id));
+        }
+
+        if profile.system_prompt_file.is_some() {
+            return Err(anyhow!(
+                "agents['{}'].system_prompt_file is only valid in source YAML; the compiled runtime config must not contain it",
+                agent_id
+            ));
         }
 
         if profile.tool.as_deref().is_some_and(|value| value.trim().is_empty()) {
@@ -3785,5 +3802,264 @@ phases:
         let restored: AgentRuntimeOverrides = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(restored.fallback_models, vec!["gpt-4o", "o4-mini"]);
         assert_eq!(restored.fallback_tools, vec!["oai-runner"]);
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_rejects_system_prompt_file_in_compiled_config() {
+        let mut config = builtin_agent_runtime_config();
+        let default_profile = config.agents.get_mut("default").expect("default agent");
+        default_profile.system_prompt_file = Some("prompts/whatever.md".to_string());
+
+        let err = validate_agent_runtime_config(&config).expect_err("compiled config must reject the field");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("system_prompt_file"), "missing field name: {msg}");
+        assert!(msg.contains("source YAML"), "missing guidance: {msg}");
+    }
+
+    #[test]
+    fn pack_agent_runtime_overlay_rejects_absolute_system_prompt_file() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        let pack_root = crate::machine_installed_packs_dir().join("animus.fixture-abs").join("0.1.0");
+        fs::create_dir_all(pack_root.join("workflows")).expect("create workflows");
+        fs::create_dir_all(pack_root.join("runtime")).expect("create runtime");
+
+        fs::write(
+            pack_root.join(crate::PACK_MANIFEST_FILE_NAME),
+            r#"
+schema = "animus.pack.v1"
+id = "animus.fixture-abs"
+version = "0.1.0"
+kind = "domain-pack"
+title = "animus.fixture-abs"
+description = "Fixture"
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+animus_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["animus.task"]
+default_kind = "animus.task"
+
+[workflows]
+root = "workflows"
+exports = ["animus.fixture-abs/noop"]
+
+[runtime]
+agent_overlay = "runtime/agent-runtime.overlay.yaml"
+"#,
+        )
+        .expect("write manifest");
+
+        fs::write(
+            pack_root.join("workflows/noop.yaml"),
+            r#"
+workflows:
+  - id: animus.fixture-abs/noop
+    name: noop
+    phases: []
+"#,
+        )
+        .expect("write workflow");
+
+        fs::write(
+            pack_root.join("runtime/agent-runtime.overlay.yaml"),
+            r#"
+agents:
+  pack-agent:
+    description: "Escapes"
+    system_prompt_file: /etc/passwd
+"#,
+        )
+        .expect("write agent overlay");
+
+        let manifest = crate::load_pack_manifest(&pack_root).expect("load manifest");
+        let err = crate::load_pack_agent_runtime_overlay(&manifest).expect_err("absolute path should be rejected");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("must be a relative path"), "missing guidance: {msg}");
+        assert!(msg.contains("animus.fixture-abs"), "missing pack id: {msg}");
+    }
+
+    #[test]
+    fn pack_agent_runtime_overlay_rejects_parent_dir_segments() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        let pack_root = crate::machine_installed_packs_dir().join("animus.fixture-parent").join("0.1.0");
+        fs::create_dir_all(pack_root.join("workflows")).expect("create workflows");
+        fs::create_dir_all(pack_root.join("runtime")).expect("create runtime");
+
+        fs::write(
+            pack_root.join(crate::PACK_MANIFEST_FILE_NAME),
+            r#"
+schema = "animus.pack.v1"
+id = "animus.fixture-parent"
+version = "0.1.0"
+kind = "domain-pack"
+title = "animus.fixture-parent"
+description = "Fixture"
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+animus_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["animus.task"]
+default_kind = "animus.task"
+
+[workflows]
+root = "workflows"
+exports = ["animus.fixture-parent/noop"]
+
+[runtime]
+agent_overlay = "runtime/agent-runtime.overlay.yaml"
+"#,
+        )
+        .expect("write manifest");
+
+        fs::write(
+            pack_root.join("workflows/noop.yaml"),
+            r#"
+workflows:
+  - id: animus.fixture-parent/noop
+    name: noop
+    phases: []
+"#,
+        )
+        .expect("write workflow");
+
+        fs::write(
+            pack_root.join("runtime/agent-runtime.overlay.yaml"),
+            r#"
+agents:
+  pack-agent:
+    description: "Escapes"
+    system_prompt_file: ../../escape.md
+"#,
+        )
+        .expect("write agent overlay");
+
+        let manifest = crate::load_pack_manifest(&pack_root).expect("load manifest");
+        let err = crate::load_pack_agent_runtime_overlay(&manifest).expect_err("parent dir should be rejected");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("must not contain '..'"), "missing parent dir error: {msg}");
+    }
+
+    #[test]
+    fn merge_agent_profile_overlay_takes_system_prompt_file() {
+        let mut base: AgentProfile = serde_json::from_value(serde_json::json!({
+            "system_prompt": "base prompt"
+        }))
+        .expect("base profile");
+        let overlay: AgentProfile = serde_json::from_value(serde_json::json!({
+            "system_prompt_file": "prompts/overlay.md"
+        }))
+        .expect("overlay profile");
+
+        merge_agent_profile(&mut base, &overlay);
+        assert_eq!(base.system_prompt_file.as_deref(), Some("prompts/overlay.md"));
+        assert_eq!(base.system_prompt, "base prompt");
+    }
+
+    #[test]
+    fn pack_agent_runtime_overlay_resolves_system_prompt_file() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+
+        let pack_root = crate::machine_installed_packs_dir().join("animus.fixture-prompt").join("0.1.0");
+        fs::create_dir_all(pack_root.join("workflows")).expect("create workflows");
+        fs::create_dir_all(pack_root.join("runtime/prompts")).expect("create runtime/prompts");
+        let prompt_body = "Pack-supplied prompt body.\n";
+        fs::write(pack_root.join("runtime/prompts/agent.md"), prompt_body).expect("write prompt");
+
+        fs::write(
+            pack_root.join(crate::PACK_MANIFEST_FILE_NAME),
+            r#"
+schema = "animus.pack.v1"
+id = "animus.fixture-prompt"
+version = "0.1.0"
+kind = "domain-pack"
+title = "animus.fixture-prompt"
+description = "Fixture"
+
+[ownership]
+mode = "bundled"
+
+[compatibility]
+animus_core = ">=0.1.0"
+workflow_schema = "v2"
+subject_schema = "v2"
+
+[subjects]
+kinds = ["animus.task"]
+default_kind = "animus.task"
+
+[workflows]
+root = "workflows"
+exports = ["animus.fixture-prompt/noop"]
+
+[runtime]
+agent_overlay = "runtime/agent-runtime.overlay.yaml"
+"#,
+        )
+        .expect("write manifest");
+
+        fs::write(
+            pack_root.join("workflows/noop.yaml"),
+            r#"
+workflows:
+  - id: animus.fixture-prompt/noop
+    name: noop
+    phases: []
+"#,
+        )
+        .expect("write workflow");
+
+        fs::write(
+            pack_root.join("runtime/agent-runtime.overlay.yaml"),
+            r#"
+agents:
+  pack-agent:
+    description: "Pack-shipped agent"
+    system_prompt_file: prompts/agent.md
+"#,
+        )
+        .expect("write agent overlay");
+
+        let manifest = crate::load_pack_manifest(&pack_root).expect("load manifest");
+        let overlay = crate::load_pack_agent_runtime_overlay(&manifest).expect("load overlay").expect("overlay");
+        let agent = overlay.agents.get("pack-agent").expect("pack-agent");
+        assert_eq!(agent.system_prompt, prompt_body);
+        assert!(agent.system_prompt_file.is_none());
+    }
+
+    #[test]
+    fn merge_agent_profile_keeps_base_system_prompt_file_when_overlay_none() {
+        let mut base: AgentProfile = serde_json::from_value(serde_json::json!({
+            "system_prompt": "base prompt",
+            "system_prompt_file": "prompts/base.md"
+        }))
+        .expect("base profile");
+        let overlay: AgentProfile = serde_json::from_value(serde_json::json!({
+            "system_prompt": "overlay prompt"
+        }))
+        .expect("overlay profile");
+
+        merge_agent_profile(&mut base, &overlay);
+        assert_eq!(base.system_prompt_file.as_deref(), Some("prompts/base.md"));
+        assert_eq!(base.system_prompt, "overlay prompt");
     }
 }

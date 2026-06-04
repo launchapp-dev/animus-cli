@@ -210,6 +210,35 @@ and boolean YAML values pass through unchanged. Comments are not stripped before
 substitution, so `# ${VAR}` inside a comment is also substituted; this is intentional and
 matches docker-compose semantics.
 
+### External prompt files
+
+Long agent system prompts can live in their own files outside `.animus/workflows.yaml`.
+Each `AgentProfile` accepts an optional `system_prompt_file` that points at a UTF-8 text
+file:
+
+- Relative paths resolve against the source YAML file's parent directory; absolute paths
+  are taken as-is.
+- The file is read at config-compile time and inlined verbatim into the agent's
+  `system_prompt` (no trimming or normalization). The compiled
+  `workflow-config.v2.json` is self-contained — `system_prompt_file` is dropped after
+  resolution.
+- `system_prompt` (inline) and `system_prompt_file` are mutually exclusive on the same
+  agent. Setting both fails with an error naming the agent id, the source YAML file, and
+  (when detectable) the line number.
+- Missing files, non-UTF-8 contents, and files larger than 1 MiB cause compile to fail
+  with the resolved absolute path in the error.
+
+```yaml
+agents:
+  implementer:
+    description: "Implementer"
+    system_prompt: "You are the implementer. Keep changes minimal."
+
+  researcher:
+    description: "Researcher"
+    system_prompt_file: prompts/researcher.md
+```
+
 ## Environment Variables
 
 The complete v0.4.0 env var surface was renamed from `AO_*` to `ANIMUS_*`. There are no

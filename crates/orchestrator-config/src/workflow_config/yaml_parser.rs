@@ -1,8 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::agent_runtime_config::{CommandCwdMode, PhaseCommandDefinition, PhaseExecutionMode, PhaseManualDefinition};
+use crate::agent_runtime_config::{
+    AgentProfile, CommandCwdMode, PhaseCommandDefinition, PhaseExecutionMode, PhaseManualDefinition,
+};
 use crate::PhaseExecutionDefinition;
 
 use super::builtins::builtin_workflow_config;
@@ -10,6 +14,8 @@ use super::types::*;
 use super::yaml_compiler::merge_yaml_into_config;
 use super::yaml_scaffold::title_case_phase_id;
 use super::yaml_types::*;
+
+const SYSTEM_PROMPT_FILE_MAX_BYTES: u64 = 1024 * 1024;
 
 /// Resolve an agent's `models:` name list against the model registry,
 /// expanding named references into concrete `model` + `fallback_models` and
@@ -337,7 +343,249 @@ pub(super) fn yaml_merge_to_merge_config(yaml: YamlMergeConfig) -> Result<MergeC
     })
 }
 
+fn source_label(source_path: Option<&Path>) -> String {
+    source_path.map(|p| p.display().to_string()).unwrap_or_else(|| "<in-memory>".to_string())
+}
+
+fn resolve_system_prompt_file_path(raw: &str, source_path: Option<&Path>) -> PathBuf {
+    let candidate = Path::new(raw);
+    if candidate.is_absolute() {
+        return candidate.to_path_buf();
+    }
+    match source_path.and_then(Path::parent) {
+        Some(parent) => parent.join(candidate),
+        None => candidate.to_path_buf(),
+    }
+}
+
+fn find_field_line_in_agent(yaml_str: &str, agent_id: &str, field_name: &str) -> Option<usize> {
+    let mut in_agents = false;
+    let mut agents_indent: Option<usize> = None;
+    let mut in_target_agent = false;
+    let mut agent_indent: Option<usize> = None;
+
+    for (idx, line) in yaml_str.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line.len() - trimmed.len();
+
+        if !in_agents {
+            if trimmed.starts_with("agents:") && indent == 0 {
+                in_agents = true;
+                agents_indent = Some(indent);
+            }
+            continue;
+        }
+
+        if let Some(top_indent) = agents_indent {
+            if indent <= top_indent && !trimmed.starts_with("agents:") {
+                in_agents = false;
+                in_target_agent = false;
+                agent_indent = None;
+                continue;
+            }
+        }
+
+        if !in_target_agent {
+            let key = trimmed.split(':').next().unwrap_or("");
+            if key == agent_id {
+                in_target_agent = true;
+                agent_indent = Some(indent);
+            }
+            continue;
+        }
+
+        if let Some(target_indent) = agent_indent {
+            if indent <= target_indent {
+                in_target_agent = false;
+                agent_indent = None;
+                let key = trimmed.split(':').next().unwrap_or("");
+                if key == agent_id {
+                    in_target_agent = true;
+                    agent_indent = Some(indent);
+                }
+                continue;
+            }
+            if trimmed.starts_with(&format!("{}:", field_name)) {
+                return Some(idx + 1);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn resolve_agent_system_prompt_files_confined_to_pack(
+    agent_profiles: &mut BTreeMap<String, AgentProfile>,
+    yaml_str: &str,
+    source_path: &Path,
+    pack_root: &Path,
+) -> Result<()> {
+    resolve_agent_system_prompt_files_internal(agent_profiles, yaml_str, Some(source_path), Some(pack_root))
+}
+
+fn resolve_agent_system_prompt_files_internal(
+    agent_profiles: &mut BTreeMap<String, AgentProfile>,
+    yaml_str: &str,
+    source_path: Option<&Path>,
+    pack_root: Option<&Path>,
+) -> Result<()> {
+    let pack_root_canonical = pack_root
+        .map(|root| {
+            fs::canonicalize(root).map_err(|err| {
+                anyhow!(
+                    "pack root '{}' could not be canonicalized for system_prompt_file confinement: {}",
+                    root.display(),
+                    err,
+                )
+            })
+        })
+        .transpose()?;
+
+    for (agent_id, profile) in agent_profiles.iter_mut() {
+        let Some(raw_path) = profile.system_prompt_file.clone() else {
+            continue;
+        };
+        let trimmed = raw_path.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!(
+                "workflow YAML at {} agent '{}' system_prompt_file must not be empty",
+                source_label(source_path),
+                agent_id,
+            ));
+        }
+
+        let inline_set = !profile.system_prompt.trim().is_empty();
+        if inline_set {
+            let line = find_field_line_in_agent(yaml_str, agent_id, "system_prompt_file");
+            let line_suffix = line.map(|l| format!(" line {}", l)).unwrap_or_default();
+            return Err(anyhow!(
+                "workflow YAML at {}{} agent '{}' sets both system_prompt and system_prompt_file; choose one",
+                source_label(source_path),
+                line_suffix,
+                agent_id,
+            ));
+        }
+
+        if pack_root.is_some() {
+            let candidate = Path::new(trimmed);
+            if candidate.is_absolute() {
+                return Err(anyhow!(
+                    "pack workflow at {} agent '{}' system_prompt_file '{}' must be a relative path inside the pack root",
+                    source_label(source_path),
+                    agent_id,
+                    raw_path,
+                ));
+            }
+            if candidate.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+                return Err(anyhow!(
+                    "pack workflow at {} agent '{}' system_prompt_file '{}' must not contain '..' segments",
+                    source_label(source_path),
+                    agent_id,
+                    raw_path,
+                ));
+            }
+        }
+
+        let resolved = resolve_system_prompt_file_path(trimmed, source_path);
+
+        if let Some(root_canonical) = pack_root_canonical.as_deref() {
+            let resolved_canonical = fs::canonicalize(&resolved).map_err(|err| {
+                anyhow!(
+                    "pack workflow at {} agent '{}' system_prompt_file '{}' could not be canonicalized: {}",
+                    source_label(source_path),
+                    agent_id,
+                    resolved.display(),
+                    err,
+                )
+            })?;
+            if !resolved_canonical.starts_with(root_canonical) {
+                return Err(anyhow!(
+                    "pack workflow at {} agent '{}' system_prompt_file '{}' resolves to '{}' which is outside the pack root '{}'",
+                    source_label(source_path),
+                    agent_id,
+                    raw_path,
+                    resolved_canonical.display(),
+                    root_canonical.display(),
+                ));
+            }
+        }
+
+        let metadata = fs::metadata(&resolved).map_err(|err| {
+            anyhow!(
+                "workflow YAML at {} agent '{}' system_prompt_file '{}' could not be read: {}",
+                source_label(source_path),
+                agent_id,
+                resolved.display(),
+                err,
+            )
+        })?;
+
+        if metadata.len() > SYSTEM_PROMPT_FILE_MAX_BYTES {
+            return Err(anyhow!(
+                "workflow YAML at {} agent '{}' system_prompt_file '{}' is {} bytes; maximum is {} bytes (1 MiB)",
+                source_label(source_path),
+                agent_id,
+                resolved.display(),
+                metadata.len(),
+                SYSTEM_PROMPT_FILE_MAX_BYTES,
+            ));
+        }
+
+        let bytes = fs::read(&resolved).map_err(|err| {
+            anyhow!(
+                "workflow YAML at {} agent '{}' system_prompt_file '{}' could not be read: {}",
+                source_label(source_path),
+                agent_id,
+                resolved.display(),
+                err,
+            )
+        })?;
+
+        let contents = String::from_utf8(bytes).map_err(|err| {
+            anyhow!(
+                "workflow YAML at {} agent '{}' system_prompt_file '{}' is not valid UTF-8: {}",
+                source_label(source_path),
+                agent_id,
+                resolved.display(),
+                err,
+            )
+        })?;
+
+        profile.system_prompt = contents;
+        profile.system_prompt_file = None;
+    }
+    Ok(())
+}
+
 pub fn parse_yaml_workflow_config_with_base(yaml_str: &str, base: &WorkflowConfig) -> Result<WorkflowConfig> {
+    parse_yaml_workflow_config_with_base_and_source(yaml_str, base, None)
+}
+
+pub fn parse_yaml_workflow_config_with_base_and_source(
+    yaml_str: &str,
+    base: &WorkflowConfig,
+    source_path: Option<&Path>,
+) -> Result<WorkflowConfig> {
+    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None)
+}
+
+pub(crate) fn parse_yaml_workflow_config_confined_to_pack(
+    yaml_str: &str,
+    base: &WorkflowConfig,
+    source_path: &Path,
+    pack_root: &Path,
+) -> Result<WorkflowConfig> {
+    parse_yaml_workflow_config_internal(yaml_str, base, Some(source_path), Some(pack_root))
+}
+
+fn parse_yaml_workflow_config_internal(
+    yaml_str: &str,
+    base: &WorkflowConfig,
+    source_path: Option<&Path>,
+    pack_root: Option<&Path>,
+) -> Result<WorkflowConfig> {
     let yaml_file: YamlWorkflowFile = serde_yaml::from_str(yaml_str).context("failed to parse YAML workflow config")?;
 
     let workflows =
@@ -377,6 +625,7 @@ pub fn parse_yaml_workflow_config_with_base(yaml_str: &str, base: &WorkflowConfi
 
     // Resolve agent model references against the top-level models registry.
     let mut agent_profiles = yaml_file.agents;
+    resolve_agent_system_prompt_files_internal(&mut agent_profiles, yaml_str, source_path, pack_root)?;
     if !yaml_file.models.is_empty() {
         for profile in agent_profiles.values_mut() {
             resolve_agent_model_references(profile, &yaml_file.models);
@@ -448,6 +697,7 @@ mod tests {
             name: None,
             description: "test".to_string(),
             system_prompt: "test prompt".to_string(),
+            system_prompt_file: None,
             role: None,
             persona: None,
             memory: Default::default(),
@@ -755,5 +1005,247 @@ phases:
         let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
         assert!(swe.model.is_none());
         assert!(swe.fallback_models.is_empty());
+    }
+
+    #[test]
+    fn system_prompt_file_inlines_relative_path_into_compiled_config() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let prompts_dir = temp.path().join("prompts");
+        std::fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+        let prompt_body = "You are the macro analyst.\nKeep evidence cited.\n";
+        std::fs::write(prompts_dir.join("macro.md"), prompt_body).expect("write prompt");
+
+        let yaml_path = temp.path().join("workflows.yaml");
+        let yaml = r#"
+agents:
+  analyst:
+    description: "Macro analyst"
+    system_prompt_file: prompts/macro.md
+
+phases:
+  research:
+    mode: agent
+    agent: analyst
+    directive: "Research."
+"#;
+        std::fs::write(&yaml_path, yaml).expect("write yaml");
+
+        let base = builtin_workflow_config();
+        let config = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
+            .expect("parse yaml with source path");
+        let analyst = config.agent_profiles.get("analyst").expect("analyst agent");
+        assert_eq!(analyst.system_prompt, prompt_body);
+        assert!(analyst.system_prompt_file.is_none(), "system_prompt_file should be consumed");
+    }
+
+    #[test]
+    fn system_prompt_file_resolves_absolute_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let abs_prompt = temp.path().join("absolute-prompt.md");
+        std::fs::write(&abs_prompt, "absolute prompt body").expect("write prompt");
+
+        let yaml = format!(
+            r#"
+agents:
+  analyst:
+    description: "Analyst"
+    system_prompt_file: "{}"
+
+phases:
+  research:
+    mode: agent
+    agent: analyst
+    directive: "Research."
+"#,
+            abs_prompt.display()
+        );
+
+        let yaml_path = temp.path().join("nested").join("workflows.yaml");
+        let base = builtin_workflow_config();
+        let config = parse_yaml_workflow_config_with_base_and_source(&yaml, &base, Some(&yaml_path))
+            .expect("parse yaml with absolute path");
+        let analyst = config.agent_profiles.get("analyst").expect("analyst agent");
+        assert_eq!(analyst.system_prompt, "absolute prompt body");
+    }
+
+    #[test]
+    fn system_prompt_file_and_inline_system_prompt_are_mutually_exclusive() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(temp.path().join("p.md"), "from file").expect("write prompt");
+
+        let yaml = r#"
+agents:
+  analyst:
+    description: "Analyst"
+    system_prompt: "inline prompt"
+    system_prompt_file: p.md
+
+phases:
+  research:
+    mode: agent
+    agent: analyst
+    directive: "Research."
+"#;
+        let yaml_path = temp.path().join("workflows.yaml");
+        std::fs::write(&yaml_path, yaml).expect("write yaml");
+
+        let base = builtin_workflow_config();
+        let err = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
+            .expect_err("mutual exclusion error");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("analyst"), "missing agent id: {msg}");
+        assert!(msg.contains("system_prompt"), "missing field name: {msg}");
+        assert!(msg.contains(&yaml_path.display().to_string()), "missing source path: {msg}");
+        assert!(msg.contains("line"), "missing line number: {msg}");
+    }
+
+    #[test]
+    fn system_prompt_file_missing_file_errors_with_resolved_path() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let yaml = r#"
+agents:
+  analyst:
+    description: "Analyst"
+    system_prompt_file: prompts/missing.md
+
+phases:
+  research:
+    mode: agent
+    agent: analyst
+    directive: "Research."
+"#;
+        let yaml_path = temp.path().join("workflows.yaml");
+        let base = builtin_workflow_config();
+        let err = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
+            .expect_err("missing file should error");
+        let msg = format!("{:#}", err);
+        let resolved = temp.path().join("prompts").join("missing.md");
+        assert!(msg.contains(&resolved.display().to_string()), "missing resolved path: {msg}");
+        assert!(msg.contains("analyst"), "missing agent id: {msg}");
+    }
+
+    #[test]
+    fn system_prompt_file_oversize_errors_with_size_cap() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let prompt_path = temp.path().join("big.md");
+        let bytes = vec![b'a'; (SYSTEM_PROMPT_FILE_MAX_BYTES + 1) as usize];
+        std::fs::write(&prompt_path, &bytes).expect("write big prompt");
+
+        let yaml = r#"
+agents:
+  analyst:
+    description: "Analyst"
+    system_prompt_file: big.md
+
+phases:
+  research:
+    mode: agent
+    agent: analyst
+    directive: "Research."
+"#;
+        let yaml_path = temp.path().join("workflows.yaml");
+        let base = builtin_workflow_config();
+        let err = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
+            .expect_err("oversize should error");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("1 MiB") || msg.contains("maximum"), "missing size cap: {msg}");
+        assert!(msg.contains(&prompt_path.display().to_string()), "missing resolved path: {msg}");
+    }
+
+    #[test]
+    fn system_prompt_file_non_utf8_errors() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let prompt_path = temp.path().join("binary.md");
+        std::fs::write(&prompt_path, &[0xffu8, 0xfe, 0xfd][..]).expect("write binary");
+
+        let yaml = r#"
+agents:
+  analyst:
+    description: "Analyst"
+    system_prompt_file: binary.md
+
+phases:
+  research:
+    mode: agent
+    agent: analyst
+    directive: "Research."
+"#;
+        let yaml_path = temp.path().join("workflows.yaml");
+        let base = builtin_workflow_config();
+        let err = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
+            .expect_err("non-utf8 should error");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("UTF-8") || msg.contains("utf-8"), "missing utf-8 marker: {msg}");
+    }
+
+    #[test]
+    fn system_prompt_file_preserves_whitespace_verbatim() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let prompt_path = temp.path().join("ws.md");
+        let body = "\n\n  leading and trailing whitespace  \n\n";
+        std::fs::write(&prompt_path, body).expect("write prompt");
+
+        let yaml = r#"
+agents:
+  analyst:
+    description: "Analyst"
+    system_prompt_file: ws.md
+
+phases:
+  research:
+    mode: agent
+    agent: analyst
+    directive: "Research."
+"#;
+        let yaml_path = temp.path().join("workflows.yaml");
+        let base = builtin_workflow_config();
+        let config = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
+            .expect("parse should succeed");
+        assert_eq!(config.agent_profiles.get("analyst").unwrap().system_prompt, body);
+    }
+
+    #[test]
+    fn agent_profile_serde_roundtrip_with_system_prompt_file() {
+        let mut profile = make_empty_profile();
+        profile.system_prompt = String::new();
+        profile.system_prompt_file = Some("prompts/agent.md".to_string());
+
+        let json = serde_json::to_string(&profile).expect("serialize");
+        assert!(json.contains("system_prompt_file"), "field should be present: {json}");
+        let back: AgentProfile = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.system_prompt_file.as_deref(), Some("prompts/agent.md"));
+    }
+
+    #[test]
+    fn agent_profile_serde_omits_system_prompt_file_when_none() {
+        let profile = make_empty_profile();
+        let json = serde_json::to_string(&profile).expect("serialize");
+        assert!(!json.contains("system_prompt_file"), "field should be skipped when None: {json}",);
+    }
+
+    #[test]
+    fn existing_yaml_without_system_prompt_file_parses_identically() {
+        let yaml = r#"
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+
+phases:
+  impl:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+"#;
+        let with_source = parse_yaml_workflow_config(yaml).expect("parse without source");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let yaml_path = temp.path().join("workflows.yaml");
+        let base = builtin_workflow_config();
+        let with_path =
+            parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path)).expect("parse with source");
+        assert_eq!(
+            with_source.agent_profiles.get("swe").unwrap().system_prompt,
+            with_path.agent_profiles.get("swe").unwrap().system_prompt
+        );
     }
 }
