@@ -25,6 +25,7 @@ pub mod phase_output;
 pub mod phase_prompt;
 pub mod phase_session;
 pub mod reattach;
+pub mod recording;
 pub mod runtime_contract;
 pub mod runtime_support;
 pub mod workflow_event_emitter;

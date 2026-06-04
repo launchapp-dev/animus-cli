@@ -268,9 +268,9 @@ impl DbosDurableStoreClient {
         )
         .await
         .with_context(|| format!("durable_store plugin '{}' initialize failed", self.inner.plugin_label))?;
-        host.notify("initialized", None)
-            .await
-            .with_context(|| format!("durable_store plugin '{}' initialized notification failed", self.inner.plugin_label))?;
+        host.notify("initialized", None).await.with_context(|| {
+            format!("durable_store plugin '{}' initialized notification failed", self.inner.plugin_label)
+        })?;
         *guard = Some(host);
         Ok(())
     }
@@ -288,7 +288,8 @@ impl DbosDurableStoreClient {
         if *init_guard {
             return Ok(());
         }
-        let host = host_guard.as_ref().ok_or_else(|| anyhow!("durable_store host not initialized after ensure_host"))?;
+        let host =
+            host_guard.as_ref().ok_or_else(|| anyhow!("durable_store host not initialized after ensure_host"))?;
         let req = BeginWorkflowRunRequest { run_id: &self.inner.run_id, phase_id: &self.inner.phase_id, inputs: None };
         let params = serde_json::to_value(&req).context("encode BeginWorkflowRunRequest")?;
         let value = host
@@ -299,8 +300,7 @@ impl DbosDurableStoreClient {
             )
             .await
             .context("durable_store begin_workflow_run failed")?;
-        let _: BeginWorkflowRunResponse =
-            serde_json::from_value(value).context("decode BeginWorkflowRunResponse")?;
+        let _: BeginWorkflowRunResponse = serde_json::from_value(value).context("decode BeginWorkflowRunResponse")?;
         *init_guard = true;
         Ok(())
     }
@@ -310,11 +310,7 @@ impl DbosDurableStoreClient {
         let host_guard = self.inner.host.lock().await;
         let host = host_guard.as_ref().ok_or_else(|| anyhow!("durable_store host not initialized"))?;
         let value = host
-            .request_typed_with_timeout(
-                method,
-                Some(params),
-                std::time::Duration::from_secs(STEP_RPC_TIMEOUT_SECS),
-            )
+            .request_typed_with_timeout(method, Some(params), std::time::Duration::from_secs(STEP_RPC_TIMEOUT_SECS))
             .await
             .with_context(|| format!("durable_store {method} failed"))?;
         serde_json::from_value(value).with_context(|| format!("decode {method} response"))
@@ -333,21 +329,19 @@ impl DbosDurableStoreClient {
 impl DurableStoreClient for DbosDurableStoreClient {
     async fn step_query(&self, key: &IdempotencyKey) -> Result<FenceState> {
         self.ensure_workflow_run().await?;
-        let params = serde_json::to_value(QueryRunRequest {
-            run_id: &self.inner.run_id,
-            phase_id: &self.inner.phase_id,
-        })
-        .context("encode QueryRunRequest")?;
+        let params =
+            serde_json::to_value(QueryRunRequest { run_id: &self.inner.run_id, phase_id: &self.inner.phase_id })
+                .context("encode QueryRunRequest")?;
         let resp: QueryRunResponse = self.call_method(METHOD_DURABLE_QUERY_RUN, params).await?;
         for step in resp.steps {
             if step.idempotency_key == key.as_str() {
                 return Ok(match step.outcome.as_str() {
-                    commit_outcome::SUCCESS => FenceState::PriorSuccess { response: step.output.unwrap_or(Value::Null) },
+                    commit_outcome::SUCCESS => {
+                        FenceState::PriorSuccess { response: step.output.unwrap_or(Value::Null) }
+                    }
                     commit_outcome::ERROR => {
-                        let msg = step
-                            .error
-                            .map(|e| e.message)
-                            .unwrap_or_else(|| "(no error message captured)".to_string());
+                        let msg =
+                            step.error.map(|e| e.message).unwrap_or_else(|| "(no error message captured)".to_string());
                         FenceState::PriorError { message: msg }
                     }
                     other => {
@@ -384,9 +378,9 @@ impl DurableStoreClient for DbosDurableStoreClient {
                 Ok(FenceState::Absent)
             }
             step_status::IN_PROGRESS => Ok(FenceState::InProgress { reservation_id: resp.step_id }),
-            step_status::ALREADY_COMMITTED => Ok(FenceState::PriorSuccess {
-                response: resp.prior_output.unwrap_or(Value::Null),
-            }),
+            step_status::ALREADY_COMMITTED => {
+                Ok(FenceState::PriorSuccess { response: resp.prior_output.unwrap_or(Value::Null) })
+            }
             step_status::PRIOR_ERROR => Ok(FenceState::PriorError {
                 message: resp
                     .prior_error

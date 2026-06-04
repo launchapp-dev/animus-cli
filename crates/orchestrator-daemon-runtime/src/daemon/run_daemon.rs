@@ -235,10 +235,10 @@ where
         // daemon startup path so no new background task is introduced
         // (see `recording::sweeper` docs).
         if let Some(runs_root) =
-            agent_runner::recording::sweeper::runs_root_for_project(std::path::Path::new(&primary_root))
+            animus_runtime_shared::recording::sweeper::runs_root_for_project(std::path::Path::new(&primary_root))
         {
-            let policy = agent_runner::recording::sweeper::SweepPolicy::from_env();
-            match agent_runner::recording::sweeper::compact_and_expire(&runs_root, policy) {
+            let policy = animus_runtime_shared::recording::sweeper::SweepPolicy::from_env();
+            match animus_runtime_shared::recording::sweeper::compact_and_expire(&runs_root, policy) {
                 Ok(report) => {
                     if report.compressed > 0 || report.expired > 0 || report.failed > 0 {
                         tracing::info!(
@@ -682,9 +682,7 @@ fn attempt_orphan_agent_reattach<H: DaemonRunHooks>(
     let connections = orphan_reattach_connections();
     for detected in &report.detected {
         let parsed_record: Option<crate::dispatch::agent_record::AgentSpawnRecord> =
-            std::fs::read_to_string(&detected.record_path)
-                .ok()
-                .and_then(|raw| serde_json::from_str(&raw).ok());
+            std::fs::read_to_string(&detected.record_path).ok().and_then(|raw| serde_json::from_str(&raw).ok());
 
         // v0.5.1 fold-in (item 2): before opening the live socket, replay
         // any decision-log events that landed during the daemon gap so

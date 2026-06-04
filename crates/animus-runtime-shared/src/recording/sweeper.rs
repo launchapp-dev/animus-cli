@@ -305,7 +305,8 @@ mod tests {
         let bak = make_archive(&run_dir, "decisions-600.jsonl.bak", b"only-50h-old\n", 50);
         // Custom policy with a 1-day expiry — file is 50h old (> 24h
         // compress, > 24h expire) so it should be expired (not compressed).
-        let policy = SweepPolicy { compress_after: Duration::from_secs(3600), expire_after: Duration::from_secs(86_400) };
+        let policy =
+            SweepPolicy { compress_after: Duration::from_secs(3600), expire_after: Duration::from_secs(86_400) };
         let report = compact_and_expire(&runs_root, policy).unwrap();
         assert_eq!(report.expired, 1);
         assert_eq!(report.compressed, 0);

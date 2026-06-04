@@ -47,7 +47,6 @@ tokio-stream = { version = "0.1", features = ["sync"] }
 tracing = "0.1"
 uuid = { version = "1", features = ["v4"] }
 animus-runtime-shared = { workspace = true }
-agent-runner = { path = "../agent-runner" }
 # v0.5.1 fold-in (item 7): unified Unix-socket + Windows-named-pipe client
 # for the reattach back-channel. Replaces the previous `cfg(unix)`-only
 # `tokio::net::UnixStream` path with a single cross-platform implementation.

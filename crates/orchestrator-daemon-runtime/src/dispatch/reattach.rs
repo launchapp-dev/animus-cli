@@ -19,9 +19,9 @@
 //! What round-3-fold-in closed (round-3 originally left this as v0.6):
 //! - [`replay_decision_log_gap`]: reconstruct events that the runner wrote
 //!   during the daemon gap by tailing `decisions.jsonl` and translating
-//!   selected [`agent_runner::recording::DecisionEvent`] kinds into
+//!   selected [`animus_runtime_shared::recording::DecisionEvent`] kinds into
 //!   `WorkflowEvent`. Race-safe: the reader uses the writer-tolerant
-//!   [`agent_runner::recording::tail::DecisionTailReader`].
+//!   [`animus_runtime_shared::recording::tail::DecisionTailReader`].
 //!
 //! v0.5.1 BETA fold-in (item 2):
 //! - [`replay_gap_from_spawn_record`]: drives the gap-replay primitive
@@ -94,11 +94,7 @@ pub fn try_reattach(
     Ok(ReattachConnection { socket_path: socket_owned, reader_thread: Some(reader_thread) })
 }
 
-fn reader_loop(
-    stream: interprocess::local_socket::Stream,
-    broadcaster: Arc<WorkflowEventBroadcaster>,
-    socket: String,
-) {
+fn reader_loop(stream: interprocess::local_socket::Stream, broadcaster: Arc<WorkflowEventBroadcaster>, socket: String) {
     use std::io::{BufRead, BufReader};
     let reader = BufReader::new(stream);
     for next in reader.lines() {
@@ -151,7 +147,7 @@ pub struct GapReplayReport {
 /// during a daemon-restart gap. Reads from `start_offset` to the current
 /// end-of-file (race-safe; partial trailing lines are held back) and
 /// emits a synthetic [`animus_control_protocol::types::WorkflowEvent`]
-/// for each recorded [`agent_runner::recording::DecisionEvent`] kind that
+/// for each recorded [`animus_runtime_shared::recording::DecisionEvent`] kind that
 /// can be lifted into the workflow-event surface.
 ///
 /// Per-agent decision events do NOT map 1:1 to workflow-terminal events
@@ -178,8 +174,8 @@ pub fn replay_decision_log_gap(
     start_offset: u64,
     broadcaster: &dyn WorkflowEventBroadcasterLike,
 ) -> anyhow::Result<GapReplayReport> {
-    use agent_runner::recording::tail::DecisionTailReader;
-    use agent_runner::recording::DecisionEvent;
+    use animus_runtime_shared::recording::tail::DecisionTailReader;
+    use animus_runtime_shared::recording::DecisionEvent;
     let mut reader = DecisionTailReader::open(decisions_path, start_offset);
     let batch = reader.read_new()?;
     let mut emitted = 0usize;
@@ -275,7 +271,7 @@ pub fn resolve_decisions_path(
         }
     }
     let project_root_str = project_root.to_string_lossy();
-    agent_runner::recording::decision_log_path(&project_root_str, &record.agent_session_id)
+    animus_runtime_shared::recording::decision_log_path(&project_root_str, &record.agent_session_id)
 }
 
 fn synthetic_workflow_id_for(record: &super::agent_record::AgentSpawnRecord) -> String {
@@ -396,7 +392,7 @@ mod tests {
 
     #[test]
     fn replay_decision_log_gap_lifts_finished_and_error_only() {
-        use agent_runner::recording::{DecisionEvent, Durability, Recorder};
+        use animus_runtime_shared::recording::{DecisionEvent, Durability, Recorder};
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("decisions.jsonl");
         let recorder = Recorder::create_with_durability(&path, Durability::FsyncPerEvent).expect("recorder");
@@ -426,7 +422,7 @@ mod tests {
 
     #[test]
     fn replay_decision_log_gap_resumes_from_offset() {
-        use agent_runner::recording::{DecisionEvent, Durability, Recorder};
+        use animus_runtime_shared::recording::{DecisionEvent, Durability, Recorder};
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("decisions.jsonl");
         let recorder = Recorder::create_with_durability(&path, Durability::FsyncPerEvent).expect("recorder");
@@ -461,7 +457,7 @@ mod tests {
 
     #[test]
     fn replay_decision_log_gap_promotes_nonzero_exit_to_agent_error() {
-        use agent_runner::recording::{DecisionEvent, Durability, Recorder};
+        use animus_runtime_shared::recording::{DecisionEvent, Durability, Recorder};
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("decisions.jsonl");
         let recorder = Recorder::create_with_durability(&path, Durability::FsyncPerEvent).expect("recorder");
@@ -484,7 +480,7 @@ mod tests {
 
     #[test]
     fn replay_decision_log_gap_promotes_missing_exit_to_agent_error() {
-        use agent_runner::recording::{DecisionEvent, Durability, Recorder};
+        use animus_runtime_shared::recording::{DecisionEvent, Durability, Recorder};
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("decisions.jsonl");
         let recorder = Recorder::create_with_durability(&path, Durability::FsyncPerEvent).expect("recorder");
@@ -505,7 +501,7 @@ mod tests {
 
     #[test]
     fn replay_gap_from_spawn_record_uses_explicit_path_when_present() {
-        use agent_runner::recording::{DecisionEvent, Durability, Recorder};
+        use animus_runtime_shared::recording::{DecisionEvent, Durability, Recorder};
         let dir = TempDir::new().unwrap();
         let decisions = dir.path().join("decisions.jsonl");
         let recorder = Recorder::create_with_durability(&decisions, Durability::FsyncPerEvent).expect("recorder");
@@ -559,7 +555,7 @@ mod tests {
 
     #[test]
     fn replay_gap_from_spawn_record_resumes_from_persisted_offset() {
-        use agent_runner::recording::{DecisionEvent, Durability, Recorder};
+        use animus_runtime_shared::recording::{DecisionEvent, Durability, Recorder};
         let dir = TempDir::new().unwrap();
         let decisions = dir.path().join("decisions.jsonl");
         let recorder = Recorder::create_with_durability(&decisions, Durability::FsyncPerEvent).expect("recorder");
@@ -595,10 +591,11 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn try_reattach_fails_on_missing_named_pipe_on_windows() {
-        let unique = format!("animus-test-missing-{}-{}", std::process::id(), std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0));
+        let unique = format!(
+            "animus-test-missing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        );
         let broadcaster = WorkflowEventBroadcaster::new();
         let err = try_reattach(&unique, broadcaster).err().expect("connect must fail when pipe absent");
         assert!(
@@ -615,10 +612,11 @@ mod tests {
         use animus_runtime_shared::workflow_event_emitter::{
             RuntimeWorkflowEvent, RuntimeWorkflowEventKind, WorkflowEventEmitter,
         };
-        let unique = format!("animus-test-roundtrip-{}-{}", std::process::id(), std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0));
+        let unique = format!(
+            "animus-test-roundtrip-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        );
         let emitter = ReattachListenerEmitter::bind(&unique).expect("bind named pipe");
         let broadcaster = WorkflowEventBroadcaster::new();
         let (_id, mut rx) = broadcaster.subscribe(WorkflowEventFilter::default());
@@ -653,7 +651,7 @@ mod tests {
 
     #[test]
     fn replay_decision_log_gap_writer_reader_race_yields_partial_tail_hint() {
-        use agent_runner::recording::{DecisionEvent, Durability, Recorder};
+        use animus_runtime_shared::recording::{DecisionEvent, Durability, Recorder};
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("decisions.jsonl");
         let recorder = Recorder::create_with_durability(&path, Durability::FsyncPerEvent).expect("recorder");
