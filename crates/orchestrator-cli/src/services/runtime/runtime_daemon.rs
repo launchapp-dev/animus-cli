@@ -9,10 +9,19 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_core::services::ServiceHub;
 use orchestrator_core::DaemonStatus;
 use orchestrator_daemon_runtime::DaemonRuntimeState;
-use orchestrator_notifications::{
-    clear_notification_config, parse_notification_config_value, read_notification_config_from_pm_config,
-    serialize_notification_config, NOTIFICATION_CONFIG_SCHEMA,
-};
+
+const NOTIFICATION_CONFIG_SCHEMA: &str = "animus.daemon-notification-config.v1";
+const NOTIFICATION_CONFIG_PM_KEY: &str = "notification_config";
+
+fn clear_notification_config(pm_config: &mut serde_json::Value) {
+    if let Some(obj) = pm_config.as_object_mut() {
+        obj.remove(NOTIFICATION_CONFIG_PM_KEY);
+    }
+}
+
+fn read_notification_config_from_pm_config(pm_config: &serde_json::Value) -> serde_json::Value {
+    pm_config.get(NOTIFICATION_CONFIG_PM_KEY).cloned().unwrap_or_else(|| serde_json::json!({}))
+}
 
 use crate::{
     print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonMetricsArgs, DaemonPreflightArgs,
@@ -25,6 +34,7 @@ pub(crate) mod daemon_reconciliation;
 mod daemon_run;
 mod daemon_run_host;
 pub(crate) mod daemon_scheduler;
+mod notifier_dispatcher;
 
 pub(crate) use control_routing::build_daemon_ops_routing;
 
@@ -408,8 +418,7 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     if let Some(raw_json) = args.notification_config_json.as_deref() {
         let value: serde_json::Value =
             serde_json::from_str(raw_json).context("failed to parse --notification-config-json")?;
-        let notification_config = parse_notification_config_value(&value)?;
-        config["notification_config"] = serialize_notification_config(&notification_config)?;
+        config["notification_config"] = value;
         updated = true;
     }
 
@@ -418,8 +427,7 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
             .with_context(|| format!("failed to read daemon notification config file at {}", config_path))?;
         let value: serde_json::Value = serde_json::from_str(raw_json.as_str())
             .with_context(|| format!("failed to parse daemon notification config file at {}", config_path))?;
-        let notification_config = parse_notification_config_value(&value)?;
-        config["notification_config"] = serialize_notification_config(&notification_config)?;
+        config["notification_config"] = value;
         updated = true;
     }
 
@@ -427,7 +435,7 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         save_pm_config(project_root, &config)?;
     }
 
-    let notification_config = read_notification_config_from_pm_config(&config).unwrap_or_default();
+    let notification_config = read_notification_config_from_pm_config(&config);
 
     print_value(
         serde_json::json!({
@@ -444,7 +452,7 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
             "phase_timeout_secs": config.get("phase_timeout_secs").and_then(serde_json::Value::as_u64),
             "idle_timeout_secs": config.get("idle_timeout_secs").and_then(serde_json::Value::as_u64),
             "notification_config_schema": NOTIFICATION_CONFIG_SCHEMA,
-            "notification_config": serialize_notification_config(&notification_config)?,
+            "notification_config": notification_config,
             "updated": updated
         }),
         json,

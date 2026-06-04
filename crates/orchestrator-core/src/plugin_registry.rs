@@ -39,6 +39,12 @@ pub const DEFAULT_DURABLE_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/ani
 /// v0.5 memory-store plugin (Zep Cloud).
 pub const DEFAULT_MEMORY_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-memory-zep", "v0.1.0")];
 
+/// v0.5.3 notifier plugin (HTTP + Slack webhook). Optional role; the
+/// daemon starts cleanly without a notifier installed. Listed here so
+/// `animus plugin install-defaults --include-notifiers` (and any future
+/// auto-install pass) can resolve a curated tag.
+pub const DEFAULT_NOTIFIER_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-notifier-http", "v0.1.0")];
+
 /// Optional add-on opted in by `--include-oai-agent`.
 pub const DEFAULT_OAI_AGENT_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-provider-oai-agent", "v0.1.3")];
 
@@ -81,6 +87,7 @@ pub fn resolve_tag_for_slug(slug: &str) -> Option<&'static str> {
         DEFAULT_QUEUE_PLUGINS,
         DEFAULT_DURABLE_STORE_PLUGINS,
         DEFAULT_MEMORY_STORE_PLUGINS,
+        DEFAULT_NOTIFIER_PLUGINS,
     ] {
         if let Some((_, tag)) = table.iter().find(|(s, _)| *s == slug) {
             return Some(*tag);

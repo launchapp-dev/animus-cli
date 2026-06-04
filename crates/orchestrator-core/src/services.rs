@@ -4,12 +4,12 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::store::{write_json_if_missing, write_json_pretty};
 use crate::types::not_found;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use fs2::FileExt;
-use crate::store::{write_json_if_missing, write_json_pretty};
 use protocol::{RunnerStatusRequest, RunnerStatusResponse};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;

@@ -44,7 +44,6 @@ crates/
 ├── orchestrator-core/           # Domain services, subject_adapter, store, bootstrap, state mutation APIs
 ├── orchestrator-daemon-runtime/ # Daemon queue and scheduling runtime
 ├── orchestrator-logging/        # Shared tracing and log file utilities
-├── orchestrator-notifications/  # Notification/runtime integration support
 ├── orchestrator-plugin-host/    # Plugin discovery, install, stdio host, session backend bridge (folded in v0.5.3)
 └── protocol/                    # Shared protocol/config/runtime types
 ```

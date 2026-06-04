@@ -43,7 +43,6 @@ crates/
 ├── orchestrator-core/
 ├── orchestrator-daemon-runtime/
 ├── orchestrator-logging/
-├── orchestrator-notifications/
 ├── orchestrator-plugin-host/
 └── protocol/
 ```

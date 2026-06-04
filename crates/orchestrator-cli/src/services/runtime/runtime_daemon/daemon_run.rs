@@ -1068,6 +1068,13 @@ mod tests {
         assert_eq!(selection_event.data.get("selection_source").and_then(serde_json::Value::as_str), Some("queue"));
     }
 
+    /// Notification delivery moved out-of-tree to the `notifier` plugin
+    /// kind in v0.5.3 (Task D). When no notifier plugin is installed the
+    /// daemon must start, run a tick, and stop cleanly even though the
+    /// project has a configured `notification_config` block — the
+    /// dispatcher silently skips delivery instead of producing a
+    /// dead-letter event. This test guards against regressions that
+    /// would couple daemon liveness to notifier presence again.
     #[tokio::test]
     async fn daemon_run_continues_when_notification_delivery_fails() {
         let _lock = lock_env();
@@ -1155,7 +1162,11 @@ mod tests {
             .map(|line| serde_json::from_str::<DaemonEventRecord>(line).expect("event json"))
             .collect();
 
-        assert!(events.iter().any(|event| event.event_type == "notification-delivery-dead-lettered"));
+        // The daemon must reach `status:running` (kept alive past startup)
+        // and `status:stopped` (clean shutdown after `--once`) regardless
+        // of whether a notifier plugin is installed.
+        assert!(events.iter().any(|event| event.event_type == "status" && event.data["status"] == "running"));
+        assert!(events.iter().any(|event| event.event_type == "status" && event.data["status"] == "stopped"));
     }
 
     #[test]

@@ -34,20 +34,17 @@ graph TD
     PLUGIN_PROTO[animus-plugin-protocol]
     PLUGIN_RUNTIME[animus-plugin-runtime]
     SUBJECT_PROTO[animus-subject-protocol]
-    NOTIF[orchestrator-notifications]
     LOG[orchestrator-logging]
 
     CLI --> CORE
     CLI --> DAEMON
     CLI --> WR
-    CLI --> NOTIF
     CLI --> PLUGIN_HOST
     CLI --> SESSION
     CLI --> PROTO
 
     DAEMON --> CORE
     DAEMON --> WR
-    DAEMON --> NOTIF
     DAEMON --> PLUGIN_HOST
     DAEMON --> LOG
     DAEMON --> PROTO
