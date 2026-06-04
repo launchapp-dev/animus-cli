@@ -654,6 +654,10 @@ impl DaemonRunHooks for CliDaemonRunHost {
         self.inner.flush_notifications(project_root).await
     }
 
+    async fn shutdown_drain_notifications(&mut self, project_root: &str) -> Result<()> {
+        self.inner.shutdown_drain_notifications(project_root).await
+    }
+
     fn plugin_routing(&self) -> Option<Arc<dyn PluginRouting>> {
         Some(self.plugin_routing.clone())
     }
