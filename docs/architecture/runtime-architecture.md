@@ -66,7 +66,7 @@ flowchart TB
 | Services | `orchestrator-core` (includes the `subject_adapter` and `store` modules), `orchestrator-config` | Bootstrap, config, state mutation APIs, workflow config, atomic persistence, subject-backend adapters |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and runner IPC/process orchestration |
 | Plugins | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers, provider plugin sessions |
-| Support | `orchestrator-notifications`, `orchestrator-logging`, `protocol` | Notifications, tracing, shared types |
+| Support | `orchestrator-logging`, `protocol` | Tracing, shared types |
 
 ## Startup Flow
 

@@ -101,6 +101,13 @@ pub struct PluginPreflightSpec {
 }
 
 impl PluginPreflightSpec {
+    /// Default daemon preflight: provider + task/requirement subjects +
+    /// workflow_runner + queue. The `notifier` role is intentionally NOT
+    /// required — notifications are advisory; the daemon starts cleanly
+    /// without an installed notifier plugin, and missing notifiers must
+    /// not block daemon startup. See `DEFAULT_NOTIFIER_PLUGINS` in
+    /// `plugin_registry` for the curated tag if an operator opts in via
+    /// `animus plugin install`.
     pub fn daemon_default() -> Self {
         Self {
             required_roles: vec![

@@ -22,19 +22,11 @@ pub async fn dispatch_queued_entries_via_runner(
     let mut undecodable_entry_ids: Vec<String> = Vec::new();
     let project_root_path = std::path::Path::new(root);
 
-    let exclude_subjects: Vec<QueueSubjectId> = active_subject_ids
-        .iter()
-        .cloned()
-        .map(QueueSubjectId::new)
-        .collect();
+    let exclude_subjects: Vec<QueueSubjectId> = active_subject_ids.iter().cloned().map(QueueSubjectId::new).collect();
     let lease_req = QueueLeaseRequest {
         max: limit,
         workflow_ids: None,
-        exclude_subjects: if exclude_subjects.is_empty() {
-            None
-        } else {
-            Some(exclude_subjects)
-        },
+        exclude_subjects: if exclude_subjects.is_empty() { None } else { Some(exclude_subjects) },
     };
     match plugin_clients::call_queue_lease(project_root_path, &lease_req).await {
         Ok(Some(response)) => {
@@ -96,7 +88,9 @@ pub async fn dispatch_queued_entries_via_runner(
                             workflow_ref: None,
                             workflow_id: None,
                         };
-                        if let Err(completion_error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
+                        if let Err(completion_error) =
+                            plugin_clients::call_queue_completion(project_root_path, &req).await
+                        {
                             warn!(
                                 actor = protocol::ACTOR_DAEMON,
                                 entry_id = %entry.entry_id,

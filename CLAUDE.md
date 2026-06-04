@@ -59,7 +59,6 @@ Runtime and provider layer:
 
 - `crates/agent-runner`
 - `crates/orchestrator-daemon-runtime`
-- `crates/orchestrator-notifications`
 - `crates/orchestrator-logging`
 
 Plugin host + protocol:

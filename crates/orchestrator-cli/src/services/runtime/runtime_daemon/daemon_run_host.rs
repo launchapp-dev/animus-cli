@@ -4,14 +4,15 @@ use std::sync::Arc;
 use anyhow::Result;
 use orchestrator_daemon_runtime::{DaemonEventLog, DaemonRunEvent, DaemonRunHooks, ProjectTickSummary};
 use orchestrator_logging::Logger;
-use orchestrator_notifications::{DaemonNotificationRuntime, NotificationLifecycleEvent};
 use serde_json::json;
 use tracing::info;
+
+use super::notifier_dispatcher::{NotifierLifecycleEvent, NotifierPluginDispatcher};
 
 pub struct DefaultDaemonRunHost {
     seq: u64,
     json: bool,
-    notification_runtime: Option<DaemonNotificationRuntime>,
+    notifier_dispatcher: Option<NotifierPluginDispatcher>,
     startup_notification_error: Option<String>,
     pub logger: Arc<Logger>,
 }
@@ -19,14 +20,15 @@ pub struct DefaultDaemonRunHost {
 impl DefaultDaemonRunHost {
     pub fn new(project_root: &str, json: bool) -> Self {
         let logger = Arc::new(Logger::for_project(Path::new(project_root)));
-        match DaemonNotificationRuntime::new(project_root) {
-            Ok(runtime) => {
-                Self { seq: 0, json, notification_runtime: Some(runtime), startup_notification_error: None, logger }
+        match NotifierPluginDispatcher::discover(project_root) {
+            Ok(dispatcher) if dispatcher.has_notifiers() => {
+                Self { seq: 0, json, notifier_dispatcher: Some(dispatcher), startup_notification_error: None, logger }
             }
+            Ok(_) => Self { seq: 0, json, notifier_dispatcher: None, startup_notification_error: None, logger },
             Err(error) => Self {
                 seq: 0,
                 json,
-                notification_runtime: None,
+                notifier_dispatcher: None,
                 startup_notification_error: Some(error.to_string()),
                 logger,
             },
@@ -303,9 +305,7 @@ impl DefaultDaemonRunHost {
                     }))
                     .emit();
             }
-            DaemonRunEvent::OrphanAgentGapReplayed {
-                agent_session_id, emitted, next_offset, partial_tail, ..
-            } => {
+            DaemonRunEvent::OrphanAgentGapReplayed { agent_session_id, emitted, next_offset, partial_tail, .. } => {
                 self.logger
                     .info(
                         "reconciliation",
@@ -333,7 +333,7 @@ impl DefaultDaemonRunHost {
         }
     }
 
-    fn emit_notification_lifecycle_events(&mut self, events: Vec<NotificationLifecycleEvent>) -> Result<()> {
+    fn emit_notification_lifecycle_events(&mut self, events: Vec<NotifierLifecycleEvent>) -> Result<()> {
         for event in events {
             let record = DaemonEventLog::next_event(&mut self.seq, &event.event_type, event.project_root, event.data);
             self.emit_record(&record)?;
@@ -379,14 +379,11 @@ impl DefaultDaemonRunHost {
         let record = DaemonEventLog::next_event(&mut self.seq, event_type, project_root, data);
         self.emit_record(&record)?;
 
-        if let Some(runtime) = self.notification_runtime.as_mut() {
-            match runtime.enqueue_for_event(&record) {
-                Ok(lifecycle_events) => self.emit_notification_lifecycle_events(lifecycle_events)?,
-                Err(error) => self.emit_notification_runtime_error(
-                    record.project_root.clone(),
-                    "enqueue",
-                    error.to_string().as_str(),
-                )?,
+        if let Some(dispatcher) = self.notifier_dispatcher.as_ref() {
+            dispatcher.dispatch(record.clone());
+            let lifecycle = dispatcher.drain_lifecycle_events();
+            if !lifecycle.is_empty() {
+                self.emit_notification_lifecycle_events(lifecycle)?;
             }
         }
         Ok(())
@@ -796,14 +793,14 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
         }
     }
 
-    async fn flush_notifications(&mut self, project_root: &str) -> Result<()> {
-        let Some(runtime) = self.notification_runtime.as_mut() else {
+    async fn flush_notifications(&mut self, _project_root: &str) -> Result<()> {
+        let Some(dispatcher) = self.notifier_dispatcher.as_ref() else {
             return Ok(());
         };
-
-        match runtime.flush_due_deliveries().await {
-            Ok(lifecycle_events) => self.emit_notification_lifecycle_events(lifecycle_events),
-            Err(error) => Err(error.context(format!("failed to flush notifications for {project_root}"))),
+        let lifecycle = dispatcher.flush().await;
+        if lifecycle.is_empty() {
+            return Ok(());
         }
+        self.emit_notification_lifecycle_events(lifecycle)
     }
 }

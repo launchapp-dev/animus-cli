@@ -5,7 +5,6 @@ members = [
   "crates/animus-plugin-runtime",
   "crates/protocol",
   "crates/orchestrator-daemon-runtime",
-  "crates/orchestrator-notifications",
   "crates/orchestrator-logging",
   "crates/orchestrator-plugin-host",
   "crates/orchestrator-config",
@@ -34,7 +33,6 @@ animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protoc
 animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.0" }
 protocol = { path = "crates/protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
-orchestrator-notifications = { path = "crates/orchestrator-notifications" }
 orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-plugin-host = { path = "crates/orchestrator-plugin-host" }
 orchestrator-config = { path = "crates/orchestrator-config" }

@@ -93,14 +93,10 @@ graph LR
     CORE["orchestrator-core"]
     PROTO["protocol"]
     WFR["workflow-runner"]
-    GIT["orchestrator-git-ops"]
-    NOTIF["orchestrator-notifications"]
 
     DRT --> CORE
     DRT --> PROTO
     DRT --> WFR
-    DRT --> GIT
-    DRT --> NOTIF
 ```
 
 ## Notes

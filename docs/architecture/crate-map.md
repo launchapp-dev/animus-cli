@@ -30,7 +30,6 @@ binary inside the installed plugin (see `crates/orchestrator-core/src/runtime_co
 | `orchestrator-cli` | Main `animus` binary, clap surface, MCP server, output formatting, and operations |
 | `orchestrator-core` | Domain services, bootstrap, state mutation APIs, plugin registry, preflight, the `subject_adapter` adapter layer (folded in from the former `orchestrator-providers` crate in v0.5.3), and the `store` atomic-persistence helpers (folded in from the former `orchestrator-store` crate in v0.5.3) |
 | `orchestrator-config` | Workflow YAML loading, pack loading, scaffolding, and phase plan resolution |
-| `orchestrator-notifications` | Notification/runtime integration support |
 
 ## Plugin Runtime
 

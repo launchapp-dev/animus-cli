@@ -51,6 +51,9 @@
     ],
     "memory_stores": [
       { "repo": "launchapp-dev/animus-memory-zep", "tag": "v0.1.0" }
+    ],
+    "notifiers": [
+      { "repo": "launchapp-dev/animus-notifier-http", "tag": "v0.1.0" }
     ]
   }
 }
