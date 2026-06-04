@@ -12,7 +12,7 @@ use serde_json::json;
 use tokio::sync::Mutex;
 use tracing::{debug, info};
 
-use super::{PlanningServiceApi, ProjectAdapter, SubjectContext, SubjectResolver, TaskServiceApi};
+use super::{PlanningAdapterApi, ProjectAdapter, SubjectContext, SubjectResolver, TaskAdapterApi};
 
 /// Attribute key set by the plugin subject fallback on every
 /// [`SubjectContext`] it produces. Downstream code (notably
@@ -348,7 +348,7 @@ fn build_context_from_plugin(
 #[must_use]
 pub fn builtin_subject_adapter_registry<T>(hub: Arc<T>) -> SubjectAdapterRegistry
 where
-    T: TaskServiceApi + PlanningServiceApi + Send + Sync + 'static,
+    T: TaskAdapterApi + PlanningAdapterApi + Send + Sync + 'static,
 {
     SubjectAdapterRegistry::new()
         .register(Arc::new(BuiltinTaskSubjectAdapter::new(hub.clone())))
@@ -371,7 +371,7 @@ impl<T> BuiltinTaskSubjectAdapter<T> {
 #[async_trait]
 impl<T> SubjectAdapter for BuiltinTaskSubjectAdapter<T>
 where
-    T: TaskServiceApi + Send + Sync + 'static,
+    T: TaskAdapterApi + Send + Sync + 'static,
 {
     fn kind(&self) -> &'static str {
         SUBJECT_KIND_TASK
@@ -580,7 +580,7 @@ impl<T> BuiltinRequirementSubjectAdapter<T> {
 #[async_trait]
 impl<T> SubjectAdapter for BuiltinRequirementSubjectAdapter<T>
 where
-    T: PlanningServiceApi + Send + Sync + 'static,
+    T: PlanningAdapterApi + Send + Sync + 'static,
 {
     fn kind(&self) -> &'static str {
         SUBJECT_KIND_REQUIREMENT
@@ -879,7 +879,7 @@ impl BuiltinSubjectResolver {
     #[must_use]
     pub fn new<T>(hub: Arc<T>) -> Self
     where
-        T: TaskServiceApi + PlanningServiceApi + Send + Sync + 'static,
+        T: TaskAdapterApi + PlanningAdapterApi + Send + Sync + 'static,
     {
         Self { registry: builtin_subject_adapter_registry(hub) }
     }
@@ -912,7 +912,7 @@ impl BuiltinProjectAdapter {
     #[must_use]
     pub fn new<T>(hub: Arc<T>) -> Self
     where
-        T: TaskServiceApi + PlanningServiceApi + Send + Sync + 'static,
+        T: TaskAdapterApi + PlanningAdapterApi + Send + Sync + 'static,
     {
         Self { registry: builtin_subject_adapter_registry(hub) }
     }
@@ -958,7 +958,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl TaskServiceApi for TestHub {
+    impl TaskAdapterApi for TestHub {
         async fn list(&self) -> Result<Vec<OrchestratorTask>> {
             unimplemented!()
         }
@@ -1056,7 +1056,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl PlanningServiceApi for TestHub {
+    impl PlanningAdapterApi for TestHub {
         async fn draft_requirements(&self, _input: RequirementsDraftInput) -> Result<RequirementsDraftResult> {
             unimplemented!()
         }
