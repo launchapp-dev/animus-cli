@@ -16,7 +16,7 @@ process as a dynamic library.
 | Plugin host/router | [`crates/orchestrator-plugin-host/src/host.rs`](../../crates/orchestrator-plugin-host/src/host.rs) |
 | Subject router | [`crates/orchestrator-plugin-host/src/subject_router.rs`](../../crates/orchestrator-plugin-host/src/subject_router.rs) |
 | Lockfile and signature checks | [`crates/orchestrator-plugin-host/src/lockfile.rs`](../../crates/orchestrator-plugin-host/src/lockfile.rs), [`crates/orchestrator-plugin-host/src/signature_verifier.rs`](../../crates/orchestrator-plugin-host/src/signature_verifier.rs) |
-| Provider session bridge | [`crates/orchestrator-session-host/src/`](../../crates/orchestrator-session-host/src/) |
+| Provider session bridge | [`crates/orchestrator-plugin-host/src/session/`](../../crates/orchestrator-plugin-host/src/session/) |
 | Curated default plugins | [`crates/orchestrator-core/src/plugin_registry.rs`](../../crates/orchestrator-core/src/plugin_registry.rs) |
 | Web plugin resolution | [`crates/orchestrator-cli/src/services/operations/ops_web.rs`](../../crates/orchestrator-cli/src/services/operations/ops_web.rs) |
 
@@ -199,7 +199,7 @@ itself exposes a project-root override.
 
 ## Provider Path
 
-Provider plugins are driven by `orchestrator-session-host`.
+Provider plugins are driven by `orchestrator-plugin-host::session`.
 
 1. Resolve the requested provider tool.
 2. Discover `provider` plugins.
@@ -301,7 +301,6 @@ Use these focused checks when changing plugin behavior:
 
 ```bash
 cargo test -p orchestrator-plugin-host
-cargo test -p orchestrator-session-host
 cargo test -p orchestrator-cli plugin
 cargo animus-bin-check
 ```

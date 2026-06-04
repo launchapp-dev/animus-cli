@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Animus is a Rust-only agent orchestrator built as a Cargo workspace of 13 members.
+Animus is a Rust-only agent orchestrator built as a Cargo workspace of 11 members.
 It provides the `animus` CLI, daemon runtime, shared workflow execution/runtime
 helpers, agent runner, MCP server, plugin host, and plugin protocol crates.
 Provider, subject, transport,
@@ -29,7 +29,7 @@ graph TD
     DAEMON[orchestrator-daemon-runtime]
     WR[animus-runtime-shared]
     AR[agent-runner]
-    SESSION[orchestrator-session-host]
+    SESSION["orchestrator-plugin-host::session"]
     PLUGIN_HOST[orchestrator-plugin-host]
     PLUGIN_PROTO[animus-plugin-protocol]
     PLUGIN_RUNTIME[animus-plugin-runtime]
@@ -40,7 +40,6 @@ graph TD
     CLI --> DAEMON
     CLI --> WR
     CLI --> PLUGIN_HOST
-    CLI --> SESSION
     CLI --> PROTO
 
     DAEMON --> CORE
@@ -103,4 +102,4 @@ surface.
 - [Runtime Topology Diagram](diagram.md) -- High-level Mermaid diagram of operators, daemon, plugins, and external systems with design rationale
 - [Crate Map](crate-map.md) -- All workspace crates grouped by responsibility with descriptions
 - [ServiceHub Pattern](service-hub.md) -- Dependency injection via the `ServiceHub` trait
-- [Provider Session Host](llm-cli-wrapper-session-backends.md) -- Historical session-backend design notes plus the current `orchestrator-session-host` provider-plugin boundary
+- [Provider Session Host](llm-cli-wrapper-session-backends.md) -- Historical session-backend design notes plus the current `orchestrator-plugin-host::session` provider-plugin boundary

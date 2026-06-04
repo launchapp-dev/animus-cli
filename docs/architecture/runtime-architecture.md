@@ -23,7 +23,7 @@ observability, and extension rules, see
 | Workflow execution helpers | [`crates/animus-runtime-shared/src/`](../../crates/animus-runtime-shared/src/) |
 | Daemon runtime | [`crates/orchestrator-daemon-runtime/src/`](../../crates/orchestrator-daemon-runtime/src/) |
 | Plugin host | [`crates/orchestrator-plugin-host/src/`](../../crates/orchestrator-plugin-host/src/) |
-| Provider session bridge | [`crates/orchestrator-session-host/src/`](../../crates/orchestrator-session-host/src/) |
+| Provider session bridge | [`crates/orchestrator-plugin-host/src/session/`](../../crates/orchestrator-plugin-host/src/session/) |
 | Web plugin resolution | [`crates/orchestrator-cli/src/services/operations/ops_web.rs`](../../crates/orchestrator-cli/src/services/operations/ops_web.rs) |
 
 ## System Shape
@@ -37,7 +37,7 @@ flowchart TB
     DAEMON["orchestrator-daemon-runtime"]
     WFR["animus-runtime-shared<br/>+ workflow_runner plugin"]
     AR["agent-runner"]
-    SESSION["orchestrator-session-host"]
+    SESSION["orchestrator-plugin-host::session"]
     PHOST["orchestrator-plugin-host"]
     PLUGINS["provider / subject / trigger / transport plugins"]
     STATE["~/.animus/<repo-scope>"]
@@ -140,9 +140,9 @@ discover installed `transport_backend` and `web_ui` plugins.
 2. The daemon starts a workflow run through an installed `workflow_runner` plugin.
 3. Shared `animus-runtime-shared` logic resolves phase configuration and runtime contracts inside that plugin.
 4. Agent phases call `agent-runner`.
-5. `agent-runner` delegates provider execution to `orchestrator-session-host`.
-6. `orchestrator-session-host` discovers and drives a provider plugin through
+5. `agent-runner` delegates provider execution to the session bridge in
    `orchestrator-plugin-host`.
+6. `orchestrator-plugin-host::session` discovers and drives a provider plugin.
 7. Events flow back through the runner, workflow state, daemon output, and logs.
 8. Terminal state is persisted in scoped runtime state and surfaced through CLI,
    MCP, web transports, and output commands.
@@ -195,6 +195,5 @@ Use source checks for architecture-affecting changes:
 ```bash
 cargo animus-bin-check
 cargo test -p orchestrator-plugin-host
-cargo test -p orchestrator-session-host
 cargo test -p orchestrator-cli
 ```

@@ -311,12 +311,13 @@ back into workflow state and, where configured, subject state.
 - telemetry
 
 Provider-specific session behavior is not implemented directly in daemon-core.
-The runner delegates provider sessions through `orchestrator-session-host`.
+The runner delegates provider sessions through the session bridge inside
+`orchestrator-plugin-host`.
 
 ## Provider Session Host
 
-`orchestrator-session-host` resolves installed provider plugins and adapts them
-to the external `animus-session-backend` contract. It owns:
+`orchestrator-plugin-host::session` resolves installed provider plugins and
+adapts them to the external `animus-session-backend` contract. It owns:
 
 - provider plugin discovery
 - reserved provider name handling
@@ -511,7 +512,6 @@ cargo test -p orchestrator-daemon-runtime
 cargo test -p animus-runtime-shared
 cargo test -p agent-runner
 cargo test -p orchestrator-plugin-host
-cargo test -p orchestrator-session-host
 ```
 
 For docs-only architecture changes, at minimum run:

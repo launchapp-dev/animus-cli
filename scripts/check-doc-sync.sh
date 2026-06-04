@@ -168,5 +168,29 @@ assert_contains \
   "$repo_root/docs/design/acp-integration.md" \
   "- **Rust-only Cargo workspace** (${workspace_count} current workspace members)" \
   "ACP integration workspace count"
+assert_contains \
+  "$repo_root/docs/architecture/index.md" \
+  "Cargo workspace of ${workspace_count} members." \
+  "architecture overview workspace count"
+assert_not_contains \
+  "$repo_root/docs/architecture/index.md" \
+  "orchestrator-session-host" \
+  "architecture overview stale session-host crate"
+assert_not_contains \
+  "$repo_root/docs/architecture/runtime-architecture.md" \
+  "orchestrator-session-host" \
+  "runtime architecture stale session-host crate"
+assert_not_contains \
+  "$repo_root/docs/architecture/plugin-system.md" \
+  "orchestrator-session-host" \
+  "plugin system stale session-host crate"
+assert_not_contains \
+  "$repo_root/docs/architecture/llm-cli-wrapper-session-backends.md" \
+  "orchestrator-session-host" \
+  "provider session host stale session-host crate"
+assert_not_contains \
+  "$repo_root/docs/architecture/plugin-host-concurrency.md" \
+  "orchestrator-session-host" \
+  "plugin host concurrency stale session-host crate"
 
 echo "CLI command tree and MCP tool reference are in sync."
