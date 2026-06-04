@@ -40,7 +40,7 @@ pub const DEFAULT_DURABLE_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/ani
 pub const DEFAULT_MEMORY_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-memory-zep", "v0.1.0")];
 
 /// Optional add-on opted in by `--include-oai-agent`.
-pub const DEFAULT_OAI_AGENT_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-provider-oai-agent", "v0.1.3")];
+pub const DEFAULT_OAI_AGENT_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-provider-oai-agent", "v0.1.4")];
 
 /// Subject backends installed by `--include-subjects`. Indexed lookups
 /// below (`default_subject_repo_for_kind`) assume each entry is listed
