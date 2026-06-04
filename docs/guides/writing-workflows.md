@@ -35,7 +35,7 @@ A workflow file can contain the following top-level sections:
 
 ```yaml
 mcp_servers:    # External tool integrations
-agents:         # Agent definitions (model, tool, system_prompt)
+agents:         # Agent definitions (model, tool, system_prompt/system_prompt_file)
 phase_catalog:  # Phase metadata (label, description, category, tags)
 phases:         # Phase execution config (mode, directive, command)
 workflows:      # Workflow definitions (sequence of phases)
@@ -44,7 +44,9 @@ pipelines:      # Reusable pipeline definitions (sequence of phases)
 
 ## Agents
 
-Agents define which model and tool to use, plus an optional system prompt:
+Agents define which model and tool to use, plus an optional system prompt. For
+long prompts, you can keep the text in a separate UTF-8 file with
+`system_prompt_file` instead of embedding it inline:
 
 ```yaml
 agents:
@@ -64,9 +66,18 @@ agents:
   research-agent:
     model: gemini-3.1-pro-preview
     tool: gemini
+
+  reviewer:
+    system_prompt_file: prompts/reviewer.md
+    model: claude-sonnet-4-6
+    tool: claude
 ```
 
 The `tool` field specifies which CLI tool runs the agent: `claude`, `codex`, `gemini`, `opencode`, or `oai-runner`.
+
+`system_prompt` and `system_prompt_file` are mutually exclusive on the same
+agent. Relative prompt-file paths resolve from the YAML file that declares the
+agent.
 
 For Claude-only account routing, set `tool_profile` on a Claude agent or in a
 phase `runtime:` block. The profile name resolves against the user's global Animus

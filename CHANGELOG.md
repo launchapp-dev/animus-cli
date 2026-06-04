@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`feat(config)`: agent profiles now accept `system_prompt_file` to load the
+  system prompt from an external UTF-8 file.** The path resolves relative to
+  the source YAML's parent directory (absolute paths supported). The contents
+  are inlined verbatim into `system_prompt` at config-compile time, so the
+  compiled `workflow-config.v2.json` stays self-contained and daemon runtime
+  behavior is unchanged. `system_prompt` and `system_prompt_file` are mutually
+  exclusive; missing files, non-UTF-8 contents, and files larger than 1 MiB
+  fail compile with the resolved path in the error message.
+
 ## [0.4.19] - 2026-05-29
 
 Follow-up hotfix to v0.4.18. The previous release wired the subject

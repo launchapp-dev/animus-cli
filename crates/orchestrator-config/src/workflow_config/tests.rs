@@ -2247,3 +2247,57 @@ fn repo_requirements_yaml_parses_requirement_workflows() {
     assert!(workflow_ids.contains(&"req-refine"));
     assert!(workflow_ids.contains(&"req-review"));
 }
+
+#[test]
+fn yaml_compile_mixes_inline_and_file_based_system_prompts() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflows_dir = temp.path().join(".animus").join("workflows");
+    fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+
+    let prompts_dir = workflows_dir.join("prompts");
+    fs::create_dir_all(&prompts_dir).expect("create prompts dir");
+    let researcher_prompt = "Researcher prompt from file.\nCite sources.\n";
+    fs::write(prompts_dir.join("researcher.md"), researcher_prompt).expect("write prompt");
+
+    fs::write(
+        workflows_dir.join("agents.yaml"),
+        r#"
+agents:
+  implementer:
+    description: "Implementer"
+    system_prompt: "You are the implementer."
+  researcher:
+    description: "Researcher"
+    system_prompt_file: prompts/researcher.md
+
+phases:
+  research:
+    mode: agent
+    agent: researcher
+    directive: "Research."
+  implement:
+    mode: agent
+    agent: implementer
+    directive: "Implement."
+
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - research
+      - implement
+"#,
+    )
+    .expect("write yaml");
+
+    let result = compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
+    let config = result.expect("should have config");
+
+    let implementer = config.agent_profiles.get("implementer").expect("implementer agent");
+    assert_eq!(implementer.system_prompt, "You are the implementer.");
+    assert!(implementer.system_prompt_file.is_none());
+
+    let researcher = config.agent_profiles.get("researcher").expect("researcher agent");
+    assert_eq!(researcher.system_prompt, researcher_prompt);
+    assert!(researcher.system_prompt_file.is_none(), "field should be consumed at compile time");
+}

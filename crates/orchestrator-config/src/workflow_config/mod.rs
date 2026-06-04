@@ -27,12 +27,17 @@ pub use validation::{
     validate_workflow_and_runtime_configs, validate_workflow_and_runtime_configs_with_project_root,
     validate_workflow_config, validate_workflow_config_with_project_root,
 };
-pub(crate) use yaml_compiler::{collect_project_yaml_workflow_sources, compile_yaml_sources_with_base};
+pub(crate) use yaml_compiler::{
+    collect_project_yaml_workflow_sources, compile_yaml_sources_confined_to_pack, compile_yaml_sources_with_base,
+};
 pub use yaml_compiler::{
     compile_yaml_workflow_files, merge_yaml_into_config, validate_and_compile_yaml_workflows,
     write_workflow_yaml_overlay, yaml_workflows_dir, CompileYamlResult,
 };
-pub use yaml_parser::{parse_yaml_workflow_config, parse_yaml_workflow_config_with_base};
+pub(crate) use yaml_parser::resolve_agent_system_prompt_files_confined_to_pack;
+pub use yaml_parser::{
+    parse_yaml_workflow_config, parse_yaml_workflow_config_with_base, parse_yaml_workflow_config_with_base_and_source,
+};
 pub use yaml_scaffold::{ensure_workflow_yaml_scaffold, title_case_phase_id};
 pub use yaml_types::{
     DEFAULT_WORKFLOW_TEMPLATE_FILE_NAME, GENERATED_RUNTIME_OVERLAY_FILE_NAME, GENERATED_WORKFLOW_OVERLAY_FILE_NAME,

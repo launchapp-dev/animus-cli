@@ -2,7 +2,12 @@
 
 ## What an Agent Is
 
-An agent is a specialized AI persona. Each agent has a system prompt that defines its role, a model that powers it, and a set of [MCP tools](./mcp-tools.md) it can use. Agents are defined in [workflow YAML](./workflows.md) and instantiated by `workflow-runner` when a phase executes.
+An agent is a specialized AI persona. Each agent has a system prompt that
+defines its role, a model that powers it, and a set of [MCP tools](./mcp-tools.md)
+it can use. That prompt can be declared inline or loaded from a
+`system_prompt_file` in workflow YAML. Agents are defined in
+[workflow YAML](./workflows.md) and instantiated by `workflow-runner` when a
+phase executes.
 
 An agent is not a long-running process. It is created for a phase, executes, returns a verdict, and is torn down.
 
@@ -16,6 +21,7 @@ agents:
     system_prompt: |
       You are a senior software engineer. Write production-quality code,
       run tests, and commit your changes.
+    # system_prompt_file: prompts/senior-engineer.md
     persona:
       style: direct
       traits: [pragmatic, rigorous]
@@ -33,6 +39,7 @@ agents:
 | `name` | Human-readable display name used in prompt/UI surfaces. |
 | `model` | The LLM model to use (e.g. `claude-sonnet-4-6`, `gemini-3.1-pro-preview`). |
 | `system_prompt` | Role-specific instructions that shape the agent's behavior. |
+| `system_prompt_file` | Optional UTF-8 file path that loads the role prompt at compile time instead of embedding it inline. |
 | `persona` | Optional style, traits, instructions, and customizations injected into system context. |
 | `memory` | Optional project-scoped memory. Enabled agents receive bounded stored memory in phase prompts. |
 | `communication` | Optional channel/direct-message permissions. Enabled agents receive bounded recent channel messages in phase prompts. |

@@ -95,6 +95,7 @@ agents:
     description: <string>        # Optional. Human-readable description.
     system_prompt: |             # Optional. System prompt for the agent.
       You are a code reviewer...
+    system_prompt_file: <path>   # Optional. Load system prompt from a UTF-8 file.
     role: <string>               # Optional. Role identifier.
     persona:                     # Optional. Personality/style configuration.
       style: <string>
@@ -133,6 +134,7 @@ agents:
 | `name` | string | no | Human-readable display name for this agent |
 | `description` | string | no | Human-readable description of the agent |
 | `system_prompt` | string | no | System prompt injected into the agent's context |
+| `system_prompt_file` | string | no | Path to a UTF-8 file whose contents are inlined into `system_prompt` at compile time; mutually exclusive with `system_prompt` |
 | `role` | string | no | Role identifier for the agent |
 | `persona` | object | no | Personality/style config injected into the agent's system context |
 | `memory` | object | no | Project-scoped memory settings. When enabled, bounded memory entries are injected into phase prompts |
@@ -146,6 +148,11 @@ agents:
 | `tool_policy` | object | no | Tool access control policy |
 
 Agent profiles defined in YAML are merged into the agent runtime config during compilation. Phase definitions reference agents by profile name.
+
+When prompts get large, prefer `system_prompt_file` over embedding long prose
+directly in YAML. Relative paths resolve from the source YAML file's parent
+directory, absolute paths are allowed for project YAML, and the file contents
+are copied verbatim into the compiled runtime config.
 
 Claude profile references resolve against the user's global Animus config, not the
 repository. This keeps account-specific paths such as `CLAUDE_CONFIG_DIR` out

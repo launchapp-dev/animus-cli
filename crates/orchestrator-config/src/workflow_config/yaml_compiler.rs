@@ -7,7 +7,10 @@ use anyhow::{Context, Result};
 use super::builtins::builtin_workflow_config;
 use super::env_interp::interpolate_env;
 use super::types::*;
-use super::yaml_parser::{parse_yaml_workflow_config_with_base, workflow_config_to_yaml_file};
+use super::yaml_parser::{
+    parse_yaml_workflow_config_confined_to_pack, parse_yaml_workflow_config_with_base_and_source,
+    workflow_config_to_yaml_file,
+};
 use super::yaml_types::*;
 
 pub fn yaml_workflows_dir(project_root: &Path) -> PathBuf {
@@ -52,6 +55,22 @@ pub(crate) fn compile_yaml_sources_with_base(
     base: &WorkflowConfig,
     yaml_sources: &[(PathBuf, String)],
 ) -> Result<Option<WorkflowConfig>> {
+    compile_yaml_sources_with_base_inner(base, yaml_sources, None)
+}
+
+pub(crate) fn compile_yaml_sources_confined_to_pack(
+    base: &WorkflowConfig,
+    yaml_sources: &[(PathBuf, String)],
+    pack_root: &Path,
+) -> Result<Option<WorkflowConfig>> {
+    compile_yaml_sources_with_base_inner(base, yaml_sources, Some(pack_root))
+}
+
+fn compile_yaml_sources_with_base_inner(
+    base: &WorkflowConfig,
+    yaml_sources: &[(PathBuf, String)],
+    pack_root: Option<&Path>,
+) -> Result<Option<WorkflowConfig>> {
     if yaml_sources.is_empty() {
         return Ok(None);
     }
@@ -62,8 +81,12 @@ pub(crate) fn compile_yaml_sources_with_base(
         let source_label = path.display().to_string();
         let substituted = interpolate_env(content, &source_label)
             .with_context(|| format!("env-var interpolation failed for {}", source_label))?;
-        let parsed = parse_yaml_workflow_config_with_base(&substituted, overlay_base)
-            .with_context(|| format!("error in YAML file {}", source_label))?;
+        let parsed = match pack_root {
+            Some(root) => parse_yaml_workflow_config_confined_to_pack(&substituted, overlay_base, path.as_path(), root)
+                .with_context(|| format!("error in pack YAML file {}", source_label))?,
+            None => parse_yaml_workflow_config_with_base_and_source(&substituted, overlay_base, Some(path.as_path()))
+                .with_context(|| format!("error in YAML file {}", source_label))?,
+        };
         merged_config = Some(match merged_config {
             None => parsed,
             Some(base) => merge_yaml_into_config(base, parsed),

@@ -835,6 +835,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             name: None,
             description: "default".to_string(),
             system_prompt: "default prompt".to_string(),
+            system_prompt_file: None,
             role: None,
             persona: None,
             memory: Default::default(),
