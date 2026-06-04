@@ -30,7 +30,7 @@ cargo build -p agent-runner
 
 ## Workspace Structure
 
-The workspace is a Cargo workspace of 12 crates. The current workspace members are:
+The workspace is a Cargo workspace of 11 crates. The current workspace members are:
 
 ```text
 crates/

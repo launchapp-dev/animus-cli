@@ -426,7 +426,16 @@ where
     // (otherwise an operator tailing the plugin would never see the
     // daemon stopping).
     hooks.handle_event(DaemonRunEvent::Status { project_root: primary_root.clone(), status: "stopped".to_string() })?;
-    hooks.handle_event(DaemonRunEvent::Shutdown { project_root: primary_root, daemon_pid })?;
+    hooks.handle_event(DaemonRunEvent::Shutdown { project_root: primary_root.clone(), daemon_pid })?;
+
+    // Await every in-flight notifier dispatch so the Status/Shutdown
+    // events above reach installed notifier plugins before the Tokio
+    // runtime drops. Closes codex v0.5.3 Task D round-5 P2 (the
+    // shutdown_drain wiring was missing). Errors are logged inside the
+    // impl; never propagate.
+    if let Err(error) = hooks.shutdown_drain_notifications(&primary_root).await {
+        tracing::warn!(%error, "notifier shutdown drain failed");
+    }
 
     // Give the fire-and-forget `log_storage/store` tasks spawned by
     // `DaemonEventLog::append` a brief window to flush before reaping

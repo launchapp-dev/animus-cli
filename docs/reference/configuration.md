@@ -253,13 +253,20 @@ legacy aliases; the old names will not be read.
 
 | Variable | Description |
 |---|---|
-| `ANIMUS_NOTIFY_WEBHOOK_URL` | Default webhook URL referenced by notification configs that use `webhook_url_env: "ANIMUS_NOTIFY_WEBHOOK_URL"` |
-| `ANIMUS_NOTIFY_BEARER_TOKEN` | Default bearer token referenced by notification configs that use `Authorization: "ANIMUS_NOTIFY_BEARER_TOKEN"` |
+| `ANIMUS_NOTIFY_WEBHOOK_URL` | Common env var referenced by generic webhook connectors via `url_env: "ANIMUS_NOTIFY_WEBHOOK_URL"` |
+| `ANIMUS_NOTIFY_BEARER_TOKEN` | Common bearer-token env var referenced from `headers_env`, for example `"headers_env": { "Authorization": "ANIMUS_NOTIFY_BEARER_TOKEN" }` |
 | `ANIMUS_NOTIFY_MISSING_URL` | Behavior tuning for notification dispatch when the webhook URL is unset |
 
 Any other env var name can be referenced by a notification config's `url_env` or per-header
 env lookups, so projects can define their own `ANIMUS_NOTIFY_*` variables and reference
 them from the persisted notification config.
+
+Notification config is persisted under the repo-scoped daemon runtime file
+`~/.animus/<repo-scope>/daemon/pm-config.json`, not under project-local
+`.animus/`. The daemon forwards only the env var names explicitly referenced by
+that `notification_config` block's `*_env` fields (including object-valued
+`headers_env` maps) into the notifier plugin subprocess, so unrelated daemon
+credentials are not re-exposed to notifier plugins.
 
 ### Provider plugin tuning
 

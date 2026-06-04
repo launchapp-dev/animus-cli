@@ -147,6 +147,41 @@ animus daemon clear-logs
 
 Animus stores runtime state under `~/.animus/<repo-scope>/`, and log plumbing is managed by the runtime binaries rather than a project-local `.animus/daemon.log` contract.
 
+## Notification Delivery Missing Credentials
+
+**Symptoms**: The daemon keeps running, but notification deliveries fail, or a
+notifier plugin cannot see the webhook URL / auth header env vars you expected.
+
+**Cause**: Notification connectors do not inherit the daemon's full environment.
+The notifier subprocess only receives env var names explicitly referenced by the
+persisted `notification_config` block in
+`~/.animus/<repo-scope>/daemon/pm-config.json`.
+
+**Fix**: Inspect the persisted daemon config and ensure the connector uses the
+right `*_env` fields:
+
+```bash
+animus daemon config
+```
+
+For a generic webhook connector, use `url_env` for the destination URL and
+`headers_env` for per-header env lookups, for example:
+
+```json
+{
+  "type": "webhook",
+  "id": "ops-webhook",
+  "enabled": true,
+  "url_env": "ANIMUS_NOTIFY_WEBHOOK_URL",
+  "headers_env": {
+    "Authorization": "ANIMUS_NOTIFY_BEARER_TOKEN"
+  }
+}
+```
+
+If you change shell env vars without updating the referenced names, restart the
+daemon so the new process environment is available to the notifier plugin.
+
 ## Workflow Stuck or Failed
 
 **Steps**:

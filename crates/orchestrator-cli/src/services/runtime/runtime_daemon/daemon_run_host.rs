@@ -803,4 +803,17 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
         }
         self.emit_notification_lifecycle_events(lifecycle)
     }
+
+    async fn shutdown_drain_notifications(&mut self, _project_root: &str) -> Result<()> {
+        let Some(dispatcher) = self.notifier_dispatcher.as_ref() else {
+            return Ok(());
+        };
+        dispatcher.shutdown_drain().await;
+        // Final drain of any lifecycle events emitted during the wait.
+        let lifecycle = dispatcher.drain_lifecycle_events();
+        if lifecycle.is_empty() {
+            return Ok(());
+        }
+        self.emit_notification_lifecycle_events(lifecycle)
+    }
 }

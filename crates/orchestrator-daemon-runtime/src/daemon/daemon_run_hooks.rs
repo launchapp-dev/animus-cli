@@ -34,6 +34,16 @@ pub trait DaemonRunHooks {
         Ok(())
     }
 
+    /// Called from every daemon exit path (`--once`, `GracefulShutdown`,
+    /// SIGINT, SIGTERM) AFTER the loop breaks but BEFORE the runtime
+    /// drops. Default is no-op. The CLI binary's notifier dispatcher
+    /// overrides this to await every in-flight `notifier/notify` task so
+    /// the final status events reach the plugin before the daemon exits.
+    /// Closes codex v0.5.3 Task D round-5 P2.
+    async fn shutdown_drain_notifications(&mut self, _project_root: &str) -> Result<()> {
+        Ok(())
+    }
+
     /// Provide a `plugin/*` routing handle for the control-RPC surface.
     /// Defaults to `None`, which leaves the daemon's `InProcessSurface`
     /// returning `NotSupported` for plugin/* methods. The CLI binary

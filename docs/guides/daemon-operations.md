@@ -28,7 +28,10 @@ Output streams directly to your terminal. Use Ctrl+C to stop.
 
 ## Stopping the Daemon
 
-Graceful shutdown with drain (waits for in-progress phases to complete):
+Graceful shutdown with drain. This waits for in-progress phases to complete and
+gives installed notifier plugins a final drain window so the terminal
+`status: stopped` / shutdown events are delivered before the daemon process
+exits:
 
 ```bash
 animus daemon stop
@@ -106,6 +109,9 @@ The daemon writes structured log entries through the active log storage
 backend. Redacted JSON lines are also persisted under
 `~/.animus/<repo-scope>/logs/events.jsonl`, which remains the local mirror
 for daemon events.
+
+Daemon automation settings, including `notification_config`, are persisted
+separately under `~/.animus/<repo-scope>/daemon/pm-config.json`.
 
 Clear logs when they grow too large:
 

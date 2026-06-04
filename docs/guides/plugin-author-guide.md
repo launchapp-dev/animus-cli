@@ -22,8 +22,9 @@ A plugin is a standalone executable that:
   one JSON value per line (NDJSON); current host-side readers also accept
   pretty-printed multi-line frames from plugins.
 - Declares a **plugin kind** (`provider`, `subject_backend`,
-  `trigger_backend`, `transport_backend`, `log_storage_backend`, or
-  `custom`). The kind tells the daemon which method family the plugin
+  `trigger_backend`, `transport_backend`, `log_storage_backend`, `web_ui`,
+  `custom`, or another forward-compatible string role the current host
+  recognizes). The kind tells the daemon which method family the plugin
   must implement.
 - Emits a one-shot **manifest** when invoked with `--manifest`. The
   manifest is the discovery surface used by `animus plugin install`,
@@ -52,8 +53,17 @@ stdio is just as compatible as one that links `animus-plugin-runtime`.
 | `subject_backend` | kind-scoped calls such as `<kind>/list`, `<kind>/get`, `<kind>/update`; protocol helpers may expose `subject/schema` and `subject/watch` | Shipped; references include `animus-subject-default`, `animus-subject-requirements`, and [`animus-subject-linear`](https://github.com/launchapp-dev/animus-subject-linear) |
 | `trigger_backend` | `trigger/watch`, emits `trigger/event` notifications, accepts `trigger/ack` | Shipped; references at `animus-trigger-webhook`, `animus-trigger-slack` |
 | `transport_backend` | Hosts a control transport (HTTP, GraphQL, ...) | Shipped; references at `animus-transport-http`, `animus-transport-graphql`, `animus-web-ui` |
+| `notifier` | `notifier/notify`, `notifier/flush` | Shipped as an optional daemon-only role; current default is `animus-notifier-http` |
+| `web_ui` | Browser UI assets + launch metadata for `animus web` | Shipped; reference at `animus-web-ui` |
 | `log_storage_backend` | Receives `log/entry` notifications, serves `log_storage/tail` | Shipped; in-tree `events.jsonl` is the fallback |
 | `custom` | Plugin-defined; invoked via `animus.plugin.call` | Shipped; no domain contract |
+
+The stdio protocol is forward-compatible on plugin-kind strings, so hosts can
+ship an additional role before every helper crate grows a first-class enum
+variant for it. `notifier` is the current example: the daemon discovers it by
+raw kind string and uses it for outbound notification delivery, but the core
+lifecycle is still the same `initialize` / `initialized` / `health/check`
+contract described below.
 
 ---
 
