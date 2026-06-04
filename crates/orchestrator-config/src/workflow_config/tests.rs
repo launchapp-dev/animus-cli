@@ -2301,3 +2301,214 @@ workflows:
     assert_eq!(researcher.system_prompt, researcher_prompt);
     assert!(researcher.system_prompt_file.is_none(), "field should be consumed at compile time");
 }
+
+#[test]
+fn yaml_parses_http_mcp_server() {
+    let yaml = r#"
+mcp_servers:
+  robinhood-trading:
+    transport: "http"
+    url: "https://agent.robinhood.com/mcp/trading"
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("http mcp server should parse");
+    let server = config.mcp_servers.get("robinhood-trading").expect("server should exist");
+    assert_eq!(server.transport.as_deref(), Some("http"));
+    assert_eq!(server.url.as_deref(), Some("https://agent.robinhood.com/mcp/trading"));
+    assert!(server.command.is_empty());
+    assert!(server.args.is_empty());
+}
+
+#[test]
+fn validation_accepts_http_mcp_server() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "robinhood-trading".to_string(),
+        McpServerDefinition {
+            command: String::new(),
+            args: Vec::new(),
+            transport: Some("http".to_string()),
+            url: Some("https://agent.robinhood.com/mcp/trading".to_string()),
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env: BTreeMap::new(),
+        },
+    );
+    validate_workflow_config(&config).expect("valid http mcp server should pass validation");
+}
+
+#[test]
+fn validation_rejects_http_without_url() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "missing-url".to_string(),
+        McpServerDefinition {
+            command: String::new(),
+            args: Vec::new(),
+            transport: Some("http".to_string()),
+            url: None,
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env: BTreeMap::new(),
+        },
+    );
+    let err = validate_workflow_config(&config).expect_err("missing url should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("mcp_servers['missing-url'].url is required when transport is \"http\""),
+        "error should mention missing url: {}",
+        message
+    );
+}
+
+#[test]
+fn validation_rejects_http_with_command() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "mixed".to_string(),
+        McpServerDefinition {
+            command: "node".to_string(),
+            args: vec!["server.js".to_string()],
+            transport: Some("http".to_string()),
+            url: Some("https://example.com/mcp".to_string()),
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env: BTreeMap::new(),
+        },
+    );
+    let err = validate_workflow_config(&config).expect_err("mutual exclusion violation should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("mcp_servers['mixed'].command must not be set when transport is \"http\""),
+        "error should mention command not allowed with http: {}",
+        message
+    );
+    assert!(
+        message.contains("mcp_servers['mixed'].args must not be set when transport is \"http\""),
+        "error should mention args not allowed with http: {}",
+        message
+    );
+}
+
+#[test]
+fn validation_rejects_stdio_with_url() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "mixed-stdio".to_string(),
+        McpServerDefinition {
+            command: "node".to_string(),
+            args: vec!["server.js".to_string()],
+            transport: Some("stdio".to_string()),
+            url: Some("https://example.com/mcp".to_string()),
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env: BTreeMap::new(),
+        },
+    );
+    let err = validate_workflow_config(&config).expect_err("stdio + url should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("mcp_servers['mixed-stdio'].url must not be set when transport is \"stdio\""),
+        "error should mention url not allowed with stdio: {}",
+        message
+    );
+}
+
+#[test]
+fn validation_rejects_http_with_invalid_url_scheme() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "bad-scheme".to_string(),
+        McpServerDefinition {
+            command: String::new(),
+            args: Vec::new(),
+            transport: Some("http".to_string()),
+            url: Some("ftp://example.com/mcp".to_string()),
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env: BTreeMap::new(),
+        },
+    );
+    let err = validate_workflow_config(&config).expect_err("invalid scheme should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("must be a valid http:// or https:// URL"),
+        "error should mention url scheme: {}",
+        message
+    );
+}
+
+#[test]
+fn validation_rejects_http_with_empty_host() {
+    for bad in ["https:///mcp", "https:// /mcp", "http://"] {
+        let mut config = builtin_workflow_config();
+        config.mcp_servers.insert(
+            "no-host".to_string(),
+            McpServerDefinition {
+                command: String::new(),
+                args: Vec::new(),
+                transport: Some("http".to_string()),
+                url: Some(bad.to_string()),
+                config: BTreeMap::new(),
+                tools: Vec::new(),
+                env: BTreeMap::new(),
+            },
+        );
+        let err =
+            validate_workflow_config(&config).err().unwrap_or_else(|| panic!("expected error for {bad:?}")).to_string();
+        assert!(err.contains("must be a valid http:// or https:// URL"), "expected URL error for {bad:?}, got: {err}");
+    }
+}
+
+#[test]
+fn validation_rejects_unknown_transport() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "weird".to_string(),
+        McpServerDefinition {
+            command: String::new(),
+            args: Vec::new(),
+            transport: Some("websocket".to_string()),
+            url: None,
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env: BTreeMap::new(),
+        },
+    );
+    let err = validate_workflow_config(&config).expect_err("unknown transport should fail");
+    let message = err.to_string();
+    assert!(message.contains("must be \"stdio\" or \"http\""), "error should mention valid transports: {}", message);
+}
+
+#[test]
+fn yaml_env_var_interpolation_reaches_http_mcp_url() {
+    let _guard = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _env_guard = EnvVarGuard::set("ROBINHOOD_MCP_URL", "https://agent.robinhood.com/mcp/trading");
+    let yaml_raw = r#"
+mcp_servers:
+  robinhood-trading:
+    transport: "http"
+    url: "${ROBINHOOD_MCP_URL}"
+"#;
+    let substituted = super::env_interp::interpolate_env(yaml_raw, "test.yaml").expect("env interp ok");
+    let config = parse_yaml_workflow_config(&substituted).expect("should parse after interp");
+    let server = config.mcp_servers.get("robinhood-trading").expect("server should exist");
+    assert_eq!(server.url.as_deref(), Some("https://agent.robinhood.com/mcp/trading"));
+}
+
+#[test]
+fn validation_rejects_agent_reference_to_unknown_mcp_server() {
+    use crate::agent_runtime_config::AgentProfile;
+
+    let mut config = builtin_workflow_config();
+    let mut profile = AgentProfile::default();
+    profile.mcp_servers = vec!["does-not-exist".to_string()];
+    config.agent_profiles.insert("rogue".to_string(), profile);
+
+    let err = validate_workflow_config(&config).expect_err("unknown server reference should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("agent_profiles['rogue'].mcp_servers references unknown MCP server 'does-not-exist'"),
+        "error should mention unknown reference: {}",
+        message
+    );
+}

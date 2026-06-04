@@ -239,6 +239,52 @@ agents:
     system_prompt_file: prompts/researcher.md
 ```
 
+### HTTP MCP servers
+
+The top-level `mcp_servers:` map in workflow YAML declares MCP servers that agents
+can attach to. Each entry must pick exactly one transport:
+
+- `transport: http` requires `url:` (an `http://` or `https://` endpoint). `command`,
+  `args`, and `env` must not be set on http entries.
+- `transport: stdio` (the default when omitted) requires `command:`; optional `args:`
+  and `env:` are supported. `url` must not be set on stdio entries.
+
+Agents reference servers by name via `agents.<id>.mcp_servers: [name1, name2]`. The
+name must match a key in the top-level `mcp_servers:` map; an unresolved name fails
+config validation with a clear error.
+
+Env-var interpolation applies to the entire workflow YAML before parsing, so it
+reaches `url:` and `command:` fields too — useful for swapping endpoints per
+environment:
+
+```yaml
+mcp_servers:
+  robinhood-trading:
+    transport: http
+    url: ${ROBINHOOD_MCP_URL:-https://agent.robinhood.com/mcp/trading}
+  animus:
+    transport: stdio
+    command: animus
+    args: ["mcp", "serve"]
+
+agents:
+  trader:
+    description: "Trade execution agent"
+    mcp_servers:
+      - robinhood-trading
+      - animus
+```
+
+The compiled `workflow-config.v2.json` carries the resolved server definitions, and
+each phase's runtime contract surfaces them under `/mcp/additional_servers` in the
+shape the agent runner expects (a `url` field for http transport, `command`/`args`/
+`env` for stdio).
+
+Note: Animus launches Claude with `--strict-mcp-config`, so user-scope `claude mcp
+add` registrations are not visible to Animus-spawned sessions. Servers an agent
+needs to call must be declared in workflow YAML (or supplied by a pack overlay or
+project-level `mcp_servers` config).
+
 ## Environment Variables
 
 The complete v0.4.0 env var surface was renamed from `AO_*` to `ANIMUS_*`. There are no
