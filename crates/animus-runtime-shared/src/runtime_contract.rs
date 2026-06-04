@@ -27,7 +27,8 @@ pub fn install_memory_mcp_stdio_command_override(resolver: Option<MemoryMcpStdio
 /// when neither is set so callers skip memory MCP injection rather than
 /// recursively launching the workflow_runner as its own MCP server.
 fn memory_mcp_stdio_command_override() -> Option<String> {
-    if let Some(command) = override_slot().read().ok().and_then(|guard| guard.as_ref().and_then(|resolver| resolver())) {
+    if let Some(command) = override_slot().read().ok().and_then(|guard| guard.as_ref().and_then(|resolver| resolver()))
+    {
         return Some(command);
     }
     std::env::var("ANIMUS_HOST_CLI_PATH").ok().filter(|value| !value.trim().is_empty())
@@ -357,11 +358,8 @@ pub fn inject_default_stdio_mcp_with_config(
         return;
     }
 
-    let command = mcp_config
-        .stdio_command
-        .clone()
-        .filter(|v| !v.trim().is_empty())
-        .or_else(memory_mcp_stdio_command_override);
+    let command =
+        mcp_config.stdio_command.clone().filter(|v| !v.trim().is_empty()).or_else(memory_mcp_stdio_command_override);
     let Some(command) = command else {
         return;
     };
@@ -1282,5 +1280,49 @@ mod tests {
             vec!["--from-host", "--json"],
             "host-supplied stdio_args_json must override the project-root fallback"
         );
+    }
+
+    #[test]
+    fn inject_workflow_mcp_servers_injects_http_transport_servers() {
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "robinhood-trading".to_string(),
+            McpServerDefinition {
+                command: String::new(),
+                args: Vec::new(),
+                transport: Some("http".to_string()),
+                url: Some("https://agent.robinhood.com/mcp/trading".to_string()),
+                config: BTreeMap::new(),
+                tools: Vec::new(),
+                env: BTreeMap::new(),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("research".to_string(), PhaseMcpBinding { servers: vec!["robinhood-trading".to_string()] });
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+        };
+
+        let mut runtime_contract = serde_json::json!({ "mcp": {} });
+        inject_workflow_mcp_servers(&mut runtime_contract, &ctx, "research");
+
+        let entry = runtime_contract
+            .pointer("/mcp/additional_servers/robinhood-trading")
+            .expect("robinhood server should be injected");
+        assert_eq!(entry.get("url").and_then(Value::as_str), Some("https://agent.robinhood.com/mcp/trading"));
+        assert_eq!(entry.get("transport").and_then(Value::as_str), Some("http"));
     }
 }

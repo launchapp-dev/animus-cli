@@ -445,8 +445,34 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         let transport = definition.transport.as_deref().map(str::trim).filter(|t| !t.is_empty());
         match transport {
             Some("http") => {
-                if definition.url.as_deref().is_none_or(|u| u.trim().is_empty()) {
-                    errors.push(format!("mcp_servers['{}'].url is required when transport is \"http\"", name));
+                match definition.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+                    None => {
+                        errors.push(format!("mcp_servers['{}'].url is required when transport is \"http\"", name));
+                    }
+                    Some(url) => {
+                        let after_scheme = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"));
+                        let host_ok = after_scheme
+                            .map(|rest| {
+                                let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+                                !host.trim().is_empty() && !host.contains(char::is_whitespace)
+                            })
+                            .unwrap_or(false);
+                        if !host_ok {
+                            errors.push(format!(
+                                "mcp_servers['{}'].url must be a valid http:// or https:// URL, got \"{}\"",
+                                name, url
+                            ));
+                        }
+                    }
+                }
+                if !definition.command.trim().is_empty() {
+                    errors.push(format!("mcp_servers['{}'].command must not be set when transport is \"http\"", name));
+                }
+                if !definition.args.is_empty() {
+                    errors.push(format!("mcp_servers['{}'].args must not be set when transport is \"http\"", name));
+                }
+                if !definition.env.is_empty() {
+                    errors.push(format!("mcp_servers['{}'].env must not be set when transport is \"http\"", name));
                 }
             }
             Some(other) if other != "stdio" => {
@@ -456,9 +482,11 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                 ));
             }
             _ => {
-                // stdio (explicit or default): command is required
                 if definition.command.trim().is_empty() {
                     errors.push(format!("mcp_servers['{}'].command must not be empty", name));
+                }
+                if definition.url.as_deref().is_some_and(|u| !u.trim().is_empty()) {
+                    errors.push(format!("mcp_servers['{}'].url must not be set when transport is \"stdio\"", name));
                 }
             }
         }

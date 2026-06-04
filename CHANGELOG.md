@@ -14,6 +14,12 @@ All notable changes to this project will be documented in this file.
   behavior is unchanged. `system_prompt` and `system_prompt_file` are mutually
   exclusive; missing files, non-UTF-8 contents, and files larger than 1 MiB
   fail compile with the resolved path in the error message.
+- **`feat(config)`: workflow YAML `mcp_servers:` entries can declare HTTP MCP
+  servers via `transport: http` + `url:`.** Validation enforces exactly one
+  transport per entry (http requires `url:` with an `http://`/`https://`
+  scheme; stdio requires `command:`), rejects mixed shapes, and the URL flows
+  through `/mcp/additional_servers` so agents reach remote MCPs without a
+  bridge script. Env-var interpolation works on `url:` and `command:` fields.
 
 ## [0.4.19] - 2026-05-29
 

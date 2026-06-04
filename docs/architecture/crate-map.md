@@ -19,7 +19,7 @@ responsibility. `Cargo.toml` is the source of truth for membership.
 | `agent-runner` | Runner process that launches and supervises provider sessions |
 
 The OpenAI-compatible runner binary moved out-of-tree to
-`launchapp-dev/animus-provider-oai-agent` v0.1.3 in the v0.5.2
+`launchapp-dev/animus-provider-oai-agent` v0.1.4 in the v0.5.2
 surface-shrink. The daemon's runtime contract resolver locates the
 binary inside the installed plugin (see `crates/orchestrator-core/src/runtime_contract.rs::resolve_oai_runner_binary`).
 
