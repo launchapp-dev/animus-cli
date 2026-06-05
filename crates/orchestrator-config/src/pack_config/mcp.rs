@@ -105,6 +105,7 @@ pub fn load_pack_mcp_overlay(pack: &LoadedPackManifest) -> Result<PackMcpOverlay
                 config,
                 tools: descriptor.tools,
                 env: descriptor.env,
+                oauth: None,
             },
         );
     }

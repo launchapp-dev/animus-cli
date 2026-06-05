@@ -21,6 +21,12 @@ pub struct ProjectMcpServerEntry {
     /// HTTP endpoint URL. Required when transport is "http".
     #[serde(default)]
     pub url: Option<String>,
+    /// OAuth broker config for HTTP transports. Mirrors the workflow YAML
+    /// `oauth:` block; carried as opaque JSON so the protocol crate
+    /// doesn't take a dep on `orchestrator-config`. The daemon
+    /// deserializes it into `OauthConfig` at contract-assembly time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

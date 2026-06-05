@@ -82,6 +82,71 @@ For subject backend and provider config patterns (and guidance on keeping **secr
 YAML), see
 [Workflow YAML environment variable interpolation](configuration.md#workflow-yaml-interpolation-non-secret-config).
 
+### HTTP transport with OAuth (v0.5.5)
+
+For HTTP-transport MCP servers (`transport: http` + `url:`), Animus can resolve
+an OAuth bearer token at contract-assembly time and inject it as an
+`Authorization: Bearer <token>` header into the additional MCP server entry
+passed to the agent. This lets `codex`, `gemini`, `opencode`, and any other
+HTTP-MCP-aware tool talk to OAuth-gated MCP endpoints without each tool
+implementing its own auth flow.
+
+```yaml
+mcp_servers:
+  robinhood-trading:
+    transport: http
+    url: https://agent.robinhood.com/mcp/trading
+    oauth:
+      flow: client_credentials       # client_credentials | refresh_token | manual_bearer
+      token_url: https://auth.robinhood.com/token
+      client_id_env: ROBINHOOD_CLIENT_ID
+      client_secret_env: ROBINHOOD_CLIENT_SECRET
+      scopes: [trade.read, trade.write]
+      audience: https://api.robinhood.com   # optional
+      cache: true                            # optional, default true
+```
+
+| Field | Required for | Description |
+| --- | --- | --- |
+| `flow` | always | `client_credentials`, `refresh_token`, or `manual_bearer`. |
+| `token_url` | `client_credentials`, `refresh_token` | OAuth token endpoint. Must be `http://` or `https://`. |
+| `client_id_env` | `client_credentials` | Env var name holding the client id. |
+| `client_secret_env` | `client_credentials` | Env var name holding the client secret. |
+| `refresh_token_env` | `refresh_token` | Env var name holding the initial refresh token. |
+| `bearer_env` | `manual_bearer` | Env var name holding a pre-baked bearer token. |
+| `scopes` | optional | OAuth scopes, joined with spaces and sent as `scope=`. |
+| `audience` | optional | Auth0-style `audience=` parameter. |
+| `cache` | optional | When `false`, the on-disk token cache is bypassed. Default `true`. |
+
+Tokens are cached under `~/.animus/<repo-scope>/mcp-oauth-cache/<server>.json`
+with `0600` permissions on Unix and a 60-second skew margin before the
+recorded `expires_at`. Setting `cache: false` skips the cache entirely.
+
+**Flows:**
+
+- **`client_credentials`** — POSTs `grant_type=client_credentials` plus the
+  resolved `client_id` / `client_secret` (and optional `scope` / `audience`)
+  to `token_url`. The returned `access_token` is cached until 60 seconds
+  before its `expires_in`.
+- **`refresh_token`** — POSTs `grant_type=refresh_token` plus the cached or
+  env-var refresh token (and any optional `client_id` / `client_secret`)
+  to `token_url`. If the response returns a rotated `refresh_token`, the
+  cache file is updated so the next phase uses the new token; the original
+  env var stays unchanged (so the env-var seed only kicks in on a cold cache).
+- **`manual_bearer`** — Reads `bearer_env` directly. No network call, no
+  refresh, no expiry. The escape hatch for tokens minted by an external
+  system.
+
+**Failure modes:** A failed token fetch logs a structured warning and emits
+the MCP entry **without** the bearer header — the downstream HTTP MCP call
+then surfaces the auth error directly to the user instead of the kernel
+silently dropping the server. Token text never appears in logs.
+
+**Validation:** `oauth` is only valid with `transport: http`. Missing
+required env-var pointers or `token_url` fail the configuration compile
+with a path-qualified error (e.g., `mcp_servers['svc'].oauth.client_id_env
+is required for flow="client_credentials"`).
+
 ---
 
 ## agents

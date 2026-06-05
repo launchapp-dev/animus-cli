@@ -1829,6 +1829,7 @@ fn validate_rejects_invalid_unified_sections() {
             config: BTreeMap::new(),
             tools: vec!["".to_string()],
             env: BTreeMap::from([("".to_string(), "value".to_string())]),
+            oauth: None,
         },
     );
     let err = validate_workflow_config(&config).expect_err("invalid unified config should fail");
@@ -2331,6 +2332,7 @@ fn validation_accepts_http_mcp_server() {
             config: BTreeMap::new(),
             tools: Vec::new(),
             env: BTreeMap::new(),
+            oauth: None,
         },
     );
     validate_workflow_config(&config).expect("valid http mcp server should pass validation");
@@ -2349,6 +2351,7 @@ fn validation_rejects_http_without_url() {
             config: BTreeMap::new(),
             tools: Vec::new(),
             env: BTreeMap::new(),
+            oauth: None,
         },
     );
     let err = validate_workflow_config(&config).expect_err("missing url should fail");
@@ -2373,6 +2376,7 @@ fn validation_rejects_http_with_command() {
             config: BTreeMap::new(),
             tools: Vec::new(),
             env: BTreeMap::new(),
+            oauth: None,
         },
     );
     let err = validate_workflow_config(&config).expect_err("mutual exclusion violation should fail");
@@ -2402,6 +2406,7 @@ fn validation_rejects_stdio_with_url() {
             config: BTreeMap::new(),
             tools: Vec::new(),
             env: BTreeMap::new(),
+            oauth: None,
         },
     );
     let err = validate_workflow_config(&config).expect_err("stdio + url should fail");
@@ -2426,6 +2431,7 @@ fn validation_rejects_http_with_invalid_url_scheme() {
             config: BTreeMap::new(),
             tools: Vec::new(),
             env: BTreeMap::new(),
+            oauth: None,
         },
     );
     let err = validate_workflow_config(&config).expect_err("invalid scheme should fail");
@@ -2451,6 +2457,7 @@ fn validation_rejects_http_with_empty_host() {
                 config: BTreeMap::new(),
                 tools: Vec::new(),
                 env: BTreeMap::new(),
+                oauth: None,
             },
         );
         let err =
@@ -2472,6 +2479,7 @@ fn validation_rejects_unknown_transport() {
             config: BTreeMap::new(),
             tools: Vec::new(),
             env: BTreeMap::new(),
+            oauth: None,
         },
     );
     let err = validate_workflow_config(&config).expect_err("unknown transport should fail");
@@ -2510,5 +2518,269 @@ fn validation_rejects_agent_reference_to_unknown_mcp_server() {
         message.contains("agent_profiles['rogue'].mcp_servers references unknown MCP server 'does-not-exist'"),
         "error should mention unknown reference: {}",
         message
+    );
+}
+
+fn http_oauth_server(oauth: OauthConfig) -> McpServerDefinition {
+    McpServerDefinition {
+        command: String::new(),
+        args: Vec::new(),
+        transport: Some("http".to_string()),
+        url: Some("https://agent.example.com/mcp".to_string()),
+        config: BTreeMap::new(),
+        tools: Vec::new(),
+        env: BTreeMap::new(),
+        oauth: Some(oauth),
+    }
+}
+
+#[test]
+fn yaml_parses_oauth_client_credentials_block() {
+    let yaml = r#"
+mcp_servers:
+  example:
+    transport: "http"
+    url: "https://agent.example.com/mcp"
+    oauth:
+      flow: client_credentials
+      token_url: "https://auth.example.com/token"
+      client_id_env: EXAMPLE_CLIENT_ID
+      client_secret_env: EXAMPLE_CLIENT_SECRET
+      scopes:
+        - read
+        - write
+      audience: "https://api.example.com"
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("oauth block should parse");
+    let server = config.mcp_servers.get("example").expect("server exists");
+    let oauth = server.oauth.as_ref().expect("oauth block present");
+    assert_eq!(oauth.flow, OauthFlow::ClientCredentials);
+    assert_eq!(oauth.token_url.as_deref(), Some("https://auth.example.com/token"));
+    assert_eq!(oauth.client_id_env.as_deref(), Some("EXAMPLE_CLIENT_ID"));
+    assert_eq!(oauth.client_secret_env.as_deref(), Some("EXAMPLE_CLIENT_SECRET"));
+    assert_eq!(oauth.scopes, vec!["read".to_string(), "write".to_string()]);
+    assert_eq!(oauth.audience.as_deref(), Some("https://api.example.com"));
+    assert!(oauth.cache, "cache should default to true");
+}
+
+#[test]
+fn yaml_parses_oauth_refresh_token_block() {
+    let yaml = r#"
+mcp_servers:
+  example:
+    transport: "http"
+    url: "https://agent.example.com/mcp"
+    oauth:
+      flow: refresh_token
+      token_url: "https://auth.example.com/token"
+      refresh_token_env: EXAMPLE_REFRESH
+      cache: false
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("oauth block should parse");
+    let oauth = config.mcp_servers.get("example").unwrap().oauth.as_ref().expect("oauth present");
+    assert_eq!(oauth.flow, OauthFlow::RefreshToken);
+    assert_eq!(oauth.refresh_token_env.as_deref(), Some("EXAMPLE_REFRESH"));
+    assert!(!oauth.cache, "explicit cache: false should be honored");
+}
+
+#[test]
+fn yaml_parses_oauth_manual_bearer_block() {
+    let yaml = r#"
+mcp_servers:
+  example:
+    transport: "http"
+    url: "https://agent.example.com/mcp"
+    oauth:
+      flow: manual_bearer
+      bearer_env: EXAMPLE_BEARER
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("oauth block should parse");
+    let oauth = config.mcp_servers.get("example").unwrap().oauth.as_ref().expect("oauth present");
+    assert_eq!(oauth.flow, OauthFlow::ManualBearer);
+    assert_eq!(oauth.bearer_env.as_deref(), Some("EXAMPLE_BEARER"));
+}
+
+#[test]
+fn validation_accepts_oauth_client_credentials() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "example".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::ClientCredentials,
+            token_url: Some("https://auth.example.com/token".to_string()),
+            client_id_env: Some("EXAMPLE_CLIENT_ID".to_string()),
+            client_secret_env: Some("EXAMPLE_CLIENT_SECRET".to_string()),
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec!["read".to_string()],
+            audience: None,
+            cache: true,
+        }),
+    );
+    validate_workflow_config(&config).expect("complete cc oauth block should validate");
+}
+
+#[test]
+fn validation_rejects_client_credentials_missing_token_url() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "example".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::ClientCredentials,
+            token_url: None,
+            client_id_env: Some("EXAMPLE_CLIENT_ID".to_string()),
+            client_secret_env: Some("EXAMPLE_CLIENT_SECRET".to_string()),
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+        }),
+    );
+    let err = validate_workflow_config(&config).expect_err("missing token_url should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("oauth.token_url is required for flow=\"client_credentials\""),
+        "error should name missing token_url: {message}"
+    );
+}
+
+#[test]
+fn validation_rejects_client_credentials_missing_client_secret_env() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "example".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::ClientCredentials,
+            token_url: Some("https://auth.example.com/token".to_string()),
+            client_id_env: Some("EXAMPLE_CLIENT_ID".to_string()),
+            client_secret_env: None,
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+        }),
+    );
+    let err = validate_workflow_config(&config).expect_err("missing client_secret_env should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("oauth.client_secret_env is required for flow=\"client_credentials\""),
+        "error should name missing client_secret_env: {message}"
+    );
+}
+
+#[test]
+fn validation_rejects_manual_bearer_without_bearer_env() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "example".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::ManualBearer,
+            token_url: None,
+            client_id_env: None,
+            client_secret_env: None,
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: false,
+        }),
+    );
+    let err = validate_workflow_config(&config).expect_err("missing bearer_env should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("oauth.bearer_env is required for flow=\"manual_bearer\""),
+        "error should name missing bearer_env: {message}"
+    );
+}
+
+#[test]
+fn validation_rejects_oauth_on_stdio_transport() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "example".to_string(),
+        McpServerDefinition {
+            command: "node".to_string(),
+            args: vec!["server.js".to_string()],
+            transport: Some("stdio".to_string()),
+            url: None,
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env: BTreeMap::new(),
+            oauth: Some(OauthConfig {
+                flow: OauthFlow::ManualBearer,
+                token_url: None,
+                client_id_env: None,
+                client_secret_env: None,
+                refresh_token_env: None,
+                bearer_env: Some("EXAMPLE_BEARER".to_string()),
+                scopes: vec![],
+                audience: None,
+                cache: false,
+            }),
+        },
+    );
+    let err = validate_workflow_config(&config).expect_err("oauth on stdio should fail");
+    let message = err.to_string();
+    assert!(
+        message.contains("oauth is only valid when transport is \"http\""),
+        "error should reject stdio + oauth: {message}"
+    );
+}
+
+#[test]
+fn validation_rejects_oauth_token_url_with_missing_host() {
+    // Regression guard for codex round-4 [P2]: previously a bare scheme
+    // like `https://` passed the prefix check and only failed later
+    // when reqwest tried to POST it. Now the validator requires a
+    // non-empty host segment.
+    for bad in ["https://", "http://", "https:// ", " https://auth.example.com/token"] {
+        let mut config = builtin_workflow_config();
+        config.mcp_servers.insert(
+            "example".to_string(),
+            http_oauth_server(OauthConfig {
+                flow: OauthFlow::ClientCredentials,
+                token_url: Some(bad.to_string()),
+                client_id_env: Some("EXAMPLE_CLIENT_ID".to_string()),
+                client_secret_env: Some("EXAMPLE_CLIENT_SECRET".to_string()),
+                refresh_token_env: None,
+                bearer_env: None,
+                scopes: vec![],
+                audience: None,
+                cache: true,
+            }),
+        );
+        let err = validate_workflow_config(&config).expect_err("expected error for {bad:?}");
+        let message = err.to_string();
+        assert!(
+            message.contains("oauth.token_url"),
+            "error should name the oauth.token_url field for {bad:?}: {message}"
+        );
+    }
+}
+
+#[test]
+fn validation_rejects_refresh_token_with_bearer_env() {
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "example".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::RefreshToken,
+            token_url: Some("https://auth.example.com/token".to_string()),
+            client_id_env: None,
+            client_secret_env: None,
+            refresh_token_env: Some("EXAMPLE_REFRESH".to_string()),
+            bearer_env: Some("EXAMPLE_BEARER".to_string()),
+            scopes: vec![],
+            audience: None,
+            cache: true,
+        }),
+    );
+    let err = validate_workflow_config(&config).expect_err("bearer_env must not coexist with refresh_token");
+    let message = err.to_string();
+    assert!(
+        message.contains("oauth.bearer_env must not be set for flow=\"refresh_token\""),
+        "error should reject bearer_env in refresh flow: {message}"
     );
 }

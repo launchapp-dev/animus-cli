@@ -49,6 +49,13 @@ protocol            = { workspace = true }
 orchestrator-core   = { workspace = true }
 orchestrator-config = { workspace = true }
 
+# v0.5.5: kernel-level OAuth broker for HTTP-transport MCP servers.
+# `reqwest::blocking` is used because the runtime_contract assembly path
+# is synchronous (called from the workflow_runner plugin without a tokio
+# context guarantee). Token resolution happens once per phase, on the
+# caller thread, with on-disk caching keyed by `<server>.json`.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+
 [features]
 # Exposes the `phase_session::test_fault` and `phase_output::test_fault`
 # helpers to downstream test crates (e.g. the plugin's integration tests)

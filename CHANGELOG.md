@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added (v0.5.5)
+
+- **Kernel-level OAuth broker for HTTP-transport MCP servers.** HTTP MCP
+  entries (`mcp_servers.<name>` with `transport: http` + `url:`) can now
+  carry an `oauth:` block declaring one of three flows
+  (`client_credentials`, `refresh_token`, `manual_bearer`). The daemon
+  resolves a bearer token at runtime-contract assembly time, caches it
+  under `~/.animus/<repo-scope>/mcp-oauth-cache/<server>.json` (0600 perms
+  on Unix, 60s skew margin), and injects `Authorization: Bearer <token>`
+  into the `/mcp/additional_servers/<name>/headers` map alongside `url`
+  and `transport`. Credentials are read from env vars named via `*_env`
+  pointers; tokens never appear in YAML or logs. Validation rejects
+  `oauth:` on stdio transports and surfaces actionable errors when
+  required env vars or `token_url` are missing. See
+  [docs/reference/workflow-yaml.md](docs/reference/workflow-yaml.md#http-transport-with-oauth-v055)
+  for the full shape.
+
 ## [0.5.4] - 2026-06-05
 
 ### Removed (v0.5.4 surface-shrink)

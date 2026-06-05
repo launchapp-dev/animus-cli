@@ -98,6 +98,7 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
                 config: BTreeMap::new(),
                 tools: Vec::new(),
                 env: BTreeMap::new(),
+                oauth: None,
             },
         )]),
         phase_mcp_bindings: BTreeMap::new(),

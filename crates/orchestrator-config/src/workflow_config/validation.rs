@@ -194,6 +194,91 @@ fn validate_skill_references(
     }
 }
 
+fn validate_oauth_config(server_name: &str, transport: Option<&str>, oauth: &OauthConfig, errors: &mut Vec<String>) {
+    if transport != Some("http") {
+        errors.push(format!("mcp_servers['{}'].oauth is only valid when transport is \"http\"", server_name));
+        return;
+    }
+    let field = |name: &str| format!("mcp_servers['{}'].oauth.{}", server_name, name);
+    let require_nonempty = |value: &Option<String>, name: &str, errors: &mut Vec<String>| match value {
+        None => {
+            errors.push(format!("{} is required for flow=\"{}\"", field(name), oauth.flow.as_str()));
+            false
+        }
+        Some(v) if v.trim().is_empty() => {
+            errors.push(format!("{} must not be empty", field(name)));
+            false
+        }
+        _ => true,
+    };
+    if let Some(token_url) = &oauth.token_url {
+        // Same shape check as the HTTP MCP server `url` field: untrimmed
+        // surrounding whitespace fails (it would be sent to reqwest
+        // verbatim), the scheme must be http/https, and the host
+        // segment must be present and contain no whitespace.
+        let raw = token_url.as_str();
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            let untrimmed = raw.len() != trimmed.len();
+            let after_scheme = trimmed.strip_prefix("http://").or_else(|| trimmed.strip_prefix("https://"));
+            let host_ok = after_scheme
+                .map(|rest| {
+                    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+                    !host.trim().is_empty() && !host.contains(char::is_whitespace)
+                })
+                .unwrap_or(false);
+            if untrimmed || !host_ok {
+                errors.push(format!(
+                    "{} must be a valid http:// or https:// URL with a non-empty host, got \"{}\"",
+                    field("token_url"),
+                    raw
+                ));
+            }
+        }
+    }
+    if oauth.scopes.iter().any(|s| s.trim().is_empty()) {
+        errors.push(format!("{} must not contain empty values", field("scopes")));
+    }
+    match oauth.flow {
+        OauthFlow::ClientCredentials => {
+            require_nonempty(&oauth.token_url, "token_url", errors);
+            require_nonempty(&oauth.client_id_env, "client_id_env", errors);
+            require_nonempty(&oauth.client_secret_env, "client_secret_env", errors);
+            if oauth.refresh_token_env.is_some() {
+                errors.push(format!("{} must not be set for flow=\"client_credentials\"", field("refresh_token_env")));
+            }
+            if oauth.bearer_env.is_some() {
+                errors.push(format!("{} must not be set for flow=\"client_credentials\"", field("bearer_env")));
+            }
+        }
+        OauthFlow::RefreshToken => {
+            require_nonempty(&oauth.token_url, "token_url", errors);
+            require_nonempty(&oauth.refresh_token_env, "refresh_token_env", errors);
+            if oauth.bearer_env.is_some() {
+                errors.push(format!("{} must not be set for flow=\"refresh_token\"", field("bearer_env")));
+            }
+        }
+        OauthFlow::ManualBearer => {
+            require_nonempty(&oauth.bearer_env, "bearer_env", errors);
+            if oauth.token_url.is_some() {
+                errors.push(format!("{} must not be set for flow=\"manual_bearer\"", field("token_url")));
+            }
+            if oauth.client_id_env.is_some() {
+                errors.push(format!("{} must not be set for flow=\"manual_bearer\"", field("client_id_env")));
+            }
+            if oauth.client_secret_env.is_some() {
+                errors.push(format!("{} must not be set for flow=\"manual_bearer\"", field("client_secret_env")));
+            }
+            if oauth.refresh_token_env.is_some() {
+                errors.push(format!("{} must not be set for flow=\"manual_bearer\"", field("refresh_token_env")));
+            }
+            if !oauth.scopes.is_empty() {
+                errors.push(format!("{} must not be set for flow=\"manual_bearer\"", field("scopes")));
+            }
+        }
+    }
+}
+
 pub fn validate_workflow_config(config: &WorkflowConfig) -> Result<()> {
     validate_workflow_config_with_project_root(config, None)
 }
@@ -501,6 +586,9 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         }
         if definition.env.iter().any(|(key, value)| key.trim().is_empty() || value.trim().is_empty()) {
             errors.push(format!("mcp_servers['{}'].env must not contain empty keys or values", name));
+        }
+        if let Some(oauth) = &definition.oauth {
+            validate_oauth_config(name, transport, oauth, &mut errors);
         }
     }
 

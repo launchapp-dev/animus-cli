@@ -290,6 +290,22 @@ add` registrations are not visible to Animus-spawned sessions. Servers an agent
 needs to call must be declared in workflow YAML (or supplied by a pack overlay or
 project-level `mcp_servers` config).
 
+#### HTTP MCP OAuth (v0.5.5)
+
+HTTP-transport MCP servers can attach an `oauth:` block so the daemon resolves
+a bearer token and injects an `Authorization: Bearer <token>` header into the
+additional MCP server entry passed to the agent. Tokens never appear in YAML —
+all credential material is read from process environment variables named via
+`*_env` pointers in the block. See the
+[workflow-yaml HTTP transport with OAuth](workflow-yaml.md#http-transport-with-oauth-v055)
+section for the full shape and validation rules.
+
+Token cache: `~/.animus/<repo-scope>/mcp-oauth-cache/<server>.json` with
+`0600` permissions on Unix. The daemon reads `client_id` / `client_secret` /
+`refresh_token` / `bearer` env vars from the daemon process's own
+environment, mirroring how plugin secrets are sourced today (see
+`docs/reference/configuration.md#secrets-vs-non-secret-config`).
+
 ## Self-update
 
 The `animus` CLI can poll its own GitHub releases
