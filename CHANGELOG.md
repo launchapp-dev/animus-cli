@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-06-05
+
 ### Removed (v0.5.3 surface-shrink)
 
 - **`agent-runner` sidecar deleted.** The standalone `crates/agent-runner/`
