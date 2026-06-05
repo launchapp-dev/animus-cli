@@ -92,6 +92,7 @@ surface.
 - [Tool-Driven Mutation Surfaces](tool-driven-mutation-surfaces.md) -- How state mutations are channeled through tool abstractions
 - [Workflow-First CLI](workflow-first-cli.md) -- Why workflows are the primary execution primitive
 - [Phase Contracts](phase-contracts.md) -- Universal phase verdicts, YAML-defined fields, and runtime validation
+- [Multi-Tenant + RBAC Design Proposal (v0.5.5+)](multi-tenant-rbac-v0.5.5.md) -- Principal model, role/permission scaffold, four-chokepoint authz, and the explicit v0.6 deferrals for per-tenant state isolation and per-principal secret routing
 
 ## Deep Dives
 
