@@ -16,6 +16,7 @@ mod queue_types;
 mod project_types;
 mod root_types;
 mod runner_types;
+mod self_types;
 mod shared_types;
 mod skill_types;
 mod subject_types;
@@ -41,6 +42,7 @@ pub(crate) use queue_types::*;
 pub(crate) use project_types::*;
 pub(crate) use root_types::*;
 pub(crate) use runner_types::*;
+pub(crate) use self_types::*;
 pub(crate) use shared_types::*;
 pub(crate) use skill_types::*;
 pub(crate) use subject_types::*;
@@ -132,6 +134,21 @@ mod tests {
     fn parses_top_level_status_command() {
         let cli = Cli::try_parse_from(["animus", "status"]).expect("status command should parse");
         assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn parses_self_update_command() {
+        let cli = Cli::try_parse_from(["animus", "self", "update", "--check-only", "--prerelease"])
+            .expect("self update should parse");
+        match cli.command {
+            Command::SelfCmd { command: SelfCommand::Update(args) } => {
+                assert!(args.check_only);
+                assert!(args.prerelease);
+                assert!(!args.force);
+                assert!(!args.yes);
+            }
+            _ => panic!("expected self update command"),
+        }
     }
 
     #[test]

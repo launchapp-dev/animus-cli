@@ -638,11 +638,7 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
     let yaml_path = plugins_yaml_path()?;
     let mut config = load_plugins_yaml(&yaml_path)?;
     let key = serde_yaml::Value::String(plugin_name.clone());
-    let entry_for_binaries = config
-        .plugins
-        .get(&key)
-        .cloned()
-        .or_else(|| config.providers.get(&key).cloned());
+    let entry_for_binaries = config.plugins.get(&key).cloned().or_else(|| config.providers.get(&key).cloned());
     let removed_in_yaml = config.plugins.remove(&key).is_some() || config.providers.remove(&key).is_some();
     if removed_in_yaml {
         save_plugins_yaml(&yaml_path, &config)?;
@@ -1138,10 +1134,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             for name in &installed_binary_names {
                 binaries_seq.push(serde_yaml::Value::String(name.clone()));
             }
-            map.insert(
-                serde_yaml::Value::String("binaries".to_string()),
-                serde_yaml::Value::Sequence(binaries_seq),
-            );
+            map.insert(serde_yaml::Value::String("binaries".to_string()), serde_yaml::Value::Sequence(binaries_seq));
         }
         if let Some(m) = manifest.as_ref() {
             map.insert(serde_yaml::Value::String("name".to_string()), serde_yaml::Value::String(m.name.clone()));
@@ -2325,11 +2318,7 @@ async fn fetch_plugin_toml_for_release(owner: &str, repo: &str, tag: &str) -> Re
     let url = format!("https://raw.githubusercontent.com/{owner}/{repo}/{tag}/plugin.toml");
     let client =
         reqwest::Client::builder().user_agent(release_user_agent()).build().context("failed to build HTTP client")?;
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {url}"))?;
+    let response = client.get(&url).send().await.with_context(|| format!("failed to GET {url}"))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }

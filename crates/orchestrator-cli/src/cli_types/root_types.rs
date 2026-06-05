@@ -124,4 +124,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: FlavorCommand,
     },
+    /// Manage the `animus` binary itself — check for and install updates.
+    #[command(name = "self")]
+    SelfCmd {
+        #[command(subcommand)]
+        command: SelfCommand,
+    },
 }

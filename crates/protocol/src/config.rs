@@ -43,6 +43,57 @@ pub struct Config {
     /// invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_subject_kind: Option<String>,
+    /// Configurable auto-update behavior for the `animus` CLI itself. Pulls
+    /// release metadata from `launchapp-dev/animus-cli` and (depending on
+    /// `mode`) notifies, prompts, or silently applies new versions on
+    /// startup. Omitted on disk by default — absence behaves like the
+    /// type-level [`AutoUpdateConfig::default`] (mode = `notify`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_update: Option<AutoUpdateConfig>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoUpdateMode {
+    Off,
+    #[default]
+    Notify,
+    Prompt,
+    Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoUpdateChannel {
+    #[default]
+    Stable,
+    Prerelease,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutoUpdateConfig {
+    #[serde(default)]
+    pub mode: AutoUpdateMode,
+    /// ISO-8601 duration string (e.g. `P1D`, `PT12H`). Parsed by the CLI
+    /// layer; persisted verbatim. Default is `P1D` (one day) when omitted.
+    #[serde(default = "default_check_interval")]
+    pub check_interval: String,
+    #[serde(default)]
+    pub channel: AutoUpdateChannel,
+}
+
+impl Default for AutoUpdateConfig {
+    fn default() -> Self {
+        Self {
+            mode: AutoUpdateMode::default(),
+            check_interval: default_check_interval(),
+            channel: AutoUpdateChannel::default(),
+        }
+    }
+}
+
+fn default_check_interval() -> String {
+    "P1D".to_string()
 }
 
 impl Config {
@@ -101,6 +152,7 @@ impl Config {
             mcp_servers: BTreeMap::new(),
             claude_profiles: BTreeMap::new(),
             default_subject_kind: Some("task".to_string()),
+            auto_update: None,
         };
         let json = serde_json::to_string_pretty(&default_config)?;
         fs::write(config_path, json)?;
@@ -260,10 +312,51 @@ mod tests {
             mcp_servers: BTreeMap::new(),
             claude_profiles: BTreeMap::new(),
             default_subject_kind: None,
+            auto_update: None,
         };
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(!json.contains("mcp_servers"));
         assert!(!json.contains("claude_profiles"));
         assert!(!json.contains("default_subject_kind"));
+        assert!(!json.contains("auto_update"));
+    }
+
+    #[test]
+    fn config_without_auto_update_block_is_accepted() {
+        let json = r#"{"agent_runner_token": null}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.auto_update.is_none());
+    }
+
+    #[test]
+    fn config_with_auto_update_block_roundtrips() {
+        let json = r#"{
+            "agent_runner_token": null,
+            "auto_update": {
+                "mode": "prompt",
+                "check_interval": "PT6H",
+                "channel": "prerelease"
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let auto = config.auto_update.as_ref().expect("auto_update block should deserialize");
+        assert_eq!(auto.mode, AutoUpdateMode::Prompt);
+        assert_eq!(auto.channel, AutoUpdateChannel::Prerelease);
+        assert_eq!(auto.check_interval, "PT6H");
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        let round: Config = serde_json::from_str(&serialized).unwrap();
+        let round_auto = round.auto_update.expect("auto_update should survive round-trip");
+        assert_eq!(round_auto.mode, AutoUpdateMode::Prompt);
+        assert_eq!(round_auto.channel, AutoUpdateChannel::Prerelease);
+    }
+
+    #[test]
+    fn auto_update_block_defaults_fill_omitted_fields() {
+        let json = r#"{"mode": "auto"}"#;
+        let auto: AutoUpdateConfig = serde_json::from_str(json).unwrap();
+        assert_eq!(auto.mode, AutoUpdateMode::Auto);
+        assert_eq!(auto.channel, AutoUpdateChannel::Stable);
+        assert_eq!(auto.check_interval, "P1D");
     }
 }
