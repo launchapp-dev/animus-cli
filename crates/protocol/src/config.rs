@@ -43,6 +43,52 @@ pub struct Config {
     /// invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_subject_kind: Option<String>,
+    /// Opt-in anonymous usage metrics. `enabled = None` means the
+    /// first-run prompt has not been shown yet; `Some(false)` means the
+    /// user (or env override) declined; `Some(true)` means opted in.
+    /// See `docs/reference/configuration.md` for the privacy invariants.
+    #[serde(default, skip_serializing_if = "MetricsConfig::is_default")]
+    pub metrics: MetricsConfig,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default = "default_metrics_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_metrics_batch_interval")]
+    pub batch_interval: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_id: Option<String>,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: None,
+            endpoint: default_metrics_endpoint(),
+            batch_interval: default_metrics_batch_interval(),
+            install_id: None,
+        }
+    }
+}
+
+impl MetricsConfig {
+    pub fn is_default(&self) -> bool {
+        self.enabled.is_none()
+            && self.install_id.is_none()
+            && self.endpoint == default_metrics_endpoint()
+            && self.batch_interval == default_metrics_batch_interval()
+    }
+}
+
+fn default_metrics_endpoint() -> String {
+    "https://metrics.animus.dev/v1/events".to_string()
+}
+
+fn default_metrics_batch_interval() -> String {
+    "P1D".to_string()
 }
 
 impl Config {
@@ -101,6 +147,7 @@ impl Config {
             mcp_servers: BTreeMap::new(),
             claude_profiles: BTreeMap::new(),
             default_subject_kind: Some("task".to_string()),
+            metrics: MetricsConfig::default(),
         };
         let json = serde_json::to_string_pretty(&default_config)?;
         fs::write(config_path, json)?;
@@ -260,10 +307,46 @@ mod tests {
             mcp_servers: BTreeMap::new(),
             claude_profiles: BTreeMap::new(),
             default_subject_kind: None,
+            metrics: MetricsConfig::default(),
         };
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(!json.contains("mcp_servers"));
         assert!(!json.contains("claude_profiles"));
         assert!(!json.contains("default_subject_kind"));
+        assert!(!json.contains("metrics"));
+    }
+
+    #[test]
+    fn config_without_metrics_block_defaults_to_unknown_consent() {
+        let json = r#"{"agent_runner_token": null}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.metrics.enabled.is_none(), "missing metrics block should mean never-asked");
+        assert!(config.metrics.install_id.is_none());
+        assert_eq!(config.metrics.endpoint, "https://metrics.animus.dev/v1/events");
+        assert_eq!(config.metrics.batch_interval, "P1D");
+        assert!(config.metrics.is_default());
+    }
+
+    #[test]
+    fn config_with_metrics_block_roundtrips() {
+        let json = r#"{
+            "agent_runner_token": null,
+            "metrics": {
+                "enabled": true,
+                "endpoint": "https://metrics.example.com/v1/events",
+                "batch_interval": "PT1H",
+                "install_id": "11111111-2222-3333-4444-555555555555"
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert_eq!(config.metrics.enabled, Some(true));
+        assert_eq!(config.metrics.endpoint, "https://metrics.example.com/v1/events");
+        assert_eq!(config.metrics.batch_interval, "PT1H");
+        assert_eq!(config.metrics.install_id.as_deref(), Some("11111111-2222-3333-4444-555555555555"));
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        let roundtripped: Config = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(roundtripped.metrics.enabled, Some(true));
+        assert_eq!(roundtripped.metrics.install_id.as_deref(), Some("11111111-2222-3333-4444-555555555555"));
     }
 }

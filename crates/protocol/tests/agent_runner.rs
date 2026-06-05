@@ -209,6 +209,7 @@ fn test_config_get_token_returns_config_value() {
         mcp_servers: BTreeMap::new(),
         claude_profiles: BTreeMap::new(),
         default_subject_kind: None,
+        metrics: MetricsConfig::default(),
     };
 
     let token = config.get_token().expect("config token should resolve");
@@ -222,6 +223,7 @@ fn test_config_get_token_rejects_blank_config_value() {
         mcp_servers: BTreeMap::new(),
         claude_profiles: BTreeMap::new(),
         default_subject_kind: None,
+        metrics: MetricsConfig::default(),
     };
 
     let error = config.get_token().expect_err("blank config token should fail closed");
@@ -235,6 +237,7 @@ fn test_config_get_token_rejects_missing_token() {
         mcp_servers: BTreeMap::new(),
         claude_profiles: BTreeMap::new(),
         default_subject_kind: None,
+        metrics: MetricsConfig::default(),
     };
 
     let error = config.get_token().expect_err("missing token should fail closed");
