@@ -16,9 +16,14 @@
 //! Errors include the YAML file path and 1-based line number of the offending
 //! reference for fast diagnosis.
 
+use std::collections::BTreeMap;
 use std::env;
 
 use anyhow::{anyhow, Result};
+
+use super::types::SecretRef;
+
+const SECRET_PREFIX: &str = "secret.";
 
 /// Resolve a single `${...}` reference against the process environment.
 ///
@@ -26,6 +31,38 @@ use anyhow::{anyhow, Result};
 /// without needing to plumb a custom resolver through the call sites.
 fn lookup_env(key: &str) -> Option<String> {
     env::var(key).ok()
+}
+
+/// `${secret.<name>}` references are reserved for the dedicated secrets
+/// interpolation pass. The env interpolator must leave them untouched (and
+/// must not validate the body, since `.` is otherwise illegal in env-var
+/// names).
+fn is_secret_reference(body: &str) -> bool {
+    // Honor the leading whitespace tolerance of `${ NAME }` by stripping
+    // ASCII whitespace before the prefix check.
+    body.trim_start().starts_with(SECRET_PREFIX)
+}
+
+/// Peek at the bytes starting at `offset` and report whether they look like
+/// a well-formed `${secret.<name>}` reference. Used so that the env-interp
+/// pass can preserve `$$` escapes that are protecting a literal secret
+/// reference for the downstream secrets pass.
+fn looks_like_secret_ref_after(bytes: &[u8], offset: usize) -> bool {
+    if offset + 1 >= bytes.len() {
+        return false;
+    }
+    if bytes[offset] != b'{' {
+        return false;
+    }
+    let body_start = offset + 1;
+    let Some(close_off) = find_matching_close(&bytes[body_start..]) else {
+        return false;
+    };
+    let body = match std::str::from_utf8(&bytes[body_start..body_start + close_off]) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    is_secret_reference(body)
 }
 
 /// Interpolate shell-style `${VAR}` references in `content`.
@@ -58,9 +95,17 @@ where
         // Flush everything since the last `$` (or start) as a single str slice.
         out.push_str(&content[copy_from..i]);
 
-        // `$$` escapes a literal `$`.
+        // `$$` escapes a literal `$`.  However, when the escape immediately
+        // precedes a `${secret.X}` reference, the secrets pass also needs to
+        // see (and consume) the `$$` so a deliberately-escaped literal
+        // `${secret.X}` survives both passes. Pass it through unchanged in
+        // that case — the secrets interpolator handles the collapse.
         if i + 1 < bytes.len() && bytes[i + 1] == b'$' {
-            out.push('$');
+            if looks_like_secret_ref_after(bytes, i + 2) {
+                out.push_str("$$");
+            } else {
+                out.push('$');
+            }
             i += 2;
             copy_from = i;
             continue;
@@ -79,6 +124,14 @@ where
                 ));
             };
             let body = &content[body_start..body_start + close_off];
+            if is_secret_reference(body) {
+                // Reserved for the dedicated secrets pass — copy the entire
+                // reference (including `${...}`) through untouched.
+                out.push_str(&content[start..=body_start + close_off]);
+                i = body_start + close_off + 1;
+                copy_from = i;
+                continue;
+            }
             let resolved = resolve_reference(body, source_label, &resolver, || line_number_for_offset(content, start))?;
             out.push_str(&resolved);
             i = body_start + close_off + 1; // skip past `}`
@@ -179,6 +232,222 @@ where
         ));
     }
     Ok(())
+}
+
+/// Resolve every `${secret.<name>}` reference in `content` against the
+/// declared `secrets` block, reading the mapped env var at compile time.
+///
+/// - Unknown secret names error with the file path and 1-based line number.
+/// - Required-but-unset env vars error with the same location info.
+/// - Optional unset secrets resolve to an empty string.
+pub fn interpolate_secrets(content: &str, source_label: &str, secrets: &BTreeMap<String, SecretRef>) -> Result<String> {
+    interpolate_secrets_with(content, source_label, secrets, lookup_env)
+}
+
+pub(crate) fn interpolate_secrets_with<F>(
+    content: &str,
+    source_label: &str,
+    secrets: &BTreeMap<String, SecretRef>,
+    resolver: F,
+) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let bytes = content.as_bytes();
+    let mut out = String::with_capacity(content.len());
+    let mut i = 0usize;
+    let mut copy_from = 0usize;
+
+    while i < bytes.len() {
+        if bytes[i] != b'$' {
+            i += 1;
+            continue;
+        }
+        out.push_str(&content[copy_from..i]);
+
+        // `$$` escapes — handled by interpolate_env earlier, but if a caller
+        // skips that pass we still want to preserve them coherently.
+        if i + 1 < bytes.len() && bytes[i + 1] == b'$' {
+            out.push('$');
+            i += 2;
+            copy_from = i;
+            continue;
+        }
+
+        if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            let start = i;
+            let body_start = i + 2;
+            let Some(close_off) = find_matching_close(&bytes[body_start..]) else {
+                let line = line_number_for_offset(content, start);
+                return Err(anyhow!(
+                    "workflow YAML at {} line {} contains an unterminated `${{` reference",
+                    source_label,
+                    line
+                ));
+            };
+            let body = &content[body_start..body_start + close_off];
+            if !is_secret_reference(body) {
+                // Not a secret — preserve as-is so non-secret env vars that
+                // the env pass passed through (e.g. unknown future syntax)
+                // are not consumed here.
+                out.push_str(&content[start..=body_start + close_off]);
+                i = body_start + close_off + 1;
+                copy_from = i;
+                continue;
+            }
+
+            let key = body.trim().strip_prefix(SECRET_PREFIX).unwrap_or("").trim();
+            if key.is_empty() {
+                let line = line_number_for_offset(content, start);
+                return Err(anyhow!(
+                    "workflow YAML at {} line {} has an empty `${{secret.}}` reference",
+                    source_label,
+                    line
+                ));
+            }
+            let Some(secret) = secrets.get(key) else {
+                let line = line_number_for_offset(content, start);
+                return Err(anyhow!(
+                    "workflow YAML at {} line {} references undeclared secret `{}`; add it under the top-level `secrets:` block",
+                    source_label,
+                    line,
+                    key
+                ));
+            };
+
+            let env_name = secret.env.trim();
+            if env_name.is_empty() {
+                let line = line_number_for_offset(content, start);
+                return Err(anyhow!(
+                    "workflow YAML at {} line {} secret `{}` has an empty `env` mapping",
+                    source_label,
+                    line,
+                    key
+                ));
+            }
+
+            match resolver(env_name) {
+                Some(value) => out.push_str(&value),
+                None if secret.required => {
+                    let line = line_number_for_offset(content, start);
+                    return Err(anyhow!(
+                        "workflow YAML at {} line {} secret `{}` requires env var {} to be set",
+                        source_label,
+                        line,
+                        key,
+                        env_name
+                    ));
+                }
+                None => {
+                    // Optional and unset — resolve to empty string.
+                }
+            }
+
+            i = body_start + close_off + 1;
+            copy_from = i;
+            continue;
+        }
+
+        out.push('$');
+        i += 1;
+        copy_from = i;
+    }
+
+    out.push_str(&content[copy_from..]);
+    Ok(out)
+}
+
+/// Scan raw YAML for `${VAR}` references whose env-var name matches a
+/// sensitive token pattern (TOKEN | KEY | SECRET | PASSWORD) and that are
+/// NOT declared under the `secrets:` block. Returns one human-readable
+/// warning per occurrence; the caller decides how to surface them. The
+/// scan is best-effort and intentionally non-fatal — authors of trusted
+/// YAML may have legitimate uses.
+pub fn lint_sensitive_interpolations(content: &str, source_label: &str) -> Vec<String> {
+    let mut warnings = Vec::new();
+    let mut in_secrets_block = false;
+    let mut in_env_block = false;
+    let mut env_block_indent: Option<usize> = None;
+    let mut secrets_indent: Option<usize> = None;
+
+    for (line_idx, line) in content.lines().enumerate() {
+        let trimmed = line.trim_start();
+        let indent = line.len() - trimmed.len();
+
+        // Track top-level `secrets:` block scope by indentation.
+        if !trimmed.starts_with('#') && !trimmed.is_empty() {
+            if let Some(top_indent) = secrets_indent {
+                if indent <= top_indent && !trimmed.starts_with("secrets:") {
+                    in_secrets_block = false;
+                    secrets_indent = None;
+                }
+            }
+            if trimmed.starts_with("secrets:") && indent == 0 {
+                in_secrets_block = true;
+                secrets_indent = Some(indent);
+            }
+
+            // Track *_env: declaration lines — those declare env var
+            // names, not values, so they are not sensitive interpolations
+            // even when the field name matches a token pattern.
+            if let Some(env_indent) = env_block_indent {
+                if indent <= env_indent {
+                    in_env_block = false;
+                    env_block_indent = None;
+                }
+            }
+            if !in_env_block {
+                let key = trimmed.split(':').next().unwrap_or("").trim();
+                if key.ends_with("_env") && !key.is_empty() {
+                    in_env_block = true;
+                    env_block_indent = Some(indent);
+                }
+            }
+        }
+
+        if in_secrets_block || in_env_block {
+            continue;
+        }
+
+        // Walk the line for `${VAR}` references.
+        let line_bytes = line.as_bytes();
+        let mut i = 0usize;
+        while i + 1 < line_bytes.len() {
+            if line_bytes[i] == b'$' && line_bytes[i + 1] == b'{' {
+                let body_start = i + 2;
+                let body_rel = &line_bytes[body_start..];
+                let Some(close_off) = find_matching_close(body_rel) else {
+                    break;
+                };
+                let body = &line[body_start..body_start + close_off];
+                if !is_secret_reference(body) && looks_like_sensitive_var(body) {
+                    warnings.push(format!(
+                        "workflow YAML at {} line {} interpolates env var `{}` which looks like a credential; \
+                         consider declaring it under `secrets:` and using `${{secret.<name>}}` instead",
+                        source_label,
+                        line_idx + 1,
+                        body.trim(),
+                    ));
+                }
+                i = body_start + close_off + 1;
+                continue;
+            }
+            i += 1;
+        }
+    }
+
+    warnings
+}
+
+fn looks_like_sensitive_var(body: &str) -> bool {
+    let trimmed = body.trim();
+    // Strip default/required modifiers (`${VAR:-default}` and `${VAR:?msg}`).
+    let name = trimmed.split([':']).next().unwrap_or("").trim();
+    if name.is_empty() {
+        return false;
+    }
+    let upper = name.to_ascii_uppercase();
+    upper.contains("TOKEN") || upper.contains("KEY") || upper.contains("SECRET") || upper.contains("PASSWORD")
 }
 
 fn line_number_for_offset(content: &str, offset: usize) -> usize {

@@ -688,6 +688,7 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
         ],
         post_success: None,
         variables: Vec::new(),
+        worktree: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
 
@@ -818,6 +819,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
         ],
         post_success: None,
         variables: Vec::new(),
+        worktree: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("workflow config should be written");
 
@@ -888,6 +890,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
                 manual: None,
                 default_tool: None,
                 idempotency: crate::Idempotency::Unknown,
+                worktree: None,
             },
         );
     }
@@ -913,6 +916,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             }),
             default_tool: None,
             idempotency: crate::Idempotency::Unknown,
+            worktree: None,
         },
     );
     crate::write_agent_runtime_config(temp.path(), &runtime_config).expect("agent runtime config should be written");
@@ -961,6 +965,7 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
         ],
         post_success: None,
         variables: Vec::new(),
+        worktree: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write config");
 

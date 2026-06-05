@@ -4,14 +4,30 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
+use std::collections::BTreeMap;
+
 use super::builtins::builtin_workflow_config;
-use super::env_interp::interpolate_env;
+use super::env_interp::{interpolate_env, interpolate_secrets, lint_sensitive_interpolations};
 use super::types::*;
 use super::yaml_parser::{
     parse_yaml_workflow_config_confined_to_pack, parse_yaml_workflow_config_with_base_and_source,
     workflow_config_to_yaml_file,
 };
 use super::yaml_types::*;
+
+/// Minimal deserialization shape used to extract just the `secrets:` block
+/// from a YAML source before the full file is parsed. Used so that
+/// `${secret.<name>}` interpolation can resolve against declared secrets
+/// before the rest of the file is interpreted.
+#[derive(serde::Deserialize)]
+struct SecretsExtract {
+    #[serde(default)]
+    secrets: BTreeMap<String, SecretRef>,
+}
+
+fn extract_declared_secrets(yaml: &str) -> BTreeMap<String, SecretRef> {
+    serde_yaml::from_str::<SecretsExtract>(yaml).map(|s| s.secrets).unwrap_or_default()
+}
 
 pub fn yaml_workflows_dir(project_root: &Path) -> PathBuf {
     project_root.join(".animus").join(YAML_WORKFLOWS_DIR)
@@ -79,12 +95,25 @@ fn compile_yaml_sources_with_base_inner(
     for (path, content) in yaml_sources {
         let overlay_base = merged_config.as_ref().unwrap_or(base);
         let source_label = path.display().to_string();
+        for warning in lint_sensitive_interpolations(content, &source_label) {
+            eprintln!("warning: {}", warning);
+        }
         let substituted = interpolate_env(content, &source_label)
             .with_context(|| format!("env-var interpolation failed for {}", source_label))?;
+        // Allow secrets declared in earlier-merged overlays (or the base
+        // config) to satisfy ${secret.X} references in this file. Locally
+        // declared secrets take precedence on collision so an overlay can
+        // remap a name if it really needs to.
+        let mut declared_secrets = overlay_base.secrets.clone();
+        for (key, value) in extract_declared_secrets(&substituted) {
+            declared_secrets.insert(key, value);
+        }
+        let resolved = interpolate_secrets(&substituted, &source_label, &declared_secrets)
+            .with_context(|| format!("secret interpolation failed for {}", source_label))?;
         let parsed = match pack_root {
-            Some(root) => parse_yaml_workflow_config_confined_to_pack(&substituted, overlay_base, path.as_path(), root)
+            Some(root) => parse_yaml_workflow_config_confined_to_pack(&resolved, overlay_base, path.as_path(), root)
                 .with_context(|| format!("error in pack YAML file {}", source_label))?,
-            None => parse_yaml_workflow_config_with_base_and_source(&substituted, overlay_base, Some(path.as_path()))
+            None => parse_yaml_workflow_config_with_base_and_source(&resolved, overlay_base, Some(path.as_path()))
                 .with_context(|| format!("error in YAML file {}", source_label))?,
         };
         merged_config = Some(match merged_config {
@@ -198,6 +227,11 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
             base.default_workflow_ref
         };
 
+    let mut secrets = base.secrets;
+    for (key, value) in yaml.secrets {
+        secrets.insert(key, value);
+    }
+
     WorkflowConfig {
         schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
         version: WORKFLOW_CONFIG_VERSION,
@@ -216,6 +250,7 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         schedules,
         triggers,
         daemon: yaml.daemon.or(base.daemon),
+        secrets,
     }
 }
 

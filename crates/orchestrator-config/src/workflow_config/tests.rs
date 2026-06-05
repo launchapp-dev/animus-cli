@@ -40,6 +40,7 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
                 }),
             }),
             variables: Vec::new(),
+            worktree: None,
         },
         WorkflowDefinition {
             id: "ui-ux-standard".to_string(),
@@ -64,6 +65,7 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
                 }),
             }),
             variables: Vec::new(),
+            worktree: None,
         },
     ];
     config
@@ -729,6 +731,7 @@ fn make_pipeline(id: &str, phases: Vec<WorkflowPhaseEntry>) -> WorkflowDefinitio
         phases,
         post_success: None,
         variables: Vec::new(),
+        worktree: None,
     }
 }
 
@@ -963,6 +966,7 @@ fn resolve_phase_plan_expands_sub_pipelines() {
         phases: vec![WorkflowPhaseEntry::Simple("code-review".into()), WorkflowPhaseEntry::Simple("testing".into())],
         post_success: None,
         variables: Vec::new(),
+        worktree: None,
     });
 
     let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
@@ -1022,6 +1026,7 @@ fn validate_rejects_circular_sub_pipeline() {
             phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review".into() })],
             post_success: None,
             variables: Vec::new(),
+            worktree: None,
         },
         WorkflowDefinition {
             id: "review".into(),
@@ -1030,6 +1035,7 @@ fn validate_rejects_circular_sub_pipeline() {
             phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "standard".into() })],
             post_success: None,
             variables: Vec::new(),
+            worktree: None,
         },
     ];
 
@@ -1785,6 +1791,7 @@ fn validate_rejects_command_program_not_in_allowlist() {
             system_prompt: None,
             default_tool: None,
             idempotency: Idempotency::Unknown,
+            worktree: None,
         },
     );
     let err = validate_workflow_config(&config).expect_err("should reject program not in allowlist");
@@ -2230,6 +2237,7 @@ fn pipeline_variables_not_serialized_when_empty() {
         phases: Vec::new(),
         post_success: None,
         variables: Vec::new(),
+        worktree: None,
     };
     let json = serde_json::to_value(&workflow).expect("serialize");
     let obj = json.as_object().expect("json object");
@@ -2511,4 +2519,425 @@ fn validation_rejects_agent_reference_to_unknown_mcp_server() {
         "error should mention unknown reference: {}",
         message
     );
+}
+
+// ---------------------------------------------------------------------------
+// v0.5.5 — worktree:, secrets:, and sensitive-interpolation lint.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn yaml_parses_workflow_level_worktree_block() {
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build it."
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+workflows:
+- id: standard-workflow
+  phases: [build]
+  worktree:
+    mode: required
+    cleanup: false
+    base_ref: develop
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let workflow = config.workflows.iter().find(|w| w.id == "standard-workflow").expect("workflow present");
+    let worktree = workflow.worktree.as_ref().expect("worktree block populated");
+    assert_eq!(worktree.mode, WorktreeMode::Required);
+    assert!(!worktree.cleanup);
+    assert_eq!(worktree.base_ref.as_deref(), Some("develop"));
+}
+
+#[test]
+fn yaml_parses_short_form_phase_worktree_skip() {
+    let yaml = r#"
+phases:
+  doc-only:
+    mode: agent
+    agent: swe
+    directive: "Update docs."
+    worktree: skip
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+workflows:
+- id: doc-flow
+  phases: [doc-only]
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let phase = config.phase_definitions.get("doc-only").expect("phase present");
+    let worktree = phase.worktree.as_ref().expect("phase-level worktree");
+    assert_eq!(worktree.mode, WorktreeMode::Skip);
+    assert!(worktree.cleanup, "cleanup should default to true for short-form");
+    assert!(worktree.base_ref.is_none());
+}
+
+#[test]
+fn phase_level_worktree_skip_overrides_workflow_required() {
+    // When a workflow is `mode: required` but an individual phase says
+    // `worktree: skip`, the phase-level decision must win — the kernel
+    // surfaces both fields and the runner resolves the override.
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build it."
+  docs:
+    mode: agent
+    agent: swe
+    directive: "Update docs."
+    worktree: skip
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+workflows:
+- id: hybrid
+  worktree:
+    mode: required
+  phases:
+    - build
+    - docs
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let workflow = config.workflows.iter().find(|w| w.id == "hybrid").expect("workflow");
+    assert_eq!(workflow.worktree.as_ref().unwrap().mode, WorktreeMode::Required);
+    let build = config.phase_definitions.get("build").expect("build phase");
+    assert!(build.worktree.is_none(), "phase without override inherits workflow setting");
+    let docs = config.phase_definitions.get("docs").expect("docs phase");
+    assert_eq!(docs.worktree.as_ref().unwrap().mode, WorktreeMode::Skip);
+}
+
+#[test]
+fn yaml_rejects_invalid_worktree_mode() {
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build it."
+    worktree: rocket-fuel
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+workflows:
+- id: bad
+  phases: [build]
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("unknown mode should fail");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("worktree mode"), "error should mention worktree mode: {msg}");
+}
+
+#[test]
+fn yaml_parses_top_level_secrets_block() {
+    let yaml = r#"
+secrets:
+  linear_token:
+    env: LINEAR_API_TOKEN
+    description: Linear GraphQL auth token
+  optional_key:
+    env: OPTIONAL_KEY
+    required: false
+
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build."
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+workflows:
+- id: flow
+  phases: [build]
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let linear = config.secrets.get("linear_token").expect("linear_token declared");
+    assert_eq!(linear.env, "LINEAR_API_TOKEN");
+    assert!(linear.required);
+    assert_eq!(linear.description.as_deref(), Some("Linear GraphQL auth token"));
+    let optional = config.secrets.get("optional_key").expect("optional_key declared");
+    assert!(!optional.required);
+}
+
+#[test]
+fn secret_interpolation_resolves_against_declared_env_var() {
+    use super::env_interp::interpolate_secrets;
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _v = EnvVarGuard::set("ANIMUS_TEST_LINEAR_TOKEN", "lnk_test_value");
+
+    let mut secrets = BTreeMap::new();
+    secrets.insert(
+        "linear_token".to_string(),
+        SecretRef { env: "ANIMUS_TEST_LINEAR_TOKEN".to_string(), required: true, description: None },
+    );
+
+    let yaml = "value: ${secret.linear_token}\n";
+    let out = interpolate_secrets(yaml, "test.yaml", &secrets).expect("interp ok");
+    assert_eq!(out, "value: lnk_test_value\n");
+}
+
+#[test]
+fn secret_interpolation_errors_on_undeclared_key() {
+    use super::env_interp::interpolate_secrets;
+    let secrets: BTreeMap<String, SecretRef> = BTreeMap::new();
+    let yaml = "a: 1\nb: 2\nval: ${secret.missing}\n";
+    let err = interpolate_secrets(yaml, ".animus/workflows.yaml", &secrets).expect_err("undeclared should error");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("line 3"), "missing line number: {msg}");
+    assert!(msg.contains("missing"), "missing key name: {msg}");
+    assert!(msg.contains("secrets:"), "should hint at secrets block: {msg}");
+}
+
+#[test]
+fn secret_interpolation_errors_on_required_unset_env() {
+    use super::env_interp::interpolate_secrets;
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _v = EnvVarGuard::unset("ANIMUS_TEST_DEFINITELY_UNSET_TOKEN");
+
+    let mut secrets = BTreeMap::new();
+    secrets.insert(
+        "tok".to_string(),
+        SecretRef { env: "ANIMUS_TEST_DEFINITELY_UNSET_TOKEN".to_string(), required: true, description: None },
+    );
+    let yaml = "val: ${secret.tok}\n";
+    let err = interpolate_secrets(yaml, "test.yaml", &secrets).expect_err("required unset should fail");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("ANIMUS_TEST_DEFINITELY_UNSET_TOKEN"), "should name env var: {msg}");
+    assert!(msg.contains("tok"), "should name secret: {msg}");
+}
+
+#[test]
+fn optional_unset_secret_resolves_to_empty_string() {
+    use super::env_interp::interpolate_secrets;
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _v = EnvVarGuard::unset("ANIMUS_TEST_OPTIONAL_SECRET");
+
+    let mut secrets = BTreeMap::new();
+    secrets.insert(
+        "opt".to_string(),
+        SecretRef { env: "ANIMUS_TEST_OPTIONAL_SECRET".to_string(), required: false, description: None },
+    );
+    let yaml = "val: \"${secret.opt}\"\n";
+    let out = interpolate_secrets(yaml, "test.yaml", &secrets).expect("optional should not fail");
+    assert_eq!(out, "val: \"\"\n");
+}
+
+#[test]
+fn double_dollar_preserves_literal_secret_reference_through_both_passes() {
+    // A user who wants the literal string `${secret.api}` in YAML output
+    // (e.g. inside a prompt or example) writes `$${secret.api}`. The env
+    // pass must hand the `$$` through to the secrets pass, which collapses
+    // it back to `$` — yielding a literal that is NOT resolved.
+    use super::env_interp::{interpolate_env, interpolate_secrets};
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _v = EnvVarGuard::set("ANIMUS_TEST_DOLLAR_DOLLAR", "should-not-leak");
+    let mut secrets = BTreeMap::new();
+    secrets.insert(
+        "api".to_string(),
+        SecretRef { env: "ANIMUS_TEST_DOLLAR_DOLLAR".to_string(), required: true, description: None },
+    );
+
+    let src = "prompt: $${secret.api}\n";
+    let after_env = interpolate_env(src, "test.yaml").expect("env interp");
+    let after_secrets = interpolate_secrets(&after_env, "test.yaml", &secrets).expect("secret interp");
+    assert_eq!(after_secrets, "prompt: ${secret.api}\n");
+}
+
+#[test]
+fn env_interpolation_passes_secret_references_through_untouched() {
+    // The env interp pass must leave ${secret.X} references alone so the
+    // secret pass can handle them; otherwise it would error on the `.` in
+    // the name validation.
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _v = EnvVarGuard::set("ANIMUS_TEST_SOMETHING", "hello");
+    let src = "a: ${ANIMUS_TEST_SOMETHING}\nb: ${secret.foo}\n";
+    let out = super::env_interp::interpolate_env(src, "test.yaml").expect("env interp ok");
+    assert_eq!(out, "a: hello\nb: ${secret.foo}\n");
+}
+
+#[test]
+fn lint_flags_sensitive_var_outside_secrets_block() {
+    use super::env_interp::lint_sensitive_interpolations;
+    let yaml = r#"
+mcp_servers:
+  linear:
+    transport: stdio
+    command: linear-mcp
+    env:
+      LINEAR_API_TOKEN: "${API_TOKEN}"
+"#;
+    let warnings = lint_sensitive_interpolations(yaml, "workflows.yaml");
+    assert!(!warnings.is_empty(), "expected at least one warning for API_TOKEN");
+    let msg = &warnings[0];
+    assert!(msg.contains("API_TOKEN"), "warning should mention the var: {msg}");
+    assert!(msg.contains("secrets:"), "warning should hint at secrets block: {msg}");
+}
+
+#[test]
+fn lint_skips_references_inside_secrets_block() {
+    use super::env_interp::lint_sensitive_interpolations;
+    let yaml = r#"
+secrets:
+  api:
+    env: API_TOKEN
+mcp_servers:
+  linear:
+    transport: stdio
+    command: linear-mcp
+    env:
+      LINEAR_API_TOKEN: "${secret.api}"
+"#;
+    let warnings = lint_sensitive_interpolations(yaml, "workflows.yaml");
+    assert!(warnings.is_empty(), "secret.* references should not trigger warnings: {:?}", warnings);
+}
+
+#[test]
+fn lint_skips_secret_env_field_names() {
+    // The webhook trigger config has a `secret_env: SOMETHING_TOKEN` field
+    // — that is a declaration, not an interpolation. The lint should leave
+    // it alone.
+    use super::env_interp::lint_sensitive_interpolations;
+    let yaml = r#"
+triggers:
+- id: github
+  type: github_webhook
+  workflow_ref: flow
+  config:
+    secret_env: GITHUB_WEBHOOK_TOKEN
+"#;
+    let warnings = lint_sensitive_interpolations(yaml, "workflows.yaml");
+    assert!(warnings.is_empty(), "no interpolations means no warnings: {:?}", warnings);
+}
+
+#[test]
+fn worktree_and_secrets_serde_roundtrip_through_workflow_config() {
+    let mut config = builtin_workflow_config();
+    config.default_workflow_ref = "standard-workflow".to_string();
+    config.workflows.push(WorkflowDefinition {
+        id: "standard-workflow".to_string(),
+        name: "Standard".to_string(),
+        description: String::new(),
+        phases: vec!["implementation".to_string().into()],
+        post_success: None,
+        variables: Vec::new(),
+        worktree: Some(WorktreeConfig {
+            mode: WorktreeMode::Skip,
+            cleanup: false,
+            base_ref: Some("develop".to_string()),
+        }),
+    });
+    config.secrets.insert(
+        "linear".to_string(),
+        SecretRef { env: "LINEAR_API_TOKEN".to_string(), required: true, description: None },
+    );
+
+    let json = serde_json::to_string(&config).expect("serialize");
+    let back: WorkflowConfig = serde_json::from_str(&json).expect("roundtrip");
+    let workflow = back.workflows.iter().find(|w| w.id == "standard-workflow").expect("workflow present");
+    let worktree = workflow.worktree.as_ref().expect("worktree preserved");
+    assert_eq!(worktree.mode, WorktreeMode::Skip);
+    assert!(!worktree.cleanup);
+    assert_eq!(worktree.base_ref.as_deref(), Some("develop"));
+    assert_eq!(back.secrets.get("linear").map(|s| s.env.as_str()), Some("LINEAR_API_TOKEN"));
+}
+
+#[test]
+fn yaml_compile_resolves_secret_declared_in_earlier_overlay() {
+    // Multi-file workflow configs are merged in lexicographic order. A
+    // later file must be able to reference a secret declared in an
+    // earlier file.
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
+    let _v = EnvVarGuard::set("ANIMUS_TEST_OVERLAY_SECRET", "overlay-value");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflows_dir = temp.path().join(".animus").join("workflows");
+    fs::create_dir_all(&workflows_dir).expect("mkdir");
+    fs::write(
+        workflows_dir.join("01-base.yaml"),
+        r#"
+secrets:
+  api:
+    env: ANIMUS_TEST_OVERLAY_SECRET
+"#,
+    )
+    .expect("write base");
+    fs::write(
+        workflows_dir.join("02-mcp.yaml"),
+        r#"
+mcp_servers:
+  linear:
+    transport: stdio
+    command: linear-mcp
+    env:
+      LINEAR_API_TOKEN: "${secret.api}"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "Be a SWE."
+workflows:
+- id: flow
+  phases: [build]
+"#,
+    )
+    .expect("write mcp");
+
+    let compiled = compile_yaml_workflow_files(temp.path()).expect("compile").expect("Some");
+    let server = compiled.mcp_servers.get("linear").expect("linear server present");
+    assert_eq!(server.env.get("LINEAR_API_TOKEN").map(|s| s.as_str()), Some("overlay-value"));
+}
+
+#[test]
+fn yaml_compile_resolves_secret_interpolation_end_to_end() {
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
+    let _v = EnvVarGuard::set("ANIMUS_TEST_E2E_SECRET", "resolved-value");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(temp.path().join(".animus").join("workflows")).expect("mkdir");
+    let yaml = r#"
+secrets:
+  api:
+    env: ANIMUS_TEST_E2E_SECRET
+mcp_servers:
+  linear:
+    transport: stdio
+    command: linear-mcp
+    env:
+      LINEAR_API_TOKEN: "${secret.api}"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "Be a SWE."
+workflows:
+- id: flow
+  phases: [build]
+"#;
+    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
+
+    let compiled = compile_yaml_workflow_files(temp.path()).expect("compile").expect("Some");
+    let server = compiled.mcp_servers.get("linear").expect("linear server present");
+    assert_eq!(server.env.get("LINEAR_API_TOKEN").map(|s| s.as_str()), Some("resolved-value"));
+    assert_eq!(compiled.secrets.get("api").map(|s| s.env.as_str()), Some("ANIMUS_TEST_E2E_SECRET"));
 }

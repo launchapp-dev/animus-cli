@@ -718,6 +718,7 @@ fn empty_workflow_overlay_base() -> WorkflowConfig {
         schedules: Vec::new(),
         triggers: Vec::new(),
         daemon: None,
+        secrets: BTreeMap::new(),
     }
 }
 

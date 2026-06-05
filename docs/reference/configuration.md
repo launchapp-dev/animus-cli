@@ -110,11 +110,17 @@ Behavior resolves in this order:
 
 ## Secrets vs. Non-Secret Config
 
-> **Secrets never go in workflow YAML.** API tokens, passwords, and OAuth keys are
-> read directly from the daemon's process environment by the plugin that needs them
-> (e.g. `LINEAR_API_TOKEN` is read by `animus-subject-linear`; `OPENAI_API_KEY` by
-> `animus-provider-oai`). The workflow YAML configures **which** plugin to use and
-> **non-sensitive** parameters — not the credentials themselves.
+> **Plugin-owned credentials still live in the daemon's env, not the YAML.**
+> The baseline contract is unchanged: API tokens, passwords, and OAuth
+> keys that a *plugin* needs (e.g. `LINEAR_API_TOKEN` for
+> `animus-subject-linear`, `OPENAI_API_KEY` for `animus-provider-oai`)
+> are read by the plugin directly from the daemon's process env.
+>
+> For credentials that a *phase* or *MCP server* declared in YAML needs
+> to receive (e.g. an MCP server's `env:` block), v0.5.5 adds the
+> [`secrets:` block](./workflow-yaml.md#secrets-v055) — declare the
+> mapping once, reference with `${secret.<name>}`, and the compiler
+> resolves it at config-compile time.
 >
 > Use `${VAR}` interpolation for non-secret configuration that varies by environment:
 > API base URLs, team IDs, feature flags, channel allowlists.

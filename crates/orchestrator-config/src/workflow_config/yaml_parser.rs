@@ -164,6 +164,7 @@ pub(super) fn yaml_phase_to_execution_definition(
         system_prompt: yaml.system_prompt,
         default_tool: yaml.default_tool,
         idempotency: yaml.idempotency,
+        worktree: yaml.worktree.map(WorktreeConfig::from_yaml).transpose()?,
     })
 }
 
@@ -196,6 +197,7 @@ pub(super) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> Ya
         phases: definition.phases.iter().map(workflow_phase_entry_to_yaml).collect(),
         post_success: definition.post_success.clone().map(post_success_config_to_yaml),
         variables: definition.variables.clone(),
+        worktree: definition.worktree.clone().map(YamlPhaseWorktree::Full),
     }
 }
 
@@ -260,6 +262,7 @@ pub(super) fn phase_execution_definition_to_yaml(definition: &PhaseExecutionDefi
         retry: definition.retry.clone(),
         default_tool: definition.default_tool.clone(),
         idempotency: definition.idempotency,
+        worktree: definition.worktree.clone().map(YamlPhaseWorktree::Full),
     }
 }
 
@@ -284,6 +287,7 @@ pub(super) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkf
         schedules: config.schedules.clone(),
         triggers: config.triggers.clone(),
         daemon: config.daemon.clone(),
+        secrets: config.secrets.clone(),
     }
 }
 
@@ -315,6 +319,7 @@ pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition)
     };
 
     let phases = yaml.phases.into_iter().map(yaml_phase_entry_to_workflow_phase_entry).collect::<Result<Vec<_>>>()?;
+    let worktree = yaml.worktree.map(WorktreeConfig::from_yaml).transpose()?;
     Ok(WorkflowDefinition {
         id: yaml.id.clone(),
         name: yaml.name.unwrap_or_else(|| yaml.id.clone()),
@@ -322,6 +327,7 @@ pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition)
         phases,
         post_success,
         variables: yaml.variables,
+        worktree,
     })
 }
 
@@ -650,6 +656,7 @@ fn parse_yaml_workflow_config_internal(
         schedules: yaml_file.schedules,
         triggers: yaml_file.triggers,
         daemon: yaml_file.daemon,
+        secrets: yaml_file.secrets,
     };
 
     Ok(merge_yaml_into_config(base.clone(), overlay))
