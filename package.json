@@ -4,7 +4,8 @@
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "docs:preview": "vitepress preview docs",
-    "docs:check-sync": "bash scripts/check-doc-sync.sh"
+    "docs:check-sync": "bash scripts/check-doc-sync.sh",
+    "docs:deploy": "bash scripts/deploy-docs.sh"
   },
   "devDependencies": {
     "mermaid": "^11.4.1",

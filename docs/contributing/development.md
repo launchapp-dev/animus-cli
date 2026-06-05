@@ -88,7 +88,7 @@ cargo test -p orchestrator-cli services::operations::ops_mcp::tests::mcp_docs_pu
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
-npx vercel --yes --prod
+npm run docs:deploy
 ```
 
 Run `npm run docs:check-sync` whenever the CLI command tree or MCP surface
@@ -99,6 +99,9 @@ reference docs and fails on drift.
 For a full drift check, also run the `orchestrator-cli` tests that assert the
 published CLI tree and MCP tool table match the live clap/MCP registries before
 deploying the docs site to Vercel.
+
+`npm run docs:deploy` wraps the required preflight in order: sync check,
+production site build, then `npx vercel --yes --prod`.
 
 Protocol schema exports live at the repo root:
 
