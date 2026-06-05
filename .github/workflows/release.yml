@@ -225,7 +225,7 @@ jobs:
           $Target = "${{ matrix.target }}"
           $StageDir = "ao-$Version-$Target"
           $Binaries = @("animus")
-          $BinaryFiles = $Binaries | ForEach-Object { "$_.exe" }
+          $BinaryFiles = @($Binaries | ForEach-Object { "$_.exe" })
 
           New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
 
@@ -258,8 +258,8 @@ jobs:
           $ArchivePath = "$StageDir.zip"
 
           $Binaries = @("animus")
-          $BinaryFiles = $Binaries | ForEach-Object { "$_.exe" }
-          $RequiredFiles = $BinaryFiles + "release-metadata.json"
+          $BinaryFiles = @($Binaries | ForEach-Object { "$_.exe" })
+          $RequiredFiles = @($BinaryFiles) + "release-metadata.json"
           foreach ($File in $RequiredFiles) {
             if (-not (Test-Path "$StageDir/$File")) {
               throw "Missing required staged file: $StageDir/$File"
