@@ -1,100 +1,76 @@
-# Agent Runner IPC
+# Provider Sessions
 
-The agent runner (`agent-runner`) is a standalone daemon that manages LLM CLI tool processes. It communicates with workflow runners over an IPC protocol.
+This page keeps the historical `agent-runner-ipc.md` path for old links, but
+the current implementation no longer has an in-tree `agent-runner` crate or IPC
+server. Provider execution now routes through
+`orchestrator-plugin-host::session` and installed provider plugins.
 
-## Transport
+## Source Files
 
-- **Unix domain socket** on Unix platforms. The server binds to
-  `<ANIMUS_CONFIG_DIR>/agent-runner.sock`.
-  In normal Animus flows, the runner is launched with `ANIMUS_CONFIG_DIR`
-  pointing at the repo-scoped runner directory
-  (`~/.animus/<repo-scope>/runner/`), so clients connect there.
-  If that Unix socket path would exceed the platform limit, Animus shortens it
-  into `/tmp/ao-runner/<hash>/agent-runner.sock` and writes `origin-path.txt`
-  with the canonical path.
-- **TCP** on Windows as a fallback
+| Area | Source |
+|---|---|
+| Agent runtime entrypoint | [`crates/orchestrator-cli/src/services/runtime/runtime_agent/run.rs`](../../crates/orchestrator-cli/src/services/runtime/runtime_agent/run.rs) |
+| Provider client | [`crates/orchestrator-cli/src/services/runtime/runtime_agent/provider_client.rs`](../../crates/orchestrator-cli/src/services/runtime/runtime_agent/provider_client.rs) |
+| Session resolver | [`crates/orchestrator-plugin-host/src/session/session_backend_resolver.rs`](../../crates/orchestrator-plugin-host/src/session/session_backend_resolver.rs) |
+| Plugin backend | [`crates/orchestrator-plugin-host/src/session/plugin_backend.rs`](../../crates/orchestrator-plugin-host/src/session/plugin_backend.rs) |
+| Plugin supervisor | [`crates/orchestrator-plugin-host/src/session/plugin_supervisor.rs`](../../crates/orchestrator-plugin-host/src/session/plugin_supervisor.rs) |
+| Runtime contract wiring | [`crates/orchestrator-core/src/runtime_contract.rs`](../../crates/orchestrator-core/src/runtime_contract.rs) |
 
-The IPC server (`crates/agent-runner/src/ipc/server.rs`) listens for incoming connections and routes them through the request handler pipeline. Each connection is assigned a monotonically increasing connection ID for tracing.
+## Current Flow
 
-## Auth-First Connection
+```mermaid
+sequenceDiagram
+    participant CLI as animus agent / workflow runner
+    participant Resolver as SessionBackendResolver
+    participant Host as PluginHost
+    participant Plugin as provider plugin
 
-Every new connection must authenticate before sending any operational requests:
+    CLI->>Resolver: resolve provider tool + runtime contract
+    Resolver->>Resolver: discover provider plugin
+    Resolver->>Host: spawn + initialize plugin
+    Host->>Plugin: agent/run or agent/resume
+    Plugin-->>Host: notifications + results
+    Host-->>Resolver: canonical session events
+    Resolver-->>CLI: streamed output / status / completion
+    CLI->>Host: agent/cancel for active session
+```
 
-1. Client sends an `IpcAuthRequest` JSON message as the first payload: `{"kind": "ipc_auth", "token": "<token>"}`
-2. Server validates the token against `agent_runner_token` loaded from
-   `<ANIMUS_CONFIG_DIR>/config.json`
-3. Server responds with `IpcAuthResult`: either `ok: true` or `ok: false` with a failure code
-4. If rejected, the connection is closed immediately
+The resolver discovers plugins with `plugin_kind == "provider"`. There is no
+in-tree provider fallback and no separate Unix-socket sidecar.
 
-Failure codes:
-- `MalformedAuthPayload` -- The first message was not a valid auth request
-- `InvalidToken` -- Token did not match
-- `ServerTokenUnavailable` -- Server could not load its own token (fails closed)
+## Session Model
 
-## Request Routing
+Important behavior in the current path:
 
-After authentication, the IPC router (`crates/agent-runner/src/ipc/router.rs`) dispatches requests to handlers:
+- `animus agent run` starts a provider-owned session through the plugin host.
+- `animus agent status` and `animus agent control` operate on the live provider
+  session tracked by the resolver.
+- `agent/resume` resumes a provider-owned session when that plugin supports it.
+- Provider plugin cwd is pinned to the resolved `project_root` so relative state
+  and child CLI paths stay anchored to the repository.
+- Structured JSON-RPC errors from the provider plugin surface directly to the
+  caller.
+- Restart handling lives in the plugin supervisor rather than a standalone
+  runner daemon.
 
-- **Run handler** (`handlers/run.rs`) -- Start a new agent run with a runtime contract
-- **Status handler** (`handlers/status.rs`) -- Query the status of running agents
-- **Control handler** (`handlers/control.rs`) -- Stop or manage running agents
+## Environment And Tool Resolution
 
-## Event Streaming
+Provider selection and launch behavior are driven by the runtime contract and
+tool routing code:
 
-During an agent run, the server streams `AgentRunEvent` messages back to the client over the socket, one JSON object per line. Events include:
+- default models live in `protocol::default_model_for_tool`
+- CLI capability mapping lives in
+  [`crates/orchestrator-core/src/runtime_contract.rs`](../../crates/orchestrator-core/src/runtime_contract.rs)
+- the OpenAI-compatible runner now resolves to the installed
+  `launchapp-dev/animus-provider-oai-agent` plugin rather than an in-tree
+  binary
 
-- Agent process started/stopped
-- Stdout/stderr output lines
-- Parsed tool calls and their results
-- Thinking blocks
-- Artifacts
-- Phase decision (the final structured output)
+Reserved first-party provider names currently include `claude`, `codex`,
+`gemini`, `opencode`, and `oai`.
 
-The stream bridge (`crates/agent-runner/src/runner/stream_bridge.rs`) connects the agent process output to the IPC event stream, translating raw process output into structured events.
+## Historical Note
 
-## Output Parsing
-
-The output parser (`crates/agent-runner/src/output/parser/`) processes raw agent output into structured events:
-
-- **Tool calls** (`tool_calls.rs`) -- Detects JSON and XML tool call patterns in agent output
-- **Artifacts** (`artifacts.rs`) -- Extracts file artifacts and structured outputs
-- **Events** (`events.rs`) -- Converts parsed output into `AgentRunEvent` messages
-- **State** (`state.rs`) -- Maintains parser state across incremental output chunks
-
-The parser handles multiple output formats since different CLI tools (claude, codex, gemini) produce output in different structures.
-
-## Sandbox
-
-The agent runner sanitizes the environment before spawning CLI tool processes:
-
-### Environment Sanitization
-
-`crates/agent-runner/src/sandbox/env_sanitizer.rs` implements an allowlist-based approach:
-
-Allowed variables:
-- System: `PATH`, `HOME`, `USER`, `SHELL`, `LANG`, `LC_ALL`, `TMPDIR`
-- Terminal/session plumbing: `TERM`, `COLORTERM`, `SSH_AUTH_SOCK`
-- Claude config: `CLAUDE_CODE_SETTINGS_PATH`, `CLAUDE_API_KEY`, `CLAUDE_CODE_DIR`
-- Prefixes: `ANIMUS_*`, `XDG_*`
-
-API keys are not forwarded by the sanitizer. The runner also explicitly strips
-Claude/Codex session markers such as `CLAUDECODE`,
-`CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ACCESS_TOKEN`,
-`CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_EFFORT`, and
-`AI_AGENT` before spawning the child process so nested agent CLIs do not inherit
-host session state.
-
-### Workspace Validation
-
-`crates/agent-runner/src/sandbox/workspace_guard.rs` validates that the requested workspace directory is safe to use, preventing path traversal attacks.
-
-## Provider Abstraction
-
-The runner module (`crates/agent-runner/src/providers/`) provides a unified interface for spawning different LLM CLI tools. The process builder (`crates/agent-runner/src/runner/process_builder.rs`) constructs the appropriate command line for each supported tool:
-
-- **claude** -- Anthropic's Claude Code CLI
-- **codex** -- OpenAI's Codex CLI
-- **gemini** -- Google's Gemini CLI
-- **opencode** -- Open-source alternative
-
-The supervisor (`crates/agent-runner/src/runner/supervisor.rs`) manages the lifecycle of spawned processes, handling graceful shutdown and cleanup.
+Older versions used a separate `agent-runner` sidecar and IPC transport. That
+design was removed in the v0.5.3 surface-shrink. If you are tracing legacy
+behavior, prefer historical architecture notes or tagged source snapshots over
+this page.

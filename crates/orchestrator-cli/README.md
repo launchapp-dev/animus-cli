@@ -112,6 +112,9 @@ The current command families are:
 - `trigger`
 - `logs`
 - `subject`
+- `flavor`
+- `self`
+- `metrics`
 
 See [`docs/reference/cli/index.md`](../../docs/reference/cli/index.md) for the
 full tree and selected flags.

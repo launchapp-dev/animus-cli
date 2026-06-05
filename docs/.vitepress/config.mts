@@ -131,7 +131,7 @@ export default withMermaid(
             { text: 'Overview', link: '/internals/' },
             { text: 'Daemon Scheduler', link: '/internals/daemon-scheduler' },
             { text: 'Workflow Runner', link: '/internals/workflow-runner' },
-            { text: 'Agent Runner IPC', link: '/internals/agent-runner-ipc' },
+            { text: 'Provider Sessions', link: '/internals/agent-runner-ipc' },
             { text: 'State Machines', link: '/internals/state-machines' },
             { text: 'Persistence', link: '/internals/persistence' },
           ],

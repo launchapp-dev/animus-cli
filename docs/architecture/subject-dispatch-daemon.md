@@ -159,7 +159,6 @@ flowchart LR
 
   subgraph Workflow["Execution"]
     WFR["workflow-runner"]
-    AR["agent-runner"]
     SESSION["orchestrator-plugin-host::session"]
     PHOST["orchestrator-plugin-host"]
     PROVIDERS["provider plugins"]
@@ -169,8 +168,7 @@ flowchart LR
   WEB --> DRT
   MCP --> DRT
   DRT --> WFR
-  WFR --> AR
-  AR --> SESSION
+  WFR --> SESSION
   SESSION --> PHOST
   PHOST --> PROVIDERS
 
@@ -202,7 +200,7 @@ tool surface consumes.
 ### Keep
 
 - `workflow-runner` as the canonical execution host
-- `agent-runner` as the process supervisor for model CLIs
+- provider plugins behind `orchestrator-plugin-host::session` as the model CLI execution path
 - `SubjectRef` as the stable identity model
 - YAML as the source of truth for advanced workflows
 

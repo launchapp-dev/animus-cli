@@ -5,8 +5,8 @@ This section documents the internal mechanisms of Animus for contributors who wa
 ## What's Covered
 
 - [Daemon Scheduler](daemon-scheduler.md) -- The tick loop that drives autonomous workflow dispatch, capacity management, and completion reconciliation
-- [Workflow Runner](workflow-runner.md) -- The standalone binary that executes workflow phases by coordinating with the agent runner
-- [Agent Runner IPC](agent-runner-ipc.md) -- The IPC protocol between workflow-runner and agent-runner, including authentication, event streaming, and output parsing
+- [Workflow Runner](workflow-runner.md) -- The standalone workflow-runner plugin path that executes phases and streams results back to Animus
+- [Provider Sessions](agent-runner-ipc.md) -- The current provider-plugin session path used by `animus agent` and workflow agent phases
 - [State Machines](state-machines.md) -- Workflow and task state machines, transition rules, and guard conditions
 - [Persistence](persistence.md) -- Atomic file writes, JSON state schemas, and the scoped directory layout
 
@@ -16,13 +16,17 @@ This section documents the internal mechanisms of Animus for contributors who wa
 
 **Subject dispatch**: Every workflow execution targets a "subject" (typically a task). The dispatch queue orders subjects by priority and tracks their lifecycle from enqueued through assigned to terminal.
 
-**Three-process model**: The daemon spawns `workflow-runner` processes, which in turn communicate with the `agent-runner` daemon over IPC. The agent runner manages the actual LLM CLI tool processes (claude, codex, gemini, opencode).
+**Current execution model**: The daemon launches an installed `workflow_runner`
+plugin for phase execution. Agent phases and `animus agent` commands resolve a
+provider plugin through `orchestrator-plugin-host::session`, which then drives
+the actual CLI/tool integration.
 
 ```
 animus daemon (tick loop)
-  └── workflow-runner (phase execution)
-        └── agent-runner (LLM CLI management)
-              └── claude / codex / gemini / opencode
+  └── workflow_runner plugin (phase execution)
+        └── orchestrator-plugin-host::session
+              └── provider plugin
+                    └── claude / codex / gemini / opencode / oai
 ```
 
 ## Related Sections

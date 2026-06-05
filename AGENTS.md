@@ -35,8 +35,7 @@ Current workspace members from `Cargo.toml`:
 
 ```text
 crates/
-├── agent-runner/                # Runner process that launches and supervises AI CLIs
-├── animus-runtime-shared/       # Shared workflow execution/runtime-contract/IPC helpers used by daemon and workflow_runner plugins
+├── animus-runtime-shared/       # Shared workflow execution/runtime-contract helpers used by daemon and workflow_runner plugins
 ├── animus-plugin-protocol/      # In-tree stdio plugin protocol types
 ├── animus-plugin-runtime/       # Runtime helpers for plugin implementations
 ├── orchestrator-cli/            # Main `animus` binary
@@ -60,7 +59,6 @@ Repo-local but not current workspace members:
 Runtime-critical binaries and supporting crates must stay healthy:
 
 - `orchestrator-cli`
-- `agent-runner`
 - `orchestrator-logging`
 - `animus-runtime-shared`
 - `orchestrator-daemon-runtime`
