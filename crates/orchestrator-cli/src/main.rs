@@ -40,6 +40,9 @@ async fn main() {
             let exit_code = match run_result {
                 Ok(()) => 0,
                 Err(error) => {
+                    services::metrics::record(&services::metrics::Event::ErrorHit {
+                        class: classify_error_to_metrics(&error),
+                    });
                     emit_cli_error(&error, json);
                     classify_exit_code(&error)
                 }
@@ -60,6 +63,9 @@ async fn main() {
             {
                 parse_err.exit();
             }
+            services::metrics::record(&services::metrics::Event::ErrorHit {
+                class: services::metrics::ErrorClass::ParseError,
+            });
             if argv_requested_json {
                 emit_argparse_error_envelope(&parse_err);
                 std::process::exit(2);
@@ -117,7 +123,59 @@ fn emit_argparse_error_envelope(err: &clap::Error) {
     emit_cli_error(&wrapped, true);
 }
 
+fn classify_error_to_metrics(error: &anyhow::Error) -> services::metrics::ErrorClass {
+    use protocol::ErrorKind;
+    match classify_cli_error_kind(error) {
+        ErrorKind::InvalidInput => services::metrics::ErrorClass::ParseError,
+        ErrorKind::Unavailable => {
+            let message = error.to_string().to_ascii_lowercase();
+            if message.contains("preflight") {
+                services::metrics::ErrorClass::PreflightFailed
+            } else if message.contains("plugin") {
+                services::metrics::ErrorClass::PluginCrash
+            } else if message.contains("network") || message.contains("connection") {
+                services::metrics::ErrorClass::NetworkError
+            } else {
+                services::metrics::ErrorClass::Other
+            }
+        }
+        _ => services::metrics::ErrorClass::Other,
+    }
+}
+
+fn command_group(command: &Command) -> services::metrics::CommandGroup {
+    use services::metrics::CommandGroup as G;
+    match command {
+        Command::Version => G::Version,
+        Command::Daemon { .. } => G::Daemon,
+        Command::Agent { .. } => G::Agent,
+        Command::Project { .. } => G::Project,
+        Command::Queue { .. } => G::Queue,
+        Command::Workflow { .. } => G::Workflow,
+        Command::History { .. } => G::History,
+        Command::Git { .. } => G::Git,
+        Command::Skill { .. } => G::Skill,
+        Command::Model { .. } => G::Model,
+        Command::Pack { .. } => G::Pack,
+        Command::Plugin { .. } => G::Plugin,
+        Command::Runner { .. } => G::Runner,
+        Command::Status => G::Status,
+        Command::Output { .. } => G::Output,
+        Command::Mcp { .. } => G::Mcp,
+        Command::Web { .. } => G::Web,
+        Command::Init(_) => G::Init,
+        Command::Doctor(_) => G::Doctor,
+        Command::Trigger { .. } => G::Trigger,
+        Command::Logs { .. } => G::Logs,
+        Command::Subject { .. } => G::Subject,
+        Command::Flavor { .. } => G::Flavor,
+        Command::Metrics { .. } => G::Metrics,
+    }
+}
+
 async fn run(cli: Cli) -> Result<()> {
+    services::metrics::record_cli_invoked(command_group(&cli.command));
+
     if matches!(cli.command, Command::Version) {
         let data = VersionInfo {
             name: env!("CARGO_PKG_NAME"),
@@ -146,6 +204,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Logs { command } => services::operations::handle_logs(command, &project_root, cli.json).await,
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
+        Command::Metrics { command } => services::operations::handle_metrics(command, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -190,7 +249,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Trigger { .. }
                 | Command::Logs { .. }
                 | Command::Subject { .. }
-                | Command::Flavor { .. } => {
+                | Command::Flavor { .. }
+                | Command::Metrics { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }

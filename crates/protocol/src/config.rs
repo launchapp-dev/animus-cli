@@ -49,6 +49,92 @@ pub struct Config {
     /// See `docs/reference/configuration.md` for the privacy invariants.
     #[serde(default, skip_serializing_if = "MetricsConfig::is_default")]
     pub metrics: MetricsConfig,
+    /// Self-update behaviour. Absent in older config files; the `Default`
+    /// posture matches a fresh install (mode=notify, interval=P1D,
+    /// channel=stable). See `crates/orchestrator-cli/src/services/self_update`.
+    #[serde(default, skip_serializing_if = "AutoUpdateConfig::is_default")]
+    pub auto_update: AutoUpdateConfig,
+}
+
+/// Self-update operating mode. Operators can change this via
+/// `.animus/config.json`, the `ANIMUS_AUTO_UPDATE_MODE` env var, or
+/// short-circuit the whole machinery via `ANIMUS_AUTO_UPDATE_DISABLE=1`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoUpdateMode {
+    Off,
+    #[default]
+    Notify,
+    Prompt,
+    Auto,
+}
+
+impl AutoUpdateMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Notify => "notify",
+            Self::Prompt => "prompt",
+            Self::Auto => "auto",
+        }
+    }
+
+    pub fn parse_lossy(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "off" | "disabled" | "none" => Some(Self::Off),
+            "notify" | "default" => Some(Self::Notify),
+            "prompt" | "ask" => Some(Self::Prompt),
+            "auto" | "apply" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AutoUpdateChannel {
+    #[default]
+    Stable,
+    Prerelease,
+}
+
+impl AutoUpdateChannel {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Stable => "stable",
+            Self::Prerelease => "prerelease",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutoUpdateConfig {
+    #[serde(default)]
+    pub mode: AutoUpdateMode,
+    #[serde(default = "default_check_interval")]
+    pub check_interval: String,
+    #[serde(default)]
+    pub channel: AutoUpdateChannel,
+}
+
+impl Default for AutoUpdateConfig {
+    fn default() -> Self {
+        Self {
+            mode: AutoUpdateMode::default(),
+            check_interval: default_check_interval(),
+            channel: AutoUpdateChannel::default(),
+        }
+    }
+}
+
+impl AutoUpdateConfig {
+    pub fn is_default(&self) -> bool {
+        self == &Self::default()
+    }
+}
+
+fn default_check_interval() -> String {
+    "P1D".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +234,7 @@ impl Config {
             claude_profiles: BTreeMap::new(),
             default_subject_kind: Some("task".to_string()),
             metrics: MetricsConfig::default(),
+            auto_update: AutoUpdateConfig::default(),
         };
         let json = serde_json::to_string_pretty(&default_config)?;
         fs::write(config_path, json)?;

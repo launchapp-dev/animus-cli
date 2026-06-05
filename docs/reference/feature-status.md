@@ -59,6 +59,7 @@ This page clarifies which Animus features are **shipped and stable**, **in-fligh
 | Model Management (`animus model`) | **Shipped** | Check model availability, validate model selection, view model roster |
 | History Inspection | **Shipped** | Inspect execution history through `animus history ...` |
 | Template-Driven Project Init | **Shipped** | `animus init` supports registry-backed templates, local template directories, non-interactive mode, plan mode, and the onboarding walkthrough flags |
+| Metrics Controls (`animus metrics`) | **Shipped** | Inspect opt-in state, enable/disable anonymous usage metrics, and flush pending telemetry batches |
 
 ### Observability and Output
 
@@ -69,6 +70,7 @@ This page clarifies which Animus features are **shipped and stable**, **in-fligh
 | Daemon Health and Status | **Shipped** | Real-time daemon process health and scheduling diagnostics |
 | Workflow Decisions | **Shipped** | View automated and manual decisions made during workflow execution |
 | Event Streaming | **Shipped** | Stream structured log events in real-time from daemon and runners |
+| Anonymous Usage Metrics | **Shipped** | Opt-in aggregate CLI/workflow/plugin/error telemetry with local pending-event storage and explicit operator controls |
 
 ## Web and TUI Surfaces
 

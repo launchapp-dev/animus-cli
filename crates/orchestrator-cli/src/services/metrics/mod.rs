@@ -22,7 +22,7 @@ use std::io::{self, IsTerminal, Write};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use protocol::{Config, MetricsConfig};
+use protocol::{AutoUpdateConfig, Config, MetricsConfig};
 use uuid::Uuid;
 
 pub use events::{
@@ -205,6 +205,7 @@ pub fn status_snapshot() -> MetricsStatus {
         claude_profiles: std::collections::BTreeMap::new(),
         default_subject_kind: None,
         metrics: MetricsConfig::default(),
+        auto_update: AutoUpdateConfig::default(),
     });
     MetricsStatus {
         enabled: config.metrics.enabled,

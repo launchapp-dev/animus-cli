@@ -70,9 +70,32 @@ Example:
         "CLAUDE_CONFIG_DIR": "/Users/alice/.claude-main"
       }
     }
+  },
+  "metrics": {
+    "enabled": true,
+    "install_id": "11111111-2222-3333-4444-555555555555",
+    "endpoint": "https://metrics.animus.dev/v1/events",
+    "batch_interval": "P1D"
+  },
+  "auto_update": {
+    "mode": "notify",
+    "check_interval": "P1D",
+    "channel": "stable"
   }
 }
 ```
+
+Additional global config blocks:
+
+- `metrics`: Opt-in anonymous usage telemetry. `enabled = null` means the first-run
+  prompt has not been answered yet; `false` opts out; `true` opts in and uses an
+  install-scoped UUID plus batched event delivery.
+- `auto_update`: Self-update policy. Defaults to `mode=notify`, `check_interval=P1D`,
+  `channel=stable`.
+
+The metrics surface is intentionally narrow: aggregate event counters only, with no
+file paths, repo names, prompts, credentials, or subject ids. Operators can inspect
+and control the current telemetry state with `animus metrics status|enable|disable|flush`.
 
 ## Installed Sources
 
@@ -304,6 +327,9 @@ legacy aliases; the old names will not be read.
 | `ANIMUS_DEBUG` | Enable verbose debug logging across the CLI and daemon |
 | `ANIMUS_LOG_JSON` | Emit log lines as JSON for log shippers |
 | `ANIMUS_DEBUG_MCP_STDIO` | Log raw MCP stdio frames for plugin/server debugging |
+| `ANIMUS_METRICS_DISABLE` | Truthy kill switch for anonymous usage metrics. Overrides an opted-in config and skips event emission/flush until unset |
+| `ANIMUS_AUTO_UPDATE_MODE` | Override the global self-update mode. Accepted values: `off`, `notify`, `prompt`, `auto` |
+| `ANIMUS_AUTO_UPDATE_DISABLE` | Truthy kill switch that disables the self-update machinery regardless of configured mode |
 
 ### Plugins and templates
 

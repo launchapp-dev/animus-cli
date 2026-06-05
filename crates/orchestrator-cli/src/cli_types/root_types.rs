@@ -124,4 +124,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: FlavorCommand,
     },
+    /// Inspect and control opt-in anonymous usage metrics.
+    Metrics {
+        #[command(subcommand)]
+        command: MetricsCommand,
+    },
 }
