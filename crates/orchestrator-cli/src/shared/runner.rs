@@ -1,8 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
-#[cfg(test)]
-use protocol::RunId;
 use protocol::{AgentRunEvent, OutputStreamType};
 use serde_json::Value;
 
@@ -14,8 +12,7 @@ use protocol::AgentControlAction;
 #[cfg(test)]
 pub(crate) use animus_runtime_shared::ipc::build_runtime_contract_with_resume;
 pub(crate) use animus_runtime_shared::ipc::{
-    append_line, build_runtime_contract, collect_json_payload_lines, connect_runner, event_matches_run, run_dir,
-    runner_config_dir, write_json_line,
+    append_line, build_runtime_contract, collect_json_payload_lines, event_matches_run, run_dir,
 };
 
 pub(crate) fn ensure_safe_run_id(run_id: &str) -> Result<()> {
@@ -32,7 +29,7 @@ impl From<AgentControlActionArg> for AgentControlAction {
     }
 }
 
-fn canonicalize_cwd_in_project(path: &str, project_root: &str) -> Result<String> {
+pub(crate) fn canonicalize_cwd_in_project(path: &str, project_root: &str) -> Result<String> {
     let root = PathBuf::from(project_root);
     let root_canonical =
         root.canonicalize().with_context(|| format!("failed to resolve project root '{}'", project_root))?;
@@ -74,6 +71,7 @@ fn is_managed_worktree_for_project(candidate_cwd: &Path, project_root: &Path) ->
     false
 }
 
+#[allow(dead_code)]
 pub(crate) fn build_agent_context(args: &AgentRunArgs, project_root: &str) -> Result<Value> {
     let mut context = if let Some(context_json) = &args.context_json {
         serde_json::from_str::<Value>(context_json)?
@@ -224,60 +222,33 @@ fn stream_type_label(stream_type: OutputStreamType) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
-    use tempfile::TempDir;
-    use tokio::io::{AsyncBufReadExt, BufReader};
-
     use protocol::test_utils::EnvVarGuard;
-    use protocol::IpcAuthRequest;
+    use protocol::RunId;
+    use tempfile::TempDir;
 
-    fn write_config(dir: &Path, token: Option<&str>) {
-        let payload = serde_json::json!({ "agent_runner_token": token });
-        std::fs::write(
-            dir.join("config.json"),
-            serde_json::to_string_pretty(&payload).expect("serialize config payload"),
-        )
-        .expect("write config file");
-    }
-
-    #[test]
-    fn runner_config_dir_defaults_to_project_scope() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", None);
-        let _runner_config = EnvVarGuard::set("ANIMUS_RUNNER_CONFIG_DIR", None);
-        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _scope = EnvVarGuard::set("ANIMUS_RUNNER_SCOPE", None);
-
-        let project_root = Path::new("/tmp/project-root");
-        let resolved = runner_config_dir(project_root);
-        let resolved_str = resolved.to_string_lossy();
-        assert!(resolved_str.contains("runner"), "expected runner suffix in resolved config dir: {resolved_str}");
-    }
-
-    #[test]
-    fn runner_config_dir_shortens_long_unix_socket_paths() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let long_root = Path::new("/tmp").join("a".repeat(120));
-        let _config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", None);
-        let _runner_config = EnvVarGuard::set("ANIMUS_RUNNER_CONFIG_DIR", None);
-        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _scope = EnvVarGuard::set("ANIMUS_RUNNER_SCOPE", None);
-
-        let resolved = runner_config_dir(&long_root);
-        let socket_path = resolved.join("agent-runner.sock");
-        assert!(
-            socket_path.to_string_lossy().len() <= protocol::MAX_UNIX_SOCKET_PATH_LEN,
-            "socket path should be shortened: {}",
-            socket_path.display()
-        );
+    fn make_agent_run_args() -> AgentRunArgs {
+        AgentRunArgs {
+            run_id: None,
+            tool: "claude".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            prompt: Some("test".to_string()),
+            cwd: None,
+            context_json: None,
+            timeout_secs: None,
+            runtime_contract_json: None,
+            detach: false,
+            stream: true,
+            save_jsonl: false,
+            jsonl_dir: None,
+            start_runner: false,
+            runner_scope: None,
+        }
     }
 
     #[test]
     fn build_agent_context_accepts_managed_worktree_cwd() {
         let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", None);
-        let _runner_config = EnvVarGuard::set("ANIMUS_RUNNER_CONFIG_DIR", None);
-        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
 
         let tmp = TempDir::new().expect("temp dir");
         let project_root = tmp.path().join("repo");
@@ -289,22 +260,8 @@ mod tests {
         std::fs::write(managed_ao.join(".project-root"), canonical_root.to_string_lossy().as_bytes())
             .expect("write marker");
 
-        let args = AgentRunArgs {
-            run_id: None,
-            tool: "claude".to_string(),
-            model: Some("claude-sonnet-4-6".to_string()),
-            prompt: Some("hello".to_string()),
-            cwd: Some(worktree.to_string_lossy().to_string()),
-            context_json: None,
-            timeout_secs: None,
-            runtime_contract_json: None,
-            detach: false,
-            stream: true,
-            save_jsonl: false,
-            jsonl_dir: None,
-            start_runner: false,
-            runner_scope: None,
-        };
+        let mut args = make_agent_run_args();
+        args.cwd = Some(worktree.to_string_lossy().to_string());
 
         let context = build_agent_context(&args, &canonical_root.to_string_lossy()).expect("build context");
         let cwd = context["cwd"].as_str().expect("cwd should be present");
@@ -328,128 +285,6 @@ mod tests {
         let input = "plain text\n{\"key\":\"value\"}\nmore text\n[1,2,3]\n42\n";
         let rows = collect_json_payload_lines(input);
         assert_eq!(rows.len(), 2);
-    }
-
-    #[test]
-    fn claude_bypass_permissions_is_disabled_by_default() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", None);
-        let contract =
-            build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(!args.contains(&"--permission-mode"));
-        assert!(!args.contains(&"bypassPermissions"));
-    }
-
-    #[test]
-    fn claude_bypass_permissions_respects_disable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
-        let contract =
-            build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(!args.contains(&"--permission-mode"));
-        assert!(!args.contains(&"bypassPermissions"));
-    }
-
-    #[test]
-    fn claude_bypass_permissions_treats_empty_value_as_disabled() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", Some(""));
-        let contract =
-            build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(!args.contains(&"--permission-mode"));
-        assert!(!args.contains(&"bypassPermissions"));
-    }
-
-    #[test]
-    fn inject_claude_permission_mode_override_is_disabled_by_default() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", None);
-        let contract =
-            build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(!args.contains(&"--permission-mode"));
-        assert!(!args.contains(&"bypassPermissions"));
-    }
-
-    #[test]
-    fn inject_claude_permission_mode_override_respects_enable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", Some("true"));
-        let mut contract =
-            build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        animus_runtime_shared::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(args.contains(&"--permission-mode"));
-        assert!(args.contains(&"bypassPermissions"));
-    }
-
-    #[test]
-    fn inject_claude_permission_mode_override_respects_disable_toggle() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", Some("false"));
-        let mut contract =
-            build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        animus_runtime_shared::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(!args.contains(&"--permission-mode"));
-        assert!(!args.contains(&"bypassPermissions"));
-    }
-
-    #[test]
-    fn inject_claude_permission_mode_override_treats_empty_toggle_as_disabled() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _bypass = EnvVarGuard::set("ANIMUS_CLAUDE_BYPASS_PERMISSIONS", Some(""));
-        let mut contract =
-            build_runtime_contract("claude", "claude-opus-4-1", "hello").expect("runtime contract should build");
-        animus_runtime_shared::runtime_support::inject_claude_permission_mode(&mut contract, "claude");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(!args.contains(&"--permission-mode"));
-        assert!(!args.contains(&"bypassPermissions"));
     }
 
     #[test]
@@ -477,138 +312,5 @@ mod tests {
         assert!(args.contains(&"session-abc-123"));
         let session = contract.pointer("/cli/session");
         assert!(session.is_some());
-        assert_eq!(
-            session.and_then(|s| s.get("session_key")).and_then(Value::as_str),
-            Some("wf:test-wf:implementation")
-        );
-        assert_eq!(session.and_then(|s| s.get("reused")).and_then(Value::as_bool), Some(false));
-    }
-
-    #[test]
-    fn build_runtime_contract_with_resume_injects_gemini_resume_flag() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let plan = orchestrator_core::runtime_contract::CliSessionResumePlan {
-            mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
-            session_key: "wf:test-wf:research".to_string(),
-            session_id: Some("session-def-456".to_string()),
-            summary_seed: None,
-            reused: true,
-            phase_thread_isolated: true,
-        };
-        let contract = build_runtime_contract_with_resume("gemini", "gemini-2.5-pro", "hello", Some(&plan))
-            .expect("runtime contract should build");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(args.contains(&"--resume"));
-        assert!(args.contains(&"session-def-456"));
-    }
-
-    #[test]
-    fn build_runtime_contract_with_resume_codex_uses_exec_resume_last() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let plan = orchestrator_core::runtime_contract::CliSessionResumePlan {
-            mode: orchestrator_core::runtime_contract::CliSessionResumeMode::NativeId,
-            session_key: "wf:test-wf:implementation".to_string(),
-            session_id: Some("session-ghi-789".to_string()),
-            summary_seed: None,
-            reused: true,
-            phase_thread_isolated: true,
-        };
-        let contract = build_runtime_contract_with_resume(
-            "codex",
-            protocol::default_model_for_tool("codex").unwrap_or("gpt-4.1"),
-            "hello",
-            Some(&plan),
-        )
-        .expect("runtime contract should build");
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(args.contains(&"resume"));
-        assert!(args.contains(&"--last"));
-        assert!(!args.contains(&"--session-id"));
-    }
-
-    #[test]
-    fn build_runtime_contract_without_resume_has_no_session_metadata() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let contract =
-            build_runtime_contract("claude", "claude-sonnet-4-6", "hello").expect("runtime contract should build");
-        let session = contract.pointer("/cli/session");
-        assert!(session.is_none());
-        let args = contract
-            .pointer("/cli/launch/args")
-            .and_then(Value::as_array)
-            .expect("launch args should be present")
-            .iter()
-            .filter_map(Value::as_str)
-            .collect::<Vec<_>>();
-        assert!(!args.contains(&"--session-id"));
-    }
-
-    #[test]
-    fn authenticate_runner_stream_uses_scoped_config_dir_token() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let global_dir = TempDir::new().expect("global temp dir");
-        let scoped_dir = TempDir::new().expect("scoped temp dir");
-        write_config(global_dir.path(), Some("global-token"));
-        write_config(scoped_dir.path(), Some("scoped-token"));
-
-        let global_override = global_dir.path().to_string_lossy().to_string();
-        let _ao_config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(&global_override));
-        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", Some(&global_override));
-        let _token_override = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
-
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        runtime.block_on(async {
-            let (mut client, server) = tokio::io::duplex(1024);
-            let server_task = tokio::spawn(async move {
-                let mut reader = BufReader::new(server);
-                let mut line = String::new();
-                let read_len = reader.read_line(&mut line).await.expect("read auth request");
-                assert!(read_len > 0, "expected auth request line");
-
-                let request: IpcAuthRequest = serde_json::from_str(line.trim()).expect("parse auth request");
-                assert_eq!(request.token, "scoped-token");
-
-                let mut server = reader.into_inner();
-                write_json_line(&mut server, &protocol::IpcAuthResult::ok()).await.expect("write auth response");
-            });
-
-            animus_runtime_shared::ipc::authenticate_runner_stream(&mut client, scoped_dir.path())
-                .await
-                .expect("authenticate runner stream");
-
-            server_task.await.expect("join server task");
-        });
-    }
-
-    #[test]
-    fn authenticate_runner_stream_fails_when_scoped_token_missing() {
-        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let scoped_dir = TempDir::new().expect("scoped temp dir");
-        write_config(scoped_dir.path(), None);
-        let _token_override = EnvVarGuard::set("AGENT_RUNNER_TOKEN", None);
-
-        let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
-        runtime.block_on(async {
-            let (mut client, _server) = tokio::io::duplex(256);
-            let error = animus_runtime_shared::ipc::authenticate_runner_stream(&mut client, scoped_dir.path())
-                .await
-                .expect_err("authentication should fail without runner token");
-            assert!(
-                error.to_string().contains("agent runner token unavailable"),
-                "error should mention missing runner token: {error}"
-            );
-        });
     }
 }

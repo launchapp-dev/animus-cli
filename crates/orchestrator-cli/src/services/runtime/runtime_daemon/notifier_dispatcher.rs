@@ -127,7 +127,8 @@ impl NotifierPluginDispatcher {
         }
         let params = json!({});
         for plugin in &self.plugins {
-            let host = match Self::host_for(&self.hosts, plugin, &self.project_root, &self.notifier_env_allowlist).await {
+            let host = match Self::host_for(&self.hosts, plugin, &self.project_root, &self.notifier_env_allowlist).await
+            {
                 Ok(host) => host,
                 Err(error) => {
                     warn!(plugin = %plugin.name, %error, "failed to spawn notifier plugin");

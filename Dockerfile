@@ -24,14 +24,16 @@ COPY crates crates
 # deleted; the runtime now spawns
 # `launchapp-dev/animus-provider-oai-agent` v0.1.3 from the installed
 # plugin. The image installs that plugin in stage 2 as well.
+# v0.5.3 surface-shrink: the in-tree `agent-runner` sidecar was deleted;
+# `animus agent {run, status, cancel, control}` now talks to provider
+# plugins directly via `SessionBackendResolver`, so the image no longer
+# ships an `agent-runner` binary.
 RUN cargo build --release --locked \
-    -p orchestrator-cli \
-    -p agent-runner
+    -p orchestrator-cli
 
 # Verify binaries exist
 RUN ls -lh \
-    target/release/animus \
-    target/release/agent-runner
+    target/release/animus
 
 # ── Stage 2: Minimal runtime image ──────────────────────────────────────────────
 FROM debian:bookworm-slim
@@ -66,7 +68,6 @@ RUN mkdir -p /root/.animus /root/.animus/plugins
 
 # Copy binaries from builder
 COPY --from=builder /src/target/release/animus /usr/local/bin/animus
-COPY --from=builder /src/target/release/agent-runner /usr/local/bin/agent-runner
 
 # Install the workflow runner plugin. As of v0.5.1 round-4 fold-in this
 # binary is the out-of-tree `animus-workflow-runner-default` plugin and

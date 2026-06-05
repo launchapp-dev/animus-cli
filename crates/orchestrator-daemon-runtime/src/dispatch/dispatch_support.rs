@@ -208,8 +208,9 @@ mod tests {
         let health = DaemonHealth {
             healthy: true,
             status: DaemonStatus::Running,
-            runner_connected: true,
-            runner_pid: Some(42),
+            runner_connected: false,
+            runner_pid: None,
+            provider_plugins_healthy: true,
             active_agents: 1,
             pool_size: Some(3),
             project_root: Some("/tmp/project".to_string()),

@@ -1,6 +1,5 @@
 [workspace]
 members = [
-  "crates/agent-runner",
   "crates/animus-plugin-protocol",
   "crates/animus-plugin-runtime",
   "crates/protocol",
@@ -14,7 +13,6 @@ members = [
 ]
 default-members = [
   "crates/orchestrator-cli",
-  "crates/agent-runner",
 ]
 resolver = "2"
 

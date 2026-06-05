@@ -36,7 +36,6 @@ flowchart TB
     CFG["orchestrator-config"]
     DAEMON["orchestrator-daemon-runtime"]
     WFR["animus-runtime-shared<br/>+ workflow_runner plugin"]
-    AR["agent-runner"]
     SESSION["orchestrator-plugin-host::session"]
     PHOST["orchestrator-plugin-host"]
     PLUGINS["provider / subject / trigger / transport plugins"]
@@ -50,13 +49,19 @@ flowchart TB
     CORE --> LOCAL
     CORE --> STATE
     DAEMON --> WFR
-    WFR --> AR
-    AR --> SESSION
+    WFR --> SESSION
     SESSION --> PHOST
     DAEMON --> PHOST
     CLI --> PHOST
     PHOST --> PLUGINS
 ```
+
+> **v0.5.3 surface-shrink:** the standalone `agent-runner` sidecar was
+> deleted. `animus agent {run, status, cancel, control}` is now a thin
+> client over `SessionBackendResolver` (see
+> `crates/orchestrator-cli/src/services/runtime/runtime_agent/provider_client.rs`).
+> Provider plugins handle CLI invocation end to end — there is no
+> Unix-socket bridge and no per-process sidecar to supervise.
 
 ## Workspace Responsibilities
 
@@ -64,7 +69,7 @@ flowchart TB
 |---|---|---|
 | Interface | `orchestrator-cli` | CLI, MCP server, JSON output, operations, `animus web` plugin launch |
 | Services | `orchestrator-core` (includes the `subject_adapter` and `store` modules), `orchestrator-config` | Bootstrap, config, state mutation APIs, workflow config, atomic persistence, subject-backend adapters |
-| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and runner IPC/process orchestration |
+| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic. Provider invocation routes through `orchestrator-plugin-host::session` (v0.5.3+; the in-tree `agent-runner` sidecar was deleted). |
 | Plugins | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers, provider plugin sessions |
 | Support | `orchestrator-logging`, `protocol` | Tracing, shared types |
 
@@ -139,12 +144,10 @@ discover installed `transport_backend` and `web_ui` plugins.
 1. A subject or queue entry selects work.
 2. The daemon starts a workflow run through an installed `workflow_runner` plugin.
 3. Shared `animus-runtime-shared` logic resolves phase configuration and runtime contracts inside that plugin.
-4. Agent phases call `agent-runner`.
-5. `agent-runner` delegates provider execution to the session bridge in
-   `orchestrator-plugin-host`.
-6. `orchestrator-plugin-host::session` discovers and drives a provider plugin.
-7. Events flow back through the runner, workflow state, daemon output, and logs.
-8. Terminal state is persisted in scoped runtime state and surfaced through CLI,
+4. Agent phases call `orchestrator-plugin-host::session::SessionBackendResolver`.
+5. The resolver discovers and drives the matching provider plugin.
+6. Events flow back through the session bridge, workflow state, daemon output, and logs.
+7. Terminal state is persisted in scoped runtime state and surfaced through CLI,
    MCP, web transports, and output commands.
 
 ## Daemon Responsibilities

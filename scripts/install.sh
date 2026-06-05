@@ -20,7 +20,11 @@ INSTALL_DIR="${ANIMUS_INSTALL_DIR:-${HOME}/.local/bin}"
 # `launchapp-dev/animus-provider-oai-agent`. Legacy v0.4.x / v0.5.0
 # archives still ship the binary; the loop below maps it back onto disk
 # for upgrading users without breaking new installs.
-BINARIES=(animus agent-runner)
+# v0.5.3 surface-shrink: the `agent-runner` sidecar binary was deleted.
+# Newer archives only ship `animus`; legacy archives still ship
+# `agent-runner` but it is no longer required, so make it optional.
+BINARIES=(animus)
+OPTIONAL_BINARIES=(agent-runner)
 
 info()  { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn()  { printf '\033[1;33mwarn:\033[0m %s\n' "$*"; }
@@ -168,6 +172,19 @@ main() {
     chmod +x "${INSTALL_DIR}/animus-oai-runner"
     warn "installed legacy oai runner; v0.5.2+ uses the plugin — run 'animus plugin install launchapp-dev/animus-provider-oai-agent'"
   fi
+
+  # v0.5.3 surface-shrink: the `agent-runner` sidecar was deleted.
+  # Pre-v0.5.3 archives still ship the binary; copy it onto disk for
+  # operators rolling back / staying on the old layout, but emit a
+  # warning so they know it's no longer required.
+  for legacy_bin in "${OPTIONAL_BINARIES[@]}"; do
+    if [[ -f "${stage_dir}/${legacy_bin}" ]]; then
+      rm -f "${INSTALL_DIR}/${legacy_bin}"
+      cp "${stage_dir}/${legacy_bin}" "${INSTALL_DIR}/${legacy_bin}"
+      chmod +x "${INSTALL_DIR}/${legacy_bin}"
+      warn "installed legacy ${legacy_bin}; v0.5.3+ no longer requires it (provider plugins handle agent execution end-to-end)"
+    fi
+  done
 
   info "Installed to ${INSTALL_DIR}:"
   for bin in "${BINARIES[@]}"; do

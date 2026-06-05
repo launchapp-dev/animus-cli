@@ -45,9 +45,7 @@ use std::path::Path;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
-use interprocess::local_socket::{
-    prelude::*, GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream,
-};
+use interprocess::local_socket::{prelude::*, GenericFilePath, GenericNamespaced, ListenerOptions, Name, Stream};
 
 use crate::workflow_event_emitter::{RuntimeWorkflowEvent, WireWorkflowEvent, WorkflowEventEmitter};
 
@@ -262,9 +260,8 @@ fn acceptor_loop(
 fn spawn_writer(mut stream: Stream, socket_label: &str) -> ReaderHandle {
     let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(BROADCAST_QUEUE_DEPTH);
     let label = socket_label.to_string();
-    let _ = thread::Builder::new()
-        .name(format!("animus-reattach-writer:{}", short_label(socket_label)))
-        .spawn(move || {
+    let _ =
+        thread::Builder::new().name(format!("animus-reattach-writer:{}", short_label(socket_label))).spawn(move || {
             for bytes in rx.iter() {
                 if stream.write_all(&bytes).is_err() {
                     tracing::debug!(

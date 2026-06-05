@@ -41,6 +41,7 @@ pub(crate) use control_routing::build_daemon_ops_routing;
 use daemon_events::handle_daemon_events_impl;
 use daemon_run::handle_daemon_run;
 
+#[allow(unused_imports)]
 pub(crate) use daemon_events::{daemon_events_log_path, poll_daemon_events, DaemonEventRecord};
 
 use protocol::{is_process_alive, terminate_process};

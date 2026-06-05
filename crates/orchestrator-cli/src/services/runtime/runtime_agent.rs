@@ -5,8 +5,8 @@ use orchestrator_core::services::ServiceHub;
 
 use crate::AgentCommand;
 
-mod connection;
 mod profiles;
+pub(crate) mod provider_client;
 mod run;
 mod status;
 
