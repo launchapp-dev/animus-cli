@@ -22,8 +22,17 @@ extract_cli_source() {
     if ($in_enum && /^\}/) {
       $in_enum = 0;
     }
+    if ($in_enum && /^\s*#\[command\(name = "([^"]+)"\)\]/) {
+      $override = $1;
+      next;
+    }
     if ($in_enum && /^\s+([A-Z][A-Za-z0-9_]*)\s*[({,]/) {
-      print lc($1), "\n";
+      if (defined $override && $override ne "") {
+        print $override, "\n";
+      } else {
+        print lc($1), "\n";
+      }
+      undef $override;
     }
   ' "$cli_source" | sort -u
 }

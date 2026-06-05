@@ -37,6 +37,7 @@ async fn main() {
         Ok(cli) => {
             let json = cli.json;
             let startup_check = spawn_startup_update_check(&cli);
+            let project_root_override = cli.project_root.clone();
             let run_result = run(cli).await;
             let exit_code = match run_result {
                 Ok(()) => 0,
@@ -46,12 +47,6 @@ async fn main() {
                 }
             };
             if let Some(check) = startup_check {
-                // For `auto` mode we wait for the install to finish (the
-                // operator explicitly asked us to apply the update; the
-                // visible cost of a one-time, post-subcommand wait is worth a
-                // correct install). For `notify` we give a short grace period
-                // so the notification reliably reaches stderr without making
-                // operators eat the GitHub round-trip latency on every call.
                 let grace = if check.is_blocking { None } else { Some(std::time::Duration::from_millis(750)) };
                 match grace {
                     Some(timeout) => {
@@ -62,6 +57,14 @@ async fn main() {
                     }
                 }
             }
+            let runtime_config = RuntimeConfig { project_root: project_root_override, ..RuntimeConfig::default() };
+            let (project_root, _) = resolve_project_root(&runtime_config);
+            let project_root_path = std::path::PathBuf::from(project_root);
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                services::metrics::maybe_flush_if_due(&project_root_path),
+            )
+            .await;
             std::process::exit(exit_code);
         }
         Err(parse_err) => {
@@ -147,6 +150,14 @@ async fn run(cli: Cli) -> Result<()> {
 
     let runtime_config = RuntimeConfig { project_root: cli.project_root.clone(), ..RuntimeConfig::default() };
     let (project_root, _) = resolve_project_root(&runtime_config);
+    // Record a `cli_invoked` event before dispatch (no-op when telemetry
+    // is disabled). The recorder constructor handles every guard
+    // internally — kill switch, no consent block, opt-out — so this
+    // line never blocks command execution.
+    services::metrics::record_event(
+        std::path::Path::new(&project_root),
+        services::metrics::EventTags::CliInvoked { command_group: cli_command_group(&cli.command) },
+    );
     match cli.command {
         Command::Init(args) => services::operations::handle_init(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
@@ -165,6 +176,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
         Command::SelfCmd { command } => services::operations::handle_self(command, &project_root, cli.json).await,
+        Command::Metrics { command } => services::operations::handle_metrics(command, &project_root, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -210,7 +222,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Logs { .. }
                 | Command::Subject { .. }
                 | Command::Flavor { .. }
-                | Command::SelfCmd { .. } => {
+                | Command::SelfCmd { .. }
+                | Command::Metrics { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }
@@ -263,6 +276,37 @@ struct VersionInfo {
     name: &'static str,
     binary: &'static str,
     version: &'static str,
+}
+
+fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
+    use services::metrics::CommandGroup;
+    match command {
+        Command::Version => CommandGroup::Version,
+        Command::Daemon { .. } => CommandGroup::Daemon,
+        Command::Agent { .. } => CommandGroup::Agent,
+        Command::Project { .. } => CommandGroup::Project,
+        Command::Queue { .. } => CommandGroup::Queue,
+        Command::Workflow { .. } => CommandGroup::Workflow,
+        Command::History { .. } => CommandGroup::History,
+        Command::Git { .. } => CommandGroup::Git,
+        Command::Skill { .. } => CommandGroup::Skill,
+        Command::Model { .. } => CommandGroup::Model,
+        Command::Pack { .. } => CommandGroup::Pack,
+        Command::Plugin { .. } => CommandGroup::Plugin,
+        Command::Runner { .. } => CommandGroup::Runner,
+        Command::Status => CommandGroup::Status,
+        Command::Output { .. } => CommandGroup::Output,
+        Command::Mcp { .. } => CommandGroup::Mcp,
+        Command::Web { .. } => CommandGroup::Web,
+        Command::Init(_) => CommandGroup::Init,
+        Command::Doctor(_) => CommandGroup::Doctor,
+        Command::Trigger { .. } => CommandGroup::Trigger,
+        Command::Logs { .. } => CommandGroup::Logs,
+        Command::Subject { .. } => CommandGroup::Subject,
+        Command::Flavor { .. } => CommandGroup::Flavor,
+        Command::SelfCmd { .. } => CommandGroup::SelfUpdate,
+        Command::Metrics { .. } => CommandGroup::Metrics,
+    }
 }
 
 #[cfg(test)]

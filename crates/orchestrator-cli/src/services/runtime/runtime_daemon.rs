@@ -641,6 +641,9 @@ pub(crate) async fn handle_daemon(
 
     match command {
         DaemonCommand::Start(args) => {
+            if !json {
+                let _ = crate::services::metrics::maybe_prompt_first_run(std::path::Path::new(project_root));
+            }
             if let Some(existing_pid) = get_daemon_pid(project_root)? {
                 if is_process_alive(existing_pid) {
                     if args.autonomous {
@@ -706,6 +709,9 @@ pub(crate) async fn handle_daemon(
                 }
 
                 let _ = set_runtime_paused(project_root, false);
+                // DaemonStarted metric is emitted by the spawned child's
+                // `handle_daemon_run` path; recording it here too would
+                // double-count autonomous starts.
                 return print_value(
                     serde_json::json!({
                         "message": "daemon started",

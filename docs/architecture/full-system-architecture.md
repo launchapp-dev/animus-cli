@@ -30,7 +30,7 @@ The core goals are:
 
 ## Workspace Inventory
 
-`Cargo.toml` currently declares 11 workspace members.
+`Cargo.toml` currently declares 10 workspace members.
 
 | Group | Crates |
 |---|---|

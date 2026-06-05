@@ -1,6 +1,6 @@
 # Architecture Overview
 
-Animus is a Rust-only agent orchestrator built as a Cargo workspace of 11 members.
+Animus is a Rust-only agent orchestrator built as a Cargo workspace of 10 members.
 It provides the `animus` CLI, daemon runtime, shared workflow execution/runtime
 helpers, agent runner, MCP server, plugin host, and plugin protocol crates.
 Provider, subject, transport,

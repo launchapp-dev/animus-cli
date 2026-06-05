@@ -2861,7 +2861,35 @@ async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json
         force_rewrite_lockfile: args.force_rewrite_lockfile,
     })
     .await?;
+    let role = output
+        .manifest
+        .as_ref()
+        .map(|m| plugin_role_from_kind(&m.plugin_kind))
+        .unwrap_or(crate::services::metrics::PluginRole::Other);
+    crate::services::metrics::record_event(
+        std::path::Path::new(project_root),
+        crate::services::metrics::EventTags::PluginInstalled { plugin_kind: role },
+    );
     print_value(output, json)
+}
+
+/// Maps a plugin manifest `plugin_kind` string into the bounded
+/// [`crate::services::metrics::PluginRole`] enum. Unknown kinds collapse
+/// to `Other` — payloads must never carry a free-form string.
+fn plugin_role_from_kind(kind: &str) -> crate::services::metrics::PluginRole {
+    use crate::services::metrics::PluginRole;
+    match kind {
+        "subject_backend" | "task_backend" => PluginRole::SubjectBackend,
+        "provider" | "session_backend" => PluginRole::Provider,
+        "transport" | "transport_backend" => PluginRole::Transport,
+        "web_ui" => PluginRole::WebUi,
+        "trigger" | "trigger_backend" => PluginRole::Trigger,
+        "log_storage" | "log_storage_backend" => PluginRole::LogStorage,
+        "queue" => PluginRole::Queue,
+        "notifier" => PluginRole::Notifier,
+        "workflow_runner" => PluginRole::WorkflowRunner,
+        _ => PluginRole::Other,
+    }
 }
 
 /// Translate CLI flag combinations into the canonical [`PluginPolicyMode`].

@@ -43,13 +43,12 @@ pub struct Config {
     /// invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_subject_kind: Option<String>,
-    /// Configurable auto-update behavior for the `animus` CLI itself. Pulls
-    /// release metadata from `launchapp-dev/animus-cli` and (depending on
-    /// `mode`) notifies, prompts, or silently applies new versions on
-    /// startup. Omitted on disk by default — absence behaves like the
-    /// type-level [`AutoUpdateConfig::default`] (mode = `notify`).
+    /// Configurable auto-update behavior for the `animus` CLI itself.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_update: Option<AutoUpdateConfig>,
+    /// Opt-in anonymous usage telemetry. Absent means "never asked".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrics: Option<MetricsConfig>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -92,8 +91,55 @@ impl Default for AutoUpdateConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
+    #[serde(default = "default_metrics_endpoint")]
+    pub endpoint: String,
+    #[serde(default = "default_metrics_batch_interval")]
+    pub batch_interval: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install_id: Option<String>,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: None,
+            endpoint: default_metrics_endpoint(),
+            batch_interval: default_metrics_batch_interval(),
+            install_id: None,
+        }
+    }
+}
+
 fn default_check_interval() -> String {
     "P1D".to_string()
+}
+
+pub const DEFAULT_METRICS_ENDPOINT: &str = "https://metrics.animus.dev/v1/events";
+pub const DEFAULT_METRICS_BATCH_INTERVAL: &str = "P1D";
+
+fn default_metrics_endpoint() -> String {
+    DEFAULT_METRICS_ENDPOINT.to_string()
+}
+
+fn default_metrics_batch_interval() -> String {
+    DEFAULT_METRICS_BATCH_INTERVAL.to_string()
+}
+
+impl MetricsConfig {
+    pub fn is_enabled(&self) -> bool {
+        if metrics_env_disabled() {
+            return false;
+        }
+        matches!(self.enabled, Some(true))
+    }
+}
+
+pub fn metrics_env_disabled() -> bool {
+    parse_env_bool("ANIMUS_METRICS_DISABLE")
 }
 
 impl Config {
@@ -107,6 +153,33 @@ impl Config {
 
     pub fn load_global() -> Result<Self> {
         Self::load_from_dir(&Self::global_config_dir())
+    }
+
+    /// Persist this config into the global config directory
+    /// (`~/.animus/config.json` by default, overridable via
+    /// `ANIMUS_CONFIG_DIR`). Used for user-level state that must not be
+    /// trusted from project-local `.animus/config.json` (e.g. telemetry
+    /// consent).
+    pub fn save_global(&self) -> Result<()> {
+        let dir = Self::global_config_dir();
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("Failed to create global config directory {}", dir.display()))?;
+        let path = dir.join("config.json");
+        let json = serde_json::to_string_pretty(self)?;
+        fs::write(&path, json).with_context(|| format!("Failed to write {}", path.display()))?;
+        Ok(())
+    }
+
+    /// Side-effect-free read of the global config file. Returns `None`
+    /// when the file does not yet exist (so callers like the metrics
+    /// recorder can probe consent without materializing the file).
+    pub fn load_global_if_exists() -> Option<Self> {
+        let path = Self::global_config_dir().join("config.json");
+        if !path.exists() {
+            return None;
+        }
+        let content = fs::read_to_string(&path).ok()?;
+        serde_json::from_str(&content).ok()
     }
 
     pub fn load_from_dir(config_dir: &Path) -> Result<Self> {
@@ -153,6 +226,7 @@ impl Config {
             claude_profiles: BTreeMap::new(),
             default_subject_kind: Some("task".to_string()),
             auto_update: None,
+            metrics: None,
         };
         let json = serde_json::to_string_pretty(&default_config)?;
         fs::write(config_path, json)?;
@@ -313,12 +387,14 @@ mod tests {
             claude_profiles: BTreeMap::new(),
             default_subject_kind: None,
             auto_update: None,
+            metrics: None,
         };
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(!json.contains("mcp_servers"));
         assert!(!json.contains("claude_profiles"));
         assert!(!json.contains("default_subject_kind"));
         assert!(!json.contains("auto_update"));
+        assert!(!json.contains("\"metrics\""));
     }
 
     #[test]
@@ -358,5 +434,60 @@ mod tests {
         assert_eq!(auto.mode, AutoUpdateMode::Auto);
         assert_eq!(auto.channel, AutoUpdateChannel::Stable);
         assert_eq!(auto.check_interval, "P1D");
+    }
+
+    #[test]
+    fn config_without_metrics_block_deserializes_as_none() {
+        let json = r#"{"agent_runner_token": null}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.metrics.is_none(), "absent metrics block must remain None");
+    }
+
+    #[test]
+    fn config_with_metrics_block_roundtrips() {
+        let json = r#"{
+            "agent_runner_token": null,
+            "metrics": {
+                "enabled": true,
+                "endpoint": "https://metrics.example.test/v1/events",
+                "batch_interval": "P1D",
+                "install_id": "550e8400-e29b-41d4-a716-446655440000"
+            }
+        }"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let metrics = config.metrics.as_ref().expect("metrics block should parse");
+        assert_eq!(metrics.enabled, Some(true));
+        assert_eq!(metrics.endpoint, "https://metrics.example.test/v1/events");
+        assert_eq!(metrics.batch_interval, "P1D");
+        assert_eq!(metrics.install_id.as_deref(), Some("550e8400-e29b-41d4-a716-446655440000"));
+
+        let serialized = serde_json::to_string(&config).unwrap();
+        let round: Config = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(round.metrics.unwrap().enabled, Some(true));
+    }
+
+    #[test]
+    fn metrics_config_defaults_apply_to_partial_block() {
+        let json = r#"{"agent_runner_token": null, "metrics": {"enabled": true}}"#;
+        let config: Config = serde_json::from_str(json).unwrap();
+        let metrics = config.metrics.unwrap();
+        assert_eq!(metrics.endpoint, DEFAULT_METRICS_ENDPOINT);
+        assert_eq!(metrics.batch_interval, DEFAULT_METRICS_BATCH_INTERVAL);
+        assert!(metrics.install_id.is_none());
+    }
+
+    #[cfg(feature = "test-utils")]
+    #[test]
+    fn metrics_is_enabled_respects_env_kill_switch() {
+        use crate::test_utils::EnvVarGuard;
+        let metrics = MetricsConfig { enabled: Some(true), ..MetricsConfig::default() };
+        {
+            let _guard = EnvVarGuard::set("ANIMUS_METRICS_DISABLE", Some("1"));
+            assert!(!metrics.is_enabled());
+        }
+        {
+            let _guard = EnvVarGuard::set("ANIMUS_METRICS_DISABLE", None);
+            assert!(metrics.is_enabled());
+        }
     }
 }

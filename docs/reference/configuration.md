@@ -369,6 +369,7 @@ legacy aliases; the old names will not be read.
 | `ANIMUS_DEBUG_MCP_STDIO` | Log raw MCP stdio frames for plugin/server debugging |
 | `ANIMUS_AUTO_UPDATE_MODE` | Override the configured `auto_update.mode` for the current process (`off`, `notify`, `prompt`, `auto`) |
 | `ANIMUS_AUTO_UPDATE_DISABLE` | Short-circuit auto-update to `off` regardless of config when set to a truthy value |
+| `ANIMUS_METRICS_DISABLE` | Truthy — hard kill switch for opt-in anonymous metrics. Suppresses emission regardless of any persisted opt-in. See [Opt-in anonymous metrics](#opt-in-anonymous-metrics-v053). |
 
 ### Plugins and templates
 
@@ -461,6 +462,95 @@ Or run: animus plugin install-defaults
 
 This is intentional — silent fallback to a removed in-tree backend would
 hide broken or missing plugins during daemon startup.
+
+## Opt-in anonymous metrics (v0.5.3)
+
+Animus ships a minimal opt-in telemetry surface. It is **disabled by
+default**: the first time you run `animus init` or `animus daemon
+start` in a TTY, the CLI prompts once for consent. The answer is
+persisted to the **user-global** config at
+`~/.animus/config.json` (overridable via `ANIMUS_CONFIG_DIR`) so you
+never see the prompt again across any project on this machine. The
+opt-in is intentionally **never** stored in the project-local
+`.animus/config.json` — that file can be committed, and a cloned repo
+must never carry someone else's consent or point at a third-party
+endpoint. Non-interactive contexts (no TTY) default to **opt-out**
+with no prompt.
+
+### Config block (in `~/.animus/config.json`)
+
+```json
+{
+  "metrics": {
+    "enabled": true,
+    "endpoint": "https://metrics.animus.dev/v1/events",
+    "batch_interval": "P1D",
+    "install_id": "9e2c1bcc-4a2f-4f24-bf25-9c0d0d3f6e2c"
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `enabled` | `true` = opted in, `false` = opted out, absent block = never asked. |
+| `endpoint` | HTTP receiver for batched event-counter payloads. |
+| `batch_interval` | ISO 8601 duration. Default `P1D` (daily). |
+| `install_id` | Opaque random UUID generated on opt-in. Wiped on opt-out. |
+
+### Kill switch
+
+| Variable | Description |
+|---|---|
+| `ANIMUS_METRICS_DISABLE` | Truthy (`1`, `true`, `yes`, `on`) — suppresses all telemetry regardless of config. Overrides any persisted opt-in. |
+
+### Privacy invariants
+
+These properties are enforced at the type level; new event types
+require updating the closed enums in
+`crates/orchestrator-cli/src/services/metrics/events.rs`:
+
+- No file paths, repo names, branch names, or git URLs.
+- No prompt content, model responses, agent output, or generated text.
+- No environment-variable values.
+- No credentials, API keys, or tokens.
+- No subject IDs (task ids, requirement ids).
+- Every event tag is a compile-time enum variant; payloads cannot
+  carry user-supplied strings.
+
+### Payload shape
+
+```json
+{
+  "install_id": "<uuid>",
+  "animus_version": "0.5.3",
+  "os": "darwin",
+  "arch": "aarch64",
+  "events": [
+    {
+      "name": "workflow_started",
+      "tags": {"workflow_kind": "task"},
+      "count": 5,
+      "first_seen": "2026-06-04T10:00:00Z"
+    }
+  ]
+}
+```
+
+Counter events are batched on disk under
+`~/.animus/<repo-scope>/metrics/pending.jsonl` and flushed by
+`animus metrics flush` or the next CLI invocation. Failed sends retry
+with exponential backoff (3 attempts) before being preserved in the
+pending queue for the next attempt — CLI/daemon operations are never
+blocked on the send path.
+
+### CLI surface
+
+| Command | Effect |
+|---|---|
+| `animus metrics status` | Show enabled flag, install_id, pending event count, last-send timestamp. |
+| `animus metrics enable` | Opt in (no re-prompt). Generates a new `install_id` if missing. |
+| `animus metrics disable` | Opt out and drop any buffered events. |
+| `animus metrics flush` | Force-send buffered events (debug). |
 
 ## Notes
 

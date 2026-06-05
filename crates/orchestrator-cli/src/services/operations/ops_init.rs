@@ -150,6 +150,10 @@ pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) 
     let mode = if args.non_interactive { InitMode::NonInteractive } else { InitMode::Guided };
     let project_root_path = Path::new(project_root);
 
+    if !json && !args.plan && !args.non_interactive {
+        let _ = crate::services::metrics::maybe_prompt_first_run(project_root_path);
+    }
+
     if args.walkthrough {
         return run_walkthrough(&args, project_root_path, mode, json).await;
     }

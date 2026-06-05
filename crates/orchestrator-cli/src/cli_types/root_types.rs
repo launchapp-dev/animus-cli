@@ -130,4 +130,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SelfCommand,
     },
+    /// Manage opt-in anonymous usage telemetry.
+    Metrics {
+        #[command(subcommand)]
+        command: MetricsCommand,
+    },
 }

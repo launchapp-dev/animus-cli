@@ -1,6 +1,6 @@
 # Crate Map
 
-The Animus workspace is a Cargo workspace of 11 crates organized by runtime
+The Animus workspace is a Cargo workspace of 10 crates organized by runtime
 responsibility. `Cargo.toml` is the source of truth for membership.
 
 ## Foundation
