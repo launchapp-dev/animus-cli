@@ -87,3 +87,4 @@ TEST_RESULTS*.md
 # Runtime state from subject plugins
 .animus/subjects/
 .vercel
+.gstack/
