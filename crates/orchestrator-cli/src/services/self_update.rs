@@ -456,7 +456,7 @@ pub(crate) fn should_check_now(
     if matches!(mode, AutoUpdateMode::Off) {
         return StartupAction::Skip;
     }
-    let interval = interval.unwrap_or(Duration::from_secs(60 * 60 * 24));
+    let interval = interval.unwrap_or(Duration::from_hours(24));
     match last_checked {
         None => StartupAction::Check,
         Some(prev) => {
@@ -1043,10 +1043,10 @@ mod tests {
 
     #[test]
     fn parse_iso8601_duration_supports_common_shapes() {
-        assert_eq!(parse_iso8601_duration("P1D"), Some(Duration::from_secs(86400)));
-        assert_eq!(parse_iso8601_duration("PT6H"), Some(Duration::from_secs(6 * 3600)));
-        assert_eq!(parse_iso8601_duration("PT30M"), Some(Duration::from_secs(30 * 60)));
-        assert_eq!(parse_iso8601_duration("P1W"), Some(Duration::from_secs(7 * 86400)));
+        assert_eq!(parse_iso8601_duration("P1D"), Some(Duration::from_hours(24)));
+        assert_eq!(parse_iso8601_duration("PT6H"), Some(Duration::from_hours(6)));
+        assert_eq!(parse_iso8601_duration("PT30M"), Some(Duration::from_mins(30)));
+        assert_eq!(parse_iso8601_duration("P1W"), Some(Duration::from_hours(168)));
         assert_eq!(parse_iso8601_duration("garbage"), None);
         assert_eq!(parse_iso8601_duration(""), None);
     }
@@ -1061,7 +1061,7 @@ mod tests {
     fn should_check_now_runs_when_never_checked() {
         let now = chrono::Utc::now();
         assert_eq!(
-            should_check_now(AutoUpdateMode::Notify, None, Some(Duration::from_secs(86400)), now),
+            should_check_now(AutoUpdateMode::Notify, None, Some(Duration::from_hours(24)), now),
             StartupAction::Check
         );
     }
@@ -1071,7 +1071,7 @@ mod tests {
         let now = chrono::Utc::now();
         let recent = now - chrono::Duration::seconds(60);
         assert_eq!(
-            should_check_now(AutoUpdateMode::Notify, Some(recent), Some(Duration::from_secs(86400)), now),
+            should_check_now(AutoUpdateMode::Notify, Some(recent), Some(Duration::from_hours(24)), now),
             StartupAction::Skip
         );
     }
@@ -1081,7 +1081,7 @@ mod tests {
         let now = chrono::Utc::now();
         let stale = now - chrono::Duration::seconds(2 * 86400);
         assert_eq!(
-            should_check_now(AutoUpdateMode::Notify, Some(stale), Some(Duration::from_secs(86400)), now),
+            should_check_now(AutoUpdateMode::Notify, Some(stale), Some(Duration::from_hours(24)), now),
             StartupAction::Check
         );
     }

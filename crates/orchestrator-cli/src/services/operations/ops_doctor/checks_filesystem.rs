@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 use super::check_kit::{CheckContext, CheckFix, CheckStatus, DiagnosticCheck};
 
 const CATEGORY: &str = "filesystem";
-const STALE_LOCK_AGE: Duration = Duration::from_secs(60 * 60);
+const STALE_LOCK_AGE: Duration = Duration::from_hours(1);
 
 pub(crate) fn run(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
     let mut out = Vec::new();

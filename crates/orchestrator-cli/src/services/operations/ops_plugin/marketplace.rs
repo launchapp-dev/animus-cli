@@ -23,7 +23,7 @@ use crate::{
 use super::{run_plugin_install, PluginInstallOutput, PluginInstallRequest};
 
 /// Default cache TTL: 6 hours.
-const REGISTRY_CACHE_TTL: Duration = Duration::from_secs(6 * 60 * 60);
+const REGISTRY_CACHE_TTL: Duration = Duration::from_hours(6);
 
 // =================== Registry types ===================
 

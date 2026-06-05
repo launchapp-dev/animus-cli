@@ -21,8 +21,8 @@ impl Default for SupervisorConfig {
     fn default() -> Self {
         Self {
             max_restarts_per_window: 3,
-            window_duration: Duration::from_secs(60),
-            disable_cooldown: Duration::from_secs(300),
+            window_duration: Duration::from_mins(1),
+            disable_cooldown: Duration::from_mins(5),
         }
     }
 }
@@ -224,7 +224,7 @@ mod tests {
     fn test_config() -> SupervisorConfig {
         SupervisorConfig {
             max_restarts_per_window: 3,
-            window_duration: Duration::from_secs(60),
+            window_duration: Duration::from_mins(1),
             disable_cooldown: Duration::from_millis(200),
         }
     }

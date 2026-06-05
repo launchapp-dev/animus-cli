@@ -893,7 +893,7 @@ fn read_daemon_events_log_entries(
         })
         .filter(|entry| level_floor.is_none_or(|floor| entry.level >= floor))
         .collect();
-    entries.sort_by(|a, b| a.ts.cmp(&b.ts));
+    entries.sort_by_key(|a| a.ts);
     if entries.len() > limit {
         let drop_count = entries.len() - limit;
         entries.drain(0..drop_count);
@@ -947,12 +947,12 @@ fn merge_and_cap_log_entries(
 
     let mut seen: HashSet<String> = HashSet::with_capacity(plugin_entries.len() + file_entries.len());
     let mut merged: Vec<DaemonLogEntry> = Vec::with_capacity(plugin_entries.len() + file_entries.len());
-    for entry in plugin_entries.into_iter().chain(file_entries.into_iter()) {
+    for entry in plugin_entries.into_iter().chain(file_entries) {
         if seen.insert(entry.id.clone()) {
             merged.push(entry);
         }
     }
-    merged.sort_by(|a, b| a.ts.cmp(&b.ts));
+    merged.sort_by_key(|a| a.ts);
     if merged.len() > limit {
         let drop_count = merged.len() - limit;
         merged.drain(0..drop_count);

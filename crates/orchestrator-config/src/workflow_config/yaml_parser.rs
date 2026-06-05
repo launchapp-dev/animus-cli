@@ -1220,7 +1220,7 @@ phases:
     fn agent_profile_serde_omits_system_prompt_file_when_none() {
         let profile = make_empty_profile();
         let json = serde_json::to_string(&profile).expect("serialize");
-        assert!(!json.contains("system_prompt_file"), "field should be skipped when None: {json}",);
+        assert!(!json.contains("system_prompt_file"), "field should be skipped when None: {json}");
     }
 
     #[test]

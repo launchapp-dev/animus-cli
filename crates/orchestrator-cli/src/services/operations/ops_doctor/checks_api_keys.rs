@@ -64,7 +64,7 @@ pub(crate) fn run(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
                     .expected(format!("{name}=<your-key>"))
                     .fix(CheckFix::manual(
                         "set_api_key_env",
-                        &format!("Add `export {name}=<your-key>` to your shell profile. See {DOCS_URL}.",),
+                        &format!("Add `export {name}=<your-key>` to your shell profile. See {DOCS_URL}."),
                     ))
             };
             out.push(check);

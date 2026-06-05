@@ -435,7 +435,8 @@ pub(super) fn resumable_workflow_ids_for_project(project_root: &str) -> std::col
     items
         .into_iter()
         .filter_map(|(_, checkpoint)| {
-            let has_sid = checkpoint.provider_session_id.as_deref().map(str::trim).filter(|s| !s.is_empty()).is_some();
+            let has_sid =
+                checkpoint.provider_session_id.as_deref().map(str::trim).as_ref().is_some_and(|s| !s.is_empty());
             if has_sid {
                 Some(checkpoint.workflow_id)
             } else {
@@ -467,7 +468,7 @@ where
         // phase blocked with a misleading error. Skip the dispatch and
         // block with an actionable, --force-aware reason instead.
         let provider_sid_present =
-            checkpoint.provider_session_id.as_deref().map(str::trim).filter(|sid| !sid.is_empty()).is_some();
+            checkpoint.provider_session_id.as_deref().map(str::trim).as_ref().is_some_and(|sid| !sid.is_empty());
         if !provider_sid_present {
             let reason =
                 "no provider session_id captured before crash; phase will re-run from scratch on resume --force"

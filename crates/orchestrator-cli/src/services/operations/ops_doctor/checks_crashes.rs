@@ -12,7 +12,7 @@ use serde::Deserialize;
 use super::check_kit::{CheckContext, CheckFix, CheckStatus, DiagnosticCheck};
 
 const CATEGORY: &str = "recent_crashes";
-const RECENT_WINDOW: Duration = Duration::from_secs(60 * 60 * 24);
+const RECENT_WINDOW: Duration = Duration::from_hours(24);
 
 #[derive(Debug, Deserialize)]
 struct SessionFileShape {

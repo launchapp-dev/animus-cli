@@ -123,8 +123,8 @@ async fn drain_events(mut run: animus_session_backend::session::session_run::Ses
 fn supervisor_records_restart_within_window() {
     let cfg = SupervisorConfig {
         max_restarts_per_window: 3,
-        window_duration: Duration::from_secs(60),
-        disable_cooldown: Duration::from_secs(300),
+        window_duration: Duration::from_mins(1),
+        disable_cooldown: Duration::from_mins(5),
     };
     let sup = PluginSupervisor::new("p", cfg);
     sup.record_restart().expect("1");
@@ -137,8 +137,8 @@ fn supervisor_records_restart_within_window() {
 fn supervisor_disables_plugin_after_3_restarts_in_60s() {
     let cfg = SupervisorConfig {
         max_restarts_per_window: 3,
-        window_duration: Duration::from_secs(60),
-        disable_cooldown: Duration::from_secs(300),
+        window_duration: Duration::from_mins(1),
+        disable_cooldown: Duration::from_mins(5),
     };
     let sup = PluginSupervisor::new("p", cfg);
     for _ in 0..3 {
@@ -153,7 +153,7 @@ fn supervisor_disables_plugin_after_3_restarts_in_60s() {
 fn supervisor_re_enables_after_cooldown() {
     let cfg = SupervisorConfig {
         max_restarts_per_window: 2,
-        window_duration: Duration::from_secs(60),
+        window_duration: Duration::from_mins(1),
         disable_cooldown: Duration::from_millis(150),
     };
     let sup = PluginSupervisor::new("p", cfg);
@@ -184,7 +184,7 @@ async fn dispatch_returns_plugin_disabled_when_supervisor_disabled() {
     let plugin = write_python_plugin(dir.path(), "happy", &state);
 
     let backend = PluginSessionBackend::new("supervisor-test", plugin, "test");
-    backend.supervisor().force_disable_for_test_public(Duration::from_secs(60));
+    backend.supervisor().force_disable_for_test_public(Duration::from_mins(1));
 
     let req = make_request(dir.path().to_path_buf());
     let result = backend.start_session(req).await;
@@ -256,8 +256,8 @@ async fn dispatch_propagates_when_retry_also_dies() {
             "supervisor-test",
             SupervisorConfig {
                 max_restarts_per_window: 5,
-                window_duration: Duration::from_secs(60),
-                disable_cooldown: Duration::from_secs(300),
+                window_duration: Duration::from_mins(1),
+                disable_cooldown: Duration::from_mins(5),
             },
         )));
 
