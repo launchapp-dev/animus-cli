@@ -312,6 +312,50 @@ variables:
 | `post_success` | PostSuccessConfig | no | Actions to perform after all phases succeed |
 | `variables` | Variable[] | no | Variables used by this workflow |
 
+## triggers
+
+Event-driven entries that enqueue a workflow when an external event fires.
+Triggers live alongside `schedules:` at the top level of workflow YAML and
+are processed each daemon tick after the cron block.
+
+```yaml
+triggers:
+  - id: fswatch-default
+    type: plugin
+    workflow_ref: review-source-change
+    config:
+      trigger_id: fswatch-default
+      globs: [src/**/*.rs]
+      debounce_ms: 250
+```
+
+### Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | Unique trigger id; must match what a `type: plugin` source emits on `trigger_id` |
+| `type` | enum | yes | One of `file_watcher`, `webhook`, `github_webhook`, `plugin` |
+| `workflow_ref` | string | yes | Workflow id to enqueue when the trigger fires |
+| `enabled` | bool | no | Default `true`. Set `false` to keep the trigger declared but quiet |
+| `config` | object | no | Type-specific configuration; forwarded opaquely to plugin triggers |
+| `input` | object | no | Static input merged into the spawned workflow run |
+
+### Trigger types
+
+| `type:` | What it is | When to use |
+|---|---|---|
+| `file_watcher` | Built-in glob watcher inside the project root | Simple filesystem fan-out under the project tree |
+| `webhook` | Built-in HTTP webhook listener | Inbound HTTP POSTs into the daemon's HTTP transport |
+| `github_webhook` | Built-in GitHub webhook listener with event-shape validation | GitHub pushes, PRs, issues |
+| `plugin` | External `trigger_backend` plugin | Anything else: Slack sockets, IDE hooks, custom adapters, cron, IMAP — anything that needs first-party process state |
+
+For `type: plugin`, the `config` block is forwarded opaquely on
+`trigger/watch`. The host does not validate its shape; each plugin
+documents its own schema. See
+[Authoring Trigger Plugins](../guides/authoring-trigger-plugins.md) for
+the protocol surface, daemon lifecycle, and how to scaffold a custom
+trigger with `animus plugin scaffold trigger <name>`.
+
 ## Phase Output Contracts
 
 Today, workflow YAML supports execution configuration such as `decision_contract`,

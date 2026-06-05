@@ -22,6 +22,12 @@ pub(crate) enum PluginCommand {
     Uninstall(PluginUninstallArgs),
     /// Scaffold a new plugin project from the launchapp-dev/animus-plugin-template scaffold.
     New(PluginNewArgs),
+    /// Emit a minimal, offline starter Cargo project for a new plugin kind.
+    /// Unlike `animus plugin new` (which clones the template repo), this
+    /// subcommand writes a self-contained project from built-in templates
+    /// so it works without network access. Currently scoped to `trigger`.
+    #[command(subcommand)]
+    Scaffold(PluginScaffoldCommand),
     /// Search the public Animus plugin registry by substring + filters.
     Search(PluginSearchArgs),
     /// Browse the public Animus plugin registry, grouped by kind.
@@ -365,4 +371,50 @@ pub(crate) struct PluginNewArgs {
     /// Override the existing output directory if it already exists.
     #[arg(long, default_value_t = false)]
     pub(crate) force: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum PluginScaffoldCommand {
+    /// Scaffold an external trigger backend plugin.
+    Trigger(PluginScaffoldTriggerArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginScaffoldTriggerArgs {
+    /// Plugin short name in kebab-case (e.g. `fswatch`, `cron`, `slack-thread`).
+    /// The generated crate is named `animus-trigger-<name>`.
+    #[arg(value_name = "NAME")]
+    pub(crate) name: String,
+
+    /// GitHub user or org for the generated project's repository field.
+    /// Defaults to `$USER`, then `launchapp-dev`.
+    #[arg(long, value_name = "OWNER")]
+    pub(crate) owner: Option<String>,
+
+    /// Output directory. Defaults to `./animus-trigger-<name>`.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) out_dir: Option<PathBuf>,
+
+    /// SPDX license identifier embedded into the generated `Cargo.toml`.
+    #[arg(long, value_name = "ID", default_value = "MIT")]
+    pub(crate) license: String,
+
+    /// Short description for the generated `Cargo.toml` + README.
+    #[arg(long, value_name = "TEXT")]
+    pub(crate) description: Option<String>,
+
+    /// Tag of `launchapp-dev/animus-protocol` to pin the generated
+    /// project's `animus-plugin-protocol` + `animus-plugin-runtime`
+    /// dependencies to. Defaults to the protocol tag this CLI was
+    /// built against.
+    #[arg(long, value_name = "TAG", default_value = "v0.5.5")]
+    pub(crate) protocol_tag: String,
+
+    /// Overwrite the output directory if it already exists.
+    #[arg(long, default_value_t = false)]
+    pub(crate) force: bool,
+
+    /// Emit the result envelope as JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
 }

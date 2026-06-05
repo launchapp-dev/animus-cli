@@ -1,0 +1,16 @@
+# Static plugin metadata for animus-trigger-fswatch.
+#
+# Mirrors the runtime --manifest output so static tooling (CI lint,
+# `animus plugin info` against an uninstalled tree, the public plugin
+# registry) can discover the plugin without spawning the binary.
+
+name        = "animus-trigger-fswatch"
+version     = "0.1.0"
+plugin_kind = "trigger_backend"
+description = "Reference filesystem-watch trigger backend"
+binary      = "animus-trigger-fswatch"
+protocol    = "stdio"
+
+# fswatch reads its watched glob list out of the `config` block on the
+# `trigger/watch` request — no environment variables required.
+env_required = []

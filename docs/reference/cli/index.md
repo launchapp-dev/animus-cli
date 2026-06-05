@@ -601,6 +601,41 @@ in the template repo for the source of truth): `name`, `NAME_UPPER`,
 `org`, `year`, `author` (from `git config user.name`),
 `author_email` (from `git config user.email`).
 
+### `animus plugin scaffold trigger <NAME>`
+
+Emit a minimal, self-contained starter Cargo project for a custom
+trigger backend plugin. Unlike `animus plugin new`, this subcommand
+writes everything from built-in templates so it works offline and
+pins a known-good `launchapp-dev/animus-protocol` tag. The generated
+project compiles against the in-tree wire shape the daemon's
+[`TriggerSupervisor`](../../crates/orchestrator-daemon-runtime/src/schedule/trigger_supervisor.rs)
+expects.
+
+See [Authoring Trigger Plugins](../../guides/authoring-trigger-plugins.md)
+for a full walkthrough.
+
+| Argument / Flag | Description |
+|---|---|
+| `<NAME>` | Plugin short name in kebab-case (e.g. `fswatch`, `cron`, `slack-thread`) |
+| `--owner <OWNER>` | GitHub user/org for the generated `repository` field. Default `$USER`, then `launchapp-dev` |
+| `--out-dir <PATH>` | Output directory. Default `./animus-trigger-<name>` |
+| `--license <ID>` | SPDX license identifier for `Cargo.toml`. Default `MIT` |
+| `--description <TEXT>` | Short description. Defaults to `Custom Animus trigger backend plugin (<name>)` |
+| `--protocol-tag <TAG>` | Tag of `launchapp-dev/animus-protocol` to pin the generated project's protocol + runtime deps to. Default `v0.5.5` |
+| `--force` | Overwrite an existing output directory |
+| `--json` | Emit the result envelope as JSON |
+
+Output layout:
+
+```
+animus-trigger-<name>/
+  - Cargo.toml          # depends on animus-plugin-protocol + animus-plugin-runtime @ <protocol-tag>
+  - plugin.toml         # static manifest (kind = trigger_backend, env_required = [])
+  - src/main.rs         # initialize + trigger/watch + trigger/ack + health/check
+  - README.md           # build, install, wire, debug
+  - .gitignore
+```
+
 ## Summary
 
 | Metric | Count |
