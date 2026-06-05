@@ -77,6 +77,15 @@ workspace_member_count() {
   ' "$cargo_manifest"
 }
 
+mcp_tool_count() {
+  rg -o 'name = "animus\.[^"]+"' "$mcp_source_dir" -N \
+    | sed 's/^.*name = "//' \
+    | sed 's/"$//' \
+    | sort -u \
+    | wc -l \
+    | tr -d '[:space:]'
+}
+
 check_surface() {
   local label="$1"
   local source_file="$2"
@@ -152,6 +161,7 @@ assert_not_contains \
   "workflow runner CI inventory"
 
 workspace_count="$(workspace_member_count)"
+mcp_count="$(mcp_tool_count)"
 assert_contains \
   "$repo_root/docs/architecture/full-system-architecture.md" \
   '`Cargo.toml` currently declares '"${workspace_count}"' workspace members.' \
@@ -172,6 +182,14 @@ assert_contains \
   "$repo_root/docs/architecture/index.md" \
   "Cargo workspace of ${workspace_count} members." \
   "architecture overview workspace count"
+assert_contains \
+  "$repo_root/docs/index.md" \
+  "details: ${mcp_count} built-in MCP tools for subject management, workflow control, plugin operations, output inspection, and runtime state mutations. Agents act through tools, not code." \
+  "docs home MCP tool count"
+assert_contains \
+  "$repo_root/docs/guides/index.md" \
+  "Complete guide to all ${mcp_count} built-in MCP tools: JSON examples, common workflows, sequencing tips, pagination, and batch operations." \
+  "guides index MCP tool count"
 assert_not_contains \
   "$repo_root/docs/architecture/index.md" \
   "orchestrator-session-host" \
