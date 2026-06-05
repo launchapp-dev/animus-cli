@@ -43,9 +43,9 @@ wt-test = "test --manifest-path"
 # out-of-tree to `launchapp-dev/animus-provider-oai-agent` v0.1.3 — the
 # daemon spawns it via plugin install. Install with
 # `animus plugin install launchapp-dev/animus-provider-oai-agent`.
-animus-bin-build = "build -p orchestrator-cli -p agent-runner"
-animus-bin-build-release = "build --release -p orchestrator-cli -p agent-runner"
-animus-bin-check = "check -p orchestrator-cli -p agent-runner"
+animus-bin-build = "build -p orchestrator-cli"
+animus-bin-build-release = "build --release -p orchestrator-cli"
+animus-bin-check = "check -p orchestrator-cli"
 
 # Linting
 animus-lint = "clippy --workspace --all-targets"

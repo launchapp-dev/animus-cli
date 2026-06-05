@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
-use std::time::Duration;
 
 use crate::store::{write_json_if_missing, write_json_pretty};
 use crate::types::not_found;
@@ -10,10 +9,7 @@ use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
 use fs2::FileExt;
-use protocol::{RunnerStatusRequest, RunnerStatusResponse};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::RwLock;
-use tokio::time::sleep;
 use uuid::Uuid;
 
 use crate::subject_adapter::{BuiltinGitProvider, GitProvider};
@@ -45,7 +41,6 @@ mod project_impl;
 mod project_shared;
 mod query_support;
 mod review_impl;
-mod runner_helpers;
 mod schedule_state;
 mod state_store;
 mod task_impl;
@@ -55,8 +50,6 @@ mod workflow_impl;
 
 pub use phase_execution::{PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor, PhaseVerdict};
 use planning_utils::*;
-pub use runner_helpers::stop_agent_runner_process;
-use runner_helpers::*;
 pub use schedule_state::{load_schedule_state, save_schedule_state, ScheduleRunState, ScheduleState};
 use state_store::{
     append_logs, clear_logs_file, load_core_state, load_core_state_for_mutation, load_logs, logs_file_for_state_file,

@@ -34,7 +34,6 @@ impl RuntimeConfigContext {
         Self { agent_runtime_config, workflow_config }
     }
 
-
     /// Returns the workflow YAML phase definition when present, falling
     /// back to `agent_runtime_config` so call sites can read a single
     /// merged view.
@@ -391,10 +390,7 @@ mod tests {
             agent_id: Some("swe".to_string()),
             directive: None,
             system_prompt: None,
-            runtime: Some(AgentRuntimeOverrides {
-                model: Some("claude-sonnet-4-6".to_string()),
-                ..Default::default()
-            }),
+            runtime: Some(AgentRuntimeOverrides { model: Some("claude-sonnet-4-6".to_string()), ..Default::default() }),
             capabilities: None,
             output_contract: None,
             output_json_schema: None,
@@ -477,7 +473,10 @@ mod tests {
             workflow_config: LoadedWorkflowConfig { metadata, config: workflow, path: PathBuf::from("builtin") },
         };
 
-        assert_eq!(ctx.phase_output_contract("implementation").map(|c| c.kind.as_str()), Some("custom_implementation_result"));
+        assert_eq!(
+            ctx.phase_output_contract("implementation").map(|c| c.kind.as_str()),
+            Some("custom_implementation_result")
+        );
         assert!(
             ctx.phase_output_json_schema("implementation").is_none(),
             "when the project supplies a custom output_contract, the builtin json_schema must not leak in"
@@ -526,10 +525,7 @@ mod tests {
             workflow_config: LoadedWorkflowConfig { metadata, config: workflow, path: PathBuf::from("builtin") },
         };
 
-        assert!(
-            ctx.phase_output_json_schema("implementation").is_some(),
-            "custom output_json_schema must be returned"
-        );
+        assert!(ctx.phase_output_json_schema("implementation").is_some(), "custom output_json_schema must be returned");
         assert!(
             ctx.phase_output_contract("implementation").is_none(),
             "when the project supplies a custom output_json_schema, the builtin output_contract must not leak in"

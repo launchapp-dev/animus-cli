@@ -19,8 +19,8 @@ mod tests {
     use super::*;
     use crate::AgentRunArgs;
     use anyhow::anyhow;
+    use protocol::test_utils::EnvVarGuard;
     use protocol::RunId;
-    use std::path::Path;
 
     fn make_agent_run_args() -> AgentRunArgs {
         AgentRunArgs {
@@ -39,44 +39,6 @@ mod tests {
             start_runner: false,
             runner_scope: None,
         }
-    }
-
-    use protocol::test_utils::EnvVarGuard;
-
-    #[test]
-    fn runner_config_dir_defaults_to_project_scope() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _ao_config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", None);
-        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _scope = EnvVarGuard::set("ANIMUS_RUNNER_SCOPE", None);
-        let project_root = Path::new("project-root");
-
-        let resolved = runner_config_dir(project_root);
-        assert!(resolved.ends_with("runner"));
-        assert!(
-            resolved.components().any(|component| component.as_os_str() == ".animus"),
-            "project scoped runner dir should be under ~/.animus/<repo-scope>/runner"
-        );
-        assert_ne!(resolved, project_root.join(".animus").join("runner"));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn runner_config_dir_shortens_long_unix_socket_paths() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _ao_config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", None);
-        let _legacy_config = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
-        let _scope = EnvVarGuard::set("ANIMUS_RUNNER_SCOPE", None);
-
-        let long_root = std::path::PathBuf::from("/tmp").join("x".repeat(220));
-        let default_dir = long_root.join(".animus").join("runner");
-        let resolved = runner_config_dir(&long_root);
-
-        assert_ne!(resolved, default_dir);
-        assert!(
-            resolved.join("agent-runner.sock").to_string_lossy().len() <= 100,
-            "runner socket path should be shortened for unix sockets"
-        );
     }
 
     #[test]
@@ -99,49 +61,6 @@ mod tests {
 
         assert_eq!(resolved, expected);
         assert_ne!(resolved, project_root.join(".animus").join("runs").join(&run_id.0));
-    }
-
-    #[test]
-    fn run_dir_scopes_missing_project_paths_with_protocol_fallback() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = tempfile::tempdir().expect("tempdir should be created");
-        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
-        let project_root = temp.path().join("Missing Repo 2026");
-        let run_id = RunId("trace-run-missing-project-root".to_string());
-
-        let resolved = run_dir(project_root.to_string_lossy().as_ref(), &run_id, None);
-        let scope = protocol::repository_scope_for_path(&project_root);
-        assert!(scope.starts_with("missing-repo-2026-"));
-
-        let expected = dirs::home_dir()
-            .expect("home directory should resolve")
-            .join(".animus")
-            .join(scope)
-            .join("runs")
-            .join(&run_id.0);
-
-        assert_eq!(resolved, expected);
-    }
-
-    #[test]
-    fn run_dir_stays_repo_scoped_when_runner_scope_is_global() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = tempfile::tempdir().expect("tempdir should be created");
-        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
-        let override_dir = temp.path().join("override-config");
-        let _scope = EnvVarGuard::set("ANIMUS_RUNNER_SCOPE", Some("global"));
-        let _config_override = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(override_dir.to_string_lossy().as_ref()));
-
-        let project_root = temp.path().join("project-root");
-        std::fs::create_dir_all(&project_root).expect("project dir should be created");
-        let run_id = RunId("trace-run-global-scope".to_string());
-
-        let resolved = run_dir(project_root.to_string_lossy().as_ref(), &run_id, None);
-        assert!(
-            resolved.starts_with(temp.path().join(".animus")),
-            "run directory should stay under ~/.animus repo-scoped runtime root"
-        );
-        assert!(!resolved.starts_with(&override_dir), "run directory should not use ANIMUS_CONFIG_DIR overrides");
     }
 
     #[test]
@@ -231,34 +150,6 @@ mod tests {
         let context = build_agent_context(&args, project.to_string_lossy().as_ref())
             .expect("relative cwd inside project should be accepted");
         let expected = nested.canonicalize().expect("nested path should canonicalize").to_string_lossy().to_string();
-        assert_eq!(context.get("cwd").and_then(serde_json::Value::as_str), Some(expected.as_str()));
-    }
-
-    #[test]
-    fn build_agent_context_accepts_managed_worktree_cwd() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = tempfile::tempdir().expect("tempdir should be created");
-        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
-
-        let project = temp.path().join("project");
-        std::fs::create_dir_all(&project).expect("project dir should be created");
-        let project_canonical = project.canonicalize().expect("project path should canonicalize");
-
-        let repo_scope = protocol::repository_scope_for_path(&project_canonical);
-
-        let repo_ao_root = temp.path().join(".animus").join(repo_scope);
-        let worktree = repo_ao_root.join("worktrees").join("task-task-011");
-        std::fs::create_dir_all(&worktree).expect("managed worktree should be created");
-        std::fs::write(repo_ao_root.join(".project-root"), format!("{}\n", project_canonical.to_string_lossy()))
-            .expect("project marker should be written");
-
-        let mut args = make_agent_run_args();
-        args.cwd = Some(worktree.to_string_lossy().to_string());
-
-        let context = build_agent_context(&args, project.to_string_lossy().as_ref())
-            .expect("managed worktree cwd should be accepted");
-        let expected =
-            worktree.canonicalize().expect("worktree path should canonicalize").to_string_lossy().to_string();
         assert_eq!(context.get("cwd").and_then(serde_json::Value::as_str), Some(expected.as_str()));
     }
 }

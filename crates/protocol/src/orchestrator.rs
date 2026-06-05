@@ -751,9 +751,21 @@ pub enum DaemonStatus {
 pub struct DaemonHealth {
     pub healthy: bool,
     pub status: DaemonStatus,
+    /// v0.5.3: the standalone agent-runner sidecar was deleted; this field
+    /// is kept for wire back-compat with v0.5.2 consumers and always
+    /// serializes as `false` now. New consumers should check
+    /// [`Self::provider_plugins_healthy`] instead.
+    #[serde(default)]
     pub runner_connected: bool,
+    /// v0.5.3: the standalone agent-runner sidecar was deleted; this field
+    /// is kept for wire back-compat and always serializes as `None`.
     #[serde(default)]
     pub runner_pid: Option<u32>,
+    /// v0.5.3: `true` when at least one provider plugin is discovered and
+    /// executable on disk under the active plugin search path. This is
+    /// the v0.5.3 replacement for `runner_connected`.
+    #[serde(default)]
+    pub provider_plugins_healthy: bool,
     #[serde(default)]
     pub active_agents: usize,
     #[serde(default, alias = "max_agents")]

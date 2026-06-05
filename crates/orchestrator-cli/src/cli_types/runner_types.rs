@@ -2,22 +2,20 @@ use clap::{Args, Subcommand};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RunnerCommand {
-    /// Show runner process health.
+    /// Show provider plugin health (one row per discovered provider).
     Health,
-    /// Detect and clean orphaned runner processes.
+    /// Detect and clean orphaned CLI processes tracked under the cli-tracker.
     Orphans {
         #[command(subcommand)]
         command: RunnerOrphanCommand,
     },
-    /// Show runner restart statistics.
-    RestartStats,
 }
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum RunnerOrphanCommand {
-    /// Detect orphaned runner processes.
+    /// Detect orphaned CLI processes.
     Detect,
-    /// Clean orphaned runner processes.
+    /// Clean orphaned CLI processes.
     Cleanup(RunnerOrphanCleanupArgs),
 }
 

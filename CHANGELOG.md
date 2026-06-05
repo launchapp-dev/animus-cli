@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed (v0.5.3 surface-shrink)
+
+- **`agent-runner` sidecar deleted.** The standalone `crates/agent-runner/`
+  binary (~8 kLOC) was removed entirely. `animus agent {run, status, cancel,
+  control}` now talks directly to provider plugins via
+  `orchestrator_plugin_host::session::SessionBackendResolver` (the same
+  surface the daemon and tests have used since v0.4.12). The Unix-domain
+  socket bridge, shared-secret auth handshake, runner lockfile, and the
+  in-process supervisor in `orchestrator-core::services::runner_helpers`
+  were deleted at the same time. The published
+  `launchapp-dev/animus-protocol::animus-agent-runner-protocol` crate is
+  bumped to v0.1.1 and marked deprecated.
+- **`animus runner restart-stats` removed.** It read daemon-event records
+  for a sidecar that no longer exists.
+
+### Changed (v0.5.3)
+
+- **`animus runner health`** now reports one entry per discovered provider
+  plugin (`plugin_name`, `provider_tool`, `binary_path`, `installed`)
+  alongside daemon health. The rendered output adds
+  `provider_plugins_healthy: bool`; `runner_connected` is still emitted on
+  the wire as `false` for back-compat.
+- **`DaemonHealth`** gains `provider_plugins_healthy: bool`. The legacy
+  `runner_connected: bool` and `runner_pid: Option<u32>` fields are kept
+  for wire back-compat and now always serialize as `false` / `None`.
+- **`animus agent control`** returns `unavailable` (exit code 5) under the
+  v0.5.3 provider-only model — there is no in-process pool to address; the
+  CLI emits an actionable error rather than a silent success.
+
 ### Added
 
 - **`feat(config)`: agent profiles now accept `system_prompt_file` to load the

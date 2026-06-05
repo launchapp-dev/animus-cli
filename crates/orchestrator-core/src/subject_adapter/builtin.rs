@@ -7,7 +7,7 @@ use protocol::orchestrator::{
     TaskStatistics, TaskStatus, TaskUpdateInput,
 };
 
-use super::{PlanningAdapterApi, RequirementsPlanningService, RequirementsProvider, TaskProvider, TaskAdapterApi};
+use super::{PlanningAdapterApi, RequirementsPlanningService, RequirementsProvider, TaskAdapterApi, TaskProvider};
 
 #[derive(Clone)]
 pub struct BuiltinTaskProvider<T> {

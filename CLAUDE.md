@@ -57,9 +57,20 @@ Core orchestration:
 
 Runtime and provider layer:
 
-- `crates/agent-runner`
 - `crates/orchestrator-daemon-runtime`
 - `crates/orchestrator-logging`
+
+The standalone `agent-runner` sidecar was **deleted in v0.5.3**. The
+CLI's `animus agent {run, status, cancel, control}` family is now a
+thin client over `SessionBackendResolver` (see
+`crates/orchestrator-cli/src/services/runtime/runtime_agent/provider_client.rs`)
+— provider plugins handle CLI invocation end to end, so there is no
+Unix-socket bridge, no shared-secret handshake, and no per-process
+sidecar to supervise. `DaemonHealth.provider_plugins_healthy` replaces
+the old `runner_connected` field; the legacy `runner_pid` /
+`runner_connected` fields are kept on the wire as deprecated and always
+serialize as `None` / `false`. The `animus-agent-runner-protocol` crate
+on `launchapp-dev/animus-protocol` is bumped to v0.1.1 deprecated.
 
 Plugin host + protocol:
 

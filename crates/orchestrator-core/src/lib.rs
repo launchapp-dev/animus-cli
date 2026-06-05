@@ -86,9 +86,9 @@ pub use runtime_contract::{
 };
 pub use services::{
     evaluate_task_priority_policy, load_daemon_health_snapshot, load_schedule_state, load_trigger_state,
-    plan_task_priority_rebalance, save_schedule_state, save_trigger_state, stop_agent_runner_process, summarize_tasks,
-    DaemonServiceApi, FileServiceHub, InMemoryServiceHub, PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor,
-    PhaseVerdict, PlanningServiceApi, ProjectServiceApi, ReviewServiceApi, ScheduleRunState, ScheduleState, ServiceHub,
+    plan_task_priority_rebalance, save_schedule_state, save_trigger_state, summarize_tasks, DaemonServiceApi,
+    FileServiceHub, InMemoryServiceHub, PhaseExecutionRequest, PhaseExecutionResult, PhaseExecutor, PhaseVerdict,
+    PlanningServiceApi, ProjectServiceApi, ReviewServiceApi, ScheduleRunState, ScheduleState, ServiceHub,
     TaskServiceApi, TriggerRunState, TriggerState, WebhookEvent, WorkflowServiceApi,
 };
 pub use state_machines::{

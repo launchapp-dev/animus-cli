@@ -9,30 +9,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
-name = "agent-runner"
-version = "0.1.0"
-dependencies = [
- "animus-runtime-shared",
- "animus-session-backend",
- "anyhow",
- "async-trait",
- "chrono",
- "dirs 6.0.0",
- "fs2",
- "once_cell",
- "orchestrator-plugin-host",
- "protocol",
- "serde",
- "serde_json",
- "tempfile",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "uuid",
- "which",
-]
-
-[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"

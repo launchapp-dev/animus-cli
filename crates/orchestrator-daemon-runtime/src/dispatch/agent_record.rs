@@ -434,14 +434,8 @@ mod tests {
     fn record_roundtrips_via_json_in_isolated_dir() {
         let temp = tempfile::tempdir().unwrap();
         let dispatch = protocol::SubjectDispatch::for_task("TASK-1", "standard");
-        let record = build_record_with_decisions(
-            "agent-xyz".to_string(),
-            4242,
-            &dispatch,
-            vec!["/bin/echo".into()],
-            None,
-            None,
-        );
+        let record =
+            build_record_with_decisions("agent-xyz".to_string(), 4242, &dispatch, vec!["/bin/echo".into()], None, None);
 
         let path = write_record_into(temp.path(), &record).expect("write");
         let raw = std::fs::read(&path).unwrap();
@@ -485,15 +479,14 @@ mod tests {
         let alive_pid = child.id();
 
         let dispatch = protocol::SubjectDispatch::for_task("TASK-ALIVE", "standard");
-        let record =
-            build_record_with_decisions(
-                "agent-alive".to_string(),
-                alive_pid,
-                &dispatch,
-                vec!["sleep".into(), "60".into()],
-                None,
-                None,
-            );
+        let record = build_record_with_decisions(
+            "agent-alive".to_string(),
+            alive_pid,
+            &dispatch,
+            vec!["sleep".into(), "60".into()],
+            None,
+            None,
+        );
         let path = write_record_into(temp.path(), &record).expect("write record");
 
         let report = scan_orphans(temp.path()).expect("scan");
@@ -532,14 +525,8 @@ mod tests {
         assert!(!protocol::is_process_alive(dead_pid), "child pid should have exited");
 
         let dispatch = protocol::SubjectDispatch::for_task("TASK-DEAD", "standard");
-        let record = build_record_with_decisions(
-            "agent-dead".to_string(),
-            dead_pid,
-            &dispatch,
-            vec!["true".into()],
-            None,
-            None,
-        );
+        let record =
+            build_record_with_decisions("agent-dead".to_string(), dead_pid, &dispatch, vec!["true".into()], None, None);
         let path = write_record_into(temp.path(), &record).expect("write record");
 
         let report = scan_orphans(temp.path()).expect("scan");
@@ -604,15 +591,14 @@ mod tests {
         let alive_pid = child.id();
 
         let dispatch = protocol::SubjectDispatch::for_task("TASK-IDEMPOTENT", "standard");
-        let record =
-            build_record_with_decisions(
-                "agent-idem".to_string(),
-                alive_pid,
-                &dispatch,
-                vec!["sleep".into(), "60".into()],
-                None,
-                None,
-            );
+        let record = build_record_with_decisions(
+            "agent-idem".to_string(),
+            alive_pid,
+            &dispatch,
+            vec!["sleep".into(), "60".into()],
+            None,
+            None,
+        );
         write_record_into(temp.path(), &record).expect("write record");
 
         let first = scan_orphans(temp.path()).expect("scan 1");

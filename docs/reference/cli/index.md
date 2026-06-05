@@ -190,12 +190,11 @@ animus
 │       ├── list             List every entry currently recorded in the plugin lockfile
 │       └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
 │
-├── runner                   Inspect runner health and orphaned runs
-│   ├── health               Show runner process health
-│   ├── orphans
-│   │   ├── detect           Detect orphaned runner processes
-│   │   └── cleanup          Clean orphaned runner processes
-│   └── restart-stats        Show runner restart statistics
+├── runner                   Inspect provider-plugin health and orphaned CLI processes
+│   ├── health               Show provider plugin health (one row per discovered provider) and daemon health
+│   └── orphans
+│       ├── detect           Detect orphaned CLI processes tracked under the cli-tracker
+│       └── cleanup          Clean orphaned CLI processes
 │
 ├── status                   Show a unified project status dashboard
 ├── output                   Inspect run output and artifacts

@@ -56,7 +56,8 @@ async fn first_daemon_streams_then_dies_then_second_daemon_reattaches() {
     // Daemon #1 attaches.
     let broadcaster_a = WorkflowEventBroadcaster::new();
     let (_id_a, mut rx_a) = broadcaster_a.subscribe(WorkflowEventFilter::default());
-    let conn_a = try_reattach(sock.to_string_lossy().as_ref(), broadcaster_a.clone()).expect("daemon #1 reattach connect");
+    let conn_a =
+        try_reattach(sock.to_string_lossy().as_ref(), broadcaster_a.clone()).expect("daemon #1 reattach connect");
 
     // Give the acceptor + reader a moment to register.
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -81,7 +82,8 @@ async fn first_daemon_streams_then_dies_then_second_daemon_reattaches() {
     // the still-live runner socket.
     let broadcaster_b = WorkflowEventBroadcaster::new();
     let (_id_b, mut rx_b) = broadcaster_b.subscribe(WorkflowEventFilter::default());
-    let _conn_b = try_reattach(sock.to_string_lossy().as_ref(), broadcaster_b.clone()).expect("daemon #2 reattach connect");
+    let _conn_b =
+        try_reattach(sock.to_string_lossy().as_ref(), broadcaster_b.clone()).expect("daemon #2 reattach connect");
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Runner emits a post-reattach event. Daemon #2 must see it.
@@ -140,7 +142,8 @@ async fn reattach_after_runner_exit_returns_eof_cleanly() {
     // by the emitter's Drop, and the reader task on the daemon side gets EOF.
     drop(emitter);
     // A fresh attempt to connect must fail because the socket file is gone.
-    let err = try_reattach(sock.to_string_lossy().as_ref(), broadcaster).err().expect("connect after runner exit must fail");
+    let err =
+        try_reattach(sock.to_string_lossy().as_ref(), broadcaster).err().expect("connect after runner exit must fail");
     assert!(
         err.kind() == std::io::ErrorKind::NotFound || err.kind() == std::io::ErrorKind::ConnectionRefused,
         "unexpected error kind: {err:?}"

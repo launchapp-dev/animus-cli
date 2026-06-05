@@ -1,88 +1,102 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use orchestrator_core::services::ServiceHub;
-use protocol::{AgentRunEvent, AgentRunRequest, ModelId, RunId, PROTOCOL_VERSION};
-use tokio::io::{AsyncBufReadExt, BufReader};
+use protocol::{AgentRunEvent, RunId};
 use uuid::Uuid;
 
-use crate::{
-    build_agent_context, event_matches_run, persist_agent_event, persist_json_output, print_agent_event, print_value,
-    run_dir, write_json_line, AgentRunArgs,
-};
+use crate::{persist_agent_event, persist_json_output, print_agent_event, print_value, run_dir, AgentRunArgs};
 
-use super::connection::connect_runner_for_agent_command;
+use super::provider_client::{session_request_from_args, start_session, to_agent_event};
 
 pub(super) async fn handle_agent_run(
     args: AgentRunArgs,
-    hub: Arc<dyn ServiceHub>,
+    _hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
     let run_id = RunId(args.run_id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()));
+    let project_root_path = Path::new(project_root);
 
-    // C6.7: prefer the control wire when daemon is running, --detach,
-    // and --json. Detach mode is the only shape that maps cleanly onto
-    // the wire's `AgentRunResult` envelope (single response, no
-    // streaming). Streaming + non-JSON renders stay on the local path
-    // so the rich `AgentRunEvent` stream survives unchanged.
-    if json && args.detach {
-        if let Some(result) = try_agent_run_via_control(project_root, &args).await? {
-            return print_value(
-                serde_json::json!({
-                    "run_id": result.session_id,
-                    "status": "submitted",
-                    "model": result.model,
-                }),
-                true,
-            );
-        }
-    }
+    let request = session_request_from_args(&args, project_root)?;
+    let run = start_session(project_root_path, request).await?;
 
-    let context = build_agent_context(&args, project_root)?;
-    let request = AgentRunRequest {
-        protocol_version: PROTOCOL_VERSION.to_string(),
-        run_id: run_id.clone(),
-        model: ModelId(args.model.clone().unwrap_or_else(|| {
-            protocol::default_model_for_tool(&args.tool).unwrap_or("claude-sonnet-4-6").to_string()
-        })),
-        context,
-        timeout_secs: args.timeout_secs,
-    };
-
-    let stream = connect_runner_for_agent_command(&hub, project_root, args.start_runner).await?;
-    let (read_half, mut write_half) = tokio::io::split(stream);
-    write_json_line(&mut write_half, &request).await?;
-
+    // v0.5.3: the agent-runner sidecar used to host the provider session
+    // out-of-process so `--detach` could safely return while the run kept
+    // streaming events into the JSONL log. Under the provider-only model
+    // the CLI hosts the plugin process itself, so if we returned right
+    // away the Tokio runtime would shut down and abort the provider
+    // before its first frame landed on disk. Two honest modes:
+    //
+    //   * `--detach` + `--save-jsonl` (the default): drain synchronously
+    //     so the JSONL log is complete by the time `animus agent run`
+    //     returns; suppress stdout streaming so the caller's stdout
+    //     still looks "submitted-then-quiet". `--json` still emits the
+    //     submission envelope first.
+    //   * `--detach --save-jsonl=false`: warn that the run cannot be
+    //     detached under v0.5.3 because there is no log to inspect
+    //     later, and fall through to the synchronous path. Operators who
+    //     actually need fire-and-forget should hand the request to the
+    //     daemon's plugin host via `animus workflow run` instead.
     if args.detach {
-        return print_value(
-            serde_json::json!({
-                "run_id": run_id.0,
-                "status": "submitted",
-            }),
-            json,
-        );
+        if json {
+            let response = serde_json::json!({ "run_id": run_id.0, "status": "submitted" });
+            print_value(response, json)?;
+        } else {
+            eprintln!(
+                "warning: --detach now drains the provider session inline under the v0.5.3 \
+                 provider-only model; run {} will keep streaming until the provider finishes",
+                run_id.0
+            );
+            if !args.save_jsonl {
+                eprintln!("warning: --save-jsonl=false + --detach produces no log to inspect later");
+            }
+        }
+        let run_dir_path =
+            if args.save_jsonl { Some(run_dir(project_root, &run_id, args.jsonl_dir.as_deref())) } else { None };
+        // Suppress streaming output and json envelope on subsequent
+        // frames — the caller asked us to return rather than render to
+        // their terminal. Errors still propagate so scripts can react
+        // to provider failures.
+        return stream_events_quiet(run, run_id, &args.tool, run_dir_path).await;
     }
 
-    let mut lines = BufReader::new(read_half).lines();
-    let run_dir = if args.save_jsonl { Some(run_dir(project_root, &run_id, args.jsonl_dir.as_deref())) } else { None };
+    let run_dir_path =
+        if args.save_jsonl { Some(run_dir(project_root, &run_id, args.jsonl_dir.as_deref())) } else { None };
 
-    while let Some(line) = lines.next_line().await? {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
+    stream_events(run, run_id, &args, run_dir_path, json).await
+}
 
-        let Ok(event) = serde_json::from_str::<AgentRunEvent>(line) else {
-            continue;
+async fn stream_events(
+    mut run: animus_session_backend::session::SessionRun,
+    run_id: RunId,
+    args: &AgentRunArgs,
+    run_dir_path: Option<PathBuf>,
+    json: bool,
+) -> Result<()> {
+    while let Some(session_event) = run.events.recv().await {
+        let is_finished = matches!(session_event, animus_session_backend::session::SessionEvent::Finished { .. });
+        let exit_code = if let animus_session_backend::session::SessionEvent::Finished { exit_code } = &session_event {
+            *exit_code
+        } else {
+            None
+        };
+        // Only unrecoverable error frames terminate the loop early.
+        // Recoverable errors are surfaced to the user / persisted but
+        // the loop continues until the provider plugin reports
+        // `Finished`. This matches v0.5.2's agent-runner semantics
+        // (P2 finding from codex review).
+        let unrecoverable_error_message = match &session_event {
+            animus_session_backend::session::SessionEvent::Error { message, recoverable } if !recoverable => {
+                Some(message.clone())
+            }
+            _ => None,
         };
 
-        if !event_matches_run(&event, &run_id) {
-            continue;
-        }
+        let event = to_agent_event(session_event, &run_id);
 
-        if let Some(path) = &run_dir {
+        if let Some(path) = &run_dir_path {
             persist_agent_event(path, &event)?;
             if let AgentRunEvent::OutputChunk { stream_type, text, .. } = &event {
                 persist_json_output(path, *stream_type, text)?;
@@ -93,65 +107,67 @@ pub(super) async fn handle_agent_run(
             print_agent_event(&event, json, &args.tool)?;
         }
 
-        match event {
-            AgentRunEvent::Finished { exit_code, .. } => {
-                if !args.stream && !json {
-                    println!("run {} finished (exit_code={:?})", run_id.0, exit_code);
-                }
-                if exit_code.unwrap_or_default() != 0 {
-                    return Err(anyhow!("agent run exited with code {:?}", exit_code));
-                }
-                return Ok(());
+        if let Some(message) = unrecoverable_error_message {
+            return Err(anyhow!(message));
+        }
+
+        if is_finished {
+            if !args.stream && !json {
+                println!("run {} finished (exit_code={:?})", run_id.0, exit_code);
             }
-            AgentRunEvent::Error { error, .. } => return Err(anyhow!(error)),
-            _ => {}
+            if exit_code.unwrap_or_default() != 0 {
+                return Err(anyhow!("agent run exited with code {:?}", exit_code));
+            }
+            return Ok(());
         }
     }
 
-    Err(anyhow!("runner connection closed before run {} completed", run_id.0))
+    Err(anyhow!("provider session ended before run {} completed", run_id.0))
 }
 
-// =====================================================================
-// C6.7 — control-wire routing helper for agent/run
-// =====================================================================
-//
-// Opens the control socket (returns Ok(None) when the daemon isn't
-// running so the caller falls back to the local in-process runner
-// path), issues the wire-shaped `agent/run` JSON-RPC call, and returns
-// the wire response. The daemon-side `AgentRouting` impl is currently
-// a pass-through stub (see `ops_agent::control_routing`) so this helper
-// will most often return `Ok(None)` via the not-supported degradation —
-// the wire surface is in place for MCP (C7) and WebAPI (C8) to swap in
-// a real implementation without changing the CLI call sites.
+/// Synchronous variant of [`stream_events`] used by `--detach`: persists
+/// events to the JSONL log (when `run_dir_path` is set) without printing
+/// to stdout. Errors propagate so scripts can react to provider failures.
+async fn stream_events_quiet(
+    mut run: animus_session_backend::session::SessionRun,
+    run_id: RunId,
+    _tool: &str,
+    run_dir_path: Option<PathBuf>,
+) -> Result<()> {
+    while let Some(session_event) = run.events.recv().await {
+        let is_finished = matches!(session_event, animus_session_backend::session::SessionEvent::Finished { .. });
+        let exit_code = if let animus_session_backend::session::SessionEvent::Finished { exit_code } = &session_event {
+            *exit_code
+        } else {
+            None
+        };
+        let unrecoverable_error_message = match &session_event {
+            animus_session_backend::session::SessionEvent::Error { message, recoverable } if !recoverable => {
+                Some(message.clone())
+            }
+            _ => None,
+        };
 
-async fn try_agent_run_via_control(
-    project_root: &str,
-    args: &AgentRunArgs,
-) -> Result<Option<animus_control_protocol::types::AgentRunResult>> {
-    use animus_control_protocol::types::AgentRunRequest as WireRequest;
-    use orchestrator_daemon_runtime::control::{is_method_unavailable, ControlClient};
+        let event = to_agent_event(session_event, &run_id);
 
-    let project_root_path = Path::new(project_root);
-    let Some(client) = ControlClient::try_connect(project_root_path).await? else {
-        return Ok(None);
-    };
-    let request = WireRequest {
-        provider: args.tool.clone(),
-        model: args
-            .model
-            .clone()
-            .unwrap_or_else(|| protocol::default_model_for_tool(&args.tool).unwrap_or("claude-sonnet-4-6").to_string()),
-        prompt: args.prompt.clone().unwrap_or_default(),
-        system: None,
-        cwd: args.cwd.as_ref().map(std::path::PathBuf::from),
-        env: Default::default(),
-    };
-    match client.agent_run(request).await {
-        Ok(response) => Ok(Some(response)),
-        Err(err) if is_method_unavailable(&err) => {
-            tracing::debug!(error = %err, "agent/run wire returned unavailable; falling back to local runner");
-            Ok(None)
+        if let Some(path) = &run_dir_path {
+            persist_agent_event(path, &event)?;
+            if let AgentRunEvent::OutputChunk { stream_type, text, .. } = &event {
+                persist_json_output(path, *stream_type, text)?;
+            }
         }
-        Err(err) => Err(err),
+
+        if let Some(message) = unrecoverable_error_message {
+            return Err(anyhow!(message));
+        }
+
+        if is_finished {
+            if exit_code.unwrap_or_default() != 0 {
+                return Err(anyhow!("agent run exited with code {:?}", exit_code));
+            }
+            return Ok(());
+        }
     }
+
+    Err(anyhow!("provider session ended before run {} completed", run_id.0))
 }
