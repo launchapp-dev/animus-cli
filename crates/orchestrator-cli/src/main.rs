@@ -36,6 +36,7 @@ async fn main() {
     match Cli::try_parse() {
         Ok(cli) => {
             let json = cli.json;
+            let startup_check = spawn_startup_update_check(&cli);
             let run_result = run(cli).await;
             let exit_code = match run_result {
                 Ok(()) => 0,
@@ -44,6 +45,23 @@ async fn main() {
                     classify_exit_code(&error)
                 }
             };
+            if let Some(check) = startup_check {
+                // For `auto` mode we wait for the install to finish (the
+                // operator explicitly asked us to apply the update; the
+                // visible cost of a one-time, post-subcommand wait is worth a
+                // correct install). For `notify` we give a short grace period
+                // so the notification reliably reaches stderr without making
+                // operators eat the GitHub round-trip latency on every call.
+                let grace = if check.is_blocking { None } else { Some(std::time::Duration::from_millis(750)) };
+                match grace {
+                    Some(timeout) => {
+                        let _ = tokio::time::timeout(timeout, check.handle).await;
+                    }
+                    None => {
+                        let _ = check.handle.await;
+                    }
+                }
+            }
             std::process::exit(exit_code);
         }
         Err(parse_err) => {
@@ -146,6 +164,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Logs { command } => services::operations::handle_logs(command, &project_root, cli.json).await,
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
+        Command::SelfCmd { command } => services::operations::handle_self(command, &project_root, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -190,12 +209,53 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Trigger { .. }
                 | Command::Logs { .. }
                 | Command::Subject { .. }
-                | Command::Flavor { .. } => {
+                | Command::Flavor { .. }
+                | Command::SelfCmd { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }
         }
     }
+}
+
+struct StartupCheck {
+    handle: tokio::task::JoinHandle<()>,
+    is_blocking: bool,
+}
+
+fn spawn_startup_update_check(cli: &Cli) -> Option<StartupCheck> {
+    if cli.json {
+        return None;
+    }
+    if matches!(cli.command, Command::SelfCmd { .. } | Command::Version) {
+        return None;
+    }
+    let runtime_config = RuntimeConfig { project_root: cli.project_root.clone(), ..RuntimeConfig::default() };
+    let (project_root, _) = resolve_project_root(&runtime_config);
+    let config_block = services::self_update::resolve_effective_config_block(&project_root);
+    let mode = services::self_update::effective_mode(config_block.as_ref());
+    if matches!(mode, protocol::AutoUpdateMode::Off) {
+        return None;
+    }
+    let is_blocking = matches!(mode, protocol::AutoUpdateMode::Auto | protocol::AutoUpdateMode::Prompt);
+    let state = services::self_update::AutoUpdateState::load();
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+
+    let handle = tokio::spawn(async move {
+        match services::self_update::run_startup_check(config_block, current_version, state).await {
+            Ok(Some(message)) => {
+                eprintln!("{message}");
+            }
+            Ok(None) => {}
+            Err(_) => {
+                // Network errors during a fire-and-forget check are silently
+                // suppressed — the subcommand the user actually asked for is
+                // what matters. Operators can run `animus self update
+                // --check-only` to surface failures.
+            }
+        }
+    });
+    Some(StartupCheck { handle, is_blocking })
 }
 
 #[derive(Debug, Serialize)]

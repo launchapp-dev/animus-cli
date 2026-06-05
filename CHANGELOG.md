@@ -35,6 +35,15 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`feat(cli)`: configurable auto-update via `animus self update`.** Adds GitHub
+  release polling on CLI startup with four modes (`off` / `notify` / `prompt` /
+  `auto`), a configurable ISO-8601 `check_interval` (default `P1D`), channel
+  filtering (`stable` / `prerelease`), and an atomic same-directory binary swap.
+  Env overrides: `ANIMUS_AUTO_UPDATE_MODE` (mode), `ANIMUS_AUTO_UPDATE_DISABLE`
+  (short-circuit to off). The new `animus self update` command supports
+  `--check-only`, `--force`, `--prerelease`, and `--yes`. The startup check is
+  fire-and-forget; the subcommand it runs alongside is never blocked by network
+  latency.
 - **`feat(config)`: agent profiles now accept `system_prompt_file` to load the
   system prompt from an external UTF-8 file.** The path resolves relative to
   the source YAML's parent directory (absolute paths supported). The contents

@@ -8,6 +8,11 @@ Animus resolves behavior from project YAML, installed pack layers, scoped runtim
 
 Repository-local Animus configuration created during setup.
 
+The optional `auto_update` block configures self-update behavior for the
+`animus` CLI binary (see [Self-update](#self-update) below). Omitted by
+default; absence behaves the same as `{"mode": "notify", "check_interval":
+"P1D", "channel": "stable"}`.
+
 ### `.animus/workflows.yaml` and `.animus/workflows/*.yaml`
 
 These YAML files are the editable workflow source of truth for a project.
@@ -285,6 +290,64 @@ add` registrations are not visible to Animus-spawned sessions. Servers an agent
 needs to call must be declared in workflow YAML (or supplied by a pack overlay or
 project-level `mcp_servers` config).
 
+## Self-update
+
+The `animus` CLI can poll its own GitHub releases
+(`launchapp-dev/animus-cli`) on startup and surface, prompt for, or
+silently apply newer builds. The behavior is fully configurable via the
+`auto_update` block in `.animus/config.json` (or the global
+`~/.animus/config.json`):
+
+```jsonc
+{
+  "auto_update": {
+    "mode": "notify",          // off | notify | prompt | auto
+    "check_interval": "P1D",   // ISO-8601 duration; default daily
+    "channel": "stable"        // stable | prerelease
+  }
+}
+```
+
+Modes:
+
+- `off` — never check, never notify, never apply.
+- `notify` (default) — print a one-liner to stderr when a newer release is
+  available, but do nothing else.
+- `prompt` — ask `[y/N]` on stderr when a newer release is available. When
+  stdin is not a TTY (CI, piped invocations) this degrades to `notify`.
+- `auto` — download and atomically install the newer release in the
+  background. The currently-running invocation continues to run on the
+  old binary; the swap takes effect on the next invocation.
+
+`check_interval` accepts an ISO-8601 duration string (`P1D`, `PT6H`,
+`P1W`, `PT30M`, ...). The last-check timestamp persists at
+`~/.animus/auto-update-state.json`.
+
+`channel` filters releases: `stable` drops anything tagged
+`prerelease: true` on GitHub; `prerelease` admits both. Pass
+`animus self update --prerelease` to override per-invocation.
+
+Manual trigger: `animus self update` bypasses the mode check and applies
+the newest matching release. Flags:
+
+- `--check-only` — print the available version and exit 0 if newer,
+  non-zero otherwise. Useful in CI.
+- `--force` — re-install the latest tag even when already current
+  (repair).
+- `--prerelease` — include prereleases regardless of `channel`.
+- `--yes` — skip the interactive confirmation prompt.
+
+Integrity: when the GitHub release asset has an inline `digest:
+sha256:<hex>` field, the staged download is verified against it before
+the atomic swap. Releases that ship a sidecar `<asset>.sha256` are also
+honored. Releases that do neither are downloaded but not hash-verified —
+operators are encouraged to publish digests upstream.
+
+The startup check is fire-and-forget — it runs as a tokio background
+task and never delays the subcommand the user actually asked for.
+Network failures during the background check are silently dropped; run
+`animus self update --check-only` to surface them.
+
 ## Environment Variables
 
 The complete v0.4.0 env var surface was renamed from `AO_*` to `ANIMUS_*`. There are no
@@ -304,6 +367,8 @@ legacy aliases; the old names will not be read.
 | `ANIMUS_DEBUG` | Enable verbose debug logging across the CLI and daemon |
 | `ANIMUS_LOG_JSON` | Emit log lines as JSON for log shippers |
 | `ANIMUS_DEBUG_MCP_STDIO` | Log raw MCP stdio frames for plugin/server debugging |
+| `ANIMUS_AUTO_UPDATE_MODE` | Override the configured `auto_update.mode` for the current process (`off`, `notify`, `prompt`, `auto`) |
+| `ANIMUS_AUTO_UPDATE_DISABLE` | Short-circuit auto-update to `off` regardless of config when set to a truthy value |
 
 ### Plugins and templates
 
