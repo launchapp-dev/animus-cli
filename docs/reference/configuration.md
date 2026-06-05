@@ -463,7 +463,7 @@ Or run: animus plugin install-defaults
 This is intentional — silent fallback to a removed in-tree backend would
 hide broken or missing plugins during daemon startup.
 
-## Opt-in anonymous metrics (v0.5.3)
+## Opt-in anonymous metrics (v0.5.4)
 
 Animus ships a minimal opt-in telemetry surface. It is **disabled by
 default**: the first time you run `animus init` or `animus daemon

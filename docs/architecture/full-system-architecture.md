@@ -2,7 +2,7 @@
 
 This is the canonical architecture narrative for the current Animus workspace.
 It ties together the crate map, runtime process model, state layout, daemon,
-workflow runner, agent runner, plugin system, control surfaces, and operational
+workflow execution, plugin system, control surfaces, and operational
 boundaries.
 
 If this document and code disagree, trust the code. The fastest source checks
@@ -36,7 +36,7 @@ The core goals are:
 |---|---|
 | CLI | `orchestrator-cli` |
 | Core services | `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config` |
-| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` |
+| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared` |
 | Plugin foundation | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-protocol`, `animus-plugin-runtime` |
 | Support | `orchestrator-logging`, `protocol` |
 
@@ -53,7 +53,6 @@ The release/runtime binary set is:
 | Binary | Package | Role |
 |---|---|---|
 | `animus` | `orchestrator-cli` | User-facing CLI, MCP endpoint, operations |
-| `agent-runner` | `agent-runner` | Agent execution service |
 | `animus-oai-runner` | external `launchapp-dev/animus-provider-oai-agent` plugin | OpenAI-compatible runner launched via the runtime contract resolver from the installed plugin (`v0.5.2` surface-shrink) |
 | `animus-workflow-runner-default` | external `workflow_runner` plugin | Preferred workflow phase execution binary launched by daemon dispatch and required by plugin preflight |
 
@@ -62,6 +61,10 @@ library. The actual workflow phase execution binary now comes from an installed
 `workflow_runner` plugin. Historical `animus-workflow-runner` and
 `ao-workflow-runner` binary names still exist only as fallback resolution
 targets for older installs.
+
+The former `agent-runner` sidecar was removed in v0.5.4. Provider sessions now
+run through `orchestrator-plugin-host::session` plus installed provider
+plugins.
 
 ## Process Topology
 
@@ -74,7 +77,6 @@ flowchart TB
     CORE["FileServiceHub<br/>orchestrator-core"]
     DAEMON["daemon runtime"]
     WFR["animus-workflow-runner-default<br/>(preferred)"]
-    AR["agent-runner"]
     SESSION["orchestrator-plugin-host::session"]
     PHOST["orchestrator-plugin-host"]
     PROVIDERS["provider plugins"]
@@ -98,8 +100,7 @@ flowchart TB
     DAEMON --> SUBJECTS
     DAEMON --> TRIGGERS
     DAEMON --> WFR
-    WFR --> AR
-    AR --> SESSION
+    WFR --> SESSION
     SESSION --> PHOST
     PHOST --> PROVIDERS
     CLI --> WEB
@@ -296,23 +297,18 @@ phases. The shared `animus-runtime-shared` module split remains architectural:
 Workflow phases emit events and persisted output. Terminal phase state projects
 back into workflow state and, where configured, subject state.
 
-## Agent Runner
-
-`agent-runner` owns agent execution service concerns:
-
-- IPC server, auth, routing, and status/control handlers
-- run lifecycle and cleanup
-- workspace guard
-- environment sanitizer
-- process/session setup
-- stdout/stderr stream bridging
-- provider output parsing
-- event persistence
-- telemetry
+## Provider Session Bridge
 
 Provider-specific session behavior is not implemented directly in daemon-core.
-The runner delegates provider sessions through the session bridge inside
-`orchestrator-plugin-host`.
+Agent and workflow execution call into the session bridge inside
+`orchestrator-plugin-host`, which owns:
+
+- provider plugin discovery
+- session backend resolution
+- run, resume, and cancel routing
+- provider process supervision and retry policy
+- active session retention so cancel reaches the owning plugin host
+- provider event streaming back into workflow execution
 
 ## Provider Session Host
 
@@ -439,9 +435,8 @@ See [Plugin Signing](plugin-signing.md) and [Plugin Host Concurrency](plugin-hos
 |---|---|
 | Daemon | tick loop plus child process supervision |
 | Workflow runner plugin | phase execution with explicit event emission and persisted markers |
-| Agent runner | IPC server with live/finished run maps |
-| Plugin host | single stdout reader task, pending response map, notification broadcast |
 | Provider sessions | active session map so cancel reaches the owning plugin host |
+| Plugin host | single stdout reader task, pending response map, notification broadcast |
 | State writes | file-backed services and atomic store helpers |
 
 Avoid adding cross-cutting locks around async request paths. Prefer immutable
@@ -472,17 +467,14 @@ sequenceDiagram
     participant Subject as subject_backend
     participant Daemon as daemon
     participant Runner as workflow-runner
-    participant Agent as agent-runner
     participant Provider as provider plugin
     participant State as scoped state
 
     Subject->>Daemon: <kind>/list ready work
     Daemon->>State: assign queue/workflow state
     Daemon->>Runner: spawn workflow run
-    Runner->>Agent: execute agent phase
-    Agent->>Provider: agent/run
-    Provider-->>Agent: provider notifications
-    Agent-->>Runner: runner events
+    Runner->>Provider: agent/run via session bridge
+    Provider-->>Runner: provider notifications
     Runner-->>Daemon: workflow events
     Runner->>State: phase output and markers
     Daemon->>State: completion and projection
@@ -510,7 +502,6 @@ cargo animus-bin-check
 cargo test -p orchestrator-cli
 cargo test -p orchestrator-daemon-runtime
 cargo test -p animus-runtime-shared
-cargo test -p agent-runner
 cargo test -p orchestrator-plugin-host
 ```
 

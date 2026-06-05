@@ -124,7 +124,7 @@ Animus is a Rust-only agent orchestrator with:
 - **Web UI** served through out-of-tree `transport_backend` + `web_ui` plugins resolved by `animus web`
 - **Runtime state** scoped under `~/.animus/<repo-scope>/`
 - **Workflow YAML** overlays in `.animus/workflows.yaml` and `.animus/workflows/*.yaml`
-- **Agent runner** orchestrating multi-step tasks with LLM and tool execution
+- **Provider session bridge** orchestrating multi-step tasks with LLM and tool execution through installed plugins
 - **Built-in MCP service** (`animus mcp serve`) plus plugin-aggregated tool surfaces
 - **Daemon mode** for background task execution and status tracking
 

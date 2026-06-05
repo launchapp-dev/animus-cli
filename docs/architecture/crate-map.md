@@ -16,13 +16,14 @@ responsibility. `Cargo.toml` is the source of truth for membership.
 |---|---|
 | `orchestrator-daemon-runtime` | Daemon queue, scheduling, subject dispatch, trigger handling, and runtime supervision |
 | `animus-runtime-shared` | Shared workflow execution helpers, runtime contracts, agent memory wiring, and runner IPC utilities consumed by daemon code and external `workflow_runner` plugins |
-| `agent-runner` | Runner process that launches and supervises provider sessions |
 
-The OpenAI-compatible runner binary moved out-of-tree to the
-`launchapp-dev/animus-provider-oai-agent` plugin in the v0.5.2
-surface-shrink. The curated default-install config currently pins that
-plugin at `v0.1.4`, and the daemon's runtime contract resolver locates
-the binary inside the installed plugin (see
+Provider invocation no longer uses an in-tree `agent-runner` crate. Agent and
+workflow execution now route through `orchestrator-plugin-host::session` and
+installed provider plugins. The OpenAI-compatible runner binary moved
+out-of-tree to the `launchapp-dev/animus-provider-oai-agent` plugin in the
+v0.5.2 surface-shrink. The curated default-install config currently pins that
+plugin at `v0.1.4`, and the daemon's runtime contract resolver locates the
+binary inside the installed plugin (see
 `crates/orchestrator-core/src/runtime_contract.rs::resolve_oai_runner_binary`).
 
 ## CLI and Services

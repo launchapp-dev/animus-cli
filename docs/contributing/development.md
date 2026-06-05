@@ -25,7 +25,7 @@ Build a specific crate:
 ```bash
 cargo build -p protocol
 cargo build -p orchestrator-core
-cargo build -p agent-runner
+cargo build -p orchestrator-plugin-host
 ```
 
 ## Workspace Structure
@@ -34,7 +34,6 @@ The workspace is a Cargo workspace of 10 crates. The current workspace members a
 
 ```text
 crates/
-├── agent-runner/
 ├── animus-plugin-protocol/
 ├── animus-plugin-runtime/
 ├── animus-runtime-shared/

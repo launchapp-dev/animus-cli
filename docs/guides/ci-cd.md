@@ -29,20 +29,19 @@ Validates that release artifacts can be produced correctly and that the release 
 
 ## Build Commands
 
-Animus provides cargo aliases for building the workspace binaries:
+Animus provides cargo aliases for building the release CLI package:
 
 ```bash
-cargo animus-bin-check           # Check all runtime binaries compile
-cargo animus-bin-build           # Debug build of all runtime binaries
-cargo animus-bin-build-release   # Release (optimized) build
+cargo animus-bin-check           # Check the animus CLI package compiles
+cargo animus-bin-build           # Debug build of the animus CLI package
+cargo animus-bin-build-release   # Release (optimized) build of the animus CLI package
 ```
 
-The runtime binary set is:
+The shipped binary set is:
 
 | Binary | Crate | Purpose |
 |--------|-------|---------|
 | `animus` | `orchestrator-cli` | Main CLI |
-| `agent-runner` | `agent-runner` | Daemon agent runner |
 | `animus-oai-runner` | external `launchapp-dev/animus-provider-oai-agent` plugin | OpenAI-compatible runner; install with `animus plugin install launchapp-dev/animus-provider-oai-agent` |
 | `animus-workflow-runner-default` | external `workflow_runner` plugin | Preferred workflow phase execution binary required by daemon preflight |
 
@@ -51,6 +50,10 @@ and the workflow phase execution binary is supplied by an external
 `workflow_runner` plugin. Legacy `animus-workflow-runner` and
 `ao-workflow-runner` names remain fallback resolution targets for older
 environments.
+
+The former `agent-runner` sidecar was removed in v0.5.4. Provider sessions now
+run through `orchestrator-plugin-host::session` plus installed provider
+plugins.
 
 ## Testing
 

@@ -2,7 +2,7 @@
 
 Animus is a Rust-only agent orchestrator built as a Cargo workspace of 10 members.
 It provides the `animus` CLI, daemon runtime, shared workflow execution/runtime
-helpers, agent runner, MCP server, plugin host, and plugin protocol crates.
+helpers, MCP server, plugin host, and plugin protocol crates.
 Provider, subject, transport,
 and web UI integrations run as external stdio plugins rather than in-process
 desktop or web shell frameworks. The workspace also depends on external
@@ -28,7 +28,6 @@ graph TD
     CONFIG[orchestrator-config]
     DAEMON[orchestrator-daemon-runtime]
     WR[animus-runtime-shared]
-    AR[agent-runner]
     SESSION["orchestrator-plugin-host::session"]
     PLUGIN_HOST[orchestrator-plugin-host]
     PLUGIN_PROTO[animus-plugin-protocol]
@@ -51,9 +50,6 @@ graph TD
     WR --> CORE
     WR --> CONFIG
     WR --> PROTO
-
-    AR --> SESSION
-    AR --> PROTO
 
     SESSION --> PLUGIN_HOST
     SESSION --> PLUGIN_PROTO
@@ -86,7 +82,7 @@ surface.
 
 - [Kernel and Flavors](kernel-and-flavors.md) -- **v0.5 product architecture commitment.** Animus is a kernel + a default flavor (curated plugin bundle) for portfolio builders. Future flavors emerge from real customer pull, not roadmap speculation. Read this before adding scope.
 - [Naming Contract](naming-contract.md) -- One name everywhere: `animus.*` for MCP tools, env vars, config dirs, pack ids, and JSON envelopes
-- [Full System Architecture](full-system-architecture.md) -- Canonical end-to-end architecture narrative covering crates, process topology, state, config, services, daemon, workflow runner, agent runner, plugins, control surfaces, security, observability, and verification
+- [Full System Architecture](full-system-architecture.md) -- Canonical end-to-end architecture narrative covering crates, process topology, state, config, services, daemon, workflow execution, plugins, control surfaces, security, observability, and verification
 - [Runtime Architecture](runtime-architecture.md) -- Current end-to-end runtime topology, startup flow, state model, crate responsibilities, execution pipeline, and failure boundaries
 - [Plugin System](plugin-system.md) -- Current stdio plugin architecture: discovery, install state, wire protocol, hosting, security, provider/subject/trigger/transport paths, and operations
 - [Plugin Pack Kernel](plugin-pack-kernel.md) -- Package-style plugin architecture for workflows, MCP servers, and bundled domain modules

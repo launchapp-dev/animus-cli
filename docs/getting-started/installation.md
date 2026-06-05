@@ -1,6 +1,6 @@
 # Installation
 
-Current workspace CLI version: **v0.5.3**. See [CHANGELOG.md](../../CHANGELOG.md)
+Current workspace CLI version: **v0.5.4**. See [CHANGELOG.md](../../CHANGELOG.md)
 for release notes and
 [`docs/migration/v0.4.11-to-v0.4.12.md`](../migration/v0.4.11-to-v0.4.12.md)
 if you are upgrading from an earlier v0.4.x.
@@ -24,7 +24,7 @@ Options:
 
 ```bash
 # Install a specific release
-ANIMUS_VERSION=v0.5.3 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
+ANIMUS_VERSION=v0.5.4 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 
 # Install into a custom directory
 ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
@@ -44,10 +44,9 @@ Prebuilt releases are published at:
 
 - <https://github.com/launchapp-dev/animus-cli/releases>
 
-Download the archive for your platform, extract it, and place these binaries on your `PATH`:
+Download the archive for your platform, extract it, and place this binary on your `PATH`:
 
 - `animus`
-- `agent-runner`
 
 Current release archives do **not** bundle a workflow-runner executable. The
 daemon's workflow phase execution binary now comes from the external
@@ -59,9 +58,9 @@ The `animus-oai-runner` binary also ships as the external
 with `animus plugin install launchapp-dev/animus-provider-oai-agent` to
 route OpenAI-compatible providers (MiniMax, Z.AI, OpenRouter, etc.).
 
-(The v0.4.11 `llm-cli-wrapper` binary was removed in v0.4.12 — the crate
-was deleted and its functionality folded into `agent-runner` and the
-upstream `animus-session-backend` crate.)
+(The v0.4.11 `llm-cli-wrapper` binary was removed in v0.4.12. The later
+`agent-runner` sidecar was removed in v0.5.4, with provider execution now
+routed through installed provider plugins and `animus-session-backend`.)
 
 Supported release targets:
 
