@@ -200,7 +200,7 @@ fn recover_stale_flushing(dir: &Path) -> Vec<PathBuf> {
     for entry in read.flatten() {
         let path = entry.path();
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-            if name.starts_with("flushing-") && name.ends_with(".jsonl") {
+            if name.starts_with("flushing-") && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl")) {
                 stale.push(path);
             }
         }

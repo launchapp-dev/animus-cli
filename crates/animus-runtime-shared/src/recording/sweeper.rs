@@ -145,10 +145,10 @@ pub fn compact_and_expire(runs_root: &Path, policy: SweepPolicy) -> Result<Sweep
 }
 
 /// Read `.bak`, write `.bak.zst.partial`, fsync, rename to `.bak.zst`,
-/// fsync parent dir, then remove the original `.bak`. The temp suffix
-/// + rename make the operation atomic against a sweeper crash: either
-/// the original `.bak` is still there, OR the `.bak.zst` is on disk
-/// and complete; never both, never neither.
+/// fsync parent dir, then remove the original `.bak`. The temp-suffix
+/// rename makes the operation atomic against a sweeper crash. Either
+/// the original `.bak` survives, or the `.bak.zst` is on disk and
+/// complete. Never both, never neither.
 fn compress_bak_to_zst(bak_path: &Path) -> io::Result<()> {
     let zst_path = bak_path.with_extension("bak.zst");
     let temp_path = bak_path.with_extension("bak.zst.partial");
@@ -159,9 +159,7 @@ fn compress_bak_to_zst(bak_path: &Path) -> io::Result<()> {
     io::copy(&mut input, &mut encoder)?;
     let mut buf_writer = encoder.finish()?;
     buf_writer.flush()?;
-    let temp_file = buf_writer
-        .into_inner()
-        .map_err(|err| io::Error::new(io::ErrorKind::Other, format!("flush temp encoder: {err}")))?;
+    let temp_file = buf_writer.into_inner().map_err(|err| io::Error::other(format!("flush temp encoder: {err}")))?;
     temp_file.sync_all()?;
     drop(temp_file);
 

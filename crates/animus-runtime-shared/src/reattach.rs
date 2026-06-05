@@ -13,8 +13,9 @@
 //!    `ANIMUS_WORKFLOW_REATTACH_SOCKET` env var and recorded in
 //!    `AgentSpawnRecord::stdio_socket_path` so a fresh daemon can find it
 //!    on startup orphan-scan. The string is platform-specific:
-//!      - Unix:  filesystem path under `~/.animus/.../agents/<id>.r.sock`
-//!      - Windows: namespaced pipe name `animus-reattach-<pid>-<id>`
+//!     - Unix:  filesystem path under `~/.animus/.../agents/<id>.r.sock`
+//!     - Windows: namespaced pipe name `animus-reattach-<pid>-<id>`
+//!
 //!    Callers should treat the string as opaque and round-trip it via the
 //!    [`local_socket_name_for`] helper rather than parsing it.
 //! 2. The runner binds the listener on startup. Bind happens before any
@@ -106,7 +107,7 @@ impl ReattachListenerEmitter {
     }
 
     pub fn bind_path(socket_path: impl AsRef<Path>) -> std::io::Result<Arc<Self>> {
-        Self::bind(socket_path.as_ref().to_string_lossy().into_owned())
+        Self::bind(&*socket_path.as_ref().to_string_lossy())
     }
 
     fn bind_inner(socket_path: String) -> std::io::Result<Arc<Self>> {
