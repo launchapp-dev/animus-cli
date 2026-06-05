@@ -119,12 +119,11 @@ pub fn sanitize_identifier(value: &str, fallback: &str) -> String {
                 out.push(ch.to_ascii_lowercase());
                 trailing_separator = false;
             }
-            ' ' | '_' | '-' => {
-                if !out.is_empty() && !trailing_separator {
-                    out.push('-');
-                    trailing_separator = true;
-                }
+            ' ' | '_' | '-' if !out.is_empty() && !trailing_separator => {
+                out.push('-');
+                trailing_separator = true;
             }
+            ' ' | '_' | '-' => {}
             _ => {}
         }
     }
