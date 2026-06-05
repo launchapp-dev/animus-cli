@@ -23,6 +23,32 @@ Typical uses:
 - define the repository's default workflow explicitly
 - declare project MCP servers, agents, variables, phases, and workflow definitions
 
+#### Workflow YAML capabilities
+
+Workflow YAML is more than per-workflow phase plumbing — three top-level blocks
+extend the daemon itself:
+
+- **`schedules`** — cron-driven workflow dispatch (UTC; forward-only, missed runs
+  are not replayed). See [Workflow YAML: schedules](workflow-yaml.md#schedules).
+- **`triggers`** — event-driven dispatch from file watchers, generic webhooks,
+  GitHub webhooks, or trigger backend plugins. See
+  [Workflow YAML: triggers](workflow-yaml.md#triggers).
+- **`daemon`** — workflow-YAML-side daemon settings: `auto_run_ready`,
+  `active_hours`, `phase_routing`, and `mcp`. Other `DaemonConfig` keys exist
+  on the struct but are configured elsewhere — `pool_size`, `interval_secs`,
+  `auto_merge`, `auto_pr`, `auto_commit_before_merge`, and
+  `auto_prune_worktrees` are read from the persisted daemon project config or
+  CLI flags, while `max_task_retries` and `retry_cooldown_secs` currently have
+  no runtime sink at all (round-trip-only). See
+  [Workflow YAML: daemon](workflow-yaml.md#daemon).
+
+All three are optional. They live at the top level of any
+`.animus/workflows.yaml` or `.animus/workflows/*.yaml` file. `schedules:` and
+`triggers:` entries merge across files by `id` (later overlays override earlier
+entries). The `daemon:` block does **not** field-merge — any overlay that
+defines `daemon:` replaces the previously-accumulated block wholesale, so keep
+`daemon:` in a single file.
+
 ### `.animus/plugins/<pack-id>/`
 
 Project-local pack overrides. Use this when a repository needs to override installed pack content without changing Animus globally.
