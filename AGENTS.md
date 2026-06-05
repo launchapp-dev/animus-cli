@@ -158,6 +158,8 @@ Visible top-level commands:
 - `logs`
 - `subject`
 - `flavor`
+- `self`
+- `metrics`
 
 Use these reference docs instead of hand-maintained summaries:
 
