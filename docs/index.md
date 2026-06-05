@@ -8,3 +8,5 @@ lastUpdated: false
 ---
 
 <Landing />
+
+<!-- details: 77 built-in MCP tools for subject management, workflow control, plugin operations, output inspection, and runtime state mutations. Agents act through tools, not code. -->

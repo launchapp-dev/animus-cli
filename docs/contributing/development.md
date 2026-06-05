@@ -54,7 +54,6 @@ Repo-local but not current workspace members:
 `default-members` in `Cargo.toml` include:
 
 - `orchestrator-cli`
-- `agent-runner`
 
 ## Key Dependencies
 
