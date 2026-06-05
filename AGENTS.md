@@ -49,7 +49,7 @@ crates/
 ```
 
 The OpenAI-compatible runner (formerly `crates/oai-runner/`) moved
-out-of-tree to `launchapp-dev/animus-provider-oai-agent` v0.1.3 in the
+out-of-tree to `launchapp-dev/animus-provider-oai-agent` v0.1.4 in the
 v0.5.2 surface-shrink. Install via
 `animus plugin install launchapp-dev/animus-provider-oai-agent`.
 
