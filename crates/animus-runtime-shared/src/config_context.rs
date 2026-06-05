@@ -239,6 +239,26 @@ impl RuntimeConfigContext {
             .and_then(|def| def.command.as_ref())
             .or_else(|| self.agent_runtime_config.phase_command(phase_id))
     }
+
+    /// Resolve the active [`EvalsConfig`] for `phase_id`, preferring the
+    /// workflow YAML override but falling back to the runtime config when
+    /// the YAML phase block is sparse and omits `evals:`. Mirrors
+    /// [`Self::phase_command`] so out-of-tree runners that adopt the eval
+    /// gate cannot accidentally drop a runtime-side gate by re-stating
+    /// only the agent / directive fields in the project YAML.
+    ///
+    /// TODO(codex-p2): `RuntimeConfigContext::load` applies
+    /// `merge_workflow_runtime_overlay` to the runtime config before this
+    /// fallback runs, and that merge currently replaces the whole runtime
+    /// phase with the sparse YAML phase. Until the merge is taught to
+    /// field-merge `evals` (instead of whole-record replace), the
+    /// fallback here only protects the in-process accessor surface; the
+    /// canonical fix lives in `agent_runtime_config::merge_workflow_runtime_overlay`.
+    pub fn phase_evals(&self, phase_id: &str) -> Option<&orchestrator_config::agent_runtime_config::EvalsConfig> {
+        self.phase_execution(phase_id)
+            .and_then(|def| def.evals.as_ref())
+            .or_else(|| self.agent_runtime_config.phase_evals(phase_id))
+    }
 }
 
 #[cfg(test)]
@@ -295,6 +315,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            evals: None,
         };
         let ctx = make_ctx_with_yaml_override("implementation", override_def);
 
@@ -335,6 +356,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            evals: None,
         };
         let ctx = make_ctx_with_yaml_override("implementation", override_def);
 
@@ -368,6 +390,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            evals: None,
         };
         let ctx = make_ctx_with_yaml_override("implementation", sparse);
 
@@ -401,6 +424,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            evals: None,
         };
         agent_runtime_config.phases.insert("implementation".to_string(), sparse);
         let workflow = builtin_workflow_config();
@@ -459,6 +483,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            evals: None,
         };
         agent_runtime_config.phases.insert("implementation".to_string(), sparse);
         let workflow = builtin_workflow_config();
@@ -511,6 +536,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            evals: None,
         };
         agent_runtime_config.phases.insert("implementation".to_string(), sparse);
         let workflow = builtin_workflow_config();
@@ -530,5 +556,68 @@ mod tests {
             ctx.phase_output_contract("implementation").is_none(),
             "when the project supplies a custom output_json_schema, the builtin output_contract must not leak in"
         );
+    }
+
+    #[test]
+    fn phase_evals_falls_back_to_runtime_config_on_sparse_yaml_override() {
+        // Codex round-10 P2: a sparse workflow YAML override that omits
+        // `evals` must NOT clear an eval gate already configured in the
+        // agent runtime config. The merged accessor falls back the same
+        // way `phase_command` does.
+        use orchestrator_config::agent_runtime_config::{EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
+
+        let mut agent_runtime_config = builtin_agent_runtime_config();
+        let evals = EvalsConfig {
+            pass_threshold: 1.0,
+            on_fail: EvalOnFail::Block,
+            max_reworks: 0,
+            checks: vec![EvalCheck {
+                id: "unit-tests".to_string(),
+                kind: EvalKind::Command,
+                command: Some("cargo".to_string()),
+                args: vec!["test".to_string()],
+                working_dir: None,
+                timeout_secs: None,
+                expected_exit: 0,
+                agent: None,
+                prompt: None,
+            }],
+        };
+        let runtime_phase = agent_runtime_config.phases.get_mut("implementation").expect("implementation phase exists");
+        runtime_phase.evals = Some(evals);
+
+        let sparse = PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Agent,
+            agent_id: Some("swe".to_string()),
+            directive: None,
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: None,
+            manual: None,
+            default_tool: None,
+            idempotency: Default::default(),
+            evals: None,
+        };
+        let mut workflow = builtin_workflow_config();
+        workflow.phase_definitions.insert("implementation".to_string(), sparse);
+        let metadata = WorkflowConfigMetadata {
+            schema: workflow.schema.clone(),
+            version: workflow.version,
+            hash: workflow_config_hash(&workflow),
+            source: WorkflowConfigSource::Builtin,
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config,
+            workflow_config: LoadedWorkflowConfig { metadata, config: workflow, path: PathBuf::from("builtin") },
+        };
+        let resolved = ctx.phase_evals("implementation").expect("evals must fall back to runtime config");
+        assert_eq!(resolved.checks.len(), 1);
+        assert_eq!(resolved.checks[0].id, "unit-tests");
     }
 }

@@ -15,6 +15,7 @@
 pub mod agent_state;
 pub mod config_context;
 pub mod ensure_execution_cwd;
+pub mod evals;
 pub mod ipc;
 pub mod metrics_hook;
 pub mod notification_log;
@@ -37,6 +38,11 @@ pub use agent_state::{
     send_agent_message, AgentMemoryDocument, AgentMemoryEntry, AgentMessage,
 };
 pub use ensure_execution_cwd::ensure_execution_cwd;
+pub use evals::llm_judge_runner::{JudgeError, JudgeRequest, JudgeResponse};
+pub use evals::{
+    evaluate_outcome, run_evals, EvalCheckResult, EvalContext, EvalsDecision, EvalsOutcome, JudgeBackend,
+    EVAL_RESULT_SCHEMA_ID,
+};
 pub use ipc::*;
 pub use payload_traversal::{
     fallback_implementation_commit_message, parse_commit_message_from_text, parse_phase_decision_from_text,

@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **`feat(workflow)`: basic eval framework for phase quality gates
+  (YAML + runner library; runtime enforcement deferred).** Phase
+  definitions can declare an `evals:` block listing `command` and
+  `llm_judge` checks. The runner library (`animus_runtime_shared::evals`)
+  executes them, scores against `pass_threshold`, and routes failures to
+  `rework` (re-execute the phase, up to `max_reworks`) or `block` (pause
+  for manual approval). Each check emits an `animus.eval.v1` record
+  (check_id, kind, passed, duration_ms, exit_code, output_excerpt) ready
+  for the workflow decision log.
+
+  **Runtime status:** the YAML/config/validator/runner ship in this
+  release. The workflow-runner call site that invokes `run_evals` between
+  phase output and phase advance lives in
+  `launchapp-dev/animus-workflow-runner-default` (out-of-tree per the
+  v0.5.1 fold-in) and is pending its next release. Until that pin bumps,
+  configured `evals:` blocks parse and validate but a phase still
+  advances regardless of check results — author/test now, do not yet
+  rely on it as a production trust gate. See
+  [docs/reference/workflow-yaml.md#evals-experimental--runtime-enforcement-deferred](docs/reference/workflow-yaml.md#evals-experimental--runtime-enforcement-deferred)
+  for the YAML surface.
+
 ## [0.5.4] - 2026-06-05
 
 ### Removed (v0.5.4 surface-shrink)

@@ -496,6 +496,93 @@ pub enum Idempotency {
     Unknown,
 }
 
+/// Kind of eval check. See `EvalCheck` for the structured contract per kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalKind {
+    /// Run a shell command in the phase's working directory. Pass on exit code match.
+    Command,
+    /// Dispatch a one-shot agent call. Pass when the response begins with "PASS".
+    LlmJudge,
+}
+
+/// What to do when an eval gate fails. `Rework` re-executes the phase (up to
+/// `max_reworks`) with the eval failure context injected into the next prompt;
+/// `Block` pauses the workflow and emits a manual gate.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalOnFail {
+    Rework,
+    #[default]
+    Block,
+}
+
+pub(crate) fn default_eval_pass_threshold() -> f32 {
+    1.0
+}
+
+pub(crate) fn default_eval_expected_exit() -> i32 {
+    0
+}
+
+/// A single eval check declared on a phase's `evals.checks` list. The `kind`
+/// discriminates which fields apply: `command` checks require `command` (+
+/// optional `args`, `working_dir`, `timeout_secs`, `expected_exit`);
+/// `llm_judge` checks require `agent` and `prompt`. Cross-kind field
+/// requirements are enforced by the validator.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalCheck {
+    pub id: String,
+    pub kind: EvalKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    #[serde(default = "default_eval_expected_exit")]
+    pub expected_exit: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
+}
+
+/// Eval gate declared on a phase. Runs after the phase produces an
+/// `advance` decision; pass rate is the fraction of `checks` that passed.
+/// If `pass_rate >= pass_threshold` the phase advances; otherwise
+/// `on_fail` controls whether to rework (up to `max_reworks`) or block.
+///
+/// Per the v0.5.5 basic-eval-framework contract:
+/// - `pass_threshold` defaults to `1.0` (all checks must pass);
+/// - `on_fail` defaults to `block` (no automatic rework);
+/// - `max_reworks` defaults to `0` and is only honoured when
+///   `on_fail = rework`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvalsConfig {
+    #[serde(default = "default_eval_pass_threshold")]
+    pub pass_threshold: f32,
+    #[serde(default)]
+    pub on_fail: EvalOnFail,
+    #[serde(default)]
+    pub max_reworks: u32,
+    #[serde(default)]
+    pub checks: Vec<EvalCheck>,
+}
+
+impl Default for EvalsConfig {
+    fn default() -> Self {
+        Self {
+            pass_threshold: default_eval_pass_threshold(),
+            on_fail: EvalOnFail::default(),
+            max_reworks: 0,
+            checks: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseExecutionDefinition {
     pub mode: PhaseExecutionMode,
@@ -527,6 +614,8 @@ pub struct PhaseExecutionDefinition {
     pub default_tool: Option<String>,
     #[serde(default)]
     pub idempotency: Idempotency,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evals: Option<EvalsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -853,6 +942,10 @@ impl AgentRuntimeConfig {
 
     pub fn phase_command(&self, phase_id: &str) -> Option<&PhaseCommandDefinition> {
         self.phase_execution(phase_id).and_then(|definition| definition.command.as_ref())
+    }
+
+    pub fn phase_evals(&self, phase_id: &str) -> Option<&EvalsConfig> {
+        self.phase_execution(phase_id).and_then(|definition| definition.evals.as_ref())
     }
 
     pub fn is_structured_output_phase(&self, phase_id: &str) -> bool {
@@ -1198,6 +1291,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
+        evals: None,
                 },
             ),
             (
@@ -1225,6 +1319,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
+        evals: None,
                 },
             ),
             (
@@ -1252,6 +1347,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
+        evals: None,
                 },
             ),
             (
@@ -1272,6 +1368,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
+        evals: None,
                 },
             ),
             (
@@ -1292,6 +1389,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
+        evals: None,
                 },
             ),
             (
@@ -1312,6 +1410,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
+        evals: None,
                 },
             ),
             (
@@ -1350,6 +1449,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
+        evals: None,
                 },
             ),
         ]),
@@ -1871,6 +1971,131 @@ fn validate_phase_definition(
         }
     }
 
+    if let Some(evals) = definition.evals.as_ref() {
+        validate_evals_block_runtime(phase_id, evals, config)?;
+    }
+
+    Ok(())
+}
+
+// Codex round-7 P2: the same eval surface lives on `AgentRuntimeConfig`
+// phases (overlay path), so the workflow-level validator is not enough.
+// This runtime-side validator catches the structural issues (empty checks,
+// threshold range, kind/field consistency, rework budget) without touching
+// the workflow tools_allowlist.
+fn validate_evals_block_runtime(phase_id: &str, evals: &EvalsConfig, config: &AgentRuntimeConfig) -> Result<()> {
+    if !(0.0..=1.0).contains(&evals.pass_threshold) || !evals.pass_threshold.is_finite() {
+        return Err(anyhow!("phases['{}'].evals.pass_threshold must be between 0.0 and 1.0", phase_id));
+    }
+    if evals.checks.is_empty() {
+        return Err(anyhow!("phases['{}'].evals must declare at least one check", phase_id));
+    }
+    if evals.on_fail == EvalOnFail::Rework && evals.max_reworks == 0 {
+        return Err(anyhow!("phases['{}'].evals.on_fail='rework' requires max_reworks > 0", phase_id));
+    }
+    let mut seen_ids = std::collections::BTreeSet::new();
+    for check in &evals.checks {
+        let trimmed = check.id.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("phases['{}'].evals.checks contains an empty check id", phase_id));
+        }
+        if !seen_ids.insert(trimmed.to_ascii_lowercase()) {
+            return Err(anyhow!("phases['{}'].evals.checks contains duplicate id '{}'", phase_id, trimmed));
+        }
+        match check.kind {
+            EvalKind::Command => {
+                let program = check.command.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| {
+                    anyhow!(
+                        "phases['{}'].evals.checks['{}'] kind='command' requires a non-empty command field",
+                        phase_id,
+                        check.id
+                    )
+                })?;
+                if !config.tools_allowlist.is_empty()
+                    && !config.tools_allowlist.iter().any(|t| t.eq_ignore_ascii_case(program))
+                {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'].command '{}' is not in tools_allowlist",
+                        phase_id,
+                        check.id,
+                        program
+                    ));
+                }
+                if check.agent.is_some() || check.prompt.is_some() {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'] kind='command' must not declare agent/prompt",
+                        phase_id,
+                        check.id
+                    ));
+                }
+                if check.timeout_secs == Some(0) {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'].timeout_secs must be greater than 0",
+                        phase_id,
+                        check.id
+                    ));
+                }
+            }
+            EvalKind::LlmJudge => {
+                let agent_id = check.agent.as_deref().map(str::trim).filter(|s| !s.is_empty()).ok_or_else(|| {
+                    anyhow!(
+                        "phases['{}'].evals.checks['{}'] kind='llm_judge' requires a non-empty agent field",
+                        phase_id,
+                        check.id
+                    )
+                })?;
+                if lookup_case_insensitive(&config.agents, agent_id).is_none() {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'] references unknown agent '{}'",
+                        phase_id,
+                        check.id,
+                        agent_id
+                    ));
+                }
+                if check.prompt.as_deref().is_none_or(|s| s.trim().is_empty()) {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'] kind='llm_judge' requires a non-empty prompt field",
+                        phase_id,
+                        check.id
+                    ));
+                }
+                if check.command.is_some() || !check.args.is_empty() {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'] kind='llm_judge' must not declare command/args",
+                        phase_id,
+                        check.id
+                    ));
+                }
+                // Codex round-9 P3: working_dir + expected_exit are
+                // command-only knobs the judge runner never consumes.
+                if check.working_dir.is_some() {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'] kind='llm_judge' must not declare working_dir",
+                        phase_id,
+                        check.id
+                    ));
+                }
+                if check.expected_exit != default_eval_expected_exit() {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'] kind='llm_judge' must not override expected_exit",
+                        phase_id,
+                        check.id
+                    ));
+                }
+                // Codex round-7 P2: judge dispatch is one-shot through the
+                // session backend; the runner has no per-call timeout
+                // override surface today. Rejecting timeout_secs here keeps
+                // the operator from being misled into thinking it will be
+                // honoured.
+                if check.timeout_secs.is_some() {
+                    return Err(anyhow!(
+                        "phases['{}'].evals.checks['{}'] kind='llm_judge' does not support timeout_secs (judge timeouts inherit from the agent profile)",
+                        phase_id, check.id
+                    ));
+                }
+            }
+        }
+    }
     Ok(())
 }
 
@@ -2208,6 +2433,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         workflow.tools.insert(
@@ -2308,6 +2534,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         workflow.workflows.push(crate::workflow_config::WorkflowDefinition {
@@ -2541,6 +2768,7 @@ cli_tools:
             manual: None,
             default_tool: None,
             idempotency: Idempotency::Unknown,
+            evals: None,
         };
 
         let json = serde_json::to_string(&definition).expect("serialize");
@@ -2594,6 +2822,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         validate_agent_runtime_config(&config).expect("valid command-mode config");
@@ -2619,6 +2848,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2663,6 +2893,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2707,6 +2938,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2751,6 +2983,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2795,6 +3028,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2843,6 +3077,7 @@ cli_tools:
                 }),
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2887,6 +3122,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
@@ -2938,6 +3174,7 @@ cli_tools:
             manual: None,
             default_tool: None,
             idempotency: Idempotency::Unknown,
+            evals: None,
         };
 
         let json = serde_json::to_string_pretty(&definition).expect("serialize");
@@ -3019,6 +3256,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3063,6 +3301,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3371,6 +3610,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         assert_eq!(config.phase_system_prompt("custom-phase"), Some("Phase-level prompt override"));
@@ -3398,6 +3638,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         assert_eq!(config.phase_system_prompt("custom-phase"), Some("Agent profile prompt"));
@@ -3425,6 +3666,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         assert_eq!(config.phase_system_prompt("custom-phase"), Some("Agent profile prompt"));
@@ -3470,6 +3712,7 @@ cli_tools:
             manual: None,
             default_tool: None,
             idempotency: Idempotency::Unknown,
+            evals: None,
         };
         let json = serde_json::to_string(&definition).expect("serialize");
         assert!(!json.contains("system_prompt"));
@@ -3508,6 +3751,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3541,6 +3785,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3574,6 +3819,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3619,6 +3865,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3664,6 +3911,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                evals: None,
             },
         );
         validate_agent_runtime_config(&config).expect("valid decision contract should pass validation");
@@ -3802,6 +4050,71 @@ phases:
         let restored: AgentRuntimeOverrides = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(restored.fallback_models, vec!["gpt-4o", "o4-mini"]);
         assert_eq!(restored.fallback_tools, vec!["oai-runner"]);
+    }
+
+    fn make_check_command(id: &str, program: &str) -> EvalCheck {
+        EvalCheck {
+            id: id.into(),
+            kind: EvalKind::Command,
+            command: Some(program.into()),
+            args: Vec::new(),
+            working_dir: None,
+            timeout_secs: None,
+            expected_exit: 0,
+            agent: None,
+            prompt: None,
+        }
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_rejects_evals_with_empty_check_list() {
+        let mut config = builtin_agent_runtime_config();
+        let phase = config.phases.get_mut("implementation").expect("phase exists");
+        phase.evals =
+            Some(EvalsConfig { pass_threshold: 1.0, on_fail: EvalOnFail::Block, max_reworks: 0, checks: Vec::new() });
+        let err = validate_agent_runtime_config(&config).expect_err("empty checks must fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("must declare at least one check"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_rejects_rework_with_zero_budget() {
+        let mut config = builtin_agent_runtime_config();
+        let phase = config.phases.get_mut("implementation").expect("phase exists");
+        phase.evals = Some(EvalsConfig {
+            pass_threshold: 1.0,
+            on_fail: EvalOnFail::Rework,
+            max_reworks: 0,
+            checks: vec![make_check_command("x", "cargo")],
+        });
+        let err = validate_agent_runtime_config(&config).expect_err("rework w/ zero budget must fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("max_reworks > 0"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_rejects_llm_judge_timeout_secs() {
+        let mut config = builtin_agent_runtime_config();
+        let phase = config.phases.get_mut("implementation").expect("phase exists");
+        phase.evals = Some(EvalsConfig {
+            pass_threshold: 1.0,
+            on_fail: EvalOnFail::Block,
+            max_reworks: 0,
+            checks: vec![EvalCheck {
+                id: "q".into(),
+                kind: EvalKind::LlmJudge,
+                command: None,
+                args: Vec::new(),
+                working_dir: None,
+                timeout_secs: Some(15),
+                expected_exit: 0,
+                agent: Some("default".into()),
+                prompt: Some("Verdict?".into()),
+            }],
+        });
+        let err = validate_agent_runtime_config(&config).expect_err("judge timeout_secs must fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("does not support timeout_secs"), "got: {msg}");
     }
 
     #[test]

@@ -227,12 +227,105 @@ phases:
 | `command` | object | no | Command execution definition when `mode: command` |
 | `manual` | object | no | Manual gate definition when `mode: manual` |
 | `default_tool` | string | no | Default tool hint for the phase |
+| `evals` | object | no | Eval gate definition (see [evals](#evals-experimental--runtime-enforcement-deferred)). Parsed and validated in v0.5.5; runtime enforcement lands when the out-of-tree workflow-runner plugin pin bumps |
 
 Phase `skills` are validated during config load. At runtime they can inject prompt fragments, model/tool policy overrides, MCP attachments, timeout overrides, launch args/env, and capability overrides. Installed registry skills work the same as local skills when a definition snapshot is present in Animus state.
 
 When `runtime.tool_profile` is set, the effective tool must resolve to
 `claude`. Animus looks up the named profile in the user's global config and injects
 its environment into the Claude launch contract.
+
+### evals (experimental — runtime enforcement deferred)
+
+> **Status (v0.5.5):** the YAML surface, config types, validators, and
+> runner library (`animus_runtime_shared::evals`) ship in v0.5.5. The
+> workflow-runner pin that calls `run_evals` between phase output and
+> phase advance lives in `launchapp-dev/animus-workflow-runner-default`
+> and is pending its next release. **Until that lands, a phase advances
+> regardless of an `evals:` block** — author/test the gate now, but do
+> not yet rely on it for production trust.
+
+`evals` declares a quality gate that runs **after** the phase emits an
+`advance` decision and **before** the workflow advances. Each check returns
+pass/fail; the gate advances when `pass_rate >= pass_threshold`. Failures
+route to either `rework` (re-execute the phase, up to `max_reworks`) or
+`block` (pause the workflow for manual approval).
+
+```yaml
+phases:
+  implementation:
+    mode: agent
+    agent: implementer
+    evals:
+      pass_threshold: 0.8           # 80% of checks must pass; default 1.0
+      on_fail: rework               # rework | block; default block
+      max_reworks: 2                # default 0; required > 0 when on_fail=rework
+      checks:
+        - id: unit-tests
+          kind: command
+          command: cargo
+          args: [test, --workspace]
+          working_dir: $REPO_ROOT   # falls back to the phase working dir
+          timeout_secs: 300
+          expected_exit: 0
+        - id: code-quality
+          kind: llm_judge
+          agent: po-reviewer
+          prompt: "Does the implementation address the spec? Reply PASS or FAIL."
+```
+
+#### Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `pass_threshold` | float | no | Minimum pass rate (0.0–1.0) required to advance. Default `1.0` |
+| `on_fail` | enum | no | `rework` or `block`. Default `block` |
+| `max_reworks` | int | no | Rework attempts available when `on_fail=rework`. Default `0`. Must be `> 0` if `on_fail=rework` |
+| `checks` | list | yes | At least one [eval check](#eval-check-kinds) |
+
+#### Eval check kinds
+
+**`kind: command`** — spawns the program in the phase's working directory
+(or `working_dir` when set; `$REPO_ROOT` resolves to the default. Do NOT
+use `${REPO_ROOT}` — that form is consumed by the workflow YAML env-var
+interpolation layer at load time and never reaches the runner. Relative
+paths anchor on the default working directory). Waits up to `timeout_secs`
+(default `300`) and passes when the process exit code matches
+`expected_exit` (default `0`). On timeout the entire process group is
+killed (Unix; Windows kills the direct child only). `command` is required
+and is validated against `tools_allowlist` when that is non-empty.
+
+**`kind: llm_judge`** — dispatches a one-shot agent call. Requires `agent`
+(must resolve through `agent_profiles`) and `prompt`. The judge sees the
+just-produced phase output via `phase_output_summary` in the request
+context. Pass: the response's first whitespace-delimited token is `PASS`
+(case-insensitive, optional trailing punctuation; words that merely START
+with `PASS` such as `PASSIVE` or `PASSAGE` do NOT count). Anything else
+is a fail.
+
+#### Decision-log records
+
+Each check appends one `animus.eval.v1` record to the workflow decision
+log:
+
+```json
+{
+  "schema": "animus.eval.v1",
+  "phase_id": "implementation",
+  "check_id": "unit-tests",
+  "kind": "command",
+  "passed": true,
+  "duration_ms": 12345,
+  "exit_code": 0,
+  "output_excerpt": "<capped at ~2 KiB; head+tail elision for long runs>"
+}
+```
+
+`exit_code` is omitted on `kind: llm_judge` records. `output_excerpt` is
+empty when the runner could not capture output (e.g. process spawn
+failure). An `error` field is populated when the check failed for a reason
+other than a clean exit-code mismatch (spawn error, timeout, judge
+backend missing, etc.).
 
 ---
 
