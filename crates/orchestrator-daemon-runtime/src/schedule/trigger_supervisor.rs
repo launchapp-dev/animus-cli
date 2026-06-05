@@ -670,6 +670,7 @@ mod tests {
             phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -943,6 +944,7 @@ mod tests {
             phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: "fw-collision".to_string(),

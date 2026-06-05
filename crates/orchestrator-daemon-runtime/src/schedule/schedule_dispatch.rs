@@ -345,6 +345,7 @@ mod tests {
             ],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         });
         config.schedules.push(orchestrator_core::WorkflowSchedule {
             id: "nightly".to_string(),

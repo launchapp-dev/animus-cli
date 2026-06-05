@@ -1263,3 +1263,31 @@ fn failed_phase_keeps_status_synced_with_machine_state() {
     executor.mark_current_phase_failed(&mut workflow, "test error".to_string());
     assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
 }
+
+#[test]
+fn load_workflow_ref_index_decodes_compressed_workflow_blobs() {
+    use crate::workflow::state_manager::{load_workflow_ref_index, WorkflowStateManager};
+    use tempfile::TempDir;
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    std::fs::create_dir_all(&home).unwrap();
+    // No EnvVarGuard available in this crate without the test-utils
+    // feature; use a process-wide HOME swap guarded by the global
+    // ENV_LOCK that other workflow tests already serialize on. This
+    // test is structurally serial-safe because we restore HOME
+    // before returning.
+    let prev_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", home.to_string_lossy().as_ref());
+    let project_root = tmp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+    let manager = WorkflowStateManager::new(&project_root);
+    let workflow = make_workflow(WorkflowStatus::Running);
+    manager.save(&workflow).unwrap();
+    let index = load_workflow_ref_index(&project_root).unwrap();
+    if let Some(prev) = prev_home {
+        std::env::set_var("HOME", prev);
+    } else {
+        std::env::remove_var("HOME");
+    }
+    assert_eq!(index.get("WF-test").map(String::as_str), Some("standard-workflow"));
+}

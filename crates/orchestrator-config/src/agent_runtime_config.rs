@@ -2317,6 +2317,7 @@ cli_tools:
             phases: vec!["pack-review".to_string().into()],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         });
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
 

@@ -1,5 +1,6 @@
 mod ops_agent;
 mod ops_common;
+mod ops_cost;
 mod ops_doctor;
 mod ops_flavor;
 mod ops_git;
@@ -24,6 +25,7 @@ mod ops_workflow;
 
 pub(crate) use ops_agent::*;
 use ops_common::*;
+pub(crate) use ops_cost::*;
 pub(crate) use ops_doctor::*;
 pub(crate) use ops_flavor::*;
 pub(crate) use ops_git::*;

@@ -25,6 +25,25 @@ fn is_supported_shortcut_cron(expression: &str) -> bool {
     matches!(expression, "@hourly" | "@daily" | "@weekly" | "@monthly")
 }
 
+fn validate_budget_config(budget: &BudgetConfig, scope_label: &str, errors: &mut Vec<String>) {
+    if budget.is_empty() {
+        errors.push(format!("{scope_label} must declare at least one of max_tokens or max_cost_usd"));
+        return;
+    }
+    if let Some(max_tokens) = budget.max_tokens {
+        if max_tokens == 0 {
+            errors.push(format!("{scope_label}.max_tokens must be greater than 0"));
+        }
+    }
+    if let Some(max_cost_usd) = budget.max_cost_usd {
+        if !max_cost_usd.is_finite() {
+            errors.push(format!("{scope_label}.max_cost_usd must be a finite number"));
+        } else if max_cost_usd <= 0.0 {
+            errors.push(format!("{scope_label}.max_cost_usd must be greater than 0"));
+        }
+    }
+}
+
 pub fn validate_workflow_and_runtime_configs(workflow: &WorkflowConfig, runtime: &AgentRuntimeConfig) -> Result<()> {
     validate_workflow_and_runtime_configs_with_project_root(workflow, runtime, None)
 }
@@ -297,6 +316,21 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                 if !merge_strategy_is_valid(&merge.strategy) {
                     errors.push(format!("workflow '{}' post_success.merge.strategy is not supported", workflow_ref));
                 }
+            }
+        }
+
+        if let Some(budget) = workflow.budget.as_ref() {
+            validate_budget_config(budget, &format!("workflow '{workflow_ref}' budget"), &mut errors);
+        }
+
+        for entry in &workflow.phases {
+            if let Some(budget) = entry.budget() {
+                let phase_id = entry.phase_id().trim();
+                validate_budget_config(
+                    budget,
+                    &format!("workflow '{workflow_ref}' phase '{phase_id}' budget"),
+                    &mut errors,
+                );
             }
         }
 

@@ -35,6 +35,7 @@ fn write_combined_config(project_root: &std::path::Path) {
         phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
         post_success: None,
         variables: Vec::new(),
+        budget: None,
     });
     config.workflows.push(orchestrator_core::WorkflowDefinition {
         id: "webhook-flow".to_string(),
@@ -43,6 +44,7 @@ fn write_combined_config(project_root: &std::path::Path) {
         phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
         post_success: None,
         variables: Vec::new(),
+        budget: None,
     });
 
     config.schedules.push(orchestrator_core::WorkflowSchedule {

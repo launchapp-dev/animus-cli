@@ -1,3 +1,4 @@
+pub(super) mod cost;
 pub(super) mod metrics;
 pub(super) mod operations;
 pub(super) mod plugin_clients;

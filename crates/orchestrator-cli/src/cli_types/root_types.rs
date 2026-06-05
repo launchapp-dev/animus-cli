@@ -135,4 +135,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: MetricsCommand,
     },
+    /// Inspect token + USD spend across workflow runs (v0.5.5).
+    Cost {
+        #[command(subcommand)]
+        command: CostCommand,
+    },
 }

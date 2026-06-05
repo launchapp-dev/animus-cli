@@ -139,6 +139,7 @@ mod tests {
                 phases: standard_phase_plan().into_iter().map(WorkflowPhaseEntry::Simple).collect(),
                 post_success: None,
                 variables: Vec::new(),
+                budget: None,
             },
             WorkflowDefinition {
                 id: UI_UX_WORKFLOW_REF.to_string(),
@@ -147,6 +148,7 @@ mod tests {
                 phases: ui_ux_phase_plan().into_iter().map(WorkflowPhaseEntry::Simple).collect(),
                 post_success: None,
                 variables: Vec::new(),
+                budget: None,
             },
         ];
         config

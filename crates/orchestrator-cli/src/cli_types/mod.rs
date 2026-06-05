@@ -1,4 +1,5 @@
 mod agent_types;
+mod cost_types;
 mod daemon_types;
 mod doctor_types;
 mod flavor_types;
@@ -26,6 +27,7 @@ mod web_types;
 mod workflow_types;
 
 pub(crate) use agent_types::*;
+pub(crate) use cost_types::*;
 pub(crate) use daemon_types::*;
 pub(crate) use doctor_types::*;
 pub(crate) use flavor_types::*;

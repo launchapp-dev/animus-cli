@@ -552,6 +552,43 @@ blocked on the send path.
 | `animus metrics disable` | Opt out and drop any buffered events. |
 | `animus metrics flush` | Force-send buffered events (debug). |
 
+## Cost governance and model rates (v0.5.5)
+
+Animus tracks per-workflow + per-phase token + USD spend using the
+`AgentRunEvent::Metadata { cost, tokens }` events the provider
+plugins already emit. The rollups live under
+`~/.animus/<scope>/cost-state.v1.json` (schema
+`animus.cost-state.v1`) and budget-exceeded decision records are
+appended to `~/.animus/<scope>/decisions.jsonl` (schema
+`animus.budget-exceeded.v1`).
+
+When a provider does not report `cost` on the metadata frame, the
+aggregator estimates USD from a small per-model rate table
+(`crates/orchestrator-cli/src/services/cost/model_rates.rs`).
+The table is intentionally simple — a single combined input + output +
+reasoning rate per model family — and reflects published vendor pricing
+as of the release that contains this file.
+
+| Model prefix | USD per 1M combined tokens |
+|---|---|
+| `claude-opus` | 30.00 |
+| `claude-sonnet` | 6.00 |
+| `claude-haiku` | 1.25 |
+| `codex` | 5.00 |
+| `o4` | 5.00 |
+| `gpt-5` | 5.00 |
+| `gemini-3` | 1.25 |
+| `gemini-2` | 0.75 |
+| `kimi` | 1.00 |
+| `minimax` | 0.70 |
+| `opencode` | 2.50 |
+
+Unknown model prefixes produce `None` (no estimate) rather than a
+fabricated number. Vendor-reported `cost` on the wire always wins over
+the table. To declare cost caps, see the `budget:` section in
+[`workflow-yaml.md`](workflow-yaml.md). To inspect spend, see
+[`cli/index.md`](cli/index.md#cost).
+
 ## Notes
 
 - Project YAML is the authored workflow surface.

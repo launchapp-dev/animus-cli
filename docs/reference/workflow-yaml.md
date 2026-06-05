@@ -311,6 +311,57 @@ variables:
 | `phases` | PhaseEntry[] | yes | Ordered list of phase entries |
 | `post_success` | PostSuccessConfig | no | Actions to perform after all phases succeed |
 | `variables` | Variable[] | no | Variables used by this workflow |
+| `budget` | BudgetConfig | no | Cost ceiling for the whole workflow run (v0.5.5+) |
+
+## budget
+
+The `budget:` block declares cost ceilings. It can live at three places:
+
+1. **Top-level on a workflow** — cap that applies across all phases of a
+   single workflow run. The ceiling is authoritative; if a phase has a
+   higher cap, the workflow-level cap still wins.
+2. **Inline on a rich phase entry** — cap that applies for one phase
+   inside one workflow run. Resets per rework attempt.
+3. **Anywhere either of the two above applies**, the workflow runner
+   pauses, fails, or warns according to `on_exceed`.
+
+```yaml
+workflows:
+  - id: expensive-flow
+    name: Expensive Flow
+    phases:
+      - exploration:
+          budget:
+            max_tokens: 100_000
+            max_cost_usd: 1.00
+            on_exceed: fail
+      - implementation
+    budget:
+      max_tokens: 1_000_000
+      max_cost_usd: 5.00
+      on_exceed: pause
+```
+
+### BudgetConfig Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `max_tokens` | integer | one of two | Cap on combined input + output + reasoning tokens. Cache reads/writes are tracked but excluded from the cap. |
+| `max_cost_usd` | number | one of two | USD cost ceiling. Cents precision. |
+| `on_exceed` | `pause` \| `fail` \| `warn` | no (default `pause`) | What to do when a cap is crossed. |
+
+Validation rules (from `validate_workflow_config`):
+
+- at least one of `max_tokens` or `max_cost_usd` must be set;
+- `max_tokens` must be greater than 0;
+- `max_cost_usd` must be a finite number greater than 0;
+- `on_exceed` must be one of `pause`, `fail`, or `warn`.
+
+The `animus cost` CLI surface (`summary`, `workflow`, `top`, `trends`)
+reports against the same per-run rollup the budget enforcer reads. See
+[`docs/reference/cli/index.md`](cli/index.md) and
+[`docs/reference/configuration.md`](configuration.md) for runtime
+configuration including the per-model USD rate table.
 
 ## Phase Output Contracts
 

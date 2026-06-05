@@ -249,6 +249,12 @@ animus
 │   ├── disable              Opt out and drop any buffered events
 │   └── flush                Force-send buffered events to the configured endpoint (debug)
 │
+├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
+│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders
+│   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`
+│   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`
+│   └── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets
+│
 └── help                     Print this message or the help of the given subcommand(s)
 ```
 

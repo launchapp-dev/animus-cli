@@ -40,6 +40,7 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
                 }),
             }),
             variables: Vec::new(),
+            budget: None,
         },
         WorkflowDefinition {
             id: "ui-ux-standard".to_string(),
@@ -64,6 +65,7 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
                 }),
             }),
             variables: Vec::new(),
+            budget: None,
         },
     ];
     config
@@ -116,6 +118,7 @@ fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
         max_rework_attempts: 3,
         on_verdict,
         skip_if: Vec::new(),
+        budget: None,
     });
 
     let err = validate_workflow_config(&config).expect_err("on_verdict with nonexistent target should fail validation");
@@ -138,6 +141,7 @@ fn validation_rejects_zero_max_rework_attempts() {
         max_rework_attempts: 0,
         on_verdict: HashMap::new(),
         skip_if: Vec::new(),
+        budget: None,
     });
 
     let err = validate_workflow_config(&config).expect_err("zero max_rework_attempts should fail validation");
@@ -287,6 +291,7 @@ fn resolve_workflow_skip_guards_extracts_guards_from_config() {
             max_rework_attempts: 3,
             on_verdict: HashMap::new(),
             skip_if: vec!["task_type == 'docs'".to_string()],
+            budget: None,
         }),
         "implementation".to_string().into(),
     ];
@@ -729,6 +734,7 @@ fn make_pipeline(id: &str, phases: Vec<WorkflowPhaseEntry>) -> WorkflowDefinitio
         phases,
         post_success: None,
         variables: Vec::new(),
+        budget: None,
     }
 }
 
@@ -870,6 +876,7 @@ fn expand_preserves_rich_phase_config() {
                 max_rework_attempts: 3,
                 on_verdict: on_verdict.clone(),
                 skip_if: vec!["task_type == 'docs'".into()],
+                budget: None,
             })],
         ),
         make_pipeline(
@@ -963,6 +970,7 @@ fn resolve_phase_plan_expands_sub_pipelines() {
         phases: vec![WorkflowPhaseEntry::Simple("code-review".into()), WorkflowPhaseEntry::Simple("testing".into())],
         post_success: None,
         variables: Vec::new(),
+        budget: None,
     });
 
     let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
@@ -1022,6 +1030,7 @@ fn validate_rejects_circular_sub_pipeline() {
             phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review".into() })],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         },
         WorkflowDefinition {
             id: "review".into(),
@@ -1030,6 +1039,7 @@ fn validate_rejects_circular_sub_pipeline() {
             phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "standard".into() })],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         },
     ];
 
@@ -2230,6 +2240,7 @@ fn pipeline_variables_not_serialized_when_empty() {
         phases: Vec::new(),
         post_success: None,
         variables: Vec::new(),
+        budget: None,
     };
     let json = serde_json::to_value(&workflow).expect("serialize");
     let obj = json.as_object().expect("json object");
@@ -2510,5 +2521,138 @@ fn validation_rejects_agent_reference_to_unknown_mcp_server() {
         message.contains("agent_profiles['rogue'].mcp_servers references unknown MCP server 'does-not-exist'"),
         "error should mention unknown reference: {}",
         message
+    );
+}
+
+#[test]
+fn yaml_parses_workflow_level_budget_block() {
+    let yaml = r#"
+workflows:
+  - id: expensive
+    name: Expensive Flow
+    phases:
+      - requirements
+      - implementation
+    budget:
+      max_tokens: 1000000
+      max_cost_usd: 5.0
+      on_exceed: pause
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("should parse workflow budget");
+    let workflow = config.workflows.iter().find(|p| p.id == "expensive").expect("workflow found");
+    let budget = workflow.budget.as_ref().expect("workflow budget set");
+    assert_eq!(budget.max_tokens, Some(1_000_000));
+    assert!((budget.max_cost_usd.unwrap() - 5.0).abs() < 1e-9);
+    assert_eq!(budget.on_exceed, BudgetOnExceed::Pause);
+}
+
+#[test]
+fn yaml_parses_phase_level_budget_block() {
+    let yaml = r#"
+workflows:
+  - id: expensive
+    name: Expensive Flow
+    phases:
+      - exploration:
+          budget:
+            max_tokens: 100000
+            max_cost_usd: 1.0
+            on_exceed: fail
+      - implementation
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("should parse phase budget");
+    let workflow = config.workflows.iter().find(|p| p.id == "expensive").expect("workflow found");
+    let phase_budget = workflow.phases[0].budget().expect("phase budget set");
+    assert_eq!(phase_budget.max_tokens, Some(100_000));
+    assert_eq!(phase_budget.on_exceed, BudgetOnExceed::Fail);
+}
+
+#[test]
+fn yaml_budget_round_trips_through_overlay_writer() {
+    let yaml = r#"
+workflows:
+  - id: expensive
+    name: Expensive Flow
+    phases:
+      - implementation
+    budget:
+      max_tokens: 250000
+      on_exceed: warn
+"#;
+    let parsed = parse_yaml_workflow_config(yaml).expect("parse");
+    let definition = parsed.workflows.into_iter().find(|p| p.id == "expensive").expect("workflow found");
+    let serialized = serde_json::to_value(&definition).expect("serialize");
+    let budget = serialized.get("budget").expect("budget retained in json round trip");
+    assert_eq!(budget.get("max_tokens").and_then(|v| v.as_u64()), Some(250_000));
+    assert_eq!(budget.get("on_exceed").and_then(|v| v.as_str()), Some("warn"));
+}
+
+fn workflow_with_budget(id: &str, budget: BudgetConfig) -> WorkflowDefinition {
+    WorkflowDefinition {
+        id: id.to_string(),
+        name: id.to_string(),
+        description: String::new(),
+        phases: vec![WorkflowPhaseEntry::Simple("requirements".to_string())],
+        post_success: None,
+        variables: Vec::new(),
+        budget: Some(budget),
+    }
+}
+
+#[test]
+fn validate_rejects_zero_budget_max_tokens() {
+    let mut config = test_workflow_config_with_standard_pipeline();
+    config.workflows.push(workflow_with_budget(
+        "zero-budget",
+        BudgetConfig { max_tokens: Some(0), max_cost_usd: None, on_exceed: BudgetOnExceed::Pause },
+    ));
+    let err = validate_workflow_config(&config).expect_err("zero max_tokens must reject");
+    assert!(err.to_string().contains("max_tokens must be greater than 0"), "expected max_tokens error, got: {err}");
+}
+
+#[test]
+fn validate_rejects_non_positive_budget_max_cost() {
+    let mut config = test_workflow_config_with_standard_pipeline();
+    config.workflows.push(workflow_with_budget(
+        "neg-budget",
+        BudgetConfig { max_tokens: None, max_cost_usd: Some(-1.5), on_exceed: BudgetOnExceed::Pause },
+    ));
+    let err = validate_workflow_config(&config).expect_err("negative cost must reject");
+    assert!(err.to_string().contains("max_cost_usd must be greater than 0"), "expected max_cost_usd error, got: {err}");
+}
+
+#[test]
+fn validate_rejects_empty_budget() {
+    let mut config = test_workflow_config_with_standard_pipeline();
+    config.workflows.push(workflow_with_budget(
+        "empty-budget",
+        BudgetConfig { max_tokens: None, max_cost_usd: None, on_exceed: BudgetOnExceed::Warn },
+    ));
+    let err = validate_workflow_config(&config).expect_err("empty budget must reject");
+    assert!(
+        err.to_string().contains("must declare at least one of max_tokens or max_cost_usd"),
+        "expected empty-budget error, got: {err}"
+    );
+}
+
+#[test]
+fn validate_rejects_invalid_on_exceed_via_yaml() {
+    let yaml = r#"
+workflows:
+  - id: bad
+    name: Bad
+    phases:
+      - implementation
+    budget:
+      max_tokens: 1000
+      on_exceed: explode
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("invalid on_exceed must fail parsing");
+    // anyhow chains the underlying serde_yaml error; `{:#}` flattens
+    // the full chain into one string we can grep against.
+    let chain = format!("{:#}", err);
+    assert!(
+        chain.contains("explode") || chain.contains("on_exceed") || chain.contains("unknown variant"),
+        "expected on_exceed parse error to mention the value or field, got: {chain}"
     );
 }

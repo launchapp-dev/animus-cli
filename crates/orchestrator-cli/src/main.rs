@@ -177,6 +177,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
         Command::SelfCmd { command } => services::operations::handle_self(command, &project_root, cli.json).await,
         Command::Metrics { command } => services::operations::handle_metrics(command, &project_root, cli.json).await,
+        Command::Cost { command } => services::operations::handle_cost(command, &project_root, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -223,7 +224,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Subject { .. }
                 | Command::Flavor { .. }
                 | Command::SelfCmd { .. }
-                | Command::Metrics { .. } => {
+                | Command::Metrics { .. }
+                | Command::Cost { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }
@@ -306,6 +308,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Flavor { .. } => CommandGroup::Flavor,
         Command::SelfCmd { .. } => CommandGroup::SelfUpdate,
         Command::Metrics { .. } => CommandGroup::Metrics,
+        Command::Cost { .. } => CommandGroup::Cost,
     }
 }
 

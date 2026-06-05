@@ -1,0 +1,526 @@
+//! `animus cost` command tree.
+//!
+//! The handler scans the live `runs/` directory under the scoped state
+//! root, folds metadata events into a fresh `CostState`, and renders
+//! the requested view. The cached `cost-state.v1.json` file is updated
+//! as a side effect so the daemon's auto-pause hook can read a recent
+//! snapshot without re-scanning.
+
+use std::collections::BTreeMap;
+use std::path::Path;
+
+use anyhow::{anyhow, Result};
+use chrono::{DateTime, Datelike, Duration, Utc};
+use serde::Serialize;
+
+use crate::cli_types::{
+    CostCommand, CostSummaryArgs, CostTopArgs, CostTopBy, CostTrendWindow, CostTrendsArgs, CostWorkflowArgs,
+};
+use crate::print_value;
+use crate::services::cost::{
+    aggregator::COST_STATE_SCHEMA_ID, enforce_caps, load_cost_state, save_cost_state, scan_runs, CostState, PhaseCost,
+    WorkflowCost,
+};
+
+const SUMMARY_SCHEMA: &str = "animus.cost.summary.v1";
+const WORKFLOW_SCHEMA: &str = "animus.cost.workflow.v1";
+const TOP_SCHEMA: &str = "animus.cost.top.v1";
+const TRENDS_SCHEMA: &str = "animus.cost.trends.v1";
+
+pub(crate) async fn handle_cost(command: CostCommand, project_root: &str, json: bool) -> Result<()> {
+    let project_path = Path::new(project_root);
+    match command {
+        CostCommand::Summary(args) => handle_summary(project_path, args, json),
+        CostCommand::Workflow(args) => handle_workflow(project_path, args, json),
+        CostCommand::Top(args) => handle_top(project_path, args, json),
+        CostCommand::Trends(args) => handle_trends(project_path, args, json),
+    }
+}
+
+fn refresh_state(project_path: &Path) -> Result<CostState> {
+    // Merge: scanner produces live workflow rollups, but it cannot
+    // see archived workflows (the daemon's auto-pause hook moves
+    // completed runs to `history` and clears them from
+    // `workflows`). Preserve the persisted history so `top` / `trends`
+    // see completed runs across daemon restarts.
+    let mut state = scan_runs(project_path)?;
+    match load_cost_state(project_path) {
+        Ok(persisted) => {
+            // Drop scanned workflow rollups whose run id is already in
+            // persisted history. Otherwise an in-place `events.jsonl`
+            // for a completed run double-counts: once from the live
+            // scan, once from the archived `HistorySummary`.
+            let archived_ids: std::collections::HashSet<String> =
+                persisted.history.iter().map(|entry| entry.workflow_run_id.clone()).collect();
+            state.workflows.retain(|run_id, _| !archived_ids.contains(run_id));
+            state.history = persisted.history;
+        }
+        Err(error) => {
+            eprintln!("warning: failed to load persisted cost state ({error}); reporting live scan only");
+        }
+    }
+    // Cache for downstream readers. A persistence failure is not
+    // fatal — surface a warning but still render the live view.
+    if let Err(error) = save_cost_state(project_path, &state) {
+        eprintln!("warning: failed to persist cost state cache: {error}; using in-memory view only");
+    }
+    // Evaluate declared budget caps against the freshest rollup. Any
+    // breach is appended to `decisions.jsonl`; the workflow runner
+    // honors `on_exceed: pause|fail|warn` based on those records.
+    // Failure here is non-fatal — surface a warning and continue so
+    // the view still renders.
+    //
+    // TODO(codex-p2): cap evaluation currently fires only from
+    // `animus cost ...` invocations and writes to the scoped-root
+    // `decisions.jsonl`. The runtime decision replay reads
+    // `runs/<run_id>/decisions.jsonl`, so active workflows do not
+    // observe the breach. Wiring `enforce_caps` into the daemon
+    // tick path (and writing per-run decision records) lands in
+    // the v0.5.5 follow-up that touches
+    // `launchapp-dev/animus-workflow-runner-default`.
+    if let Err(error) = enforce_caps(project_path, &state) {
+        eprintln!("warning: failed to evaluate budget caps: {error}");
+    }
+    Ok(state)
+}
+
+#[derive(Debug, Serialize)]
+struct SummaryView {
+    schema: &'static str,
+    state_schema: &'static str,
+    since: String,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    active_workflows: usize,
+    completed_workflows: usize,
+    top_workflows: Vec<TopSpenderRow>,
+}
+
+#[derive(Debug, Serialize)]
+struct TopSpenderRow {
+    workflow_run_id: String,
+    workflow_id: String,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    status: String,
+}
+
+/// Summary semantics: `--since` filters which workflow rollups are
+/// included (a workflow is in scope if its `started_at` or
+/// `updated_at` falls inside the window), but the per-row token / USD
+/// totals are the workflow's lifetime spend, not in-window deltas.
+/// Per-event windowing would require keeping a time-series sidecar,
+/// which is out of scope for v0.5.5 (TODO(codex-p2)).
+fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Result<()> {
+    let state = refresh_state(project_path)?;
+    let window = args.since.as_deref().unwrap_or("24h");
+    let duration = parse_duration(window)?;
+    let now = Utc::now();
+    let window_start = now - duration;
+
+    let mut active_count: usize = 0;
+    let mut completed: usize = 0;
+    let mut all_rows: Vec<TopSpenderRow> = Vec::new();
+
+    for (run_id, workflow) in &state.workflows {
+        let last_seen = workflow.updated_at.unwrap_or(workflow.started_at);
+        if last_seen < window_start && workflow.started_at < window_start {
+            continue;
+        }
+        // The scanner can attach a terminal `Completed` or `Failed`
+        // status to a workflow whose events log contains a `Finished`
+        // / `Error` frame but that the daemon has not yet moved into
+        // `history`. Those should NOT count as active — otherwise
+        // `summary` reports them in the "active" column and the
+        // "completed" column stays at zero.
+        match workflow.status {
+            crate::services::cost::aggregator::WorkflowCostStatus::Running => active_count += 1,
+            _ => completed += 1,
+        }
+        all_rows.push(TopSpenderRow {
+            workflow_run_id: run_id.clone(),
+            workflow_id: workflow.workflow_id.clone(),
+            total_tokens: workflow.total_tokens,
+            total_cost_usd: workflow.total_cost_usd,
+            status: format!("{:?}", workflow.status).to_lowercase(),
+        });
+    }
+    for history in &state.history {
+        if history.finished_at >= window_start {
+            completed += 1;
+            all_rows.push(TopSpenderRow {
+                workflow_run_id: history.workflow_run_id.clone(),
+                workflow_id: history.workflow_id.clone(),
+                total_tokens: history.total_tokens,
+                total_cost_usd: history.total_cost_usd,
+                status: format!("{:?}", history.final_status).to_lowercase(),
+            });
+        }
+    }
+    let total_tokens: u64 = all_rows.iter().map(|row| row.total_tokens).sum();
+    let total_cost_usd: f64 = all_rows.iter().map(|row| row.total_cost_usd).sum();
+    all_rows.sort_by(|a, b| b.total_cost_usd.partial_cmp(&a.total_cost_usd).unwrap_or(std::cmp::Ordering::Equal));
+    all_rows.truncate(args.top);
+    let view = SummaryView {
+        schema: SUMMARY_SCHEMA,
+        state_schema: COST_STATE_SCHEMA_ID,
+        since: window.to_string(),
+        window_start,
+        window_end: now,
+        total_tokens,
+        total_cost_usd,
+        active_workflows: active_count,
+        completed_workflows: completed,
+        top_workflows: all_rows,
+    };
+    if json {
+        print_value(&view, json)
+    } else {
+        print_summary_text(&view);
+        Ok(())
+    }
+}
+
+fn print_summary_text(view: &SummaryView) {
+    println!("animus cost — last {}", view.since);
+    println!(
+        "  window:    {} → {}",
+        view.window_start.format("%Y-%m-%d %H:%M UTC"),
+        view.window_end.format("%Y-%m-%d %H:%M UTC")
+    );
+    println!(
+        "  spend:     ${:.4} across {} tokens (lifetime totals for runs touched in window)",
+        view.total_cost_usd, view.total_tokens
+    );
+    println!("  workflows: {} active, {} completed in window", view.active_workflows, view.completed_workflows);
+    if view.top_workflows.is_empty() {
+        println!("  no workflow activity in window");
+        return;
+    }
+    println!();
+    println!("  top {} by cost:", view.top_workflows.len());
+    for row in &view.top_workflows {
+        println!(
+            "    {:.<48} ${:>8.4}  {:>10} toks  [{}]",
+            truncate(&row.workflow_run_id, 47),
+            row.total_cost_usd,
+            row.total_tokens,
+            row.status
+        );
+    }
+}
+
+fn truncate(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        value.to_string()
+    } else {
+        let taken: String = value.chars().take(max_chars.saturating_sub(1)).collect();
+        format!("{taken}…")
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct WorkflowView<'a> {
+    schema: &'static str,
+    state_schema: &'static str,
+    workflow_run_id: &'a str,
+    workflow: &'a WorkflowCost,
+    phases: Vec<PhaseRow<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+struct PhaseRow<'a> {
+    phase_id: &'a str,
+    #[serde(flatten)]
+    cost: &'a PhaseCost,
+    total_tokens: u64,
+}
+
+fn handle_workflow(project_path: &Path, args: CostWorkflowArgs, json: bool) -> Result<()> {
+    let state = refresh_state(project_path)?;
+    if let Some(workflow) = state.workflows.get(&args.workflow_run_id) {
+        let phases = workflow
+            .phases
+            .iter()
+            .map(|(phase_id, cost)| PhaseRow { phase_id, cost, total_tokens: cost.total_tokens() })
+            .collect();
+        let view = WorkflowView {
+            schema: WORKFLOW_SCHEMA,
+            state_schema: COST_STATE_SCHEMA_ID,
+            workflow_run_id: &args.workflow_run_id,
+            workflow,
+            phases,
+        };
+        return if json {
+            print_value(&view, json)
+        } else {
+            println!(
+                "workflow {} ({}): ${:.4} / {} tokens",
+                view.workflow_run_id,
+                view.workflow.workflow_id,
+                view.workflow.total_cost_usd,
+                view.workflow.total_tokens
+            );
+            if view.phases.is_empty() {
+                println!("  no phase activity yet");
+            } else {
+                for row in &view.phases {
+                    println!(
+                        "  {:<24} ${:>8.4}  {:>10} toks  attempt={}{}",
+                        row.phase_id,
+                        row.cost.cost_usd,
+                        row.total_tokens,
+                        row.cost.attempts,
+                        row.cost.model.as_deref().map(|m| format!(" model={m}")).unwrap_or_default()
+                    );
+                }
+            }
+            Ok(())
+        };
+    }
+    // Fall back to the history ring: completed workflows that the
+    // daemon's auto-pause hook has archived no longer appear in
+    // `state.workflows` but their HistorySummary is still queryable.
+    if let Some(history) = state.history.iter().find(|h| h.workflow_run_id == args.workflow_run_id) {
+        let view = ArchivedWorkflowView {
+            schema: WORKFLOW_SCHEMA,
+            state_schema: COST_STATE_SCHEMA_ID,
+            workflow_run_id: &args.workflow_run_id,
+            workflow_id: &history.workflow_id,
+            started_at: history.started_at,
+            finished_at: history.finished_at,
+            total_tokens: history.total_tokens,
+            total_cost_usd: history.total_cost_usd,
+            final_status: format!("{:?}", history.final_status).to_lowercase(),
+            archived: true,
+        };
+        return if json {
+            print_value(&view, json)
+        } else {
+            println!(
+                "workflow {} ({}): ${:.4} / {} tokens  [archived: {}]",
+                view.workflow_run_id, view.workflow_id, view.total_cost_usd, view.total_tokens, view.final_status
+            );
+            println!("  archived workflows do not retain per-phase detail; use `cost top` for a leaderboard view");
+            Ok(())
+        };
+    }
+    Err(anyhow!("workflow run '{}' not found in cost state or history", args.workflow_run_id))
+}
+
+#[derive(Debug, Serialize)]
+struct ArchivedWorkflowView<'a> {
+    schema: &'static str,
+    state_schema: &'static str,
+    workflow_run_id: &'a str,
+    workflow_id: &'a str,
+    started_at: DateTime<Utc>,
+    finished_at: DateTime<Utc>,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    final_status: String,
+    archived: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct TopView {
+    schema: &'static str,
+    state_schema: &'static str,
+    by: &'static str,
+    rows: Vec<TopSpenderRow>,
+}
+
+fn handle_top(project_path: &Path, args: CostTopArgs, json: bool) -> Result<()> {
+    let state = refresh_state(project_path)?;
+    let mut rows: Vec<TopSpenderRow> = state
+        .workflows
+        .iter()
+        .map(|(run_id, workflow)| TopSpenderRow {
+            workflow_run_id: run_id.clone(),
+            workflow_id: workflow.workflow_id.clone(),
+            total_tokens: workflow.total_tokens,
+            total_cost_usd: workflow.total_cost_usd,
+            status: format!("{:?}", workflow.status).to_lowercase(),
+        })
+        .collect();
+    for history in &state.history {
+        rows.push(TopSpenderRow {
+            workflow_run_id: history.workflow_run_id.clone(),
+            workflow_id: history.workflow_id.clone(),
+            total_tokens: history.total_tokens,
+            total_cost_usd: history.total_cost_usd,
+            status: format!("{:?}", history.final_status).to_lowercase(),
+        });
+    }
+    let by_label: &'static str = match args.by {
+        CostTopBy::Tokens => "tokens",
+        CostTopBy::Cost => "cost",
+    };
+    match args.by {
+        CostTopBy::Tokens => rows.sort_by_key(|row| std::cmp::Reverse(row.total_tokens)),
+        CostTopBy::Cost => {
+            rows.sort_by(|a, b| b.total_cost_usd.partial_cmp(&a.total_cost_usd).unwrap_or(std::cmp::Ordering::Equal))
+        }
+    }
+    rows.truncate(args.limit);
+    let view = TopView { schema: TOP_SCHEMA, state_schema: COST_STATE_SCHEMA_ID, by: by_label, rows };
+    if json {
+        print_value(&view, json)
+    } else {
+        println!("animus cost top by {} (limit {})", view.by, view.rows.len());
+        if view.rows.is_empty() {
+            println!("  (no workflow activity recorded)");
+        } else {
+            for (idx, row) in view.rows.iter().enumerate() {
+                println!(
+                    "  {:>2}. {:.<46} ${:>8.4}  {:>10} toks  [{}]",
+                    idx + 1,
+                    truncate(&row.workflow_run_id, 45),
+                    row.total_cost_usd,
+                    row.total_tokens,
+                    row.status
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct TrendsView {
+    schema: &'static str,
+    state_schema: &'static str,
+    window: &'static str,
+    buckets: Vec<TrendBucket>,
+}
+
+#[derive(Debug, Serialize)]
+struct TrendBucket {
+    /// `YYYY-MM-DD` for `day`, `YYYY-Www` for `week`, `YYYY-MM` for `month`.
+    label: String,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    workflow_runs: usize,
+}
+
+fn handle_trends(project_path: &Path, args: CostTrendsArgs, json: bool) -> Result<()> {
+    let state = refresh_state(project_path)?;
+    let mut tally: BTreeMap<String, TrendBucket> = BTreeMap::new();
+    for workflow in state.workflows.values() {
+        let key = bucket_label(workflow.started_at, args.window);
+        let entry = tally.entry(key.clone()).or_insert_with(|| TrendBucket {
+            label: key,
+            total_tokens: 0,
+            total_cost_usd: 0.0,
+            workflow_runs: 0,
+        });
+        entry.total_tokens = entry.total_tokens.saturating_add(workflow.total_tokens);
+        entry.total_cost_usd += workflow.total_cost_usd;
+        entry.workflow_runs += 1;
+    }
+    for history in &state.history {
+        let key = bucket_label(history.finished_at, args.window);
+        let entry = tally.entry(key.clone()).or_insert_with(|| TrendBucket {
+            label: key,
+            total_tokens: 0,
+            total_cost_usd: 0.0,
+            workflow_runs: 0,
+        });
+        entry.total_tokens = entry.total_tokens.saturating_add(history.total_tokens);
+        entry.total_cost_usd += history.total_cost_usd;
+        entry.workflow_runs += 1;
+    }
+    let mut buckets: Vec<TrendBucket> = tally.into_values().collect();
+    buckets.sort_by(|a, b| a.label.cmp(&b.label));
+    if buckets.len() > args.n {
+        let start = buckets.len() - args.n;
+        buckets = buckets.split_off(start);
+    }
+    let window_label: &'static str = match args.window {
+        CostTrendWindow::Day => "day",
+        CostTrendWindow::Week => "week",
+        CostTrendWindow::Month => "month",
+    };
+    let view = TrendsView { schema: TRENDS_SCHEMA, state_schema: COST_STATE_SCHEMA_ID, window: window_label, buckets };
+    if json {
+        print_value(&view, json)
+    } else {
+        println!("animus cost trends — {} buckets (window={})", view.buckets.len(), view.window);
+        for bucket in &view.buckets {
+            println!(
+                "  {:<10} ${:>8.4}  {:>10} toks  ({} runs)",
+                bucket.label, bucket.total_cost_usd, bucket.total_tokens, bucket.workflow_runs
+            );
+        }
+        Ok(())
+    }
+}
+
+fn bucket_label(ts: DateTime<Utc>, window: CostTrendWindow) -> String {
+    match window {
+        CostTrendWindow::Day => ts.format("%Y-%m-%d").to_string(),
+        CostTrendWindow::Week => {
+            let iso = ts.iso_week();
+            format!("{}-W{:02}", iso.year(), iso.week())
+        }
+        CostTrendWindow::Month => ts.format("%Y-%m").to_string(),
+    }
+}
+
+fn parse_duration(input: &str) -> Result<Duration> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("--since duration must not be empty"));
+    }
+    let (num_part, unit_part) = trimmed.split_at(
+        trimmed
+            .find(|c: char| c.is_ascii_alphabetic())
+            .ok_or_else(|| anyhow!("--since duration '{trimmed}' must end with a unit (m/h/d/w)"))?,
+    );
+    let value: i64 = num_part.parse().map_err(|_| anyhow!("--since duration '{trimmed}' has invalid number"))?;
+    if value <= 0 {
+        return Err(anyhow!("--since duration must be positive"));
+    }
+    match unit_part {
+        "m" => Ok(Duration::minutes(value)),
+        "h" => Ok(Duration::hours(value)),
+        "d" => Ok(Duration::days(value)),
+        "w" => Ok(Duration::weeks(value)),
+        other => Err(anyhow!("--since duration unit '{other}' must be one of m/h/d/w")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_duration_accepts_supported_units() {
+        assert_eq!(parse_duration("30m").unwrap(), Duration::minutes(30));
+        assert_eq!(parse_duration("12h").unwrap(), Duration::hours(12));
+        assert_eq!(parse_duration("7d").unwrap(), Duration::days(7));
+        assert_eq!(parse_duration("2w").unwrap(), Duration::weeks(2));
+    }
+
+    #[test]
+    fn parse_duration_rejects_non_positive() {
+        assert!(parse_duration("0h").is_err());
+        assert!(parse_duration("-5m").is_err());
+    }
+
+    #[test]
+    fn parse_duration_rejects_unknown_unit() {
+        assert!(parse_duration("5y").is_err());
+        assert!(parse_duration("5").is_err());
+    }
+
+    #[test]
+    fn bucket_label_matches_window() {
+        let ts = chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 6, 5, 12, 0, 0).unwrap();
+        assert_eq!(bucket_label(ts, CostTrendWindow::Day), "2026-06-05");
+        assert_eq!(bucket_label(ts, CostTrendWindow::Month), "2026-06");
+        assert!(bucket_label(ts, CostTrendWindow::Week).starts_with("2026-W"));
+    }
+}

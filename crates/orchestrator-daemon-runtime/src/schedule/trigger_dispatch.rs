@@ -286,6 +286,7 @@ mod tests {
             phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -310,6 +311,7 @@ mod tests {
             phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -368,6 +370,7 @@ mod tests {
             phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
             post_success: None,
             variables: Vec::new(),
+            budget: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: "disabled-watcher".to_string(),
