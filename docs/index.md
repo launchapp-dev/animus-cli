@@ -2,15 +2,15 @@
 layout: home
 
 hero:
-  name: Animus
-  text: Agent Orchestrator CLI
-  tagline: Orchestrate AI agent workflows from your terminal. Define YAML workflows, dispatch to any LLM, and ship code autonomously.
+  name: ANIMUS
+  text: The runtime for the agent era.
+  tagline: Orchestrate AI agents from your terminal. Define YAML workflows, dispatch to any model, and ship code autonomously — it shouldn't be you.
   image:
     src: /logo.svg
     alt: Animus
   actions:
     - theme: brand
-      text: Get Started
+      text: Get Started →
       link: /getting-started/
     - theme: alt
       text: View on GitHub

@@ -1,87 +1,284 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+/* ---------------------------------------------------------------------------
+   Animus docs theme — modeled on launchapp.dev
+   Brutalist / technical-minimal: near-black canvas, off-white text,
+   electric-orange accent, Archivo Black display type, sharp high-contrast
+   borders, generous spacing.
+   --------------------------------------------------------------------------- */
+
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
 :root {
-  --vp-c-brand-1: #b47a2e;
-  --vp-c-brand-2: #c88a33;
-  --vp-c-brand-3: #9a6824;
-  --vp-c-brand-soft: rgba(180, 122, 46, 0.12);
+  /* Brand — electric orange (#ff7a00) */
+  --vp-c-brand-1: #e96a00;
+  --vp-c-brand-2: #ff7a00;
+  --vp-c-brand-3: #c75a00;
+  --vp-c-brand-soft: rgba(255, 122, 0, 0.12);
 
+  /* Fonts */
+  --vp-font-family-base: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
+  --vp-font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --animus-font-display: 'Archivo Black', 'Space Grotesk', system-ui, sans-serif;
+  --animus-font-heading: 'Space Grotesk', var(--vp-font-family-base);
+
+  /* Light mode — warm-neutral inverse of the dark brand */
+  --vp-c-bg: #ffffff;
+  --vp-c-bg-alt: #fafafa;
+  --vp-c-bg-soft: #f5f5f5;
+  --vp-c-bg-elv: #ffffff;
+
+  --vp-c-default-1: #525252;
+  --vp-c-default-2: #737373;
+  --vp-c-default-3: #a3a3a3;
+
+  /* Hero gradient text */
   --vp-home-hero-name-color: transparent;
   --vp-home-hero-name-background: -webkit-linear-gradient(
     120deg,
-    #B1763A 30%,
-    #FFC067 70%,
-    #FFD88A
+    #ff7a00 20%,
+    #ff9d33 80%
   );
-
   --vp-home-hero-image-background-image: linear-gradient(
     -45deg,
-    #B1763A 40%,
-    #FFC067 60%
+    rgba(255, 122, 0, 0.55) 30%,
+    rgba(255, 157, 51, 0.35) 70%
   );
-  --vp-home-hero-image-filter: blur(44px);
+  --vp-home-hero-image-filter: blur(56px);
 
+  /* Buttons — solid orange brand, black text */
   --vp-button-brand-border: transparent;
-  --vp-button-brand-text: var(--vp-c-white);
-  --vp-button-brand-bg: var(--vp-c-brand-1);
+  --vp-button-brand-text: #0a0a0a;
+  --vp-button-brand-bg: #ff7a00;
   --vp-button-brand-hover-border: transparent;
-  --vp-button-brand-hover-text: var(--vp-c-white);
-  --vp-button-brand-hover-bg: var(--vp-c-brand-2);
-
-  --vp-font-family-base: 'Plus Jakarta Sans', ui-sans-serif, system-ui, sans-serif;
-  --vp-font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-
-  --vp-c-default-1: var(--vp-c-gray-1);
-  --vp-c-default-2: var(--vp-c-gray-2);
-  --vp-c-default-3: var(--vp-c-gray-3);
+  --vp-button-brand-hover-text: #0a0a0a;
+  --vp-button-brand-hover-bg: #ff9233;
+  --vp-button-brand-active-bg: #e96a00;
 }
 
 .dark {
-  --vp-c-brand-1: #FFC067;
-  --vp-c-brand-2: #FFD088;
-  --vp-c-brand-3: #B1763A;
-  --vp-c-brand-soft: rgba(255, 192, 103, 0.12);
+  /* Brand stays vivid on black */
+  --vp-c-brand-1: #ff7a00;
+  --vp-c-brand-2: #ff9233;
+  --vp-c-brand-3: #c75a00;
+  --vp-c-brand-soft: rgba(255, 122, 0, 0.14);
 
-  --vp-c-bg: #010108;
-  --vp-c-bg-alt: #0a0a12;
-  --vp-c-bg-soft: #111118;
-  --vp-c-bg-elv: #1a1a22;
+  /* Near-black brutalist canvas */
+  --vp-c-bg: #0a0a0a;
+  --vp-c-bg-alt: #000000;
+  --vp-c-bg-soft: #121213;
+  --vp-c-bg-elv: #161617;
 
+  /* High-contrast hairline borders */
+  --vp-c-border: #262626;
+  --vp-c-divider: #1f1f1f;
+  --vp-c-gutter: #000000;
+
+  --vp-c-default-1: #a3a3a3;
+  --vp-c-default-2: #737373;
+  --vp-c-default-3: #525252;
+
+  --vp-c-text-1: #f5f5f5;
+  --vp-c-text-2: #a3a3a3;
+  --vp-c-text-3: #737373;
+
+  --vp-home-hero-name-background: -webkit-linear-gradient(
+    120deg,
+    #ff7a00 20%,
+    #ffb066 85%
+  );
   --vp-home-hero-image-background-image: linear-gradient(
     -45deg,
-    #B1763A 40%,
-    #FFC067 60%
+    rgba(255, 122, 0, 0.5) 30%,
+    rgba(255, 157, 51, 0.25) 70%
   );
-  --vp-home-hero-image-filter: blur(68px);
+  --vp-home-hero-image-filter: blur(72px);
 }
 
-.VPHero .VPImage {
-  max-width: 200px;
-  max-height: 200px;
-}
+/* --------------------------------------------------------------------------
+   Typography
+   -------------------------------------------------------------------------- */
 
 .VPHero .name {
-  font-family: 'Outfit', var(--vp-font-family-base);
+  font-family: var(--animus-font-display);
+  font-weight: 400; /* Archivo Black is single-weight */
+  letter-spacing: -0.02em;
+  line-height: 1.02;
 }
 
-.VPFeatures .VPFeature {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+.VPHero .text {
+  font-family: var(--animus-font-heading);
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
 
-.VPFeatures .VPFeature:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
-}
-
-.dark .VPFeatures .VPFeature:hover {
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-}
-
-.VPNavBar .title {
-  font-family: 'Outfit', var(--vp-font-family-base);
-  font-weight: 700;
+.VPHero .tagline {
+  color: var(--vp-c-text-2);
+  font-weight: 400;
 }
 
 h1, h2, h3, h4 {
-  font-family: 'Outfit', var(--vp-font-family-base);
+  font-family: var(--animus-font-heading);
+  letter-spacing: -0.015em;
+}
+
+.VPNavBar .title,
+.VPNavBarTitle .text {
+  font-family: var(--animus-font-display);
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  text-transform: uppercase;
+  font-size: 16px;
+}
+
+/* Small uppercase labels — brutalist signature */
+.VPSidebarItem.level-0 > .item > .text,
+.VPDocOutlineItem .outline-title {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+   Buttons — sharp corners, confident weight
+   -------------------------------------------------------------------------- */
+
+.VPButton {
+  border-radius: 6px;
+  font-family: var(--animus-font-heading);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: transform 0.15s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.VPButton:hover {
+  transform: translateY(-1px);
+}
+
+.VPButton.alt {
+  background-color: transparent;
+  border: 1px solid var(--vp-c-border);
+}
+
+.dark .VPButton.alt {
+  border-color: #2e2e2e;
+}
+
+.VPButton.alt:hover {
+  border-color: var(--vp-c-brand-1);
+  color: var(--vp-c-brand-1);
+  background-color: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   Feature cards — bordered, sharp, orange on hover
+   -------------------------------------------------------------------------- */
+
+.VPFeatures .VPFeature {
+  border: 1px solid var(--vp-c-border);
+  border-radius: 8px;
+  background-color: var(--vp-c-bg-soft);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.VPFeatures .VPFeature:hover {
+  transform: translateY(-3px);
+  border-color: var(--vp-c-brand-1);
+  box-shadow: 0 8px 30px rgba(255, 122, 0, 0.08);
+}
+
+.VPFeature .icon {
+  border-radius: 8px;
+  background-color: var(--vp-c-brand-soft) !important;
+  border: 1px solid transparent;
+}
+
+.VPFeature .title {
+  font-family: var(--animus-font-heading);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.VPFeature .link-text-value {
+  color: var(--vp-c-brand-1);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------------------------
+   Nav + layout chrome
+   -------------------------------------------------------------------------- */
+
+.dark .VPNavBar.has-sidebar .content-body,
+.dark .VPNavBar {
+  background-color: rgba(10, 10, 10, 0.8);
+  backdrop-filter: blur(12px);
+}
+
+.VPNavBar.has-sidebar .divider-line,
+.VPNavBar .divider {
+  background-color: var(--vp-c-divider);
+}
+
+/* Active nav/sidebar accents */
+.VPSidebarItem.is-active > .item .text,
+.VPSidebarItem.is-active > .item .link > .text {
+  color: var(--vp-c-brand-1);
+}
+
+.VPSidebarItem.is-active > .item .indicator {
+  background-color: var(--vp-c-brand-1);
+}
+
+/* --------------------------------------------------------------------------
+   Inline code + code blocks
+   -------------------------------------------------------------------------- */
+
+:not(pre) > code {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.85em;
+  border-radius: 4px;
+}
+
+.dark :not(pre) > code {
+  background-color: #161617;
+  border: 1px solid #262626;
+}
+
+div[class*='language-'] {
+  border-radius: 8px;
+}
+
+.dark div[class*='language-'] {
+  border: 1px solid var(--vp-c-divider);
+  background-color: #000000;
+}
+
+.dark div[class*='language-'] pre {
+  background-color: transparent;
+}
+
+/* --------------------------------------------------------------------------
+   Links + accents
+   -------------------------------------------------------------------------- */
+
+.vp-doc a {
+  font-weight: 500;
+  text-underline-offset: 3px;
+}
+
+.dark .custom-block.tip {
+  border-color: var(--vp-c-brand-1);
+}
+
+/* Subtle radial glow behind the hero on dark */
+.dark .VPHome::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 900px;
+  height: 500px;
+  background: radial-gradient(ellipse at center, rgba(255, 122, 0, 0.10), transparent 70%);
+  pointer-events: none;
+  z-index: 0;
 }
