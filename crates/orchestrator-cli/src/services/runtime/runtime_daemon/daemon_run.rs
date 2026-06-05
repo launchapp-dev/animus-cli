@@ -785,6 +785,10 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let mut driver: SlimProjectTickDriver<'_> =
         slim_project_tick_driver(&runtime_options, &mut process_manager, logger);
 
+    crate::services::metrics::record_event(
+        std::path::Path::new(project_root),
+        crate::services::metrics::EventTags::DaemonStarted {},
+    );
     let run_result =
         run_daemon(project_root, &mut runtime_options, &mut driver, &mut host, |driver| driver.active_process_count())
             .await;

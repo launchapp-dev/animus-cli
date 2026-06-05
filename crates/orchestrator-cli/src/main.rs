@@ -36,6 +36,7 @@ async fn main() {
     match Cli::try_parse() {
         Ok(cli) => {
             let json = cli.json;
+            let project_root_override = cli.project_root.clone();
             let run_result = run(cli).await;
             let exit_code = match run_result {
                 Ok(()) => 0,
@@ -44,6 +45,18 @@ async fn main() {
                     classify_exit_code(&error)
                 }
             };
+            // Best-effort opportunistic metrics flush. Gated on
+            // `batch_interval` elapsing since the last successful send and
+            // bounded by a short timeout so a misbehaving endpoint never
+            // delays CLI exit.
+            let runtime_config = RuntimeConfig { project_root: project_root_override, ..RuntimeConfig::default() };
+            let (project_root, _) = resolve_project_root(&runtime_config);
+            let project_root_path = std::path::PathBuf::from(project_root);
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(2),
+                services::metrics::maybe_flush_if_due(&project_root_path),
+            )
+            .await;
             std::process::exit(exit_code);
         }
         Err(parse_err) => {
@@ -129,6 +142,14 @@ async fn run(cli: Cli) -> Result<()> {
 
     let runtime_config = RuntimeConfig { project_root: cli.project_root.clone(), ..RuntimeConfig::default() };
     let (project_root, _) = resolve_project_root(&runtime_config);
+    // Record a `cli_invoked` event before dispatch (no-op when telemetry
+    // is disabled). The recorder constructor handles every guard
+    // internally — kill switch, no consent block, opt-out — so this
+    // line never blocks command execution.
+    services::metrics::record_event(
+        std::path::Path::new(&project_root),
+        services::metrics::EventTags::CliInvoked { command_group: cli_command_group(&cli.command) },
+    );
     match cli.command {
         Command::Init(args) => services::operations::handle_init(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
@@ -146,6 +167,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Logs { command } => services::operations::handle_logs(command, &project_root, cli.json).await,
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
+        Command::Metrics { command } => services::operations::handle_metrics(command, &project_root, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -190,7 +212,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Trigger { .. }
                 | Command::Logs { .. }
                 | Command::Subject { .. }
-                | Command::Flavor { .. } => {
+                | Command::Flavor { .. }
+                | Command::Metrics { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }
@@ -203,6 +226,36 @@ struct VersionInfo {
     name: &'static str,
     binary: &'static str,
     version: &'static str,
+}
+
+fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
+    use services::metrics::CommandGroup;
+    match command {
+        Command::Version => CommandGroup::Version,
+        Command::Daemon { .. } => CommandGroup::Daemon,
+        Command::Agent { .. } => CommandGroup::Agent,
+        Command::Project { .. } => CommandGroup::Project,
+        Command::Queue { .. } => CommandGroup::Queue,
+        Command::Workflow { .. } => CommandGroup::Workflow,
+        Command::History { .. } => CommandGroup::History,
+        Command::Git { .. } => CommandGroup::Git,
+        Command::Skill { .. } => CommandGroup::Skill,
+        Command::Model { .. } => CommandGroup::Model,
+        Command::Pack { .. } => CommandGroup::Pack,
+        Command::Plugin { .. } => CommandGroup::Plugin,
+        Command::Runner { .. } => CommandGroup::Runner,
+        Command::Status => CommandGroup::Status,
+        Command::Output { .. } => CommandGroup::Output,
+        Command::Mcp { .. } => CommandGroup::Mcp,
+        Command::Web { .. } => CommandGroup::Web,
+        Command::Init(_) => CommandGroup::Init,
+        Command::Doctor(_) => CommandGroup::Doctor,
+        Command::Trigger { .. } => CommandGroup::Trigger,
+        Command::Logs { .. } => CommandGroup::Logs,
+        Command::Subject { .. } => CommandGroup::Subject,
+        Command::Flavor { .. } => CommandGroup::Flavor,
+        Command::Metrics { .. } => CommandGroup::Metrics,
+    }
 }
 
 #[cfg(test)]

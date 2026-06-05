@@ -241,6 +241,12 @@ animus
 │   ├── describe             Print a parsed flavor manifest (TOML by default, JSON via `--json`)
 │   └── install              Install the named flavor (`default` only in v0.5); equivalent to `animus plugin install-defaults --include-subjects --include-transports` plus the default `workflow_runner` and `queue` plugins
 │
+├── metrics                  Manage opt-in anonymous usage telemetry (v0.5.3)
+│   ├── status               Show enabled flag, install_id, pending event count, last-send timestamp
+│   ├── enable               Opt in to anonymous metrics (skips the first-run prompt re-show)
+│   ├── disable              Opt out and drop any buffered events
+│   └── flush                Force-send buffered events to the configured endpoint (debug)
+│
 └── help                     Print this message or the help of the given subcommand(s)
 ```
 

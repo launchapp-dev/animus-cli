@@ -638,11 +638,7 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
     let yaml_path = plugins_yaml_path()?;
     let mut config = load_plugins_yaml(&yaml_path)?;
     let key = serde_yaml::Value::String(plugin_name.clone());
-    let entry_for_binaries = config
-        .plugins
-        .get(&key)
-        .cloned()
-        .or_else(|| config.providers.get(&key).cloned());
+    let entry_for_binaries = config.plugins.get(&key).cloned().or_else(|| config.providers.get(&key).cloned());
     let removed_in_yaml = config.plugins.remove(&key).is_some() || config.providers.remove(&key).is_some();
     if removed_in_yaml {
         save_plugins_yaml(&yaml_path, &config)?;
@@ -1138,10 +1134,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             for name in &installed_binary_names {
                 binaries_seq.push(serde_yaml::Value::String(name.clone()));
             }
-            map.insert(
-                serde_yaml::Value::String("binaries".to_string()),
-                serde_yaml::Value::Sequence(binaries_seq),
-            );
+            map.insert(serde_yaml::Value::String("binaries".to_string()), serde_yaml::Value::Sequence(binaries_seq));
         }
         if let Some(m) = manifest.as_ref() {
             map.insert(serde_yaml::Value::String("name".to_string()), serde_yaml::Value::String(m.name.clone()));
@@ -2325,11 +2318,7 @@ async fn fetch_plugin_toml_for_release(owner: &str, repo: &str, tag: &str) -> Re
     let url = format!("https://raw.githubusercontent.com/{owner}/{repo}/{tag}/plugin.toml");
     let client =
         reqwest::Client::builder().user_agent(release_user_agent()).build().context("failed to build HTTP client")?;
-    let response = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {url}"))?;
+    let response = client.get(&url).send().await.with_context(|| format!("failed to GET {url}"))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
@@ -2872,7 +2861,35 @@ async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json
         force_rewrite_lockfile: args.force_rewrite_lockfile,
     })
     .await?;
+    let role = output
+        .manifest
+        .as_ref()
+        .map(|m| plugin_role_from_kind(&m.plugin_kind))
+        .unwrap_or(crate::services::metrics::PluginRole::Other);
+    crate::services::metrics::record_event(
+        std::path::Path::new(project_root),
+        crate::services::metrics::EventTags::PluginInstalled { plugin_kind: role },
+    );
     print_value(output, json)
+}
+
+/// Maps a plugin manifest `plugin_kind` string into the bounded
+/// [`crate::services::metrics::PluginRole`] enum. Unknown kinds collapse
+/// to `Other` — payloads must never carry a free-form string.
+fn plugin_role_from_kind(kind: &str) -> crate::services::metrics::PluginRole {
+    use crate::services::metrics::PluginRole;
+    match kind {
+        "subject_backend" | "task_backend" => PluginRole::SubjectBackend,
+        "provider" | "session_backend" => PluginRole::Provider,
+        "transport" | "transport_backend" => PluginRole::Transport,
+        "web_ui" => PluginRole::WebUi,
+        "trigger" | "trigger_backend" => PluginRole::Trigger,
+        "log_storage" | "log_storage_backend" => PluginRole::LogStorage,
+        "queue" => PluginRole::Queue,
+        "notifier" => PluginRole::Notifier,
+        "workflow_runner" => PluginRole::WorkflowRunner,
+        _ => PluginRole::Other,
+    }
 }
 
 /// Translate CLI flag combinations into the canonical [`PluginPolicyMode`].

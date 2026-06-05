@@ -6,6 +6,18 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- **`feat(cli)`: opt-in anonymous metrics with first-run prompt (v0.5.3).**
+  Adds a hard-opt-in event-counter telemetry surface. First-run prompt on
+  `animus init` and `animus daemon start`; persisted under
+  `.animus/config.json`. Events are bounded enums (`workflow_started`,
+  `workflow_completed`, `plugin_installed`, `daemon_started`, `error_hit`,
+  `cli_invoked`, `update_applied`) with closed tag enums — no code, no
+  file paths, no repo names, no prompts, no credentials reach the
+  payload. Disabled by default if no TTY is available. Kill switch:
+  `ANIMUS_METRICS_DISABLE=1`. New CLI surface: `animus metrics {status,
+  enable, disable, flush}`. Default endpoint
+  `https://metrics.animus.dev/v1/events` is a placeholder pending
+  product confirmation.
 - **`feat(config)`: agent profiles now accept `system_prompt_file` to load the
   system prompt from an external UTF-8 file.** The path resolves relative to
   the source YAML's parent directory (absolute paths supported). The contents
