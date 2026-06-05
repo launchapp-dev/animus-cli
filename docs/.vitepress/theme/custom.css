@@ -126,7 +126,27 @@ h1, h2, h3, h4 {
   font-weight: 400;
   letter-spacing: -0.01em;
   text-transform: uppercase;
-  font-size: 16px;
+  font-size: 17px;
+}
+
+/* Bigger brand mark in the navbar */
+.VPNavBarTitle .logo,
+.VPNavBar .logo {
+  width: 30px;
+  height: 30px;
+  margin-right: 10px;
+}
+
+/* Full-bleed custom landing (layout: page) — strip the doc container padding */
+.VPContent.is-home,
+.VPContent:has(.animus-landing) {
+  padding: 0 !important;
+}
+.VPPage:has(.animus-landing),
+.VPPage .animus-landing {
+  margin: 0 !important;
+  padding: 0 !important;
+  max-width: none !important;
 }
 
 /* Small uppercase labels — brutalist signature */
