@@ -81,6 +81,49 @@ mod tests {
             .collect()
     }
 
+    fn live_workspace_crates() -> Vec<String> {
+        let mut in_members = false;
+        let mut crates = Vec::new();
+        for line in read_doc("Cargo.toml").lines() {
+            let trimmed = line.trim();
+            if trimmed == "members = [" {
+                in_members = true;
+                continue;
+            }
+            if in_members && trimmed == "]" {
+                break;
+            }
+            if !in_members {
+                continue;
+            }
+            let Some(member) = trimmed.strip_prefix('"').and_then(|value| value.strip_suffix("\",")) else {
+                continue;
+            };
+            let Some(crate_name) = member.strip_prefix("crates/") else {
+                continue;
+            };
+            crates.push(crate_name.to_string());
+        }
+        crates
+    }
+
+    fn documented_workspace_crates() -> Vec<String> {
+        read_doc("docs/architecture/crate-map.md")
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if !trimmed.starts_with("| `") {
+                    return None;
+                }
+                let crate_name = trimmed.split('`').nth(1)?;
+                if crate_name.starts_with("crates/") {
+                    return None;
+                }
+                Some(crate_name.to_string())
+            })
+            .collect()
+    }
+
     #[test]
     fn agent_run_help_includes_actionable_field_descriptions() {
         let error = Cli::try_parse_from(["animus", "agent", "run", "--help"])
@@ -285,6 +328,27 @@ mod tests {
         assert_eq!(
             documented, actual,
             "docs/reference/cli/index.md top-level command tree drifted from Cli::command()"
+        );
+    }
+
+    #[test]
+    fn crate_map_matches_live_workspace_members() {
+        let mut live = live_workspace_crates();
+        let mut documented = documented_workspace_crates();
+
+        live.sort();
+        documented.sort();
+
+        assert_eq!(
+            documented, live,
+            "docs/architecture/crate-map.md drifted from Cargo.toml workspace membership"
+        );
+
+        let crate_map = read_doc("docs/architecture/crate-map.md");
+        assert!(
+            crate_map.contains(&format!("Cargo workspace of {} crates", live.len())),
+            "docs/architecture/crate-map.md should publish the live workspace crate count ({})",
+            live.len()
         );
     }
 }
