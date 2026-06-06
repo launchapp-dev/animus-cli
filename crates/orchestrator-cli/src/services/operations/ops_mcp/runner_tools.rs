@@ -27,20 +27,6 @@ impl AoMcpServer {
     }
 
     #[tool(
-        name = "animus.runner.restart-stats",
-        description = "Get runner restart statistics. Purpose: View runner uptime and restart history for reliability analysis. Prerequisites: None. Example: {}. Sequencing: Use if investigating stability issues, or after animus.runner.health shows problems.",
-        input_schema = ao_schema_for_type::<ProjectRootInput>()
-    )]
-    async fn ao_runner_restart_stats(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool(
-            "animus.runner.restart-stats",
-            vec!["runner".to_string(), "restart-stats".to_string()],
-            params.0.project_root,
-        )
-        .await
-    }
-
-    #[tool(
         name = "animus.runner.orphans-cleanup",
         description = "Clean up orphaned runner processes. Purpose: Remove runner processes that are no longer managed by the daemon. Prerequisites: Use animus.runner.orphans-detect first to identify orphaned run IDs. Example: {\"run_id\": [\"abc123\"]}. Sequencing: Use after animus.runner.orphans-detect to find orphan IDs, then animus.runner.health to verify cleanup.",
         input_schema = ao_schema_for_type::<RunnerOrphansCleanupInput>()

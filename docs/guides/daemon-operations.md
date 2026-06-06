@@ -181,14 +181,6 @@ Clean them up:
 animus runner orphans cleanup
 ```
 
-### Restart Statistics
-
-View how often the runner has restarted:
-
-```bash
-animus runner restart-stats
-```
-
 ## Common Patterns
 
 ### Start Daemon and Monitor

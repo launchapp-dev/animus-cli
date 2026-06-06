@@ -113,12 +113,7 @@ This clears `paused`, `blocked_at`, `blocked_reason`, and `blocked_by`. Never ha
    animus runner orphans cleanup
    ```
 
-4. Check restart statistics:
-   ```bash
-   animus runner restart-stats
-   ```
-
-5. Verify API keys are set:
+4. Verify API keys are set:
    ```bash
    animus model status
    ```
