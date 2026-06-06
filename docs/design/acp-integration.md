@@ -242,13 +242,14 @@ Animus can expose workflow execution plans through this structure, giving editor
 ┌─────────────────────────────────────────────────────┐
 │   Animus Core Services (Existing Architecture)       │
 │                                                      │
-│  • Orchestrator-core (workflow execution)            │
-│  • Orchestrator-config (session/mode config)         │
-│  • Orchestrator-git-ops (file operations)            │
+│  • orchestrator-core (workflow execution, file       │
+│    service hub, and persisted state coordination)    │
+│  • orchestrator-config (session/mode config)         │
+│  • orchestrator-cli MCP surfaces                     │
 │  • workflow_runner plugin + animus-runtime-shared    │
 │    (agent execution)                                 │
-│  • Orchestrator-providers (MCP tools)                │
-│  • Orchestrator-store (session persistence)          │
+│  • orchestrator-plugin-host (provider sessions and   │
+│    plugin routing)                                   │
 └─────────────────────────────────────────────────────┘
 ```
 
