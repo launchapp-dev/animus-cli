@@ -1,7 +1,7 @@
 # Working with Animus via MCP Tools
 
-This guide explains the current MCP tool surface exposed by `animus mcp serve`.
-Each tool maps to an `animus` CLI command and accepts JSON input.
+This guide explains the current MCP surface exposed by `animus mcp serve`.
+Each built-in tool maps to an `animus` CLI command and accepts JSON input.
 
 For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.md).
 
@@ -32,6 +32,26 @@ the target repo when present.
 The total includes both the CLI-shaped `animus.agent.memory.*` wrappers and the
 top-level `animus.memory.*` document-oriented surface composed into
 `animus mcp serve`.
+
+The same server also publishes 6 built-in read-only resources: 3 current
+`animus://project/*` URIs and 3 legacy `ao://project/*` aliases retained for
+older clients.
+
+## MCP Resources
+
+Alongside tools, MCP clients can enumerate and read these built-in resources:
+
+| Resource URI | Description |
+|---|---|
+| `animus://project/tasks` | Task index JSON |
+| `animus://project/requirements` | Requirement index JSON |
+| `animus://project/daemon-events` | Daemon event JSON (`?limit=N` supported) |
+| `ao://project/tasks` | Legacy alias for `animus://project/tasks` |
+| `ao://project/requirements` | Legacy alias for `animus://project/requirements` |
+| `ao://project/daemon-events` | Legacy alias for `animus://project/daemon-events` |
+
+The `ao://` aliases are still listed so clients built against older Animus
+resource URIs keep working without a migration step.
 
 ## Subject Operations
 

@@ -7,6 +7,9 @@ tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
 and returning structured results.
 
+The same server also exposes 6 built-in resources: 3 current `animus://`
+resources plus 3 legacy `ao://` aliases retained for v0.3 back-compat.
+
 Most project-scoped tools accept an optional `project_root` parameter to override
 the server default. Marketplace tools may omit `project_root` because they
 operate on the public registry. Plugin mutation tools that touch installed
@@ -20,6 +23,25 @@ families were removed. Use the unified `animus.subject.*` tools with `kind=task`
 default task/requirement plugins that own Animus-managed local state. External
 `subject_backend` plugins (Linear, Jira, GitHub Issues, etc.) plug into the same surface and
 can claim their own `kind`.
+
+---
+
+## MCP Resources (6 resources)
+
+`animus mcp serve` enables MCP resources in addition to tools. The built-in
+resource set is intentionally small and read-only:
+
+| Resource URI | Description |
+|---|---|
+| `animus://project/tasks` | Project task index as JSON |
+| `animus://project/requirements` | Project requirement index as JSON |
+| `animus://project/daemon-events` | Recent daemon events as JSON; supports `?limit=N` |
+| `ao://project/tasks` | Deprecated alias of `animus://project/tasks` |
+| `ao://project/requirements` | Deprecated alias of `animus://project/requirements` |
+| `ao://project/daemon-events` | Deprecated alias of `animus://project/daemon-events` |
+
+The `ao://` URIs are advertised and accepted so older clients that cached the
+pre-v0.4 resource names can still enumerate and read the same data.
 
 ---
 
