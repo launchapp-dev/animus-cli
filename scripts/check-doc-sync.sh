@@ -77,6 +77,10 @@ workspace_member_count() {
   ' "$cargo_manifest"
 }
 
+mcp_tool_count() {
+  extract_mcp_source | wc -l | tr -d ' '
+}
+
 check_surface() {
   local label="$1"
   local source_file="$2"
@@ -152,6 +156,7 @@ assert_not_contains \
   "workflow runner CI inventory"
 
 workspace_count="$(workspace_member_count)"
+mcp_count="$(mcp_tool_count)"
 assert_contains \
   "$repo_root/docs/architecture/full-system-architecture.md" \
   '`Cargo.toml` currently declares '"${workspace_count}"' workspace members.' \
@@ -168,5 +173,21 @@ assert_contains \
   "$repo_root/docs/design/acp-integration.md" \
   "- **Rust-only Cargo workspace** (${workspace_count} current workspace members)" \
   "ACP integration workspace count"
+assert_contains \
+  "$repo_root/docs/architecture/index.md" \
+  "Animus is a Rust-only agent orchestrator built as a Cargo workspace of ${workspace_count} crates." \
+  "architecture overview workspace count"
+assert_contains \
+  "$repo_root/docs/index.md" \
+  "details: ${mcp_count} built-in MCP tools for subject management, workflow control, plugin operations, output inspection, and runtime state mutations." \
+  "docs home MCP tool count"
+assert_contains \
+  "$repo_root/docs/guides/index.md" \
+  "Complete guide to all ${mcp_count} built-in MCP tools" \
+  "guides index MCP tool count"
+assert_contains \
+  "$repo_root/docs/guides/agents.md" \
+  "Animus currently exposes **${mcp_count} built-in MCP tools** across these families:" \
+  "agents guide MCP tool count"
 
 echo "CLI command tree and MCP tool reference are in sync."
