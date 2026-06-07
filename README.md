@@ -507,7 +507,7 @@ Animus v0.5 is a **kernel + flavors** architecture: a Rust workspace daemon kern
 - `orchestrator-notifications` — event streaming and notifications
 - `orchestrator-logging` — shared logging utilities
 - `orchestrator-plugin-host` / `animus-plugin-protocol` / `animus-plugin-runtime` — stdio plugin foundation
-- external [`launchapp-dev/animus-protocol`](https://github.com/launchapp-dev/animus-protocol) `v0.5.1` workspace — the four new plugin-kind protocol crates (`workflow_runner`, `queue`, `durable_store`, `memory_store`) plus the extended `animus-plugin-protocol`, the re-homed `animus-subject-protocol`, and the generic `animus-plugin-runtime` shell
+- external [`launchapp-dev/animus-protocol`](https://github.com/launchapp-dev/animus-protocol) `v0.5.x` protocol crates — the four new plugin-kind protocol crates (`workflow_runner`, `queue`, `durable_store`, `memory_store`) plus the extended `animus-plugin-protocol`, the re-homed `animus-subject-protocol`, and the generic `animus-plugin-runtime` shell
 - `crates/orchestrator-web-server/` — legacy in-repo web-server directory retained outside the current Cargo workspace
 
 **v0.5 reference plugins** (install via `animus plugin install-defaults`):
