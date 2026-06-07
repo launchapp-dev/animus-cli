@@ -125,7 +125,7 @@ dependencies = [
 [[package]]
 name = "animus-plugin-protocol"
 version = "0.1.14"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.0#70a2c1db5004ababa228df1dad347d5feb7a8a7b"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -135,7 +135,7 @@ dependencies = [
 [[package]]
 name = "animus-plugin-protocol"
 version = "0.1.14"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.7#6b98095bdc59b2a6f5aaaffe9f07693332210e19"
 dependencies = [
  "schemars 1.2.1",
  "serde",
@@ -162,7 +162,7 @@ version = "0.2.0"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
 dependencies = [
  "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
- "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-subject-protocol 0.1.14",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -225,9 +225,9 @@ dependencies = [
 [[package]]
 name = "animus-subject-protocol"
 version = "0.1.14"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.0#70a2c1db5004ababa228df1dad347d5feb7a8a7b"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
 dependencies = [
- "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.0)",
+ "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
  "anyhow",
  "async-trait",
  "chrono",
@@ -240,10 +240,10 @@ dependencies = [
 
 [[package]]
 name = "animus-subject-protocol"
-version = "0.1.14"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
+version = "0.1.15"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.7#6b98095bdc59b2a6f5aaaffe9f07693332210e19"
 dependencies = [
- "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.7)",
  "anyhow",
  "async-trait",
  "chrono",
@@ -275,7 +275,7 @@ version = "0.2.0"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1#9e4d4b4ccdf71472b2abee8e28586da5cbef8d73"
 dependencies = [
  "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
- "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-subject-protocol 0.1.14",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -2205,7 +2205,7 @@ dependencies = [
  "animus-runtime-shared",
  "animus-session-backend",
  "animus-subject-protocol 0.1.13",
- "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-subject-protocol 0.1.14",
  "animus-workflow-runner-protocol",
  "anyhow",
  "assert_cmd",
@@ -2305,7 +2305,7 @@ dependencies = [
  "animus-queue-protocol",
  "animus-runtime-shared",
  "animus-subject-protocol 0.1.13",
- "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.1)",
+ "animus-subject-protocol 0.1.14",
  "animus-workflow-runner-protocol",
  "anyhow",
  "async-trait",
@@ -2601,7 +2601,7 @@ dependencies = [
 name = "protocol"
 version = "0.1.0"
 dependencies = [
- "animus-subject-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.0)",
+ "animus-subject-protocol 0.1.15",
  "anyhow",
  "chrono",
  "dirs 6.0.0",

@@ -70,10 +70,8 @@ mod tests {
             .lines()
             .filter(|line| line.starts_with("├── ") || line.starts_with("└── "))
             .filter_map(|line| {
-                let entry = line
-                    .strip_prefix("├── ")
-                    .or_else(|| line.strip_prefix("└── "))
-                    .expect("prefix already checked");
+                let entry =
+                    line.strip_prefix("├── ").or_else(|| line.strip_prefix("└── ")).expect("prefix already checked");
                 entry.split_whitespace().next().map(str::to_string)
             })
             .collect()
@@ -258,7 +256,8 @@ mod tests {
         let mut command = Cli::command();
         command.build();
 
-        let mut actual: Vec<String> = command.get_subcommands().map(|subcommand| subcommand.get_name().to_string()).collect();
+        let mut actual: Vec<String> =
+            command.get_subcommands().map(|subcommand| subcommand.get_name().to_string()).collect();
         let mut documented = documented_top_level_commands();
 
         actual.sort();

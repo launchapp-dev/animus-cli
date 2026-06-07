@@ -37,7 +37,7 @@ categories = ["command-line-utilities", "development-tools"]
 animus-plugin-protocol = { path = "crates/animus-plugin-protocol" }
 animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
 animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
-animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.0" }
+animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.7" }
 protocol = { path = "crates/protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-notifications = { path = "crates/orchestrator-notifications" }
