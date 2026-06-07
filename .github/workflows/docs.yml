@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
     paths:
+      - 'Cargo.toml'
       - 'docs/**'
       - 'package.json'
       - 'package-lock.json'
@@ -15,6 +16,7 @@ on:
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
+      - 'Cargo.toml'
       - 'docs/**'
       - 'package.json'
       - 'package-lock.json'

@@ -35,6 +35,23 @@ jobs:
       - name: Check formatting
         run: cargo fmt --all -- --check
 
+  docs-sync:
+    name: docs-sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install docs dependencies
+        run: npm ci
+      - name: Check docs sync
+        run: npm run docs:check-sync
+
   clippy:
     name: clippy
     runs-on: ubuntu-latest
