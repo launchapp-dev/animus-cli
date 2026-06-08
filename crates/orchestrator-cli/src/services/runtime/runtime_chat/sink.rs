@@ -42,8 +42,17 @@ pub(crate) enum ChatStreamEvent {
     Thinking { text: String },
     /// Agent invoked a tool.
     ToolCall { tool_name: String, arguments: serde_json::Value },
-    /// A tool returned a result.
-    ToolResult { tool_name: String, success: bool },
+    /// A tool returned a result. `output` carries the full tool result the
+    /// provider surfaced (file contents, command output, structured JSON)
+    /// so a consumer can stream everything the agent did, not just whether
+    /// the call succeeded. Omitted from the wire when the provider gave no
+    /// output payload.
+    ToolResult {
+        tool_name: String,
+        success: bool,
+        #[serde(skip_serializing_if = "serde_json::Value::is_null")]
+        output: serde_json::Value,
+    },
     /// Provider metadata frame (usage / cost).
     Metadata {
         #[serde(skip_serializing_if = "Option::is_none")]

@@ -363,6 +363,7 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
     let mut usage = None;
     let mut stale_session = false;
     let mut fatal_error = None;
+    let mut last_tool_name: Option<String> = None;
 
     while let Some(event) = run.events.recv().await {
         match event {
@@ -394,10 +395,20 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
                 sink.emit(&ChatStreamEvent::Thinking { text: t })?;
             }
             SessionEvent::ToolCall { tool_name, arguments, .. } => {
+                last_tool_name = Some(tool_name.clone());
                 sink.emit(&ChatStreamEvent::ToolCall { tool_name, arguments })?;
             }
-            SessionEvent::ToolResult { tool_name, success, .. } => {
-                sink.emit(&ChatStreamEvent::ToolResult { tool_name, success })?;
+            SessionEvent::ToolResult { tool_name, success, output } => {
+                // Some providers (e.g. the claude parser) put the tool_use_id
+                // in `tool_name` on results because the upstream tool_result
+                // references the call by id, not name. Prefer the preceding
+                // ToolCall's human name when this looks like an id so the
+                // stream reads cleanly; fall back to whatever the provider gave.
+                let display_name = match &last_tool_name {
+                    Some(name) if tool_name.starts_with("toolu_") || tool_name.starts_with("call_") => name.clone(),
+                    _ => tool_name,
+                };
+                sink.emit(&ChatStreamEvent::ToolResult { tool_name: display_name, success, output })?;
             }
             SessionEvent::Artifact { .. } => {}
             SessionEvent::Metadata { metadata } => {
