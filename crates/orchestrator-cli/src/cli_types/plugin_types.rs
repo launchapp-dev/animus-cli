@@ -32,7 +32,10 @@ pub(crate) enum PluginCommand {
     Search(PluginSearchArgs),
     /// Browse the public Animus plugin registry, grouped by kind.
     Browse(PluginBrowseArgs),
-    /// Update one or all installed release-source plugins to the latest tag.
+    /// Bulk-update installed release-source plugins to the recommended pins
+    /// declared in `default-install.json`. Selectors: `--all`, `--kind <KIND>`,
+    /// or `--name <NAME>` (exactly one required). `--check` previews the diff
+    /// without writing; `--yes` skips the confirmation prompt.
     Update(PluginUpdateArgs),
     /// Install the standard set of provider plugins from public GitHub releases
     /// (claude, codex, gemini, opencode, oai). Skips plugins that are already
@@ -172,21 +175,52 @@ pub(crate) struct PluginBrowseArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct PluginUpdateArgs {
-    /// Optional plugin name. When omitted, all installed release-source plugins are updated.
-    #[arg(value_name = "NAME")]
-    pub(crate) name: Option<String>,
-    /// Pin to a specific tag instead of resolving the latest release.
+    /// Legacy positional plugin name. Equivalent to `--name <NAME>`. Retained
+    /// so v0.5.7 scripts (`animus plugin update <NAME>`) still work.
+    #[arg(value_name = "NAME", conflicts_with_all = ["all", "kind", "name_flag"])]
+    pub(crate) name_positional: Option<String>,
+    /// Update every installed release-source plugin to its recommended pin
+    /// (from `default-install.json`).
+    #[arg(long, default_value_t = false, conflicts_with_all = ["kind", "name_flag"])]
+    pub(crate) all: bool,
+    /// Update every installed release-source plugin whose recommended pin lives
+    /// under the named kind in `default-install.json`. Accepts the
+    /// canonical-plural section names (`providers`, `subjects`,
+    /// `workflow_runners`, `queues`, `notifiers`, `transports`, `oai_agent`)
+    /// or the singular plugin_kind values (`provider`, `subject_backend`,
+    /// `workflow_runner`, `queue`, `notifier`, `transport_backend`).
+    #[arg(long, value_name = "KIND", conflicts_with_all = ["all", "name_flag"])]
+    pub(crate) kind: Option<String>,
+    /// Update a single installed plugin by name (matches the lockfile /
+    /// `plugins.yaml` entry key — i.e. the `name_override` if one was set at
+    /// install, otherwise the manifest name).
+    #[arg(long = "name", value_name = "NAME", conflicts_with_all = ["all", "kind"])]
+    pub(crate) name_flag: Option<String>,
+    /// Print the diff (would update X v1 -> v2) and exit 0 without writing
+    /// anything. Mutually exclusive with `--yes`.
+    #[arg(long, default_value_t = false, conflicts_with = "yes")]
+    pub(crate) check: bool,
+    /// Skip the confirmation prompt and proceed with the install.
+    #[arg(long, default_value_t = false)]
+    pub(crate) yes: bool,
+    /// Pin to a specific tag instead of resolving the recommended pin from
+    /// `default-install.json`. Only valid with `--name`.
     #[arg(long, value_name = "TAG")]
     pub(crate) tag: Option<String>,
-    /// Show what would change without performing the install.
+    /// Legacy alias for `--check`. Retained so v0.5.7 scripts still work.
     #[arg(long, default_value_t = false)]
     pub(crate) dry_run: bool,
     /// Emit results as JSON.
     #[arg(long, default_value_t = false)]
     pub(crate) json: bool,
-    /// Force reinstall even if the installed tag matches the target tag.
+    /// Reinstall even if the installed tag already matches the recommended pin.
     #[arg(long, default_value_t = false)]
     pub(crate) force: bool,
+    /// After updating, attempt to restart the daemon (best-effort) so the new
+    /// binaries are picked up. Default off — the operator usually wants to
+    /// schedule the restart themselves.
+    #[arg(long, default_value_t = false)]
+    pub(crate) restart_daemon: bool,
 }
 
 #[derive(Debug, Args)]

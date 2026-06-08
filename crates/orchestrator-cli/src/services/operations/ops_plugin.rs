@@ -7,7 +7,7 @@ mod signing;
 pub(crate) use control_routing::build_plugin_routing;
 pub(crate) use marketplace::{
     run_plugin_browse, run_plugin_search, run_plugin_update, PluginBrowseRequest, PluginSearchRequest,
-    PluginUpdateRequest,
+    PluginUpdateRequest, PluginUpdateSelector,
 };
 #[allow(unused_imports)]
 pub(crate) use signing::{
@@ -276,7 +276,7 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
         },
         PluginCommand::Search(args) => marketplace::handle_plugin_search(args).await,
         PluginCommand::Browse(args) => marketplace::handle_plugin_browse(args).await,
-        PluginCommand::Update(args) => marketplace::handle_plugin_update(args).await,
+        PluginCommand::Update(args) => marketplace::handle_plugin_update(args, project_root, json).await,
         PluginCommand::InstallDefaults(args) => handle_plugin_install_defaults(args, project_root).await,
         PluginCommand::Lock(cmd) => handle_plugin_lock(cmd, project_root).await,
         PluginCommand::Doctor(args) => handle_plugin_doctor(args, project_root, json).await,

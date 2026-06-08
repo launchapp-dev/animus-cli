@@ -3,16 +3,22 @@
 //! Provides three CLI commands and matching reusable runners:
 //! * `animus plugin search` — substring + filter search against the registry index
 //! * `animus plugin browse` — grouped listing (installed vs available)
-//! * `animus plugin update` — re-resolve latest release tag for installed release-source plugins
+//! * `animus plugin update` — bulk-update installed plugins to the recommended
+//!   pins declared in `crates/orchestrator-cli/config/default-install.json`,
+//!   with `--all` / `--kind <KIND>` / `--name <NAME>` selectors, a `--check`
+//!   diff preview, and `--yes` for unattended runs.
 //!
-//! All three share a registry fetch + on-disk cache layer (`~/.cache/animus/plugin-registry.json`,
-//! refreshed every 6 hours unless `--no-cache` is passed).
+//! Search + browse share a registry fetch + on-disk cache layer
+//! (`~/.cache/animus/plugin-registry.json`, refreshed every 6 hours unless
+//! `--no-cache` is passed). Update bypasses the registry entirely — it reads
+//! the bundled `default-install.json` as the source of truth so the update
+//! surface stays consistent with `animus plugin install-defaults`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use orchestrator_plugin_host::{legacy_plugins_registry_path, plugins_registry_path};
 use serde::{Deserialize, Serialize};
 
@@ -340,210 +346,549 @@ pub(crate) async fn handle_plugin_browse(args: PluginBrowseArgs) -> Result<()> {
 
 // =================== Update ===================
 
-#[derive(Debug, Clone, Default)]
+/// Selector for `animus plugin update`. Exactly one variant is required.
+#[derive(Debug, Clone)]
+pub(crate) enum PluginUpdateSelector {
+    /// All installed release-source plugins.
+    All,
+    /// Every installed plugin whose recommended pin lives under this section
+    /// of `default-install.json`.
+    Kind(String),
+    /// One installed plugin by name (the `plugins.yaml` / lockfile key).
+    Name(String),
+}
+
+#[derive(Debug, Clone)]
 pub(crate) struct PluginUpdateRequest {
-    pub(crate) name: Option<String>,
-    pub(crate) tag: Option<String>,
-    pub(crate) dry_run: bool,
+    pub(crate) selector: PluginUpdateSelector,
+    pub(crate) tag_override: Option<String>,
+    pub(crate) check: bool,
     pub(crate) force: bool,
-    pub(crate) registry_url: String,
-    pub(crate) no_cache: bool,
+    pub(crate) project_root: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct PluginUpdateRow {
     pub(crate) name: String,
     pub(crate) installed_tag: Option<String>,
-    pub(crate) target_tag: Option<String>,
+    pub(crate) recommended_tag: Option<String>,
     pub(crate) origin: Option<String>,
-    pub(crate) status: &'static str,
-    pub(crate) detail: Option<String>,
+    /// Action that would be taken (or was taken when `--check` is off):
+    /// `update`, `skip`, `failed`, or `would_update` (dry-run only).
+    pub(crate) action: &'static str,
+    /// Free-form note ("ahead of pin", "not in default-install", "already current", ...).
+    pub(crate) note: Option<String>,
+    /// `default-install.json` section the recommended pin came from
+    /// (`providers`, `subjects`, ...). `None` when the slug has no matching
+    /// recommended pin.
+    pub(crate) recommended_kind: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) install: Option<PluginInstallOutput>,
 }
 
 #[derive(Debug, Serialize)]
 pub(crate) struct PluginUpdateOutput {
-    pub(crate) dry_run: bool,
+    pub(crate) check: bool,
     pub(crate) considered: usize,
     pub(crate) updated: usize,
+    pub(crate) failed: usize,
     pub(crate) results: Vec<PluginUpdateRow>,
 }
 
-pub(crate) async fn run_plugin_update(req: PluginUpdateRequest) -> Result<PluginUpdateOutput> {
-    let installed = read_installed_index().context("failed to read installed plugin registry")?;
-    if installed.is_empty() {
-        return Ok(PluginUpdateOutput { dry_run: req.dry_run, considered: 0, updated: 0, results: vec![] });
+/// Recommended pins parsed from `crates/orchestrator-cli/config/default-install.json`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct RecommendedPins {
+    /// `owner/repo` -> (`tag`, `default-install.json section`).
+    pub(crate) by_slug: BTreeMap<String, (String, String)>,
+}
+
+impl RecommendedPins {
+    pub(crate) fn parse(raw_json: &str) -> Result<Self> {
+        let value: serde_json::Value =
+            serde_json::from_str(raw_json).context("default-install.json is not valid JSON")?;
+        let mut by_slug: BTreeMap<String, (String, String)> = BTreeMap::new();
+        if let Some(map) = value.get("plugins").and_then(|p| p.as_object()) {
+            for (section, entries) in map {
+                let Some(arr) = entries.as_array() else { continue };
+                for entry in arr {
+                    let Some(repo) = entry.get("repo").and_then(|v| v.as_str()) else { continue };
+                    let Some(tag) = entry.get("tag").and_then(|v| v.as_str()) else { continue };
+                    by_slug.insert(repo.to_string(), (tag.to_string(), section.to_string()));
+                }
+            }
+        }
+        Ok(RecommendedPins { by_slug })
     }
 
-    let mut candidates: Vec<InstalledPlugin> = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        Some(name) => {
-            let entry = installed
-                .get(name)
-                .cloned()
-                .ok_or_else(|| invalid_input_error(format!("plugin '{name}' is not installed")))?;
-            vec![entry]
+    pub(crate) fn lookup(&self, slug: &str) -> Option<&(String, String)> {
+        self.by_slug.get(slug)
+    }
+}
+
+const DEFAULT_INSTALL_MANIFEST_JSON: &str = include_str!("../../../../config/default-install.json");
+
+// TODO(codex-p2): `default-install.json` is currently a SUBSET of the slugs
+// install-defaults actually installs (it omits e.g. animus-subject-linear,
+// animus-transport-http, animus-web-ui, gemini/opencode/oai-runner). Those
+// slugs get reported as "not in default-install" by `animus plugin update`
+// and are never bumped here. Bringing them under update requires either
+// expanding the JSON file or merging with `orchestrator_core::plugin_registry`
+// + `flavors/default.toml`. Tracked as a v0.5.9 follow-up so this v0.5.8 PR
+// stays scoped to the surface the task asked for.
+pub(crate) fn load_recommended_pins() -> Result<RecommendedPins> {
+    RecommendedPins::parse(DEFAULT_INSTALL_MANIFEST_JSON)
+}
+
+/// Normalize a `default-install.json` section name or singular plugin_kind
+/// to the canonical section key (`providers`, `subjects`, ...). Returns the
+/// input unchanged for unknown values so the caller can surface a clear error.
+pub(crate) fn normalize_kind_selector(kind: &str) -> String {
+    match kind.trim().to_ascii_lowercase().as_str() {
+        // Singular plugin_kind aliases users see in `animus plugin list`.
+        "provider" => "providers".to_string(),
+        "subject_backend" | "subject" => "subjects".to_string(),
+        "workflow_runner" => "workflow_runners".to_string(),
+        "queue" => "queues".to_string(),
+        "notifier" => "notifiers".to_string(),
+        "transport_backend" | "transport" => "transports".to_string(),
+        // Canonical section names plus a couple of forgivable plurals.
+        "providers" | "subjects" | "workflow_runners" | "queues" | "notifiers" | "transports" | "oai_agent" => {
+            kind.trim().to_ascii_lowercase()
         }
-        None => installed.values().cloned().collect(),
+        other => other.to_string(),
+    }
+}
+
+/// Parse a release tag into a comparable semver, stripping a leading `v`.
+fn parse_tag(tag: &str) -> Option<semver::Version> {
+    let trimmed = tag.trim();
+    let stripped = trimmed.strip_prefix('v').unwrap_or(trimmed);
+    semver::Version::parse(stripped).ok()
+}
+
+/// Compare two release tags as semver. Returns `None` when either side fails
+/// to parse — callers fall back to string equality.
+fn compare_tags(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+    Some(parse_tag(a)?.cmp(&parse_tag(b)?))
+}
+
+#[derive(Debug, Clone)]
+struct UpdatePlan {
+    entry: InstalledPlugin,
+    repo_slug: Option<String>,
+    recommended_tag: Option<String>,
+    recommended_kind: Option<String>,
+    action: &'static str,
+    note: Option<String>,
+}
+
+fn build_update_plan(
+    installed: &BTreeMap<String, InstalledPlugin>,
+    pins: &RecommendedPins,
+    selector: &PluginUpdateSelector,
+    tag_override: Option<&str>,
+    force: bool,
+) -> Result<Vec<UpdatePlan>> {
+    let normalized_kind = match selector {
+        PluginUpdateSelector::Kind(k) => Some(normalize_kind_selector(k)),
+        _ => None,
     };
-    candidates.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let registry_url = if req.registry_url.trim().is_empty() {
-        DEFAULT_PLUGIN_REGISTRY_URL.to_string()
-    } else {
-        req.registry_url.clone()
+    if let PluginUpdateSelector::Name(name) = selector {
+        if installed.get(name).is_none() {
+            return Err(invalid_input_error(format!("plugin '{name}' is not installed")));
+        }
+    }
+
+    let mut plans: Vec<UpdatePlan> = Vec::new();
+    let entries: Vec<&InstalledPlugin> = match selector {
+        PluginUpdateSelector::Name(n) => vec![installed.get(n).expect("checked above")],
+        PluginUpdateSelector::All | PluginUpdateSelector::Kind(_) => installed.values().collect(),
     };
-    let registry = fetch_registry_index(&registry_url, req.no_cache).await.ok();
-    let by_name: BTreeMap<String, RegistryPluginEntry> =
-        registry.map(|idx| idx.plugins.into_iter().map(|p| (p.name.clone(), p)).collect()).unwrap_or_default();
 
-    let mut results: Vec<PluginUpdateRow> = Vec::new();
-    let mut updated = 0usize;
-
-    for installed_entry in candidates {
+    for installed_entry in entries {
         let source_kind = installed_entry.source_kind.as_deref().unwrap_or("");
         if source_kind != "release" {
-            results.push(PluginUpdateRow {
-                name: installed_entry.name.clone(),
-                installed_tag: installed_entry.release_tag.clone(),
-                target_tag: None,
-                origin: installed_entry.origin.clone(),
-                status: "skipped",
-                detail: Some(format!("source_kind={source_kind} (only `release` plugins can be updated)")),
-                install: None,
-            });
-            continue;
-        }
-
-        let repo_slug = match origin_to_repo_slug(installed_entry.origin.as_deref()) {
-            Some(slug) => slug,
-            None => {
-                results.push(PluginUpdateRow {
-                    name: installed_entry.name.clone(),
-                    installed_tag: installed_entry.release_tag.clone(),
-                    target_tag: None,
-                    origin: installed_entry.origin.clone(),
-                    status: "skipped",
-                    detail: Some("missing owner/repo in origin field".to_string()),
-                    install: None,
-                });
+            // Per spec: NEVER touch a plugin installed from a non-default
+            // source. When the user filtered by `--kind`, suppress these
+            // entries entirely — they have no recommended_kind to match.
+            // `--name` and `--all` still surface them so the operator sees
+            // why the plugin was untouched.
+            if normalized_kind.is_some() {
                 continue;
             }
-        };
+            let note = if source_kind.is_empty() {
+                "not from registry (no source_kind)".to_string()
+            } else {
+                format!("not from registry (source_kind={source_kind})")
+            };
+            plans.push(UpdatePlan {
+                entry: installed_entry.clone(),
+                repo_slug: None,
+                recommended_tag: None,
+                recommended_kind: None,
+                action: "skip",
+                note: Some(note),
+            });
+            continue;
+        }
 
-        let target_tag = match req.tag.clone() {
-            Some(t) => Some(t),
-            None => by_name.get(&installed_entry.name).and_then(|p| p.latest_tag.clone()),
-        };
+        let repo_slug = origin_to_repo_slug(installed_entry.origin.as_deref());
+        let recommended = repo_slug.as_deref().and_then(|slug| pins.lookup(slug)).cloned();
+        let recommended_kind = recommended.as_ref().map(|(_, k)| k.clone());
+        let recommended_tag = recommended.as_ref().map(|(t, _)| t.clone());
 
-        let installed_tag = installed_entry.release_tag.clone();
-        let needs_update = match (&installed_tag, &target_tag) {
-            (Some(installed), Some(target)) => installed != target || req.force,
-            (None, Some(_)) => true,
-            (_, None) => req.force,
-        };
+        if let Some(needle) = normalized_kind.as_deref() {
+            match recommended_kind.as_deref() {
+                Some(k) if k == needle => {}
+                _ => continue,
+            }
+        }
 
-        if !needs_update {
+        // Resolve target_tag: explicit --tag override (only valid with --name)
+        // wins, else the recommended pin.
+        let target_tag = tag_override.map(|s| s.to_string()).or(recommended_tag.clone());
+
+        let installed_tag = installed_entry.release_tag.as_deref();
+        let (action, note) = decide_action(installed_tag, target_tag.as_deref(), recommended_tag.is_some(), force);
+
+        plans.push(UpdatePlan {
+            entry: installed_entry.clone(),
+            repo_slug,
+            recommended_tag: target_tag,
+            recommended_kind,
+            action,
+            note,
+        });
+    }
+
+    plans.sort_by(|a, b| a.entry.name.cmp(&b.entry.name));
+    Ok(plans)
+}
+
+fn decide_action(
+    installed_tag: Option<&str>,
+    target_tag: Option<&str>,
+    has_recommendation: bool,
+    force: bool,
+) -> (&'static str, Option<String>) {
+    match (installed_tag, target_tag) {
+        (_, None) => {
+            if has_recommendation {
+                ("skip", Some("recommended pin missing release tag".to_string()))
+            } else {
+                // `force` is intentionally ignored here: without a target tag
+                // there is nothing to reinstall to.
+                let _ = force;
+                ("skip", Some("not in default-install".to_string()))
+            }
+        }
+        (None, Some(_)) => ("update", None),
+        (Some(installed), Some(target)) => {
+            if installed == target {
+                if force {
+                    ("update", Some("forced reinstall".to_string()))
+                } else {
+                    ("skip", Some("current".to_string()))
+                }
+            } else {
+                match compare_tags(installed, target) {
+                    Some(std::cmp::Ordering::Greater) => {
+                        if force {
+                            ("update", Some("forced downgrade".to_string()))
+                        } else {
+                            ("skip", Some("ahead of pin".to_string()))
+                        }
+                    }
+                    Some(std::cmp::Ordering::Less) | Some(std::cmp::Ordering::Equal) => ("update", None),
+                    None => ("update", Some("non-semver tag; falling back to string compare".to_string())),
+                }
+            }
+        }
+    }
+}
+
+pub(crate) async fn run_plugin_update(req: PluginUpdateRequest) -> Result<PluginUpdateOutput> {
+    // Validate request shape BEFORE touching the filesystem so callers get
+    // deterministic errors regardless of whether plugins.yaml exists yet.
+    if req.tag_override.is_some() && !matches!(req.selector, PluginUpdateSelector::Name(_)) {
+        return Err(invalid_input_error("--tag <TAG> is only valid with --name <NAME>"));
+    }
+
+    let installed = read_installed_index().context("failed to read installed plugin registry")?;
+    let pins = load_recommended_pins()?;
+
+    if let PluginUpdateSelector::Name(_) = &req.selector {
+        // valid even when registry is empty — explicit error surfaces below
+    } else if installed.is_empty() {
+        return Ok(PluginUpdateOutput { check: req.check, considered: 0, updated: 0, failed: 0, results: vec![] });
+    }
+
+    let plans = build_update_plan(&installed, &pins, &req.selector, req.tag_override.as_deref(), req.force)?;
+
+    let mut results: Vec<PluginUpdateRow> = Vec::with_capacity(plans.len());
+    let mut updated = 0usize;
+    let mut failed = 0usize;
+
+    for plan in plans {
+        if plan.action == "skip" {
             results.push(PluginUpdateRow {
-                name: installed_entry.name.clone(),
-                installed_tag,
-                target_tag,
-                origin: installed_entry.origin.clone(),
-                status: "current",
-                detail: Some("installed tag matches target".to_string()),
+                name: plan.entry.name.clone(),
+                installed_tag: plan.entry.release_tag.clone(),
+                recommended_tag: plan.recommended_tag.clone(),
+                origin: plan.entry.origin.clone(),
+                action: "skip",
+                note: plan.note,
+                recommended_kind: plan.recommended_kind,
                 install: None,
             });
             continue;
         }
 
-        if req.dry_run {
+        if req.check {
             results.push(PluginUpdateRow {
-                name: installed_entry.name.clone(),
-                installed_tag,
-                target_tag,
-                origin: installed_entry.origin.clone(),
-                status: "would_update",
-                detail: None,
+                name: plan.entry.name.clone(),
+                installed_tag: plan.entry.release_tag.clone(),
+                recommended_tag: plan.recommended_tag.clone(),
+                origin: plan.entry.origin.clone(),
+                action: "would_update",
+                note: plan.note,
+                recommended_kind: plan.recommended_kind,
                 install: None,
             });
             continue;
         }
 
-        let source = match target_tag.as_deref() {
-            Some(tag) => format!("{repo_slug}@{tag}"),
-            None => repo_slug.clone(),
+        let Some(slug) = plan.repo_slug.clone() else {
+            results.push(PluginUpdateRow {
+                name: plan.entry.name.clone(),
+                installed_tag: plan.entry.release_tag.clone(),
+                recommended_tag: plan.recommended_tag.clone(),
+                origin: plan.entry.origin.clone(),
+                action: "skip",
+                note: Some("origin missing owner/repo".to_string()),
+                recommended_kind: plan.recommended_kind,
+                install: None,
+            });
+            continue;
         };
+
+        let source = match plan.recommended_tag.as_deref() {
+            Some(tag) => format!("{slug}@{tag}"),
+            None => slug.clone(),
+        };
+        // Only bypass the publisher TOFU prompt + provider-shadow guard when
+        // the slug is one of the curated `default-install.json` pins. For
+        // arbitrary `--name --tag` overrides against a plugin that is NOT in
+        // the curated list, fall back to the regular install policy so the
+        // user re-confirms trust for the publisher.
+        let is_curated_pin = plan.recommended_kind.is_some();
         let install_request = PluginInstallRequest {
             source: Some(source),
-            name: Some(installed_entry.name.clone()),
+            name: Some(plan.entry.name.clone()),
             force: true,
+            project_root: req.project_root.clone(),
+            allow_org: if is_curated_pin { vec!["launchapp-dev".to_string()] } else { Vec::new() },
+            yes: is_curated_pin,
+            allow_shadow_builtin: is_curated_pin,
             ..Default::default()
         };
+
         match run_plugin_install(install_request).await {
             Ok(output) => {
                 let resolved_tag = output.release_tag.clone();
                 updated += 1;
                 results.push(PluginUpdateRow {
-                    name: installed_entry.name.clone(),
-                    installed_tag,
-                    target_tag: resolved_tag.or(target_tag),
-                    origin: installed_entry.origin.clone(),
-                    status: "updated",
-                    detail: None,
+                    name: plan.entry.name.clone(),
+                    installed_tag: plan.entry.release_tag.clone(),
+                    recommended_tag: resolved_tag.or(plan.recommended_tag),
+                    origin: plan.entry.origin.clone(),
+                    action: "update",
+                    note: plan.note,
+                    recommended_kind: plan.recommended_kind,
                     install: Some(output),
                 });
             }
             Err(err) => {
+                failed += 1;
                 results.push(PluginUpdateRow {
-                    name: installed_entry.name.clone(),
-                    installed_tag,
-                    target_tag,
-                    origin: installed_entry.origin.clone(),
-                    status: "failed",
-                    detail: Some(err.to_string()),
+                    name: plan.entry.name.clone(),
+                    installed_tag: plan.entry.release_tag.clone(),
+                    recommended_tag: plan.recommended_tag,
+                    origin: plan.entry.origin.clone(),
+                    action: "failed",
+                    note: Some(err.to_string()),
+                    recommended_kind: plan.recommended_kind,
                     install: None,
                 });
             }
         }
     }
 
-    Ok(PluginUpdateOutput { dry_run: req.dry_run, considered: results.len(), updated, results })
+    Ok(PluginUpdateOutput { check: req.check, considered: results.len(), updated, failed, results })
 }
 
-pub(crate) async fn handle_plugin_update(args: PluginUpdateArgs) -> Result<()> {
-    let json = args.json;
-    let dry_run = args.dry_run;
-    let registry_url = DEFAULT_PLUGIN_REGISTRY_URL.to_string();
-    let output = run_plugin_update(PluginUpdateRequest {
-        name: args.name,
-        tag: args.tag,
-        dry_run,
-        force: args.force,
-        registry_url,
-        no_cache: false,
-    })
-    .await?;
-    if json {
-        return print_value(output, true);
+fn prompt_confirm(prompt: &str) -> Result<bool> {
+    use std::io::{IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return Err(invalid_input_error(format!(
+            "{prompt} aborted: stdin is not a terminal. Re-run with --yes for unattended use, \
+             or --check to preview without applying."
+        )));
     }
-    if output.considered == 0 {
-        println!("no installed release-source plugins found");
-        return Ok(());
-    }
-    println!(
-        "{}: considered {}, updated {}",
-        if output.dry_run { "dry-run" } else { "update" },
-        output.considered,
-        output.updated
-    );
+    eprint!("{prompt} [y/N]: ");
+    let _ = std::io::stderr().flush();
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer).context("failed to read confirmation from stdin")?;
+    let normalized = answer.trim().to_ascii_lowercase();
+    Ok(normalized == "y" || normalized == "yes")
+}
+
+fn print_diff_table(output: &PluginUpdateOutput) {
+    println!("{:<34} {:<10} {:<12} Action", "Plugin", "Current", "Recommended");
     for row in &output.results {
         let installed = row.installed_tag.as_deref().unwrap_or("--");
-        let target = row.target_tag.as_deref().unwrap_or("--");
-        println!("  {:<32} {} -> {}  [{}]", row.name, installed, target, row.status);
-        if let Some(detail) = row.detail.as_deref() {
-            println!("    {}", detail);
+        let recommended = row.recommended_tag.as_deref().unwrap_or("--");
+        let action_label: String = match row.action {
+            "skip" => match row.note.as_deref() {
+                Some(note) => format!("skip ({note})"),
+                None => "skip".to_string(),
+            },
+            "would_update" => "update".to_string(),
+            "update" => "updated".to_string(),
+            "failed" => "failed".to_string(),
+            other => other.to_string(),
+        };
+        println!("{:<34} {:<10} {:<12} {}", row.name, installed, recommended, action_label);
+    }
+}
+
+pub(crate) async fn handle_plugin_update(args: PluginUpdateArgs, project_root: &str, root_json: bool) -> Result<()> {
+    let json = args.json || root_json;
+    let check = args.check || args.dry_run;
+
+    // Resolve the selector: exactly one of --all / --kind / --name (or the
+    // legacy positional NAME) is required.
+    let selector_count = [args.all, args.kind.is_some(), args.name_flag.is_some(), args.name_positional.is_some()]
+        .iter()
+        .filter(|b| **b)
+        .count();
+    if selector_count == 0 {
+        return Err(invalid_input_error(
+            "animus plugin update requires exactly one of --all, --kind <KIND>, or --name <NAME>",
+        ));
+    }
+    if selector_count > 1 {
+        return Err(invalid_input_error(
+            "animus plugin update accepts only one of --all, --kind <KIND>, or --name <NAME> at a time",
+        ));
+    }
+
+    let selector = if args.all {
+        PluginUpdateSelector::All
+    } else if let Some(kind) = args.kind {
+        PluginUpdateSelector::Kind(kind)
+    } else if let Some(name) = args.name_flag {
+        PluginUpdateSelector::Name(name)
+    } else {
+        PluginUpdateSelector::Name(args.name_positional.expect("checked above"))
+    };
+
+    // First pass: compute the diff so the operator can preview it before any
+    // mutation. We honor --check here.
+    let preview = run_plugin_update(PluginUpdateRequest {
+        selector: selector.clone(),
+        tag_override: args.tag.clone(),
+        check: true,
+        force: args.force,
+        project_root: Some(project_root.to_string()),
+    })
+    .await?;
+
+    if json {
+        // In JSON mode we still preview-then-apply, but emit a single envelope
+        // at the end. If --check, emit the preview envelope as-is.
+        if check {
+            return print_value(preview, true);
+        }
+    } else {
+        if preview.results.is_empty() {
+            println!("no installed release-source plugins matched the selector");
+            return Ok(());
+        }
+        print_diff_table(&preview);
+    }
+
+    if check {
+        if !json {
+            println!();
+            println!("--check: no changes written");
+        }
+        return Ok(());
+    }
+
+    let pending_updates = preview.results.iter().filter(|r| r.action == "would_update").count();
+    if pending_updates == 0 {
+        if !json {
+            println!();
+            println!("nothing to update");
+        } else {
+            print_value(preview, true)?;
+        }
+        return Ok(());
+    }
+
+    if !args.yes && !json {
+        println!();
+        let prompt = format!("apply update to {pending_updates} plugin(s)?");
+        if !prompt_confirm(&prompt)? {
+            println!("aborted by user");
+            return Ok(());
+        }
+    } else if !args.yes && json {
+        // JSON callers MUST pass --yes; we can't prompt without polluting
+        // stdout. Refuse loudly so scripts don't silently no-op.
+        return Err(invalid_input_error("--json requires --yes (or --check) for non-interactive use"));
+    }
+
+    let output = run_plugin_update(PluginUpdateRequest {
+        selector,
+        tag_override: args.tag,
+        check: false,
+        force: args.force,
+        project_root: Some(project_root.to_string()),
+    })
+    .await?;
+
+    if json {
+        print_value(&output, true)?;
+    } else {
+        println!();
+        println!(
+            "update complete: considered={} updated={} failed={}",
+            output.considered, output.updated, output.failed
+        );
+        for row in &output.results {
+            if let Some(note) = row.note.as_deref() {
+                if matches!(row.action, "failed" | "update") {
+                    println!("  {:<32}  {}", row.name, note);
+                }
+            }
+        }
+        if args.restart_daemon {
+            eprintln!();
+            eprintln!(
+                "warning: --restart-daemon is a placeholder in v0.5.8 — the daemon is NOT \
+                 restarted automatically. Run `animus daemon stop && animus daemon start` to \
+                 pick up the new plugin binaries."
+            );
         }
     }
+
+    if output.failed > 0 {
+        return Err(anyhow!("animus plugin update completed with {} failure(s)", output.failed));
+    }
+
     Ok(())
 }
 
@@ -1049,5 +1394,277 @@ mod tests {
 
         let unknown = InstalledPlugin { name: "ghost".to_string(), ..Default::default() };
         assert_eq!(format_installed_source(&unknown), "--");
+    }
+
+    // =================== v0.5.8: default-install-driven update ===================
+
+    fn release(name: &str, slug: &str, tag: &str) -> InstalledPlugin {
+        InstalledPlugin {
+            name: name.to_string(),
+            source_kind: Some("release".to_string()),
+            origin: Some(format!("{slug}@{tag}")),
+            release_tag: Some(tag.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn fixture_pins() -> RecommendedPins {
+        RecommendedPins::parse(
+            r#"{
+                "schema": "animus.default-install.v1",
+                "plugins": {
+                    "providers": [
+                        {"repo": "launchapp-dev/animus-provider-claude", "tag": "v0.2.2"},
+                        {"repo": "launchapp-dev/animus-provider-codex", "tag": "v0.2.3"}
+                    ],
+                    "subjects": [
+                        {"repo": "launchapp-dev/animus-subject-default", "tag": "v0.1.4"},
+                        {"repo": "launchapp-dev/animus-subject-requirements", "tag": "v0.1.7"}
+                    ],
+                    "queues": [
+                        {"repo": "launchapp-dev/animus-queue-default", "tag": "v0.3.0"}
+                    ]
+                }
+            }"#,
+        )
+        .expect("fixture pins parse")
+    }
+
+    fn fixture_installed() -> BTreeMap<String, InstalledPlugin> {
+        let mut map = BTreeMap::new();
+        // Drift: current v0.2.1, recommended v0.2.2.
+        map.insert(
+            "animus-provider-claude".to_string(),
+            release("animus-provider-claude", "launchapp-dev/animus-provider-claude", "v0.2.1"),
+        );
+        // Up-to-date.
+        map.insert(
+            "animus-provider-codex".to_string(),
+            release("animus-provider-codex", "launchapp-dev/animus-provider-codex", "v0.2.3"),
+        );
+        // Ahead of pin.
+        map.insert(
+            "animus-subject-default".to_string(),
+            release("animus-subject-default", "launchapp-dev/animus-subject-default", "v0.1.5"),
+        );
+        // Drift: queue.
+        map.insert(
+            "animus-queue-default".to_string(),
+            release("animus-queue-default", "launchapp-dev/animus-queue-default", "v0.2.0"),
+        );
+        // Not in default-install.
+        map.insert(
+            "animus-trigger-webhook".to_string(),
+            release("animus-trigger-webhook", "launchapp-dev/animus-trigger-webhook", "v0.1.0"),
+        );
+        // Non-release source (local --path install).
+        map.insert(
+            "my-local-plugin".to_string(),
+            InstalledPlugin {
+                name: "my-local-plugin".to_string(),
+                source_kind: Some("path".to_string()),
+                origin: None,
+                release_tag: None,
+                ..Default::default()
+            },
+        );
+        map
+    }
+
+    #[test]
+    fn embedded_default_install_json_parses() {
+        let pins = load_recommended_pins().expect("embedded default-install.json must parse");
+        assert!(!pins.by_slug.is_empty(), "default-install.json must declare at least one plugin pin");
+        // Spot-check one curated pin so we catch a future schema rename.
+        assert!(
+            pins.lookup("launchapp-dev/animus-queue-default").is_some(),
+            "default-install.json must pin animus-queue-default"
+        );
+    }
+
+    #[test]
+    fn update_plan_all_covers_every_installed_plugin() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(&installed, &pins, &PluginUpdateSelector::All, None, false).unwrap();
+        assert_eq!(plans.len(), installed.len());
+    }
+
+    #[test]
+    fn update_plan_filters_by_kind() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(
+            &installed,
+            &pins,
+            &PluginUpdateSelector::Kind("subject_backend".to_string()),
+            None,
+            false,
+        )
+        .unwrap();
+        let names: Vec<_> = plans.iter().map(|p| p.entry.name.clone()).collect();
+        assert_eq!(names, vec!["animus-subject-default".to_string()]);
+    }
+
+    #[test]
+    fn update_plan_filters_by_kind_canonical_plural() {
+        // `--kind queues` (canonical) and `--kind queue` (singular) should
+        // both target the queue plugin.
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        for kind in ["queues", "queue"] {
+            let plans =
+                build_update_plan(&installed, &pins, &PluginUpdateSelector::Kind(kind.to_string()), None, false)
+                    .unwrap();
+            let names: Vec<_> = plans.iter().map(|p| p.entry.name.clone()).collect();
+            assert_eq!(names, vec!["animus-queue-default".to_string()], "kind={kind}");
+        }
+    }
+
+    #[test]
+    fn update_plan_name_selector_targets_one() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(
+            &installed,
+            &pins,
+            &PluginUpdateSelector::Name("animus-queue-default".to_string()),
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].entry.name, "animus-queue-default");
+        assert_eq!(plans[0].action, "update");
+        assert_eq!(plans[0].recommended_tag.as_deref(), Some("v0.3.0"));
+    }
+
+    #[test]
+    fn update_plan_name_selector_errors_when_missing() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let err = build_update_plan(
+            &installed,
+            &pins,
+            &PluginUpdateSelector::Name("does-not-exist".to_string()),
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not installed"), "err: {err}");
+    }
+
+    #[test]
+    fn update_plan_marks_current_when_tags_match() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(&installed, &pins, &PluginUpdateSelector::All, None, false).unwrap();
+        let codex = plans.iter().find(|p| p.entry.name == "animus-provider-codex").unwrap();
+        assert_eq!(codex.action, "skip");
+        assert_eq!(codex.note.as_deref(), Some("current"));
+    }
+
+    #[test]
+    fn update_plan_marks_ahead_of_pin() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(&installed, &pins, &PluginUpdateSelector::All, None, false).unwrap();
+        let subj = plans.iter().find(|p| p.entry.name == "animus-subject-default").unwrap();
+        assert_eq!(subj.action, "skip");
+        assert_eq!(subj.note.as_deref(), Some("ahead of pin"));
+    }
+
+    #[test]
+    fn update_plan_skips_plugins_missing_from_default_install() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(&installed, &pins, &PluginUpdateSelector::All, None, false).unwrap();
+        let trig = plans.iter().find(|p| p.entry.name == "animus-trigger-webhook").unwrap();
+        assert_eq!(trig.action, "skip");
+        assert_eq!(trig.note.as_deref(), Some("not in default-install"));
+    }
+
+    #[test]
+    fn update_plan_skips_non_release_source_plugins() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(&installed, &pins, &PluginUpdateSelector::All, None, false).unwrap();
+        let local = plans.iter().find(|p| p.entry.name == "my-local-plugin").unwrap();
+        assert_eq!(local.action, "skip");
+        assert!(
+            local.note.as_deref().unwrap_or("").contains("not from registry"),
+            "expected 'not from registry' note, got {:?}",
+            local.note
+        );
+    }
+
+    #[test]
+    fn update_plan_force_reinstalls_already_current() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(&installed, &pins, &PluginUpdateSelector::All, None, true).unwrap();
+        let codex = plans.iter().find(|p| p.entry.name == "animus-provider-codex").unwrap();
+        assert_eq!(codex.action, "update");
+        assert_eq!(codex.note.as_deref(), Some("forced reinstall"));
+    }
+
+    #[test]
+    fn update_plan_force_downgrades_when_ahead() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let plans = build_update_plan(&installed, &pins, &PluginUpdateSelector::All, None, true).unwrap();
+        let subj = plans.iter().find(|p| p.entry.name == "animus-subject-default").unwrap();
+        assert_eq!(subj.action, "update");
+        assert_eq!(subj.note.as_deref(), Some("forced downgrade"));
+    }
+
+    #[test]
+    fn parse_tag_strips_leading_v_and_compares_semver() {
+        assert_eq!(compare_tags("v0.1.0", "v0.1.1"), Some(std::cmp::Ordering::Less));
+        assert_eq!(compare_tags("0.2.0", "v0.1.9"), Some(std::cmp::Ordering::Greater));
+        assert_eq!(compare_tags("v1.0.0", "v1.0.0"), Some(std::cmp::Ordering::Equal));
+        // Non-semver tag — falls back to string compare via None.
+        assert_eq!(compare_tags("abc", "v0.1.0"), None);
+    }
+
+    #[test]
+    fn recommended_pins_parses_default_install_layout() {
+        let pins = fixture_pins();
+        assert_eq!(
+            pins.lookup("launchapp-dev/animus-provider-claude").map(|(t, s)| (t.as_str(), s.as_str())),
+            Some(("v0.2.2", "providers"))
+        );
+        assert_eq!(
+            pins.lookup("launchapp-dev/animus-queue-default").map(|(t, s)| (t.as_str(), s.as_str())),
+            Some(("v0.3.0", "queues"))
+        );
+        assert!(pins.lookup("launchapp-dev/animus-provider-unknown").is_none());
+    }
+
+    #[test]
+    fn normalize_kind_selector_handles_aliases() {
+        assert_eq!(normalize_kind_selector("provider"), "providers");
+        assert_eq!(normalize_kind_selector("Subject_Backend"), "subjects");
+        assert_eq!(normalize_kind_selector("subjects"), "subjects");
+        assert_eq!(normalize_kind_selector("workflow_runner"), "workflow_runners");
+        assert_eq!(normalize_kind_selector("transport"), "transports");
+        // Unknown values pass through (lowercased) so the build_update_plan
+        // filter simply matches zero plugins and the surface stays predictable.
+        assert_eq!(normalize_kind_selector("Bogus"), "bogus");
+    }
+
+    #[test]
+    fn tag_override_without_name_is_rejected() {
+        // run_plugin_update enforces this at the request layer.
+        let req = PluginUpdateRequest {
+            selector: PluginUpdateSelector::All,
+            tag_override: Some("v9.9.9".to_string()),
+            check: true,
+            force: false,
+            project_root: None,
+        };
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        let err = rt.block_on(run_plugin_update(req)).unwrap_err();
+        assert!(err.to_string().contains("--tag"), "err: {err}");
     }
 }
