@@ -7,8 +7,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::{
-    print_value, SubjectCommand, SubjectCreateArgs, SubjectDeleteArgs, SubjectGetArgs, SubjectListArgs, SubjectNextArgs,
-    SubjectStatusArgs, SubjectUpdateArgs,
+    print_value, SubjectCommand, SubjectCreateArgs, SubjectDeleteArgs, SubjectGetArgs, SubjectListArgs,
+    SubjectNextArgs, SubjectStatusArgs, SubjectUpdateArgs,
 };
 
 #[derive(Debug, Serialize)]

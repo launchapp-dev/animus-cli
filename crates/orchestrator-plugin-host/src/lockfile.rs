@@ -62,6 +62,35 @@ pub struct LockEntry {
     pub signature_bundle_sha256: Option<String>,
     /// RFC 3339 timestamp captured at install time.
     pub installed_at: String,
+    /// User-facing kind assigned at install time. For subject_backend
+    /// plugins this is the kind the SubjectRouter dispatches against
+    /// (e.g. `task`, `task-2`, `archive`); for provider plugins it is the
+    /// `provider_tool` users invoke (e.g. `claude`, `claude-2`). When
+    /// `None` the entry is from a pre-v0.5.7 lockfile and the consumer
+    /// treats it as `installed_kind == native_kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub installed_kind: Option<String>,
+    /// Plugin-native kind declared in the binary's manifest. The
+    /// SubjectRouter translates `<installed_kind>/<verb>` to
+    /// `<native_kind>/<verb>` at the wire boundary so plugins stay
+    /// non-parametric. When `None` the entry is from a pre-v0.5.7
+    /// lockfile and the consumer treats it as `installed_kind == native_kind`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_kind: Option<String>,
+}
+
+impl LockEntry {
+    /// Resolve the effective installed kind, falling back to `native_kind`
+    /// for pre-v0.5.7 entries where the rename surface did not yet exist.
+    pub fn effective_installed_kind(&self) -> Option<&str> {
+        self.installed_kind.as_deref().or(self.native_kind.as_deref())
+    }
+
+    /// Resolve the effective native kind, falling back to `installed_kind`
+    /// for pre-v0.5.7 entries where the rename surface did not yet exist.
+    pub fn effective_native_kind(&self) -> Option<&str> {
+        self.native_kind.as_deref().or(self.installed_kind.as_deref())
+    }
 }
 
 /// The full on-disk lockfile shape.
@@ -284,6 +313,8 @@ mod tests {
             artifact_sha256: "a".repeat(64),
             signature_bundle_sha256: Some("b".repeat(64)),
             installed_at: now_str(),
+            installed_kind: None,
+            native_kind: None,
         });
         lock.save().unwrap();
 
@@ -307,6 +338,8 @@ mod tests {
             artifact_sha256: "1".repeat(64),
             signature_bundle_sha256: None,
             installed_at: now_str(),
+            installed_kind: None,
+            native_kind: None,
         });
         let prior = lock.upsert(LockEntry {
             name: "x".into(),
@@ -314,6 +347,8 @@ mod tests {
             artifact_sha256: "2".repeat(64),
             signature_bundle_sha256: None,
             installed_at: now_str(),
+            installed_kind: None,
+            native_kind: None,
         });
         assert!(prior.is_some());
         assert_eq!(lock.plugins.len(), 1);
@@ -332,6 +367,8 @@ mod tests {
             artifact_sha256: sha.clone(),
             signature_bundle_sha256: None,
             installed_at: now_str(),
+            installed_kind: None,
+            native_kind: None,
         });
         assert_eq!(lock.verify_entry("x", &sha), LockVerifyResult::Match);
         assert_eq!(lock.verify_entry("x", &sha.to_ascii_uppercase()), LockVerifyResult::Match);
@@ -360,6 +397,8 @@ mod tests {
             artifact_sha256: original_sha.clone(),
             signature_bundle_sha256: None,
             installed_at: now_str(),
+            installed_kind: None,
+            native_kind: None,
         });
 
         // No tamper — should match.
@@ -387,6 +426,8 @@ mod tests {
             artifact_sha256: "9".repeat(64),
             signature_bundle_sha256: None,
             installed_at: now_str(),
+            installed_kind: None,
+            native_kind: None,
         });
         let removed = lock.remove("drop-me").expect("expected entry");
         assert_eq!(removed.name, "drop-me");
@@ -417,5 +458,43 @@ mod tests {
     fn default_path_falls_back_to_global_when_no_project_root() {
         let resolved = PluginLockfile::default_path(None);
         assert_eq!(resolved, global_lockfile_path());
+    }
+
+    #[test]
+    fn legacy_lockfile_without_kind_fields_parses_with_defaults() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("plugins.lock");
+        let legacy = "schema_version = \"1.0\"\ngenerated_at = \"2026-05-26T00:00:00Z\"\n\n[[plugins]]\nname = \"launchapp-dev/animus-subject-default\"\nversion = \"v0.1.1\"\nartifact_sha256 = \"a\"\ninstalled_at = \"2026-05-26T00:00:00Z\"\n";
+        fs::write(&path, legacy).unwrap();
+        let lock = PluginLockfile::load_or_empty(&path).expect("legacy lockfile parses");
+        assert_eq!(lock.plugins.len(), 1);
+        let entry = &lock.plugins[0];
+        assert_eq!(entry.installed_kind, None);
+        assert_eq!(entry.native_kind, None);
+        assert_eq!(entry.effective_installed_kind(), None);
+        assert_eq!(entry.effective_native_kind(), None);
+    }
+
+    #[test]
+    fn lockfile_roundtrips_installed_and_native_kind() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("plugins.lock");
+        let mut lock = PluginLockfile::empty_at(&path);
+        lock.upsert(LockEntry {
+            name: "launchapp-dev/animus-subject-default-archive".to_string(),
+            version: "v0.1.0".to_string(),
+            artifact_sha256: "c".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now_str(),
+            installed_kind: Some("archive".to_string()),
+            native_kind: Some("task".to_string()),
+        });
+        lock.save().unwrap();
+        let reloaded = PluginLockfile::load_or_empty(&path).unwrap();
+        let entry = &reloaded.plugins[0];
+        assert_eq!(entry.installed_kind.as_deref(), Some("archive"));
+        assert_eq!(entry.native_kind.as_deref(), Some("task"));
+        assert_eq!(entry.effective_installed_kind(), Some("archive"));
+        assert_eq!(entry.effective_native_kind(), Some("task"));
     }
 }

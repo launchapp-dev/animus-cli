@@ -155,6 +155,7 @@ impl PluginRouting for PluginRoutingImpl {
             // fail-closed when the project lockfile is corrupt. Operators
             // must inspect via CLI and re-run with `--force-rewrite-lockfile`.
             force_rewrite_lockfile: false,
+            as_kind: None,
         };
         let output = run_plugin_install(install_req).await.map_err(internal)?;
         let plugin_kind = output.manifest.as_ref().map(|m| m.plugin_kind.clone()).unwrap_or_default();

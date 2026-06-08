@@ -70,9 +70,9 @@ pub use orchestrator_config::{
     PROJECT_PACKS_DIR_NAME,
 };
 pub use plugin_preflight::{
-    summarize_discovered_plugins, AutoInstalledPlugin, InstalledPluginSummary, MissingPlugin, PluginInstaller,
-    PluginPreflightRunner, PluginPreflightSpec, PreflightResult, RequiredRole, DEFAULT_PROVIDER_REPO,
-    DEFAULT_REQUIREMENT_BACKEND_REPO, DEFAULT_TASK_BACKEND_REPO,
+    summarize_discovered_plugins, summarize_discovered_plugins_with_lock, AutoInstalledPlugin, InstalledPluginSummary,
+    MissingPlugin, PluginInstaller, PluginPreflightRunner, PluginPreflightSpec, PreflightResult, RequiredRole,
+    DEFAULT_PROVIDER_REPO, DEFAULT_REQUIREMENT_BACKEND_REPO, DEFAULT_TASK_BACKEND_REPO,
 };
 pub use plugin_registry::{
     default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, resolve_tag_for_slug,

@@ -197,6 +197,25 @@ All notable changes to this project will be documented in this file.
   through `/mcp/additional_servers` so agents reach remote MCPs without a
   bridge script. Env-var interpolation works on `url:` and `command:` fields.
 
+### Added (v0.5.7)
+
+- **Plugin kind translator**: `subject_backend` and `provider`
+  plugin collisions are now solved daemon-side instead of requiring each
+  plugin to be parametric. Every install carries a user-facing
+  `installed_kind` recorded in `.animus/plugins.lock` that may differ
+  from the plugin-native `native_kind`. The `SubjectRouter` rewrites
+  outbound methods (`<installed_kind>/<verb>` → `<native_kind>/<verb>`)
+  and inbound top-level `kind` fields in responses, so plugins stay
+  unmodified. Install pipeline auto-increments on `subject_kind:*` /
+  `provider_tool:*` collisions (`task` → `task-2` → `task-3`); explicit
+  override via the new `animus plugin install --as-kind <KIND>` flag.
+  Preflight summarization consults `plugins.lock` so renamed plugins
+  report against their `installed_kind`. New `animus plugin doctor`
+  subcommand shows every preflight role with its installed claimants
+  and flags duplicates explicitly. See
+  [docs/architecture/plugin-kind-translator-v0.5.7.md](docs/architecture/plugin-kind-translator-v0.5.7.md)
+  for the architecture and the explicit deferral of nested-kind rewriting.
+
 ## [0.4.19] - 2026-05-29
 
 Follow-up hotfix to v0.4.18. The previous release wired the subject

@@ -210,15 +210,42 @@ impl InstalledPluginSummary {
 pub fn summarize_discovered_plugins(
     plugins: &[orchestrator_plugin_host::DiscoveredPlugin],
 ) -> Vec<InstalledPluginSummary> {
+    summarize_discovered_plugins_with_lock(plugins, None)
+}
+
+/// Like [`summarize_discovered_plugins`] but, when supplied a v0.5.7+
+/// [`orchestrator_plugin_host::PluginLockfile`], translates the
+/// manifest-declared `subject_kind:*` capabilities into the user-facing
+/// `installed_kind` recorded at install time. Preflight then reports
+/// satisfaction against the kind operators actually dispatch against
+/// (`archive`) rather than the plugin's native kind (`task`). When no
+/// lockfile is supplied or the lockfile carries no rename, the summary
+/// is identical to the pre-v0.5.7 capability-string view.
+pub fn summarize_discovered_plugins_with_lock(
+    plugins: &[orchestrator_plugin_host::DiscoveredPlugin],
+    lockfile: Option<&orchestrator_plugin_host::PluginLockfile>,
+) -> Vec<InstalledPluginSummary> {
     plugins
         .iter()
         .map(|plugin| {
+            let lock_entry = lockfile.and_then(|lock| lock.find(&plugin.name));
+            let native_to_installed: Option<(String, String)> =
+                lock_entry.and_then(|entry| match (entry.effective_installed_kind(), entry.effective_native_kind()) {
+                    (Some(installed), Some(native)) if installed != native => {
+                        Some((native.to_string(), installed.to_string()))
+                    }
+                    _ => None,
+                });
             let subject_kinds = plugin
                 .manifest
                 .capabilities
                 .iter()
                 .filter_map(|cap| cap.strip_prefix("subject_kind:").map(|rest| rest.trim().to_string()))
                 .filter(|k| !k.is_empty())
+                .map(|k| match &native_to_installed {
+                    Some((native, installed)) if k == *native => installed.clone(),
+                    _ => k,
+                })
                 .collect::<Vec<_>>();
             InstalledPluginSummary {
                 name: plugin.name.clone(),

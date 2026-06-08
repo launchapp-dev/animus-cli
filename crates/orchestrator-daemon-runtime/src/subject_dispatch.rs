@@ -38,7 +38,9 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use orchestrator_plugin_host::{discover_plugins, DiscoveredPlugin, PluginHost, PluginSpawnOptions, SubjectRouter};
+use orchestrator_plugin_host::{
+    discover_plugins, DiscoveredPlugin, KindAliasMap, PluginHost, PluginLockfile, PluginSpawnOptions, SubjectRouter,
+};
 use serde_json::Value;
 
 use animus_plugin_protocol::{RpcError, PLUGIN_KIND_SUBJECT_BACKEND};
@@ -216,14 +218,26 @@ pub async fn resolve_subject_dispatch(project_root: &Path) -> Result<SubjectDisp
         plugin_count += 1;
     }
 
-    let router = SubjectRouter::from_initialized_hosts(hosts).await?;
+    // v0.5.7: load install-time kind renames from the project's
+    // plugins.lock so the SubjectRouter can translate
+    // `<installed_kind>/<verb>` -> `<native_kind>/<verb>` at the wire
+    // boundary. When the lockfile is missing or every entry was
+    // installed under its native kind, the alias map is empty and the
+    // router behaves identically to its pre-v0.5.7 form.
+    let aliases = load_kind_aliases_from_lockfile(project_root, &candidates);
+    let router = SubjectRouter::from_initialized_hosts_with_aliases(hosts, aliases.clone()).await?;
 
     for plugin in &candidates {
         for cap in &plugin.manifest.capabilities {
             if let Some(rest) = cap.strip_prefix("subject_kind:") {
                 let trimmed = rest.trim().to_string();
-                if !trimmed.is_empty() && !kinds.contains(&trimmed) {
-                    kinds.push(trimmed);
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let effective =
+                    aliases.installed_for_plugin_native(&plugin.name, &trimmed).unwrap_or(trimmed.as_str()).to_string();
+                if !kinds.contains(&effective) {
+                    kinds.push(effective);
                 }
             }
         }
@@ -234,6 +248,47 @@ pub async fn resolve_subject_dispatch(project_root: &Path) -> Result<SubjectDisp
         all_candidates: candidates,
         warnings,
     })
+}
+
+/// Build the daemon-side kind translator from `plugins.lock`. Reads every
+/// subject_backend entry whose `installed_kind` differs from `native_kind`
+/// and registers a one-way alias the SubjectRouter consults at routing
+/// time. A missing or unreadable lockfile yields an empty alias map
+/// (the router behaves identically to its pre-v0.5.7 form). Lockfile
+/// entries pointing at plugins that aren't in the `candidates` set are
+/// dropped silently — they refer to plugins that were uninstalled (or
+/// failed manifest discovery this boot) and would otherwise pollute the
+/// alias map with dangling renames.
+fn load_kind_aliases_from_lockfile(project_root: &Path, candidates: &[DiscoveredPlugin]) -> KindAliasMap {
+    let mut aliases = KindAliasMap::default();
+    let lock = match PluginLockfile::load_default(Some(project_root)) {
+        Ok(l) => l,
+        Err(err) => {
+            tracing::warn!(error = %err, "plugin lockfile unreadable; daemon-side kind translator disabled for this run");
+            return aliases;
+        }
+    };
+    // TODO(codex-p2 round-4 v0.5.7): the candidate set is keyed by
+    // `plugin.name` which comes from discovery (plugins.yaml entry name
+    // == manifest name). The lockfile entry can be keyed by the
+    // `--name` install override when the operator passed one, so a
+    // plugin installed as `--name task-archive` with a manifest name of
+    // `animus-subject-default` would have its lockfile row dropped here
+    // and the daemon would re-register it under its native kind. Fix
+    // requires plumbing the install-time name override through discovery
+    // (plugins.yaml currently doesn't record it). Today's defaults flow
+    // doesn't pass --name so this is dormant.
+    let candidate_names: std::collections::HashSet<&str> = candidates.iter().map(|p| p.name.as_str()).collect();
+    for entry in &lock.plugins {
+        if !candidate_names.contains(entry.name.as_str()) {
+            continue;
+        }
+        let (Some(installed), Some(native)) = (entry.effective_installed_kind(), entry.effective_native_kind()) else {
+            continue;
+        };
+        aliases.insert(&entry.name, installed, native);
+    }
+    aliases
 }
 
 #[cfg(test)]

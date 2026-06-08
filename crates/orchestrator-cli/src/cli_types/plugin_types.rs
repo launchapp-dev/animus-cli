@@ -43,6 +43,18 @@ pub(crate) enum PluginCommand {
     /// `install --force` or tampered-binary scenario is visible to operators.
     #[command(subcommand)]
     Lock(PluginLockCommand),
+    /// Per-role view of installed plugins. Shows every preflight role with its
+    /// installed plugins (by installed_kind + native_kind) and flags duplicates
+    /// so collisions are visible without spelunking through the lockfile.
+    Doctor(PluginDoctorArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginDoctorArgs {
+    /// Emit results as JSON (animus.cli.v1 envelope when paired with --json
+    /// at the root).
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -284,6 +296,18 @@ pub(crate) struct PluginInstallArgs {
     /// overwriting it.
     #[arg(long, default_value_t = false)]
     pub(crate) force_rewrite_lockfile: bool,
+    /// (v0.5.7) Override the installed-kind assigned to a subject_backend
+    /// plugin at install time. The supplied KIND becomes the user-facing
+    /// prefix the SubjectRouter dispatches against (e.g. `archive` for a
+    /// second `subject_kind:task` backend). When omitted and the native
+    /// kind collides with an existing install, the install pipeline
+    /// auto-increments (`task` -> `task-2` -> `task-3`). When supplied and
+    /// the explicit value also collides, the install fails with an
+    /// actionable error. v0.5.7 only supports renaming subject_backend
+    /// plugins; passing --as-kind on a provider, transport, workflow_runner,
+    /// queue, or trigger plugin is an error.
+    #[arg(long = "as-kind", value_name = "KIND")]
+    pub(crate) as_kind: Option<String>,
 }
 
 #[derive(Debug, Args)]

@@ -35,7 +35,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    invalid_input_error, not_found_error, print_value, PluginCallArgs, PluginCommand, PluginInfoArgs,
+    invalid_input_error, not_found_error, print_value, PluginCallArgs, PluginCommand, PluginDoctorArgs, PluginInfoArgs,
     PluginInstallArgs, PluginInstallDefaultsArgs, PluginListArgs, PluginLockCommand, PluginLockListArgs,
     PluginLockVerifyArgs, PluginPingArgs, PluginScaffoldCommand, PluginUninstallArgs,
 };
@@ -116,6 +116,18 @@ pub(crate) struct PluginInstallOutput {
     pub(crate) signature_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) signature_detail: Option<SignatureStatus>,
+    /// User-facing kind assigned at install time. For subject_backend
+    /// plugins this is the prefix the SubjectRouter dispatches against
+    /// (e.g. `archive` after auto-increment from `task`). For provider
+    /// plugins this is the `provider_tool` users invoke. Absent when the
+    /// plugin declares no rename-eligible capability.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) assigned_kind: Option<String>,
+    /// Plugin-native kind as declared in the manifest capabilities. Paired
+    /// with [`Self::assigned_kind`] so scripts can detect auto-incremented
+    /// renames via the `animus.plugin.install.v1` envelope.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) native_kind: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -222,6 +234,15 @@ pub(crate) struct PluginInstallRequest {
     /// genuinely broken file while refusing to silently paper over what
     /// could be tamper.
     pub(crate) force_rewrite_lockfile: bool,
+    /// Operator-supplied override for the user-facing `installed_kind`
+    /// recorded in `plugins.lock`. Used by `animus plugin install --as-kind`
+    /// to give a second `subject_kind:task` plugin a distinct dispatch
+    /// prefix (e.g. `archive`). When `None`, the install pipeline picks
+    /// the native kind from the manifest and auto-increments
+    /// (`task -> task-2 -> task-3`) when the native value collides with
+    /// an existing install. Provider plugins follow the same logic against
+    /// their `provider_tool` capability.
+    pub(crate) as_kind: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -258,6 +279,7 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
         PluginCommand::Update(args) => marketplace::handle_plugin_update(args).await,
         PluginCommand::InstallDefaults(args) => handle_plugin_install_defaults(args, project_root).await,
         PluginCommand::Lock(cmd) => handle_plugin_lock(cmd, project_root).await,
+        PluginCommand::Doctor(args) => handle_plugin_doctor(args, project_root, json).await,
     }
 }
 
@@ -480,6 +502,7 @@ async fn handle_plugin_install_defaults(args: PluginInstallDefaultsArgs, project
             allow_shadow_builtin: true,
             project_root: Some(project_root.to_string()),
             force_rewrite_lockfile: args.force_rewrite_lockfile,
+            as_kind: None,
             ..Default::default()
         };
 
@@ -1004,6 +1027,35 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         )));
     }
 
+    // ---- v0.5.7: validate the installed_kind assignment BEFORE any
+    // ----        filesystem mutation (copy / plugins.yaml save).
+    //
+    // Codex P1 round-2: returning Err after the binary copy + yaml save
+    // leaves the plugin discoverable on disk without a matching lockfile
+    // entry, which makes subsequent discovery + preflight disagree with
+    // the install pipeline. Compute the assignment now so a bad
+    // `--as-kind` (collision, or supplied for a non-rename-eligible
+    // plugin) errors out before we touch any on-disk state.
+    //
+    // Live discovery feeds `currently_claimed_kinds` so pre-v0.5.7
+    // lockfile rows still participate in collision detection — each
+    // installed subject_backend's manifest is consulted directly rather
+    // than blindly inferring its kind from the lockfile name (codex P1
+    // round-3 v0.5.7).
+    let currently_claimed_kinds = current_subject_kinds_for_collision_check(
+        req.project_root.as_deref(),
+        req.plugin_dir.as_deref(),
+        &lockfile,
+        &plugin_name,
+    );
+    let (assigned_kind, native_kind_for_lock) = compute_kind_assignment(
+        source_manifest.as_ref(),
+        &lockfile,
+        &currently_claimed_kinds,
+        &plugin_name,
+        req.as_kind.as_deref(),
+    )?;
+
     std::fs::copy(&source_path, &installed_path)
         .with_context(|| format!("failed to copy {} → {}", source_path.display(), installed_path.display()))?;
     ensure_executable(&installed_path)?;
@@ -1230,6 +1282,8 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         artifact_sha256: computed_sha.clone(),
         signature_bundle_sha256: bundle_sha,
         installed_at: recorded_at.clone(),
+        installed_kind: assigned_kind.clone(),
+        native_kind: native_kind_for_lock.clone(),
     };
     lockfile.upsert(lock_entry);
     for (secondary_name, _path, secondary_sha, _temp) in &secondary_installed {
@@ -1239,9 +1293,64 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             artifact_sha256: secondary_sha.clone(),
             signature_bundle_sha256: None,
             installed_at: recorded_at.clone(),
+            installed_kind: None,
+            native_kind: None,
         });
     }
+    let alias_required = match (assigned_kind.as_deref(), native_kind_for_lock.as_deref()) {
+        (Some(installed), Some(native)) => installed != native,
+        _ => false,
+    };
     if let Err(err) = lockfile.save() {
+        if alias_required {
+            // Codex P2 round-4 v0.5.7: when this install records a
+            // non-identity installed_kind, the lockfile is the ONLY
+            // place the daemon-side SubjectRouter learns about it.
+            //
+            // For a FRESH install we roll back the binary + plugins.yaml
+            // entry so the partial state is not silently picked up by
+            // the next daemon start. For an UPGRADE we cannot roll back
+            // to the pre-upgrade state without a snapshot of the prior
+            // binary + entry, so we fail closed but leave on-disk state
+            // untouched — the old version stays installed under its
+            // existing kind, and the user is told why the alias swap
+            // failed. Codex P2 round-5 (don't wipe a working install
+            // because of a transient lockfile failure during upgrade).
+            let (action, abort_clause) = if is_upgrade {
+                // The binary was already overwritten by std::fs::copy and
+                // plugins.yaml has already been re-saved with the new
+                // entry, so we cannot honestly claim the previous install
+                // was preserved. We DO leave the new binary + entry in
+                // place (don't wipe a working binary because of a
+                // transient lockfile failure) but tell the user the
+                // lockfile is now inconsistent so they know to retry.
+                // Codex P2 round-6 (honest error message on aliased
+                // upgrade failure).
+                (
+                    "upgrade left lockfile inconsistent (new binary + plugins.yaml saved, lockfile still records prior state)",
+                    "rerun the install with the same args once the lockfile path is writable",
+                )
+            } else {
+                let yaml_key = serde_yaml::Value::String(plugin_name.clone());
+                config.providers.remove(&yaml_key);
+                config.plugins.remove(&yaml_key);
+                if let Err(rollback_err) = save_plugins_yaml(&yaml_path, &config) {
+                    tracing::warn!(path = %yaml_path.display(), error = %rollback_err, "failed to roll back plugins.yaml after aliased install lockfile save failure");
+                }
+                if let Err(rollback_err) = std::fs::remove_file(&installed_path) {
+                    tracing::warn!(path = %installed_path.display(), error = %rollback_err, "failed to remove installed binary during rollback");
+                }
+                ("install aborted", "binary + plugins.yaml entry rolled back")
+            };
+            return Err(invalid_input_error(format!(
+                "failed to persist plugin lockfile at {path} after assigning installed_kind '{installed}' \
+                 (native '{native}'): {err:#}. The {action} ({abort_clause}) because the daemon would \
+                 otherwise lose this alias on next startup. Check the lockfile path's permissions and retry.",
+                path = lockfile.path().display(),
+                installed = assigned_kind.as_deref().unwrap_or(""),
+                native = native_kind_for_lock.as_deref().unwrap_or(""),
+            )));
+        }
         tracing::warn!(path = %lockfile.path().display(), %err, "failed to persist plugin lockfile");
     }
 
@@ -1364,7 +1473,273 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         sha256_verified,
         signature_status,
         signature_detail,
+        assigned_kind,
+        native_kind: native_kind_for_lock,
     })
+}
+
+/// Extract the manifest capability the v0.5.7 kind translator can rename.
+///
+/// Only `subject_backend` plugins are eligible in v0.5.7: their kind
+/// dispatch flows through `SubjectRouter::route_call`, which translates
+/// `<installed_kind>/<verb>` -> `<native_kind>/<verb>` at the wire
+/// boundary. `provider` plugins are intentionally NOT renamed here — the
+/// provider dispatch path derives `provider_tool` from the plugin binary
+/// name and does not consult `plugins.lock`. Recording a provider alias
+/// would mint an `installed_kind` the runtime cannot honor; that promise
+/// is deferred to a future release. Plugins with no `subject_kind:*`
+/// capability — and providers, transports, workflow_runners, queues,
+/// triggers — return `None` here and skip the rename pipeline.
+// TODO(codex-p2 round-4 v0.5.7): this function returns ONLY the first
+// exact subject_kind. For multi-kind subject backends (a plugin
+// declaring both `task` and `requirement` in the same binary)
+// install-time collision detection only checks the first kind. Fix
+// requires either changing this to return Vec<String> + updating every
+// caller, OR adding a second collision-check pass over the manifest's
+// remaining exact kinds. Today's launchapp-dev/animus-subject-* set is
+// single-kind per plugin so this edge case doesn't fire; bump priority
+// the moment a multi-kind subject backend ships.
+fn rename_eligible_native_kind(manifest: &PluginManifest) -> Option<String> {
+    if manifest.plugin_kind != "subject_backend" {
+        return None;
+    }
+    for cap in &manifest.capabilities {
+        if let Some(rest) = cap.strip_prefix("subject_kind:") {
+            let trimmed = rest.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Glob subject kinds (e.g. `subject_kind:task.*`) are passed
+            // through unrenamed by the SubjectRouter, so recording an
+            // alias for them would mint an `installed_kind` the router
+            // never registers. Skip globs here and let auto-increment
+            // / `--as-kind` apply only to exact kinds (codex P2 round-3
+            // v0.5.7).
+            if trimmed.ends_with(".*") {
+                continue;
+            }
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+/// Inventory every `installed_kind` currently claimed by a
+/// `subject_backend` plugin discoverable on disk. Used at install time
+/// so collision detection sees pre-v0.5.7 plugins through their
+/// manifest capabilities (translated to the lock's `installed_kind` when
+/// present, falling back to the native capability when absent). The
+/// `current_plugin_name` argument is excluded so an `--force` upgrade of
+/// the same plugin never collides with itself.
+///
+/// Discovery is best-effort: filesystem errors are swallowed and an
+/// empty list is returned. The downstream collision check is purely a
+/// safety net — the daemon's `SubjectRouter` also rejects duplicate
+/// exact kinds at startup, so a stale discovery here at most leaves the
+/// operator with a clearer pre-install error message than the daemon
+/// would otherwise produce.
+fn current_subject_kinds_for_collision_check(
+    project_root: Option<&str>,
+    plugin_dir: Option<&str>,
+    lockfile: &PluginLockfile,
+    current_plugin_name: &str,
+) -> Vec<String> {
+    let mut discovery = PluginDiscovery::new();
+    if let Some(root) = project_root {
+        discovery = discovery.with_project_root(std::path::Path::new(root));
+    }
+    let _ = plugin_dir;
+    let discovered = match discovery.discover() {
+        Ok(plugins) => plugins,
+        Err(error) => {
+            tracing::warn!(%error, "plugin discovery failed during install collision pre-check; assuming none claim a kind yet");
+            return Vec::new();
+        }
+    };
+    let mut out: Vec<String> = Vec::new();
+    for plugin in discovered {
+        if plugin.name == current_plugin_name || plugin.manifest.plugin_kind != "subject_backend" {
+            continue;
+        }
+        let lock_entry = lockfile.find(&plugin.name);
+        let (native_to_installed, _installed_kind_from_lock) = match lock_entry {
+            Some(entry) => match (entry.effective_installed_kind(), entry.effective_native_kind()) {
+                (Some(installed), Some(native)) if installed != native => {
+                    (Some((native.to_string(), installed.to_string())), Some(installed.to_string()))
+                }
+                (Some(installed), _) => (None, Some(installed.to_string())),
+                _ => (None, None),
+            },
+            None => (None, None),
+        };
+        for cap in &plugin.manifest.capabilities {
+            let Some(rest) = cap.strip_prefix("subject_kind:") else {
+                continue;
+            };
+            let trimmed = rest.trim();
+            if trimmed.is_empty() || trimmed.ends_with(".*") {
+                // Glob captures aren't renamed by the SubjectRouter, so
+                // they neither block nor get auto-incremented in v0.5.7.
+                continue;
+            }
+            let effective = match &native_to_installed {
+                Some((native, installed)) if native == trimmed => installed.clone(),
+                _ => trimmed.to_string(),
+            };
+            if !out.contains(&effective) {
+                out.push(effective);
+            }
+        }
+    }
+    out
+}
+
+/// Compute the `(installed_kind, native_kind)` pair the v0.5.7 install
+/// pipeline records in `plugins.lock` for `plugin_name`. Runs BEFORE
+/// any on-disk install state is mutated so a bad `--as-kind` or a
+/// collision aborts the install without leaving partially-installed
+/// files behind. Returns `(None, None)` when the plugin declares no
+/// rename-eligible capability (transports, workflow runners, queues,
+/// providers in v0.5.7, etc.) — and surfaces an error in that case if
+/// the operator still passed `--as-kind`.
+fn compute_kind_assignment(
+    manifest: Option<&PluginManifest>,
+    lockfile: &PluginLockfile,
+    currently_claimed_kinds: &[String],
+    plugin_name: &str,
+    requested_as_kind: Option<&str>,
+) -> Result<(Option<String>, Option<String>)> {
+    let native_kind = manifest.and_then(rename_eligible_native_kind);
+    match native_kind.as_deref() {
+        None => {
+            if let Some(explicit) = requested_as_kind.map(str::trim).filter(|s| !s.is_empty()) {
+                return Err(invalid_input_error(format!(
+                    "--as-kind '{explicit}' supplied but plugin '{plugin_name}' declares no \
+                     rename-eligible capability (no subject_kind:* entry). v0.5.7 only renames \
+                     subject_backend plugins with exact (non-glob) subject_kind capabilities; \
+                     drop --as-kind to install this plugin."
+                )));
+            }
+            Ok((None, None))
+        }
+        Some(native) => {
+            let assigned = pick_installed_kind_for_install(
+                lockfile,
+                currently_claimed_kinds,
+                plugin_name,
+                native,
+                requested_as_kind,
+            )?;
+            if assigned != native {
+                eprintln!(
+                    "animus.plugin.install.v1: plugin '{plugin_name}' assigned installed_kind \
+                     '{assigned}' (native '{native}'); a previously-installed plugin already \
+                     claimed '{native}'. Pass --as-kind on a future install to override."
+                );
+                tracing::info!(
+                    plugin = %plugin_name,
+                    assigned_kind = %assigned,
+                    native_kind = %native,
+                    "plugin install auto-incremented installed_kind (v0.5.7 kind translator)",
+                );
+            }
+            Ok((Some(assigned), Some(native.to_string())))
+        }
+    }
+}
+
+/// Resolve the user-facing `installed_kind` for a fresh install. When the
+/// operator passed `--as-kind <NEW>`, the value is validated against
+/// other entries and either accepted or returned as an error. Otherwise
+/// the function auto-increments from `native_kind` (`task -> task-2 ->
+/// task-3 -> ...`) until a free slot is found.
+///
+/// `current_plugin_name` is excluded from collision detection so a
+/// re-install / upgrade of the same plugin keeps its prior installed_kind
+/// instead of being bumped to a new suffix.
+fn pick_installed_kind_for_install(
+    lockfile: &PluginLockfile,
+    currently_claimed_kinds: &[String],
+    current_plugin_name: &str,
+    native_kind: &str,
+    requested_as_kind: Option<&str>,
+) -> Result<String> {
+    // The collision set is built from two sources:
+    //
+    // 1. v0.5.7+ lockfile entries — `effective_installed_kind()` reads
+    //    the recorded `installed_kind`. Pre-v0.5.7 rows have both fields
+    //    unset and drop out of this filter.
+    // 2. Live `currently_claimed_kinds` — the union of `subject_kind:*`
+    //    capabilities declared by every currently-installed
+    //    subject_backend plugin, computed before the install touches
+    //    disk. Pre-v0.5.7 lockfile entries are covered here via their
+    //    binary's manifest, so a legacy `subject_kind:task` install
+    //    still blocks a second `task` install while a legacy provider
+    //    row does NOT spuriously block the first `subject_kind:task`
+    //    install (codex P1 round-3 v0.5.7).
+    let mut existing: Vec<(String, String)> = lockfile
+        .plugins
+        .iter()
+        .filter(|entry| entry.name != current_plugin_name)
+        .filter_map(|entry| entry.effective_installed_kind().map(|k| (entry.name.clone(), k.to_string())))
+        .collect();
+    for kind in currently_claimed_kinds {
+        if !existing.iter().any(|(_, k)| k == kind) {
+            existing.push((String::new(), kind.clone()));
+        }
+    }
+
+    if let Some(explicit) = requested_as_kind.map(str::trim).filter(|s| !s.is_empty()) {
+        if explicit.contains('/')
+            || explicit.contains('*')
+            || explicit.contains(':')
+            || explicit.contains(char::is_whitespace)
+        {
+            return Err(invalid_input_error(format!(
+                "--as-kind '{explicit}' is not a valid subject kind. \
+                 Kinds must be exact identifiers with no '/', '*', ':', or whitespace; \
+                 the ':' separator is reserved for subject id encoding (`<kind>:<local-id>`) \
+                 and glob/prefix-routed kinds are not supported by the v0.5.7 translator."
+            )));
+        }
+        if let Some((collider_name, _)) = existing.iter().find(|(_, k)| k == explicit) {
+            return Err(invalid_input_error(format!(
+                "--as-kind '{explicit}' is already claimed by installed plugin '{collider_name}'. \
+                 Pick a different kind or uninstall the colliding plugin first."
+            )));
+        }
+        return Ok(explicit.to_string());
+    }
+
+    // Re-install / upgrade: preserve the previously-assigned
+    // installed_kind so a routine `animus plugin install --force` does
+    // not silently move a plugin from `archive` back to `task`. Codex P2
+    // round-1 v0.5.7. Only applies when no `--as-kind` override was
+    // supplied (the explicit-override branch above already handled that
+    // case).
+    if let Some(prior) = lockfile.find(current_plugin_name).and_then(|e| e.effective_installed_kind()) {
+        if !existing.iter().any(|(_, k)| k == prior) {
+            return Ok(prior.to_string());
+        }
+        // Prior alias now collides with another install — fall through
+        // to the auto-increment branch so the upgrade gets a fresh slot.
+    }
+
+    if !existing.iter().any(|(_, k)| k == native_kind) {
+        return Ok(native_kind.to_string());
+    }
+    let mut suffix: u32 = 2;
+    loop {
+        let candidate = format!("{native_kind}-{suffix}");
+        if !existing.iter().any(|(_, k)| k == &candidate) {
+            return Ok(candidate);
+        }
+        suffix = suffix.checked_add(1).ok_or_else(|| {
+            invalid_input_error(format!(
+                "exhausted u32 auto-increment range for installed_kind '{native_kind}'; this is a bug"
+            ))
+        })?;
+    }
 }
 
 fn discover(project_root: &str, include_system_path: bool) -> Result<Vec<DiscoveredPlugin>> {
@@ -2866,6 +3241,7 @@ async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json
         yes: args.yes,
         project_root: Some(project_root.to_string()),
         force_rewrite_lockfile: args.force_rewrite_lockfile,
+        as_kind: args.as_kind,
     })
     .await?;
     let role = output
@@ -2966,6 +3342,249 @@ struct PluginLockVerifyOutput {
     matched: usize,
     mismatched: usize,
     missing_binary: usize,
+}
+
+// ===== `plugin doctor` =====
+
+#[derive(Debug, Serialize)]
+struct PluginDoctorClaim {
+    plugin: String,
+    installed_kind: String,
+    native_kind: String,
+    /// `true` when the install pipeline applied a rename (auto-increment
+    /// or explicit `--as-kind`). Surfaced so doctor output makes the
+    /// distinction visible without forcing operators to re-derive it
+    /// from the side-by-side columns.
+    renamed: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginDoctorRole {
+    role: String,
+    /// One entry per installed plugin currently satisfying this role.
+    /// Multiple entries for the same role can be legitimate (two
+    /// distinct providers, or two subject backends with auto-incremented
+    /// installed_kinds) — but the same `installed_kind` claimed twice is
+    /// always a collision.
+    claims: Vec<PluginDoctorClaim>,
+    /// Set when two or more `claims` share the same `installed_kind`.
+    /// The presence of this list — independent of `claims.len()` — is
+    /// the doctor's collision signal.
+    collisions: Vec<String>,
+    /// `true` when the role has zero satisfying installs. Distinct from
+    /// "no collisions": preflight will refuse daemon startup in this case.
+    unsatisfied: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginDoctorOutput {
+    lockfile: String,
+    roles: Vec<PluginDoctorRole>,
+    /// Operator-facing summary so a single grep can flag broken setups
+    /// without parsing the per-role rows.
+    total_collisions: usize,
+    total_unsatisfied: usize,
+}
+
+async fn handle_plugin_doctor(args: PluginDoctorArgs, project_root: &str, json: bool) -> Result<()> {
+    use orchestrator_core::{summarize_discovered_plugins_with_lock, PluginPreflightSpec, RequiredRole};
+
+    let project_root_path = std::path::Path::new(project_root);
+    let discovered = discover_plugins(project_root_path).context("plugin discovery failed")?;
+    let lockfile = PluginLockfile::load_default(Some(project_root_path)).unwrap_or_else(|err| {
+        tracing::warn!(error = %err, "plugin lockfile unreadable; doctor will treat every entry as identity-renamed");
+        PluginLockfile::empty_at(&PluginLockfile::default_path(Some(project_root_path)))
+    });
+    // Read the lockfile-aware summary so role membership reflects the
+    // same `installed_kind` view the daemon preflight uses. Without this,
+    // doctor and preflight can disagree (codex P2 round-1 v0.5.7):
+    // doctor would still report `subject_kind:task` satisfied by a plugin
+    // installed as `archive`, while the daemon refuses startup because
+    // its preflight maps the same plugin to `subject_kind:archive`.
+    let summaries = summarize_discovered_plugins_with_lock(&discovered, Some(&lockfile));
+
+    let spec = PluginPreflightSpec::daemon_default();
+    let mut roles_output: Vec<PluginDoctorRole> = Vec::with_capacity(spec.required_roles.len());
+    let mut total_collisions = 0_usize;
+    let mut total_unsatisfied = 0_usize;
+
+    for role in &spec.required_roles {
+        let role_label = role.label();
+        let mut claims: Vec<PluginDoctorClaim> = Vec::new();
+
+        for summary in &summaries {
+            let claim_kind = match (role, summary) {
+                (RequiredRole::AtLeastOneProvider, s) if s.is_provider() => provider_native_kind(&discovered, &s.name),
+                (RequiredRole::SubjectKind(target), s) => {
+                    // `summary.subject_kinds` is already the lock-aware
+                    // installed_kind view; matching against `target` lines
+                    // doctor up with what the daemon's preflight checks.
+                    if s.is_subject_backend() && s.subject_kinds.iter().any(|k| k == target) {
+                        Some(target.clone())
+                    } else {
+                        None
+                    }
+                }
+                (RequiredRole::WorkflowRunner, s) if s.is_workflow_runner() => Some(summary.plugin_kind.clone()),
+                (RequiredRole::Queue, s) if s.is_queue() => Some(summary.plugin_kind.clone()),
+                (RequiredRole::TransportEnabled, _) => None,
+                _ => None,
+            };
+            let Some(claim_kind) = claim_kind else {
+                continue;
+            };
+            let lock_entry = lockfile.find(&summary.name);
+            let installed_kind = lock_entry
+                .and_then(|e| e.effective_installed_kind())
+                .map(str::to_string)
+                .unwrap_or_else(|| claim_kind.clone());
+            let native_kind =
+                lock_entry.and_then(|e| e.effective_native_kind()).map(str::to_string).unwrap_or_else(|| claim_kind);
+            let renamed = installed_kind != native_kind;
+            claims.push(PluginDoctorClaim { plugin: summary.name.clone(), installed_kind, native_kind, renamed });
+        }
+
+        let mut by_installed: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for claim in &claims {
+            by_installed.entry(claim.installed_kind.clone()).or_default().push(claim.plugin.clone());
+        }
+        let mut collisions: Vec<String> =
+            by_installed.iter().filter(|(_, plugins)| plugins.len() > 1).map(|(kind, _)| kind.clone()).collect();
+        collisions.sort();
+
+        let unsatisfied = claims.is_empty() && !matches!(role, RequiredRole::TransportEnabled);
+        if !collisions.is_empty() {
+            total_collisions += 1;
+        }
+        if unsatisfied {
+            total_unsatisfied += 1;
+        }
+
+        roles_output.push(PluginDoctorRole { role: role_label, claims, collisions, unsatisfied });
+    }
+
+    // Codex P2 round-4 v0.5.7: synthesize per-installed-kind rows for
+    // every `subject_kind` outside the daemon default spec. Two plugins
+    // both renamed to `archive` (or two plugins installed under any
+    // other non-default subject kind) would otherwise pass `doctor`
+    // without warning even though the SubjectRouter rejects the
+    // duplicate exact-kind registration at startup. Synthetic rows are
+    // appended AFTER the spec-driven roles so the standard preflight
+    // view stays at the top of the output.
+    let mut spec_subject_kinds: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for role in &spec.required_roles {
+        if let RequiredRole::SubjectKind(k) = role {
+            spec_subject_kinds.insert(k.clone());
+        }
+    }
+    let mut extra_kinds: Vec<String> = Vec::new();
+    for summary in &summaries {
+        if !summary.is_subject_backend() {
+            continue;
+        }
+        for kind in &summary.subject_kinds {
+            if !spec_subject_kinds.contains(kind) && !extra_kinds.contains(kind) {
+                extra_kinds.push(kind.clone());
+            }
+        }
+    }
+    extra_kinds.sort();
+    for kind in extra_kinds {
+        let role_label = format!("subject_kind:{kind}");
+        let mut claims: Vec<PluginDoctorClaim> = Vec::new();
+        for summary in &summaries {
+            if !summary.is_subject_backend() || !summary.subject_kinds.contains(&kind) {
+                continue;
+            }
+            let lock_entry = lockfile.find(&summary.name);
+            let installed_kind = lock_entry
+                .and_then(|e| e.effective_installed_kind())
+                .map(str::to_string)
+                .unwrap_or_else(|| kind.clone());
+            let native_kind =
+                lock_entry.and_then(|e| e.effective_native_kind()).map(str::to_string).unwrap_or_else(|| kind.clone());
+            let renamed = installed_kind != native_kind;
+            claims.push(PluginDoctorClaim { plugin: summary.name.clone(), installed_kind, native_kind, renamed });
+        }
+        let mut by_installed: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
+        for claim in &claims {
+            by_installed.entry(claim.installed_kind.clone()).or_default().push(claim.plugin.clone());
+        }
+        let mut collisions: Vec<String> =
+            by_installed.iter().filter(|(_, plugins)| plugins.len() > 1).map(|(kind, _)| kind.clone()).collect();
+        collisions.sort();
+        if !collisions.is_empty() {
+            total_collisions += 1;
+        }
+        // Synthetic subject_kind rows never count as `unsatisfied` —
+        // they exist only because something IS installed under the kind.
+        roles_output.push(PluginDoctorRole { role: role_label, claims, collisions, unsatisfied: false });
+    }
+
+    let lockfile_display = lockfile.path().display().to_string();
+    let output = PluginDoctorOutput {
+        lockfile: lockfile_display.clone(),
+        roles: roles_output,
+        total_collisions,
+        total_unsatisfied,
+    };
+
+    if json || args.json {
+        return print_value(output, true);
+    }
+
+    println!("plugin doctor (lockfile: {lockfile_display})");
+    for role in &output.roles {
+        let header = if !role.collisions.is_empty() {
+            format!("[COLLISION] {}", role.role)
+        } else if role.unsatisfied {
+            format!("[UNSATISFIED] {}", role.role)
+        } else {
+            format!("[ok] {}", role.role)
+        };
+        println!("  {header}");
+        if role.claims.is_empty() {
+            println!("    (no installed plugin satisfies this role)");
+            continue;
+        }
+        for claim in &role.claims {
+            let rename_note = if claim.renamed { " (renamed)" } else { "" };
+            println!(
+                "    - {plugin} installed={installed} native={native}{rename_note}",
+                plugin = claim.plugin,
+                installed = claim.installed_kind,
+                native = claim.native_kind,
+            );
+        }
+        if !role.collisions.is_empty() {
+            for kind in &role.collisions {
+                println!("    ! duplicate installed_kind '{kind}' claimed by multiple plugins");
+            }
+        }
+    }
+    println!(
+        "summary: {total_collisions} role(s) with collisions, {total_unsatisfied} role(s) unsatisfied",
+        total_collisions = output.total_collisions,
+        total_unsatisfied = output.total_unsatisfied,
+    );
+    Ok(())
+}
+
+/// Look up the `provider_tool:*` capability declared in a discovered
+/// plugin's manifest. Returns the bare tool name (e.g. `claude`,
+/// `codex`) or `None` when the plugin declares no `provider_tool:*`
+/// capability (older provider plugins rely on `is_provider()` alone).
+fn provider_native_kind(discovered: &[DiscoveredPlugin], plugin_name: &str) -> Option<String> {
+    let plugin = discovered.iter().find(|p| p.name == plugin_name)?;
+    for cap in &plugin.manifest.capabilities {
+        if let Some(rest) = cap.strip_prefix("provider_tool:") {
+            let trimmed = rest.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+    Some(plugin.manifest.name.clone())
 }
 
 async fn handle_plugin_lock(cmd: PluginLockCommand, project_root: &str) -> Result<()> {
@@ -4177,14 +4796,26 @@ trusted_signers:
 
     #[cfg(unix)]
     fn write_fake_plugin_binary(path: &std::path::Path, manifest_name: &str, plugin_kind: &str) {
+        write_fake_plugin_binary_with_capabilities(path, manifest_name, plugin_kind, &[]);
+    }
+
+    #[cfg(unix)]
+    fn write_fake_plugin_binary_with_capabilities(
+        path: &std::path::Path,
+        manifest_name: &str,
+        plugin_kind: &str,
+        capabilities: &[&str],
+    ) {
         use std::os::unix::fs::PermissionsExt;
+        let capabilities_value: Vec<serde_json::Value> =
+            capabilities.iter().map(|c| serde_json::Value::String((*c).to_string())).collect();
         let manifest = serde_json::json!({
             "name": manifest_name,
             "version": "0.1.0",
             "plugin_kind": plugin_kind,
             "description": "fake plugin for install-pipeline tests",
             "protocol_version": "1.0.0",
-            "capabilities": [],
+            "capabilities": capabilities_value,
         });
         // The probe runs the binary with `--manifest`. A POSIX shell script that
         // prints the manifest JSON when `--manifest` is the first arg is enough
@@ -4590,6 +5221,8 @@ trusted_signers:
             artifact_sha256: "c".repeat(64),
             signature_bundle_sha256: None,
             installed_at: chrono::Utc::now().to_rfc3339(),
+            installed_kind: None,
+            native_kind: None,
         });
         concurrent_lock.save().expect("seed concurrent entry");
 
@@ -4955,5 +5588,532 @@ trusted_signers:
         assert_eq!(event["details"]["plugin"], output.name);
         // skip_signature=true -> install pipeline returns SignatureStatus::Skipped.
         assert_eq!(event["details"]["signature_status"], "skipped");
+    }
+
+    // ---- v0.5.7 kind translator: install auto-increment + --as-kind ----
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn install_records_native_kind_for_uncontested_subject_backend() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        let source = tmp.path().join("animus-plugin-task-a");
+        write_fake_plugin_binary_with_capabilities(
+            &source,
+            "animus-plugin-task-a",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+
+        let req = PluginInstallRequest {
+            path: Some(source.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let output = run_plugin_install(req).await.expect("install must succeed");
+        assert_eq!(output.assigned_kind.as_deref(), Some("task"));
+        assert_eq!(output.native_kind.as_deref(), Some("task"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn install_auto_increments_installed_kind_on_subject_collision() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        let first = tmp.path().join("animus-plugin-task-default");
+        write_fake_plugin_binary_with_capabilities(
+            &first,
+            "animus-plugin-task-default",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let req_first = PluginInstallRequest {
+            path: Some(first.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let out_first = run_plugin_install(req_first).await.expect("first install");
+        assert_eq!(out_first.assigned_kind.as_deref(), Some("task"));
+
+        let second = tmp.path().join("animus-plugin-task-archive");
+        write_fake_plugin_binary_with_capabilities(
+            &second,
+            "animus-plugin-task-archive",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let req_second = PluginInstallRequest {
+            path: Some(second.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let out_second = run_plugin_install(req_second).await.expect("second install");
+        assert_eq!(
+            out_second.assigned_kind.as_deref(),
+            Some("task-2"),
+            "second install of subject_kind:task must auto-increment to task-2"
+        );
+        assert_eq!(out_second.native_kind.as_deref(), Some("task"));
+
+        let lock = PluginLockfile::load_default(Some(&project_root)).expect("lockfile loads");
+        let entry = lock.find(&out_second.name).expect("second plugin lock entry");
+        assert_eq!(entry.installed_kind.as_deref(), Some("task-2"));
+        assert_eq!(entry.native_kind.as_deref(), Some("task"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn install_as_kind_overrides_auto_increment() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        let first = tmp.path().join("animus-plugin-task-default-a");
+        write_fake_plugin_binary_with_capabilities(
+            &first,
+            "animus-plugin-task-default-a",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let req_first = PluginInstallRequest {
+            path: Some(first.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        run_plugin_install(req_first).await.expect("first install");
+
+        let second = tmp.path().join("animus-plugin-task-archive-a");
+        write_fake_plugin_binary_with_capabilities(
+            &second,
+            "animus-plugin-task-archive-a",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let req_second = PluginInstallRequest {
+            path: Some(second.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            as_kind: Some("archive".to_string()),
+            ..Default::default()
+        };
+        let out_second = run_plugin_install(req_second).await.expect("second install");
+        assert_eq!(out_second.assigned_kind.as_deref(), Some("archive"), "--as-kind must override auto-increment");
+        assert_eq!(out_second.native_kind.as_deref(), Some("task"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn install_as_kind_with_existing_collision_returns_error() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        let first = tmp.path().join("animus-plugin-task-existing");
+        write_fake_plugin_binary_with_capabilities(
+            &first,
+            "animus-plugin-task-existing",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let req_first = PluginInstallRequest {
+            path: Some(first.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        run_plugin_install(req_first).await.expect("first install");
+
+        let second = tmp.path().join("animus-plugin-task-colliding");
+        write_fake_plugin_binary_with_capabilities(
+            &second,
+            "animus-plugin-task-colliding",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let req_second = PluginInstallRequest {
+            path: Some(second.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            as_kind: Some("task".to_string()),
+            ..Default::default()
+        };
+        let err = run_plugin_install(req_second).await.expect_err("explicit collision must fail");
+        let message = format!("{err:#}");
+        assert!(message.contains("already claimed by installed plugin"), "error must explain the collision: {message}");
+    }
+
+    #[test]
+    fn pick_installed_kind_returns_native_for_first_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-a", "task", None).expect("first install");
+        assert_eq!(chosen, "task");
+    }
+
+    #[test]
+    fn pick_installed_kind_auto_increments_through_task_2_task_3() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "plugin-a".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now.clone(),
+            installed_kind: Some("task".into()),
+            native_kind: Some("task".into()),
+        });
+        let chosen_b = pick_installed_kind_for_install(&lock, &[], "plugin-b", "task", None).expect("second install");
+        assert_eq!(chosen_b, "task-2");
+
+        lock.upsert(LockEntry {
+            name: "plugin-b".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "b".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now.clone(),
+            installed_kind: Some(chosen_b.clone()),
+            native_kind: Some("task".into()),
+        });
+        let chosen_c = pick_installed_kind_for_install(&lock, &[], "plugin-c", "task", None).expect("third install");
+        assert_eq!(chosen_c, "task-3");
+    }
+
+    #[test]
+    fn pick_installed_kind_uses_live_claims_to_cover_legacy_lockfile_rows() {
+        // Pre-v0.5.7 lockfile rows carry no `installed_kind`/`native_kind`
+        // fields, so collision detection must come from live discovery
+        // (`currently_claimed_kinds`) rather than the lockfile alone.
+        // When the legacy plugin's binary still declares
+        // `subject_kind:task`, the discovery pass surfaces `task` and
+        // the next install gets bumped to `task-2`.
+        let dir = tempfile::tempdir().unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "legacy-task".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now,
+            installed_kind: None,
+            native_kind: None,
+        });
+        let live_claims = vec!["task".to_string()];
+        let chosen = pick_installed_kind_for_install(&lock, &live_claims, "new-task", "task", None)
+            .expect("legacy lockfile row must still trigger collision detection via live discovery");
+        assert_eq!(chosen, "task-2", "auto-increment must run when legacy plugin still claims native kind");
+    }
+
+    #[test]
+    fn pick_installed_kind_lets_legacy_provider_row_pass_through() {
+        // Codex P1 round-3 v0.5.7: a legacy provider lockfile row must
+        // NOT spuriously force a fresh `subject_kind:task` install to
+        // auto-increment. Provider rows do not claim subject kinds, so
+        // `currently_claimed_kinds` carries no `task` entry and the new
+        // install lands on the native value.
+        let dir = tempfile::tempdir().unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "legacy-provider".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now,
+            installed_kind: None,
+            native_kind: None,
+        });
+        let chosen = pick_installed_kind_for_install(&lock, &[], "new-task", "task", None)
+            .expect("legacy unrelated row must not block first subject install");
+        assert_eq!(chosen, "task", "first subject_kind:task install must keep the native value");
+    }
+
+    #[test]
+    fn pick_installed_kind_preserves_prior_alias_on_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "plugin-archive".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now,
+            installed_kind: Some("archive".into()),
+            native_kind: Some("task".into()),
+        });
+        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-archive", "task", None)
+            .expect("upgrade must keep prior alias");
+        assert_eq!(chosen, "archive", "upgrade without --as-kind must NOT move plugin back to native kind");
+    }
+
+    #[test]
+    fn pick_installed_kind_skips_collision_when_upgrading_same_plugin() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "plugin-a".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now,
+            installed_kind: Some("task".into()),
+            native_kind: Some("task".into()),
+        });
+        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-a", "task", None)
+            .expect("upgrade must not collide with itself");
+        assert_eq!(chosen, "task", "re-install of same plugin keeps native kind");
+    }
+
+    #[test]
+    fn rename_eligible_native_kind_picks_subject_kind_for_subject_backend() {
+        let manifest = PluginManifest {
+            name: "subject-x".into(),
+            version: "0.1".into(),
+            plugin_kind: "subject_backend".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec!["subject_kind:task".into(), "subject_kind:incident".into()],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        assert_eq!(rename_eligible_native_kind(&manifest).as_deref(), Some("task"));
+    }
+
+    #[test]
+    fn rename_eligible_native_kind_returns_none_for_provider_in_v0_5_7() {
+        let manifest = PluginManifest {
+            name: "provider-x".into(),
+            version: "0.1".into(),
+            plugin_kind: "provider".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec!["provider_tool:claude".into()],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        // v0.5.7 only renames subject_backend kinds; provider dispatch
+        // does not consult plugins.lock yet, so providers must skip the
+        // rename pipeline to avoid recording aliases the runtime cannot honor.
+        assert_eq!(rename_eligible_native_kind(&manifest), None);
+    }
+
+    #[test]
+    fn rename_eligible_native_kind_skips_glob_subject_kinds() {
+        // Codex P2 round-3 v0.5.7: glob kinds (`subject_kind:task.*`) are
+        // passed through unrenamed by the SubjectRouter, so the install
+        // pipeline must skip them too — otherwise the lockfile would
+        // record an `installed_kind` the router never registers.
+        let manifest = PluginManifest {
+            name: "subject-glob".into(),
+            version: "0.1".into(),
+            plugin_kind: "subject_backend".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec!["subject_kind:task.*".into()],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        assert_eq!(rename_eligible_native_kind(&manifest), None);
+    }
+
+    #[test]
+    fn rename_eligible_native_kind_picks_exact_kind_even_when_globs_present() {
+        let manifest = PluginManifest {
+            name: "subject-mixed".into(),
+            version: "0.1".into(),
+            plugin_kind: "subject_backend".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec!["subject_kind:task.*".into(), "subject_kind:incident".into()],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        assert_eq!(rename_eligible_native_kind(&manifest).as_deref(), Some("incident"));
+    }
+
+    #[test]
+    fn rename_eligible_native_kind_is_none_for_unknown_plugin_kind() {
+        let manifest = PluginManifest {
+            name: "transport-x".into(),
+            version: "0.1".into(),
+            plugin_kind: "transport".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec!["http_routes:foo".into()],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        assert_eq!(rename_eligible_native_kind(&manifest), None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn plugin_doctor_flags_collision_between_two_task_backends() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        // Stage two installed subject_backend plugins claiming the same
+        // native kind, then hand-edit the lockfile so BOTH share the same
+        // installed_kind. That is the broken-state the doctor must flag —
+        // the install pipeline itself prevents it from happening through
+        // the normal CLI path.
+        let plugin_a = install_dir.join("animus-plugin-collide-a");
+        write_fake_plugin_binary_with_capabilities(
+            &plugin_a,
+            "animus-plugin-collide-a",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let plugin_b = install_dir.join("animus-plugin-collide-b");
+        write_fake_plugin_binary_with_capabilities(
+            &plugin_b,
+            "animus-plugin-collide-b",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let mut lock = PluginLockfile::empty_at(&animus_dir.join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "animus-plugin-collide-a".into(),
+            version: "v0".into(),
+            artifact_sha256: "1".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now.clone(),
+            installed_kind: Some("task".into()),
+            native_kind: Some("task".into()),
+        });
+        lock.upsert(LockEntry {
+            name: "animus-plugin-collide-b".into(),
+            version: "v0".into(),
+            artifact_sha256: "2".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now,
+            installed_kind: Some("task".into()),
+            native_kind: Some("task".into()),
+        });
+        lock.save().expect("save lockfile");
+
+        use orchestrator_core::{summarize_discovered_plugins_with_lock, PluginPreflightSpec, RequiredRole};
+        let discovered = discover_plugins(&project_root).expect("discover");
+        let lock_loaded_for_summaries = PluginLockfile::load_default(Some(&project_root)).expect("reload lock");
+        let summaries = summarize_discovered_plugins_with_lock(&discovered, Some(&lock_loaded_for_summaries));
+        assert!(
+            summaries.iter().any(|s| s.name == "animus-plugin-collide-a"),
+            "discovery must surface plugin-a from the install dir"
+        );
+        assert!(
+            summaries.iter().any(|s| s.name == "animus-plugin-collide-b"),
+            "discovery must surface plugin-b from the install dir"
+        );
+
+        // Replicate the doctor's grouping logic locally to avoid invoking
+        // the print path inside a multi-threaded test runner.
+        let spec = PluginPreflightSpec::daemon_default();
+        let task_role = spec
+            .required_roles
+            .iter()
+            .find(|r| matches!(r, RequiredRole::SubjectKind(k) if k == "task"))
+            .expect("subject_kind:task role present in daemon default spec");
+        let claims: Vec<&str> = summaries
+            .iter()
+            .filter(|s| s.is_subject_backend() && s.covers_subject_kind("task"))
+            .map(|s| s.name.as_str())
+            .collect();
+        assert_eq!(claims.len(), 2, "both plugins claim subject_kind:task: {claims:?}");
+        let lock_loaded = PluginLockfile::load_default(Some(&project_root)).expect("reload lock");
+        let installed_kinds: Vec<String> = claims
+            .iter()
+            .map(|name| {
+                lock_loaded
+                    .find(name)
+                    .and_then(|e| e.effective_installed_kind())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| "task".to_string())
+            })
+            .collect();
+        let mut by_kind: std::collections::HashMap<&String, usize> = std::collections::HashMap::new();
+        for k in &installed_kinds {
+            *by_kind.entry(k).or_insert(0) += 1;
+        }
+        assert!(
+            by_kind.values().any(|&v| v >= 2),
+            "doctor must see at least one installed_kind claimed by two plugins for role {}",
+            task_role.label(),
+        );
     }
 }
