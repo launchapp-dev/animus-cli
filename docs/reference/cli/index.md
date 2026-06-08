@@ -226,13 +226,14 @@ animus
 ├── logs                     Tail and inspect daemon log output (in-tree or via log_storage_backend plugin)
 │   └── tail                 Tail recent log entries from the active log storage backend
 │
-├── subject                  List, get, create, and update subjects via installed subject_backend plugins
+├── subject                  List, get, create, update, status, and delete subjects via installed subject_backend plugins
 │   ├── list                 List subjects for a given kind via the active subject_backend plugin
 │   ├── get                  Fetch a single subject by id from the active subject_backend plugin
 │   ├── create               Create a subject through the active subject_backend plugin
 │   ├── update               Update a subject through the active subject_backend plugin
 │   ├── next                 Return the highest-priority Ready subject for the given kind
-│   └── status               Set the status of a subject by id through the active subject_backend
+│   ├── status               Set the status of a subject by id through the active subject_backend
+│   └── delete               Delete a subject by id; requires --yes to confirm (otherwise prints preview)
 │
 ├── flavor                   Inspect or install Animus flavor manifests (`flavors/<name>.toml`) — v0.5
 │   ├── list                 List available flavor manifests on disk

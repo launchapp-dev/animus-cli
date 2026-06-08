@@ -33,11 +33,16 @@ pub const DEFAULT_WORKFLOW_RUNNER_PLUGINS: &[(&str, &str)] =
 /// v0.5 queue plugin. See [`DEFAULT_WORKFLOW_RUNNER_PLUGINS`].
 pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.3.0")];
 
-/// v0.5 durable-store plugin (DBOS Option A).
-pub const DEFAULT_DURABLE_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-step-durable-dbos", "v0.2.0")];
+/// v0.5 durable-store plugin (DBOS Option A). The `animus-step-durable-dbos`
+/// repository has not shipped a tagged release yet; until it does this list
+/// stays empty so `animus plugin install-defaults --include-durable-stores`
+/// no-ops cleanly instead of failing the install with a 404.
+pub const DEFAULT_DURABLE_STORE_PLUGINS: &[(&str, &str)] = &[];
 
-/// v0.5 memory-store plugin (Zep Cloud).
-pub const DEFAULT_MEMORY_STORE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-memory-zep", "v0.1.0")];
+/// v0.5 memory-store plugin (Zep Cloud). Same shape as
+/// [`DEFAULT_DURABLE_STORE_PLUGINS`] — the `animus-memory-zep` repo has not
+/// shipped a tagged release yet; empty until it does.
+pub const DEFAULT_MEMORY_STORE_PLUGINS: &[(&str, &str)] = &[];
 
 /// v0.5.3 notifier plugin (HTTP + Slack webhook). Optional role; the
 /// daemon starts cleanly without a notifier installed. Listed here so
@@ -52,9 +57,9 @@ pub const DEFAULT_OAI_AGENT_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-
 /// below (`default_subject_repo_for_kind`) assume each entry is listed
 /// here so preflight and install-defaults stay in lockstep.
 pub const DEFAULT_SUBJECT_PLUGINS: &[(&str, &str)] = &[
-    ("launchapp-dev/animus-subject-default", "v0.1.1"),
-    ("launchapp-dev/animus-subject-requirements", "v0.1.6"),
-    ("launchapp-dev/animus-subject-linear", "v0.1.4"),
+    ("launchapp-dev/animus-subject-default", "v0.1.4"),
+    ("launchapp-dev/animus-subject-requirements", "v0.1.7"),
+    ("launchapp-dev/animus-subject-linear", "v0.1.5"),
     ("launchapp-dev/animus-subject-sqlite", "v0.1.4"),
     ("launchapp-dev/animus-subject-markdown", "v0.1.4"),
 ];
@@ -63,7 +68,7 @@ pub const DEFAULT_SUBJECT_PLUGINS: &[(&str, &str)] = &[
 pub const DEFAULT_TRANSPORT_PLUGINS: &[(&str, &str)] = &[
     ("launchapp-dev/animus-transport-http", "v0.2.1"),
     ("launchapp-dev/animus-transport-graphql", "v0.2.3"),
-    ("launchapp-dev/animus-web-ui", "v0.1.1"),
+    ("launchapp-dev/animus-web-ui", "v0.1.0"),
 ];
 
 /// Format a registry entry into the `owner/repo@tag` spec accepted by

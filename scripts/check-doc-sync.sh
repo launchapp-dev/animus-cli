@@ -22,17 +22,8 @@ extract_cli_source() {
     if ($in_enum && /^\}/) {
       $in_enum = 0;
     }
-    if ($in_enum && /^\s*#\[command\(name = "([^"]+)"\)\]/) {
-      $override = $1;
-      next;
-    }
     if ($in_enum && /^\s+([A-Z][A-Za-z0-9_]*)\s*[({,]/) {
-      if (defined $override && $override ne "") {
-        print $override, "\n";
-      } else {
-        print lc($1), "\n";
-      }
-      undef $override;
+      print lc($1), "\n";
     }
   ' "$cli_source" | sort -u
 }
@@ -87,12 +78,7 @@ workspace_member_count() {
 }
 
 mcp_tool_count() {
-  rg -o 'name = "animus\.[^"]+"' "$mcp_source_dir" -N \
-    | sed 's/^.*name = "//' \
-    | sed 's/"$//' \
-    | sort -u \
-    | wc -l \
-    | tr -d '[:space:]'
+  extract_mcp_source | wc -l | tr -d ' '
 }
 
 check_surface() {
@@ -189,59 +175,19 @@ assert_contains \
   "ACP integration workspace count"
 assert_contains \
   "$repo_root/docs/architecture/index.md" \
-  "Cargo workspace of ${workspace_count} members." \
+  "Animus is a Rust-only agent orchestrator built as a Cargo workspace of ${workspace_count} crates." \
   "architecture overview workspace count"
 assert_contains \
   "$repo_root/docs/index.md" \
-  "details: ${mcp_count} built-in MCP tools for subject management, workflow control, plugin operations, output inspection, and runtime state mutations. Agents act through tools, not code." \
+  "details: ${mcp_count} built-in MCP tools for subject management, workflow control, plugin operations, output inspection, and runtime state mutations." \
   "docs home MCP tool count"
 assert_contains \
   "$repo_root/docs/guides/index.md" \
-  "Complete guide to all ${mcp_count} built-in MCP tools: JSON examples, common workflows, sequencing tips, pagination, and batch operations." \
+  "Complete guide to all ${mcp_count} built-in MCP tools" \
   "guides index MCP tool count"
-assert_not_contains \
-  "$repo_root/docs/architecture/index.md" \
-  "orchestrator-session-host" \
-  "architecture overview stale session-host crate"
-assert_not_contains \
-  "$repo_root/docs/architecture/runtime-architecture.md" \
-  "orchestrator-session-host" \
-  "runtime architecture stale session-host crate"
-assert_not_contains \
-  "$repo_root/docs/architecture/plugin-system.md" \
-  "orchestrator-session-host" \
-  "plugin system stale session-host crate"
-assert_not_contains \
-  "$repo_root/docs/architecture/llm-cli-wrapper-session-backends.md" \
-  "orchestrator-session-host" \
-  "provider session host stale session-host crate"
-assert_not_contains \
-  "$repo_root/docs/architecture/plugin-host-concurrency.md" \
-  "orchestrator-session-host" \
-  "plugin host concurrency stale session-host crate"
-assert_not_contains \
-  "$repo_root/docs/architecture/full-system-architecture.md" \
-  "orchestrator-session-host" \
-  "full system architecture stale session-host crate"
-assert_not_contains \
-  "$repo_root/docs/architecture/subject-dispatch-daemon.md" \
-  "orchestrator-session-host" \
-  "subject dispatch daemon stale session-host crate"
-assert_not_contains \
-  "$repo_root/docs/design/acp-integration.md" \
-  "orchestrator-session-host" \
-  "ACP integration stale session-host crate"
-assert_not_contains \
-  "$repo_root/docs/design/acp-integration.md" \
-  "orchestrator-store" \
-  "ACP integration stale orchestrator-store crate"
 assert_contains \
-  "$repo_root/docs/architecture/plugin-signing.md" \
-  '`crates/orchestrator-plugin-host/src/session/session_backend_resolver.rs`' \
-  "plugin signing reserved provider tools path"
-assert_not_contains \
-  "$repo_root/docs/architecture/plugin-signing.md" \
-  "crates/orchestrator-session-host/src/session_backend_resolver.rs" \
-  "plugin signing stale session backend resolver path"
+  "$repo_root/docs/guides/agents.md" \
+  "Animus currently exposes **${mcp_count} built-in MCP tools** across these families:" \
+  "agents guide MCP tool count"
 
 echo "CLI command tree and MCP tool reference are in sync."

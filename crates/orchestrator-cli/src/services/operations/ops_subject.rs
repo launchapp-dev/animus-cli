@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::{
-    print_value, SubjectCommand, SubjectCreateArgs, SubjectGetArgs, SubjectListArgs, SubjectNextArgs,
+    print_value, SubjectCommand, SubjectCreateArgs, SubjectDeleteArgs, SubjectGetArgs, SubjectListArgs, SubjectNextArgs,
     SubjectStatusArgs, SubjectUpdateArgs,
 };
 
@@ -28,6 +28,7 @@ pub(crate) async fn handle_subject(command: SubjectCommand, project_root: &str, 
         SubjectCommand::Update(args) => handle_subject_update(args, project_root, json).await,
         SubjectCommand::Next(args) => handle_subject_next(args, project_root, json).await,
         SubjectCommand::Status(args) => handle_subject_status(args, project_root, json).await,
+        SubjectCommand::Delete(args) => handle_subject_delete(args, project_root, json).await,
     }
 }
 
@@ -119,6 +120,27 @@ async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json
     }
     let params = Some(json!({ "id": id, "status": status }));
     dispatch(&kind, "status", params, project_root, json).await
+}
+
+async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json: bool) -> Result<()> {
+    let kind = resolve_kind(args.kind.as_deref(), project_root)?;
+    let id = args.id.trim();
+    if id.is_empty() {
+        return Err(anyhow!("--id must not be empty"));
+    }
+    if !args.yes {
+        let preview = json!({
+            "kind": kind,
+            "verb": "delete",
+            "id": id,
+            "would_delete": true,
+            "hint": "re-run with --yes to actually delete",
+        });
+        print_value(&preview, json)?;
+        return Ok(());
+    }
+    let params = Some(json!({ "id": id }));
+    dispatch(&kind, "delete", params, project_root, json).await
 }
 
 /// Resolve the `--kind` value used for `animus subject <verb>`.

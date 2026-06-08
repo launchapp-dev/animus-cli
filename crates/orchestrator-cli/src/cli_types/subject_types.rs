@@ -24,6 +24,13 @@ pub(crate) enum SubjectCommand {
     Next(SubjectNextArgs),
     /// Set the status of a subject by id through the active subject_backend.
     Status(SubjectStatusArgs),
+    /// Delete a subject by id through the active subject_backend plugin.
+    ///
+    /// Routes `<kind>/delete` through the daemon's [`SubjectRouter`]. Backends
+    /// that do not support delete return `BackendError::Unsupported` (the
+    /// `SubjectBackend::delete` default impl restored in `animus-protocol`
+    /// v0.5.7). Plugins that claim `supports_delete: true` honor it.
+    Delete(SubjectDeleteArgs),
 }
 
 #[derive(Debug, Args)]
@@ -128,4 +135,20 @@ pub(crate) struct SubjectStatusArgs {
     /// New normalized status to set.
     #[arg(long, value_name = "STATUS")]
     pub status: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SubjectDeleteArgs {
+    /// Subject kind to route through. When omitted, falls back to
+    /// `default_subject_kind` in `.animus/config.json` (defaults to
+    /// `task`).
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<String>,
+    /// Backend-qualified subject id to delete.
+    #[arg(long, value_name = "ID")]
+    pub id: String,
+    /// Confirm the destructive operation. Required to actually delete;
+    /// without it the command prints what would be deleted and exits 0.
+    #[arg(long)]
+    pub yes: bool,
 }
