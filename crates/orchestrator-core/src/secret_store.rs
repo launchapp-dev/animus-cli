@@ -291,6 +291,14 @@ impl SecretStore for KeyringSecretStore {
 
     fn get(&self, key: &str) -> SecretStoreResult<Option<String>> {
         validate_key(key)?;
+        // Treat the per-scope index as authoritative: a key not in
+        // `index.json` is reported as absent even if a stale keychain
+        // entry survives. Matches `snapshot_filtered` and
+        // `WorkflowSecretResolver::resolve` semantics. (codex round-11 P2.)
+        let index = read_index(&self.scoped_root)?;
+        if !index.keys.iter().any(|k| k == key) {
+            return Ok(None);
+        }
         let entry = self.entry(key)?;
         match entry.get_password() {
             Ok(value) => Ok(Some(value)),
