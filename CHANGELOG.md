@@ -103,6 +103,30 @@ All notable changes to this project will be documented in this file.
   rely on it as a production trust gate. See
   [docs/reference/workflow-yaml.md#evals-experimental--runtime-enforcement-deferred](docs/reference/workflow-yaml.md#evals-experimental--runtime-enforcement-deferred)
   for the YAML surface.
+### Added (v0.5.5 cost governance)
+
+- **Workflow + phase budget caps in YAML.** New `budget:` block on
+  `WorkflowDefinition` and on rich phase entries declares
+  `max_tokens`, `max_cost_usd`, and `on_exceed: pause|fail|warn`.
+  Workflow caps subsume phase caps; phase rework resets the per-phase
+  counter. Validated by `validate_workflow_config`.
+- **Cost aggregator over existing `AgentRunEvent::Metadata` events.**
+  `crates/orchestrator-cli/src/services/cost/` folds vendor-reported
+  cost + token counts into a per-(workflow_run_id, phase_id) rollup
+  persisted to `~/.animus/<scope>/cost-state.v1.json` (schema
+  `animus.cost-state.v1`). When the provider omits `cost`, a small
+  per-model USD rate table estimates it (see
+  `docs/reference/configuration.md#cost-governance-and-model-rates-v055`).
+- **`animus cost` CLI.** `summary [--since 24h]`, `workflow <ID>`,
+  `top [--by tokens|cost] [--limit N]`, `trends [--window day|week|month]`.
+  All commands honor `--json`.
+- **Budget-exceeded decision records.** When a cap is crossed,
+  `cap_check::check_caps` produces a `BudgetExceededRecord` (schema
+  `animus.budget-exceeded.v1`) intended for `decisions.jsonl`. The
+  workflow runner hook that translates these into actual workflow
+  pauses lands in the `launchapp-dev/animus-workflow-runner-default`
+  plugin in a follow-up release; this commit ships the data, schemas,
+  and read surface.
 
 ## [0.5.4] - 2026-06-05
 

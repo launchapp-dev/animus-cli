@@ -43,6 +43,54 @@ pub(crate) fn default_max_rework_attempts() -> u32 {
     3
 }
 
+/// What the workflow runner should do when a [`BudgetConfig`] cap is hit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BudgetOnExceed {
+    /// Move the workflow into a manual-approval state with reason `budget_exceeded`.
+    #[default]
+    Pause,
+    /// Terminate the workflow as failed.
+    Fail,
+    /// Emit a warning to logs + events and continue running.
+    Warn,
+}
+
+impl BudgetOnExceed {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BudgetOnExceed::Pause => "pause",
+            BudgetOnExceed::Fail => "fail",
+            BudgetOnExceed::Warn => "warn",
+        }
+    }
+}
+
+/// Cost ceiling declared on a [`WorkflowDefinition`] or a phase entry.
+///
+/// Workflow caps subsume phase caps: a workflow cap that is lower than
+/// any individual phase cap is still authoritative.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct BudgetConfig {
+    /// Combined input + output + reasoning token ceiling. `None` means
+    /// no token ceiling for this scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    /// USD ceiling with cents precision. `None` means no cost ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<f64>,
+    /// Action to take when either ceiling is crossed.
+    #[serde(default)]
+    pub on_exceed: BudgetOnExceed,
+}
+
+impl BudgetConfig {
+    /// True when no cap is set — the config is effectively a no-op.
+    pub fn is_empty(&self) -> bool {
+        self.max_tokens.is_none() && self.max_cost_usd.is_none()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowPhaseConfig {
     pub id: String,
@@ -52,6 +100,8 @@ pub struct WorkflowPhaseConfig {
     pub on_verdict: HashMap<String, PhaseTransitionConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skip_if: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<BudgetConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -106,6 +156,14 @@ impl WorkflowPhaseEntry {
 
     pub fn is_sub_workflow(&self) -> bool {
         matches!(self, WorkflowPhaseEntry::SubWorkflow(_))
+    }
+
+    /// Phase-level budget cap declared inline on a rich phase entry.
+    pub fn budget(&self) -> Option<&BudgetConfig> {
+        match self {
+            WorkflowPhaseEntry::Simple(_) | WorkflowPhaseEntry::SubWorkflow(_) => None,
+            WorkflowPhaseEntry::Rich(config) => config.budget.as_ref(),
+        }
     }
 }
 
@@ -231,6 +289,7 @@ pub struct WorkflowDefinition {
     pub variables: Vec<WorkflowVariable>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeConfig>,
+    pub budget: Option<BudgetConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

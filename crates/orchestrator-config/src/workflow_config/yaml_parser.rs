@@ -238,6 +238,7 @@ pub(super) fn workflow_phase_entry_to_yaml(entry: &WorkflowPhaseEntry) -> YamlPh
                     max_rework_attempts: config.max_rework_attempts,
                     skip_if: config.skip_if.clone(),
                     on_verdict: config.on_verdict.clone(),
+                    budget: config.budget.clone(),
                 },
             );
             YamlPhaseEntry::Rich(map)
@@ -254,6 +255,7 @@ pub(super) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> Ya
         post_success: definition.post_success.clone().map(post_success_config_to_yaml),
         variables: definition.variables.clone(),
         worktree: definition.worktree.clone().map(YamlPhaseWorktree::Full),
+        budget: definition.budget.clone(),
     }
 }
 
@@ -364,6 +366,7 @@ pub(super) fn yaml_phase_entry_to_workflow_phase_entry(entry: YamlPhaseEntry) ->
                 max_rework_attempts: config.max_rework_attempts,
                 on_verdict: config.on_verdict,
                 skip_if: config.skip_if,
+                budget: config.budget,
             }))
         }
     }
@@ -385,6 +388,7 @@ pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition)
         post_success,
         variables: yaml.variables,
         worktree,
+        budget: yaml.budget,
     })
 }
 

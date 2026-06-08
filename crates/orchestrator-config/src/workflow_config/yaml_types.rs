@@ -38,6 +38,8 @@ pub(super) struct YamlPhaseRichConfig {
     pub(super) skip_if: Vec<String>,
     #[serde(default)]
     pub(super) on_verdict: HashMap<String, PhaseTransitionConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) budget: Option<BudgetConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +85,7 @@ pub(super) struct YamlWorkflowDefinition {
     pub(super) variables: Vec<WorkflowVariable>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) worktree: Option<YamlPhaseWorktree>,
+    pub(super) budget: Option<BudgetConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

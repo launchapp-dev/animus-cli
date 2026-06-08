@@ -140,6 +140,7 @@ mod tests {
                 post_success: None,
                 variables: Vec::new(),
                 worktree: None,
+                budget: None,
             },
             WorkflowDefinition {
                 id: UI_UX_WORKFLOW_REF.to_string(),
@@ -149,6 +150,7 @@ mod tests {
                 post_success: None,
                 variables: Vec::new(),
                 worktree: None,
+                budget: None,
             },
         ];
         config

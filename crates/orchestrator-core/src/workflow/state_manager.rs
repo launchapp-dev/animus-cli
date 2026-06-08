@@ -573,6 +573,48 @@ pub fn load_workflow_history_summaries(project_root: &std::path::Path) -> Result
     Ok(workflows)
 }
 
+/// Build a `workflow_id → workflow_ref` map from the workflows table.
+///
+/// Used by `animus cost` to bridge runtime workflow ids (the random
+/// id the daemon assigns when it kicks off a workflow) back to the
+/// YAML `workflow_ref` so budget caps declared in `workflows.yaml`
+/// can be resolved against the cost rollup.
+///
+/// The `json` column is zstd-compressed (see `compress_json`), so
+/// we round-trip through `decompress_json` before parsing. Rows that
+/// fail to decompress or parse are skipped silently — the caller
+/// gets a partial index rather than a hard error.
+pub fn load_workflow_ref_index(project_root: &std::path::Path) -> Result<std::collections::HashMap<String, String>> {
+    let conn = match open_project_db(project_root) {
+        Ok(conn) => conn,
+        Err(_) => return Ok(std::collections::HashMap::new()),
+    };
+    let mut stmt = match conn.prepare("SELECT id, json FROM workflows") {
+        Ok(stmt) => stmt,
+        Err(_) => return Ok(std::collections::HashMap::new()),
+    };
+    let rows = stmt.query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)))?;
+    let mut out = std::collections::HashMap::new();
+    for row in rows {
+        let (workflow_id, blob) = match row {
+            Ok(pair) => pair,
+            Err(_) => continue,
+        };
+        let json = match decompress_json(&blob) {
+            Ok(text) => text,
+            Err(_) => continue,
+        };
+        let value: serde_json::Value = match serde_json::from_str(&json) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(workflow_ref) = value.get("workflow_ref").and_then(serde_json::Value::as_str) {
+            out.insert(workflow_id, workflow_ref.to_string());
+        }
+    }
+    Ok(out)
+}
+
 pub fn db_path_for_project(project_root: &std::path::Path) -> PathBuf {
     protocol::scoped_state_root(project_root).expect("scoped_state_root requires a home directory").join("workflow.db")
 }
