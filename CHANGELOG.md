@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added (v0.5.8)
+
+- **`animus plugin rename <PLUGIN_NAME> --to <NEW_KIND>`** — post-install
+  rename of a plugin's `installed_kind` in `plugins.lock`. Reuses the
+  v0.5.7 install pipeline's collision check, auto-increment behavior, and
+  invalid-character validation; only the lockfile's `installed_kind` slot
+  changes (the on-disk binary, manifest, and `native_kind` stay put).
+  `--force` auto-increments past a collision (`requirement` -> `requirement-2`)
+  instead of failing. Emits an `animus.plugin.rename.v1` envelope.
+
+### Fixed (v0.5.8)
+
+- **Multi-kind subject backend collision detection** — the install
+  pipeline's `rename_eligible_native_kind` previously returned only the
+  FIRST exact `subject_kind:*` capability, so a single binary declaring
+  both `task` and `requirement` slipped past collision checks on the
+  secondary kind. v0.5.8 introduces `all_rename_eligible_native_kinds`
+  and a secondary-kind collision pass in `compute_kind_assignment`. A
+  multi-kind backend now refuses to install when ANY of its declared
+  exact kinds collides with an existing install — the lockfile records
+  one `installed_kind` per plugin, so a secondary collision cannot be
+  auto-incremented and must be surfaced. Closes `TODO(codex-p2 round-4
+  v0.5.7)` in `ops_plugin.rs`.
+- **`--name <NAME>` install override round-trips through discovery** —
+  `plugins.yaml` gains a `name_override` field that records the
+  install-time `--name` value. `PluginDiscovery::discover_configured`
+  now uses `name_override` as the canonical `DiscoveredPlugin::name`
+  when set, so the daemon's `SubjectRouter` alias map (keyed by
+  `plugin.name` from discovery) finds the lockfile entry (also keyed
+  under the override) instead of dropping the alias. Without this
+  fix, a plugin installed as `--name task-archive` would re-register
+  under its manifest name on next daemon start and lose its rename.
+  Closes `TODO(codex-p2 round-4 v0.5.7)` in `subject_dispatch.rs`.
+
 ## [0.5.5] - 2026-06-07
 
 ### Documentation

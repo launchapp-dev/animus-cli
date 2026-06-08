@@ -268,16 +268,13 @@ fn load_kind_aliases_from_lockfile(project_root: &Path, candidates: &[Discovered
             return aliases;
         }
     };
-    // TODO(codex-p2 round-4 v0.5.7): the candidate set is keyed by
-    // `plugin.name` which comes from discovery (plugins.yaml entry name
-    // == manifest name). The lockfile entry can be keyed by the
-    // `--name` install override when the operator passed one, so a
-    // plugin installed as `--name task-archive` with a manifest name of
-    // `animus-subject-default` would have its lockfile row dropped here
-    // and the daemon would re-register it under its native kind. Fix
-    // requires plumbing the install-time name override through discovery
-    // (plugins.yaml currently doesn't record it). Today's defaults flow
-    // doesn't pass --name so this is dormant.
+    // v0.5.8 fold-in (closes codex P2 round-4 v0.5.7): the candidate set
+    // is keyed by `plugin.name` which now reflects the install-time
+    // `--name <NAME>` override when the operator passed one (recorded in
+    // `plugins.yaml` as `name_override` and surfaced by
+    // `PluginDiscovery::discover_configured`). The lockfile entry is
+    // already keyed under the same override, so the candidate filter
+    // here no longer drops aliases for renamed installs.
     let candidate_names: std::collections::HashSet<&str> = candidates.iter().map(|p| p.name.as_str()).collect();
     for entry in &lock.plugins {
         if !candidate_names.contains(entry.name.as_str()) {

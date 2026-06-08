@@ -616,6 +616,29 @@ The `--json` shape (`PluginDoctorOutput`) is wrapped in the standard
 See [Plugin kind translator (v0.5.7)](../../architecture/plugin-kind-translator-v0.5.7.md)
 for the underlying renaming mechanism.
 
+### `animus plugin rename <PLUGIN_NAME> --to <NEW_KIND>` (v0.5.8)
+
+Post-install rename of a plugin's `installed_kind`. Reuses the v0.5.7
+install pipeline's collision check, auto-increment behavior, and
+invalid-character validation — only the lockfile's `installed_kind`
+slot changes; the on-disk binary, manifest, and `native_kind` are
+untouched.
+
+```bash
+animus plugin rename animus-subject-default --to archive
+animus plugin rename animus-subject-default --to task --force   # auto-increments past collisions
+```
+
+| Flag | Description |
+|---|---|
+| `<PLUGIN_NAME>` (positional) | Lockfile entry name. Matches the `name` recorded by `animus plugin install` (the `--name <NAME>` override when supplied, otherwise the binary basename). |
+| `--to <NEW_KIND>` | New `installed_kind`. Rejected if it contains `/`, `*`, `:`, or whitespace, mirroring `--as-kind` on install. |
+| `--force` | When `--to` collides with another installed plugin, auto-increment (`task` -> `task-2` -> ...) instead of failing. Without `--force` a collision is a hard error so the operator picks the suffix explicitly. |
+| `--json` | Emit the `animus.plugin.rename.v1` envelope as JSON. |
+
+The handler errors out cleanly when `PLUGIN_NAME` has no lockfile
+entry — install the plugin first or check `animus plugin lock list`.
+
 ### `animus plugin new`
 
 Scaffold a new plugin project from the

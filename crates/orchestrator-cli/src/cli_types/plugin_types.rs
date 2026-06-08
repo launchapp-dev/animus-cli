@@ -47,6 +47,33 @@ pub(crate) enum PluginCommand {
     /// installed plugins (by installed_kind + native_kind) and flags duplicates
     /// so collisions are visible without spelunking through the lockfile.
     Doctor(PluginDoctorArgs),
+    /// Rename an installed plugin's `installed_kind` after install. Reuses the
+    /// same collision check + auto-increment + invalid-character validation
+    /// the install pipeline applies for `--as-kind`. Operates on the lockfile
+    /// entry keyed by `<PLUGIN_NAME>`; the on-disk binary and manifest's
+    /// `native_kind` are untouched. Only the user-facing `installed_kind` —
+    /// the prefix the SubjectRouter dispatches against — changes.
+    Rename(PluginRenameArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginRenameArgs {
+    /// Logical plugin name (matches the lockfile / `plugins.yaml` entry key).
+    #[arg(value_name = "PLUGIN_NAME")]
+    pub(crate) name: String,
+    /// New `installed_kind` to assign. Validated against the same rules
+    /// as `--as-kind`: rejects `/`, `*`, `:`, and whitespace.
+    #[arg(long = "to", value_name = "NEW_KIND")]
+    pub(crate) to: String,
+    /// When the requested kind already collides with another installed
+    /// plugin, auto-increment (`task` -> `task-2` -> ...) instead of
+    /// failing. Without this flag a collision is a hard error so the
+    /// operator picks the suffix explicitly.
+    #[arg(long, default_value_t = false)]
+    pub(crate) force: bool,
+    /// Emit the result envelope as JSON.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Args)]
