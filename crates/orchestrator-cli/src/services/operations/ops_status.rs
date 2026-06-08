@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command as ProcessCommand, Stdio};
+use std::sync::OnceLock;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
@@ -20,6 +21,9 @@ const RECENT_FAILURES_LIMIT: usize = 3;
 const CI_PROVIDER_GITHUB: &str = "github";
 const GH_RUN_LIST_FIELDS: &str =
     "databaseId,displayTitle,name,workflowName,status,conclusion,event,headBranch,headSha,createdAt,updatedAt,url";
+
+const CI_CACHE_SCHEMA: &str = "animus.cache.ci.v1";
+const CI_CACHE_DEFAULT_TTL_SECS: u64 = 60;
 
 #[derive(Debug, Clone, Serialize)]
 struct StatusDashboard {
@@ -119,8 +123,9 @@ struct WorkflowStatusSnapshot {
     recent_failures: Vec<RecentFailureEntry>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CiStatusSlice {
+    #[serde(skip_deserializing, default = "default_ci_provider")]
     provider: &'static str,
     available: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,9 +134,30 @@ struct CiStatusSlice {
     reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// `true` when this slice was served from the on-disk CI cache rather
+    /// than a fresh `gh run list` shell-out. Lets the UI say "as of 30s
+    /// ago". Skipped from JSON when `false` to keep the wire compact.
+    #[serde(default, skip_serializing_if = "is_false")]
+    cached: bool,
 }
 
-#[derive(Debug, Clone, Serialize)]
+fn default_ci_provider() -> &'static str {
+    CI_PROVIDER_GITHUB
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct CiCacheFile {
+    schema: String,
+    fetched_at: DateTime<Utc>,
+    ttl_seconds: u64,
+    payload: CiStatusSlice,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct CiRunSummary {
     id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -513,7 +539,7 @@ fn load_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSna
 
 async fn collect_ci_status(project_root: &str) -> CiStatusSlice {
     let project_root = project_root.to_string();
-    match tokio::task::spawn_blocking(move || ci_status_from_lookup(lookup_ci_status(project_root.as_str()))).await {
+    match tokio::task::spawn_blocking(move || collect_ci_status_blocking(project_root.as_str())).await {
         Ok(status) => status,
         Err(error) => CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
@@ -521,8 +547,128 @@ async fn collect_ci_status(project_root: &str) -> CiStatusSlice {
             last_run: None,
             reason: None,
             error: Some(format!("failed to collect CI status: {error}")),
+            cached: false,
         },
     }
+}
+
+fn collect_ci_status_blocking(project_root: &str) -> CiStatusSlice {
+    if cache_enabled() {
+        if let Some(cached) = read_ci_cache(project_root) {
+            return cached;
+        }
+    }
+    let fresh = ci_status_from_lookup(lookup_ci_status(project_root));
+    if cache_enabled() && fresh.error.is_none() {
+        let _ = write_ci_cache(project_root, &fresh);
+    }
+    fresh
+}
+
+fn cache_enabled() -> bool {
+    if no_cache_runtime_flag() {
+        return false;
+    }
+    match std::env::var("ANIMUS_DISABLE_CI_CACHE") {
+        Ok(value) => !is_truthy(&value),
+        Err(_) => true,
+    }
+}
+
+fn is_truthy(value: &str) -> bool {
+    matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on")
+}
+
+fn ci_cache_ttl_secs() -> u64 {
+    std::env::var("ANIMUS_CI_CACHE_TTL_SECS")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(CI_CACHE_DEFAULT_TTL_SECS)
+}
+
+/// Per-project CI cache path. Each repo gets its own file under
+/// `~/.animus/<repo-scope>/cache/ci-status.json` so two different
+/// projects polled within the same TTL window never serve each other's
+/// `gh run list` output. Falls back to a global path when scope
+/// resolution fails (rare; only when home_dir is unset).
+fn ci_cache_path(project_root: &str) -> Option<PathBuf> {
+    let path = Path::new(project_root);
+    let base = protocol::scoped_state_root(path)
+        .unwrap_or_else(|| protocol::Config::global_config_dir().join("cache-fallback"));
+    Some(base.join("cache").join("ci-status.json"))
+}
+
+fn read_ci_cache(project_root: &str) -> Option<CiStatusSlice> {
+    let path = ci_cache_path(project_root)?;
+    let bytes = std::fs::read(&path).ok()?;
+    let file: CiCacheFile = serde_json::from_slice(&bytes).ok()?;
+    if file.schema != CI_CACHE_SCHEMA {
+        return None;
+    }
+    // Always honor the *current* TTL on read. The serialized
+    // `ttl_seconds` is informational only; using it would let one stale
+    // `ANIMUS_CI_CACHE_TTL_SECS=3600` invocation pin every subsequent
+    // call to an hour-long cache even after the user lowers the override.
+    let ttl = ci_cache_ttl_secs();
+    let age = (Utc::now() - file.fetched_at).num_seconds();
+    if age < 0 || age as u64 >= ttl {
+        return None;
+    }
+    let mut payload = file.payload;
+    payload.cached = true;
+    Some(payload)
+}
+
+fn write_ci_cache(project_root: &str, payload: &CiStatusSlice) -> Result<()> {
+    let path = match ci_cache_path(project_root) {
+        Some(p) => p,
+        None => return Ok(()),
+    };
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("failed to create cache dir {}", parent.display()))?;
+    }
+    let mut fresh = payload.clone();
+    fresh.cached = false;
+    let file = CiCacheFile {
+        schema: CI_CACHE_SCHEMA.to_string(),
+        fetched_at: Utc::now(),
+        ttl_seconds: ci_cache_ttl_secs(),
+        payload: fresh,
+    };
+    let bytes = serde_json::to_vec_pretty(&file).context("failed to serialize ci cache")?;
+    write_atomic(&path, &bytes)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| anyhow!("cache path has no parent: {}", path.display()))?;
+    std::fs::create_dir_all(parent).with_context(|| format!("failed to create dir {}", parent.display()))?;
+    let pid = std::process::id();
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let tmp = parent.join(format!(
+        ".{}.tmp.{}.{}",
+        path.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "cache".to_string()),
+        pid,
+        nonce
+    ));
+    std::fs::write(&tmp, bytes).with_context(|| format!("failed to write {}", tmp.display()))?;
+    if let Err(err) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(anyhow!("failed to rename {} -> {}: {}", tmp.display(), path.display(), err));
+    }
+    Ok(())
+}
+
+/// Process-global "skip all caches" flag. Set by `--no-cache` at CLI
+/// parse time so library code does not have to thread the flag through
+/// every call site.
+static NO_CACHE_FLAG: OnceLock<bool> = OnceLock::new();
+
+pub fn set_no_cache_flag(value: bool) {
+    let _ = NO_CACHE_FLAG.set(value);
+}
+
+fn no_cache_runtime_flag() -> bool {
+    *NO_CACHE_FLAG.get().unwrap_or(&false)
 }
 
 fn lookup_ci_status(project_root: &str) -> CiLookupOutcome {
@@ -544,6 +690,7 @@ fn ci_status_from_lookup(outcome: CiLookupOutcome) -> CiStatusSlice {
             last_run: None,
             reason: Some(reason),
             error: None,
+            cached: false,
         },
         CiLookupOutcome::Success(run) => CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
@@ -551,6 +698,7 @@ fn ci_status_from_lookup(outcome: CiLookupOutcome) -> CiStatusSlice {
             reason: if run.is_none() { Some("no workflow runs found".to_string()) } else { None },
             last_run: run,
             error: None,
+            cached: false,
         },
         CiLookupOutcome::Failure(error) => CiStatusSlice {
             provider: CI_PROVIDER_GITHUB,
@@ -558,18 +706,22 @@ fn ci_status_from_lookup(outcome: CiLookupOutcome) -> CiStatusSlice {
             last_run: None,
             reason: None,
             error: Some(error),
+            cached: false,
         },
     }
 }
 
 fn gh_available() -> bool {
-    ProcessCommand::new("gh")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    static MEMO: OnceLock<bool> = OnceLock::new();
+    *MEMO.get_or_init(|| {
+        ProcessCommand::new("gh")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    })
 }
 
 fn query_latest_gh_run(project_root: &str) -> Result<Option<CiRunSummary>> {
@@ -707,6 +859,9 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let _ = writeln!(&mut output, "CI Status");
     let _ = writeln!(&mut output, "  provider: {}", dashboard.ci.provider);
     let _ = writeln!(&mut output, "  available: {}", dashboard.ci.available);
+    if dashboard.ci.cached {
+        let _ = writeln!(&mut output, "  cached: true");
+    }
     if let Some(run) = dashboard.ci.last_run.as_ref() {
         let _ = writeln!(
             &mut output,

@@ -266,6 +266,7 @@ fn render_status_dashboard_uses_required_section_order() {
             last_run: None,
             reason: Some("gh CLI is not installed".to_string()),
             error: None,
+            cached: false,
         },
     };
 
@@ -282,4 +283,135 @@ fn render_status_dashboard_uses_required_section_order() {
     assert!(summary_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
+}
+
+mod cache_tests {
+    use super::*;
+
+    fn with_cache_env<F: FnOnce(&std::path::Path)>(f: F) {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let prev_home = std::env::var("HOME").ok();
+        let prev_disable = std::env::var("ANIMUS_DISABLE_CI_CACHE").ok();
+        let prev_ttl = std::env::var("ANIMUS_CI_CACHE_TTL_SECS").ok();
+        std::env::set_var("HOME", temp.path());
+        std::env::remove_var("ANIMUS_DISABLE_CI_CACHE");
+        std::env::remove_var("ANIMUS_CI_CACHE_TTL_SECS");
+        let project = temp.path().join("project");
+        std::fs::create_dir_all(&project).expect("project dir");
+        f(&project);
+        match prev_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+        match prev_disable {
+            Some(v) => std::env::set_var("ANIMUS_DISABLE_CI_CACHE", v),
+            None => std::env::remove_var("ANIMUS_DISABLE_CI_CACHE"),
+        }
+        match prev_ttl {
+            Some(v) => std::env::set_var("ANIMUS_CI_CACHE_TTL_SECS", v),
+            None => std::env::remove_var("ANIMUS_CI_CACHE_TTL_SECS"),
+        }
+    }
+
+    fn sample_slice() -> CiStatusSlice {
+        CiStatusSlice {
+            provider: CI_PROVIDER_GITHUB,
+            available: true,
+            last_run: Some(CiRunSummary {
+                id: Some(99),
+                title: None,
+                name: None,
+                workflow_name: Some("ci".to_string()),
+                status: "completed".to_string(),
+                conclusion: Some("success".to_string()),
+                event: None,
+                head_branch: None,
+                head_sha: None,
+                created_at: None,
+                updated_at: None,
+                url: None,
+            }),
+            reason: None,
+            error: None,
+            cached: false,
+        }
+    }
+
+    #[test]
+    fn ci_cache_hit_within_ttl_marks_cached_true() {
+        with_cache_env(|project_root| {
+            let slice = sample_slice();
+            let pr = project_root.to_string_lossy();
+            write_ci_cache(&pr, &slice).expect("write cache");
+            let read = read_ci_cache(&pr).expect("should hit");
+            assert!(read.cached, "served-from-cache slice should set cached=true");
+            assert_eq!(read.last_run.as_ref().and_then(|r| r.id), Some(99));
+        });
+    }
+
+    #[test]
+    fn ci_cache_disabled_by_env_returns_none() {
+        with_cache_env(|project_root| {
+            let pr = project_root.to_string_lossy();
+            write_ci_cache(&pr, &sample_slice()).expect("write cache");
+            std::env::set_var("ANIMUS_DISABLE_CI_CACHE", "1");
+            assert!(!cache_enabled());
+        });
+    }
+
+    #[test]
+    fn ci_cache_expired_returns_none() {
+        with_cache_env(|project_root| {
+            std::env::set_var("ANIMUS_CI_CACHE_TTL_SECS", "0");
+            let pr = project_root.to_string_lossy();
+            write_ci_cache(&pr, &sample_slice()).expect("write cache");
+            assert!(read_ci_cache(&pr).is_none(), "ttl=0 should always expire");
+        });
+    }
+
+    #[test]
+    fn ci_cache_corrupt_file_falls_through() {
+        with_cache_env(|project_root| {
+            let pr = project_root.to_string_lossy();
+            let path = ci_cache_path(&pr).expect("path");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, b"not json").unwrap();
+            assert!(read_ci_cache(&pr).is_none(), "corrupt cache must not panic and must fall through");
+        });
+    }
+
+    #[test]
+    fn ci_cache_wrong_schema_returns_none() {
+        with_cache_env(|project_root| {
+            let pr = project_root.to_string_lossy();
+            let path = ci_cache_path(&pr).expect("path");
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, br#"{"schema":"other.v9","fetched_at":"2026-01-01T00:00:00Z","ttl_seconds":60,"payload":{"available":true,"cached":false}}"#).unwrap();
+            assert!(read_ci_cache(&pr).is_none());
+        });
+    }
+
+    #[test]
+    fn ci_cache_isolated_per_project_root() {
+        with_cache_env(|project_root_a| {
+            let pr_a = project_root_a.to_string_lossy().to_string();
+            // Place project-b under a sibling directory hierarchy so
+            // `scoped_state_root` always hashes it to a different scope.
+            let project_b = project_root_a.parent().unwrap().join("sibling-tree").join("project-b");
+            std::fs::create_dir_all(&project_b).expect("project-b dir");
+            let pr_b = project_b.to_string_lossy().to_string();
+
+            // Confirm the cache paths are physically distinct before we
+            // probe behavior — if they collide the assertion below is
+            // meaningless and the test is wrong, not the code.
+            let path_a = ci_cache_path(&pr_a).expect("a path");
+            let path_b = ci_cache_path(&pr_b).expect("b path");
+            assert_ne!(path_a, path_b, "scoped paths must differ");
+
+            write_ci_cache(&pr_a, &sample_slice()).expect("write a");
+            assert!(read_ci_cache(&pr_b).is_none(), "project-b must not see project-a cache");
+            assert!(read_ci_cache(&pr_a).is_some(), "project-a still has its own cache");
+        });
+    }
 }

@@ -9,9 +9,11 @@ use super::validation::validate_workflow_config_with_project_root;
 use super::yaml_compiler::{merge_yaml_into_config, yaml_workflows_dir};
 use super::yaml_scaffold::ensure_workflow_yaml_scaffold;
 use super::yaml_types::GENERATED_WORKFLOW_OVERLAY_FILE_NAME;
+use crate::cache::WorkflowCacheInput;
+use crate::pack_config::LoadedPackManifest;
 use crate::{
     load_pack_workflow_overlay, machine_installed_packs_dir, resolve_pack_registry, validate_active_pack_configuration,
-    PackRegistrySource,
+    PackRegistrySource, ResolvedPackRegistry,
 };
 
 pub fn workflow_config_path(project_root: &Path) -> PathBuf {
@@ -64,7 +66,33 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
     }
 
     if !yaml_sources.is_empty() || registry.has_pack_overlays() {
+        // v0.5.9: bypass the disk cache when sources reference external
+        // inputs not captured in the hash (env vars, system_prompt_file:
+        // references, declared secrets). Those inputs change without
+        // mutating the YAML source files, so a content+mtime hash alone
+        // could otherwise serve stale compiled output.
+        let cache_disabled_for_run = sources_have_external_inputs(&yaml_sources, &registry);
+        let cache_input = build_workflow_cache_input(project_root, &yaml_sources, &registry);
+        let cache_hash = cache_input.hash();
+        // Validate pack configuration *before* returning a cache hit so
+        // changes in active-pack inputs that aren't part of the cache
+        // hash still surface as errors, matching the cold-path
+        // behavior exactly.
+        //
+        // TODO(codex-p2): cache hits currently skip
+        // `load_pack_workflow_overlay` and `resolve_pack_workflow_assets`,
+        // so a referenced pack asset removed after the cache was written
+        // is masked until the YAML/manifest changes or the user passes
+        // `--no-cache`. Either fold an asset-existence probe into
+        // `WorkflowCacheInput` or run a thin asset-presence validator on
+        // every cache hit.
         validate_active_pack_configuration(&registry)?;
+        if !cache_disabled_for_run {
+            if let Some(cached) = crate::cache::read_workflow_cache(project_root, &cache_hash) {
+                return Ok(cached);
+            }
+        }
+
         let (mut config, mut path) = build_installed_pack_workflow_config_base(project_root)?;
 
         for entry in registry.entries_for_source(PackRegistrySource::Installed) {
@@ -102,7 +130,7 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
             WorkflowConfigSource::Yaml
         };
 
-        return Ok(LoadedWorkflowConfig {
+        let loaded = LoadedWorkflowConfig {
             metadata: WorkflowConfigMetadata {
                 schema: config.schema.clone(),
                 version: config.version,
@@ -111,7 +139,11 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
             },
             config,
             path,
-        });
+        };
+        if !cache_disabled_for_run {
+            let _ = crate::cache::write_workflow_cache(project_root, &cache_hash, &loaded);
+        }
+        return Ok(loaded);
     }
 
     Err(anyhow!("workflow config is missing. Define workflows in .animus/workflows.yaml or .animus/workflows/*.yaml"))
@@ -161,4 +193,116 @@ pub fn workflow_config_hash(config: &WorkflowConfig) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     format!("{:x}", hasher.finalize())
+}
+
+fn build_workflow_cache_input(
+    project_root: &Path,
+    yaml_sources: &[(PathBuf, String)],
+    registry: &ResolvedPackRegistry,
+) -> WorkflowCacheInput {
+    let mut input = WorkflowCacheInput::new();
+
+    for (path, content) in yaml_sources {
+        input.push(path.clone(), content.as_bytes().to_vec());
+    }
+
+    for entry in &registry.entries {
+        if let Some(loaded) = entry.loaded_manifest() {
+            append_pack_inputs(&mut input, loaded);
+        }
+    }
+
+    let _ = project_root;
+    input
+}
+
+fn sources_have_external_inputs(yaml_sources: &[(PathBuf, String)], registry: &ResolvedPackRegistry) -> bool {
+    if yaml_sources.iter().any(|(_, content)| content_references_external_inputs(content)) {
+        return true;
+    }
+    for entry in &registry.entries {
+        let Some(loaded) = entry.loaded_manifest() else {
+            continue;
+        };
+        if let Some(workflows) = loaded.manifest.workflows.as_ref() {
+            let root = loaded.pack_root.join(&workflows.root);
+            if root.is_dir() {
+                if let Ok(read_dir) = std::fs::read_dir(&root) {
+                    for entry in read_dir.flatten() {
+                        let path = entry.path();
+                        if path.extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false) {
+                            if let Ok(s) = std::fs::read_to_string(&path) {
+                                if content_references_external_inputs(&s) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(overlay_path) = loaded.manifest.runtime.workflow_overlay.as_deref() {
+            let path = loaded.pack_root.join(overlay_path);
+            if let Ok(s) = std::fs::read_to_string(&path) {
+                if content_references_external_inputs(&s) {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+fn content_references_external_inputs(content: &str) -> bool {
+    // ${VAR}, ${VAR:-default}, ${VAR:?msg}: env-var interpolation reads
+    // process env at compile time.
+    // ${secret.NAME}: secret-store reads, identical hazard.
+    // system_prompt_file: arbitrary path read whose contents are inlined
+    // into the compiled config but not hashed by `WorkflowCacheInput`.
+    // The match is a substring scan so any YAML spelling (quoted,
+    // whitespace-padded, or block-style) reliably trips the bypass —
+    // overshooting into a comment costs us a cache miss, not
+    // correctness. Stale-prompt bugs are silent and cost more.
+    content.contains("${") || content.contains("system_prompt_file")
+}
+
+fn append_pack_inputs(input: &mut WorkflowCacheInput, pack: &LoadedPackManifest) {
+    let manifest_path = pack.manifest_path.clone();
+    let manifest_bytes = std::fs::read(&manifest_path).unwrap_or_default();
+    input.push(manifest_path, manifest_bytes);
+
+    if let Some(workflows) = pack.manifest.workflows.as_ref() {
+        let root = pack.pack_root.join(&workflows.root);
+        if root.is_dir() {
+            if let Ok(read_dir) = std::fs::read_dir(&root) {
+                let mut paths: Vec<PathBuf> = read_dir
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.path())
+                    .filter(|p| p.extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false))
+                    .collect();
+                paths.sort();
+                for path in paths {
+                    let bytes = std::fs::read(&path).unwrap_or_default();
+                    input.push(path, bytes);
+                }
+            }
+        }
+    }
+
+    if let Some(overlay_path) = pack.manifest.runtime.workflow_overlay.as_deref() {
+        let path = pack.pack_root.join(overlay_path);
+        let bytes = std::fs::read(&path).unwrap_or_default();
+        input.push(path, bytes);
+    }
+
+    // v0.5.9: also key on the agent_overlay (runtime profiles + system
+    // prompt files referenced from it) so editing the overlay or the
+    // prompt file it points at invalidates the cache. Asset
+    // existence/canonicalization checks still happen on the cold path,
+    // but this covers the common edit-pack-prompt loop.
+    if let Some(overlay_path) = pack.manifest.runtime.agent_overlay.as_deref() {
+        let path = pack.pack_root.join(overlay_path);
+        let bytes = std::fs::read(&path).unwrap_or_default();
+        input.push(path, bytes);
+    }
 }

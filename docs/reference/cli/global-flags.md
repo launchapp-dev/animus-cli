@@ -53,6 +53,42 @@ logged loudly.
 animus --as release-bot auth whoami
 ```
 
+## --no-cache
+
+(v0.5.9) Bypass hot-path read caches for this invocation.
+
+Animus caches three hot-path reads for performance:
+
+- **CI status cache** — file at `~/.animus/<repo-scope>/cache/ci-status.json`,
+  default TTL 60s. Read by `animus status` to avoid re-running `gh run list`.
+- **Workflow YAML compile cache** — file at
+  `~/.animus/<repo-scope>/cache/workflow-config.compiled.v1.json`. Keyed by a
+  hash of source file paths + mtimes + content; auto-invalidates when any
+  source changes. Bypassed automatically when sources reference env vars
+  (`${VAR}`), secrets (`${secret.NAME}`), or `system_prompt_file:` paths.
+- **Daemon health snapshot** — in-process memory cache with a 1s freshness
+  window, only relevant when one CLI invocation makes multiple internal calls.
+
+`--no-cache` skips the read step on all of the above for the current
+invocation. The on-disk caches stay in place; the next call without the flag
+will use them as normal.
+
+Per-cache environment overrides:
+
+- `ANIMUS_DISABLE_CI_CACHE=1` — disable the CI status cache (read + write).
+- `ANIMUS_CI_CACHE_TTL_SECS=<n>` — override the 60s default TTL.
+- `ANIMUS_DISABLE_WORKFLOW_CACHE=1` — disable the workflow compile cache
+  (read + write).
+
+All caches are best-effort. Any deserialize, I/O, hash, or schema mismatch
+silently falls through to a fresh live read so a corrupt cache file never
+masks a real source change.
+
+```bash
+animus --no-cache status --json
+animus --no-cache workflow config get
+```
+
 ## Common Cross-Command Flags
 
 Many destructive commands expose command-specific confirmation and preview flags

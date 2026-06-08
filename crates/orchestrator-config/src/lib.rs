@@ -1,4 +1,5 @@
 pub mod agent_runtime_config;
+pub mod cache;
 mod json;
 pub mod pack_config;
 pub mod pack_marketplace;

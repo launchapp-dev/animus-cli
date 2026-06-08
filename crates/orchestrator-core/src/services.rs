@@ -74,6 +74,8 @@ pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHe
     daemon_impl::load_daemon_health_snapshot(project_root).await
 }
 
+pub use daemon_impl::set_daemon_health_cache_disabled;
+
 pub fn plan_task_priority_rebalance(
     tasks: &[OrchestratorTask],
     options: TaskPriorityRebalanceOptions,
