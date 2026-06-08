@@ -1,7 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use super::yaml_diagnostic::closest_match;
 
 use crate::agent_runtime_config::{
     default_eval_expected_exit, default_eval_pass_threshold, AgentProfile, EvalKind, EvalOnFail, Idempotency,
@@ -48,12 +51,95 @@ pub(super) struct YamlSubWorkflowRef {
     pub(super) workflow_ref: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub(super) enum YamlPhaseEntry {
     SubWorkflow(YamlSubWorkflowRef),
     Simple(String),
     Rich(HashMap<String, YamlPhaseRichConfig>),
+}
+
+impl<'de> Deserialize<'de> for YamlPhaseEntry {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match value {
+            serde_yaml::Value::String(id) => Ok(YamlPhaseEntry::Simple(id)),
+            serde_yaml::Value::Mapping(_) => {
+                let v = value.clone();
+                let sub_err = match serde_yaml::from_value::<YamlSubWorkflowRef>(v) {
+                    Ok(sub) => return Ok(YamlPhaseEntry::SubWorkflow(sub)),
+                    Err(e) => e,
+                };
+                let rich_err = match serde_yaml::from_value::<HashMap<String, YamlPhaseRichConfig>>(value.clone()) {
+                    Ok(map) => {
+                        if map.len() != 1 {
+                            return Err(de::Error::custom(format!(
+                                "rich phase entry must be a single-key map `{{ <phase_id>: {{ ... }} }}`; got {} keys",
+                                map.len()
+                            )));
+                        }
+                        return Ok(YamlPhaseEntry::Rich(map));
+                    }
+                    Err(e) => e,
+                };
+                if value_looks_like_sub_workflow_ref_typo(&value) {
+                    return Err(de::Error::custom(format!("invalid sub-workflow ref: {}", sub_err)));
+                }
+                Err(de::Error::custom(format!(
+                    "invalid phase entry shape: {}. expected one of: \
+                     a string phase id (e.g. `- impl`); \
+                     a sub-workflow ref (`{{ workflow_ref: <name> }}`); \
+                     or a rich config single-key map (`{{ <phase_id>: {{ max_rework_attempts: N, ... }} }}`)",
+                    rich_err
+                )))
+            }
+            other => Err(de::Error::custom(format!(
+                "invalid phase entry: expected a string phase id, a sub-workflow ref map, or a rich config map; got {}",
+                value_kind(&other)
+            ))),
+        }
+    }
+}
+
+/// Heuristic: only flag an entry as a sub-workflow ref typo when the
+/// shape closely resembles `{ workflow_ref: <string> }` — i.e. exactly
+/// one key, the key starts with `workflow_re`, and its value is a scalar
+/// string. This avoids stealing legitimate rich phase IDs like
+/// `workflow_setup:` whose value is a map.
+fn value_looks_like_sub_workflow_ref_typo(value: &serde_yaml::Value) -> bool {
+    let serde_yaml::Value::Mapping(map) = value else {
+        return false;
+    };
+    if map.len() != 1 {
+        return false;
+    }
+    let Some((k, v)) = map.iter().next() else {
+        return false;
+    };
+    let serde_yaml::Value::String(key) = k else {
+        return false;
+    };
+    let is_string_value = matches!(v, serde_yaml::Value::String(_));
+    if !is_string_value {
+        return false;
+    }
+    let lower = key.to_ascii_lowercase();
+    lower != "workflow_ref" && (lower.starts_with("workflow_re") || lower == "workflowref")
+}
+
+fn value_kind(v: &serde_yaml::Value) -> &'static str {
+    match v {
+        serde_yaml::Value::Null => "null",
+        serde_yaml::Value::Bool(_) => "boolean",
+        serde_yaml::Value::Number(_) => "number",
+        serde_yaml::Value::String(_) => "string",
+        serde_yaml::Value::Sequence(_) => "sequence",
+        serde_yaml::Value::Mapping(_) => "mapping",
+        serde_yaml::Value::Tagged(_) => "tagged",
+    }
 }
 
 /// Permissive YAML representation of a worktree block.
@@ -62,19 +148,96 @@ pub(super) enum YamlPhaseEntry {
 /// the short form (`worktree: skip`), or the boolean shorthand
 /// (`worktree: false` -> skip, `worktree: true` -> auto). The parser
 /// normalizes all three into `WorktreeConfig`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub(crate) enum YamlPhaseWorktree {
     /// `worktree: false` / `worktree: true` boolean shorthand.
-    /// `false` -> `skip`, `true` -> `auto`. Order matters under
-    /// `#[serde(untagged)]` — `Bool` must come before `Mode` because
-    /// YAML scalars `true`/`false` parse as strings too if the bool
-    /// arm is tried second.
     Bool(bool),
     /// `worktree: skip` short-form scalar (auto / required / skip).
     Mode(String),
     /// `worktree: { mode: ..., cleanup: ..., base_ref: ... }` long-form map.
     Full(WorktreeConfig),
+}
+
+const WORKTREE_VALID_MODES: &[&str] = &["auto", "required", "skip"];
+
+impl<'de> Deserialize<'de> for YamlPhaseWorktree {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = serde_yaml::Value::deserialize(deserializer)?;
+        match value {
+            serde_yaml::Value::Bool(flag) => Ok(YamlPhaseWorktree::Bool(flag)),
+            serde_yaml::Value::String(scalar) => {
+                let trimmed = scalar.trim();
+                let lower = trimmed.to_ascii_lowercase();
+                if WORKTREE_VALID_MODES.iter().any(|m| *m == lower) {
+                    Ok(YamlPhaseWorktree::Mode(scalar))
+                } else {
+                    let suggestion = match lower.as_str() {
+                        "yes" | "on" | "enabled" | "enable" | "true" => Some("auto".to_string()),
+                        "no" | "off" | "disabled" | "disable" | "false" | "none" => Some("skip".to_string()),
+                        "needed" | "must" | "force" | "mandatory" => Some("required".to_string()),
+                        _ => closest_match(&lower, WORKTREE_VALID_MODES, 2).map(|s| s.to_string()),
+                    };
+                    let mut msg = format!(
+                        "invalid `worktree:` value `{}`: expected one of: \
+                         a string \"auto\" | \"required\" | \"skip\"; \
+                         a boolean `true` (= auto) | `false` (= skip); \
+                         or a map {{ mode: <string>, cleanup: <bool>, base_ref: <string> }}",
+                        scalar
+                    );
+                    if let Some(s) = suggestion {
+                        msg.push_str(&format!(". did you mean `{}`?", s));
+                    }
+                    Err(de::Error::custom(msg))
+                }
+            }
+            serde_yaml::Value::Mapping(_) => {
+                let v = value.clone();
+                let parsed: Result<WorktreeConfig, _> = serde_yaml::from_value(v);
+                match parsed {
+                    Ok(cfg) => Ok(YamlPhaseWorktree::Full(cfg)),
+                    Err(e) => {
+                        let mut hint = String::new();
+                        if let serde_yaml::Value::Mapping(map) = &value {
+                            if let Some(serde_yaml::Value::String(s)) = map
+                                .iter()
+                                .find(|(k, _)| matches!(k, serde_yaml::Value::String(s) if s == "mode"))
+                                .map(|(_, v)| v)
+                            {
+                                {
+                                    let lower = s.trim().to_ascii_lowercase();
+                                    if !WORKTREE_VALID_MODES.iter().any(|m| *m == lower) {
+                                        let sugg = closest_match(&lower, WORKTREE_VALID_MODES, 2);
+                                        match sugg {
+                                            Some(s2) => hint = format!(
+                                                ". `mode: {}` is not valid (expected auto | required | skip); did you mean `{}`?",
+                                                s, s2
+                                            ),
+                                            None => hint = format!(
+                                                ". `mode: {}` is not valid (expected auto | required | skip)",
+                                                s
+                                            ),
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(de::Error::custom(format!(
+                            "invalid `worktree:` map: {}{}. expected {{ mode: <auto|required|skip>, cleanup: <bool>, base_ref: <string> }}",
+                            e, hint
+                        )))
+                    }
+                }
+            }
+            other => Err(de::Error::custom(format!(
+                "invalid `worktree:` value: expected a string, boolean, or map; got {}",
+                value_kind(&other)
+            ))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
