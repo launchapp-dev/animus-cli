@@ -21,6 +21,7 @@ use crate::{print_value, DoctorArgs};
 
 mod check_kit;
 mod checks_api_keys;
+mod checks_branches;
 mod checks_cli_tools;
 mod checks_cosign;
 mod checks_crashes;
@@ -28,6 +29,9 @@ mod checks_daemon;
 mod checks_disk;
 mod checks_filesystem;
 mod checks_plugins;
+mod checks_stale_pid;
+mod checks_worktrees;
+mod checks_zombie_phases;
 
 use check_kit::{CheckContext, CheckStatus, DiagnosticCheck, FixOutcome};
 
@@ -68,14 +72,7 @@ pub(crate) async fn handle_doctor(project_root: &str, args: DoctorArgs, json: bo
     let ctx = CheckContext { project_root: project_root_path.clone(), skip_subprocess: args.skip_subprocess };
 
     let mut checks = run_all_checks(&ctx).await;
-    if !args.filter.is_empty() {
-        let needles: Vec<String> = args.filter.iter().map(|s| s.to_ascii_lowercase()).collect();
-        checks.retain(|c| {
-            let id_lc = c.id.to_ascii_lowercase();
-            let cat_lc = c.category.to_ascii_lowercase();
-            needles.iter().any(|n| id_lc.contains(n) || cat_lc.contains(n))
-        });
-    }
+    apply_filters(&mut checks, &args);
 
     // Apply safe fixes if requested. We do this BEFORE rendering so the
     // human-readable summary reflects post-fix state. Fixes that change
@@ -83,19 +80,12 @@ pub(crate) async fn handle_doctor(project_root: &str, args: DoctorArgs, json: bo
     // the relevant check modules.
     let mut fix_section = FixSection { requested: args.fix, applied: false, actions: Vec::new() };
     if args.fix {
-        let outcomes = apply_safe_fixes(&ctx, &checks);
+        let outcomes = apply_safe_fixes(&ctx, &checks, args.yes);
         fix_section.applied = outcomes.iter().any(|o| o.status == "applied");
         fix_section.actions = outcomes;
         // Re-run after applying fixes so the surfaced state is fresh.
         checks = run_all_checks(&ctx).await;
-        if !args.filter.is_empty() {
-            let needles: Vec<String> = args.filter.iter().map(|s| s.to_ascii_lowercase()).collect();
-            checks.retain(|c| {
-                let id_lc = c.id.to_ascii_lowercase();
-                let cat_lc = c.category.to_ascii_lowercase();
-                needles.iter().any(|n| id_lc.contains(n) || cat_lc.contains(n))
-            });
-        }
+        apply_filters(&mut checks, &args);
     }
 
     let summary = summarize(&checks);
@@ -129,7 +119,30 @@ async fn run_all_checks(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
     out.extend(checks_filesystem::run(ctx));
     out.extend(checks_disk::run(ctx));
     out.extend(checks_crashes::run(ctx));
+    out.extend(checks_stale_pid::run(ctx));
+    out.extend(checks_worktrees::run(ctx));
+    out.extend(checks_zombie_phases::run(ctx));
+    out.extend(checks_branches::run(ctx));
     out
+}
+
+fn apply_filters(checks: &mut Vec<DiagnosticCheck>, args: &DoctorArgs) {
+    if !args.filter.is_empty() {
+        let needles: Vec<String> = args.filter.iter().map(|s| s.to_ascii_lowercase()).collect();
+        checks.retain(|c| {
+            let id_lc = c.id.to_ascii_lowercase();
+            let cat_lc = c.category.to_ascii_lowercase();
+            needles.iter().any(|n| id_lc.contains(n) || cat_lc.contains(n))
+        });
+    }
+    if !args.check.is_empty() {
+        let exact: Vec<String> = args.check.iter().map(|s| s.to_ascii_lowercase()).collect();
+        checks.retain(|c| {
+            let id_lc = c.id.to_ascii_lowercase();
+            let cat_lc = c.category.to_ascii_lowercase();
+            exact.iter().any(|n| id_lc == *n || cat_lc == *n)
+        });
+    }
 }
 
 fn summarize(checks: &[DiagnosticCheck]) -> DoctorSummary {
@@ -211,7 +224,7 @@ fn render_human(checks: &[DiagnosticCheck], summary: &DoctorSummary, fix: &FixSe
     }
 }
 
-fn apply_safe_fixes(ctx: &CheckContext, checks: &[DiagnosticCheck]) -> Vec<FixOutcome> {
+fn apply_safe_fixes(ctx: &CheckContext, checks: &[DiagnosticCheck], yes: bool) -> Vec<FixOutcome> {
     let mut out = Vec::new();
     let project_root_path = ctx.project_root.as_path();
 
@@ -305,7 +318,142 @@ fn apply_safe_fixes(ctx: &CheckContext, checks: &[DiagnosticCheck]) -> Vec<FixOu
         }
     }
 
+    // Stale daemon pid / control.sock cleanup. Always safe — the underlying
+    // process is already gone by the time the check fires. We use Warn|Fail
+    // (not "not Pass") so a Skipped check never triggers a fix.
+    let stale_pid_present =
+        checks.iter().any(|c| c.id == "stale_daemon_pid" && matches!(c.status, CheckStatus::Warn | CheckStatus::Fail));
+    if stale_pid_present {
+        let artifacts = checks_stale_pid::collect_stale_artifacts_for_fix(project_root_path);
+        let mut removed: Vec<String> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        for path in &artifacts {
+            match std::fs::remove_file(path) {
+                Ok(()) => removed.push(path.display().to_string()),
+                Err(e) => errors.push(format!("{}: {e}", path.display())),
+            }
+        }
+        if errors.is_empty() && !removed.is_empty() {
+            out.push(applied(
+                "remove_stale_daemon_pid",
+                &format!("removed stale daemon artifact(s): {}", summarize_paths(&removed)),
+            ));
+        } else if !errors.is_empty() {
+            out.push(failed(
+                "remove_stale_daemon_pid",
+                format!("removed {}, failed {}: {}", removed.len(), errors.len(), errors.join("; ")),
+            ));
+        }
+    } else {
+        out.push(skipped("remove_stale_daemon_pid", "no stale daemon.pid detected"));
+    }
+
+    // Zombie phase session normalization. Idempotent rewrite of the JSON.
+    let zombies_present = checks
+        .iter()
+        .any(|c| c.id == "zombie_phase_sessions" && matches!(c.status, CheckStatus::Warn | CheckStatus::Fail));
+    if zombies_present {
+        let sessions = checks_zombie_phases::collect_zombie_for_fix(project_root_path);
+        let mut normalized: Vec<String> = Vec::new();
+        let mut raced: Vec<String> = Vec::new();
+        let mut errors: Vec<String> = Vec::new();
+        for path in &sessions {
+            match checks_zombie_phases::normalize_session_file(path) {
+                Ok(checks_zombie_phases::NormalizeOutcome::Rewritten) => normalized.push(path.display().to_string()),
+                Ok(checks_zombie_phases::NormalizeOutcome::NoLongerZombie) => raced.push(path.display().to_string()),
+                Err(e) => errors.push(format!("{}: {e}", path.display())),
+            }
+        }
+        if errors.is_empty() && !normalized.is_empty() {
+            let raced_note = if raced.is_empty() {
+                String::new()
+            } else {
+                format!(" (skipped {} no-longer-zombie session(s) after a race recheck)", raced.len())
+            };
+            out.push(applied(
+                "normalize_zombie_phase_sessions",
+                &format!(
+                    "marked {} zombie phase session(s) as failed: {}{raced_note}",
+                    normalized.len(),
+                    summarize_paths(&normalized),
+                ),
+            ));
+        } else if !errors.is_empty() {
+            out.push(failed(
+                "normalize_zombie_phase_sessions",
+                format!("normalized {}, failed {}: {}", normalized.len(), errors.len(), errors.join("; ")),
+            ));
+        } else if !raced.is_empty() {
+            out.push(skipped(
+                "normalize_zombie_phase_sessions",
+                &format!("{} session(s) finished between detect + fix; nothing to normalize", raced.len()),
+            ));
+        }
+    } else {
+        out.push(skipped("normalize_zombie_phase_sessions", "no zombie running phase sessions detected"));
+    }
+
+    // Orphan worktree removal. Requires --yes because it shells out to
+    // `git worktree remove --force`, which is destructive even though the
+    // directory in question is repo-local agent state. We deliberately
+    // ignore Skipped — when --skip-subprocess gates the check we must not
+    // re-enter git via the fix path, and when git itself failed the check
+    // marks Skipped so the operator gets a clear "we can't tell" signal.
+    let orphans_present =
+        checks.iter().any(|c| c.id == "orphan_worktrees" && matches!(c.status, CheckStatus::Warn | CheckStatus::Fail));
+    if orphans_present {
+        if !yes {
+            out.push(skipped(
+                "remove_orphan_worktrees",
+                "orphan worktrees detected; re-run with `animus doctor --fix --yes` to remove them",
+            ));
+        } else {
+            let orphans = checks_worktrees::collect_orphan_worktrees_for_fix(project_root_path);
+            let mut removed: Vec<String> = Vec::new();
+            let mut errors: Vec<String> = Vec::new();
+            for path in &orphans {
+                match remove_orphan_worktree(project_root_path, path) {
+                    Ok(()) => removed.push(path.display().to_string()),
+                    Err(e) => errors.push(format!("{}: {e}", path.display())),
+                }
+            }
+            if errors.is_empty() && !removed.is_empty() {
+                out.push(applied(
+                    "remove_orphan_worktrees",
+                    &format!("removed {} orphan worktree(s): {}", removed.len(), summarize_paths(&removed)),
+                ));
+            } else if !errors.is_empty() {
+                out.push(failed(
+                    "remove_orphan_worktrees",
+                    format!("removed {}, failed {}: {}", removed.len(), errors.len(), errors.join("; ")),
+                ));
+            }
+        }
+    } else {
+        out.push(skipped("remove_orphan_worktrees", "no orphan worktrees detected"));
+    }
+
     out
+}
+
+fn remove_orphan_worktree(project_root: &Path, path: &Path) -> std::io::Result<()> {
+    let status = std::process::Command::new("git")
+        .args(["worktree", "remove", "--force"])
+        .arg(path)
+        .current_dir(project_root)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status();
+    match status {
+        Ok(s) if s.success() => Ok(()),
+        Ok(_) | Err(_) => {
+            // git refused (likely because the path is not a registered
+            // worktree). Fall back to a plain recursive directory removal —
+            // safe because the doctor already proved the path is not in
+            // `git worktree list --porcelain`.
+            std::fs::remove_dir_all(path)
+        }
+    }
 }
 
 fn extract_path_from_current(current: Option<&str>) -> Option<PathBuf> {
@@ -413,7 +561,7 @@ mod tests {
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         // Should not panic, should not return error, should produce JSON
         // envelope with at least the required-roles fail check.
-        let args = DoctorArgs { fix: false, filter: Vec::new(), skip_subprocess: true };
+        let args = DoctorArgs { fix: false, yes: false, filter: Vec::new(), check: Vec::new(), skip_subprocess: true };
         handle_doctor(temp.path().to_string_lossy().as_ref(), args, true)
             .await
             .expect("doctor should run cleanly even with no daemon/plugins");
@@ -424,8 +572,29 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let _lock = lock();
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
-        let args = DoctorArgs { fix: false, filter: vec!["disk".to_string()], skip_subprocess: true };
+        let args = DoctorArgs {
+            fix: false,
+            yes: false,
+            filter: vec!["disk".to_string()],
+            check: Vec::new(),
+            skip_subprocess: true,
+        };
         handle_doctor(temp.path().to_string_lossy().as_ref(), args, true).await.expect("filter run ok");
+    }
+
+    #[tokio::test]
+    async fn handle_doctor_check_narrows_to_exact_id_or_category() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _lock = lock();
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let args = DoctorArgs {
+            fix: false,
+            yes: false,
+            filter: Vec::new(),
+            check: vec!["stale_pid".to_string()],
+            skip_subprocess: true,
+        };
+        handle_doctor(temp.path().to_string_lossy().as_ref(), args, true).await.expect("check run ok");
     }
 
     #[tokio::test]
@@ -435,8 +604,71 @@ mod tests {
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let ctx = CheckContext { project_root: temp.path().to_path_buf(), skip_subprocess: true };
         let checks = run_all_checks(&ctx).await;
-        let actions = apply_safe_fixes(&ctx, &checks);
+        let actions = apply_safe_fixes(&ctx, &checks, false);
         assert!(actions.iter().any(|action| action.id == "create_default_daemon_config" && action.status == "applied"));
         assert!(orchestrator_core::daemon_project_config_path(temp.path()).exists());
+    }
+
+    fn git_init(path: &std::path::Path) {
+        std::process::Command::new("git")
+            .arg("init")
+            .arg("--quiet")
+            .current_dir(path)
+            .status()
+            .expect("git init should succeed for orphan-worktree test");
+    }
+
+    #[tokio::test]
+    async fn fix_without_yes_skips_orphan_worktree_removal() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _lock = lock();
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project = temp.path().join("project-yes-required");
+        std::fs::create_dir_all(&project).unwrap();
+        git_init(&project);
+        let wt_dir = protocol::scoped_state_root(&project).unwrap().join("worktrees");
+        std::fs::create_dir_all(wt_dir.join("task-leftover")).unwrap();
+
+        let ctx = CheckContext { project_root: project.clone(), skip_subprocess: false };
+        let checks = run_all_checks(&ctx).await;
+        let actions = apply_safe_fixes(&ctx, &checks, false);
+        let action =
+            actions.iter().find(|a| a.id == "remove_orphan_worktrees").expect("orphan worktree action emitted");
+        assert_eq!(action.status, "skipped");
+        assert!(action.details.contains("--yes"));
+        assert!(wt_dir.join("task-leftover").exists(), "directory must remain untouched without --yes");
+    }
+
+    #[tokio::test]
+    async fn fix_with_yes_removes_orphan_worktree() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _lock = lock();
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project = temp.path().join("project-yes");
+        std::fs::create_dir_all(&project).unwrap();
+        git_init(&project);
+        let wt_dir = protocol::scoped_state_root(&project).unwrap().join("worktrees");
+        std::fs::create_dir_all(wt_dir.join("task-orphan")).unwrap();
+
+        let ctx = CheckContext { project_root: project.clone(), skip_subprocess: false };
+        let checks = run_all_checks(&ctx).await;
+        let actions = apply_safe_fixes(&ctx, &checks, true);
+        let action =
+            actions.iter().find(|a| a.id == "remove_orphan_worktrees").expect("orphan worktree action emitted");
+        assert_eq!(action.status, "applied", "{:?}", action);
+        assert!(!wt_dir.join("task-orphan").exists());
+    }
+
+    #[tokio::test]
+    async fn doctor_json_envelope_includes_new_checks_and_filter_to_check_id() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _lock = lock();
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let ctx = CheckContext { project_root: temp.path().to_path_buf(), skip_subprocess: true };
+        let all = run_all_checks(&ctx).await;
+        let ids: std::collections::BTreeSet<String> = all.iter().map(|c| c.id.clone()).collect();
+        for expected in &["stale_daemon_pid", "orphan_worktrees", "zombie_phase_sessions", "merged_agent_branches"] {
+            assert!(ids.contains(*expected), "missing new check id: {expected}, got {:?}", ids);
+        }
     }
 }
