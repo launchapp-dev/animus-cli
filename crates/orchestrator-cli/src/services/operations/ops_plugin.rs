@@ -286,6 +286,92 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
             args.json = args.json || json;
             status::handle_plugin_status(args, project_root).await
         }
+        PluginCommand::Cache(cmd) => handle_plugin_cache(cmd, json),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct PluginCacheClearOutput {
+    kind: &'static str,
+    root: String,
+    removed: usize,
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginCacheListEntry {
+    sha256: String,
+    size_bytes: u64,
+    mtime: Option<u64>,
+    path: String,
+}
+
+#[derive(Debug, Serialize)]
+struct PluginCacheListOutput {
+    kind: &'static str,
+    root: String,
+    enabled: bool,
+    entries: Vec<PluginCacheListEntry>,
+}
+
+fn handle_plugin_cache(cmd: crate::cli_types::PluginCacheCommand, json: bool) -> Result<()> {
+    use crate::cli_types::PluginCacheCommand;
+    use orchestrator_plugin_host::ManifestCache;
+    let cache = ManifestCache::from_default();
+    match cmd {
+        PluginCacheCommand::Clear(args) => {
+            let emit_json = args.json || json;
+            let root = cache.root().display().to_string();
+            let removed = cache.clear().with_context(|| format!("failed to clear manifest cache at {root}"))?;
+            let payload = PluginCacheClearOutput {
+                kind: "plugin.cache.clear",
+                root: root.clone(),
+                removed,
+                enabled: cache.is_enabled(),
+            };
+            if emit_json {
+                return print_value(payload, true);
+            }
+            println!("Cleared {removed} cached manifest entr{} from {root}.", if removed == 1 { "y" } else { "ies" });
+            if !cache.is_enabled() {
+                println!("Note: cache is disabled (ANIMUS_DISABLE_MANIFEST_CACHE=1).");
+            }
+            Ok(())
+        }
+        PluginCacheCommand::List(args) => {
+            let emit_json = args.json || json;
+            let root = cache.root().display().to_string();
+            let entries = cache.list().with_context(|| format!("failed to list manifest cache at {root}"))?;
+            let rendered: Vec<PluginCacheListEntry> = entries
+                .iter()
+                .map(|e| PluginCacheListEntry {
+                    sha256: e.sha256.clone(),
+                    size_bytes: e.size_bytes,
+                    mtime: e.mtime.and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs())),
+                    path: e.path.display().to_string(),
+                })
+                .collect();
+            let payload = PluginCacheListOutput {
+                kind: "plugin.cache.list",
+                root: root.clone(),
+                enabled: cache.is_enabled(),
+                entries: rendered,
+            };
+            if emit_json {
+                return print_value(payload, true);
+            }
+            println!("Cache root: {root}");
+            println!("Enabled: {}", if cache.is_enabled() { "yes" } else { "no" });
+            if payload.entries.is_empty() {
+                println!("No cached manifests.");
+            } else {
+                println!("Entries ({}):", payload.entries.len());
+                for entry in &payload.entries {
+                    println!("  {} ({} bytes)", entry.sha256, entry.size_bytes);
+                }
+            }
+            Ok(())
+        }
     }
 }
 
