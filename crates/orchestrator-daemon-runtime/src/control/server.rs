@@ -262,14 +262,7 @@ impl ControlServer {
         surface: Arc<dyn ControlSurface>,
         broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
     ) -> Result<ControlServerHandle, ControlError> {
-        Self::start_with_socket_full(
-            socket_path,
-            surface,
-            broadcaster,
-            PolicyState::single_user(),
-            None,
-        )
-        .await
+        Self::start_with_socket_full(socket_path, surface, broadcaster, PolicyState::single_user(), None).await
     }
 
     /// Bind, set perms, and run the accept loop with an explicit RBAC
