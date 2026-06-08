@@ -14,7 +14,7 @@ use serde_json::json;
 use super::*;
 use crate::services::operations::ops_plugin::{
     run_plugin_browse, run_plugin_search, run_plugin_update, PluginBrowseRequest, PluginSearchRequest,
-    PluginUpdateRequest,
+    PluginUpdateRequest, PluginUpdateSelector,
 };
 
 const DEFAULT_PLUGIN_REGISTRY_URL_MCP: &str =
@@ -82,9 +82,15 @@ pub(super) struct PluginUpdateInput {
     dry_run: Option<bool>,
     #[serde(default)]
     force: Option<bool>,
+    /// Deprecated since v0.5.8 — update is no longer registry-backed.
+    /// The field is retained on the input schema so older MCP clients don't
+    /// reject the tool call, but is ignored at runtime.
     #[serde(default)]
+    #[allow(dead_code)]
     registry_url: Option<String>,
+    /// Deprecated since v0.5.8 — see `registry_url`.
     #[serde(default)]
+    #[allow(dead_code)]
     no_cache: Option<bool>,
 }
 
@@ -138,18 +144,24 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.plugin.update",
-        description = "Re-resolve the latest release tag for installed plugins whose `source_kind=release`. With no `name`, all installed release-source plugins are considered; with `name`, only that plugin. `tag` pins to a specific release. `dry_run=true` reports what would change without installing. `force=true` reinstalls even when the installed tag matches. Path/url source plugins are skipped (no remote to query). Returns `{dry_run, considered, updated, results}` where each result has `{name, installed_tag, target_tag, origin, status, detail, install?}`. After successful updates, the cached plugin registry is dropped.",
+        description = "Update installed release-source plugins to the recommended pins declared in `default-install.json`. With no `name`, every installed release-source plugin is considered (equivalent to the CLI's `--all`); with `name`, only that plugin. `tag` pins to a specific release (only valid with `name`). `dry_run=true` reports what would change without installing. `force=true` reinstalls even when the installed tag matches the recommended pin (or downgrades when ahead). Path/url source plugins are skipped (not in the registry). Returns `{check, considered, updated, failed, results}` where each result has `{name, installed_tag, recommended_tag, origin, action, note, recommended_kind, install?}`. After successful updates, the cached plugin registry is dropped.",
         input_schema = ao_schema_for_type::<PluginUpdateInput>()
     )]
     async fn ao_plugin_update(&self, params: Parameters<PluginUpdateInput>) -> Result<CallToolResult, McpError> {
-        let PluginUpdateInput { name, tag, dry_run, force, registry_url, no_cache } = params.0;
+        let PluginUpdateInput { name, tag, dry_run, force, registry_url: _, no_cache: _ } = params.0;
+        let selector = match name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            Some(name) => PluginUpdateSelector::Name(name.to_string()),
+            None => PluginUpdateSelector::All,
+        };
         let output = run_plugin_update(PluginUpdateRequest {
-            name,
-            tag,
-            dry_run: dry_run.unwrap_or(false),
+            selector,
+            tag_override: tag,
+            check: dry_run.unwrap_or(false),
             force: force.unwrap_or(false),
-            registry_url: registry_url.unwrap_or_else(|| DEFAULT_PLUGIN_REGISTRY_URL_MCP.to_string()),
-            no_cache: no_cache.unwrap_or(false),
+            // Match the MCP install/uninstall tools: pin lockfile + audit
+            // resolution to the server's default project root so a
+            // daemon-initiated update touches the right `.animus/plugins.lock`.
+            project_root: Some(self.default_project_root.clone()),
         })
         .await
         .map_err(anyhow_to_mcp_marketplace)?;

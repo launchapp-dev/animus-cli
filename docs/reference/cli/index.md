@@ -564,17 +564,25 @@ entries first.
 
 ### `animus plugin search` / `browse` / `update`
 
-Marketplace commands read the public plugin registry and optionally compare it
-with installed release-source plugins.
+Marketplace commands read the public plugin registry. Update is registry-free
+as of v0.5.8 — its source of truth is the bundled
+`crates/orchestrator-cli/config/default-install.json` (the same file
+`animus plugin install-defaults` resolves against).
 
 | Command | Flags |
 |---|---|
 | `animus plugin search [QUERY]` | `--kind <KIND>`, `--tag <TAG>` (repeatable), `--org <ORG>`, `--stability <STABILITY>`, `--registry-url <URL>`, `--no-cache`, `--json` |
 | `animus plugin browse` | `--kind <KIND>`, `--installed`, `--available`, `--registry-url <URL>`, `--no-cache`, `--json` |
-| `animus plugin update [NAME]` | `--tag <TAG>`, `--dry-run`, `--force`, `--json` |
+| `animus plugin update` | `--all` \| `--kind <KIND>` \| `--name <NAME>` (exactly one required), `--check`, `--yes`, `--tag <TAG>` (only with `--name`), `--force`, `--restart-daemon`, `--json` |
 
-Use `animus plugin update --dry-run` as the update check; there is no
-`plugin list --check-updates` flag.
+`--check` (or the legacy `--dry-run` alias) prints the diff and exits without
+writing anything. `--yes` skips the confirmation prompt. `--force` reinstalls
+even when the installed tag already matches the recommended pin, and downgrades
+when the installed tag is *ahead* of the pin. Plugins installed from
+`--path`/`--url` sources (i.e. `source_kind != "release"`) and plugins whose
+slug has no recommended pin are reported with a clear `skip` note and never
+mutated. `--restart-daemon` is currently a placeholder — restart the daemon
+manually after a successful update.
 
 ### `animus plugin lock`
 

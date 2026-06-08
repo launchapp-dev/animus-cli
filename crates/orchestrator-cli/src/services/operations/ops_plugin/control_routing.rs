@@ -284,13 +284,20 @@ impl PluginRouting for PluginRoutingImpl {
     }
 
     async fn plugin_update(&self, request: WireUpdateRequest) -> Result<WireUpdateResponse, ControlError> {
+        use super::marketplace::PluginUpdateSelector;
+        let selector = match request.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+            Some(name) => PluginUpdateSelector::Name(name.to_string()),
+            None => PluginUpdateSelector::All,
+        };
         let req = PluginUpdateRequest {
-            name: request.name,
-            tag: request.tag,
-            dry_run: request.dry_run,
+            selector,
+            tag_override: request.tag,
+            check: request.dry_run,
             force: false,
-            registry_url: String::new(),
-            no_cache: false,
+            // Pin lockfile + audit resolution to the daemon's project root so
+            // a control-routed update touches `.animus/plugins.lock` instead
+            // of silently falling back to `~/.animus/plugins.lock`.
+            project_root: Some(self.project_root_str()),
         };
         let output = run_plugin_update(req).await.map_err(internal)?;
         let updates = output
@@ -299,8 +306,8 @@ impl PluginRouting for PluginRoutingImpl {
             .map(|row| animus_control_protocol::types::PluginUpdateEntry {
                 name: row.name,
                 from_version: row.installed_tag.unwrap_or_default(),
-                to_version: row.target_tag.unwrap_or_default(),
-                applied: row.status == "updated",
+                to_version: row.recommended_tag.unwrap_or_default(),
+                applied: row.action == "update",
             })
             .collect();
         Ok(WireUpdateResponse { updates })

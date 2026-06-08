@@ -255,7 +255,7 @@ These tools query and update the public plugin registry view exposed by the CLI.
 |---|---|---|
 | `animus.plugin.search` | Search the public plugin registry. | `query`, `kind`, `tag[]`, `org`, `stability`, `registry_url`, `no_cache` |
 | `animus.plugin.browse` | Browse registry entries grouped by plugin kind. | `kind`, `installed`, `available`, `registry_url`, `no_cache` |
-| `animus.plugin.update` | Update one or all installed release-source plugins from the registry. | `name`, `tag`, `dry_run`, `force`, `registry_url`, `no_cache` |
+| `animus.plugin.update` | Update one or all installed release-source plugins to the pins declared in `default-install.json`. | `name` (omit for `--all`), `tag` (only valid with `name`), `dry_run`, `force`. `registry_url` + `no_cache` are deprecated in v0.5.8 (ignored). |
 
 Discovery order: `~/.animus/plugins.yaml` (or the legacy
 `~/.config/animus/plugins.yaml` only when the new registry is absent) →
