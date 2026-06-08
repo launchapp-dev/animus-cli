@@ -313,3 +313,19 @@ Requires a daemon restart to take effect and to re-enable. See
 provider backends were extracted to standalone plugins. There is no longer
 a runtime escape hatch for provider dispatch — uninstall or disable the
 offending plugin instead.
+
+## Multi-tenant + RBAC roadmap
+
+Animus is single-user as of v0.5.4: the control socket is owned by the OS
+user who started the daemon, audit lines record only the role hint
+(`user` / `daemon`), and no permission checks gate control requests.
+
+The v0.5.5+ design proposal at
+[`docs/architecture/multi-tenant-rbac-v0.5.5.md`](../architecture/multi-tenant-rbac-v0.5.5.md)
+lays out a typed `Principal` model, a four-chokepoint RBAC scaffold
+(control dispatch, plugin install, secret read, audit write — where
+control dispatch carries the per-request `Permission` constant that
+gates every control RPC including `workflow.run`, `queue.mutate`,
+`subject.update`, `plugin.uninstall`, and `daemon.shutdown`), and a
+`~/.animus/principals.yaml` policy file. Per-tenant state isolation and
+per-principal secret routing are explicitly deferred to v0.6.

@@ -16,3 +16,4 @@ Formal specifications and exhaustive listings for the Animus CLI.
 | [Configuration](configuration.md) | Config files, environment variables, and precedence |
 | [Data Layout](data-layout.md) | Project-local `.animus/` config plus repo-scoped runtime state |
 | [Status Values & Enums](status-values.md) | All accepted enum values across the system |
+| [Security](security.md) | Plugin signature trust model, lockfile policy, kill switches, and multi-tenant + RBAC roadmap |
