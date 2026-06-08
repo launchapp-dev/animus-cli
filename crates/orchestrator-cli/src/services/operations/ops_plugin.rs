@@ -1,6 +1,7 @@
 mod control_routing;
 mod marketplace;
 mod new;
+mod scaffold;
 mod signing;
 
 pub(crate) use control_routing::build_plugin_routing;
@@ -36,7 +37,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     invalid_input_error, not_found_error, print_value, PluginCallArgs, PluginCommand, PluginInfoArgs,
     PluginInstallArgs, PluginInstallDefaultsArgs, PluginListArgs, PluginLockCommand, PluginLockListArgs,
-    PluginLockVerifyArgs, PluginPingArgs, PluginUninstallArgs,
+    PluginLockVerifyArgs, PluginPingArgs, PluginScaffoldCommand, PluginUninstallArgs,
 };
 
 #[derive(Debug, Serialize)]
@@ -246,6 +247,12 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
         PluginCommand::Install(args) => handle_plugin_install(args, project_root, json).await,
         PluginCommand::Uninstall(args) => handle_plugin_uninstall(args, project_root, json),
         PluginCommand::New(args) => new::handle_plugin_new(args, json),
+        PluginCommand::Scaffold(cmd) => match cmd {
+            PluginScaffoldCommand::Trigger(mut args) => {
+                args.json = args.json || json;
+                scaffold::handle_plugin_scaffold_trigger(args)
+            }
+        },
         PluginCommand::Search(args) => marketplace::handle_plugin_search(args).await,
         PluginCommand::Browse(args) => marketplace::handle_plugin_browse(args).await,
         PluginCommand::Update(args) => marketplace::handle_plugin_update(args).await,

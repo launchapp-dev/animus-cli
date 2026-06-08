@@ -42,6 +42,29 @@ All notable changes to this project will be documented in this file.
   declaration field, the compiler emits a warning to stderr suggesting
   the author move it under `secrets:`. The lint is a warning, not an
   error — trusted workflows may have legitimate uses.
+- **Trigger plugin authoring story.** New `animus plugin scaffold trigger <name>`
+  subcommand emits a minimal, offline, self-contained Cargo starter for a
+  custom `trigger_backend` plugin (Cargo.toml, plugin.toml, src/main.rs,
+  README.md, .gitignore) pinned against `launchapp-dev/animus-protocol`
+  v0.5.5 by default. Unlike `animus plugin new`, the scaffolder works
+  without network access and ships a working `initialize` + `trigger/watch`
+  + `trigger/ack` + `health/check` skeleton.
+- **`examples/triggers/fswatch/`** — reference filesystem-watch trigger
+  plugin that watches a glob list and emits `trigger/event` notifications
+  on file modification. Compiles standalone; not a workspace member.
+- **`docs/guides/authoring-trigger-plugins.md`** — walks the trigger
+  protocol surface, daemon supervisor lifecycle, manifest format,
+  scaffold usage, fswatch walkthrough, and debugging.
+
+### Fixed
+
+- **Trigger plugins now receive workflow YAML `config` blocks.** The
+  daemon's `TriggerSupervisor` was previously sending
+  `TriggerWatchParams::default()` for every trigger plugin, so the
+  `triggers[].config` block authors wrote in workflow YAML never
+  reached the plugin. The supervisor now forwards every enabled
+  `type: plugin` trigger as `TriggerWatchParams.config.triggers[]`;
+  each plugin filters the list for entries it understands.
 
 ## [0.5.4] - 2026-06-05
 

@@ -244,7 +244,7 @@ impl TriggerPluginRunner for ProcessTriggerRunner {
             return SessionOutcome::SpawnError(format!("handshake failed: {error:#}"));
         }
         let mut notifications = host.subscribe_notifications();
-        let watch = TriggerWatchParams::default();
+        let watch = TriggerWatchParams { cursor: None, config: Some(collect_plugin_trigger_config(project_root)) };
         let watch_params = match serde_json::to_value(watch) {
             Ok(value) => value,
             Err(error) => return SessionOutcome::SpawnError(format!("encode watch params: {error}")),
@@ -599,6 +599,58 @@ fn build_routed_payload(event: &TriggerEvent) -> serde_json::Value {
 /// `event_id` fields are propagated into the WebhookEvent payload under
 /// `__animus_*` reserved keys so downstream tick handlers (and workflow YAML)
 /// can branch on them without losing context.
+/// Build the merged `trigger/watch` config payload from every enabled
+/// `type: plugin` entry in the project's workflow YAML.
+///
+/// The payload shape is:
+///
+/// ```json
+/// {
+///   "triggers": [
+///     {"id": "fswatch-default", "workflow_ref": "...", "config": {...}, "input": {...}},
+///     ...
+///   ]
+/// }
+/// ```
+///
+/// Plugins read this list, decide which entries are theirs (by `id`,
+/// shape of `config`, or convention) and start emitting events with
+/// the matching `trigger_id`. The supervisor is intentionally agnostic
+/// about per-plugin filtering — it can't reliably tell which plugin
+/// owns which workflow entry without an explicit `plugin_name` field
+/// on the trigger, so it ships the full list and lets each plugin
+/// pick the entries it understands. Plugins SHOULD ignore unknown
+/// entries silently rather than erroring.
+///
+/// Each entry's top-level `config` block is what authors write under
+/// `triggers[].config` in YAML — for the reference fswatch plugin,
+/// for example, that contains `trigger_id`, `globs`, and
+/// `debounce_ms`. Bridge plugins authored against an older protocol
+/// version that doesn't read this list still get an empty config
+/// block and degrade gracefully.
+pub(crate) fn collect_plugin_trigger_config(project_root: &Path) -> serde_json::Value {
+    let workflow_config = orchestrator_core::load_workflow_config_or_default(project_root);
+    let triggers: Vec<serde_json::Value> = workflow_config
+        .config
+        .triggers
+        .iter()
+        .filter(|trigger| trigger.enabled && matches!(trigger.trigger_type, TriggerType::Plugin))
+        .map(|trigger| {
+            let mut entry = serde_json::Map::new();
+            entry.insert("id".to_string(), serde_json::Value::String(trigger.id.clone()));
+            if let Some(workflow_ref) = trigger.workflow_ref.as_ref() {
+                entry.insert("workflow_ref".to_string(), serde_json::Value::String(workflow_ref.clone()));
+            }
+            entry.insert("config".to_string(), trigger.config.clone());
+            if let Some(input) = trigger.input.as_ref() {
+                entry.insert("input".to_string(), input.clone());
+            }
+            serde_json::Value::Object(entry)
+        })
+        .collect();
+    json!({ "triggers": triggers })
+}
+
 fn route_event(project_root: &Path, event: &TriggerEvent) -> bool {
     let Some(trigger_id) = event.trigger_id.as_deref() else {
         debug!(event_id = %event.event_id, "trigger event lacks trigger_id; dropping (router has no default workflow)");
@@ -681,6 +733,54 @@ mod tests {
             input: None,
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("write workflow config");
+    }
+
+    #[test]
+    fn collect_plugin_trigger_config_emits_enabled_plugin_entries() {
+        let temp = tempdir().expect("tempdir");
+        let project_root = temp.path();
+        let mut config = orchestrator_core::builtin_workflow_config();
+        config.workflows.push(orchestrator_core::WorkflowDefinition {
+            id: "plugin-flow".to_string(),
+            name: "Plugin Flow".to_string(),
+            description: String::new(),
+            phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
+            post_success: None,
+            variables: Vec::new(),
+        });
+        config.triggers.push(WorkflowTrigger {
+            id: "fswatch-default".to_string(),
+            trigger_type: TriggerType::Plugin,
+            workflow_ref: Some("plugin-flow".to_string()),
+            enabled: true,
+            config: json!({"trigger_id": "fswatch-default", "globs": ["src/**/*.rs"]}),
+            input: None,
+        });
+        config.triggers.push(WorkflowTrigger {
+            id: "disabled".to_string(),
+            trigger_type: TriggerType::Plugin,
+            workflow_ref: Some("plugin-flow".to_string()),
+            enabled: false,
+            config: json!({}),
+            input: None,
+        });
+        config.triggers.push(WorkflowTrigger {
+            id: "ignored-webhook".to_string(),
+            trigger_type: TriggerType::Webhook,
+            workflow_ref: Some("plugin-flow".to_string()),
+            enabled: true,
+            config: json!({"max_triggers_per_minute": 10}),
+            input: None,
+        });
+        orchestrator_core::write_workflow_config(project_root, &config).expect("write workflow config");
+
+        let payload = collect_plugin_trigger_config(project_root);
+        let triggers = payload.get("triggers").and_then(|v| v.as_array()).expect("triggers array");
+        assert_eq!(triggers.len(), 1, "only enabled plugin trigger should be included");
+        let entry = &triggers[0];
+        assert_eq!(entry.get("id").and_then(|v| v.as_str()), Some("fswatch-default"));
+        assert_eq!(entry.get("workflow_ref").and_then(|v| v.as_str()), Some("plugin-flow"));
+        assert_eq!(entry.pointer("/config/trigger_id").and_then(|v| v.as_str()), Some("fswatch-default"));
     }
 
     #[test]

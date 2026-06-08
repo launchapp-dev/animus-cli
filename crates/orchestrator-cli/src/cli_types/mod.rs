@@ -227,6 +227,44 @@ mod tests {
     }
 
     #[test]
+    fn parses_plugin_scaffold_trigger_command() {
+        let cli = Cli::try_parse_from([
+            "animus",
+            "plugin",
+            "scaffold",
+            "trigger",
+            "fswatch",
+            "--owner",
+            "acme-co",
+            "--license",
+            "Apache-2.0",
+            "--protocol-tag",
+            "v0.5.5",
+        ])
+        .expect("plugin scaffold trigger should parse");
+
+        match cli.command {
+            Command::Plugin { command: PluginCommand::Scaffold(PluginScaffoldCommand::Trigger(args)) } => {
+                assert_eq!(args.name, "fswatch");
+                assert_eq!(args.owner.as_deref(), Some("acme-co"));
+                assert_eq!(args.license, "Apache-2.0");
+                assert_eq!(args.protocol_tag, "v0.5.5");
+                assert!(!args.force);
+                assert!(!args.json);
+                assert!(args.out_dir.is_none());
+            }
+            _ => panic!("expected plugin scaffold trigger command"),
+        }
+    }
+
+    #[test]
+    fn plugin_scaffold_trigger_requires_name() {
+        let error =
+            Cli::try_parse_from(["animus", "plugin", "scaffold", "trigger"]).expect_err("missing NAME should fail");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
     fn parses_workflow_run_with_positional_pipeline() {
         let cli = Cli::try_parse_from(["animus", "workflow", "run", "animus.task/standard", "--task-id", "TASK-123"])
             .expect("workflow run should parse");

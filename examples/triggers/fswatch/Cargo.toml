@@ -1,0 +1,28 @@
+[workspace]
+
+[package]
+name = "animus-trigger-fswatch"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Reference Animus trigger backend that fires when files matching a glob are modified"
+repository = "https://github.com/launchapp-dev/animus-cli"
+publish = false
+
+[[bin]]
+name = "animus-trigger-fswatch"
+path = "src/main.rs"
+
+[dependencies]
+animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.5" }
+animus-plugin-runtime  = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.5" }
+anyhow = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+glob = "0.3"
+notify = "6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
