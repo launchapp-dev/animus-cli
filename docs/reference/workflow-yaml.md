@@ -18,6 +18,9 @@ agents:          # Agent profile definitions
 agent_channels:  # Agent communication channel definitions
 phases:          # Reusable phase execution definitions
 workflows:       # Named workflow pipelines
+schedules:       # Cron-driven workflow dispatch
+triggers:        # Event-driven workflow dispatch
+daemon:          # Daemon-wide runtime tuning
 ```
 
 All sections are optional. Multiple YAML files in `.animus/workflows/` are merged,
@@ -522,5 +525,283 @@ variables:
   - name: target_branch
     default: main
 ```
+
+---
+
+## schedules
+
+Declares cron-driven dispatchers that enqueue a workflow on a recurring
+schedule. Each entry compiles into a `WorkflowSchedule` and is evaluated once
+per daemon scheduler tick.
+
+```yaml
+schedules:
+  - id: nightly-housekeeping
+    cron: "0 2 * * *"
+    workflow_ref: housekeeping
+    input: { include_archived: true }
+  - id: hourly-dispatch
+    cron: "0 * * * *"
+    workflow_ref: dispatch-batch
+  - id: weekday-report
+    cron: "0 9 * * 1-5"
+    workflow_ref: send-report
+    enabled: true
+```
+
+### Fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | Unique identifier within the project; used for state tracking |
+| `cron` | string | yes | Standard 5-field cron expression evaluated in UTC |
+| `workflow_ref` | string | yes | ID of the workflow to enqueue when the schedule fires |
+| `input` | object | no | Structured JSON forwarded as the spawned workflow's input |
+| `enabled` | boolean | no | Whether the schedule is active (default: `true`) |
+
+The `command:` field still exists on the underlying `WorkflowSchedule` struct
+for back-compat, but the current config validator rejects schedules that use it
+(`schedules['<id>'].command is no longer supported; use workflow_ref`). Wrap any
+shell work you need in a workflow whose phase runs `mode: command` and point
+the schedule at that workflow instead.
+
+### Runtime semantics
+
+- Schedules are evaluated each daemon scheduler tick (default 5s, configurable
+  via the persisted daemon project config; see [`daemon`](#daemon) below).
+- Missed runs (daemon down at fire time) are **not** replayed when the daemon comes
+  back up — schedules fire forward-only from the next tick that matches the cron
+  expression.
+- Per-schedule activity is tracked under the scoped runtime state in
+  `ScheduleRunState` with three counters:
+  - `last_run` — UTC timestamp of the most recent dispatch attempt. Updated
+    when the schedule fires AND the daemon got far enough to invoke the
+    spawn — including spawn failures other than tick-budget exhaustion (this
+    prevents the same minute from retrying every tick).
+  - `run_count` — total dispatch attempts since project init (successes and
+    non-budget spawn failures both increment it).
+  - `missed_count` — increments only when the per-tick budget rejected the
+    spawn slot; `last_run` is **not** updated in that case so the schedule
+    gets another shot on the next tick within the same cron minute. Ticks
+    skipped outside `active_hours` do not touch either counter — the whole
+    schedule branch is bypassed.
+
+See `crates/orchestrator-core/src/services/schedule_state.rs` for the on-disk
+schema.
+
+---
+
+## triggers
+
+Declares event-driven dispatchers that enqueue a workflow when an external event
+fires. Each entry compiles into a `WorkflowTrigger` and is processed each daemon
+tick after the cron schedule block.
+
+```yaml
+triggers:
+  - id: docs-rebuild
+    type: file_watcher
+    workflow_ref: docs-build
+    config:
+      paths: ["docs/**/*.md"]
+      debounce_secs: 10
+      ignore: ["docs/_drafts/**"]
+  - id: github-push
+    type: github_webhook
+    workflow_ref: ci-pipeline
+    config:
+      secret_env: GITHUB_WEBHOOK_SECRET
+      max_triggers_per_minute: 30
+  - id: slack-inbound
+    type: plugin
+    workflow_ref: triage
+    # `config:` is accepted but not currently forwarded to plugins; see below.
+```
+
+### Common fields
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `id` | string | yes | Unique trigger identifier within the project |
+| `type` | string | yes | Event source: `file_watcher`, `webhook`, `github_webhook`, or `plugin` |
+| `workflow_ref` | string | yes | Workflow to enqueue when the trigger fires. Optional in the struct but validation rejects triggers that omit it (`triggers['<id>'] must define workflow_ref`) |
+| `enabled` | boolean | no | Whether the trigger is active (default: `true`) |
+| `config` | object | depends on `type` | Type-specific configuration. Required for `file_watcher` (must supply `paths`) and `webhook`/`github_webhook` (must supply `max_triggers_per_minute > 0` — see note below). Optional for `plugin` |
+| `input` | object | no | Structured JSON forwarded as the spawned workflow's input |
+
+**Webhook config caveat:** for webhook/github_webhook triggers you must supply
+an explicit `config:` block — even an empty `config: {}` is fine, because
+serde then applies the per-field default of `max_triggers_per_minute = 10`.
+Omitting `config:` entirely makes the field default to `Value::Null`, which
+the parser falls back through `WebhookTriggerConfig::default()` to
+`max_triggers_per_minute = 0`, and the config validator rejects that
+(`triggers['<id>'].config.max_triggers_per_minute must be greater than zero`).
+
+### `file_watcher` config
+
+Watches local filesystem paths and fires when they change.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `paths` | string[] | — | **Required.** Glob patterns to watch, relative to the project root. Validation rejects an empty list (`triggers['<id>'].config.paths must not be empty for file_watcher triggers`) |
+| `debounce_secs` | integer | `5` | Debounce window in seconds before re-dispatching after a burst of changes |
+| `ignore` | string[] | `[]` | Glob patterns to exclude from watching, relative to the project root |
+
+```yaml
+triggers:
+  - id: schema-rebuild
+    type: file_watcher
+    workflow_ref: regenerate-schema
+    config:
+      paths:
+        - "crates/protocol/src/**/*.rs"
+        - "schema/**/*.json"
+      debounce_secs: 15
+      ignore:
+        - "**/target/**"
+        - "**/*.tmp"
+```
+
+### `webhook` and `github_webhook` config
+
+Both kinds drain inbound webhook events from a daemon-managed queue. The
+in-tree daemon does **not** itself register `POST /triggers/{id}` HTTP routes —
+the public ingress is provided by an installed transport plugin (e.g.
+`launchapp-dev/animus-transport-http`), which is expected to honour
+`secret_env` and `max_triggers_per_minute` when it forwards events into the
+queue. (Note: the `WebhookTriggerConfig` doc comment in
+`crates/orchestrator-config/src/workflow_config/types.rs` still describes the
+in-tree HTTP path that existed before transports were extracted out-of-tree
+— treat the description in this section as authoritative until that comment
+is refreshed.)
+
+The in-tree path that *every* deployment can rely on is
+[`animus trigger fire <trigger_id> --payload <json>`](cli/index.md), which
+appends a synthetic event into the same pending-events queue that the daemon's
+trigger dispatcher drains each tick. Use it for local testing or for piping
+events from custom upstreams.
+
+`github_webhook` behaves the same as `webhook` but is intended for GitHub-style
+event payloads; filtering on the GitHub event type is left to the receiving
+workflow today.
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `secret_env` | string | `null` | Environment variable name. Transport plugins that implement HTTP ingress read this env var to validate the `sha256=<hex>` signature header on incoming requests. `animus trigger fire` ignores it (events are already trusted) |
+| `max_triggers_per_minute` | integer | `10` | Soft rate limit that transport plugins enforce by returning HTTP `429` on excess. `animus trigger fire` ignores it. Must be `> 0` |
+
+```yaml
+triggers:
+  - id: deploy-hook
+    type: webhook
+    workflow_ref: deploy
+    config:
+      secret_env: DEPLOY_WEBHOOK_SECRET
+      max_triggers_per_minute: 5
+```
+
+The signing secret is read from the transport plugin's process environment at
+request time — it is not stored in YAML. Use shell `export`, your service
+manager's env file, or `direnv` to populate it.
+
+### `plugin` config
+
+The daemon discovers every installed `trigger_backend` plugin via the stdio
+plugin host and supervises one session per plugin. Each plugin emits
+`trigger/event` notifications, which the daemon routes into the same
+`pending_events` queue used by webhook triggers and drains via
+`TriggerDispatch::process_due_triggers` on each tick.
+
+**Important caveat (current behaviour):** the supervisor sends
+`TriggerWatchParams::default()` to each plugin and does **not** forward the
+per-trigger `config:` map from this YAML block to the plugin. Trigger plugins
+that need configuration (Slack tokens, watch paths, etc.) currently source it
+from their own environment or sidecar config files, not from this YAML. Putting
+keys under `config:` for a `type: plugin` trigger is accepted by the config
+parser but has no runtime effect today.
+
+A dedicated trigger-plugin authoring guide is planned for `docs/guides/`; until
+it lands, the plugin host contract lives in `crates/animus-plugin-protocol`
+(see `TriggerWatchParams`, `TriggerEvent`, `TriggerAckParams`) and the
+supervisor in `crates/orchestrator-daemon-runtime/src/schedule/trigger_supervisor.rs`.
+
+### Plugin kill-switch
+
+Setting `ANIMUS_DAEMON_DISABLE_TRIGGERS=1` skips the trigger plugin supervisor on
+daemon start and interrupts any in-progress restart backoff. Schedules, webhooks,
+and file watchers configured via this YAML block continue to run; only
+`type: plugin` triggers are suppressed.
+
+---
+
+## daemon
+
+Top-level block that tunes parts of the daemon at workflow-config compile time.
+This block lives at the **top level** of the workflow YAML — not under a
+workflow — and compiles into `DaemonConfig`.
+
+```yaml
+daemon:
+  auto_run_ready: true
+  active_hours: "09:00-17:00"
+  phase_routing:
+    implementation:
+      tool: claude
+      model: claude-sonnet-4-6
+  mcp:
+    # daemon-side MCP runtime config
+```
+
+### Fields read from workflow YAML
+
+The daemon currently honours these fields from the YAML `daemon:` block:
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `auto_run_ready` | boolean | `false` | When `true`, the daemon auto-dispatches Ready subjects without a manual `animus workflow run`. Used as the fallback when the persisted daemon config does not pin `auto_run_ready` and no CLI override is passed |
+| `active_hours` | string | unset (24/7) | Local-time window during which the daemon's project tick will dispatch new schedule- AND trigger-driven work, e.g. `"09:00-17:00"`. Outside this window the tick skips **both** `process_due_schedules` and `process_due_triggers`, so cron schedules, webhook events, file-watcher events, and plugin events are all suppressed. Missed cron fires are **not** replayed when the window reopens — the next tick re-evaluates the cron expression against the new current minute, so an 08:00 cron does not get a delayed run when a 09:00 window opens. Webhook and plugin events stay queued in `pending_events` until the window opens and drain then. In-flight phases are not interrupted. Schedules suppressed this way do **not** bump `missed_count`. Read on every tick from workflow YAML (the persisted daemon config has no `active_hours` field) |
+| `phase_routing` | object | unset | Per-phase model/tool routing overrides applied at daemon spawn time. See [Model Routing](../guides/model-routing.md) |
+| `mcp` | object | unset | Daemon-side MCP runtime config (forwarded to `ProcessManager`). See [MCP Tools](mcp-tools.md) |
+
+### Fields parsed but not consumed by the daemon
+
+The remaining fields exist on the `DaemonConfig` struct and round-trip through
+config compilation, but the daemon does not currently read them from workflow
+YAML. The persisted daemon config lives at
+`~/.animus/<repo-scope>/daemon/pm-config.json` (not the project-local
+`.animus/` tree). Set persisted fields via
+`animus daemon config --<flag> <value>` (a leaf command — flags directly, no
+`set` subcommand) or pass equivalent flags to `animus daemon run` /
+`animus daemon start`.
+
+| Field | Type | Where to set it today |
+|---|---|---|
+| `interval_secs` | integer | `animus daemon config --interval-secs <n>` (persisted, hot-reloaded) or `animus daemon run --interval-secs <n>` |
+| `pool_size` | integer | `animus daemon config --pool-size <n>` (persisted, hot-reloaded) or `animus daemon run --pool-size <n>`. Alias: `max_agents` |
+| `auto_merge` | boolean | `animus daemon config --auto-merge <bool>` |
+| `auto_pr` | boolean | `animus daemon config --auto-pr <bool>` |
+| `auto_commit_before_merge` | boolean | `animus daemon config --auto-commit-before-merge <bool>` |
+| `auto_prune_worktrees` | boolean | `animus daemon config --auto-prune-worktrees-after-merge <bool>` |
+| `max_task_retries` | integer | **No wired sink today.** The field exists on `DaemonConfig` but is not read from workflow YAML and is not a field on `DaemonProjectConfig`. Setting it has no runtime effect |
+| `retry_cooldown_secs` | integer | **No wired sink today.** Same as `max_task_retries` |
+
+Setting these keys under `daemon:` in workflow YAML is harmless (the config
+round-trips), but it will not change daemon behaviour. Use
+[`animus daemon config`](cli/index.md) (which accepts flags directly — there is
+no `set` subcommand) or the equivalent CLI flags on
+`animus daemon run` / `animus daemon start` instead.
+
+### How `daemon:` blocks merge across files
+
+`schedules:` and `triggers:` entries merge by `id` across all
+`.animus/workflows/*.yaml` files (later overlays override earlier entries with
+the same id). The `daemon:` block does **not** field-merge: as each overlay is
+applied the YAML compiler runs `yaml.daemon.or(base.daemon)`, where `yaml` is
+the overlay being applied. The result is that any overlay which defines a
+`daemon:` block replaces the previously-accumulated block wholesale — fields
+defined only in earlier overlays are dropped. Keep `daemon:` in a single
+workflow YAML file to avoid losing settings to a partial later override.
+
+---
 
 See also: [Configuration](configuration.md), [Status Values](status-values.md).

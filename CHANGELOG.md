@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+
+- docs(workflow-yaml): document `schedules`, `triggers`, and `daemon` top-level blocks — features have shipped but had no authoring documentation. Added per-type config tables for `file_watcher`, `webhook`, `github_webhook`, and `plugin` triggers, runtime semantics for cron schedules (missed runs not replayed; `run_count` vs `missed_count`), and the full `DaemonConfig` field surface. Cross-linked from `docs/reference/configuration.md`.
+
 ## [0.5.4] - 2026-06-05
 
 ### Removed (v0.5.4 surface-shrink)
