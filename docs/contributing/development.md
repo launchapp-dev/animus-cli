@@ -101,6 +101,11 @@ deploying the docs site to Vercel.
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then `npx vercel --yes --prod`.
 
+The deploy step assumes the runner can reach `registry.npmjs.org` to resolve the
+`vercel` CLI and that the shell is already authenticated with Vercel. In
+restricted environments, expect the deploy phase to fail even when the docs are
+otherwise in sync.
+
 Protocol schema exports live at the repo root:
 
 ```bash

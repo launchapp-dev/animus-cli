@@ -8,4 +8,9 @@ cd "$repo_root"
 
 npm run docs:check-sync
 npm run docs:build
-npx vercel --yes --prod
+echo "Deploying docs with Vercel..."
+echo "Prerequisites: npm registry access and a valid Vercel login."
+npm_config_fetch_retries=0 \
+npm_config_fetch_timeout=10000 \
+npm_config_fetch_retry_maxtimeout=10000 \
+  npx vercel --yes --prod
