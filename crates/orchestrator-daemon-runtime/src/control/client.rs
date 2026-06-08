@@ -241,6 +241,15 @@ impl ControlClient {
         self.call::<Value, _>("daemon/metrics", Value::Null).await
     }
 
+    /// Call `plugin/status` — in-tree wire-string RPC introduced in v0.5.8 to
+    /// surface per-plugin runtime state (pid, last_rpc_at, restart_count,
+    /// last_error) from the daemon's [`PluginStatusRegistry`]. The response
+    /// envelope includes `protocol_version` so older clients can detect
+    /// schema drift cleanly.
+    pub async fn plugin_status(&self) -> Result<orchestrator_plugin_host::PluginStatusResponse> {
+        self.call::<Value, _>("plugin/status", Value::Null).await
+    }
+
     // ----- Workflow convenience methods ------------------------------
 
     /// Call `workflow/list`.
@@ -407,6 +416,102 @@ impl ControlClient {
     #[cfg(not(unix))]
     pub async fn daemon_logs(&self, _request: DaemonLogsRequest, _limit: usize) -> Result<Vec<DaemonLogEntry>> {
         Err(anyhow!("control client daemon/logs: control socket not supported on this platform"))
+    }
+
+    /// Subscribe to the daemon's `workflow/events` stream and invoke `on_event`
+    /// for every decoded [`animus_control_protocol::types::WorkflowEvent`]
+    /// until the socket closes, the connection errors, or `on_event` returns
+    /// `false`. Returns `Ok(())` on clean termination.
+    ///
+    /// The daemon does NOT buffer historical events today — subscribing only
+    /// delivers events that arrive after the subscribe ack lands. Callers that
+    /// want a rewind window must filter client-side using `event.occurred_at`.
+    #[cfg(unix)]
+    pub async fn workflow_events<F>(
+        &self,
+        request: animus_control_protocol::types::WorkflowEventsRequest,
+        mut on_event: F,
+    ) -> Result<()>
+    where
+        F: FnMut(animus_control_protocol::types::WorkflowEvent) -> bool,
+    {
+        let method = method_names::METHOD_WORKFLOW_EVENTS;
+        let mut stream = UnixStream::connect(&self.socket_path)
+            .await
+            .with_context(|| format!("connect to {}", self.socket_path.display()))?;
+        let params = serde_json::to_value(&request).context("serialize workflow/events params")?;
+        let rpc_request = RpcRequest::new(Value::from(1u64), method.to_string(), Some(params));
+        let mut bytes = serde_json::to_vec(&rpc_request).context("serialize workflow/events request")?;
+        bytes.push(b'\n');
+        stream.write_all(&bytes).await.context("write workflow/events request")?;
+        stream.flush().await.context("flush workflow/events request")?;
+
+        let (read_half, _write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+        let mut ack_seen = false;
+        let mut buf = String::new();
+        loop {
+            buf.clear();
+            let n = reader.read_line(&mut buf).await.context("read workflow/events frame")?;
+            if n == 0 {
+                if !ack_seen {
+                    return Err(anyhow!("control server closed connection without ack on {method}"));
+                }
+                break;
+            }
+            let trimmed = buf.trim_end();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let frame: Value =
+                serde_json::from_str(trimmed).with_context(|| format!("parse workflow/events frame: {trimmed}"))?;
+            let method_name = frame.get("method").and_then(|m| m.as_str()).unwrap_or("");
+            // The daemon's subscribe-driver spawns the broadcast handler BEFORE
+            // writing the ack frame, so a fast workflow event can land on the
+            // socket before the ack. Recognize the ack by the absence of a
+            // `method` field (notifications always carry one).
+            if method_name.is_empty() && !ack_seen {
+                let ack: RpcResponse =
+                    serde_json::from_str(trimmed).with_context(|| format!("parse {method} ack: {trimmed}"))?;
+                if let Some(err) = ack.error {
+                    return Err(rpc_error_to_anyhow(method, &err));
+                }
+                ack_seen = true;
+                continue;
+            }
+            if method_name == "subscription/closed" {
+                let reason =
+                    frame.get("params").and_then(|p| p.get("reason")).and_then(|r| r.as_str()).unwrap_or("unknown");
+                if reason != "workflow_completed" && reason != "workflow_failed" {
+                    eprintln!("animus: workflow event subscription closed by daemon (reason: {reason})");
+                }
+                break;
+            }
+            let Some(params) = frame.get("params") else {
+                continue;
+            };
+            let Some(data) = params.get("data") else {
+                continue;
+            };
+            let event: animus_control_protocol::types::WorkflowEvent = serde_json::from_value(data.clone())
+                .with_context(|| format!("decode workflow/event payload: {data}"))?;
+            if !on_event(event) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    pub async fn workflow_events<F>(
+        &self,
+        _request: animus_control_protocol::types::WorkflowEventsRequest,
+        _on_event: F,
+    ) -> Result<()>
+    where
+        F: FnMut(animus_control_protocol::types::WorkflowEvent) -> bool,
+    {
+        Err(anyhow!("control client workflow/events: control socket not supported on this platform"))
     }
 }
 

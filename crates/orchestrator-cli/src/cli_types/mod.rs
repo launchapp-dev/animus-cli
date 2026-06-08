@@ -2,6 +2,7 @@ mod agent_types;
 mod cost_types;
 mod daemon_types;
 mod doctor_types;
+mod events_types;
 mod flavor_types;
 mod git_types;
 mod history_types;
@@ -30,6 +31,7 @@ pub(crate) use agent_types::*;
 pub(crate) use cost_types::*;
 pub(crate) use daemon_types::*;
 pub(crate) use doctor_types::*;
+pub(crate) use events_types::*;
 pub(crate) use flavor_types::*;
 pub(crate) use git_types::*;
 pub(crate) use history_types::*;
@@ -379,10 +381,7 @@ mod tests {
         live.sort();
         documented.sort();
 
-        assert_eq!(
-            documented, live,
-            "docs/architecture/crate-map.md drifted from Cargo.toml workspace membership"
-        );
+        assert_eq!(documented, live, "docs/architecture/crate-map.md drifted from Cargo.toml workspace membership");
 
         let crate_map = read_doc("docs/architecture/crate-map.md");
         assert!(

@@ -140,4 +140,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: CostCommand,
     },
+    /// Stream workflow lifecycle events from the daemon (v0.5.8).
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
 }

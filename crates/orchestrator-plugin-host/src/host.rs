@@ -618,6 +618,15 @@ impl PluginHost {
     }
 
     /// Plugin name (label) — same as the `name` field passed to spawn.
+    /// Return the OS process id of the spawned child, if one is owned by
+    /// this host. Returns `None` for in-memory hosts constructed by tests
+    /// via [`Self::from_streams`], or when the child mutex is currently
+    /// held by another task (so the synchronous accessor never blocks).
+    pub fn child_pid(&self) -> Option<u32> {
+        let guard = self.inner.child.try_lock().ok()?;
+        guard.as_ref().and_then(|child| child.id())
+    }
+
     pub fn name(&self) -> &str {
         &self.inner.name
     }

@@ -47,6 +47,7 @@ use animus_control_protocol::{
 use super::workflow_events::{SubscriberItem, WorkflowEventBroadcaster, WorkflowEventFilter};
 use animus_plugin_protocol::{error_codes, RpcError, RpcRequest, RpcResponse};
 use futures_util::StreamExt;
+use orchestrator_plugin_host::{PluginStatusRegistry, PluginStatusResponse, PLUGIN_STATUS_PROTOCOL_VERSION};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
@@ -63,13 +64,14 @@ pub struct ControlConnection {
     stream: UnixStream,
     surface: Arc<dyn ControlSurface>,
     workflow_event_broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+    plugin_status_registry: Option<Arc<PluginStatusRegistry>>,
 }
 
 impl ControlConnection {
     /// Build a new connection bound to `stream`, dispatching via
     /// `surface`.
     pub fn new(stream: UnixStream, surface: Arc<dyn ControlSurface>) -> Self {
-        Self { stream, surface, workflow_event_broadcaster: None }
+        Self { stream, surface, workflow_event_broadcaster: None, plugin_status_registry: None }
     }
 
     /// Attach a [`WorkflowEventBroadcaster`] so `workflow/events`
@@ -78,6 +80,14 @@ impl ControlConnection {
     /// implement it on the v0.1.10 trait) and surfaces `method_not_found`.
     pub fn with_workflow_event_broadcaster(mut self, broadcaster: Arc<WorkflowEventBroadcaster>) -> Self {
         self.workflow_event_broadcaster = Some(broadcaster);
+        self
+    }
+
+    /// Attach a [`PluginStatusRegistry`] so `plugin/status` RPC calls
+    /// return live per-plugin runtime state. Without one the RPC reports
+    /// an empty plugins list with `protocol_version` populated.
+    pub fn with_plugin_status_registry(mut self, registry: Arc<PluginStatusRegistry>) -> Self {
+        self.plugin_status_registry = Some(registry);
         self
     }
 
@@ -96,6 +106,7 @@ impl ControlConnection {
         let mut reader = BufReader::new(read_half);
         let writer = Arc::new(ConnectionWriter::new(write_half));
         let broadcaster = self.workflow_event_broadcaster.clone();
+        let status_registry = self.plugin_status_registry.clone();
 
         let mut line = String::new();
         loop {
@@ -124,7 +135,15 @@ impl ControlConnection {
             let surface = Arc::clone(&self.surface);
             let writer_clone = Arc::clone(&writer);
             let broadcaster_clone = broadcaster.clone();
-            dispatch_request(&surface, &writer_clone, frame, broadcaster_clone.as_ref()).await?;
+            let status_registry_clone = status_registry.clone();
+            dispatch_request(
+                &surface,
+                &writer_clone,
+                frame,
+                broadcaster_clone.as_ref(),
+                status_registry_clone.as_ref(),
+            )
+            .await?;
         }
     }
 }
@@ -197,9 +216,10 @@ async fn dispatch_request(
     writer: &Arc<ConnectionWriter>,
     frame: RpcRequest,
     broadcaster: Option<&Arc<WorkflowEventBroadcaster>>,
+    status_registry: Option<&Arc<PluginStatusRegistry>>,
 ) -> std::io::Result<()> {
     let id = frame.id.clone();
-    let result = invoke_surface(surface, writer, &frame, broadcaster).await;
+    let result = invoke_surface(surface, writer, &frame, broadcaster, status_registry).await;
     match result {
         Ok(Some(value)) => {
             let response = RpcResponse::ok(id, value);
@@ -225,6 +245,7 @@ async fn invoke_surface(
     writer: &Arc<ConnectionWriter>,
     frame: &RpcRequest,
     broadcaster: Option<&Arc<WorkflowEventBroadcaster>>,
+    status_registry: Option<&Arc<PluginStatusRegistry>>,
 ) -> Result<Option<Value>, RpcError> {
     let params = frame.params.clone().unwrap_or(Value::Null);
     match frame.method.as_str() {
@@ -449,6 +470,18 @@ async fn invoke_surface(
         "daemon/metrics" => {
             let snapshot = crate::metrics::snapshot();
             Ok(Some(serialize_result(snapshot)))
+        }
+
+        // ----- Plugin runtime status (in-tree only; v0.5.8 observability) ----
+        // Not part of the upstream animus-control-protocol; added as a wire
+        // string so the CLI can answer "why does it feel like the agent is
+        // stuck" without forcing a protocol crate bump. Wraps the response in
+        // PluginStatusResponse so `protocol_version` is always present and
+        // older CLIs can detect schema drift.
+        "plugin/status" => {
+            let plugins = status_registry.map(|reg| reg.snapshot()).unwrap_or_default();
+            let response = PluginStatusResponse { protocol_version: PLUGIN_STATUS_PROTOCOL_VERSION, plugins };
+            Ok(Some(serialize_result(response)))
         }
 
         unknown => Err(RpcError {

@@ -103,6 +103,7 @@ pub(crate) enum CommandGroup {
     SelfUpdate,
     Metrics,
     Cost,
+    Events,
     Other,
 }
 

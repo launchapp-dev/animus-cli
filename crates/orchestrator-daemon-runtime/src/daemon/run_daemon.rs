@@ -257,7 +257,17 @@ where
         }
     }
 
-    discover_plugins_for_daemon(project_root, &primary_root, hooks)?;
+    let plugin_status_registry = orchestrator_plugin_host::PluginStatusRegistry::new();
+    orchestrator_plugin_host::install_global_status_registry(plugin_status_registry.clone());
+    // TODO(codex-p2): subject_backend / trigger / log_storage / transport /
+    // queue / workflow_runner plugins are spawned via paths that do not
+    // currently call into the status registry, so they remain in the
+    // `discovered` state for the lifetime of the daemon. Provider plugins
+    // (PluginSessionBackend::spawn_and_handshake + graceful_shutdown) are
+    // wired through and report live runtime state. Widening coverage requires
+    // touching the trigger supervisor, log-storage dispatch, and subject
+    // router spawn sites — left to a follow-up commit.
+    discover_plugins_for_daemon(project_root, &primary_root, hooks, &plugin_status_registry)?;
 
     let log_storage_handle = resolve_log_storage_dispatch_for_daemon(project_root, &primary_root, hooks).await;
     let log_storage_drop_guard = LogStorageHandleDropGuard::new(log_storage_handle.clone());
@@ -277,8 +287,14 @@ where
         attempt_orphan_agent_reattach(project_root, &primary_root, workflow_event_broadcaster.clone(), hooks)?;
     }
 
-    let control_server_handle =
-        start_control_server_for_daemon(project_root, &primary_root, hooks, workflow_event_broadcaster.clone()).await;
+    let control_server_handle = start_control_server_for_daemon(
+        project_root,
+        &primary_root,
+        hooks,
+        workflow_event_broadcaster.clone(),
+        plugin_status_registry.clone(),
+    )
+    .await;
 
     // Trigger backend plugins. Off by default behind an env flag mirroring
     // the provider-plugin opt-out shape.
@@ -602,6 +618,7 @@ async fn start_control_server_for_daemon<H: DaemonRunHooks>(
     primary_root: &str,
     hooks: &mut H,
     workflow_event_broadcaster: Arc<WorkflowEventBroadcaster>,
+    plugin_status_registry: Arc<orchestrator_plugin_host::PluginStatusRegistry>,
 ) -> Option<crate::control::ControlServerHandle> {
     let project_root_path = Path::new(project_root);
     let socket_path = crate::control::control_socket_path(project_root_path);
@@ -640,10 +657,11 @@ async fn start_control_server_for_daemon<H: DaemonRunHooks>(
     let surface = surface_builder.build();
     let surface_arc: Arc<dyn animus_control_protocol::ControlSurface> = Arc::new(surface);
 
-    match crate::control::ControlServer::start_with_workflow_events(
+    match crate::control::ControlServer::start_with_observability(
         project_root_path,
         surface_arc,
-        workflow_event_broadcaster,
+        Some(workflow_event_broadcaster),
+        Some(plugin_status_registry),
     )
     .await
     {
@@ -849,10 +867,23 @@ fn emit_orphan_agent_scan_events<H: DaemonRunHooks>(
     Ok(())
 }
 
-fn discover_plugins_for_daemon<H: DaemonRunHooks>(project_root: &str, primary_root: &str, hooks: &mut H) -> Result<()> {
+fn discover_plugins_for_daemon<H: DaemonRunHooks>(
+    project_root: &str,
+    primary_root: &str,
+    hooks: &mut H,
+    status_registry: &Arc<orchestrator_plugin_host::PluginStatusRegistry>,
+) -> Result<()> {
     use orchestrator_plugin_host::DiscoverySource;
     match orchestrator_plugin_host::discover_plugins(Path::new(project_root)) {
         Ok(plugins) => {
+            for plugin in &plugins {
+                status_registry.record_discovered(
+                    &plugin.name,
+                    &plugin.manifest.plugin_kind,
+                    Some(plugin.path.display().to_string()),
+                    Some(plugin.manifest.name.clone()),
+                );
+            }
             let summaries = plugins
                 .into_iter()
                 .map(|p| DiscoveredPluginSummary {

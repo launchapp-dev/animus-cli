@@ -30,6 +30,7 @@ use tokio::task::JoinHandle;
 #[cfg(unix)]
 use super::connection::ControlConnection;
 use super::workflow_events::WorkflowEventBroadcaster;
+use orchestrator_plugin_host::PluginStatusRegistry;
 
 /// Environment variable that disables the control server entirely when
 /// set to a truthy value.
@@ -194,6 +195,18 @@ impl ControlServer {
         Self::start_with_socket_and_workflow_events(socket_path, surface, Some(broadcaster)).await
     }
 
+    /// Like [`Self::start_with_workflow_events`] but additionally wires a
+    /// [`PluginStatusRegistry`] for the `plugin/status` RPC method.
+    pub async fn start_with_observability(
+        project_root: &Path,
+        surface: Arc<dyn ControlSurface>,
+        broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        status_registry: Option<Arc<PluginStatusRegistry>>,
+    ) -> Result<ControlServerHandle, ControlError> {
+        let socket_path = control_socket_path(project_root);
+        Self::start_with_socket_and_observability(socket_path, surface, broadcaster, status_registry).await
+    }
+
     /// Bind at an explicit socket path. Used by tests where the
     /// scoped-state-root resolution would produce a path too long for
     /// `SUN_LEN`, and as the underlying primitive for [`Self::start`].
@@ -215,6 +228,16 @@ impl ControlServer {
         surface: Arc<dyn ControlSurface>,
         broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
     ) -> Result<ControlServerHandle, ControlError> {
+        Self::start_with_socket_and_observability(socket_path, surface, broadcaster, None).await
+    }
+
+    #[cfg(unix)]
+    pub async fn start_with_socket_and_observability(
+        socket_path: PathBuf,
+        surface: Arc<dyn ControlSurface>,
+        broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        status_registry: Option<Arc<PluginStatusRegistry>>,
+    ) -> Result<ControlServerHandle, ControlError> {
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| ControlError::CreateDir { path: parent.to_path_buf(), source: e })?;
@@ -229,8 +252,14 @@ impl ControlServer {
             .map_err(|e| ControlError::Chmod { path: socket_path.clone(), source: e })?;
 
         let (shutdown_tx, _shutdown_rx) = broadcast::channel::<()>(8);
-        let accept_task =
-            tokio::spawn(accept_loop(listener, surface, shutdown_tx.subscribe(), socket_path.clone(), broadcaster));
+        let accept_task = tokio::spawn(accept_loop(
+            listener,
+            surface,
+            shutdown_tx.subscribe(),
+            socket_path.clone(),
+            broadcaster,
+            status_registry,
+        ));
 
         Ok(ControlServerHandle { socket_path, accept_task: Some(accept_task), shutdown_tx })
     }
@@ -254,6 +283,16 @@ impl ControlServer {
     ) -> Result<ControlServerHandle, ControlError> {
         Err(ControlError::Unavailable("control server not supported on this platform"))
     }
+
+    #[cfg(not(unix))]
+    pub async fn start_with_socket_and_observability(
+        _socket_path: PathBuf,
+        _surface: Arc<dyn ControlSurface>,
+        _broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        _status_registry: Option<Arc<PluginStatusRegistry>>,
+    ) -> Result<ControlServerHandle, ControlError> {
+        Err(ControlError::Unavailable("control server not supported on this platform"))
+    }
 }
 
 /// Background task: accept connections until the shutdown signal fires.
@@ -270,6 +309,7 @@ async fn accept_loop(
     mut shutdown_rx: broadcast::Receiver<()>,
     socket_path: PathBuf,
     broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+    status_registry: Option<Arc<PluginStatusRegistry>>,
 ) {
     loop {
         tokio::select! {
@@ -286,10 +326,14 @@ async fn accept_loop(
                     Ok((stream, _peer)) => {
                         let surface = Arc::clone(&surface);
                         let broadcaster_clone = broadcaster.clone();
+                        let status_registry_clone = status_registry.clone();
                         tokio::spawn(async move {
                             let mut connection = ControlConnection::new(stream, surface);
                             if let Some(b) = broadcaster_clone {
                                 connection = connection.with_workflow_event_broadcaster(b);
+                            }
+                            if let Some(r) = status_registry_clone {
+                                connection = connection.with_plugin_status_registry(r);
                             }
                             if let Err(err) = connection.serve().await {
                                 tracing::debug!(
