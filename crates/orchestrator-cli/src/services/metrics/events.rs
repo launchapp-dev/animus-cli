@@ -105,6 +105,7 @@ pub(crate) enum CommandGroup {
     Cost,
     Auth,
     Events,
+    State,
     Other,
 }
 

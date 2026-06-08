@@ -173,10 +173,21 @@ async fn run(cli: Cli) -> Result<()> {
     // is disabled). The recorder constructor handles every guard
     // internally — kill switch, no consent block, opt-out — so this
     // line never blocks command execution.
-    services::metrics::record_event(
-        std::path::Path::new(&project_root),
-        services::metrics::EventTags::CliInvoked { command_group: cli_command_group(&cli.command) },
-    );
+    //
+    // Skip the recorder for `animus state` commands: the recorder
+    // materializes `~/.animus/<scope>/metrics/pending.jsonl` on first
+    // call. That would (a) make a fresh target scope look non-empty to
+    // `state import` (forcing operators to pass `--yes` for what
+    // should be an empty restore) and (b) defeat the export path's
+    // read-only "no scoped state — nothing to export" guard by
+    // creating a metrics-only marker file. Telemetry for state ops is
+    // out-of-scope for v0.5.8.
+    if !matches!(cli.command, Command::State { .. }) {
+        services::metrics::record_event(
+            std::path::Path::new(&project_root),
+            services::metrics::EventTags::CliInvoked { command_group: cli_command_group(&cli.command) },
+        );
+    }
     match cli.command {
         Command::Init(args) => services::operations::handle_init(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
@@ -202,6 +213,7 @@ async fn run(cli: Cli) -> Result<()> {
             services::operations::handle_auth(command, cli.as_principal.clone(), cli.json).await
         }
         Command::Events { command } => services::operations::handle_events(command, &project_root, cli.json).await,
+        Command::State { command } => services::operations::handle_state(command, &project_root, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -252,7 +264,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Metrics { .. }
                 | Command::Cost { .. }
                 | Command::Auth { .. }
-                | Command::Events { .. } => {
+                | Command::Events { .. }
+                | Command::State { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }
@@ -339,6 +352,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Cost { .. } => CommandGroup::Cost,
         Command::Auth { .. } => CommandGroup::Auth,
         Command::Events { .. } => CommandGroup::Events,
+        Command::State { .. } => CommandGroup::State,
     }
 }
 

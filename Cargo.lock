@@ -2262,6 +2262,7 @@ dependencies = [
  "uuid",
  "webbrowser",
  "which",
+ "zstd",
 ]
 
 [[package]]

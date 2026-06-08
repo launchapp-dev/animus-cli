@@ -267,6 +267,10 @@ animus
 ├── events                   Stream workflow lifecycle events from the daemon (v0.5.8)
 │   └── tail                 Subscribe to `workflow/events` and render phase_started / phase_completed / workflow_completed / workflow_failed; supports `--workflow-id`, client-side `--since`, `--json`. The stream naturally terminates when a `--workflow-id` filter sees workflow_completed/workflow_failed; otherwise it follows until Ctrl-C.
 │
+├── state                    Export and import scoped runtime state for backup or migration (v0.5.8)
+│   ├── export               Write `animus-state-<scope>-<ts>.tar.zst` with `config/` + `daemon/` + `principals.yaml`
+│   └── import               Restore an export archive; `--yes` overwrites, `--into-project` re-scopes
+│
 └── help                     Print this message or the help of the given subcommand(s)
 ```
 
