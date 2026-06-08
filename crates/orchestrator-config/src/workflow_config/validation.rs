@@ -3,9 +3,125 @@ use std::path::Path;
 
 use anyhow::{anyhow, Result};
 
-use crate::agent_runtime_config::{AgentProfile, AgentRuntimeConfig, PhaseExecutionMode};
+use crate::agent_runtime_config::{
+    default_eval_expected_exit as default_eval_expected_exit_value, AgentProfile, AgentRuntimeConfig, EvalKind,
+    EvalsConfig, PhaseExecutionMode,
+};
 
 use super::types::*;
+
+fn validate_evals_block(phase_id: &str, evals: &EvalsConfig, config: &WorkflowConfig, errors: &mut Vec<String>) {
+    if !(0.0..=1.0).contains(&evals.pass_threshold) || !evals.pass_threshold.is_finite() {
+        errors.push(format!(
+            "phase_definitions['{}'].evals.pass_threshold must be between 0.0 and 1.0 (got {})",
+            phase_id, evals.pass_threshold
+        ));
+    }
+    if evals.checks.is_empty() {
+        errors.push(format!("phase_definitions['{}'].evals must declare at least one check", phase_id));
+    }
+    let mut seen_ids: BTreeSet<String> = BTreeSet::new();
+    for (idx, check) in evals.checks.iter().enumerate() {
+        let trimmed_id = check.id.trim();
+        if trimmed_id.is_empty() {
+            errors.push(format!("phase_definitions['{}'].evals.checks[{}].id must not be empty", phase_id, idx));
+        } else if !seen_ids.insert(trimmed_id.to_ascii_lowercase()) {
+            errors
+                .push(format!("phase_definitions['{}'].evals.checks contains duplicate id '{}'", phase_id, trimmed_id));
+        }
+        match check.kind {
+            EvalKind::Command => {
+                match check.command.as_deref().map(str::trim).filter(|c| !c.is_empty()) {
+                    None => errors.push(format!(
+                        "phase_definitions['{}'].evals.checks['{}'] kind='command' requires a non-empty command field",
+                        phase_id, check.id
+                    )),
+                    Some(program) => {
+                        if !config.tools_allowlist.is_empty()
+                            && !config.tools_allowlist.iter().any(|t| t.eq_ignore_ascii_case(program))
+                        {
+                            errors.push(format!(
+                                "phase_definitions['{}'].evals.checks['{}'].command '{}' is not in tools_allowlist",
+                                phase_id, check.id, program
+                            ));
+                        }
+                    }
+                }
+                if check.agent.is_some() || check.prompt.is_some() {
+                    errors.push(format!(
+                        "phase_definitions['{}'].evals.checks['{}'] kind='command' must not declare agent/prompt",
+                        phase_id, check.id
+                    ));
+                }
+                if let Some(timeout) = check.timeout_secs {
+                    if timeout == 0 {
+                        errors.push(format!(
+                            "phase_definitions['{}'].evals.checks['{}'].timeout_secs must be greater than 0",
+                            phase_id, check.id
+                        ));
+                    }
+                }
+            }
+            EvalKind::LlmJudge => {
+                let agent_ok = check.agent.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                let prompt_ok = check.prompt.as_deref().map(str::trim).filter(|s| !s.is_empty());
+                if agent_ok.is_none() {
+                    errors.push(format!(
+                        "phase_definitions['{}'].evals.checks['{}'] kind='llm_judge' requires a non-empty agent field",
+                        phase_id, check.id
+                    ));
+                } else if let Some(agent_id) = agent_ok {
+                    if !config.agent_profiles.contains_key(agent_id) {
+                        errors.push(format!(
+                            "phase_definitions['{}'].evals.checks['{}'] references agent '{}' not found in agent_profiles",
+                            phase_id, check.id, agent_id
+                        ));
+                    }
+                }
+                if prompt_ok.is_none() {
+                    errors.push(format!(
+                        "phase_definitions['{}'].evals.checks['{}'] kind='llm_judge' requires a non-empty prompt field",
+                        phase_id, check.id
+                    ));
+                }
+                if check.command.is_some() || !check.args.is_empty() {
+                    errors.push(format!(
+                        "phase_definitions['{}'].evals.checks['{}'] kind='llm_judge' must not declare command/args",
+                        phase_id, check.id
+                    ));
+                }
+                // Codex round-9 P3: working_dir and expected_exit are
+                // command-only knobs; `run_llm_judge_check` does not consume
+                // them. Reject so misleading YAML doesn't slip through.
+                if check.working_dir.is_some() {
+                    errors.push(format!(
+                        "phase_definitions['{}'].evals.checks['{}'] kind='llm_judge' must not declare working_dir",
+                        phase_id, check.id
+                    ));
+                }
+                if check.expected_exit != default_eval_expected_exit_value() {
+                    errors.push(format!(
+                        "phase_definitions['{}'].evals.checks['{}'] kind='llm_judge' must not override expected_exit",
+                        phase_id, check.id
+                    ));
+                }
+                // Codex round-7 P2: llm_judge dispatch is one-shot through
+                // the session backend; `timeout_secs` is silently ignored
+                // by `run_llm_judge_check`. Reject it so operators get a
+                // clear error instead of a misleading config.
+                if check.timeout_secs.is_some() {
+                    errors.push(format!(
+                        "phase_definitions['{}'].evals.checks['{}'] kind='llm_judge' does not support timeout_secs (judge timeouts inherit from the agent profile)",
+                        phase_id, check.id
+                    ));
+                }
+            }
+        }
+    }
+    if evals.on_fail == crate::agent_runtime_config::EvalOnFail::Rework && evals.max_reworks == 0 {
+        errors.push(format!("phase_definitions['{}'].evals.on_fail='rework' requires max_reworks > 0", phase_id));
+    }
+}
 
 fn validate_cron_expression(expression: &str) -> Result<()> {
     let expression = expression.trim();
@@ -519,6 +635,9 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                     }
                 }
             }
+        }
+        if let Some(evals) = definition.evals.as_ref() {
+            validate_evals_block(phase_id, evals, config, &mut errors);
         }
     }
 

@@ -891,6 +891,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
                 default_tool: None,
                 idempotency: crate::Idempotency::Unknown,
                 worktree: None,
+                evals: None,
             },
         );
     }
@@ -917,6 +918,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             default_tool: None,
             idempotency: crate::Idempotency::Unknown,
             worktree: None,
+            evals: None,
         },
     );
     crate::write_agent_runtime_config(temp.path(), &runtime_config).expect("agent runtime config should be written");

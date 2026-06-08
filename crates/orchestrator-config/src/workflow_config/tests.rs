@@ -1792,6 +1792,7 @@ fn validate_rejects_command_program_not_in_allowlist() {
             default_tool: None,
             idempotency: Idempotency::Unknown,
             worktree: None,
+            evals: None,
         },
     );
     let err = validate_workflow_config(&config).expect_err("should reject program not in allowlist");
@@ -3210,4 +3211,200 @@ fn validation_rejects_refresh_token_with_bearer_env() {
         message.contains("oauth.bearer_env must not be set for flow=\"refresh_token\""),
         "error should reject bearer_env in refresh flow: {message}"
     );
+#[test]
+fn yaml_evals_block_round_trips_through_parser() {
+    let yaml_raw = r#"
+phases:
+  implementation:
+    mode: agent
+    agent: default
+    evals:
+      pass_threshold: 0.8
+      on_fail: rework
+      max_reworks: 2
+      checks:
+        - id: unit-tests
+          kind: command
+          command: cargo
+          args: [test, --workspace]
+          working_dir: $REPO_ROOT
+          timeout_secs: 300
+          expected_exit: 0
+        - id: code-quality
+          kind: llm_judge
+          agent: default
+          prompt: "Verdict?"
+"#;
+    let config = parse_yaml_workflow_config(yaml_raw).expect("parse ok");
+    let phase = config.phase_definitions.get("implementation").expect("phase present");
+    let evals = phase.evals.as_ref().expect("evals present");
+    assert!((evals.pass_threshold - 0.8).abs() < 1e-3);
+    assert_eq!(evals.max_reworks, 2);
+    assert_eq!(evals.checks.len(), 2);
+    let cmd = &evals.checks[0];
+    assert_eq!(cmd.id, "unit-tests");
+    assert_eq!(cmd.command.as_deref(), Some("cargo"));
+    assert_eq!(cmd.args, vec!["test", "--workspace"]);
+    assert_eq!(cmd.working_dir.as_deref(), Some("$REPO_ROOT"));
+    assert_eq!(cmd.timeout_secs, Some(300));
+    let judge = &evals.checks[1];
+    assert_eq!(judge.id, "code-quality");
+    assert_eq!(judge.agent.as_deref(), Some("default"));
+    assert_eq!(judge.prompt.as_deref(), Some("Verdict?"));
+}
+
+#[test]
+fn yaml_evals_defaults_apply_when_omitted() {
+    let yaml_raw = r#"
+phases:
+  implementation:
+    mode: agent
+    agent: default
+    evals:
+      checks:
+        - id: unit-tests
+          kind: command
+          command: cargo
+"#;
+    let config = parse_yaml_workflow_config(yaml_raw).expect("parse ok");
+    let phase = config.phase_definitions.get("implementation").expect("phase present");
+    let evals = phase.evals.as_ref().expect("evals present");
+    assert!((evals.pass_threshold - 1.0).abs() < 1e-3, "default threshold should be 1.0");
+    assert_eq!(evals.max_reworks, 0, "default max_reworks should be 0");
+    assert_eq!(evals.on_fail, crate::agent_runtime_config::EvalOnFail::Block, "default on_fail should be block");
+    assert_eq!(evals.checks[0].expected_exit, 0, "default expected_exit should be 0");
+}
+
+fn seed_implementation_phase(config: &mut WorkflowConfig) {
+    config.phase_definitions.insert(
+        "implementation".to_string(),
+        PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Agent,
+            agent_id: None,
+            directive: None,
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: None,
+            manual: None,
+            default_tool: None,
+            idempotency: Idempotency::Unknown,
+            evals: None,
+        },
+    );
+}
+
+#[test]
+fn validation_rejects_pass_threshold_outside_unit_range() {
+    use crate::agent_runtime_config::{AgentProfile, EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
+
+    let mut config = builtin_workflow_config();
+    config.agent_profiles.insert("default".to_string(), AgentProfile::default());
+    seed_implementation_phase(&mut config);
+    let phase = config.phase_definitions.get_mut("implementation").expect("phase exists");
+    phase.evals = Some(EvalsConfig {
+        pass_threshold: 1.5,
+        on_fail: EvalOnFail::Block,
+        max_reworks: 0,
+        checks: vec![EvalCheck {
+            id: "x".into(),
+            kind: EvalKind::Command,
+            command: Some("true".into()),
+            args: Vec::new(),
+            working_dir: None,
+            timeout_secs: None,
+            expected_exit: 0,
+            agent: None,
+            prompt: None,
+        }],
+    });
+    let err = validate_workflow_config(&config).expect_err("out-of-range threshold should fail");
+    assert!(err.to_string().contains("pass_threshold must be between 0.0 and 1.0"), "got: {err}");
+}
+
+#[test]
+fn validation_rejects_command_check_missing_command_field() {
+    use crate::agent_runtime_config::{EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
+
+    let mut config = builtin_workflow_config();
+    seed_implementation_phase(&mut config);
+    let phase = config.phase_definitions.get_mut("implementation").expect("phase exists");
+    phase.evals = Some(EvalsConfig {
+        pass_threshold: 1.0,
+        on_fail: EvalOnFail::Block,
+        max_reworks: 0,
+        checks: vec![EvalCheck {
+            id: "x".into(),
+            kind: EvalKind::Command,
+            command: None,
+            args: Vec::new(),
+            working_dir: None,
+            timeout_secs: None,
+            expected_exit: 0,
+            agent: None,
+            prompt: None,
+        }],
+    });
+    let err = validate_workflow_config(&config).expect_err("missing command should fail");
+    assert!(err.to_string().contains("kind='command' requires a non-empty command field"), "got: {err}");
+}
+
+#[test]
+fn validation_rejects_rework_on_fail_with_zero_budget() {
+    use crate::agent_runtime_config::{EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
+
+    let mut config = builtin_workflow_config();
+    seed_implementation_phase(&mut config);
+    let phase = config.phase_definitions.get_mut("implementation").expect("phase exists");
+    phase.evals = Some(EvalsConfig {
+        pass_threshold: 1.0,
+        on_fail: EvalOnFail::Rework,
+        max_reworks: 0,
+        checks: vec![EvalCheck {
+            id: "x".into(),
+            kind: EvalKind::Command,
+            command: Some("true".into()),
+            args: Vec::new(),
+            working_dir: None,
+            timeout_secs: None,
+            expected_exit: 0,
+            agent: None,
+            prompt: None,
+        }],
+    });
+    let err = validate_workflow_config(&config).expect_err("rework with zero budget should fail");
+    assert!(err.to_string().contains("max_reworks > 0"), "got: {err}");
+}
+
+#[test]
+fn validation_rejects_llm_judge_with_timeout_secs() {
+    use crate::agent_runtime_config::{AgentProfile, EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
+
+    let mut config = builtin_workflow_config();
+    config.agent_profiles.insert("po-reviewer".to_string(), AgentProfile::default());
+    seed_implementation_phase(&mut config);
+    let phase = config.phase_definitions.get_mut("implementation").expect("phase exists");
+    phase.evals = Some(EvalsConfig {
+        pass_threshold: 1.0,
+        on_fail: EvalOnFail::Block,
+        max_reworks: 0,
+        checks: vec![EvalCheck {
+            id: "judge".into(),
+            kind: EvalKind::LlmJudge,
+            command: None,
+            args: Vec::new(),
+            working_dir: None,
+            timeout_secs: Some(30),
+            expected_exit: 0,
+            agent: Some("po-reviewer".into()),
+            prompt: Some("Verdict?".into()),
+        }],
+    });
+    let err = validate_workflow_config(&config).expect_err("llm_judge with timeout_secs should fail");
+    assert!(err.to_string().contains("does not support timeout_secs"), "got: {err}");
 }

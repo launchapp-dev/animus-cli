@@ -404,6 +404,7 @@ mod tests {
                 default_tool: None,
                 idempotency: orchestrator_core::Idempotency::Unknown,
                 worktree: None,
+                evals: None,
             },
         );
         phase.directive = Some("Implement {{release_name}} safely.".to_string());

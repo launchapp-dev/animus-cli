@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, HashMap};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent_runtime_config::{AgentProfile, Idempotency, PhaseExecutionMode};
+use crate::agent_runtime_config::{
+    default_eval_expected_exit, default_eval_pass_threshold, AgentProfile, EvalKind, EvalOnFail, Idempotency,
+    PhaseExecutionMode,
+};
 
 use super::types::*;
 
@@ -149,6 +152,38 @@ pub(super) struct YamlManualDefinition {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct YamlEvalCheck {
+    pub(super) id: String,
+    pub(super) kind: EvalKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) command: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(super) args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) working_dir: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) timeout_secs: Option<u64>,
+    #[serde(default = "default_eval_expected_exit")]
+    pub(super) expected_exit: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct YamlEvalsConfig {
+    #[serde(default = "default_eval_pass_threshold")]
+    pub(super) pass_threshold: f32,
+    #[serde(default)]
+    pub(super) on_fail: EvalOnFail,
+    #[serde(default)]
+    pub(super) max_reworks: u32,
+    #[serde(default)]
+    pub(super) checks: Vec<YamlEvalCheck>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct YamlPhaseDefinition {
     pub(super) mode: PhaseExecutionMode,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -182,6 +217,7 @@ pub(super) struct YamlPhaseDefinition {
     pub(super) idempotency: Idempotency,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) worktree: Option<YamlPhaseWorktree>,
+    pub(super) evals: Option<YamlEvalsConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

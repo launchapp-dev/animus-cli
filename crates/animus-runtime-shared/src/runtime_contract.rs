@@ -914,6 +914,7 @@ mod tests {
             default_tool: None,
             idempotency: Idempotency::Unknown,
             worktree: None,
+            evals: None,
         };
         workflow_config.phase_definitions.insert(phase_id.to_string(), phase_definition);
         LoadedWorkflowConfig {

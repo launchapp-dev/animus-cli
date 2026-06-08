@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 
 use crate::agent_runtime_config::{
-    AgentProfile, CommandCwdMode, PhaseCommandDefinition, PhaseExecutionMode, PhaseManualDefinition,
+    AgentProfile, CommandCwdMode, EvalCheck, EvalsConfig, PhaseCommandDefinition, PhaseExecutionMode,
+    PhaseManualDefinition,
 };
 use crate::PhaseExecutionDefinition;
 
@@ -93,6 +94,60 @@ pub(super) fn parse_merge_strategy(value: &str) -> Result<MergeStrategy> {
     }
 }
 
+// TODO(codex-p2): pack asset resolution does not yet rewrite
+// `evals.checks[].command` when it points at a pack-relative asset (e.g.
+// `assets/review-check.sh`). The current pack resolver only rewrites
+// phase `command.program` and tool executables. When the out-of-tree
+// workflow-runner adopts `run_evals`, extend the pack resolver in
+// `workflow_config::resolution` to walk eval check commands as well so
+// installed pack eval checks spawn from the pack root rather than the
+// phase worktree.
+fn yaml_evals_to_evals_config(yaml: YamlEvalsConfig) -> EvalsConfig {
+    EvalsConfig {
+        pass_threshold: yaml.pass_threshold,
+        on_fail: yaml.on_fail,
+        max_reworks: yaml.max_reworks,
+        checks: yaml
+            .checks
+            .into_iter()
+            .map(|c| EvalCheck {
+                id: c.id,
+                kind: c.kind,
+                command: c.command,
+                args: c.args,
+                working_dir: c.working_dir,
+                timeout_secs: c.timeout_secs,
+                expected_exit: c.expected_exit,
+                agent: c.agent,
+                prompt: c.prompt,
+            })
+            .collect(),
+    }
+}
+
+fn evals_config_to_yaml(config: EvalsConfig) -> YamlEvalsConfig {
+    YamlEvalsConfig {
+        pass_threshold: config.pass_threshold,
+        on_fail: config.on_fail,
+        max_reworks: config.max_reworks,
+        checks: config
+            .checks
+            .into_iter()
+            .map(|c| YamlEvalCheck {
+                id: c.id,
+                kind: c.kind,
+                command: c.command,
+                args: c.args,
+                working_dir: c.working_dir,
+                timeout_secs: c.timeout_secs,
+                expected_exit: c.expected_exit,
+                agent: c.agent,
+                prompt: c.prompt,
+            })
+            .collect(),
+    }
+}
+
 pub(super) fn yaml_phase_to_execution_definition(
     phase_id: &str,
     yaml: YamlPhaseDefinition,
@@ -165,6 +220,7 @@ pub(super) fn yaml_phase_to_execution_definition(
         default_tool: yaml.default_tool,
         idempotency: yaml.idempotency,
         worktree: yaml.worktree.map(WorktreeConfig::from_yaml).transpose()?,
+        evals: yaml.evals.map(yaml_evals_to_evals_config),
     })
 }
 
@@ -263,6 +319,7 @@ pub(super) fn phase_execution_definition_to_yaml(definition: &PhaseExecutionDefi
         default_tool: definition.default_tool.clone(),
         idempotency: definition.idempotency,
         worktree: definition.worktree.clone().map(YamlPhaseWorktree::Full),
+        evals: definition.evals.clone().map(evals_config_to_yaml),
     }
 }
 
