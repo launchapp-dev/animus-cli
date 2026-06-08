@@ -62,6 +62,8 @@ Mutable runtime state lives outside the repo:
 ├── runner/
 │   ├── config.json
 │   └── agent-runner.sock
+├── secrets/
+│   └── index.json
 ├── state/
 │   ├── pack-selection.v1.json
 │   ├── schedule-state.json
@@ -88,6 +90,8 @@ Key points:
 - `runner/config.json` stores the runner auth token for the resolved runner
   scope, and `runner/agent-runner.sock` is the default Unix socket path used
   by scoped runner clients
+- `secrets/index.json` stores only the set of known secret KEY names for this
+  repo scope; secret values themselves stay in the OS keychain
 - `state/handoffs.json`, `state/history.json`, and `state/errors.json` are the
   current domain-state JSON stores persisted under the repo-scoped runtime root
 - other files under `state/` may appear over time as specific subsystems persist

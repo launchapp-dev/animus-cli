@@ -31,10 +31,11 @@ and project YAML can override installed pack workflows.
 
 ## secrets (v0.5.5+)
 
-Declares logical secret names backed by process environment variables.
-Reference them in any YAML scalar with `${secret.<name>}` — resolution
-happens at config-compile time, with the file path and line number
-included in any error.
+Declares logical secret names backed by env-var names. Reference them in
+any YAML scalar with `${secret.<name>}` — resolution happens at
+config-compile time, with the file path and line number included in any
+error. The lookup chain is explicit process env first, then the
+project-scoped keychain entry for the same env-var key if one exists.
 
 ```yaml
 secrets:
@@ -55,8 +56,10 @@ mcp_servers:
 
 ### Resolution semantics
 
-- The mapped env var is read at compile time. Required-but-unset env vars
-  fail the compile.
+- The mapped env var key is resolved at compile time. Explicit process env
+  wins; if it is unset, Animus falls back to the project-scoped keychain
+  store populated by `animus secret`.
+- Required-but-unset keys fail the compile.
 - Referencing an undeclared key (`${secret.unknown}`) fails the compile.
 - The compiled `workflow-config.v2.json` contains the *resolved string*
   — plugins consume the same scalar shape they always did. There is no

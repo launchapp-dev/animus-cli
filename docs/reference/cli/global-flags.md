@@ -37,6 +37,22 @@ animus subject list --kind task --project-root /path/to/my-project
 This flag is required when running Animus commands from outside a project
 directory, or when automating across multiple projects.
 
+## --as \<PRINCIPAL\>
+
+Impersonate a declared principal id for the current CLI invocation. This is an
+honor-system override carried to the daemon over the local control socket and
+logged loudly.
+
+- Under `policy.rbac=single-user`, the daemon accepts the override.
+- Under `policy.rbac=enforce`, the daemon rejects undeclared principals and
+  impersonation attempts that peer credentials do not permit.
+- `animus auth whoami --as <id>` shows the effective principal the daemon would
+  resolve for the same invocation.
+
+```bash
+animus --as release-bot auth whoami
+```
+
 ## Common Cross-Command Flags
 
 Many destructive commands expose command-specific confirmation and preview flags

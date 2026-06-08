@@ -153,17 +153,18 @@ Behavior resolves in this order:
 
 ## Secrets vs. Non-Secret Config
 
-> **Plugin-owned credentials still live in the daemon's env, not the YAML.**
-> The baseline contract is unchanged: API tokens, passwords, and OAuth
-> keys that a *plugin* needs (e.g. `LINEAR_API_TOKEN` for
-> `animus-subject-linear`, `OPENAI_API_KEY` for `animus-provider-oai`)
-> are read by the plugin directly from the daemon's process env.
+> **Plugin-owned credentials still stay out of YAML.**
+> As of v0.5.8, plugins can read required env vars from either the
+> daemon's process environment or the project-scoped keychain-backed
+> secret store. Resolution order is: explicit parent-process env first,
+> then the keychain entry for the current `repo-scope`.
 >
 > For credentials that a *phase* or *MCP server* declared in YAML needs
 > to receive (e.g. an MCP server's `env:` block), v0.5.5 adds the
 > [`secrets:` block](./workflow-yaml.md#secrets-v055) — declare the
 > mapping once, reference with `${secret.<name>}`, and the compiler
-> resolves it at config-compile time.
+> resolves it at config-compile time using the same env-first,
+> keychain-second lookup chain.
 >
 > Use `${VAR}` interpolation for non-secret configuration that varies by environment:
 > API base URLs, team IDs, feature flags, channel allowlists.
@@ -172,16 +173,24 @@ Behavior resolves in this order:
 
 | Plugin | Env var it reads | Set on |
 |---|---|---|
-| `animus-subject-linear` | `LINEAR_API_TOKEN` | The daemon's process environment |
-| `animus-provider-oai` | `OPENAI_API_KEY` (and provider-specific overrides) | The daemon's process environment |
+| `animus-subject-linear` | `LINEAR_API_TOKEN` | Parent-process env, else `animus secret` keychain entry |
+| `animus-provider-oai` | `OPENAI_API_KEY` (and provider-specific overrides) | Parent-process env, else `animus secret` keychain entry |
 | `animus-provider-claude` | inherits the Claude CLI's existing auth | The daemon's process environment |
 | `animus-provider-codex` | inherits the Codex CLI's existing auth | The daemon's process environment |
-| future plugins | declared in the plugin's `plugin.toml` `[[env]]` section or its README | The daemon's process environment |
+| future plugins | declared in the plugin's `plugin.toml` `[[env]]` section or its README | Parent-process env, else `animus secret` keychain entry when the plugin declares that variable |
 
-Start the daemon with the necessary env vars exported in its parent shell, for example:
+Seed credentials either by exporting them before daemon start or by
+storing them with `animus secret set <KEY>`. Explicit process env still
+wins on collision. Example:
 
 ```bash
 LINEAR_API_TOKEN=lin_api_... OPENAI_API_KEY=sk-... animus daemon start --autonomous
+```
+
+```bash
+animus secret set LINEAR_API_TOKEN --value lin_api_...
+animus secret set OPENAI_API_KEY --value sk-...
+animus daemon start --autonomous
 ```
 
 ### Workflow YAML interpolation (non-secret config)
@@ -190,7 +199,8 @@ Workflow YAML supports shell-style `${VAR}` interpolation **for non-secret confi
 the same YAML can target dev, staging, and prod without edits. Substitution is performed by
 the workflow YAML loader **before** the YAML is parsed, so every string scalar in the file
 (`.animus/workflows.yaml`, `.animus/workflows/*.yaml`, and pack-shipped workflow overlays)
-accepts the same syntax uniformly.
+accepts the same syntax uniformly. Lookup order is `std::env` first, then the project-scoped
+keychain-backed secret store installed by `animus secret`.
 
 #### Syntax
 
@@ -255,6 +265,10 @@ animus daemon start --autonomous
 
 Or use a process supervisor (systemd, launchd, docker-compose) that supports an
 `EnvironmentFile` directive.
+
+For persistent machine-local storage without keeping plaintext in the shell
+environment, use `animus secret import-env` to migrate selected `.env`
+entries into the OS keychain, then remove the plaintext file.
 
 #### What gets interpolated
 
