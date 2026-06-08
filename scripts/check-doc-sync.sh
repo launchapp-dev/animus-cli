@@ -6,6 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 cli_source="$repo_root/crates/orchestrator-cli/src/cli_types/root_types.rs"
 cli_docs="$repo_root/docs/reference/cli/index.md"
+agents_guide="$repo_root/AGENTS.md"
 mcp_source_dir="$repo_root/crates/orchestrator-cli/src/services/operations/ops_mcp"
 mcp_docs="$repo_root/docs/reference/mcp-tools.md"
 cargo_manifest="$repo_root/Cargo.toml"
@@ -55,6 +56,30 @@ extract_cli_docs() {
       }
     }
   ' "$cli_docs" | sort -u
+}
+
+extract_agents_cli_docs() {
+  awk '
+    /^Visible top-level commands:/ {
+      in_section=1
+      next
+    }
+    in_section && !started && NF == 0 {
+      next
+    }
+    in_section && started && NF == 0 {
+      exit
+    }
+    in_section && /^- / {
+      started=1
+      line=$0
+      sub(/^- `/, "", line)
+      sub(/`$/, "", line)
+      if (line != "") {
+        print line
+      }
+    }
+  ' "$agents_guide" | sort -u
 }
 
 extract_mcp_source() {
@@ -117,10 +142,12 @@ check_surface() {
 
 extract_cli_source > "$tmp_dir/cli-source.txt"
 extract_cli_docs > "$tmp_dir/cli-docs.txt"
+extract_agents_cli_docs > "$tmp_dir/agents-cli-docs.txt"
 extract_mcp_source > "$tmp_dir/mcp-source.txt"
 extract_mcp_docs > "$tmp_dir/mcp-docs.txt"
 
 check_surface "CLI command tree" "$tmp_dir/cli-source.txt" "$tmp_dir/cli-docs.txt"
+check_surface "AGENTS top-level command list" "$tmp_dir/cli-source.txt" "$tmp_dir/agents-cli-docs.txt"
 check_surface "MCP tool reference" "$tmp_dir/mcp-source.txt" "$tmp_dir/mcp-docs.txt"
 
 assert_contains() {

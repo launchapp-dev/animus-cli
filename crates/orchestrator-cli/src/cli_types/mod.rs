@@ -93,6 +93,23 @@ mod tests {
             .collect()
     }
 
+    fn documented_agents_top_level_commands() -> Vec<String> {
+        let binding = read_doc("AGENTS.md");
+        let mut lines = binding.lines();
+        for line in lines.by_ref() {
+            if line.trim() == "Visible top-level commands:" {
+                break;
+            }
+        }
+
+        lines
+            .skip_while(|line| line.trim().is_empty())
+            .take_while(|line| !line.trim().is_empty())
+            .filter_map(|line| line.trim().strip_prefix("- `").and_then(|entry| entry.strip_suffix('`')))
+            .map(str::to_string)
+            .collect()
+    }
+
     fn live_workspace_crates() -> Vec<String> {
         let mut in_members = false;
         let mut crates = Vec::new();
@@ -453,6 +470,22 @@ mod tests {
             documented, actual,
             "docs/reference/cli/index.md top-level command tree drifted from Cli::command()"
         );
+    }
+
+    #[test]
+    fn agents_guide_top_level_commands_match_live_clap_commands() {
+        let mut command = Cli::command();
+        command.build();
+
+        let mut actual: Vec<String> =
+            command.get_subcommands().map(|subcommand| subcommand.get_name().to_string()).collect();
+        actual.retain(|name| name != "help");
+        let mut documented = documented_agents_top_level_commands();
+
+        actual.sort();
+        documented.sort();
+
+        assert_eq!(documented, actual, "AGENTS.md top-level command list drifted from Cli::command()");
     }
 
     #[test]

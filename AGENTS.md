@@ -157,9 +157,12 @@ Visible top-level commands:
 - `subject`
 - `flavor`
 - `self`
+- `update`
 - `metrics`
 - `cost`
 - `auth`
+- `events`
+- `state`
 - `secret`
 
 Use these reference docs instead of hand-maintained summaries:
