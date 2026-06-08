@@ -505,7 +505,7 @@ fn peer_uid_for_stream(stream: &tokio::net::UnixStream) -> Option<libc::uid_t> {
     // SAFETY: `fd` is a valid descriptor; `&raw mut ucred` is a valid
     // out-pointer; `&raw mut len` is a valid in/out length pointer.
     let rc = unsafe {
-        libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&raw mut ucred) as *mut libc::c_void, &raw mut len)
+        libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&raw mut ucred).cast::<libc::c_void>(), &raw mut len)
     };
     if rc != 0 {
         tracing::debug!(
