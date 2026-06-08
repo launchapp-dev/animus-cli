@@ -218,7 +218,7 @@ animus
 ├── init                     Initialize an Animus project from a template
 │   (no subcommands)         Supports registry-backed or local copy templates, plan mode, and daemon defaults
 │
-├── doctor                   Run environment and configuration diagnostics
+├── doctor                   Run environment and configuration diagnostics. `--fix` applies safe remediations (stale daemon pid cleanup, zombie phase-session normalization, lock-file removal, chmod plugin binaries); `--fix --yes` additionally removes orphan worktrees via `git worktree remove --force`. `--check <id|category>` narrows to a single check; `--filter <substr>` keeps the legacy substring match.
 │
 ├── trigger                  Inspect and manage event triggers
 │   ├── list                 List all configured event triggers for this project

@@ -70,6 +70,10 @@ impl CheckFix {
             auto_applicable: true,
         }
     }
+
+    pub(crate) fn auto_no_command(id: &str, details: &str) -> Self {
+        Self { id: id.to_string(), details: details.to_string(), command: None, auto_applicable: true }
+    }
 }
 
 /// One diagnostic check emitted by a category module.
