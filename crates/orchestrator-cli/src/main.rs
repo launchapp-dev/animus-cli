@@ -150,6 +150,25 @@ async fn run(cli: Cli) -> Result<()> {
 
     let runtime_config = RuntimeConfig { project_root: cli.project_root.clone(), ..RuntimeConfig::default() };
     let (project_root, _) = resolve_project_root(&runtime_config);
+    // v0.5.8: propagate --as to ControlClient via env var. The CLI
+    // warns once before dispatch; the daemon either accepts the
+    // honor-system override (rbac=single-user) or rejects via peer-cred
+    // (rbac=enforce). Both surface uniformly through the standard error
+    // path.
+    // Scope the carrier env var to the parsed --as flag so an
+    // already-exported ANIMUS_AS_PRINCIPAL from a parent shell cannot
+    // silently impersonate. (codex round-5 P2) If the current
+    // invocation did not pass --as we unset the env var; if it did, we
+    // overwrite with the parsed value.
+    match cli.as_principal.as_deref() {
+        Some(principal) => {
+            std::env::set_var(orchestrator_daemon_runtime::control::ANIMUS_AS_PRINCIPAL_ENV, principal);
+            eprintln!(
+                "warning: --as is honor-system on the local Unix socket; logged loudly per v0.5.8 RBAC small core"
+            );
+        }
+        None => std::env::remove_var(orchestrator_daemon_runtime::control::ANIMUS_AS_PRINCIPAL_ENV),
+    }
     // Record a `cli_invoked` event before dispatch (no-op when telemetry
     // is disabled). The recorder constructor handles every guard
     // internally — kill switch, no consent block, opt-out — so this
@@ -178,6 +197,9 @@ async fn run(cli: Cli) -> Result<()> {
         Command::SelfCmd { command } => services::operations::handle_self(command, &project_root, cli.json).await,
         Command::Metrics { command } => services::operations::handle_metrics(command, &project_root, cli.json).await,
         Command::Cost { command } => services::operations::handle_cost(command, &project_root, cli.json).await,
+        Command::Auth { command } => {
+            services::operations::handle_auth(command, cli.as_principal.clone(), cli.json).await
+        }
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -225,7 +247,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Flavor { .. }
                 | Command::SelfCmd { .. }
                 | Command::Metrics { .. }
-                | Command::Cost { .. } => {
+                | Command::Cost { .. }
+                | Command::Auth { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }
@@ -309,6 +332,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::SelfCmd { .. } => CommandGroup::SelfUpdate,
         Command::Metrics { .. } => CommandGroup::Metrics,
         Command::Cost { .. } => CommandGroup::Cost,
+        Command::Auth { .. } => CommandGroup::Auth,
     }
 }
 

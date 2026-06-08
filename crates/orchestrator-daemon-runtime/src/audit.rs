@@ -34,18 +34,55 @@ pub fn audit_log_path(scoped_root: &Path) -> PathBuf {
 }
 
 /// Who performed the action being logged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// v0.5.8 small core kept the legacy `User`/`Daemon` variants for
+/// back-compat: every existing reader still parses lines with
+/// `"actor": "user"` and `"actor": "daemon"`. New call sites can pass
+/// [`AuditActor::Principal`] to additionally stamp typed `principal.id`
+/// and `principal.kind` fields on the JSON record. The legacy `actor`
+/// string still maps to `"user"` / `"daemon"` / `"service_account"` so
+/// SIEM filters keep working.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuditActor {
+    /// Legacy "some OS user did this" actor. Preserved bit-identical for
+    /// existing call sites (no `principal.*` fields emitted).
     User,
+    /// Legacy daemon-initiated event.
     Daemon,
+    /// v0.5.8: typed principal carrying `id` + `kind` for the audit
+    /// record. The legacy `actor` field is derived from `kind` so
+    /// existing readers keep working.
+    Principal {
+        /// Stable principal id (matches `Principal::id`).
+        id: String,
+        /// Principal kind label (matches `Principal::kind`).
+        kind: &'static str,
+    },
 }
 
 impl AuditActor {
+    /// Stable string label written to the legacy `actor` field. Returns
+    /// `"user"` / `"daemon"` / `"service_account"` per the design doc.
     #[must_use]
-    pub fn as_str(self) -> &'static str {
+    pub fn as_str(&self) -> &'static str {
         match self {
             Self::User => "user",
             Self::Daemon => "daemon",
+            Self::Principal { kind, .. } => kind,
+        }
+    }
+
+    /// Convenience: build a [`Self::Principal`] actor from an
+    /// `orchestrator_core::Principal`.
+    #[must_use]
+    pub fn from_principal(principal: &orchestrator_core::Principal) -> Self {
+        Self::Principal { id: principal.id().to_string(), kind: principal.kind() }
+    }
+
+    fn principal_fields(&self) -> Option<(String, &'static str)> {
+        match self {
+            Self::Principal { id, kind } => Some((id.clone(), kind)),
+            Self::User | Self::Daemon => None,
         }
     }
 }
@@ -84,19 +121,47 @@ impl AuditEventKind {
 
 /// One audit log record. The wire shape is always the JSON object described
 /// in the module docs.
+///
+/// v0.5.8 small core adds the optional `principal` field: when the actor
+/// is [`AuditActor::Principal`], serialization emits a sibling
+/// `principal: {id, kind}` object next to the legacy `actor` string. The
+/// legacy string field is kept so existing audit-log readers (history
+/// CLI, external SIEM exports) keep parsing unchanged — see the design
+/// doc §Risks #6.
 #[derive(Debug, Clone, Serialize)]
 pub struct AuditEvent {
+    /// RFC 3339 timestamp.
     pub ts: String,
+    /// Legacy actor string (`"user"` / `"daemon"` / `"service_account"`).
     pub actor: &'static str,
+    /// Stable event label (matches [`AuditEventKind::as_str`]).
     pub event: &'static str,
+    /// Free-form event payload.
     pub details: Value,
+    /// v0.5.8 typed principal carrier. Emitted only when the actor was
+    /// constructed via [`AuditActor::Principal`] / [`AuditActor::from_principal`].
+    /// Absent on legacy `User`/`Daemon` actors so existing audit-log
+    /// fixtures keep parsing bit-identically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub principal: Option<AuditPrincipal>,
+}
+
+/// Typed principal carrier serialized as a sibling of the legacy
+/// `actor` string. Mirrors `orchestrator_core::Principal::{id,kind}`.
+#[derive(Debug, Clone, Serialize)]
+pub struct AuditPrincipal {
+    /// Stable principal id.
+    pub id: String,
+    /// Principal kind (`user` / `daemon` / `service_account`).
+    pub kind: &'static str,
 }
 
 impl AuditEvent {
     /// Build an event with `ts` set to "now".
     #[must_use]
     pub fn new(actor: AuditActor, event: AuditEventKind, details: Value) -> Self {
-        Self { ts: Utc::now().to_rfc3339(), actor: actor.as_str(), event: event.as_str(), details }
+        let principal = actor.principal_fields().map(|(id, kind)| AuditPrincipal { id, kind });
+        Self { ts: Utc::now().to_rfc3339(), actor: actor.as_str(), event: event.as_str(), details, principal }
     }
 }
 

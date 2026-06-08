@@ -640,10 +640,46 @@ async fn start_control_server_for_daemon<H: DaemonRunHooks>(
     let surface = surface_builder.build();
     let surface_arc: Arc<dyn animus_control_protocol::ControlSurface> = Arc::new(surface);
 
-    match crate::control::ControlServer::start_with_workflow_events(
+    // v0.5.8 small-core RBAC: bootstrap ~/.animus/principals.yaml on
+    // first daemon startup (collision-guarded: never overwrites an
+    // existing file). Then load policy. Missing file falls back to
+    // single-user (the bit-identical default). Parse errors fail
+    // closed — we refuse to start the control server rather than
+    // silently degrading from `enforce` to single-user after a YAML
+    // typo. (codex round-4 P2: bootstrap before load so first-run
+    // operators see a generated default rather than nothing.)
+    let principals_path = orchestrator_core::default_principals_path();
+    if let Err(err) = orchestrator_core::bootstrap_principals_file_if_absent(&principals_path) {
+        tracing::warn!(
+            target: "animus.control.server",
+            path = %principals_path.display(),
+            error = %err,
+            "principals.yaml bootstrap failed; policy loader will fall through to single-user"
+        );
+    }
+    let policy = match crate::control::PolicyState::load(principals_path) {
+        Ok(policy) => policy,
+        Err(error) => {
+            // Codex round-8 P1: keep the control server running but
+            // in deny-all mode. If we just refused to start, CLI
+            // helpers that treat a missing socket as "daemon down"
+            // would silently fall back to in-process services that
+            // bypass chokepoint #1. The fail-closed posture only
+            // works if every wire entry point still hits the hook.
+            tracing::error!(
+                target: "animus.control.server",
+                error = %error,
+                "principals.yaml unparseable; control server entering deny-all mode (fail-closed under v0.5.8 RBAC)"
+            );
+            crate::control::PolicyState::deny_all(format!("principals.yaml unparseable: {error}"))
+        }
+    };
+
+    match crate::control::ControlServer::start_with_policy(
         project_root_path,
         surface_arc,
-        workflow_event_broadcaster,
+        Some(workflow_event_broadcaster),
+        policy,
     )
     .await
     {

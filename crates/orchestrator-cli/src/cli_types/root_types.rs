@@ -14,6 +14,17 @@ pub(crate) struct Cli {
         help = "Project root directory. Overrides default root resolution."
     )]
     pub(crate) project_root: Option<String>,
+    /// v0.5.8 honor-system principal override. Sends `$/setPrincipal` to
+    /// the daemon at connection open. Logged loudly; ignored under
+    /// `policy.rbac=single-user`. Under `enforce` the daemon rejects
+    /// impersonation when peer credentials don't match.
+    #[arg(
+        long = "as",
+        global = true,
+        value_name = "PRINCIPAL",
+        help = "Impersonate a declared principal (honor-system; warned)."
+    )]
+    pub(crate) as_principal: Option<String>,
 
     #[command(subcommand)]
     pub(crate) command: Command,
@@ -139,5 +150,10 @@ pub(crate) enum Command {
     Cost {
         #[command(subcommand)]
         command: CostCommand,
+    },
+    /// Inspect identity + permissions (v0.5.8 small-core RBAC).
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
     },
 }

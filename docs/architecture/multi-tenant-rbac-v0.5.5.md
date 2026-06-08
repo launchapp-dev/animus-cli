@@ -1,6 +1,41 @@
 # Multi-Tenant + RBAC Design Proposal (v0.5.5+)
 
-## Status
+## Status (v0.5.8 small-core landed)
+
+The small-core implementation called for in §"Recommended next steps"
+step 2 shipped in **v0.5.8**. What landed:
+
+| Piece | Status |
+|-------|--------|
+| `Principal` enum (User / Daemon / ServiceAccount) | **Landed** in `crates/orchestrator-core/src/principal.rs` |
+| `policy.rbac` config (`single-user` default, `enforce` opt-in) | **Landed** as `RbacMode` + `RbacConfig` |
+| `~/.animus/principals.yaml` auto-bootstrap (collision-guarded) | **Landed** in `bootstrap_principals_file_if_absent` |
+| Chokepoint #1 — control-dispatch permission hook | **Landed** in `crates/orchestrator-daemon-runtime/src/control/policy.rs` + `connection.rs` |
+| `getpeereid` / `SO_PEERCRED` peer-cred check (`cfg(unix)`) | **Landed** in `control/server.rs` `accept_loop` |
+| `animus auth whoami` CLI + global `--as <principal>` flag | **Landed** in `cli_types/auth_types.rs` + `ops_auth.rs` |
+| `AuditActor::Principal { id, kind }` shim (additive) | **Landed** in `daemon-runtime/src/audit.rs` |
+
+Still **deferred to v0.6** per the original "Explicit non-goals":
+
+- Per-tenant scope migration (`~/.animus/<repo-scope>/tenants/<tenant>/`).
+- Per-principal secret routing through `launchapp-dev/animus-provider-*`.
+- Plugin-host trust model changes — a single plugin process still
+  serves every principal routed through it with the same
+  manifest-declared secret bag.
+- Chokepoints #2 (plugin mutation), #3 (secret read), #4 (audit write
+  enforcement). The audit shim is in place but write-time enforcement
+  is not.
+
+Single-user installs are unchanged: `policy.rbac` defaults to
+`single-user`, and the chokepoint hook is a no-op there. The honest
+positioning from the original §"Why this is an honest stop" still
+holds — we now ship the *vocabulary* of multi-tenancy (principals,
+roles, audit attribution, `--as`) without claiming multi-tenant
+isolation.
+
+---
+
+## Original proposal
 
 - **Version:** v0.5.5 design proposal — pre-implementation review
 - **Type:** Architectural proposal. No code lands in this commit.

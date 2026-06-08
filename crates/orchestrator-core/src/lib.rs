@@ -10,6 +10,7 @@ pub mod flavor;
 pub mod model_quality;
 pub mod plugin_preflight;
 pub mod plugin_registry;
+pub mod principal;
 pub mod runtime_contract;
 pub mod services;
 pub mod state_machines;
@@ -78,6 +79,12 @@ pub use plugin_registry::{
     default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, resolve_tag_for_slug,
     DEFAULT_OAI_AGENT_PLUGINS, DEFAULT_PROVIDER_PLUGINS, DEFAULT_QUEUE_PLUGINS, DEFAULT_SUBJECT_PLUGINS,
     DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+};
+pub use principal::{
+    bootstrap_principals_file_if_absent, bootstrap_principals_file_if_absent_for, check_principal_can,
+    current_os_username, default_principals_path, load_principals_file, resolve_principal_by_id,
+    resolve_principal_for_os_user, role_allows_method, PermissionDecision, Principal, PrincipalEntry, PrincipalKind,
+    PrincipalsError, PrincipalsFile, PrincipalsPolicy, RbacConfig, RbacMode,
 };
 pub use runtime_contract::{
     build_cli_launch_contract, build_runtime_contract, cli_capabilities_for_tool, cli_capabilities_from_config,
