@@ -608,6 +608,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            worktree: None,
             evals: None,
         };
         let mut workflow = builtin_workflow_config();

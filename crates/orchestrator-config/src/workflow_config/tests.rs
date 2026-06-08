@@ -2856,6 +2856,7 @@ fn worktree_and_secrets_serde_roundtrip_through_workflow_config() {
             cleanup: false,
             base_ref: Some("develop".to_string()),
         }),
+        budget: None,
     });
     config.secrets.insert(
         "linear".to_string(),
@@ -2960,6 +2961,8 @@ workflows:
     let server = compiled.mcp_servers.get("linear").expect("linear server present");
     assert_eq!(server.env.get("LINEAR_API_TOKEN").map(|s| s.as_str()), Some("resolved-value"));
     assert_eq!(compiled.secrets.get("api").map(|s| s.env.as_str()), Some("ANIMUS_TEST_E2E_SECRET"));
+}
+
 fn http_oauth_server(oauth: OauthConfig) -> McpServerDefinition {
     McpServerDefinition {
         command: String::new(),
@@ -2970,6 +2973,9 @@ fn http_oauth_server(oauth: OauthConfig) -> McpServerDefinition {
         tools: Vec::new(),
         env: BTreeMap::new(),
         oauth: Some(oauth),
+    }
+}
+
 #[test]
 fn yaml_parses_workflow_level_budget_block() {
     let yaml = r#"
@@ -3041,6 +3047,7 @@ fn workflow_with_budget(id: &str, budget: BudgetConfig) -> WorkflowDefinition {
         phases: vec![WorkflowPhaseEntry::Simple("requirements".to_string())],
         post_success: None,
         variables: Vec::new(),
+        worktree: None,
         budget: Some(budget),
     }
 }
@@ -3294,6 +3301,8 @@ fn validation_rejects_refresh_token_with_bearer_env() {
         message.contains("oauth.bearer_env must not be set for flow=\"refresh_token\""),
         "error should reject bearer_env in refresh flow: {message}"
     );
+}
+
 #[test]
 fn yaml_evals_block_round_trips_through_parser() {
     let yaml_raw = r#"
@@ -3377,6 +3386,7 @@ fn seed_implementation_phase(config: &mut WorkflowConfig) {
             manual: None,
             default_tool: None,
             idempotency: Idempotency::Unknown,
+            worktree: None,
             evals: None,
         },
     );
@@ -3491,6 +3501,8 @@ fn validation_rejects_llm_judge_with_timeout_secs() {
     let err = validate_workflow_config(&config).expect_err("llm_judge with timeout_secs should fail");
     assert!(err.to_string().contains("does not support timeout_secs"), "got: {err}");
 }
+
+#[test]
 fn validate_rejects_zero_budget_max_tokens() {
     let mut config = test_workflow_config_with_standard_pipeline();
     config.workflows.push(workflow_with_budget(

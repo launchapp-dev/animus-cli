@@ -748,6 +748,8 @@ mod tests {
             phases: vec![orchestrator_core::WorkflowPhaseEntry::Simple("requirements".to_string())],
             post_success: None,
             variables: Vec::new(),
+            worktree: None,
+            budget: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: "fswatch-default".to_string(),
