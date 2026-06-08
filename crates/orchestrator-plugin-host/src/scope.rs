@@ -214,9 +214,13 @@ impl PluginScope {
         //     resolver AND the plugin set is non-empty. In that case
         //     the lightweight TOML parser already resolved the
         //     plugins, so we can safely activate `flavor-only`.
-        let mode = if flavor_manifest_present {
-            PluginScopeMode::FlavorOnly
-        } else if !flavor_plugins.is_empty() && locate_default_flavor_manifest(project_root).is_some() {
+        // FlavorOnly when EITHER the caller asserts a flavor is present
+        // (fail-closed even with an empty plugin set), OR auto-detection
+        // finds a manifest and the lightweight TOML parser already
+        // resolved a non-empty plugin set. Otherwise `mode: all`.
+        let mode = if flavor_manifest_present
+            || (!flavor_plugins.is_empty() && locate_default_flavor_manifest(project_root).is_some())
+        {
             PluginScopeMode::FlavorOnly
         } else {
             PluginScopeMode::All

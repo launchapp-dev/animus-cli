@@ -4,6 +4,51 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.9] - 2026-06-08
+
+The **performance + scoping** wave. Five parallel agents cut the
+compound cost that multiplies across Tauri polling, agent automation,
+and daemon ticks. Headline: `animus daemon status` 3052ms → ~800ms,
+`animus status` 11.1s → 3.1s, warm 30-plugin discovery 3000ms → ~4ms.
+
+### Added
+- **`animus plugin cache clear|list`** — inspect/wipe the sha256-keyed
+  on-disk manifest cache (`~/.animus/cache/manifests/<sha>.json`). Cache
+  invalidation is automatic since install/upgrade rewrites the binary sha.
+  `ANIMUS_DISABLE_MANIFEST_CACHE=1` kill-switch.
+- **`animus plugin scope show|set|reset`** — per-project plugin scoping via
+  `.animus/plugin-scope.yaml`. Three modes (`all`, `flavor-only`,
+  `allowlist`); `flavor-only` is the default when a flavor manifest exists.
+  Discovery, preflight, and the plugin-status registry iterate the scoped
+  set instead of every binary in `~/.animus/plugins/`.
+- **`--no-cache`** global flag + `ANIMUS_DISABLE_{CI,WORKFLOW}_CACHE=1` /
+  `ANIMUS_CI_CACHE_TTL_SECS` env knobs for the new hot-path caches.
+- **`ANIMUS_DISABLE_PROJECT_ROOT_CACHE=1`** kill-switch for the new
+  in-process `resolve_project_root` cache.
+
+### Performance
+- **sha256-keyed plugin manifest cache + parallel cold probes** — warm
+  30-plugin discovery drops from ~3s to ~4ms; cold-cache probes run
+  `min(8, num_cpus)`-parallel instead of serial. Fixes the root cause of
+  slow `daemon status` / `plugin list` / `init` on many-plugin installs.
+- **daemon status fast-path** — `load_daemon_status_snapshot_fast` skips the
+  SQLite queued-task count + provider scan that `load_daemon_health_snapshot`
+  does. `animus daemon status` no longer pays ~3.3s of health-snapshot cost.
+- **MCP daemon tools route in-process** — `animus.daemon.status/health/agents`
+  no longer `current_exe()`-spawn a CLI subprocess per call, killing the
+  Tauri 3-call refresh penalty (~3× full CLI startup per refresh).
+- **single-socket ControlClient** — `try_connect` + `call_raw` reuse one
+  AF_UNIX connect instead of two.
+- **provider-healthy check is a directory walk** — `provider_plugins_healthy_for`
+  walks `~/.animus/plugins/animus-provider-*` instead of running full plugin
+  discovery (the original v0.5.8.1 fix, now alongside the cache).
+- **CI status cache** (60s TTL, per-repo) skips the `gh run list` subprocess —
+  `animus status` ~8s faster. **workflow YAML compile cache** keyed by source
+  mtime+sha. **1s in-process daemon health cache** for multi-call flows.
+- **CLI per-invocation cuts** — `resolve_project_root` in-process cache,
+  `gh --version` memoized, update-check end grace 750ms → 50ms, end-of-run
+  metrics flush 2s → 200ms, keychain installer short-circuit.
+
 ## [0.5.8] - 2026-06-08
 
 This wave is the **observability + reliability** + **secrets** + **state**
