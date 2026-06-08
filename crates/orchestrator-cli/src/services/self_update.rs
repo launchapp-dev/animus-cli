@@ -803,6 +803,13 @@ pub async fn run_startup_check(
     // request can't cause us to retry-and-throttle on every short
     // invocation. The throttle window honors the operator's configured
     // `check_interval` regardless of fetch outcome.
+    //
+    // Trade-off with the CLI's 50ms startup-check grace (see
+    // `main.rs::spawn_startup_update_check`): a fetch cancelled mid-flight
+    // by the grace still advances the throttle, so the user may miss the
+    // first notification and see it only on the next interval boundary.
+    // Long-running commands (`daemon start`, `daemon run`) give the fetch
+    // time to surface the notice immediately.
     let mut next_state = state;
     next_state.last_checked = Some(now);
     let _ = next_state.save();
@@ -813,9 +820,6 @@ pub async fn run_startup_check(
         Some((release, version)) => {
             next_state.last_seen_version = Some(version.to_string());
             let _ = next_state.save();
-            // `last_seen_version` save here is a refinement on top of the
-            // pre-fetch `last_checked` save above; either landing alone is
-            // still a valid throttle state.
             match mode {
                 AutoUpdateMode::Off => None,
                 AutoUpdateMode::Notify => Some(format!(
