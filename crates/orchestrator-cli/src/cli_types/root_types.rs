@@ -141,6 +141,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SelfCommand,
     },
+    /// Check for and install a newer `animus` release in one step.
+    /// Thin top-level alias over `animus self update` with the simplified
+    /// `--check / --yes / --channel` surface.
+    Update(UpdateArgs),
     /// Manage opt-in anonymous usage telemetry.
     Metrics {
         #[command(subcommand)]
