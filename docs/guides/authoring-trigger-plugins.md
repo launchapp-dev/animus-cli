@@ -351,13 +351,13 @@ backends with durable state would persist the cursor at this point.
 | Symptom | First check |
 |---|---|
 | Plugin doesn't show up in `animus plugin list` | `--manifest` JSON shape — run the binary with `--manifest` and confirm `plugin_kind == "trigger_backend"` |
-| Plugin shows up but never fires events | Daemon log at `~/.animus/<repo-scope>/daemon.log` — supervisor emits `StartFailed`, `Started`, `Restart`, `Crashed`, and `Event` lifecycle JSON lines |
+| Plugin shows up but never fires events | Daemon process log at `~/.animus/<repo-scope>/daemon/daemon.log` and structured runtime events at `~/.animus/<repo-scope>/logs/events.jsonl` — supervisor emits `StartFailed`, `Started`, `Restart`, `Crashed`, and `Event` lifecycle JSON lines |
 | Events fire but no workflow runs | Workflow YAML `triggers[].id` does not match the plugin's `trigger_id`; check `animus workflow validate` |
 | Plugin keeps restarting | Check the daemon log for the `Crashed` event and the stderr forwarded from the plugin |
 | Want to isolate the plugin | `ANIMUS_DAEMON_DISABLE_TRIGGERS=1 animus daemon start` — supervisor is skipped, so any remaining trigger fires came from the built-in `file_watcher` / `webhook` path |
 | Want to drive the plugin manually | Pipe JSON-RPC on stdin (see the fswatch README for a worked example) |
 
-Plugin stderr is forwarded into the daemon log unchanged. Set
+Plugin stderr is forwarded into the daemon process log unchanged. Set
 `RUST_LOG=<plugin_crate>=debug` in the daemon's environment to surface
 the plugin's tracing output.
 

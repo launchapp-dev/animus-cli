@@ -51,6 +51,7 @@ Mutable runtime state lives outside the repo:
 │   ├── workflow-config.v2.json
 │   └── agent-runtime-config.v2.json
 ├── daemon/
+│   ├── daemon.log
 │   └── pm-config.json
 ├── docs/
 │   ├── architecture.json
@@ -84,6 +85,7 @@ Key points:
 - `config/agent-runtime-config.v2.json` stores compiled agent runtime config when a compile/write
   flow persists it under the scoped runtime root
 - `daemon/pm-config.json` stores persisted daemon settings
+- `daemon/daemon.log` is the autonomous daemon process log file
 - `logs/events.jsonl` stores redacted structured runtime events under the
   scoped state root; daemon events are still mirrored here when a
   `log_storage_backend` plugin is active
@@ -185,6 +187,7 @@ Use Animus commands or Animus MCP tools instead.
 | `~/.animus/<repo-scope>/config/state-machines.v1.json` | Repo-scoped state-machine config |
 | `~/.animus/<repo-scope>/config/workflow-config.v2.json` | Compiled repo-scoped workflow config |
 | `~/.animus/<repo-scope>/config/agent-runtime-config.v2.json` | Compiled repo-scoped agent runtime config |
+| `~/.animus/<repo-scope>/daemon/daemon.log` | Autonomous daemon process log |
 | `~/.animus/<repo-scope>/logs/events.jsonl` | Redacted structured runtime event log |
 | `~/.animus/<repo-scope>/runner/config.json` | Runner-scope config, including `agent_runner_token` |
 | `~/.animus/<repo-scope>/runner/agent-runner.sock` | Default scoped Unix runner socket path |

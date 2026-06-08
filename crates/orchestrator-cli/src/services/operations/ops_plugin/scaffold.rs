@@ -574,7 +574,8 @@ animus daemon start --autonomous
 
 ## Debugging
 
-- Plugin stderr is forwarded to the daemon log: `~/.animus/<repo-scope>/daemon.log`.
+- Plugin stderr is forwarded to the daemon process log: `~/.animus/<repo-scope>/daemon/daemon.log`.
+- Structured supervisor/runtime events are mirrored separately at `~/.animus/<repo-scope>/logs/events.jsonl`.
 - Set `RUST_LOG=info` (or `debug`) in the daemon's environment to surface
   the plugin's tracing output.
 - Temporarily disable trigger supervision with

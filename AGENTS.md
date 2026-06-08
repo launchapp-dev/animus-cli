@@ -54,6 +54,8 @@ v0.5.2 surface-shrink. Install via
 
 Repo-local but not current workspace members:
 
+- `crates/agent-runner/`
+- `crates/oai-runner/`
 - `crates/orchestrator-web-server/`
 
 Runtime-critical binaries and supporting crates must stay healthy:

@@ -147,6 +147,11 @@ animus daemon clear-logs
 
 Animus stores runtime state under `~/.animus/<repo-scope>/`, and log plumbing is managed by the runtime binaries rather than a project-local `.animus/daemon.log` contract.
 
+Current paths:
+
+- daemon process log: `~/.animus/<repo-scope>/daemon/daemon.log`
+- structured runtime event mirror: `~/.animus/<repo-scope>/logs/events.jsonl`
+
 ## Daemon Status Looks Slow With Many Plugins
 
 **Symptoms**: `animus daemon status` used to feel slow on machines with many
