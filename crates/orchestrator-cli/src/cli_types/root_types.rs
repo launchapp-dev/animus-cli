@@ -156,4 +156,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Export and import scoped runtime state for backup or migration (v0.5.8).
+    State {
+        #[command(subcommand)]
+        command: StateCommand,
+    },
 }

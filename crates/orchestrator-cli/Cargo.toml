@@ -58,6 +58,7 @@ colored = "3.0"
 tracing = "0.1"
 tempfile = "3"
 tar = "0.4"
+zstd = "0.13"
 flate2 = "1.0"
 toml = "1.0"
 

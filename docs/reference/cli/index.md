@@ -260,6 +260,10 @@ animus
 ├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)
 │   └── whoami               Print the currently resolved principal (id + kind + peer OS user)
 │
+├── state                    Export and import scoped runtime state for backup or migration (v0.5.8)
+│   ├── export               Write `animus-state-<scope>-<ts>.tar.zst` with `config/` + `daemon/` + `principals.yaml`
+│   └── import               Restore an export archive; `--yes` overwrites, `--into-project` re-scopes
+│
 └── help                     Print this message or the help of the given subcommand(s)
 ```
 
