@@ -455,7 +455,7 @@ mod tests {
         let result = ControlClient::try_connect(dir.path()).await.unwrap();
         // The probe walks `~/.animus/<repo-scope>/control.sock`; for a
         // fresh tempdir that path will not exist.
-        assert!(result.is_none() || result.is_some_and(|c| !c.socket_path().exists()));
+        assert!(result.is_none_or(|c| !c.socket_path().exists()));
     }
 
     #[tokio::test]
@@ -610,7 +610,7 @@ mod tests {
         // Use a project_root that has no `~/.animus/<scope>/control.sock`.
         let result = ControlClient::try_connect(dir.path()).await.unwrap();
         // Either the path doesn't exist (None) or it exists but is unusable.
-        assert!(result.is_none() || result.is_some_and(|c| !c.socket_path().exists()));
+        assert!(result.is_none_or(|c| !c.socket_path().exists()));
     }
 
     /// C6.6: `queue/list` round-trips a QueueListResponse through the
@@ -656,7 +656,7 @@ mod tests {
     async fn queue_list_falls_back_when_socket_missing() {
         let dir = tempfile::TempDir::new().unwrap();
         let result = ControlClient::try_connect(dir.path()).await.unwrap();
-        assert!(result.is_none() || result.is_some_and(|c| !c.socket_path().exists()));
+        assert!(result.is_none_or(|c| !c.socket_path().exists()));
     }
 
     /// C6.6: `queue/enqueue` typed call round-trips a QueueEntry shape
@@ -772,7 +772,7 @@ mod tests {
     async fn agent_run_falls_back_to_local_when_socket_missing() {
         let dir = tempfile::TempDir::new().unwrap();
         let result = ControlClient::try_connect(dir.path()).await.unwrap();
-        assert!(result.is_none() || result.is_some_and(|c| !c.socket_path().exists()));
+        assert!(result.is_none_or(|c| !c.socket_path().exists()));
     }
 
     /// `agent/status` round-trips an AgentStatus through the wire,

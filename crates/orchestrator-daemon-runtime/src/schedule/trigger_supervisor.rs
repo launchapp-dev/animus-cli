@@ -58,12 +58,12 @@ const BACKOFF_BASE: Duration = Duration::from_secs(1);
 
 /// Hard cap on the exponential backoff between restart attempts. Picked to
 /// avoid a single broken plugin starving a daemon's restart budget for hours.
-const MAX_BACKOFF: Duration = Duration::from_secs(60);
+const MAX_BACKOFF: Duration = Duration::from_mins(1);
 
 /// A plugin that has run for at least this long without exiting is treated
 /// as "healthy enough" — the attempt counter resets so transient crashes
 /// later don't drain the restart budget.
-const HEALTHY_WINDOW: Duration = Duration::from_secs(60);
+const HEALTHY_WINDOW: Duration = Duration::from_mins(1);
 
 /// Lifecycle event the daemon observes from the supervisor.
 #[derive(Debug, Clone)]
@@ -1135,7 +1135,7 @@ mod tests {
 
         // Run until completion. Bail with a hard ceiling so a runaway loop in
         // the implementation fails the test rather than hanging.
-        match tokio::time::timeout(Duration::from_secs(600), handle).await {
+        match tokio::time::timeout(Duration::from_mins(10), handle).await {
             Ok(Ok(())) => {}
             Ok(Err(join)) => panic!("supervise loop panicked: {join}"),
             Err(_) => {

@@ -1786,7 +1786,7 @@ fn validate_phase_definition(
             }
 
             if matches!(command.cwd_mode, CommandCwdMode::Path)
-                && command.cwd_path.as_deref().map(str::trim).filter(|value| !value.is_empty()).is_none()
+                && command.cwd_path.as_deref().is_none_or(|value| value.trim().is_empty())
             {
                 return Err(anyhow!("phases['{}'].command.cwd_path must be set for cwd_mode='path'", phase_id));
             }

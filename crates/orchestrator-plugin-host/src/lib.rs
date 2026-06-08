@@ -29,5 +29,5 @@ pub use signature_verifier::{
     cosign_available, verify_plugin_binary_keyless, verify_plugin_install, PolicyMode, SignaturePolicy,
     TrustedPublisher, VerificationResult, GITHUB_OIDC_ISSUER,
 };
-pub use subject_router::SubjectRouter;
+pub use subject_router::{KindAliasMap, SubjectRouter};
 pub use transport::StdioTransport;

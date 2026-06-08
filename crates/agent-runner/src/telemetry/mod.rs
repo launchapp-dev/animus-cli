@@ -63,7 +63,7 @@ impl RunnerMetrics {
             runs_failed: self.runs_failed.load(Ordering::Relaxed),
             runs_timed_out: self.runs_timed_out.load(Ordering::Relaxed),
             runs_cancelled: self.runs_cancelled.load(Ordering::Relaxed),
-            avg_duration_ms: if completed > 0 { total_ms / completed } else { 0 },
+            avg_duration_ms: total_ms.checked_div(completed).unwrap_or(0),
         }
     }
 }

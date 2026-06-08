@@ -480,7 +480,7 @@ pub async fn run_agent_loop(
             let result = if tool_name == "conversation_stats" {
                 let total_tokens = context::estimate_total_tokens(&messages);
                 let target = context_limit.saturating_sub(max_tokens);
-                let usage_pct = if target > 0 { total_tokens * 100 / target } else { 100 };
+                let usage_pct = total_tokens.checked_mul(100).and_then(|n| n.checked_div(target)).unwrap_or(100);
                 let r = format!(
                     "Messages: {}, Estimated tokens: {}/{} ({}% of limit), Compaction history entries: {}",
                     messages.len(),

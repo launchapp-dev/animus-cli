@@ -2,10 +2,10 @@ use std::path::Path;
 
 use anyhow::Result;
 use orchestrator_core::{
-    summarize_discovered_plugins, InstalledPluginSummary, PluginInstaller, PluginPreflightRunner, PluginPreflightSpec,
-    PreflightResult,
+    summarize_discovered_plugins_with_lock, InstalledPluginSummary, PluginInstaller, PluginPreflightRunner,
+    PluginPreflightSpec, PreflightResult,
 };
-use orchestrator_plugin_host::discover_plugins;
+use orchestrator_plugin_host::{discover_plugins, PluginLockfile};
 
 use crate::DaemonRunEvent;
 use crate::DaemonRunHooks;
@@ -110,8 +110,14 @@ pub async fn run_plugin_preflight<H: DaemonRunHooks>(
 }
 
 pub fn discover_installed_plugins(project_root: &str) -> Result<Vec<InstalledPluginSummary>> {
-    let plugins = discover_plugins(Path::new(project_root))?;
-    Ok(summarize_discovered_plugins(&plugins))
+    let root = Path::new(project_root);
+    let plugins = discover_plugins(root)?;
+    // v0.5.7: consult the project's plugins.lock so renamed entries
+    // (installed_kind != native_kind) report against the kind operators
+    // actually dispatch against. Missing/unreadable lockfile is non-fatal
+    // (matches pre-v0.5.7 behavior).
+    let lockfile = PluginLockfile::load_default(Some(root)).ok();
+    Ok(summarize_discovered_plugins_with_lock(&plugins, lockfile.as_ref()))
 }
 
 fn record_plugins_installed_gauge(installed: &[InstalledPluginSummary]) {

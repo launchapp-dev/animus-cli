@@ -216,10 +216,9 @@ fn inject_cli_extra_args(
         return;
     };
 
-    let mut insert_at = launch_prompt_insert_index(args);
-    for extra_arg in extra_args {
-        args.insert(insert_at, Value::String(extra_arg));
-        insert_at += 1;
+    let insert_at = launch_prompt_insert_index(args);
+    for (offset, extra_arg) in extra_args.into_iter().enumerate() {
+        args.insert(insert_at + offset, Value::String(extra_arg));
     }
 }
 

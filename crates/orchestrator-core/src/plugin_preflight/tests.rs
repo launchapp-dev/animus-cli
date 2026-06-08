@@ -1,7 +1,8 @@
 use super::runner::{PluginInstaller, PluginPreflightRunner};
-use super::{InstalledPluginSummary, PluginPreflightSpec, RequiredRole};
+use super::{summarize_discovered_plugins_with_lock, InstalledPluginSummary, PluginPreflightSpec, RequiredRole};
 use anyhow::Result;
 use async_trait::async_trait;
+use orchestrator_plugin_host::{DiscoveredPlugin, DiscoverySource, LockEntry, PluginLockfile};
 use std::cell::RefCell;
 
 struct FakeInstaller {
@@ -260,4 +261,51 @@ fn install_target_for_resolves_role_labels_to_repo_specs() {
         "requirement role must map to animus-subject-requirements (NOT animus-subject-linear), got: {requirement}"
     );
     assert_eq!(spec.install_target_for("nonexistent_role"), None);
+}
+
+fn discovered_subject_plugin(name: &str, native_kind: &str) -> DiscoveredPlugin {
+    DiscoveredPlugin {
+        name: name.to_string(),
+        path: std::path::PathBuf::from(format!("/tmp/{name}")),
+        manifest: animus_plugin_protocol::PluginManifest {
+            name: name.to_string(),
+            version: "0.1.0".to_string(),
+            plugin_kind: "subject_backend".to_string(),
+            description: "t".to_string(),
+            protocol_version: "1.0.0".to_string(),
+            capabilities: vec![format!("subject_kind:{native_kind}")],
+            env_required: vec![],
+            notification_buffer_size: None,
+        },
+        source: DiscoverySource::PluginPath,
+    }
+}
+
+#[test]
+fn summarize_with_lock_translates_native_subject_kind_to_installed_kind() {
+    let plugins = vec![discovered_subject_plugin("animus-plugin-archive", "task")];
+    let dir = tempfile::tempdir().unwrap();
+    let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+    lock.upsert(LockEntry {
+        name: "animus-plugin-archive".into(),
+        version: "v0.1".into(),
+        artifact_sha256: "a".repeat(64),
+        signature_bundle_sha256: None,
+        installed_at: chrono::Utc::now().to_rfc3339(),
+        installed_kind: Some("archive".into()),
+        native_kind: Some("task".into()),
+    });
+    let summaries = summarize_discovered_plugins_with_lock(&plugins, Some(&lock));
+    assert_eq!(summaries.len(), 1);
+    let only = &summaries[0];
+    assert_eq!(only.subject_kinds, vec!["archive".to_string()]);
+    assert!(only.covers_subject_kind("archive"));
+    assert!(!only.covers_subject_kind("task"), "renamed plugin must no longer satisfy native role");
+}
+
+#[test]
+fn summarize_with_lock_is_identity_when_lockfile_absent() {
+    let plugins = vec![discovered_subject_plugin("animus-plugin-task", "task")];
+    let summaries = summarize_discovered_plugins_with_lock(&plugins, None);
+    assert_eq!(summaries[0].subject_kinds, vec!["task".to_string()]);
 }

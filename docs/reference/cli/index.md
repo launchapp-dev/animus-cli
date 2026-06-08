@@ -186,9 +186,10 @@ animus
 │   ├── browse               Browse the public Animus plugin registry, grouped by kind
 │   ├── update               Update one or all installed release-source plugins to the latest tag
 │   ├── install-defaults     Install the standard set of provider plugins from public GitHub releases (claude, codex, gemini, opencode, oai). Skips plugins that are already installed. Optional flags pull in additional default plugins
-│   └── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`). The lockfile records sha256 + version for every installed plugin so an `install --force` or tampered-binary scenario is visible to operators
-│       ├── list             List every entry currently recorded in the plugin lockfile
-│       └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
+│   ├── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`). The lockfile records sha256 + version for every installed plugin so an `install --force` or tampered-binary scenario is visible to operators
+│   │   ├── list             List every entry currently recorded in the plugin lockfile
+│   │   └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
+│   └── doctor               Per-role view of installed plugins. Shows every preflight role with its installed plugins (by installed_kind + native_kind) and flags duplicates so collisions are visible without spelunking through the lockfile (v0.5.7)
 │
 ├── runner                   Inspect runner health and orphaned runs
 │   ├── health               Show runner process health
@@ -381,6 +382,7 @@ animus plugin install --url https://example.com/plugin --sha256 a1b2c3d4...
 | `--allow-org <OWNER>` | Mark an additional GitHub owner as trusted (repeatable). Skips the trust-on-first-use prompt for that owner and writes the entry to `~/.animus/trusted-orgs.yaml` after the install succeeds |
 | `--yes` | Auto-confirm the trust-on-first-use prompt for unknown orgs |
 | `--force-rewrite-lockfile` | Discard an unparseable / schema-incompatible `.animus/plugins.lock` (or `~/.animus/plugins.lock`) and rebuild a fresh lockfile starting from this install. Without this flag, an unreadable lockfile fails the install **closed** with an actionable error pointing at the corrupt path. **Security warning**: rewriting drops the recorded sha256 integrity history, so subsequent `--force` installs cannot detect pre-existing tamper. See [Security › Lockfile fail-closed policy](../security.md#lockfile-fail-closed-policy) |
+| `--as-kind <KIND>` | (v0.5.7) Override the user-facing `installed_kind` recorded in `plugins.lock` for a `subject_backend` plugin. The supplied `KIND` becomes the prefix the SubjectRouter dispatches against (e.g. `archive` for a second `subject_kind:task` backend). When omitted and the manifest-declared native kind collides with an existing install, the install pipeline auto-increments (`task` → `task-2` → `task-3`) and prints the assignment via the `animus.plugin.install.v1` envelope. When `--as-kind` is supplied and the explicit value also collides, the install fails with an actionable error. Only `subject_backend` plugins are eligible in v0.5.7; passing `--as-kind` on a provider, transport, workflow_runner, queue, or trigger plugin is rejected. See [Plugin kind translator (v0.5.7)](../../architecture/plugin-kind-translator-v0.5.7.md) |
 
 #### Signature verification (v0.4.x+)
 
@@ -567,6 +569,38 @@ to `~/.animus/plugins.lock`.
 |---|---|
 | `animus plugin lock list` | `--lockfile <PATH>`, `--json` |
 | `animus plugin lock verify` | `--lockfile <PATH>`, `--plugin-dir <PATH>`, `--json` |
+
+### `animus plugin doctor` (v0.5.7)
+
+Per-role view of installed plugins, with explicit collision flags.
+Iterates every required role from the daemon preflight spec
+(`at_least_one_provider`, `subject_kind:task`, `subject_kind:requirement`,
+`workflow_runner`, `queue`) and lists every installed plugin claiming
+that role, showing both the user-facing `installed_kind` and the
+plugin's manifest-declared `native_kind`.
+
+```bash
+animus plugin doctor
+animus plugin doctor --json
+```
+
+Output highlights:
+
+- `[ok] <role>` — exactly one plugin claims the role, or each claimant
+  has a distinct `installed_kind`.
+- `[COLLISION] <role>` — two or more plugins share the same
+  `installed_kind` for the role. Each colliding kind is listed under a
+  `! duplicate installed_kind '<kind>' claimed by multiple plugins`
+  marker.
+- `[UNSATISFIED] <role>` — no installed plugin claims this role; the
+  daemon preflight will refuse startup until an `animus plugin install`
+  remediates it.
+
+The `--json` shape (`PluginDoctorOutput`) is wrapped in the standard
+`animus.cli.v1` envelope when paired with the root `--json` flag.
+
+See [Plugin kind translator (v0.5.7)](../../architecture/plugin-kind-translator-v0.5.7.md)
+for the underlying renaming mechanism.
 
 ### `animus plugin new`
 

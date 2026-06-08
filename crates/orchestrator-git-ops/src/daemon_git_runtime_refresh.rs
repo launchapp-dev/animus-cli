@@ -116,7 +116,7 @@ fn runtime_binary_refresh_backoff_active(
     if state.last_attempt_main_head.as_deref() != Some(main_head) {
         return false;
     }
-    if state.last_error.as_deref().map(str::trim).filter(|value| !value.is_empty()).is_none() {
+    if state.last_error.as_deref().is_none_or(|value| value.trim().is_empty()) {
         return false;
     }
 

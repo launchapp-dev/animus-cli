@@ -446,7 +446,7 @@ pub(super) async fn ensure_agent_runner_running(project_root: &Path) -> Result<O
             return Ok(read_runner_pid_from_lock(&config_dir).or(Some(spawned_pid)));
         }
         sleep(delay).await;
-        delay = std::cmp::min(delay * 2, Duration::from_millis(2_000));
+        delay = std::cmp::min(delay * 2, Duration::from_secs(2));
     }
 
     // In some environments the runner process is alive but needs additional

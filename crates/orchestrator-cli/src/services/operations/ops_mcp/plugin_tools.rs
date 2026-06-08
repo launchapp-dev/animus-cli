@@ -350,6 +350,7 @@ impl AoMcpServer {
             // `false` (fail-closed) so that the G2 v0.4.14 fix still holds for
             // MCP callers who don't opt in.
             force_rewrite_lockfile: force_rewrite_lockfile.unwrap_or(false),
+            as_kind: None,
         })
         .await
         .map_err(anyhow_to_mcp)?;

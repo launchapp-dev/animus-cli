@@ -32,6 +32,23 @@ Project-local plugin integrity lockfile. When plugin install/update flows are
 scoped to the repository, Animus records installed plugin versions and sha256
 digests here instead of falling back to the global `~/.animus/plugins.lock`.
 
+Each `[[plugins]]` entry records:
+
+- `name`, `version`, `artifact_sha256`, `signature_bundle_sha256`,
+  `installed_at` — integrity audit trail.
+- `installed_kind` (v0.5.7+) — user-facing kind the SubjectRouter
+  dispatches against (e.g. `task`, `task-2`, `archive`). Set by the
+  install pipeline; auto-incremented on collision unless the operator
+  passes `animus plugin install --as-kind <KIND>`.
+- `native_kind` (v0.5.7+) — plugin-native kind declared in the
+  manifest (e.g. `task`). The SubjectRouter translates
+  `<installed_kind>/<verb>` → `<native_kind>/<verb>` at the wire
+  boundary.
+
+Entries written by pre-v0.5.7 installers parse cleanly; consumers treat
+the missing fields as `installed_kind == native_kind`. See
+[Plugin kind translator (v0.5.7)](../architecture/plugin-kind-translator-v0.5.7.md).
+
 ## Repo-Scoped Runtime Config
 
 Animus stores mutable project runtime config under `~/.animus/<repo-scope>/`.

@@ -53,7 +53,7 @@ const PLUGIN_KIND_QUEUE: &str = "queue";
 /// long-running so the workflow-runner timeout is generous; queue ops use
 /// the short timeout.
 const PLUGIN_CALL_TIMEOUT_SHORT: Duration = Duration::from_secs(30);
-const PLUGIN_CALL_TIMEOUT_LONG: Duration = Duration::from_secs(3600);
+const PLUGIN_CALL_TIMEOUT_LONG: Duration = Duration::from_hours(1);
 
 /// Discover a plugin by `plugin_kind` value from its manifest.
 fn find_plugin_for_kind(project_root: &Path, plugin_kind: &str) -> Result<Option<DiscoveredPlugin>> {
