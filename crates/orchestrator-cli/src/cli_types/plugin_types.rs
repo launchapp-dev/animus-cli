@@ -66,6 +66,39 @@ pub(crate) enum PluginCommand {
     /// spawners are wired through the same status registry. See
     /// TODO(codex-p2) markers in `daemon/run_daemon.rs`.
     Status(PluginStatusArgs),
+    /// Inspect or wipe the on-disk plugin manifest cache. The cache stores
+    /// serialized `--manifest` responses keyed by binary sha256 under
+    /// `~/.animus/cache/manifests/<sha>.json` and is the reason
+    /// `animus daemon status` returns in ~50ms instead of ~3s on a 30-plugin
+    /// install. Use `clear` to wipe after a manual binary swap that didn't
+    /// rewrite the lockfile, or `list` to debug cache contents.
+    #[command(subcommand)]
+    Cache(PluginCacheCommand),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum PluginCacheCommand {
+    /// Remove every cached manifest entry under
+    /// `~/.animus/cache/manifests/`. Discovery will fall back to live
+    /// `--manifest` probes (and repopulate the cache) on the next call.
+    Clear(PluginCacheClearArgs),
+    /// List every cached manifest entry with its sha256 key, byte size, and
+    /// last-modified timestamp.
+    List(PluginCacheListArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginCacheClearArgs {
+    /// Emit the result envelope as JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginCacheListArgs {
+    /// Emit results as JSON.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Args)]

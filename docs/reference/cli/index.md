@@ -192,7 +192,10 @@ animus
 │   │   ├── list             List every entry currently recorded in the plugin lockfile
 │   │   └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
 │   ├── doctor               Per-role view of installed plugins. Shows every preflight role with its installed plugins (by installed_kind + native_kind) and flags duplicates so collisions are visible without spelunking through the lockfile (v0.5.7)
-│   └── status               Per-plugin runtime status (pid, state, last RPC, restart count, last error). Answers "why does this plugin feel stuck?" by surfacing the supervisor's restart counter for every discovered plugin (v0.5.8)
+│   ├── status               Per-plugin runtime status (pid, state, last RPC, restart count, last error). Answers "why does this plugin feel stuck?" by surfacing the supervisor's restart counter for every discovered plugin (v0.5.8)
+│   └── cache                Inspect or wipe the on-disk plugin manifest cache (`~/.animus/cache/manifests/`) that backs the v0.5.9 discovery speed-up (v0.5.9)
+│       ├── clear            Remove every cached manifest entry; discovery repopulates on next call
+│       └── list             List cached entries with sha256, size, and mtime
 │
 ├── runner                   Inspect provider-plugin health and orphaned CLI processes
 │   ├── health               Show provider plugin health (one row per discovered provider) and daemon health
@@ -646,6 +649,25 @@ The `--json` shape (`PluginDoctorOutput`) is wrapped in the standard
 
 See [Plugin kind translator (v0.5.7)](../../architecture/plugin-kind-translator-v0.5.7.md)
 for the underlying renaming mechanism.
+
+### `animus plugin cache` (v0.5.9)
+
+Inspect or wipe the on-disk plugin manifest cache that backs the v0.5.9
+discovery speed-up. Cached manifests live under
+`~/.animus/cache/manifests/<sha256>.json` (override the parent directory
+with `$ANIMUS_CACHE_DIR`); each cache hit replaces a `--manifest`
+subprocess probe with a stat + JSON read.
+
+```bash
+animus plugin cache list           # show every cached entry
+animus plugin cache list --json
+animus plugin cache clear          # wipe the cache; discovery repopulates next call
+animus plugin cache clear --json
+```
+
+Set `ANIMUS_DISABLE_MANIFEST_CACHE=1` to bypass the cache entirely (the
+clear/list commands still work — they just report the cache as
+disabled).
 
 ### `animus plugin rename <PLUGIN_NAME> --to <NEW_KIND>` (v0.5.8)
 

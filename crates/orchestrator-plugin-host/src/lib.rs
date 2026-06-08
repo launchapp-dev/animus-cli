@@ -3,6 +3,7 @@
 mod discovery;
 mod host;
 pub mod lockfile;
+pub mod manifest_cache;
 mod registry;
 pub mod session;
 pub mod signature_verifier;
@@ -30,6 +31,16 @@ pub use host::{
 pub use lockfile::{
     global_lockfile_path, sha256_of_file, LockEntry, LockVerifyResult, PluginLockfile, LOCKFILE_SCHEMA_VERSION,
 };
+pub use manifest_cache::{CachedEntry, ManifestCache};
+
+/// Crate-wide mutex any test that mutates process-global env vars
+/// (notably `ANIMUS_*` env vars consulted by discovery + the manifest
+/// cache) MUST hold while running. Cargo runs unit tests on multiple
+/// threads in the same process, so without this shared lock the
+/// `discovery` and `manifest_cache` modules race each other across the
+/// kill-switch env var and produce flaky CI runs. Codex round 4 P2.
+#[cfg(test)]
+pub(crate) static TEST_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub use registry::PluginRegistry;
 pub use signature_verifier::{
     cosign_available, verify_plugin_binary_keyless, verify_plugin_install, PolicyMode, SignaturePolicy,
