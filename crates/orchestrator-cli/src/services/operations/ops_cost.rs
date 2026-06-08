@@ -14,18 +14,21 @@ use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::Serialize;
 
 use crate::cli_types::{
-    CostCommand, CostSummaryArgs, CostTopArgs, CostTopBy, CostTrendWindow, CostTrendsArgs, CostWorkflowArgs,
+    CostCommand, CostConversationArgs, CostSummaryArgs, CostTopArgs, CostTopBy, CostTrendWindow, CostTrendsArgs,
+    CostWorkflowArgs,
 };
 use crate::print_value;
 use crate::services::cost::{
     aggregator::COST_STATE_SCHEMA_ID, enforce_caps, load_cost_state, save_cost_state, scan_runs, CostState, PhaseCost,
     WorkflowCost,
 };
+use crate::services::runtime::runtime_chat::store::{ConversationStore, FileConversationStore};
 
 const SUMMARY_SCHEMA: &str = "animus.cost.summary.v1";
 const WORKFLOW_SCHEMA: &str = "animus.cost.workflow.v1";
 const TOP_SCHEMA: &str = "animus.cost.top.v1";
 const TRENDS_SCHEMA: &str = "animus.cost.trends.v1";
+const CONVERSATION_SCHEMA: &str = "animus.cost.conversation.v1";
 
 pub(crate) async fn handle_cost(command: CostCommand, project_root: &str, json: bool) -> Result<()> {
     let project_path = Path::new(project_root);
@@ -34,6 +37,68 @@ pub(crate) async fn handle_cost(command: CostCommand, project_root: &str, json: 
         CostCommand::Workflow(args) => handle_workflow(project_path, args, json),
         CostCommand::Top(args) => handle_top(project_path, args, json),
         CostCommand::Trends(args) => handle_trends(project_path, args, json),
+        CostCommand::Conversation(args) => handle_conversation(project_path, args, json),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ConversationCostView {
+    schema: &'static str,
+    conversation_id: String,
+    assistant_turns: usize,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+/// Aggregate per-turn token + USD spend for a single chat conversation by
+/// folding the `usage` / `cost_usd` fields recorded on each assistant
+/// [`ChatMessage`](crate::services::runtime::runtime_chat::store::ChatMessage).
+fn handle_conversation(project_path: &Path, args: CostConversationArgs, json: bool) -> Result<()> {
+    let store = FileConversationStore::for_project(project_path)?;
+    if store.load_meta(&args.conversation_id)?.is_none() {
+        return Err(anyhow!("conversation '{}' not found", args.conversation_id));
+    }
+    let messages = store.load_messages(&args.conversation_id)?;
+    let mut assistant_turns = 0usize;
+    let mut total_tokens = 0u64;
+    let mut total_cost_usd = 0.0f64;
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    for message in &messages {
+        if message.usage.is_none() && message.cost_usd.is_none() {
+            continue;
+        }
+        assistant_turns += 1;
+        if let Some(usage) = &message.usage {
+            input_tokens += u64::from(usage.input);
+            output_tokens += u64::from(usage.output);
+            total_tokens += u64::from(usage.input) + u64::from(usage.output);
+        }
+        if let Some(cost) = message.cost_usd {
+            total_cost_usd += cost;
+        }
+    }
+    let view = ConversationCostView {
+        schema: CONVERSATION_SCHEMA,
+        conversation_id: args.conversation_id.clone(),
+        assistant_turns,
+        total_tokens,
+        total_cost_usd,
+        input_tokens,
+        output_tokens,
+    };
+    if json {
+        print_value(&view, json)
+    } else {
+        println!("animus cost — conversation {}", view.conversation_id);
+        println!(
+            "  spend:  ${:.4} across {} tokens ({} in / {} out)",
+            view.total_cost_usd, view.total_tokens, view.input_tokens, view.output_tokens
+        );
+        println!("  turns:  {} assistant turns with recorded usage", view.assistant_turns);
+        Ok(())
     }
 }
 

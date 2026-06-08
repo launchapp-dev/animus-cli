@@ -50,6 +50,11 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Hold multi-turn conversations with a provider tool (v0.5.10).
+    Chat {
+        #[command(subcommand)]
+        command: ChatCommand,
+    },
     /// Manage project registration and metadata.
     Project {
         #[command(subcommand)]

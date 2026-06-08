@@ -80,6 +80,7 @@ pub(crate) enum CommandGroup {
     Version,
     Daemon,
     Agent,
+    Chat,
     Project,
     Queue,
     Workflow,

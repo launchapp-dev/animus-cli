@@ -49,6 +49,12 @@ animus
 │       ├── send             Send a message on an agent channel
 │       └── list             List agent messages
 │
+├── chat                     Hold multi-turn conversations with a provider tool (v0.5.10)
+│   ├── new                  Start a new (empty) conversation and print its id
+│   ├── send                 Send a user message and stream the reply
+│   ├── get                  Print a conversation's full transcript
+│   └── list                 List conversations, most-recently-updated first
+│
 ├── project                  Manage project registration and metadata
 │   ├── list                 List registered projects
 │   ├── active               Show the active project
@@ -268,7 +274,8 @@ animus
 │   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders
 │   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`
 │   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`
-│   └── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets
+│   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets
+│   └── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
 │
 ├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)
 │   └── whoami               Print the currently resolved principal (id + kind + peer OS user)

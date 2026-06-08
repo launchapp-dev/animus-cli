@@ -136,6 +136,7 @@ Visible top-level commands:
 - `version`
 - `daemon`
 - `agent`
+- `chat`
 - `project`
 - `queue`
 - `workflow`

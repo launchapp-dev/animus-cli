@@ -10,6 +10,15 @@ pub(crate) enum CostCommand {
     Top(CostTopArgs),
     /// Aggregate tokens + cost over recent daily/weekly/monthly windows.
     Trends(CostTrendsArgs),
+    /// Show token + USD spend for a single chat conversation (v0.5.10).
+    Conversation(CostConversationArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct CostConversationArgs {
+    /// Chat conversation id, e.g. `conv-abc123`.
+    #[arg(value_name = "CONVERSATION_ID")]
+    pub(crate) conversation_id: String,
 }
 
 #[derive(Debug, Args)]
