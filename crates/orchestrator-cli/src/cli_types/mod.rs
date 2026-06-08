@@ -267,6 +267,29 @@ mod tests {
     }
 
     #[test]
+    fn parses_plugin_rename_command() {
+        let cli =
+            Cli::try_parse_from(["animus", "plugin", "rename", "animus-subject-default", "--to", "archive", "--force"])
+                .expect("plugin rename should parse");
+        match cli.command {
+            Command::Plugin { command: PluginCommand::Rename(args) } => {
+                assert_eq!(args.name, "animus-subject-default");
+                assert_eq!(args.to, "archive");
+                assert!(args.force);
+                assert!(!args.json);
+            }
+            _ => panic!("expected plugin rename command"),
+        }
+    }
+
+    #[test]
+    fn plugin_rename_requires_to_flag() {
+        let error =
+            Cli::try_parse_from(["animus", "plugin", "rename", "some-plugin"]).expect_err("missing --to should fail");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
     fn parses_workflow_run_with_positional_pipeline() {
         let cli = Cli::try_parse_from(["animus", "workflow", "run", "animus.task/standard", "--task-id", "TASK-123"])
             .expect("workflow run should parse");
@@ -379,10 +402,7 @@ mod tests {
         live.sort();
         documented.sort();
 
-        assert_eq!(
-            documented, live,
-            "docs/architecture/crate-map.md drifted from Cargo.toml workspace membership"
-        );
+        assert_eq!(documented, live, "docs/architecture/crate-map.md drifted from Cargo.toml workspace membership");
 
         let crate_map = read_doc("docs/architecture/crate-map.md");
         assert!(

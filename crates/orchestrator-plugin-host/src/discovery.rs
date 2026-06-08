@@ -52,6 +52,14 @@ pub struct PluginConfigEntry {
     pub binary: String,
     #[serde(default)]
     pub name: Option<String>,
+    /// Install-time `--name <NAME>` override recorded in `plugins.yaml`.
+    /// When set, discovery uses this as the canonical [`DiscoveredPlugin::name`]
+    /// instead of the manifest-declared name or the table key. Keeps the
+    /// lockfile entry, discovery, and the daemon's SubjectRouter alias map
+    /// agreed on the same logical name when the operator installed the
+    /// plugin with `--name`. v0.5.8+.
+    #[serde(default)]
+    pub name_override: Option<String>,
     /// Persisted audit trail: `true` when the plugin was installed with the
     /// `--skip-manifest-check` flag. Discovery emits a `warn!` on every probe
     /// for plugins flagged this way so operators don't lose track of a plugin
@@ -197,6 +205,13 @@ impl PluginDiscovery {
         let config = load_plugins_config(&config_path)
             .with_context(|| format!("failed to read plugin config at {}", config_path.display()))?;
         for (logical_name, entry) in config.plugins.iter().chain(config.providers.iter()) {
+            // v0.5.8+: `name_override` records the install-time `--name <NAME>`
+            // override so discovery, the lockfile entry, and the daemon
+            // SubjectRouter all agree on the same logical plugin name. Falls
+            // back to the manifest-name field, then the table key, for
+            // pre-v0.5.8 entries that never recorded the override.
+            let effective_name =
+                entry.name_override.clone().or_else(|| entry.name.clone()).unwrap_or_else(|| logical_name.clone());
             let Some(path) = find_binary(&expand_home(&entry.binary)) else {
                 let reason = format!("configured binary not found: {}", entry.binary);
                 tracing::warn!(
@@ -206,14 +221,14 @@ impl PluginDiscovery {
                     "plugin manifest probe skipped: {reason}"
                 );
                 warnings.push(DiscoveryWarning {
-                    name: entry.name.clone().unwrap_or_else(|| logical_name.clone()),
+                    name: effective_name.clone(),
                     path: PathBuf::from(&entry.binary),
                     source: DiscoverySource::ExplicitConfig,
                     reason,
                 });
                 continue;
             };
-            let name = entry.name.clone().unwrap_or_else(|| logical_name.clone());
+            let name = effective_name;
             if seen.contains(&name) {
                 continue;
             }
@@ -537,7 +552,8 @@ pub fn registered_skip_manifest_check_at_install(plugin_name: &str) -> bool {
     let trimmed = plugin_name.trim();
     for (logical_name, entry) in config.plugins.iter().chain(config.providers.iter()) {
         let registered_name = entry.name.as_deref().unwrap_or(logical_name);
-        if registered_name == trimmed || logical_name == trimmed {
+        let override_name = entry.name_override.as_deref();
+        if registered_name == trimmed || logical_name == trimmed || override_name == Some(trimmed) {
             return entry.skip_manifest_check_at_install;
         }
     }
@@ -684,6 +700,53 @@ mod tests {
 
         assert_eq!(discovered.len(), 1);
         assert_eq!(discovered[0].name, "compatible");
+    }
+
+    /// v0.5.8: when `name_override` is recorded in `plugins.yaml`, discovery
+    /// uses the override as the canonical [`DiscoveredPlugin::name`] instead
+    /// of the manifest-declared name. Without this round-trip, the daemon's
+    /// SubjectRouter alias map (keyed by `plugin.name`) cannot find lockfile
+    /// entries that were keyed under the install-time `--name <NAME>` value.
+    /// Closes codex P2 round-4 v0.5.7.
+    #[cfg(unix)]
+    #[test]
+    fn name_override_overrides_manifest_name_in_discovery() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+        let plugin = temp.path().join("renamed-bin");
+        let manifest = serde_json::json!({
+            "name": "animus-subject-default",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "test",
+            "protocol_version": "1.0.0",
+            "capabilities": ["subject_kind:task"],
+        });
+        fs::write(&plugin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut permissions = fs::metadata(&plugin).expect("metadata").permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&plugin, permissions).expect("chmod");
+
+        let config_path = temp.path().join("plugins.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "plugins:\n  custom-task:\n    binary: {}\n    name: animus-subject-default\n    name_override: custom-task\n",
+                plugin.to_string_lossy()
+            ),
+        )
+        .expect("write config");
+
+        let discovered = PluginDiscovery::new().with_config_path(config_path).discover().expect("discover");
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(
+            discovered[0].name, "custom-task",
+            "name_override must take precedence over the manifest-declared name in discovery",
+        );
     }
 
     #[cfg(unix)]

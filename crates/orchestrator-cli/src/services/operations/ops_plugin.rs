@@ -37,7 +37,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     invalid_input_error, not_found_error, print_value, PluginCallArgs, PluginCommand, PluginDoctorArgs, PluginInfoArgs,
     PluginInstallArgs, PluginInstallDefaultsArgs, PluginListArgs, PluginLockCommand, PluginLockListArgs,
-    PluginLockVerifyArgs, PluginPingArgs, PluginScaffoldCommand, PluginUninstallArgs,
+    PluginLockVerifyArgs, PluginPingArgs, PluginRenameArgs, PluginScaffoldCommand, PluginUninstallArgs,
 };
 
 #[derive(Debug, Serialize)]
@@ -280,6 +280,7 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
         PluginCommand::InstallDefaults(args) => handle_plugin_install_defaults(args, project_root).await,
         PluginCommand::Lock(cmd) => handle_plugin_lock(cmd, project_root).await,
         PluginCommand::Doctor(args) => handle_plugin_doctor(args, project_root, json).await,
+        PluginCommand::Rename(args) => handle_plugin_rename(args, project_root, json),
     }
 }
 
@@ -946,10 +947,10 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         SignaturePolicyOutcome::Proceed => {}
     }
 
-    let plugin_name = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        Some(name) => name.to_string(),
+    let (plugin_name, name_override_for_yaml) = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) => (name.to_string(), Some(name.to_string())),
         None => {
-            if !default_name.is_empty() {
+            let derived = if !default_name.is_empty() {
                 default_name
             } else {
                 source_path
@@ -957,7 +958,8 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
                     .and_then(|f| f.to_str())
                     .ok_or_else(|| invalid_input_error("could not derive plugin name from source path"))?
                     .to_string()
-            }
+            };
+            (derived, None)
         }
     };
 
@@ -1197,6 +1199,18 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         }
         if let Some(m) = manifest.as_ref() {
             map.insert(serde_yaml::Value::String("name".to_string()), serde_yaml::Value::String(m.name.clone()));
+        }
+        if let Some(override_name) = name_override_for_yaml.as_deref() {
+            // v0.5.8+: persist the install-time `--name <NAME>` override so
+            // discovery uses the same logical name the lockfile and the
+            // daemon SubjectRouter alias map were keyed under. Without this
+            // field, a plugin installed with `--name task-archive` would
+            // discover as its manifest name and drop the lockfile-keyed
+            // alias on next daemon start (codex P2 round-4 v0.5.7).
+            map.insert(
+                serde_yaml::Value::String("name_override".to_string()),
+                serde_yaml::Value::String(override_name.to_string()),
+            );
         }
         if let Some(kind) = provenance.source_kind {
             map.insert(
@@ -1490,38 +1504,51 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
 /// is deferred to a future release. Plugins with no `subject_kind:*`
 /// capability — and providers, transports, workflow_runners, queues,
 /// triggers — return `None` here and skip the rename pipeline.
-// TODO(codex-p2 round-4 v0.5.7): this function returns ONLY the first
-// exact subject_kind. For multi-kind subject backends (a plugin
-// declaring both `task` and `requirement` in the same binary)
-// install-time collision detection only checks the first kind. Fix
-// requires either changing this to return Vec<String> + updating every
-// caller, OR adding a second collision-check pass over the manifest's
-// remaining exact kinds. Today's launchapp-dev/animus-subject-* set is
-// single-kind per plugin so this edge case doesn't fire; bump priority
-// the moment a multi-kind subject backend ships.
+///
+/// Returns the FIRST exact (non-glob) `subject_kind:*` capability — the
+/// "primary" kind whose `installed_kind` slot is auto-incremented /
+/// renamed by `--as-kind`. See [`all_rename_eligible_native_kinds`] for
+/// the full set: install-time collision detection must check every kind
+/// the plugin declares, not just the primary, so a multi-kind subject
+/// backend (a single binary declaring both `task` and `requirement`) is
+/// blocked when its secondary kind collides too.
+#[cfg(test)]
 fn rename_eligible_native_kind(manifest: &PluginManifest) -> Option<String> {
+    all_rename_eligible_native_kinds(manifest).into_iter().next()
+}
+
+/// Every exact `subject_kind:*` capability eligible for the v0.5.7+ kind
+/// translator. Order matches the manifest's declaration order, so the
+/// first element is the "primary" kind returned by
+/// [`rename_eligible_native_kind`]. Glob captures (e.g. `subject_kind:task.*`)
+/// are excluded — the SubjectRouter passes them through unrenamed, and an
+/// alias against a glob would mint an `installed_kind` the router never
+/// registers.
+///
+/// v0.5.8 fold-in (closes codex P2 round-4 v0.5.7): install-time
+/// collision detection now iterates every entry returned here. A
+/// multi-kind subject backend (a plugin declaring `task` and
+/// `requirement` in the same binary) is refused when ANY of its
+/// declared kinds collides with an existing install, not just the
+/// primary.
+fn all_rename_eligible_native_kinds(manifest: &PluginManifest) -> Vec<String> {
     if manifest.plugin_kind != "subject_backend" {
-        return None;
+        return Vec::new();
     }
+    let mut out: Vec<String> = Vec::new();
     for cap in &manifest.capabilities {
-        if let Some(rest) = cap.strip_prefix("subject_kind:") {
-            let trimmed = rest.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            // Glob subject kinds (e.g. `subject_kind:task.*`) are passed
-            // through unrenamed by the SubjectRouter, so recording an
-            // alias for them would mint an `installed_kind` the router
-            // never registers. Skip globs here and let auto-increment
-            // / `--as-kind` apply only to exact kinds (codex P2 round-3
-            // v0.5.7).
-            if trimmed.ends_with(".*") {
-                continue;
-            }
-            return Some(trimmed.to_string());
+        let Some(rest) = cap.strip_prefix("subject_kind:") else {
+            continue;
+        };
+        let trimmed = rest.trim();
+        if trimmed.is_empty() || trimmed.ends_with(".*") {
+            continue;
+        }
+        if !out.iter().any(|existing| existing == trimmed) {
+            out.push(trimmed.to_string());
         }
     }
-    None
+    out
 }
 
 /// Inventory every `installed_kind` currently claimed by a
@@ -1609,43 +1636,105 @@ fn compute_kind_assignment(
     plugin_name: &str,
     requested_as_kind: Option<&str>,
 ) -> Result<(Option<String>, Option<String>)> {
-    let native_kind = manifest.and_then(rename_eligible_native_kind);
-    match native_kind.as_deref() {
-        None => {
-            if let Some(explicit) = requested_as_kind.map(str::trim).filter(|s| !s.is_empty()) {
-                return Err(invalid_input_error(format!(
-                    "--as-kind '{explicit}' supplied but plugin '{plugin_name}' declares no \
-                     rename-eligible capability (no subject_kind:* entry). v0.5.7 only renames \
-                     subject_backend plugins with exact (non-glob) subject_kind capabilities; \
-                     drop --as-kind to install this plugin."
-                )));
-            }
-            Ok((None, None))
+    let native_kinds = manifest.map(all_rename_eligible_native_kinds).unwrap_or_default();
+    let Some(primary_native) = native_kinds.first().cloned() else {
+        if let Some(explicit) = requested_as_kind.map(str::trim).filter(|s| !s.is_empty()) {
+            return Err(invalid_input_error(format!(
+                "--as-kind '{explicit}' supplied but plugin '{plugin_name}' declares no \
+                 rename-eligible capability (no subject_kind:* entry). v0.5.7 only renames \
+                 subject_backend plugins with exact (non-glob) subject_kind capabilities; \
+                 drop --as-kind to install this plugin."
+            )));
         }
-        Some(native) => {
-            let assigned = pick_installed_kind_for_install(
-                lockfile,
-                currently_claimed_kinds,
-                plugin_name,
-                native,
-                requested_as_kind,
-            )?;
-            if assigned != native {
-                eprintln!(
-                    "animus.plugin.install.v1: plugin '{plugin_name}' assigned installed_kind \
-                     '{assigned}' (native '{native}'); a previously-installed plugin already \
-                     claimed '{native}'. Pass --as-kind on a future install to override."
-                );
-                tracing::info!(
-                    plugin = %plugin_name,
-                    assigned_kind = %assigned,
-                    native_kind = %native,
-                    "plugin install auto-incremented installed_kind (v0.5.7 kind translator)",
-                );
-            }
-            Ok((Some(assigned), Some(native.to_string())))
+        return Ok((None, None));
+    };
+
+    // v0.5.8 (closes codex P2 round-4 v0.5.7): check secondary kinds for
+    // collisions BEFORE assigning the primary slot. The lockfile records
+    // a single `installed_kind` per plugin, so a multi-kind subject
+    // backend (a plugin declaring both `task` and `requirement`) cannot
+    // auto-increment a secondary collision via the rename slot — the
+    // only safe action is to refuse the install and tell the operator
+    // which kind clashes. Pre-v0.5.7 single-kind plugins are unaffected:
+    // `native_kinds.len() == 1` short-circuits the loop.
+    for secondary in native_kinds.iter().skip(1) {
+        let collider = lockfile_collider(lockfile, currently_claimed_kinds, plugin_name, secondary);
+        if let Some(collider_name) = collider {
+            let collider_label = if collider_name.is_empty() {
+                "an installed plugin's manifest capability".to_string()
+            } else {
+                format!("installed plugin '{collider_name}'")
+            };
+            return Err(invalid_input_error(format!(
+                "plugin '{plugin_name}' declares secondary subject_kind '{secondary}' which is \
+                 already claimed by {collider_label}. Multi-kind subject backends cannot \
+                 auto-increment a secondary kind in v0.5.8 (the lockfile records one \
+                 installed_kind per plugin). Uninstall the colliding plugin first or pick a \
+                 different binary."
+            )));
         }
     }
+
+    // Codex round-2 v0.5.8 P2: pass the plugin's own secondary native
+    // kinds so the auto-increment loop skips values that would collide
+    // with capabilities this same binary will register at startup.
+    // Without this guard, a manifest declaring `subject_kind:task` +
+    // `subject_kind:task-2` could be assigned primary `task-2` after an
+    // existing `task` install, and the SubjectRouter would reject the
+    // duplicate at next boot.
+    let own_secondary_kinds: Vec<String> = native_kinds.iter().skip(1).cloned().collect();
+    let assigned = pick_installed_kind_for_install(
+        lockfile,
+        currently_claimed_kinds,
+        plugin_name,
+        &primary_native,
+        requested_as_kind,
+        &own_secondary_kinds,
+    )?;
+    if assigned != primary_native {
+        eprintln!(
+            "animus.plugin.install.v1: plugin '{plugin_name}' assigned installed_kind \
+             '{assigned}' (native '{primary_native}'); a previously-installed plugin already \
+             claimed '{primary_native}'. Pass --as-kind on a future install to override."
+        );
+        tracing::info!(
+            plugin = %plugin_name,
+            assigned_kind = %assigned,
+            native_kind = %primary_native,
+            "plugin install auto-incremented installed_kind (v0.5.7 kind translator)",
+        );
+    }
+    Ok((Some(assigned), Some(primary_native)))
+}
+
+/// Look up which currently-installed plugin (if any) already claims `kind`.
+///
+/// Returns `Some(name)` with the colliding plugin's name when a lockfile
+/// entry or live capability already records that kind, `None` otherwise.
+/// Excludes `current_plugin_name` so an upgrade of the same plugin never
+/// reports itself as a collider. An empty-string name indicates the
+/// collision came from `currently_claimed_kinds` (live capability scan)
+/// where the discovery side intentionally drops the source plugin name.
+fn lockfile_collider(
+    lockfile: &PluginLockfile,
+    currently_claimed_kinds: &[String],
+    current_plugin_name: &str,
+    kind: &str,
+) -> Option<String> {
+    for entry in &lockfile.plugins {
+        if entry.name == current_plugin_name {
+            continue;
+        }
+        if let Some(installed) = entry.effective_installed_kind() {
+            if installed == kind {
+                return Some(entry.name.clone());
+            }
+        }
+    }
+    if currently_claimed_kinds.iter().any(|k| k == kind) {
+        return Some(String::new());
+    }
+    None
 }
 
 /// Resolve the user-facing `installed_kind` for a fresh install. When the
@@ -1663,6 +1752,7 @@ fn pick_installed_kind_for_install(
     current_plugin_name: &str,
     native_kind: &str,
     requested_as_kind: Option<&str>,
+    own_secondary_kinds: &[String],
 ) -> Result<String> {
     // The collision set is built from two sources:
     //
@@ -1708,6 +1798,14 @@ fn pick_installed_kind_for_install(
                  Pick a different kind or uninstall the colliding plugin first."
             )));
         }
+        if own_secondary_kinds.iter().any(|k| k == explicit) {
+            return Err(invalid_input_error(format!(
+                "--as-kind '{explicit}' is one of plugin '{current_plugin_name}'s own native \
+                 subject kinds. Aliasing the primary slot to a value the plugin will also \
+                 register natively would cause the SubjectRouter to refuse the duplicate at \
+                 startup. Pick a different kind."
+            )));
+        }
         return Ok(explicit.to_string());
     }
 
@@ -1718,20 +1816,25 @@ fn pick_installed_kind_for_install(
     // supplied (the explicit-override branch above already handled that
     // case).
     if let Some(prior) = lockfile.find(current_plugin_name).and_then(|e| e.effective_installed_kind()) {
-        if !existing.iter().any(|(_, k)| k == prior) {
+        if !existing.iter().any(|(_, k)| k == prior) && !own_secondary_kinds.iter().any(|k| k == prior) {
             return Ok(prior.to_string());
         }
-        // Prior alias now collides with another install — fall through
-        // to the auto-increment branch so the upgrade gets a fresh slot.
+        // Prior alias now collides with another install (or the plugin's
+        // own newly-declared secondary kind after an upgrade) — fall
+        // through to the auto-increment branch so the upgrade gets a
+        // fresh slot.
     }
 
-    if !existing.iter().any(|(_, k)| k == native_kind) {
+    let conflicts_self = |candidate: &str| own_secondary_kinds.iter().any(|k| k == candidate);
+    let conflicts_others = |candidate: &str| existing.iter().any(|(_, k)| k == candidate);
+
+    if !conflicts_others(native_kind) && !conflicts_self(native_kind) {
         return Ok(native_kind.to_string());
     }
     let mut suffix: u32 = 2;
     loop {
         let candidate = format!("{native_kind}-{suffix}");
-        if !existing.iter().any(|(_, k)| k == &candidate) {
+        if !conflicts_others(&candidate) && !conflicts_self(&candidate) {
             return Ok(candidate);
         }
         suffix = suffix.checked_add(1).ok_or_else(|| {
@@ -3313,6 +3416,250 @@ fn handle_plugin_uninstall(args: PluginUninstallArgs, project_root: &str, json: 
         project_root: Some(project_root.to_string()),
     })?;
     print_value(output, json)
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PluginRenameOutput {
+    pub(crate) schema: &'static str,
+    pub(crate) plugin_name: String,
+    pub(crate) old_kind: String,
+    pub(crate) new_kind: String,
+    /// The unmodified value the operator passed via `--to`. Distinct from
+    /// `new_kind` when `--force` auto-incremented past a collision
+    /// (e.g. requested `task`, assigned `task-2`).
+    pub(crate) requested_kind: String,
+    pub(crate) native_kind: String,
+    pub(crate) lockfile: String,
+    pub(crate) auto_incremented: bool,
+}
+
+fn handle_plugin_rename(args: PluginRenameArgs, project_root: &str, json: bool) -> Result<()> {
+    let want_json = json || args.json;
+    let output = run_plugin_rename(PluginRenameRequest {
+        name: args.name,
+        to: args.to,
+        force: args.force,
+        project_root: project_root.to_string(),
+    })?;
+    if output.auto_incremented {
+        eprintln!(
+            "animus.plugin.rename.v1: plugin '{plugin}' assigned installed_kind \
+             '{assigned}' (requested '{requested}'); the requested value was already \
+             claimed and --force auto-incremented to the next free slot.",
+            plugin = output.plugin_name,
+            assigned = output.new_kind,
+            requested = output.requested_kind,
+        );
+    }
+    print_value(output, want_json)
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct PluginRenameRequest {
+    pub(crate) name: String,
+    pub(crate) to: String,
+    pub(crate) force: bool,
+    pub(crate) project_root: String,
+}
+
+pub(crate) fn run_plugin_rename(req: PluginRenameRequest) -> Result<PluginRenameOutput> {
+    let plugin_name = req.name.trim().to_string();
+    if plugin_name.is_empty() {
+        return Err(invalid_input_error("PLUGIN_NAME must not be empty"));
+    }
+    let requested = req.to.trim().to_string();
+    if requested.is_empty() {
+        return Err(invalid_input_error("--to must not be empty"));
+    }
+    if requested.contains('/')
+        || requested.contains('*')
+        || requested.contains(':')
+        || requested.contains(char::is_whitespace)
+    {
+        return Err(invalid_input_error(format!(
+            "--to '{requested}' is not a valid subject kind. Kinds must be exact identifiers \
+             with no '/', '*', ':', or whitespace; the ':' separator is reserved for subject id \
+             encoding (`<kind>:<local-id>`) and glob/prefix-routed kinds are not supported by \
+             the v0.5.7 translator."
+        )));
+    }
+
+    let project_root_path = std::path::Path::new(&req.project_root);
+    let mut lockfile =
+        PluginLockfile::load_default(Some(project_root_path)).with_context(|| {
+            format!(
+                "failed to load plugin lockfile at {}",
+                PluginLockfile::default_path(Some(project_root_path)).display(),
+            )
+        })?;
+    let lockfile_path = lockfile.path().to_path_buf();
+
+    // The collision check pulls live subject kinds from disk so a
+    // pre-v0.5.7 plugin (no lockfile rename slot) still blocks the rename
+    // target. Same helper as the install pipeline.
+    let currently_claimed_kinds =
+        current_subject_kinds_for_collision_check(Some(&req.project_root), None, &lockfile, &plugin_name);
+
+    let entry = lockfile
+        .find(&plugin_name)
+        .ok_or_else(|| {
+            not_found_error(format!(
+                "plugin '{plugin_name}' has no entry in {}. Install it first with `animus plugin install` \
+                 or run `animus plugin lock list` to see currently-tracked plugins.",
+                lockfile_path.display(),
+            ))
+        })?
+        .clone();
+
+    let old_kind = entry
+        .effective_installed_kind()
+        .map(str::to_string)
+        .or_else(|| entry.effective_native_kind().map(str::to_string))
+        .ok_or_else(|| {
+            invalid_input_error(format!(
+                "plugin '{plugin_name}' has no installed_kind or native_kind recorded in {}. \
+                 Reinstall the plugin to populate the rename surface before calling \
+                 `animus plugin rename`.",
+                lockfile_path.display(),
+            ))
+        })?;
+    let native_kind = entry.effective_native_kind().map(str::to_string).unwrap_or_else(|| old_kind.clone());
+
+    if old_kind == requested {
+        // No-op rename — treated as success so scripted retries are idempotent.
+        return Ok(PluginRenameOutput {
+            schema: "animus.plugin.rename.v1",
+            plugin_name,
+            old_kind: old_kind.clone(),
+            new_kind: requested.clone(),
+            requested_kind: requested,
+            native_kind,
+            lockfile: lockfile_path.to_string_lossy().to_string(),
+            auto_incremented: false,
+        });
+    }
+
+    // Codex round-1 v0.5.8 P2: a multi-kind subject backend declaring both
+    // `task` (primary) and `requirement` (secondary) must not be renamed
+    // to its OWN secondary kind. The lockfile alias only renames the
+    // primary slot, so the SubjectRouter would still register the
+    // secondary native kind unaliased — a `--to requirement` rename on
+    // such a plugin produces two registrations of `requirement` (the
+    // primary, now aliased, plus the secondary, still native) and the
+    // router rejects the duplicate at startup. Refuse the rename here so
+    // the operator sees a clear error instead of a broken next boot.
+    let own_secondary_native_kinds: Vec<String> = match PluginDiscovery::new()
+        .with_project_root(std::path::Path::new(&req.project_root))
+        .discover()
+    {
+        Ok(plugins) => plugins
+            .into_iter()
+            .find(|p| p.name == plugin_name)
+            .map(|p| {
+                let mut kinds = all_rename_eligible_native_kinds(&p.manifest);
+                // Drop the primary native kind — it's the slot the
+                // rename legitimately replaces.
+                if let Some(idx) = kinds.iter().position(|k| k == &native_kind) {
+                    kinds.swap_remove(idx);
+                }
+                kinds
+            })
+            .unwrap_or_default(),
+        Err(error) => {
+            tracing::warn!(%error, "plugin discovery failed during rename self-collision pre-check; relying on lockfile collision detection only");
+            Vec::new()
+        }
+    };
+    if own_secondary_native_kinds.iter().any(|k| k == &requested) {
+        return Err(invalid_input_error(format!(
+            "--to '{requested}' is one of plugin '{plugin_name}'s own native subject kinds. \
+             The lockfile records a single installed_kind per plugin, so the rename would \
+             alias the primary slot to '{requested}' while the secondary capability remains \
+             registered under its native value — the SubjectRouter would refuse the \
+             resulting duplicate at startup. Pick a different `--to` value or uninstall the \
+             plugin's secondary capability."
+        )));
+    }
+
+    let collider = lockfile_collider(&lockfile, &currently_claimed_kinds, &plugin_name, &requested);
+    let (assigned_kind, auto_incremented) = match (collider, req.force) {
+        (Some(collider_name), false) => {
+            let collider_label = if collider_name.is_empty() {
+                "an installed plugin's manifest capability".to_string()
+            } else {
+                format!("installed plugin '{collider_name}'")
+            };
+            return Err(invalid_input_error(format!(
+                "--to '{requested}' is already claimed by {collider_label}. Pass --force to \
+                 auto-increment from '{requested}' (e.g. '{requested}-2'), or pick a different \
+                 value and re-run."
+            )));
+        }
+        (Some(_), true) => {
+            // Auto-increment from the requested base, exactly like the install
+            // pipeline's auto-increment behavior. Codex round-2 v0.5.8 P2:
+            // also skip candidates that would alias to one of this plugin's
+            // OWN secondary native kinds — otherwise the SubjectRouter would
+            // see two registrations for the same kind at next boot.
+            let mut suffix: u32 = 2;
+            let chosen = loop {
+                let candidate = format!("{requested}-{suffix}");
+                let collides_other =
+                    lockfile_collider(&lockfile, &currently_claimed_kinds, &plugin_name, &candidate).is_some();
+                let collides_self = own_secondary_native_kinds.iter().any(|k| k == &candidate);
+                if !collides_other && !collides_self {
+                    break candidate;
+                }
+                suffix = suffix.checked_add(1).ok_or_else(|| {
+                    invalid_input_error(format!(
+                        "exhausted u32 auto-increment range for installed_kind '{requested}'; this is a bug"
+                    ))
+                })?;
+            };
+            (chosen, true)
+        }
+        (None, _) => (requested.clone(), false),
+    };
+
+    let mut updated = entry.clone();
+    updated.installed_kind = Some(assigned_kind.clone());
+    if updated.native_kind.is_none() {
+        updated.native_kind = Some(native_kind.clone());
+    }
+    lockfile.upsert(updated);
+    if let Err(err) = lockfile.save() {
+        return Err(invalid_input_error(format!(
+            "failed to persist plugin lockfile at {} after renaming '{plugin_name}' to '{assigned_kind}': {err:#}. \
+             The lockfile may now be inconsistent — rerun the rename once the path is writable.",
+            lockfile_path.display(),
+        )));
+    }
+
+    if let Some(scoped) = protocol::repository_scope::scoped_state_root(project_root_path) {
+        Audit::at_scoped_root(&scoped).log_event(AuditEvent::new(
+            AuditActor::User,
+            AuditEventKind::PluginInstall,
+            serde_json::json!({
+                "plugin": plugin_name,
+                "action": "rename",
+                "old_kind": old_kind,
+                "new_kind": assigned_kind,
+                "native_kind": native_kind,
+                "auto_incremented": auto_incremented,
+            }),
+        ));
+    }
+
+    Ok(PluginRenameOutput {
+        schema: "animus.plugin.rename.v1",
+        plugin_name,
+        old_kind,
+        new_kind: assigned_kind,
+        requested_kind: requested,
+        native_kind,
+        lockfile: lockfile_path.to_string_lossy().to_string(),
+        auto_incremented,
+    })
 }
 
 // ===== `plugin lock` subcommands =====
@@ -5805,7 +6152,7 @@ trusted_signers:
     fn pick_installed_kind_returns_native_for_first_install() {
         let dir = tempfile::tempdir().unwrap();
         let lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
-        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-a", "task", None).expect("first install");
+        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-a", "task", None, &[]).expect("first install");
         assert_eq!(chosen, "task");
     }
 
@@ -5823,7 +6170,8 @@ trusted_signers:
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
         });
-        let chosen_b = pick_installed_kind_for_install(&lock, &[], "plugin-b", "task", None).expect("second install");
+        let chosen_b =
+            pick_installed_kind_for_install(&lock, &[], "plugin-b", "task", None, &[]).expect("second install");
         assert_eq!(chosen_b, "task-2");
 
         lock.upsert(LockEntry {
@@ -5835,7 +6183,8 @@ trusted_signers:
             installed_kind: Some(chosen_b.clone()),
             native_kind: Some("task".into()),
         });
-        let chosen_c = pick_installed_kind_for_install(&lock, &[], "plugin-c", "task", None).expect("third install");
+        let chosen_c =
+            pick_installed_kind_for_install(&lock, &[], "plugin-c", "task", None, &[]).expect("third install");
         assert_eq!(chosen_c, "task-3");
     }
 
@@ -5860,7 +6209,7 @@ trusted_signers:
             native_kind: None,
         });
         let live_claims = vec!["task".to_string()];
-        let chosen = pick_installed_kind_for_install(&lock, &live_claims, "new-task", "task", None)
+        let chosen = pick_installed_kind_for_install(&lock, &live_claims, "new-task", "task", None, &[])
             .expect("legacy lockfile row must still trigger collision detection via live discovery");
         assert_eq!(chosen, "task-2", "auto-increment must run when legacy plugin still claims native kind");
     }
@@ -5884,7 +6233,7 @@ trusted_signers:
             installed_kind: None,
             native_kind: None,
         });
-        let chosen = pick_installed_kind_for_install(&lock, &[], "new-task", "task", None)
+        let chosen = pick_installed_kind_for_install(&lock, &[], "new-task", "task", None, &[])
             .expect("legacy unrelated row must not block first subject install");
         assert_eq!(chosen, "task", "first subject_kind:task install must keep the native value");
     }
@@ -5903,7 +6252,7 @@ trusted_signers:
             installed_kind: Some("archive".into()),
             native_kind: Some("task".into()),
         });
-        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-archive", "task", None)
+        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-archive", "task", None, &[])
             .expect("upgrade must keep prior alias");
         assert_eq!(chosen, "archive", "upgrade without --as-kind must NOT move plugin back to native kind");
     }
@@ -5922,7 +6271,7 @@ trusted_signers:
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
         });
-        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-a", "task", None)
+        let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-a", "task", None, &[])
             .expect("upgrade must not collide with itself");
         assert_eq!(chosen, "task", "re-install of same plugin keeps native kind");
     }
@@ -6114,6 +6463,458 @@ trusted_signers:
             by_kind.values().any(|&v| v >= 2),
             "doctor must see at least one installed_kind claimed by two plugins for role {}",
             task_role.label(),
+        );
+    }
+
+    #[test]
+    fn all_rename_eligible_native_kinds_returns_every_exact_kind_in_declaration_order() {
+        let manifest = PluginManifest {
+            name: "subject-multi".into(),
+            version: "0.1".into(),
+            plugin_kind: "subject_backend".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec![
+                "subject_kind:task".into(),
+                "subject_kind:requirement".into(),
+                "subject_kind:incident".into(),
+            ],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        let kinds = all_rename_eligible_native_kinds(&manifest);
+        assert_eq!(kinds, vec!["task".to_string(), "requirement".to_string(), "incident".to_string()]);
+    }
+
+    #[test]
+    fn all_rename_eligible_native_kinds_drops_globs_and_duplicates() {
+        let manifest = PluginManifest {
+            name: "subject-mixed".into(),
+            version: "0.1".into(),
+            plugin_kind: "subject_backend".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec![
+                "subject_kind:task".into(),
+                "subject_kind:task".into(),
+                "subject_kind:task.*".into(),
+                "subject_kind:requirement".into(),
+            ],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        let kinds = all_rename_eligible_native_kinds(&manifest);
+        assert_eq!(kinds, vec!["task".to_string(), "requirement".to_string()]);
+    }
+
+    #[test]
+    fn compute_kind_assignment_blocks_multi_kind_secondary_collision() {
+        // Closes codex P2 round-4 v0.5.7: a plugin declaring both `task` and
+        // `requirement` must be refused at install time when EITHER kind
+        // collides — not just the primary. The lockfile records a single
+        // installed_kind per plugin, so we cannot auto-increment a
+        // secondary collision.
+        let dir = tempfile::tempdir().unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "existing-requirement".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now,
+            installed_kind: Some("requirement".into()),
+            native_kind: Some("requirement".into()),
+        });
+        let manifest = PluginManifest {
+            name: "subject-multi".into(),
+            version: "0.1".into(),
+            plugin_kind: "subject_backend".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec!["subject_kind:task".into(), "subject_kind:requirement".into()],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        let err = compute_kind_assignment(Some(&manifest), &lock, &[], "subject-multi", None)
+            .expect_err("secondary kind collision must refuse the install");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("secondary subject_kind 'requirement'"), "error must name the secondary kind: {msg}");
+        assert!(msg.contains("existing-requirement"), "error must name the colliding plugin: {msg}");
+    }
+
+    #[test]
+    fn pick_installed_kind_avoids_own_secondary_native_during_auto_increment() {
+        // Codex round-2 v0.5.8 P2: a manifest declaring `task` + `task-2`
+        // installed after another plugin claims `task` must NOT receive
+        // primary alias `task-2` (its own secondary native kind). The
+        // SubjectRouter would otherwise refuse the duplicate at boot.
+        let dir = tempfile::tempdir().unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "other-task".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now,
+            installed_kind: Some("task".into()),
+            native_kind: Some("task".into()),
+        });
+        let chosen = pick_installed_kind_for_install(&lock, &[], "multi-plugin", "task", None, &["task-2".to_string()])
+            .expect("auto-increment must skip own secondary kind");
+        assert_eq!(chosen, "task-3", "auto-increment must skip task-2 because the plugin declares it natively");
+    }
+
+    #[test]
+    fn pick_installed_kind_rejects_explicit_as_kind_matching_own_secondary() {
+        let dir = tempfile::tempdir().unwrap();
+        let lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let err = pick_installed_kind_for_install(
+            &lock,
+            &[],
+            "multi-plugin",
+            "task",
+            Some("requirement"),
+            &["requirement".to_string()],
+        )
+        .expect_err("--as-kind matching own secondary must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("own native subject kinds"), "error must explain self-collision: {msg}");
+    }
+
+    #[test]
+    fn compute_kind_assignment_auto_increments_primary_when_secondary_clear() {
+        // Multi-kind backend with a primary collision and a secondary that's
+        // free — the install must auto-increment the primary slot rather
+        // than refuse.
+        let dir = tempfile::tempdir().unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let now = chrono::Utc::now().to_rfc3339();
+        lock.upsert(LockEntry {
+            name: "existing-task".into(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now,
+            installed_kind: Some("task".into()),
+            native_kind: Some("task".into()),
+        });
+        let manifest = PluginManifest {
+            name: "subject-multi".into(),
+            version: "0.1".into(),
+            plugin_kind: "subject_backend".into(),
+            description: "t".into(),
+            protocol_version: "1.0.0".into(),
+            capabilities: vec!["subject_kind:task".into(), "subject_kind:incident".into()],
+            env_required: vec![],
+            notification_buffer_size: None,
+        };
+        let (assigned, native) = compute_kind_assignment(Some(&manifest), &lock, &[], "subject-multi", None)
+            .expect("primary auto-increment with free secondary must succeed");
+        assert_eq!(assigned.as_deref(), Some("task-2"));
+        assert_eq!(native.as_deref(), Some("task"));
+    }
+
+    fn rename_test_lockfile(dir: &std::path::Path, entries: Vec<LockEntry>) -> PluginLockfile {
+        let path = dir.join(".animus").join("plugins.lock");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut lock = PluginLockfile::empty_at(&path);
+        for entry in entries {
+            lock.upsert(entry);
+        }
+        lock.save().expect("save initial lockfile");
+        lock
+    }
+
+    fn rename_lock_entry(name: &str, installed: &str, native: &str) -> LockEntry {
+        LockEntry {
+            name: name.to_string(),
+            version: "v0.1".into(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: chrono::Utc::now().to_rfc3339(),
+            installed_kind: Some(installed.to_string()),
+            native_kind: Some(native.to_string()),
+        }
+    }
+
+    #[test]
+    fn run_plugin_rename_renames_lockfile_entry_when_target_is_free() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path().to_path_buf();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        rename_test_lockfile(&project_root, vec![rename_lock_entry("plugin-a", "task", "task")]);
+
+        let out = run_plugin_rename(PluginRenameRequest {
+            name: "plugin-a".into(),
+            to: "task-archive".into(),
+            force: false,
+            project_root: project_root.to_string_lossy().to_string(),
+        })
+        .expect("rename succeeds");
+        assert_eq!(out.old_kind, "task");
+        assert_eq!(out.new_kind, "task-archive");
+        assert_eq!(out.native_kind, "task");
+        assert!(!out.auto_incremented);
+
+        let lock = PluginLockfile::load_default(Some(&project_root)).expect("reload");
+        let entry = lock.find("plugin-a").expect("entry");
+        assert_eq!(entry.effective_installed_kind(), Some("task-archive"));
+        assert_eq!(entry.effective_native_kind(), Some("task"));
+    }
+
+    #[test]
+    fn run_plugin_rename_missing_plugin_returns_not_found() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path().to_path_buf();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        rename_test_lockfile(&project_root, vec![rename_lock_entry("plugin-a", "task", "task")]);
+
+        let err = run_plugin_rename(PluginRenameRequest {
+            name: "ghost-plugin".into(),
+            to: "archive".into(),
+            force: false,
+            project_root: project_root.to_string_lossy().to_string(),
+        })
+        .expect_err("missing plugin must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("ghost-plugin"), "error must name the missing plugin: {msg}");
+        assert!(msg.contains("no entry in"), "error must mention the lockfile: {msg}");
+    }
+
+    #[test]
+    fn run_plugin_rename_collision_without_force_errors() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path().to_path_buf();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        rename_test_lockfile(
+            &project_root,
+            vec![
+                rename_lock_entry("plugin-a", "task", "task"),
+                rename_lock_entry("plugin-b", "requirement", "requirement"),
+            ],
+        );
+
+        let err = run_plugin_rename(PluginRenameRequest {
+            name: "plugin-a".into(),
+            to: "requirement".into(),
+            force: false,
+            project_root: project_root.to_string_lossy().to_string(),
+        })
+        .expect_err("colliding target without --force must fail");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("plugin-b"), "error must name the colliding plugin: {msg}");
+        assert!(msg.contains("--force"), "error must suggest --force: {msg}");
+    }
+
+    #[test]
+    fn run_plugin_rename_collision_with_force_auto_increments() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path().to_path_buf();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        rename_test_lockfile(
+            &project_root,
+            vec![
+                rename_lock_entry("plugin-a", "task", "task"),
+                rename_lock_entry("plugin-b", "requirement", "requirement"),
+            ],
+        );
+
+        let out = run_plugin_rename(PluginRenameRequest {
+            name: "plugin-a".into(),
+            to: "requirement".into(),
+            force: true,
+            project_root: project_root.to_string_lossy().to_string(),
+        })
+        .expect("--force must auto-increment past collision");
+        assert!(out.auto_incremented);
+        assert_eq!(out.requested_kind, "requirement");
+        assert_eq!(out.new_kind, "requirement-2");
+    }
+
+    #[test]
+    fn run_plugin_rename_rejects_invalid_to_value() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let project_root = tmp.path().to_path_buf();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        rename_test_lockfile(&project_root, vec![rename_lock_entry("plugin-a", "task", "task")]);
+
+        for bad in ["task/sub", "task:foo", "task *", "task*", ""] {
+            let err = run_plugin_rename(PluginRenameRequest {
+                name: "plugin-a".into(),
+                to: bad.to_string(),
+                force: false,
+                project_root: project_root.to_string_lossy().to_string(),
+            })
+            .expect_err("invalid --to must be rejected");
+            let msg = format!("{err:#}");
+            assert!(
+                msg.contains("--to") || msg.contains("must not be empty"),
+                "rejection must explain the invalid --to value '{bad}': {msg}",
+            );
+        }
+    }
+
+    /// Codex round-1 v0.5.8 P2: renaming a multi-kind subject backend to
+    /// one of its OWN secondary native subject kinds would alias the
+    /// primary slot while the secondary stays registered under the same
+    /// native value — the SubjectRouter rejects the duplicate at startup.
+    /// Refuse the rename here so the operator sees a clear error.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn run_plugin_rename_refuses_self_secondary_native_kind_collision() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        let source = tmp.path().join("animus-subject-multi");
+        write_fake_plugin_binary_with_capabilities(
+            &source,
+            "animus-subject-multi",
+            "subject_backend",
+            &["subject_kind:task", "subject_kind:requirement"],
+        );
+        let req = PluginInstallRequest {
+            path: Some(source.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        run_plugin_install(req).await.expect("install multi-kind plugin");
+
+        let err = run_plugin_rename(PluginRenameRequest {
+            name: "animus-subject-multi".into(),
+            to: "requirement".into(),
+            force: false,
+            project_root: project_root.to_string_lossy().to_string(),
+        })
+        .expect_err("rename to plugin's own secondary native kind must be refused");
+        let msg = format!("{err:#}");
+        assert!(msg.contains("own native subject kinds"), "error must explain the self-collision: {msg}");
+    }
+
+    /// v0.5.8 fold-in: `--name <NAME>` install override is now recorded in
+    /// plugins.yaml as `name_override`. Discovery uses the override when
+    /// matching the lockfile entry, and the daemon SubjectRouter alias map
+    /// stays consistent across boots.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn install_name_override_round_trips_through_yaml_lockfile_and_discovery() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+        let config_dir = tmp.path().join("config");
+        let install_dir = tmp.path().join("install");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let _config_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().unwrap()));
+        let _plugin_env =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_str().unwrap()));
+
+        let source = tmp.path().join("animus-subject-default");
+        write_fake_plugin_binary_with_capabilities(
+            &source,
+            "animus-subject-default",
+            "subject_backend",
+            &["subject_kind:task"],
+        );
+        let req = PluginInstallRequest {
+            path: Some(source.to_string_lossy().to_string()),
+            name: Some("custom-task".to_string()),
+            skip_signature: true,
+            yes: true,
+            project_root: Some(project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let output = run_plugin_install(req).await.expect("install with --name override");
+        assert_eq!(output.name, "custom-task");
+
+        let yaml_path = std::path::PathBuf::from(&output.plugins_yaml);
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&yaml_path).unwrap()).unwrap();
+        let entry =
+            yaml.get("plugins").and_then(|p| p.get("custom-task")).expect("plugins.yaml table keyed under override");
+        let recorded = entry
+            .get("name_override")
+            .and_then(|v| v.as_str())
+            .expect("name_override field persisted when --name was passed");
+        assert_eq!(recorded, "custom-task", "name_override must record the install-time override");
+
+        let lock = PluginLockfile::load_default(Some(&project_root)).expect("load lock");
+        assert!(lock.find("custom-task").is_some(), "lockfile entry must be keyed under the install-time override");
+
+        // Discovery uses the override as the canonical name — without this
+        // round-trip the daemon's SubjectRouter alias map could not find
+        // the lockfile entry on next start.
+        let discovered = orchestrator_plugin_host::PluginDiscovery::new()
+            .with_project_root(&project_root)
+            .discover()
+            .expect("discover");
+        let canonical_names: Vec<String> = discovered.iter().map(|p| p.name.clone()).collect();
+        assert!(
+            canonical_names.contains(&"custom-task".to_string()),
+            "discovery must surface the plugin under its name_override: {canonical_names:?}",
         );
     }
 }
