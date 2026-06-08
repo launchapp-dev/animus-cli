@@ -47,7 +47,23 @@ async fn main() {
                 }
             };
             if let Some(check) = startup_check {
-                let grace = if check.is_blocking { None } else { Some(std::time::Duration::from_millis(750)) };
+                // Non-blocking modes (Notify / Off) get a tight 50ms grace
+                // window so a slow network probe never adds dead-air to the
+                // end of the command the user actually asked for.
+                //
+                // Trade-off documented up-front: `run_startup_check` persists
+                // `last_checked = now` BEFORE the GitHub fetch (so a flaky
+                // network can't cause us to retry on every CLI invocation).
+                // That means a fetch cut off by this 50ms grace still consumes
+                // the throttle window, so the user may miss the notification
+                // for one `check_interval` period (24h by default). They will
+                // still see the update notice on the next interval boundary,
+                // and any long-running command (`daemon start`, `daemon run`)
+                // gives the check time to complete and surface immediately.
+                //
+                // Blocking modes (Prompt / Auto) explicitly opted in to wait,
+                // so they get no cap.
+                let grace = if check.is_blocking { None } else { Some(std::time::Duration::from_millis(50)) };
                 match grace {
                     Some(timeout) => {
                         let _ = tokio::time::timeout(timeout, check.handle).await;
@@ -60,8 +76,13 @@ async fn main() {
             let runtime_config = RuntimeConfig { project_root: project_root_override, ..RuntimeConfig::default() };
             let (project_root, _) = resolve_project_root(&runtime_config);
             let project_root_path = std::path::PathBuf::from(project_root);
+            // 200ms cap on end-of-run metrics flush. The flush is best-effort
+            // — if the network is slow the next CLI invocation will retry,
+            // so blocking the user's terminal for up to 2s of dead-air at the
+            // tail of every command is not worth the marginal delivery
+            // improvement.
             let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
+                std::time::Duration::from_millis(200),
                 services::metrics::maybe_flush_if_due(&project_root_path),
             )
             .await;
@@ -196,9 +217,18 @@ async fn run(cli: Cli) -> Result<()> {
     // session-backend probe paths see the same secrets a daemon-spawned
     // plugin would). First-installer-wins; safe to call once per CLI
     // invocation. (codex round-2 P2.)
-    let project_root_for_secrets = std::path::Path::new(&project_root);
-    let _ = orchestrator_daemon_runtime::quotas::install_keychain_workflow_resolver_for(project_root_for_secrets);
-    let _ = orchestrator_daemon_runtime::quotas::install_keychain_secret_provider_for(project_root_for_secrets);
+    //
+    // The inner `install_*` slots already early-return when populated, but
+    // the per-call setup constructs a `KeyringSecretStore` and calls
+    // `scoped_state_root` (filesystem + potential `git remote get-url`
+    // subprocess) every time. Gate the whole block behind a process-local
+    // sentinel so repeat calls within a single CLI process pay nothing.
+    static KEYCHAIN_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    KEYCHAIN_INSTALLED.get_or_init(|| {
+        let project_root_for_secrets = std::path::Path::new(&project_root);
+        let _ = orchestrator_daemon_runtime::quotas::install_keychain_workflow_resolver_for(project_root_for_secrets);
+        let _ = orchestrator_daemon_runtime::quotas::install_keychain_secret_provider_for(project_root_for_secrets);
+    });
     match cli.command {
         Command::Init(args) => services::operations::handle_init(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,

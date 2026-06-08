@@ -563,13 +563,20 @@ fn ci_status_from_lookup(outcome: CiLookupOutcome) -> CiStatusSlice {
 }
 
 fn gh_available() -> bool {
-    ProcessCommand::new("gh")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+    // Memoize per-process: `gh --version` spawns a subprocess (~50-100ms on
+    // first call). Subsequent `animus status` invocations from the same
+    // process (Tauri loops, MCP servers, dashboard refreshes) reuse the
+    // cached answer.
+    static AVAILABLE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *AVAILABLE.get_or_init(|| {
+        ProcessCommand::new("gh")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    })
 }
 
 fn query_latest_gh_run(project_root: &str) -> Result<Option<CiRunSummary>> {
