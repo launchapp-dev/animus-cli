@@ -138,6 +138,10 @@ pub(crate) enum WorkflowConfigCommand {
     Validate,
     /// Validate and resolve YAML workflow files.
     Compile,
+    /// Re-run the workflow YAML compile pipeline and (when the daemon is
+    /// running) swap the in-memory config snapshot. Useful when filesystem
+    /// notifications are unreliable on the host filesystem.
+    Reload,
 }
 
 #[derive(Debug, Subcommand)]

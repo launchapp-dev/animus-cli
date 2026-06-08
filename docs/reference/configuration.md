@@ -49,6 +49,51 @@ entries). The `daemon:` block does **not** field-merge — any overlay that
 defines `daemon:` replaces the previously-accumulated block wholesale, so keep
 `daemon:` in a single file.
 
+#### Hot-reload
+
+When the daemon is running, edits to `.animus/workflows.yaml` and any file under
+`.animus/workflows/*.yaml` are picked up automatically by a filesystem watcher
+(the `notify` crate's recommended backend per platform). Workflow YAML is the
+only configuration surface that hot-reloads today; `.animus/pm-config.json` and
+`.animus/plugins.lock` still require a daemon restart.
+
+Behaviour:
+
+- A 500 ms debounce coalesces editor write-bursts (vim's `.swp`+rename, vscode's
+  atomic temp-then-rename) into a single reload.
+- On success: the most-recently compiled `WorkflowConfig` is stored in an
+  `arc-swap` snapshot and the daemon broadcasts a `config_reloaded` event on the
+  `workflow/events` control subscription. Subscribers see
+  `{workflow_id: "<daemon>", kind: "config_reloaded", payload: {...}}`.
+- On failure: the daemon logs the YAML diagnostic, broadcasts a
+  `config_reload_failed` event, and **keeps the prior snapshot active**. A
+  malformed edit never crashes the daemon. Note that daemon paths today still
+  read directly from disk via `load_workflow_config_with_metadata` for each
+  workflow run, so a malformed-then-saved overlay can still surface a parse
+  error to the next workflow that starts; the snapshot guarantees the
+  hot-reload broadcast contract and the carry-over for callers that consume
+  the snapshot directly. Routing the rest of the daemon's workflow paths
+  through the snapshot is tracked separately.
+- Daemon transport settings (control socket, MCP, plugin process layout) are
+  **not** affected by a reload — those still require a daemon restart.
+
+macOS note: `notify`'s recommended backend on macOS is FSEvents, which delivers
+file-system events that are already coarsened by the kernel. A single editor
+write often surfaces as a single batched event regardless of the userland write
+pattern, so the 500 ms debounce window is largely redundant there but kept for
+parity with Linux's finer-grained inotify and Windows' ReadDirectoryChangesW.
+
+Manual trigger (useful when the host filesystem's notify backend is flaky):
+
+```bash
+animus workflow config reload [--json]
+```
+
+JSON envelope shape (matches the `animus.cli.v1` wrapper):
+
+- success: `{"reloaded": true, "phase_definitions": N, "workflows": M, "agent_profiles": K, "source_files": [...], "config_hash": "<sha256 of compiled workflow config>"}`
+- failure: `{"reloaded": false, "errors": [{"message": "<diagnostic>"}], "source_files": [...]}`
+
 ### `.animus/plugins/<pack-id>/`
 
 Project-local pack overrides. Use this when a repository needs to override installed pack content without changing Animus globally.

@@ -330,6 +330,36 @@ impl DefaultDaemonRunHost {
                     }))
                     .emit();
             }
+            DaemonRunEvent::WorkflowConfigReloaded {
+                phase_definitions,
+                workflows,
+                agent_profiles,
+                source_files,
+                config_hash,
+                ..
+            } => {
+                self.logger
+                    .info(
+                        "config",
+                        format!(
+                            "workflow config reloaded — {phase_definitions} phase definitions, {workflows} workflows"
+                        ),
+                    )
+                    .meta(json!({
+                        "phase_definitions": phase_definitions,
+                        "workflows": workflows,
+                        "agent_profiles": agent_profiles,
+                        "source_files": source_files,
+                        "config_hash": config_hash,
+                    }))
+                    .emit();
+            }
+            DaemonRunEvent::WorkflowConfigReloadFailed { errors, .. } => {
+                self.logger
+                    .warn("config", "workflow config reload failed; prior config remains active")
+                    .meta(json!({"errors": errors}))
+                    .emit();
+            }
         }
     }
 
@@ -789,6 +819,30 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
                         "agent_session_id": agent_session_id,
                         "error": error,
                     }),
+                ),
+            DaemonRunEvent::WorkflowConfigReloaded {
+                project_root,
+                phase_definitions,
+                workflows,
+                agent_profiles,
+                source_files,
+                config_hash,
+            } => self.emit_daemon_event_with_notifications(
+                "workflow-config-reloaded",
+                Some(project_root),
+                json!({
+                    "phase_definitions": phase_definitions,
+                    "workflows": workflows,
+                    "agent_profiles": agent_profiles,
+                    "source_files": source_files,
+                    "config_hash": config_hash,
+                }),
+            ),
+            DaemonRunEvent::WorkflowConfigReloadFailed { project_root, errors } => self
+                .emit_daemon_event_with_notifications(
+                    "workflow-config-reload-failed",
+                    Some(project_root),
+                    json!({"errors": errors}),
                 ),
         }
     }
