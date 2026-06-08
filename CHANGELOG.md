@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.10] - 2026-06-08
+
+**Animus Chat (CLI-first).** Multi-turn conversations through the CLI,
+streamed as JSON, built entirely on the **existing** provider plugins
+(claude/codex/gemini) — no new plugin, no new API key.
+
+### Added
+- **`animus chat new|send|get|list`** — durable multi-turn conversations.
+  `send --stream --json` emits one `ChatStreamEvent` JSON object per line
+  to stdout (turn_started / text_delta / tool_call / tool_result /
+  metadata / turn_completed) — the surface to build chat apps on.
+- **`animus cost conversation <id>`** — per-conversation token + USD rollup,
+  folding each turn's usage (matches the existing workflow cost aggregator).
+- **Provider-owned continuity** — each turn is strictly resume XOR replay,
+  never both: with a live provider `session_id` the prompt is just the new
+  message (the CLI tool's native session carries history); with no session
+  Animus replays its stored transcript. Single full-history retry on a
+  stale-session error. No double-counted context.
+- **Conversation store** at `~/.animus/<repo-scope>/chat/<id>/`
+  (`meta.json` continuity pointer + append-only `messages.jsonl`),
+  path-traversal-guarded. User message persists before the provider call
+  (crash safety); the provider's native `session_id` is captured per turn.
+- Reuses `SessionBackendResolver` (the `animus agent run` path), so the
+  wrapped CLI tool reaches Animus's MCP server via `mcp_endpoint` — the
+  model can call `animus.*` tools mid-conversation.
+
+### Notes
+- Direct-API `chat_provider` plugins (own the turn structure, intercept
+  tool use) and the OpenAI-compat HTTP surface are deferred to v0.5.11.
+  The turn loop is factored behind a `TurnProducer` seam so that path is
+  additive. See [docs/architecture/animus-chat.md](docs/architecture/animus-chat.md).
+
 ## [0.5.9] - 2026-06-08
 
 The **performance + scoping** wave. Five parallel agents cut the
