@@ -466,17 +466,7 @@ pub fn inject_project_mcp_servers(
         if !assigned {
             continue;
         }
-        let mut entry_json = serde_json::json!({
-            "command": entry.command,
-            "args": entry.args,
-            "env": entry.env,
-        });
-        if let Some(transport) = &entry.transport {
-            entry_json["transport"] = serde_json::Value::String(transport.clone());
-        }
-        if let Some(url) = &entry.url {
-            entry_json["url"] = serde_json::Value::String(url.clone());
-        }
+        let entry_json = build_project_mcp_server_entry(name, entry, project_root);
         servers.insert(name.clone(), entry_json);
     }
     let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
@@ -488,7 +478,25 @@ pub fn inject_project_mcp_servers(
     }
 }
 
+/// Back-compat entry point for out-of-tree `workflow_runner` plugins
+/// that pin an older `animus-runtime-shared`. The v0.5.5 OAuth broker
+/// needs a project root to place the token cache, but plugins that
+/// haven't migrated yet still call this three-argument form. The
+/// three-arg path skips OAuth resolution entirely (a token cache under
+/// an empty path would be unusable anyway). Migrating plugins should
+/// call `inject_workflow_mcp_servers_with_project_root` so HTTP MCP
+/// servers with an `oauth:` block actually receive the
+/// `Authorization: Bearer <token>` header.
 pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeConfigContext, phase_id: &str) {
+    inject_workflow_mcp_servers_with_project_root(runtime_contract, ctx, phase_id, "");
+}
+
+pub fn inject_workflow_mcp_servers_with_project_root(
+    runtime_contract: &mut Value,
+    ctx: &RuntimeConfigContext,
+    phase_id: &str,
+    project_root: &str,
+) {
     if ctx.workflow_config.config.mcp_servers.is_empty() {
         return;
     }
@@ -526,17 +534,7 @@ pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeCo
         if !allowed_servers.is_empty() && !allowed_servers.contains(name) {
             continue;
         }
-        let mut entry_json = serde_json::json!({
-            "command": definition.command,
-            "args": definition.args,
-            "env": definition.env,
-        });
-        if let Some(transport) = &definition.transport {
-            entry_json["transport"] = serde_json::Value::String(transport.clone());
-        }
-        if let Some(url) = &definition.url {
-            entry_json["url"] = serde_json::Value::String(url.clone());
-        }
+        let entry_json = build_additional_mcp_server_entry(name, definition, project_root);
         servers.insert(name.clone(), entry_json);
     }
     let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
@@ -546,6 +544,91 @@ pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeCo
     if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
         mcp.insert("additional_servers".to_string(), Value::Object(servers));
     }
+}
+
+/// Shape a single MCP server entry for `/mcp/additional_servers`. Resolves
+/// the OAuth bearer token (if configured) and adds a `headers` map carrying
+/// `Authorization: Bearer <token>`. OAuth resolution failures are logged
+/// and the entry is emitted WITHOUT the bearer header — the downstream MCP
+/// call will surface the auth error to the user instead of the kernel
+/// silently dropping the server. (Tokens themselves are never logged.)
+fn build_additional_mcp_server_entry(
+    name: &str,
+    definition: &orchestrator_config::McpServerDefinition,
+    project_root: &str,
+) -> Value {
+    let mut entry_json = serde_json::json!({
+        "command": definition.command,
+        "args": definition.args,
+        "env": definition.env,
+    });
+    if let Some(transport) = &definition.transport {
+        entry_json["transport"] = serde_json::Value::String(transport.clone());
+    }
+    if let Some(url) = &definition.url {
+        entry_json["url"] = serde_json::Value::String(url.clone());
+    }
+    if let Some(oauth) = definition.oauth.as_ref() {
+        match crate::oauth_broker::resolve_token_for_project(name, oauth, project_root) {
+            Ok(token) => {
+                let map = crate::oauth_broker::header_map_for_token(&token);
+                let mut headers = entry_json.get("headers").and_then(Value::as_object).cloned().unwrap_or_default();
+                for (k, v) in map {
+                    headers.insert(k, Value::String(v));
+                }
+                entry_json["headers"] = Value::Object(headers);
+            }
+            Err(err) => {
+                // Token text is never embedded in the message: `err`
+                // surfaces the env-var name and endpoint URL only.
+                warn!(server = name, error = %err, "OAuth resolution failed; emitting MCP entry without bearer header");
+            }
+        }
+    }
+    entry_json
+}
+
+fn build_project_mcp_server_entry(
+    name: &str,
+    definition: &protocol::ProjectMcpServerEntry,
+    project_root: &str,
+) -> Value {
+    let mut entry_json = serde_json::json!({
+        "command": definition.command,
+        "args": definition.args,
+        "env": definition.env,
+    });
+    if let Some(transport) = &definition.transport {
+        entry_json["transport"] = serde_json::Value::String(transport.clone());
+    }
+    if let Some(url) = &definition.url {
+        entry_json["url"] = serde_json::Value::String(url.clone());
+    }
+    if let Some(oauth_value) = definition.oauth.as_ref() {
+        match serde_json::from_value::<orchestrator_config::OauthConfig>(oauth_value.clone()) {
+            Ok(oauth) => match crate::oauth_broker::resolve_token_for_project(name, &oauth, project_root) {
+                Ok(token) => {
+                    let map = crate::oauth_broker::header_map_for_token(&token);
+                    let mut headers = entry_json.get("headers").and_then(Value::as_object).cloned().unwrap_or_default();
+                    for (k, v) in map {
+                        headers.insert(k, Value::String(v));
+                    }
+                    entry_json["headers"] = Value::Object(headers);
+                }
+                Err(err) => {
+                    warn!(server = name, error = %err, "OAuth resolution failed; emitting MCP entry without bearer header");
+                }
+            },
+            Err(err) => {
+                warn!(
+                    server = name,
+                    error = %err,
+                    "malformed `oauth` block in project mcp_servers entry; emitting MCP entry without bearer header"
+                );
+            }
+        }
+    }
+    entry_json
 }
 
 pub fn inject_named_mcp_servers(
@@ -572,33 +655,13 @@ pub fn inject_named_mcp_servers(
         }
 
         if let Some(definition) = ctx.workflow_config.config.mcp_servers.get(name) {
-            let mut entry_json = serde_json::json!({
-                "command": definition.command,
-                "args": definition.args,
-                "env": definition.env,
-            });
-            if let Some(transport) = &definition.transport {
-                entry_json["transport"] = serde_json::Value::String(transport.clone());
-            }
-            if let Some(url) = &definition.url {
-                entry_json["url"] = serde_json::Value::String(url.clone());
-            }
+            let entry_json = build_additional_mcp_server_entry(name, definition, project_root);
             servers.insert(name.to_string(), entry_json);
             continue;
         }
 
         if let Some(definition) = project_config.mcp_servers.get(name) {
-            let mut entry_json = serde_json::json!({
-                "command": definition.command,
-                "args": definition.args,
-                "env": definition.env,
-            });
-            if let Some(transport) = &definition.transport {
-                entry_json["transport"] = serde_json::Value::String(transport.clone());
-            }
-            if let Some(url) = &definition.url {
-                entry_json["url"] = serde_json::Value::String(url.clone());
-            }
+            let entry_json = build_project_mcp_server_entry(name, definition, project_root);
             servers.insert(name.to_string(), entry_json);
             continue;
         }
@@ -716,6 +779,7 @@ mod tests {
                 config: BTreeMap::new(),
                 tools: Vec::new(),
                 env: BTreeMap::new(),
+                oauth: None,
             },
         );
         workflow_config
@@ -740,7 +804,12 @@ mod tests {
         let mut runtime_contract = serde_json::json!({
             "mcp": {}
         });
-        inject_workflow_mcp_servers(&mut runtime_contract, &ctx, "research");
+        inject_workflow_mcp_servers_with_project_root(
+            &mut runtime_contract,
+            &ctx,
+            "research",
+            "/tmp/animus-runtime-shared-test",
+        );
 
         let additional_servers = runtime_contract
             .pointer("/mcp/additional_servers")
@@ -775,7 +844,12 @@ mod tests {
                 }
             }
         });
-        inject_workflow_mcp_servers(&mut runtime_contract, &ctx, "requirements");
+        inject_workflow_mcp_servers_with_project_root(
+            &mut runtime_contract,
+            &ctx,
+            "requirements",
+            "/tmp/animus-runtime-shared-test",
+        );
 
         assert!(
             runtime_contract.pointer("/mcp/additional_servers").is_none(),
@@ -1296,6 +1370,7 @@ mod tests {
                 config: BTreeMap::new(),
                 tools: Vec::new(),
                 env: BTreeMap::new(),
+                oauth: None,
             },
         );
         workflow_config
@@ -1318,12 +1393,97 @@ mod tests {
         };
 
         let mut runtime_contract = serde_json::json!({ "mcp": {} });
-        inject_workflow_mcp_servers(&mut runtime_contract, &ctx, "research");
+        inject_workflow_mcp_servers_with_project_root(
+            &mut runtime_contract,
+            &ctx,
+            "research",
+            "/tmp/animus-runtime-shared-test",
+        );
 
         let entry = runtime_contract
             .pointer("/mcp/additional_servers/robinhood-trading")
             .expect("robinhood server should be injected");
         assert_eq!(entry.get("url").and_then(Value::as_str), Some("https://agent.robinhood.com/mcp/trading"));
         assert_eq!(entry.get("transport").and_then(Value::as_str), Some("http"));
+    }
+
+    #[test]
+    fn inject_workflow_mcp_servers_attaches_oauth_bearer_header() {
+        use orchestrator_config::workflow_config::{OauthConfig, OauthFlow};
+
+        // Use the manual_bearer flow so this test stays hermetic (no
+        // network, no real token endpoint). The runtime-contract path
+        // calls `resolve_token_for_project` which reads the env var and
+        // emits the Authorization header. Token text never appears in
+        // logs (verified by the test assertion that the entry value is
+        // exactly "Bearer <token>"; structured logs in the production
+        // path emit `error = %err` only on failure).
+        let _lock = crate::test_env::scoped_state_serializer();
+        let _home = crate::test_env::stable_test_home();
+
+        let bearer_env_name = "ANIMUS_TEST_BEARER_HEADER_INJECT";
+        std::env::set_var(bearer_env_name, "tok-xyz");
+
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.mcp_servers.insert(
+            "robinhood-trading".to_string(),
+            McpServerDefinition {
+                command: String::new(),
+                args: Vec::new(),
+                transport: Some("http".to_string()),
+                url: Some("https://agent.robinhood.com/mcp/trading".to_string()),
+                config: BTreeMap::new(),
+                tools: Vec::new(),
+                env: BTreeMap::new(),
+                oauth: Some(OauthConfig {
+                    flow: OauthFlow::ManualBearer,
+                    token_url: None,
+                    client_id_env: None,
+                    client_secret_env: None,
+                    refresh_token_env: None,
+                    bearer_env: Some(bearer_env_name.to_string()),
+                    scopes: vec![],
+                    audience: None,
+                    cache: false,
+                }),
+            },
+        );
+        workflow_config
+            .phase_mcp_bindings
+            .insert("research".to_string(), PhaseMcpBinding { servers: vec!["robinhood-trading".to_string()] });
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+        };
+
+        let mut runtime_contract = serde_json::json!({ "mcp": {} });
+        inject_workflow_mcp_servers_with_project_root(
+            &mut runtime_contract,
+            &ctx,
+            "research",
+            "/tmp/animus-oauth-runtime-test",
+        );
+
+        let entry = runtime_contract
+            .pointer("/mcp/additional_servers/robinhood-trading")
+            .expect("robinhood server should be injected");
+        let header = entry
+            .pointer("/headers/Authorization")
+            .and_then(Value::as_str)
+            .expect("Authorization header should be present");
+        assert_eq!(header, "Bearer tok-xyz");
+
+        std::env::remove_var(bearer_env_name);
     }
 }

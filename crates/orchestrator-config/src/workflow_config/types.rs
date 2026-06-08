@@ -438,6 +438,73 @@ pub struct McpServerDefinition {
     pub tools: Vec<String>,
     #[serde(default)]
     pub env: BTreeMap<String, String>,
+    /// OAuth broker configuration for HTTP-transport MCP servers. When set,
+    /// the daemon resolves a bearer token (caching under
+    /// `~/.animus/<scope>/mcp-oauth-cache/`) and injects it as an
+    /// `Authorization: Bearer <token>` header into the additional MCP
+    /// server entry passed to the agent. Only valid with `transport: http`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub oauth: Option<OauthConfig>,
+}
+
+/// OAuth flow shape attached to an HTTP-transport MCP server.
+///
+/// All credential material is read from env vars (`*_env` fields) rather
+/// than baked into the YAML, so workflow files stay safe to commit.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OauthConfig {
+    pub flow: OauthFlow,
+    /// Token endpoint for `client_credentials` and `refresh_token` flows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_url: Option<String>,
+    /// Env var name that holds the OAuth client id (required for
+    /// `client_credentials` and `refresh_token`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id_env: Option<String>,
+    /// Env var name that holds the OAuth client secret (required for
+    /// `client_credentials`; optional for `refresh_token`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_secret_env: Option<String>,
+    /// Env var name that holds a long-lived refresh token (required for
+    /// `refresh_token`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_token_env: Option<String>,
+    /// Env var name that holds a pre-baked bearer token (required for
+    /// `manual_bearer`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearer_env: Option<String>,
+    /// OAuth scopes requested at token exchange.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scopes: Vec<String>,
+    /// Optional `audience` parameter (e.g. for Auth0-style flows).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    /// When false, disable the on-disk token cache and re-fetch on every
+    /// contract assembly. Defaults to true.
+    #[serde(default = "default_oauth_cache")]
+    pub cache: bool,
+}
+
+fn default_oauth_cache() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OauthFlow {
+    ClientCredentials,
+    RefreshToken,
+    ManualBearer,
+}
+
+impl OauthFlow {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OauthFlow::ClientCredentials => "client_credentials",
+            OauthFlow::RefreshToken => "refresh_token",
+            OauthFlow::ManualBearer => "manual_bearer",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

@@ -18,6 +18,7 @@ pub mod ensure_execution_cwd;
 pub mod ipc;
 pub mod metrics_hook;
 pub mod notification_log;
+pub mod oauth_broker;
 pub mod payload_traversal;
 pub mod phase_git;
 pub mod phase_metadata;
