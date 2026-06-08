@@ -14,7 +14,7 @@ use super::validation::{
     validate_workflow_config,
 };
 use super::yaml_compiler::{compile_yaml_workflow_files, merge_yaml_into_config, validate_and_compile_yaml_workflows};
-use super::yaml_parser::parse_yaml_workflow_config;
+use super::yaml_parser::{parse_yaml_workflow_config, parse_yaml_workflow_config_with_base_and_source};
 
 fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
     let mut config = builtin_workflow_config();
@@ -520,7 +520,11 @@ fn yaml_invalid_syntax_returns_error() {
     let result = parse_yaml_workflow_config(yaml);
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("failed to parse YAML"), "error should mention YAML parsing: {}", err);
+    assert!(
+        err.starts_with("error: ") || err.contains("invalid type"),
+        "error should be a rustc-style YAML diagnostic: {}",
+        err
+    );
 }
 
 #[test]
@@ -2701,7 +2705,10 @@ workflows:
 "#;
     let err = parse_yaml_workflow_config(yaml).expect_err("unknown mode should fail");
     let msg = format!("{:#}", err);
-    assert!(msg.contains("worktree mode"), "error should mention worktree mode: {msg}");
+    assert!(
+        msg.contains("invalid `worktree:` value") || msg.contains("worktree mode"),
+        "error should mention worktree value: {msg}"
+    );
 }
 
 #[test]
@@ -3605,4 +3612,169 @@ workflows:
         chain.contains("explode") || chain.contains("on_exceed") || chain.contains("unknown variant"),
         "expected on_exceed parse error to mention the value or field, got: {chain}"
     );
+}
+
+#[test]
+fn diagnostic_suggests_skip_for_worktree_no() {
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build it."
+    worktree: no
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "You are a SWE."
+workflows:
+- id: bad
+  phases: [build]
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("worktree: no must error");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("invalid `worktree:`"), "expected worktree diagnostic, got: {msg}");
+    assert!(
+        msg.contains("did you mean `skip`") || msg.contains("did you mean `false`"),
+        "expected `skip`/`false` suggestion, got: {msg}"
+    );
+}
+
+#[test]
+fn diagnostic_suggests_auto_for_worktree_yes() {
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build it."
+    worktree: yes
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "You are a SWE."
+workflows:
+- id: bad
+  phases: [build]
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("worktree: yes must error");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("invalid `worktree:`"), "expected worktree diagnostic, got: {msg}");
+    assert!(
+        msg.contains("did you mean `auto`") || msg.contains("did you mean `true`"),
+        "expected `auto`/`true` suggestion, got: {msg}"
+    );
+}
+
+#[test]
+fn diagnostic_rejects_worktree_map_with_invalid_mode() {
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build it."
+    worktree:
+      mode: skipping
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "You are a SWE."
+workflows:
+- id: bad
+  phases: [build]
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("worktree.mode: skipping must error");
+    let msg = format!("{:#}", err);
+    assert!(
+        msg.contains("invalid `worktree:` map") || msg.contains("skipping"),
+        "expected invalid worktree map diagnostic, got: {msg}"
+    );
+    assert!(msg.contains("did you mean `skip`") || msg.contains("expected auto"), "expected mode hint, got: {msg}");
+}
+
+#[test]
+fn diagnostic_suggests_field_for_sub_workflow_typo() {
+    let yaml = r#"
+phases:
+  impl:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "You are a SWE."
+workflows:
+- id: bad
+  phases:
+  - workflow_reff: standard
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("typo must error");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("unknown field"), "expected unknown-field diagnostic, got: {msg}");
+    assert!(msg.contains("did you mean `workflow_ref`"), "expected workflow_ref suggestion, got: {msg}");
+}
+
+#[test]
+fn diagnostic_rejects_phase_entry_with_multi_key_map() {
+    let yaml = r#"
+phases:
+  impl:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "You are a SWE."
+workflows:
+- id: bad
+  phases:
+  - impl: { max_rework_attempts: 1 }
+    review: { max_rework_attempts: 1 }
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("multi-key rich phase entry must error");
+    let msg = format!("{:#}", err);
+    assert!(
+        msg.contains("rich phase entry") || msg.contains("single-key"),
+        "expected multi-key phase entry diagnostic, got: {msg}"
+    );
+}
+
+#[test]
+fn diagnostic_carries_source_path_and_line() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let yaml = "phases:\n  build:\n    mode: agent\n    worktree: no\n";
+    let yaml_path = temp.path().join("phases.yaml");
+    std::fs::write(&yaml_path, yaml).expect("write yaml");
+    let base = builtin_workflow_config();
+    let err = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
+        .expect_err("worktree: no must error");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains(&yaml_path.display().to_string()), "expected file path, got: {msg}");
+    assert!(msg.contains("-->"), "expected rustc-style location arrow, got: {msg}");
+}
+
+#[test]
+fn diagnostic_does_not_steal_rich_phase_id_starting_with_workflow_underscore() {
+    let yaml = r#"
+phases:
+  workflow_setup:
+    mode: agent
+    agent: swe
+    directive: "Set up."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "You are a SWE."
+workflows:
+- id: ok
+  phases:
+  - workflow_setup: { max_rework_attempts: 1 }
+"#;
+    let config = parse_yaml_workflow_config(yaml)
+        .expect("rich phase id starting with `workflow_` must parse as a rich entry, not a sub-workflow typo");
+    let workflow = config.workflows.iter().find(|w| w.id == "ok").expect("workflow ok");
+    assert!(matches!(workflow.phases.first().unwrap(), super::WorkflowPhaseEntry::Rich(_)));
 }

@@ -13,6 +13,7 @@ use crate::PhaseExecutionDefinition;
 use super::builtins::builtin_workflow_config;
 use super::types::*;
 use super::yaml_compiler::merge_yaml_into_config;
+use super::yaml_diagnostic::wrap_serde_yaml_error;
 use super::yaml_scaffold::title_case_phase_id;
 use super::yaml_types::*;
 
@@ -647,13 +648,176 @@ pub(crate) fn parse_yaml_workflow_config_confined_to_pack(
     parse_yaml_workflow_config_internal(yaml_str, base, Some(source_path), Some(pack_root))
 }
 
+/// Known top-level YAML keys recognized by `YamlWorkflowFile`. Used when
+/// `serde_yaml` surfaces an `unknown field` diagnostic at the top level
+/// to suggest the closest valid key.
+///
+/// NOTE: `YamlWorkflowFile` does not currently use `deny_unknown_fields`,
+/// so silent typos at the top level (e.g. `phasess:`) are not surfaced
+/// today — they are simply ignored. The suggestion table is still wired
+/// up because unknown-field errors do bubble up from nested structs that
+/// DO deny unknown fields (e.g. `YamlSubWorkflowRef`).
+const KNOWN_FIELD_KEYS: &[&str] = &[
+    "default_workflow_ref",
+    "phase_catalog",
+    "workflows",
+    "phases",
+    "agents",
+    "agent_channels",
+    "models",
+    "tools_allowlist",
+    "mcp_servers",
+    "phase_mcp_bindings",
+    "tools",
+    "integrations",
+    "schedules",
+    "triggers",
+    "daemon",
+    "secrets",
+    "workflow_ref",
+    "mode",
+    "agent",
+    "command",
+    "manual",
+    "directive",
+    "system_prompt",
+    "skills",
+    "runtime",
+    "capabilities",
+    "output_contract",
+    "output_json_schema",
+    "decision_contract",
+    "retry",
+    "default_tool",
+    "idempotency",
+    "worktree",
+    "evals",
+];
+
+/// Inspect the raw serde_yaml error message and upgrade the diagnostic
+/// with a more specific code, an expected-shape list, and (when possible)
+/// a "did you mean" suggestion derived from Levenshtein distance.
+fn enrich_diagnostic(
+    mut diag: super::yaml_diagnostic::YamlDiagnostic,
+    yaml_str: &str,
+) -> super::yaml_diagnostic::YamlDiagnostic {
+    use super::yaml_diagnostic::closest_match;
+    let msg = diag.message.clone();
+    if let Some(field) = parse_unknown_field_name(&msg) {
+        diag.code = "yaml.unknown_field".to_string();
+        if let Some(suggestion) = closest_match(&field, KNOWN_FIELD_KEYS, 2) {
+            diag.suggestion = Some(suggestion.to_string());
+            diag.message = format!("unknown field `{}`", field);
+        }
+    } else if msg.contains("invalid `worktree:`") {
+        diag.code = "yaml.invalid_worktree".to_string();
+        diag.expected = vec![
+            "string: \"auto\" | \"required\" | \"skip\"".to_string(),
+            "boolean: true (= auto) | false (= skip)".to_string(),
+            "map: { mode: <string>, cleanup: <bool>, base_ref: <string> }".to_string(),
+        ];
+        if let Some(s) = parse_did_you_mean_from_message(&msg) {
+            diag.suggestion = Some(s);
+        }
+        if let Some(start_line) = diag.line {
+            if let Some((line, col_start, col_end)) = locate_field_line(yaml_str, "worktree", start_line) {
+                diag.line = Some(line);
+                diag.col = Some(col_start);
+                diag.excerpt = None;
+                diag = diag.with_excerpt_from(yaml_str, line, col_start, col_end);
+            }
+        }
+    } else if msg.contains("invalid phase entry") || msg.contains("rich phase entry") {
+        diag.code = "yaml.invalid_phase_entry".to_string();
+        diag.expected = vec![
+            "string phase id (e.g. `- impl`)".to_string(),
+            "sub-workflow ref: { workflow_ref: <name> }".to_string(),
+            "rich config: { <phase_id>: { max_rework_attempts: N, ... } }".to_string(),
+        ];
+    } else if msg.contains("missing field") {
+        diag.code = "yaml.missing_field".to_string();
+    }
+    // If we have an excerpt with only a single-char underline at column N
+    // but the focal line contains a YAML key:value where we can widen the
+    // span to the full value, do so for better UX.
+    if let (Some(line), Some(col)) = (diag.line, diag.col) {
+        diag = widen_excerpt_to_value(diag, yaml_str, line, col);
+    }
+    diag
+}
+
+/// Extract a quoted field name from serde_yaml's "unknown field `xxx`" /
+/// "unknown variant `xxx`" messages.
+/// Search `yaml_str` starting from `start_line` (1-based) for a line whose
+/// trimmed prefix is `<field>:`. Returns the 1-based line plus 1-based
+/// column start / column end (exclusive) covering `<field>: <value>`.
+fn locate_field_line(yaml_str: &str, field: &str, start_line: usize) -> Option<(usize, usize, usize)> {
+    let key = format!("{}:", field);
+    let lines: Vec<&str> = yaml_str.lines().collect();
+    let start_idx = start_line.saturating_sub(1).min(lines.len());
+    for (offset, line) in lines.iter().enumerate().skip(start_idx) {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(&key) {
+            let indent = line.len() - trimmed.len();
+            return Some((offset + 1, indent + 1, line.chars().count() + 1));
+        }
+    }
+    for offset in (0..start_idx).rev() {
+        let line = lines[offset];
+        let trimmed = line.trim_start();
+        if trimmed.starts_with(&key) {
+            let indent = line.len() - trimmed.len();
+            return Some((offset + 1, indent + 1, line.chars().count() + 1));
+        }
+    }
+    None
+}
+
+fn parse_unknown_field_name(msg: &str) -> Option<String> {
+    let needle = msg.find("unknown field `").map(|i| i + "unknown field `".len())?;
+    let rest = &msg[needle..];
+    let end = rest.find('`')?;
+    Some(rest[..end].to_string())
+}
+
+fn parse_did_you_mean_from_message(msg: &str) -> Option<String> {
+    let i = msg.find("did you mean `").map(|i| i + "did you mean `".len())?;
+    let rest = &msg[i..];
+    let end = rest.find('`')?;
+    Some(rest[..end].to_string())
+}
+
+fn widen_excerpt_to_value(
+    mut diag: super::yaml_diagnostic::YamlDiagnostic,
+    yaml_str: &str,
+    line: usize,
+    col: usize,
+) -> super::yaml_diagnostic::YamlDiagnostic {
+    let Some(focal_line) = yaml_str.lines().nth(line.saturating_sub(1)) else {
+        return diag;
+    };
+    let line_len = focal_line.chars().count();
+    if col >= line_len {
+        return diag;
+    }
+    let end = line_len + 1;
+    diag.excerpt = None;
+    diag.with_excerpt_from(yaml_str, line, col, end)
+}
+
 fn parse_yaml_workflow_config_internal(
     yaml_str: &str,
     base: &WorkflowConfig,
     source_path: Option<&Path>,
     pack_root: Option<&Path>,
 ) -> Result<WorkflowConfig> {
-    let yaml_file: YamlWorkflowFile = serde_yaml::from_str(yaml_str).context("failed to parse YAML workflow config")?;
+    let yaml_file: YamlWorkflowFile = match serde_yaml::from_str(yaml_str) {
+        Ok(file) => file,
+        Err(err) => {
+            let diag = enrich_diagnostic(wrap_serde_yaml_error(&err, yaml_str, source_path), yaml_str);
+            return Err(anyhow!("{}", diag));
+        }
+    };
 
     let workflows =
         yaml_file.workflows.into_iter().map(yaml_workflow_to_workflow_definition).collect::<Result<Vec<_>>>()?;
