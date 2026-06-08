@@ -100,9 +100,35 @@ fn active_flavor_for_project(project_root: &Path) -> Option<String> {
 /// exists but has lost its execute bit fails to spawn at run time, so
 /// surfacing it as healthy here would produce a false-green; match the
 /// `animus runner health` executability check exactly.
-fn provider_plugins_healthy_for(project_root: &Path) -> bool {
-    use orchestrator_plugin_host::session::discover_provider_plugins;
-    discover_provider_plugins(project_root).iter().any(|p| is_binary_executable(&p.binary_path))
+///
+/// v0.5.9: previously delegated to `discover_provider_plugins`, which
+/// ran the full `discover_plugins` pipeline — including a `--manifest`
+/// probe on every installed plugin. With 30+ subject-backend plugins
+/// installed, `animus daemon status` was spending ~3s probing binaries
+/// it didn't care about just to confirm one provider was alive. Walk
+/// the plugin install dir directly: any `animus-provider-*` entry that's
+/// executable counts. No spawn, no probe, no manifest read.
+fn provider_plugins_healthy_for(_project_root: &Path) -> bool {
+    use orchestrator_plugin_host::plugin_install_dir;
+    let dir = plugin_install_dir();
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.starts_with("animus-provider-") {
+            continue;
+        }
+        let path = entry.path();
+        let candidate = if path.is_dir() { path.join(name_str) } else { path };
+        if is_binary_executable(&candidate) {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(unix)]

@@ -118,6 +118,10 @@ runtime events are written through the active log storage backend and mirrored
 locally at `~/.animus/<repo-scope>/logs/events.jsonl`. Use `animus daemon stream`
 for live events and `animus logs tail` for recent persisted entries.
 
+For provider readiness, `animus daemon status` only needs one installed,
+executable `animus-provider-*` binary to count providers as healthy. It does
+not spawn or manifest-probe unrelated plugins during that check.
+
 ### Failure Recovery
 
 - **Daemon crashes** -- On next startup, orphan recovery detects and cleans up

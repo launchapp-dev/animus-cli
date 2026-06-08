@@ -90,6 +90,7 @@ surface.
 - [Subject Dispatch Daemon](subject-dispatch-daemon.md) -- How the daemon schedules and dispatches workflow subjects
 - [Subject Backend Plugins](subject-backend-plugins.md) -- Current subject_backend contract: normalized subjects, kind-scoped routing, preflight requirements, CLI/daemon behavior, and authoring rules
 - [Knowledge / RAG Binding (v0.5.5 design)](knowledge-rag-binding-v0.5.5.md) -- Design for the `memory_store` plugin kind, agent + workflow `memory_bindings:` shape, runtime contract injection point, CLI surface, and the v0.6 implementation checklist. Ships design-only in v0.5.5; honest stops documented inline
+- [Animus Chat](animus-chat.md) -- v0.5.10 chat architecture: conversation subjects, `chat_provider` plugins, daemon-side tool loop, streaming control protocol, and OpenAI-compatible HTTP surface
 - [Tool-Driven Mutation Surfaces](tool-driven-mutation-surfaces.md) -- How state mutations are channeled through tool abstractions
 - [Workflow-First CLI](workflow-first-cli.md) -- Why workflows are the primary execution primitive
 - [Phase Contracts](phase-contracts.md) -- Universal phase verdicts, YAML-defined fields, and runtime validation

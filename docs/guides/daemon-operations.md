@@ -89,6 +89,10 @@ Check whether the daemon is running and its current state:
 animus daemon status
 ```
 
+`animus daemon status` reads the persisted daemon state and reports whether at
+least one installed `animus-provider-*` binary is executable. It does not spawn
+or manifest-probe every installed plugin just to answer the health question.
+
 ### Health Check
 
 Detailed health information including uptime and resource usage:
@@ -166,6 +170,11 @@ The runner is a separate process from the daemon. It spawns CLI tools (claude, c
 ```bash
 animus runner health
 ```
+
+This reports one row per discovered provider plugin plus a summary
+`provider_plugins_healthy` flag. A provider only counts as installed when its
+binary exists and is executable, so a lost execute bit shows up here before the
+next agent run fails at spawn time.
 
 ### Orphan Detection
 

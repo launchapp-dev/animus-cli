@@ -112,6 +112,7 @@ export default withMermaid(
           collapsed: true,
           items: [
             { text: 'Overview', link: '/architecture/' },
+            { text: 'Animus Chat', link: '/architecture/animus-chat' },
             { text: 'Kernel and Flavors', link: '/architecture/kernel-and-flavors' },
             { text: 'Kernel Extraction v0.5', link: '/architecture/kernel-extraction-v0.5' },
             { text: 'v0.5 Protocol Specs', link: '/architecture/v0.5-protocol-specs' },

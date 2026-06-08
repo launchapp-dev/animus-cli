@@ -103,6 +103,11 @@ This clears `paused`, `blocked_at`, `blocked_reason`, and `blocked_by`. Never ha
    animus runner health
    ```
 
+   If every provider shows `installed: false`, verify the plugin binaries still
+   exist under `~/.animus/plugins/` and still have their execute bit. A present
+   but non-executable `animus-provider-*` binary is treated as unhealthy on
+   purpose.
+
 2. Detect orphaned runner processes:
    ```bash
    animus runner orphans detect
@@ -141,6 +146,20 @@ animus daemon clear-logs
 ```
 
 Animus stores runtime state under `~/.animus/<repo-scope>/`, and log plumbing is managed by the runtime binaries rather than a project-local `.animus/daemon.log` contract.
+
+## Daemon Status Looks Slow With Many Plugins
+
+**Symptoms**: `animus daemon status` used to feel slow on machines with many
+installed subject or transport plugins.
+
+**Cause**: Provider-health reporting previously walked the full plugin discovery
+pipeline, which could manifest-probe binaries unrelated to daemon/provider
+readiness.
+
+**Current behavior**: daemon status now answers the provider-health portion by
+checking the installed `animus-provider-*` binaries directly and verifying that
+at least one is executable. If status is still slow, the remaining cost is
+elsewhere in daemon state loading rather than plugin manifest probes.
 
 ## Notification Delivery Missing Credentials
 
