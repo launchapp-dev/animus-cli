@@ -195,6 +195,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
         Command::SelfCmd { command } => services::operations::handle_self(command, &project_root, cli.json).await,
+        Command::Update(args) => services::operations::handle_update(args, &project_root, cli.json).await,
         Command::Metrics { command } => services::operations::handle_metrics(command, &project_root, cli.json).await,
         Command::Cost { command } => services::operations::handle_cost(command, &project_root, cli.json).await,
         Command::Auth { command } => {
@@ -246,6 +247,7 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Subject { .. }
                 | Command::Flavor { .. }
                 | Command::SelfCmd { .. }
+                | Command::Update(_)
                 | Command::Metrics { .. }
                 | Command::Cost { .. }
                 | Command::Auth { .. } => {
@@ -265,7 +267,7 @@ fn spawn_startup_update_check(cli: &Cli) -> Option<StartupCheck> {
     if cli.json {
         return None;
     }
-    if matches!(cli.command, Command::SelfCmd { .. } | Command::Version) {
+    if matches!(cli.command, Command::SelfCmd { .. } | Command::Update(_) | Command::Version) {
         return None;
     }
     let runtime_config = RuntimeConfig { project_root: cli.project_root.clone(), ..RuntimeConfig::default() };
@@ -330,6 +332,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Subject { .. } => CommandGroup::Subject,
         Command::Flavor { .. } => CommandGroup::Flavor,
         Command::SelfCmd { .. } => CommandGroup::SelfUpdate,
+        Command::Update(_) => CommandGroup::SelfUpdate,
         Command::Metrics { .. } => CommandGroup::Metrics,
         Command::Cost { .. } => CommandGroup::Cost,
         Command::Auth { .. } => CommandGroup::Auth,

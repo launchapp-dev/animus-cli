@@ -515,10 +515,35 @@ async fn fetch_release_listing(timeout: Duration) -> Result<Vec<GithubReleaseRec
 
 fn build_client(timeout: Duration) -> Result<reqwest::Client> {
     reqwest::Client::builder()
-        .user_agent(format!("animus-cli/{} self-update", env!("CARGO_PKG_VERSION")))
+        .user_agent(format!("animus-update/{}", env!("CARGO_PKG_VERSION")))
         .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            // Cap chain length and reject any hop that lands on a host
+            // outside the GitHub release plane. GitHub's release-download
+            // path 302s to `objects.githubusercontent.com`, and the API
+            // path 302s back to itself — anything else is suspicious.
+            if attempt.previous().len() >= MAX_REDIRECTS {
+                return attempt.error("too many redirects (cap 5)");
+            }
+            let host = attempt.url().host_str().map(str::to_owned);
+            match host {
+                Some(host) if is_allowed_release_host(&host) => attempt.follow(),
+                Some(host) => attempt.error(format!("redirect to disallowed host: {host}")),
+                None => attempt.error("redirect target missing host"),
+            }
+        }))
         .build()
         .context("failed to build HTTP client")
+}
+
+/// Hard cap on follow-redirect chain length for any self-update HTTP
+/// call. GitHub's release-download flow is one or two hops in practice.
+const MAX_REDIRECTS: usize = 5;
+
+pub(crate) fn is_allowed_release_host(host: &str) -> bool {
+    let host = host.to_ascii_lowercase();
+    matches!(host.as_str(), "api.github.com" | "github.com" | "codeload.github.com" | "objects.githubusercontent.com")
+        || host.ends_with(".githubusercontent.com")
 }
 
 /// Resolve the eligible release for the running binary given the channel
@@ -543,6 +568,31 @@ pub struct ManualUpdateOptions {
     pub force: bool,
     pub prerelease_override: bool,
     pub assume_yes: bool,
+    /// Force a specific channel and ignore the config block entirely.
+    /// Set by `animus update --channel <c>` so the explicit flag wins
+    /// over an `auto_update.channel = "prerelease"` config block — the
+    /// `prerelease_override` boolean is one-way (it can only flip
+    /// stable -> prerelease, not the reverse), so the alias surface
+    /// needs a strict override.
+    pub channel_override: Option<AutoUpdateChannel>,
+}
+
+/// Pick the channel for a manual update invocation by stacking the
+/// CLI-level `channel_override` (highest priority — used by `animus
+/// update --channel <c>`), the `prerelease_override` boolean (used by
+/// `animus self update --prerelease`), and the persisted config block
+/// (lowest priority).
+pub(crate) fn select_channel(
+    config_block: Option<&AutoUpdateConfig>,
+    options: &ManualUpdateOptions,
+) -> AutoUpdateChannel {
+    if let Some(forced) = options.channel_override {
+        return forced;
+    }
+    if options.prerelease_override {
+        return AutoUpdateChannel::Prerelease;
+    }
+    config_block.map(|c| c.channel).unwrap_or_default()
 }
 
 /// Manual entry point — used by `animus self update`.
@@ -550,11 +600,7 @@ pub async fn run_manual_update(
     config_block: Option<&AutoUpdateConfig>,
     options: ManualUpdateOptions,
 ) -> Result<UpdateOutcome> {
-    let channel = if options.prerelease_override {
-        AutoUpdateChannel::Prerelease
-    } else {
-        config_block.map(|c| c.channel).unwrap_or_default()
-    };
+    let channel = select_channel(config_block, &options);
     let current = env!("CARGO_PKG_VERSION");
 
     let eligible = resolve_eligible_release(channel, current, MANUAL_FETCH_TIMEOUT).await?;
@@ -835,6 +881,36 @@ mod tests {
         assert!(is_newer_than_current("0.5.3", current()).is_none());
         assert!(is_newer_than_current("0.5.2", current()).is_none());
         assert!(is_newer_than_current("garbage", current()).is_none());
+    }
+
+    fn cfg(channel: AutoUpdateChannel) -> AutoUpdateConfig {
+        AutoUpdateConfig { mode: AutoUpdateMode::Notify, check_interval: "P1D".to_string(), channel }
+    }
+
+    #[test]
+    fn select_channel_override_beats_prerelease_config() {
+        let config = cfg(AutoUpdateChannel::Prerelease);
+        let opts = ManualUpdateOptions { channel_override: Some(AutoUpdateChannel::Stable), ..Default::default() };
+        assert_eq!(select_channel(Some(&config), &opts), AutoUpdateChannel::Stable);
+    }
+
+    #[test]
+    fn select_channel_override_beats_prerelease_flag() {
+        let opts = ManualUpdateOptions {
+            channel_override: Some(AutoUpdateChannel::Stable),
+            prerelease_override: true,
+            ..Default::default()
+        };
+        assert_eq!(select_channel(None, &opts), AutoUpdateChannel::Stable);
+    }
+
+    #[test]
+    fn select_channel_falls_back_to_config_then_default() {
+        assert_eq!(
+            select_channel(Some(&cfg(AutoUpdateChannel::Prerelease)), &ManualUpdateOptions::default()),
+            AutoUpdateChannel::Prerelease
+        );
+        assert_eq!(select_channel(None, &ManualUpdateOptions::default()), AutoUpdateChannel::Stable);
     }
 
     #[test]
@@ -1185,6 +1261,29 @@ mod tests {
         std::fs::write(&target, b"old").unwrap();
         atomic_install(&staged, &target).unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), b"new");
+    }
+
+    #[test]
+    fn allowed_release_host_accepts_github_plane_only() {
+        for ok in [
+            "api.github.com",
+            "github.com",
+            "codeload.github.com",
+            "objects.githubusercontent.com",
+            "release-assets.githubusercontent.com",
+            "GITHUB.COM",
+        ] {
+            assert!(is_allowed_release_host(ok), "expected {ok} to be allowed");
+        }
+        for bad in [
+            "evil.com",
+            "github.com.evil.com",
+            "raw.example.com",
+            "api.github.com.evil.com",
+            "githubusercontent.com.evil",
+        ] {
+            assert!(!is_allowed_release_host(bad), "expected {bad} to be rejected");
+        }
     }
 
     #[test]

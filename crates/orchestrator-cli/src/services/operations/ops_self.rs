@@ -33,6 +33,7 @@ async fn handle_self_update(args: SelfUpdateArgs, project_root: &str, json: bool
         force: args.force,
         prerelease_override: args.prerelease,
         assume_yes: args.yes,
+        channel_override: None,
     };
     let outcome = run_manual_update(block.as_ref(), options).await?;
     let (status, current, latest, installed) = match outcome {

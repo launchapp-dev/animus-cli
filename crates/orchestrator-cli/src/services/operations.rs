@@ -21,6 +21,7 @@ mod ops_skill;
 mod ops_status;
 mod ops_subject;
 mod ops_trigger;
+mod ops_update;
 mod ops_web;
 mod ops_workflow;
 
@@ -47,5 +48,6 @@ pub(crate) use ops_skill::*;
 pub(crate) use ops_status::*;
 pub(crate) use ops_subject::*;
 pub(crate) use ops_trigger::*;
+pub(crate) use ops_update::*;
 pub(crate) use ops_web::*;
 pub(crate) use ops_workflow::*;

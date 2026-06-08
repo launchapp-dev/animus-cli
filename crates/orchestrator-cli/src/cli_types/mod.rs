@@ -24,6 +24,7 @@ mod shared_types;
 mod skill_types;
 mod subject_types;
 mod trigger_types;
+mod update_types;
 mod web_types;
 mod workflow_types;
 
@@ -53,6 +54,7 @@ pub(crate) use shared_types::*;
 pub(crate) use skill_types::*;
 pub(crate) use subject_types::*;
 pub(crate) use trigger_types::*;
+pub(crate) use update_types::*;
 pub(crate) use web_types::*;
 pub(crate) use workflow_types::*;
 
@@ -200,6 +202,40 @@ mod tests {
         let cli =
             Cli::try_parse_from(["animus", "--as", "alice", "auth", "whoami"]).expect("--as should parse globally");
         assert_eq!(cli.as_principal.as_deref(), Some("alice"));
+    }
+
+    #[test]
+    fn parses_top_level_update_command_with_check_and_channel() {
+        let cli =
+            Cli::try_parse_from(["animus", "update", "--check", "--channel", "nightly"]).expect("update should parse");
+        match cli.command {
+            Command::Update(args) => {
+                assert!(args.check);
+                assert!(!args.yes);
+                assert!(matches!(args.channel, UpdateChannelArg::Nightly));
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn top_level_update_defaults_to_stable_channel() {
+        let cli = Cli::try_parse_from(["animus", "update"]).expect("update should parse with defaults");
+        match cli.command {
+            Command::Update(args) => {
+                assert!(!args.check);
+                assert!(!args.yes);
+                assert!(matches!(args.channel, UpdateChannelArg::Stable));
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn top_level_update_rejects_unknown_channel() {
+        let error =
+            Cli::try_parse_from(["animus", "update", "--channel", "canary"]).expect_err("unknown channel should fail");
+        assert_eq!(error.kind(), ErrorKind::InvalidValue);
     }
 
     #[test]
