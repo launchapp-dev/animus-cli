@@ -4,6 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.11] - 2026-06-08
+
+**Chat streaming fidelity + the full provider matrix.** `animus chat send
+--stream --json` now streams *everything the agent does* — and all four
+provider tools (claude / codex / opencode / gemini) were brought up to
+current-CLI compatibility so their tool/command activity streams too.
+
+### Fixed
+- **chat `tool_result` streams the tool output.** Previously a tool result
+  emitted only `success: bool`, dropping the actual content. It now carries
+  the provider's full output (command stdout, file contents, structured
+  JSON) so a consumer sees what each tool returned, not just that it ran.
+- **chat `tool_result` reports the human tool name.** When a provider put a
+  tool_use id (e.g. `toolu_…`) in the result's name field, the stream now
+  correlates it back to the preceding `tool_call`'s name.
+
+### Provider compatibility (ship separately — run `animus plugin update`)
+The provider plugins evolved past their parsers as the upstream CLIs
+changed. All three are released at **v0.2.4** on the stable `v0.1.13.2`
+protocol lineage:
+- **codex v0.2.4** — codex emits sandbox shell runs as `command_execution`
+  stream items (not `function_call`); these were dropped. Now mapped to
+  `tool_call` + `tool_result`, so codex streams its commands.
+- **opencode v0.2.4** — opencode v1.2 wraps frames as `{type, part}` with
+  tool details under `part.state`; the parser read the old flat keys and
+  produced `unknown_tool`. Now parses the part shape into `tool_call` +
+  `tool_result` (old format still handled).
+- **gemini v0.2.4** — gemini CLI refused headless runs in an "untrusted"
+  directory (exit 55). The provider now sets `GEMINI_CLI_TRUST_WORKSPACE=true`
+  on spawn so `animus chat --tool gemini` works without interactive pre-trust.
+
+All four providers verified end-to-end through `animus chat` against official
+signed builds.
+
 ## [0.5.10] - 2026-06-08
 
 **Animus Chat (CLI-first).** Multi-turn conversations through the CLI,
