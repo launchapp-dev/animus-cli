@@ -188,6 +188,17 @@ async fn run(cli: Cli) -> Result<()> {
             services::metrics::EventTags::CliInvoked { command_group: cli_command_group(&cli.command) },
         );
     }
+
+    // v0.5.8 secrets: install both the keychain-backed workflow YAML
+    // resolver (so `${VAR}` falls back to keychain entries) AND the
+    // plugin-host `SecretSnapshotProvider` (so direct CLI plugin spawns
+    // such as `animus plugin ping/call/info`, `animus web`, and the
+    // session-backend probe paths see the same secrets a daemon-spawned
+    // plugin would). First-installer-wins; safe to call once per CLI
+    // invocation. (codex round-2 P2.)
+    let project_root_for_secrets = std::path::Path::new(&project_root);
+    let _ = orchestrator_daemon_runtime::quotas::install_keychain_workflow_resolver_for(project_root_for_secrets);
+    let _ = orchestrator_daemon_runtime::quotas::install_keychain_secret_provider_for(project_root_for_secrets);
     match cli.command {
         Command::Init(args) => services::operations::handle_init(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
@@ -214,6 +225,9 @@ async fn run(cli: Cli) -> Result<()> {
         }
         Command::Events { command } => services::operations::handle_events(command, &project_root, cli.json).await,
         Command::State { command } => services::operations::handle_state(command, &project_root, cli.json).await,
+        Command::Secret { command } => {
+            services::operations::handle_secret(command, &project_root, cli.as_principal.clone(), cli.json).await
+        }
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -265,7 +279,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Cost { .. }
                 | Command::Auth { .. }
                 | Command::Events { .. }
-                | Command::State { .. } => {
+                | Command::State { .. }
+                | Command::Secret { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }
@@ -353,6 +368,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Auth { .. } => CommandGroup::Auth,
         Command::Events { .. } => CommandGroup::Events,
         Command::State { .. } => CommandGroup::State,
+        Command::Secret { .. } => CommandGroup::Secret,
     }
 }
 

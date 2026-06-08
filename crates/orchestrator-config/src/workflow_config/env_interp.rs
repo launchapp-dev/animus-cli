@@ -18,6 +18,7 @@
 
 use std::collections::BTreeMap;
 use std::env;
+use std::sync::{Arc, OnceLock, RwLock};
 
 use anyhow::{anyhow, Result};
 
@@ -25,12 +26,64 @@ use super::types::SecretRef;
 
 const SECRET_PREFIX: &str = "secret.";
 
+/// Process-wide hook the workflow-YAML interpolator queries as a
+/// fallback when `${VAR}` is not present in `std::env`. The CLI
+/// installs a real implementation that reads from the OS keychain;
+/// embedders that never set one keep the historical "env-only" lookup.
+pub trait WorkflowSecretResolver: Send + Sync + 'static {
+    /// Return the value for `key` from the installed secret store, or
+    /// `None` if the key is not present.
+    fn resolve(&self, key: &str) -> Option<String>;
+}
+
+fn workflow_secret_resolver_slot() -> &'static RwLock<Option<Arc<dyn WorkflowSecretResolver>>> {
+    static SLOT: OnceLock<RwLock<Option<Arc<dyn WorkflowSecretResolver>>>> = OnceLock::new();
+    SLOT.get_or_init(|| RwLock::new(None))
+}
+
+/// Install the process-wide workflow secret resolver. First-installer-wins.
+pub fn install_workflow_secret_resolver(resolver: Arc<dyn WorkflowSecretResolver>) -> bool {
+    let mut guard = workflow_secret_resolver_slot().write().expect("workflow secret resolver lock poisoned");
+    if guard.is_some() {
+        return false;
+    }
+    *guard = Some(resolver);
+    true
+}
+
+/// Test-only: unconditionally replace the installed resolver.
+pub fn install_workflow_secret_resolver_for_test(resolver: Arc<dyn WorkflowSecretResolver>) {
+    let mut guard = workflow_secret_resolver_slot().write().expect("workflow secret resolver lock poisoned");
+    *guard = Some(resolver);
+}
+
+/// Test-only: clear the installed resolver so the interpolator falls
+/// back to env-only lookups.
+pub fn clear_workflow_secret_resolver_for_test() {
+    let mut guard = workflow_secret_resolver_slot().write().expect("workflow secret resolver lock poisoned");
+    *guard = None;
+}
+
+fn current_workflow_secret_resolver() -> Option<Arc<dyn WorkflowSecretResolver>> {
+    workflow_secret_resolver_slot().read().expect("workflow secret resolver lock poisoned").clone()
+}
+
 /// Resolve a single `${...}` reference against the process environment.
 ///
 /// This is factored out so tests can stub the environment via `EnvVarGuard`
 /// without needing to plumb a custom resolver through the call sites.
 fn lookup_env(key: &str) -> Option<String> {
     env::var(key).ok()
+}
+
+/// Public lookup chain: `std::env` first, then the installed
+/// [`WorkflowSecretResolver`] (typically a keychain-backed store). The
+/// chain is pure when no resolver is installed.
+fn lookup_env_then_secret_store(key: &str) -> Option<String> {
+    if let Some(value) = lookup_env(key) {
+        return Some(value);
+    }
+    current_workflow_secret_resolver().and_then(|store| store.resolve(key))
 }
 
 /// `${secret.<name>}` references are reserved for the dedicated secrets
@@ -70,7 +123,7 @@ fn looks_like_secret_ref_after(bytes: &[u8], offset: usize) -> bool {
 /// `source_label` is included in error messages — pass the YAML file path
 /// (or any human-readable identifier) so users can locate the offending file.
 pub fn interpolate_env(content: &str, source_label: &str) -> Result<String> {
-    interpolate_env_with(content, source_label, lookup_env)
+    interpolate_env_with(content, source_label, lookup_env_then_secret_store)
 }
 
 /// Implementation seam used by unit tests to inject a hermetic env lookup.
@@ -241,7 +294,7 @@ where
 /// - Required-but-unset env vars error with the same location info.
 /// - Optional unset secrets resolve to an empty string.
 pub fn interpolate_secrets(content: &str, source_label: &str, secrets: &BTreeMap<String, SecretRef>) -> Result<String> {
-    interpolate_secrets_with(content, source_label, secrets, lookup_env)
+    interpolate_secrets_with(content, source_label, secrets, lookup_env_then_secret_store)
 }
 
 pub(crate) fn interpolate_secrets_with<F>(
@@ -570,5 +623,60 @@ mod tests {
         let err = interpolate_env("a: ${1BAD}\n", "test.yaml").unwrap_err();
         let msg = format!("{:#}", err);
         assert!(msg.contains("must start with"));
+    }
+
+    /// Stub resolver used by the keychain-fallback tests below.
+    struct StubResolver(std::collections::BTreeMap<String, String>);
+
+    impl WorkflowSecretResolver for StubResolver {
+        fn resolve(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+    }
+
+    const KEYCHAIN_FALLBACK_KEY: &str = "ANIMUS_TEST_KEYCHAIN_FALLBACK";
+
+    #[test]
+    fn falls_back_to_workflow_secret_resolver_when_env_unset() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::unset(KEYCHAIN_FALLBACK_KEY);
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(KEYCHAIN_FALLBACK_KEY.to_string(), "from-keychain".to_string());
+        install_workflow_secret_resolver_for_test(Arc::new(StubResolver(map)));
+
+        let out = interpolate_env(&format!("token: ${{{}}}\n", KEYCHAIN_FALLBACK_KEY), "test.yaml").unwrap();
+        assert_eq!(out, "token: from-keychain\n");
+
+        clear_workflow_secret_resolver_for_test();
+    }
+
+    #[test]
+    fn env_var_wins_over_workflow_secret_resolver_on_collision() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::set(KEYCHAIN_FALLBACK_KEY, "from-env");
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(KEYCHAIN_FALLBACK_KEY.to_string(), "from-keychain".to_string());
+        install_workflow_secret_resolver_for_test(Arc::new(StubResolver(map)));
+
+        let out = interpolate_env(&format!("token: ${{{}}}\n", KEYCHAIN_FALLBACK_KEY), "test.yaml").unwrap();
+        assert_eq!(out, "token: from-env\n");
+
+        clear_workflow_secret_resolver_for_test();
+    }
+
+    #[test]
+    fn required_default_still_applies_when_neither_env_nor_resolver_has_key() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::unset(KEYCHAIN_FALLBACK_KEY);
+        install_workflow_secret_resolver_for_test(Arc::new(StubResolver(std::collections::BTreeMap::new())));
+
+        let out = interpolate_env(
+            &format!("url: ${{{}:-https://default.example.com}}\n", KEYCHAIN_FALLBACK_KEY),
+            "test.yaml",
+        )
+        .unwrap();
+        assert_eq!(out, "url: https://default.example.com\n");
+
+        clear_workflow_secret_resolver_for_test();
     }
 }

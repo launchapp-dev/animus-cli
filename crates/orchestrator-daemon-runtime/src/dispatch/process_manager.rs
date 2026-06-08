@@ -33,6 +33,50 @@ fn set_session_id_on_spawn(cmd: &mut Command) {
 
 pub const ANIMUS_AGENT_RUN_ID_ENV: &str = "ANIMUS_AGENT_RUN_ID";
 
+/// Env-var allowlist consulted by the workflow-runner subprocess for
+/// keychain-backed secret injection. The runner is not a plugin and
+/// therefore has no manifest; instead the daemon ships a fixed set of
+/// well-known credential variables that historically belong on the
+/// runner's environment. Operators may extend the list at runtime via
+/// the comma-separated [`RUNNER_SECRET_ALLOWLIST_ENV`] override.
+/// (codex round-5 P1.)
+pub const RUNNER_SECRET_ALLOWLIST_DEFAULT: &[&str] = &[
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "LINEAR_API_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_TOKEN",
+    "SLACK_BOT_TOKEN",
+    "SLACK_SIGNING_SECRET",
+];
+
+/// Comma-separated env var name; values listed here are appended to
+/// [`RUNNER_SECRET_ALLOWLIST_DEFAULT`] for the workflow-runner spawn
+/// path.
+pub const RUNNER_SECRET_ALLOWLIST_ENV: &str = "ANIMUS_RUNNER_SECRET_ALLOWLIST";
+
+/// Env keys the daemon manages itself on the workflow-runner spawn —
+/// never replace these from the keychain even if a user stores a
+/// matching key. (codex round-5 P2.)
+const DAEMON_MANAGED_RUNNER_ENV_KEYS: &[&str] =
+    &[ANIMUS_AGENT_RUN_ID_ENV, "ANIMUS_WORKFLOW_REATTACH_SOCKET", "ANIMUS_WORKFLOW_EVENT_PIPE"];
+
+fn runner_secret_allowlist() -> Vec<String> {
+    let mut out: Vec<String> = RUNNER_SECRET_ALLOWLIST_DEFAULT.iter().map(|s| (*s).to_string()).collect();
+    if let Ok(extra) = std::env::var(RUNNER_SECRET_ALLOWLIST_ENV) {
+        for raw in extra.split(',') {
+            let name = raw.trim();
+            if !name.is_empty() && !out.iter().any(|n| n == name) {
+                out.push(name.to_string());
+            }
+        }
+    }
+    out
+}
+
 struct WorkflowProcess {
     subject_key: String,
     subject_id: String,
@@ -181,6 +225,53 @@ impl ProcessManager {
         // `replay_gap_from_spawn_record` falls back to scanning runs/ for
         // the most recent decisions.jsonl matching the spawn time.
         command.env(ANIMUS_AGENT_RUN_ID_ENV, &pending_session_id);
+        // v0.5.8 secrets: inject keychain entries into the runner env so
+        // workflow runs see the same secret values as
+        // `PluginHost::spawn_with_options` would. The runner is a
+        // subprocess that we do NOT have a manifest allowlist for, so
+        // the set of keys we expose is gated by a fixed allowlist plus
+        // the operator override `ANIMUS_RUNNER_SECRET_ALLOWLIST`. We
+        // never expose the daemon-managed env keys (run id, reattach
+        // socket, ...), and parent env / daemon-set values win on
+        // collision so explicit overrides keep working.
+        // (codex round-3 P1, round-4 P2, round-5 P1+P2.)
+        if let Some(provider) = orchestrator_plugin_host::current_secret_snapshot_provider() {
+            // Pre-filter the requested allowlist so the keychain isn't
+            // touched for keys the parent env or daemon already provides;
+            // matches the plugin-host precedence rules. (codex round-7 P2.)
+            let requested: Vec<String> = runner_secret_allowlist()
+                .into_iter()
+                .filter(|name| !DAEMON_MANAGED_RUNNER_ENV_KEYS.contains(&name.as_str()))
+                .filter(|name| std::env::var_os(name).is_none())
+                .collect();
+            let snapshot = if requested.is_empty() {
+                std::collections::BTreeMap::new()
+            } else {
+                provider.snapshot_filtered(&requested)
+            };
+            let mut total: usize = 0;
+            for (key, value) in snapshot {
+                // Defensive: should be a no-op since we pre-filtered, but
+                // covers the case where a provider returns extra keys.
+                if DAEMON_MANAGED_RUNNER_ENV_KEYS.iter().any(|managed| **managed == key) {
+                    continue;
+                }
+                if std::env::var_os(&key).is_some() {
+                    continue;
+                }
+                let next = total.saturating_add(key.len()).saturating_add(value.len());
+                if next > orchestrator_plugin_host::MAX_INJECTED_SECRET_BYTES {
+                    tracing::warn!(
+                        runner = %pending_session_id,
+                        skipped_key = %key,
+                        "workflow-runner secret entry skipped: would exceed cumulative cap"
+                    );
+                    continue;
+                }
+                command.env(&key, value);
+                total = next;
+            }
+        }
         #[cfg(unix)]
         let reattach_socket_path = reattach_socket_path_for(&project_root_path, &pending_session_id);
         #[cfg(unix)]

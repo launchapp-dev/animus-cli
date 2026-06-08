@@ -14,6 +14,10 @@ mod yaml_types;
 mod tests;
 
 pub use builtins::builtin_workflow_config;
+pub use env_interp::{
+    clear_workflow_secret_resolver_for_test, install_workflow_secret_resolver,
+    install_workflow_secret_resolver_for_test, WorkflowSecretResolver,
+};
 pub use loading::{
     ensure_workflow_config_compiled, ensure_workflow_config_file, legacy_workflow_config_paths, load_workflow_config,
     load_workflow_config_or_default, load_workflow_config_with_metadata, workflow_config_hash, workflow_config_path,

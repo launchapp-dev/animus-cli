@@ -202,6 +202,116 @@ pub fn install_runtime_quota_process_slot_factory() -> bool {
     orchestrator_plugin_host::install_process_slot_factory(std::sync::Arc::new(RuntimeQuotaSlotFactory))
 }
 
+/// Adapter that bridges the orchestrator-core [`KeyringSecretStore`]
+/// behind the plugin-host's [`SecretSnapshotProvider`] hook. The daemon
+/// (or any embedder that wants secrets surfaced to plugins) installs
+/// one of these at startup; the host then merges the live keychain
+/// snapshot into every spawned plugin's env (subject to the 1 MiB cap).
+pub struct KeychainSecretSnapshotProvider<S: orchestrator_core::SecretStore + 'static> {
+    store: S,
+}
+
+impl<S: orchestrator_core::SecretStore + 'static> KeychainSecretSnapshotProvider<S> {
+    pub fn new(store: S) -> Self {
+        Self { store }
+    }
+}
+
+impl<S: orchestrator_core::SecretStore + 'static> orchestrator_plugin_host::SecretSnapshotProvider
+    for KeychainSecretSnapshotProvider<S>
+{
+    fn snapshot(&self) -> std::collections::BTreeMap<String, String> {
+        self.store.snapshot_for_spawn().unwrap_or_default()
+    }
+
+    fn snapshot_filtered(&self, requested: &[String]) -> std::collections::BTreeMap<String, String> {
+        // The per-scope index is the source of truth: a key that is
+        // not in `list_keys()` is not considered stored, even if the
+        // OS keychain still has a stale entry. Intersect `requested`
+        // with the index before calling `get` so a write that lost
+        // its index update is invisible to the spawn path.
+        // (codex round-6 P2.)
+        let indexed: std::collections::BTreeSet<String> =
+            self.store.list_keys().unwrap_or_default().into_iter().collect();
+        let mut out = std::collections::BTreeMap::new();
+        for key in requested {
+            if !indexed.contains(key) {
+                continue;
+            }
+            if let Ok(Some(value)) = self.store.get(key) {
+                out.insert(key.clone(), value);
+            }
+        }
+        out
+    }
+}
+
+/// Install the keychain-backed [`SecretSnapshotProvider`] into the
+/// plugin host. First-installer-wins. Safe to call repeatedly.
+pub fn install_keychain_secret_provider_for(project_root: &std::path::Path) -> bool {
+    let Some(scoped_root) = protocol::repository_scope::scoped_state_root(project_root) else {
+        return false;
+    };
+    let scope = scope_label_for_scoped_root(project_root, &scoped_root);
+    let store = orchestrator_core::KeyringSecretStore::new(&scope, scoped_root);
+    orchestrator_plugin_host::install_secret_snapshot_provider(std::sync::Arc::new(
+        KeychainSecretSnapshotProvider::new(store),
+    ))
+}
+
+/// Adapter that bridges a [`orchestrator_core::SecretStore`] behind the
+/// workflow-YAML `WorkflowSecretResolver` hook. Lets `${VAR}`
+/// interpolation fall back to the keychain when an env var is not set
+/// in the daemon's process environment.
+pub struct KeychainWorkflowResolver<S: orchestrator_core::SecretStore + 'static> {
+    store: S,
+}
+
+impl<S: orchestrator_core::SecretStore + 'static> KeychainWorkflowResolver<S> {
+    pub fn new(store: S) -> Self {
+        Self { store }
+    }
+}
+
+impl<S: orchestrator_core::SecretStore + 'static> orchestrator_config::WorkflowSecretResolver
+    for KeychainWorkflowResolver<S>
+{
+    fn resolve(&self, key: &str) -> Option<String> {
+        // Index is authoritative — a key that's missing from the
+        // per-scope index counts as not-stored even if the OS
+        // keychain still has a stale entry. (codex round-6 P2.)
+        let indexed: std::collections::BTreeSet<String> = self.store.list_keys().ok()?.into_iter().collect();
+        if !indexed.contains(key) {
+            return None;
+        }
+        self.store.get(key).ok().flatten()
+    }
+}
+
+/// Install the keychain-backed `WorkflowSecretResolver` so workflow YAML
+/// `${VAR}` falls back to the keychain when the env var is unset.
+/// First-installer-wins.
+pub fn install_keychain_workflow_resolver_for(project_root: &std::path::Path) -> bool {
+    let Some(scoped_root) = protocol::repository_scope::scoped_state_root(project_root) else {
+        return false;
+    };
+    let scope = scope_label_for_scoped_root(project_root, &scoped_root);
+    let store = orchestrator_core::KeyringSecretStore::new(&scope, scoped_root);
+    orchestrator_config::install_workflow_secret_resolver(std::sync::Arc::new(KeychainWorkflowResolver::new(store)))
+}
+
+/// Prefer the adopted scope directory name when it's present and UTF-8;
+/// fall back to a freshly-derived `repo-scope`. Keeps the keychain
+/// service name aligned with the index file even when
+/// `scoped_state_root` adopted an existing scope by git-origin.
+/// (codex round-1 P2.)
+fn scope_label_for_scoped_root(project_root: &std::path::Path, scoped_root: &std::path::Path) -> String {
+    if let Some(name) = scoped_root.file_name().and_then(|s| s.to_str()) {
+        return name.to_string();
+    }
+    protocol::repository_scope::repository_scope_for_path(project_root)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PluginProcessSlotError {
     pub current: usize,
