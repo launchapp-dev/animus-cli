@@ -244,6 +244,90 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
     }
 }
 
+/// CLI surface for `animus workflow config reload`. Runs the same
+/// compile pipeline the daemon's hot-reload watcher uses and prints the
+/// diagnostic envelope.
+///
+/// When a daemon is detected in a separate process (via the project's
+/// `daemon.pid` file), each candidate YAML source file's mtime is also
+/// touched so the daemon's own filesystem watcher observes a Modify event
+/// and reruns its in-process reload. The CLI compile is still authoritative
+/// for the diagnostic envelope the user sees; the touch is fire-and-forget.
+pub(crate) fn reload_workflow_config_payload(project_root: &str) -> Value {
+    let snapshot = orchestrator_daemon_runtime::config::workflow_config_snapshot();
+    let outcome =
+        orchestrator_daemon_runtime::config::reload_workflow_config_once(Path::new(project_root), &snapshot, None);
+
+    // Best-effort nudge a separate-process daemon to re-pick-up the same
+    // edit via its own watcher. We avoid building a dedicated control-RPC
+    // verb so the path stays a single chokepoint (the daemon's existing
+    // watcher) and so a CLI invocation without a running daemon is still a
+    // no-op-safe operation.
+    if orchestrator_daemon_runtime::DaemonRuntimeState::read_daemon_pid_file(project_root).is_some() {
+        touch_workflow_yaml_for_watcher(Path::new(project_root));
+    }
+
+    outcome.to_json()
+}
+
+/// Best-effort touch of every workflow YAML source file under `.animus/`
+/// so the daemon's filesystem watcher observes a Modify event. Uses
+/// `std::fs::File::set_modified` (stable since Rust 1.75) so no extra
+/// crate is required. Failures are swallowed — the CLI compile pipeline
+/// is the authoritative diagnostic, and the daemon's own watcher recovers
+/// on the next real edit if this nudge is missed.
+fn touch_workflow_yaml_for_watcher(project_root: &Path) {
+    let now = std::time::SystemTime::now();
+    let mut touched_any_file = false;
+
+    let single = project_root.join(".animus").join("workflows.yaml");
+    if single.exists() {
+        if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&single) {
+            if file.set_modified(now).is_ok() {
+                touched_any_file = true;
+            }
+        }
+    }
+    let workflows_dir = project_root.join(".animus").join("workflows");
+    if workflows_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&workflows_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let is_yaml = path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml"))
+                    .unwrap_or(false);
+                if is_yaml {
+                    if let Ok(file) = std::fs::OpenOptions::new().write(true).open(&path) {
+                        if file.set_modified(now).is_ok() {
+                            touched_any_file = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If every YAML overlay was removed before the manual reload ran, there
+    // is nothing to set_modified on — but the daemon's watcher still needs
+    // a kick to notice the removed-final-file state and clear its snapshot.
+    // Drop a sentinel marker file (which itself looks like a non-YAML write
+    // inside the watched .animus dir and therefore does not retrigger the
+    // reload path) immediately followed by removal. The Create / Remove
+    // events alone are enough to wake the watcher's select loop; the path
+    // filter then sees `.animus` is now empty of YAML and clears.
+    if !touched_any_file {
+        let animus_dir = project_root.join(".animus");
+        if animus_dir.is_dir() {
+            let sentinel = animus_dir.join(".reload-nudge");
+            if std::fs::write(&sentinel, b"").is_ok() {
+                let _ = std::fs::remove_file(&sentinel);
+            }
+        }
+    }
+}
+
 pub(crate) fn compile_yaml_workflows_payload(project_root: &str) -> Result<Value> {
     match orchestrator_core::validate_and_compile_yaml_workflows(Path::new(project_root))? {
         Some(result) => {
@@ -282,4 +366,41 @@ pub(super) fn title_case_phase_id(phase_id: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn write_minimal_overlay(dir: &Path) {
+        let animus = dir.join(".animus");
+        fs::create_dir_all(animus.join("workflows")).unwrap();
+        let yaml = "phases:\n  alpha:\n    mode: agent\n    agent_id: hot-reload-agent\nagents:\n  hot-reload-agent:\n    description: hot-reload fixture\n    system_prompt: hot-reload prompt\n    skills: []\nworkflows:\n  - id: hot-reload-workflow\n    name: Hot Reload\n    phases:\n      - alpha\n";
+        fs::write(animus.join("workflows.yaml"), yaml).unwrap();
+    }
+
+    #[test]
+    fn reload_payload_reports_reloaded_true_for_valid_overlay() {
+        let dir = tempdir().unwrap();
+        write_minimal_overlay(dir.path());
+        let project_root = dir.path().to_string_lossy().to_string();
+        let value = reload_workflow_config_payload(&project_root);
+        assert_eq!(value["reloaded"], serde_json::json!(true), "valid overlay must reload");
+        let phases = value["phase_definitions"].as_u64().expect("phase_definitions present");
+        assert!(phases >= 1, "expected at least one phase");
+    }
+
+    #[test]
+    fn reload_payload_reports_reloaded_false_for_malformed_overlay() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(".animus")).unwrap();
+        fs::write(dir.path().join(".animus").join("workflows.yaml"), ": not valid\n[]\n").unwrap();
+        let project_root = dir.path().to_string_lossy().to_string();
+        let value = reload_workflow_config_payload(&project_root);
+        assert_eq!(value["reloaded"], serde_json::json!(false), "malformed overlay must NOT reload");
+        let errors = value["errors"].as_array().expect("errors array");
+        assert!(!errors.is_empty(), "diagnostic must be surfaced");
+    }
 }

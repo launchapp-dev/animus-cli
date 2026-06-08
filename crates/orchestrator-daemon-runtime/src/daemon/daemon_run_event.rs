@@ -233,4 +233,25 @@ pub enum DaemonRunEvent {
         agent_session_id: String,
         error: String,
     },
+    /// v0.5.8 hot-reload: a filesystem-watcher-driven (or manually
+    /// triggered) reload of `.animus/workflows.yaml` /
+    /// `.animus/workflows/*.yaml` succeeded. The new config is now live in
+    /// the [`crate::config::WorkflowConfigSnapshot`]; in-flight workflow
+    /// runs keep their captured snapshot until their current phase
+    /// completes.
+    WorkflowConfigReloaded {
+        project_root: String,
+        phase_definitions: usize,
+        workflows: usize,
+        agent_profiles: usize,
+        source_files: Vec<String>,
+        config_hash: String,
+    },
+    /// v0.5.8 hot-reload: a reload attempt failed to compile / validate
+    /// the YAML overlay. The previous config remains active; the daemon
+    /// did NOT crash. The diagnostic is rustc-style when available.
+    WorkflowConfigReloadFailed {
+        project_root: String,
+        errors: Vec<String>,
+    },
 }

@@ -648,6 +648,7 @@ pub(crate) async fn handle_workflow(
                 print_value(config::validate_workflow_config_payload(project_root), json)
             }
             WorkflowConfigCommand::Compile => print_value(config::compile_yaml_workflows_payload(project_root)?, json),
+            WorkflowConfigCommand::Reload => print_value(config::reload_workflow_config_payload(project_root), json),
         },
         WorkflowCommand::StateMachine { command } => match command {
             WorkflowStateMachineCommand::Get => print_value(config::get_state_machine_payload(project_root)?, json),

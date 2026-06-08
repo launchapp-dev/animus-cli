@@ -325,6 +325,43 @@ where
         }
     }
 
+    // v0.5.8 hot-reload: prime the workflow-config snapshot from the
+    // current YAML state and spawn the watcher. Watcher failure is logged
+    // but never aborts daemon startup — a misbehaving FS notify backend
+    // must not block the daemon from coming up.
+    let workflow_config_snapshot = crate::config::workflow_config_snapshot();
+    let initial_reload = crate::config::reload_workflow_config_once(
+        Path::new(project_root),
+        &workflow_config_snapshot,
+        Some(workflow_event_broadcaster.as_ref()),
+    );
+    if initial_reload.reloaded {
+        hooks.handle_event(DaemonRunEvent::WorkflowConfigReloaded {
+            project_root: primary_root.clone(),
+            phase_definitions: initial_reload.phase_definitions,
+            workflows: initial_reload.workflows,
+            agent_profiles: initial_reload.agent_profiles,
+            source_files: initial_reload.source_files.iter().map(|p| p.display().to_string()).collect(),
+            config_hash: initial_reload.config_hash.clone().unwrap_or_default(),
+        })?;
+    }
+    let workflow_config_watcher = match crate::config::spawn_workflow_config_watcher(
+        PathBuf::from(project_root),
+        workflow_config_snapshot.clone(),
+        workflow_event_broadcaster.clone(),
+        Duration::from_millis(crate::config::WATCHER_DEBOUNCE_DEFAULT_MS),
+    ) {
+        Ok(handle) => Some(handle),
+        Err(error) => {
+            tracing::warn!(
+                target: "animus.config.hot_reload",
+                error = %error,
+                "workflow config watcher failed to start; manual `animus workflow config reload` still works"
+            );
+            None
+        }
+    };
+
     let mut interval = Duration::from_secs(options.interval_secs.max(1));
     let mut sigterm_stream = SigtermStream::new()?;
     loop {
@@ -408,6 +445,10 @@ where
     if let Some(supervisor) = trigger_supervisor {
         let _ = supervisor.shutdown().await;
         drain_trigger_events(&primary_root, &trigger_event_queue, hooks)?;
+    }
+
+    if let Some(watcher) = workflow_config_watcher {
+        watcher.shutdown().await;
     }
 
     if let Some(server) = control_server_handle {

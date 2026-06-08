@@ -93,7 +93,8 @@ animus
 │   ├── config
 │   │   ├── get              Read resolved workflow config
 │   │   ├── validate         Validate workflow config shape and references
-│   │   └── compile          Validate and resolve YAML workflow files
+│   │   ├── compile          Validate and resolve YAML workflow files
+│   │   └── reload           Re-run YAML compile pipeline (hot-reload fallback)
 │   ├── state-machine
 │   │   ├── get              Read workflow state-machine config
 │   │   ├── validate         Validate workflow state-machine config

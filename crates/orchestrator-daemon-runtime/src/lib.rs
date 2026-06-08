@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod config;
 pub mod control;
 mod daemon;
 mod dispatch;
