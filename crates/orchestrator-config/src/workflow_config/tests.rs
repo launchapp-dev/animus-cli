@@ -3778,3 +3778,123 @@ workflows:
     let workflow = config.workflows.iter().find(|w| w.id == "ok").expect("workflow ok");
     assert!(matches!(workflow.phases.first().unwrap(), super::WorkflowPhaseEntry::Rich(_)));
 }
+
+mod cache_tests {
+    use super::*;
+    use crate::workflow_config::loading::load_workflow_config_with_metadata;
+
+    fn write_simple_yaml(temp: &std::path::Path, content: &str) {
+        let ao_dir = temp.join(".animus");
+        std::fs::create_dir_all(&ao_dir).expect("create .animus dir");
+        std::fs::write(ao_dir.join("workflows.yaml"), content).expect("write yaml");
+    }
+
+    const SAMPLE_YAML: &str = r#"
+workflows:
+  - id: standard
+    name: Cache Test
+    phases:
+      - requirements
+      - implementation
+      - code-review
+      - testing
+"#;
+
+    const ALT_YAML: &str = r#"
+workflows:
+  - id: standard
+    name: Cache Test Updated
+    phases:
+      - requirements
+      - implementation
+      - code-review
+      - testing
+"#;
+
+    #[test]
+    fn workflow_cache_round_trip_returns_same_compiled_output() {
+        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        write_simple_yaml(temp.path(), SAMPLE_YAML);
+
+        let first = load_workflow_config_with_metadata(temp.path()).expect("first compile");
+        let cache_path = crate::cache::workflow_cache_path(temp.path());
+        assert!(cache_path.exists(), "cache file should be written");
+
+        let second = load_workflow_config_with_metadata(temp.path()).expect("second compile (cached)");
+        assert_eq!(first.metadata.hash, second.metadata.hash, "cached compile must match fresh compile");
+        assert_eq!(first.config.workflows.len(), second.config.workflows.len());
+    }
+
+    #[test]
+    fn workflow_cache_invalidates_when_yaml_changes() {
+        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        write_simple_yaml(temp.path(), SAMPLE_YAML);
+        let first = load_workflow_config_with_metadata(temp.path()).expect("first compile");
+        let original_name =
+            first.config.workflows.iter().find(|w| w.id == "standard").map(|w| w.name.clone()).unwrap_or_default();
+        assert_eq!(original_name, "Cache Test");
+
+        // Sleep briefly so mtime ticks past 1s granularity on slow FSes
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        write_simple_yaml(temp.path(), ALT_YAML);
+
+        let second = load_workflow_config_with_metadata(temp.path()).expect("second compile after edit");
+        let new_name =
+            second.config.workflows.iter().find(|w| w.id == "standard").map(|w| w.name.clone()).unwrap_or_default();
+        assert_eq!(new_name, "Cache Test Updated", "cache must invalidate on YAML change");
+    }
+
+    #[test]
+    fn workflow_cache_corrupt_file_falls_through_to_fresh_compile() {
+        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        write_simple_yaml(temp.path(), SAMPLE_YAML);
+
+        let cache_path = crate::cache::workflow_cache_path(temp.path());
+        std::fs::create_dir_all(cache_path.parent().unwrap()).expect("mkdir cache dir");
+        std::fs::write(&cache_path, b"not json at all").expect("write corrupt cache");
+
+        let loaded = load_workflow_config_with_metadata(temp.path()).expect("corrupt cache must fall through");
+        assert!(loaded.config.workflows.iter().any(|w| w.id == "standard"));
+    }
+
+    #[test]
+    fn workflow_cache_disabled_by_env_skips_read_and_write() {
+        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let _disable = EnvVarGuard::set("ANIMUS_DISABLE_WORKFLOW_CACHE", "1");
+        write_simple_yaml(temp.path(), SAMPLE_YAML);
+
+        let _ = load_workflow_config_with_metadata(temp.path()).expect("compile");
+        let cache_path = crate::cache::workflow_cache_path(temp.path());
+        assert!(!cache_path.exists(), "cache write must be skipped when disabled");
+    }
+
+    #[test]
+    fn workflow_cache_bypassed_when_sources_reference_env_vars() {
+        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let _probe = EnvVarGuard::set("WF_CACHE_PROBE_NAME", "EnvDriven");
+        let yaml = r#"
+workflows:
+  - id: standard
+    name: ${WF_CACHE_PROBE_NAME:-Fallback}
+    phases:
+      - requirements
+      - implementation
+      - code-review
+      - testing
+"#;
+        write_simple_yaml(temp.path(), yaml);
+        let _ = load_workflow_config_with_metadata(temp.path()).expect("compile");
+        let cache_path = crate::cache::workflow_cache_path(temp.path());
+        assert!(!cache_path.exists(), "cache must not be written when YAML references ${{VAR}} env interpolation");
+    }
+}

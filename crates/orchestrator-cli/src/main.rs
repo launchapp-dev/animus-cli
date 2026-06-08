@@ -160,6 +160,9 @@ fn emit_argparse_error_envelope(err: &clap::Error) {
 }
 
 async fn run(cli: Cli) -> Result<()> {
+    services::operations::set_no_cache_flag(cli.no_cache);
+    orchestrator_config::cache::set_no_cache_flag(cli.no_cache);
+    orchestrator_core::set_daemon_health_cache_disabled(cli.no_cache);
     if matches!(cli.command, Command::Version) {
         let data = VersionInfo {
             name: env!("CARGO_PKG_NAME"),

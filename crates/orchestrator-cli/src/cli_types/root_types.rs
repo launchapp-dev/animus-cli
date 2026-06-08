@@ -25,6 +25,12 @@ pub(crate) struct Cli {
         help = "Impersonate a declared principal (honor-system; warned)."
     )]
     pub(crate) as_principal: Option<String>,
+    /// v0.5.9: bypass all on-disk and in-memory hot-path caches for this
+    /// invocation. Mirrors `ANIMUS_DISABLE_*_CACHE=1` env vars but lets
+    /// scripts opt out per-call. Reads stay correct because caches are
+    /// best-effort fall-throughs to the live source of truth.
+    #[arg(long = "no-cache", global = true, help = "Bypass hot-path read caches for this invocation.")]
+    pub(crate) no_cache: bool,
 
     #[command(subcommand)]
     pub(crate) command: Command,
