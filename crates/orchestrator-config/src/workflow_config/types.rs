@@ -250,6 +250,10 @@ impl WorktreeConfig {
     /// (`worktree: skip`) or a long-form map.
     pub(crate) fn from_yaml(yaml: super::yaml_types::YamlPhaseWorktree) -> Result<Self> {
         match yaml {
+            super::yaml_types::YamlPhaseWorktree::Bool(flag) => {
+                let mode = if flag { WorktreeMode::Auto } else { WorktreeMode::Skip };
+                Ok(Self { mode, cleanup: default_worktree_cleanup(), base_ref: None })
+            }
             super::yaml_types::YamlPhaseWorktree::Mode(scalar) => {
                 let mode = Self::parse_mode(&scalar)?;
                 Ok(Self { mode, cleanup: default_worktree_cleanup(), base_ref: None })

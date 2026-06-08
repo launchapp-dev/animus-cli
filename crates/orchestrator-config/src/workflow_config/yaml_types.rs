@@ -58,12 +58,19 @@ pub(super) enum YamlPhaseEntry {
 
 /// Permissive YAML representation of a worktree block.
 ///
-/// Authors may write either the long form (`worktree: { mode: skip, ... }`)
-/// or the short form (`worktree: skip`). The parser normalizes both into
-/// `WorktreeConfig`.
+/// Authors may write either the long form (`worktree: { mode: skip, ... }`),
+/// the short form (`worktree: skip`), or the boolean shorthand
+/// (`worktree: false` -> skip, `worktree: true` -> auto). The parser
+/// normalizes all three into `WorktreeConfig`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum YamlPhaseWorktree {
+    /// `worktree: false` / `worktree: true` boolean shorthand.
+    /// `false` -> `skip`, `true` -> `auto`. Order matters under
+    /// `#[serde(untagged)]` — `Bool` must come before `Mode` because
+    /// YAML scalars `true`/`false` parse as strings too if the bool
+    /// arm is tried second.
+    Bool(bool),
     /// `worktree: skip` short-form scalar (auto / required / skip).
     Mode(String),
     /// `worktree: { mode: ..., cleanup: ..., base_ref: ... }` long-form map.

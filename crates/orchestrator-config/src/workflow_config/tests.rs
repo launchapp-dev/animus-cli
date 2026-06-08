@@ -2599,6 +2599,53 @@ workflows:
 }
 
 #[test]
+fn yaml_parses_bool_shorthand_phase_worktree_false() {
+    let yaml = r#"
+phases:
+  doc-only:
+    mode: agent
+    agent: swe
+    directive: "Update docs."
+    worktree: false
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+workflows:
+- id: doc-flow
+  phases: [doc-only]
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let phase = config.phase_definitions.get("doc-only").expect("phase present");
+    let worktree = phase.worktree.as_ref().expect("phase-level worktree");
+    assert_eq!(worktree.mode, WorktreeMode::Skip);
+    assert!(worktree.cleanup, "cleanup defaults to true for bool shorthand");
+}
+
+#[test]
+fn yaml_parses_bool_shorthand_phase_worktree_true() {
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build."
+    worktree: true
+agents:
+  swe:
+    description: "Software engineer"
+    system_prompt: "You are a SWE."
+workflows:
+- id: build-flow
+  phases: [build]
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+    let phase = config.phase_definitions.get("build").expect("phase present");
+    let worktree = phase.worktree.as_ref().expect("phase-level worktree");
+    assert_eq!(worktree.mode, WorktreeMode::Auto);
+}
+
+#[test]
 fn phase_level_worktree_skip_overrides_workflow_required() {
     // When a workflow is `mode: required` but an individual phase says
     // `worktree: skip`, the phase-level decision must win — the kernel
