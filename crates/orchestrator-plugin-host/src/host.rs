@@ -30,6 +30,13 @@ use tracing::{debug, warn};
 pub const PLUGIN_BASE_ENV_ALLOWLIST: &[&str] =
     &["PATH", "HOME", "USER", "SHELL", "TERM", "TMPDIR", "LANG", "LC_ALL", "RUST_LOG", "RUST_BACKTRACE", "TZ"];
 
+/// Maximum cumulative bytes (sum of `key.len() + value.len()`) the spawn
+/// path will merge from the installed [`SecretSnapshotProvider`] into a
+/// child plugin's environment. The cap protects against a runaway
+/// keychain index from blowing past the platform's `ARG_MAX`. Mirrors
+/// `orchestrator_core::MAX_INJECTED_ENV_BYTES`.
+pub const MAX_INJECTED_SECRET_BYTES: usize = 1024 * 1024;
+
 /// Compiled default for the per-host notification broadcast channel capacity.
 ///
 /// Used when neither [`PluginManifest::notification_buffer_size`] nor the
@@ -379,6 +386,82 @@ fn current_process_slot_factory() -> Option<Arc<dyn ProcessSlotFactory>> {
     process_slot_factory_slot().read().expect("process slot factory lock poisoned").clone()
 }
 
+/// Process-wide hook that supplies the keychain-backed secret snapshot the
+/// spawn path merges into each plugin's child environment.
+///
+/// Decoupled from `orchestrator-core` so this crate stays dependency-free
+/// w.r.t. the secret store: the daemon installs a real implementation at
+/// startup, tests may install a mock, and any embedder that hasn't opted
+/// in gets the historical "no extra env" behaviour.
+pub trait SecretSnapshotProvider: Send + Sync + 'static {
+    /// Return the (KEY, VALUE) pairs the host should merge into the
+    /// next-spawned plugin's environment, **before** the caller's process
+    /// environment is applied. Existing parent-process env wins on
+    /// collision so explicit `KEY=val animus daemon start` overrides the
+    /// keychain entry.
+    ///
+    /// Implementations MUST cap their own output at
+    /// `orchestrator_core::MAX_INJECTED_ENV_BYTES` bytes cumulative
+    /// (sum of key.len() + value.len()) and return the empty map on any
+    /// error so a broken keychain never blocks plugin spawn.
+    fn snapshot(&self) -> std::collections::BTreeMap<String, String>;
+
+    /// Return only the entries whose KEYs appear in `requested`. Default
+    /// impl scans the full snapshot; production providers SHOULD
+    /// override this to avoid touching keychain items the caller does
+    /// not need (so a plugin with no `env_required` block never causes
+    /// the OS to prompt for unrelated secrets). (codex round-3 P2.)
+    fn snapshot_filtered(&self, requested: &[String]) -> std::collections::BTreeMap<String, String> {
+        if requested.is_empty() {
+            return std::collections::BTreeMap::new();
+        }
+        let mut all = self.snapshot();
+        all.retain(|k, _| requested.iter().any(|r| r == k));
+        all
+    }
+}
+
+fn secret_snapshot_provider_slot() -> &'static RwLock<Option<Arc<dyn SecretSnapshotProvider>>> {
+    static SLOT: OnceLock<RwLock<Option<Arc<dyn SecretSnapshotProvider>>>> = OnceLock::new();
+    SLOT.get_or_init(|| RwLock::new(None))
+}
+
+/// Install the process-wide [`SecretSnapshotProvider`]. First-installer-wins
+/// to match [`install_process_slot_factory`] semantics; tests use
+/// [`install_secret_snapshot_provider_for_test`] to swap unconditionally.
+pub fn install_secret_snapshot_provider(provider: Arc<dyn SecretSnapshotProvider>) -> bool {
+    let mut guard = secret_snapshot_provider_slot().write().expect("secret snapshot provider lock poisoned");
+    if guard.is_some() {
+        return false;
+    }
+    *guard = Some(provider);
+    true
+}
+
+/// Test-only: unconditionally replace the installed provider.
+#[cfg(any(test, feature = "test-support"))]
+pub fn install_secret_snapshot_provider_for_test(provider: Arc<dyn SecretSnapshotProvider>) {
+    let mut guard = secret_snapshot_provider_slot().write().expect("secret snapshot provider lock poisoned");
+    *guard = Some(provider);
+}
+
+/// Test-only: clear the installed provider so the spawn path skips the
+/// keychain merge entirely.
+#[cfg(any(test, feature = "test-support"))]
+pub fn clear_secret_snapshot_provider_for_test() {
+    let mut guard = secret_snapshot_provider_slot().write().expect("secret snapshot provider lock poisoned");
+    *guard = None;
+}
+
+/// Snapshot of the currently-installed [`SecretSnapshotProvider`], if
+/// any. Exposed so out-of-tree subprocess spawn paths (e.g. the daemon's
+/// `ProcessManager` workflow-runner spawn) can merge keychain entries
+/// into their own command env without going through
+/// [`PluginHost::spawn_with_options`].
+pub fn current_secret_snapshot_provider() -> Option<Arc<dyn SecretSnapshotProvider>> {
+    secret_snapshot_provider_slot().read().expect("secret snapshot provider lock poisoned").clone()
+}
+
 /// Shared inner state for a [`PluginHost`]. One per spawned plugin process.
 ///
 /// The host follows the single-reader-router pattern: one tokio task owns
@@ -511,6 +594,54 @@ impl PluginHost {
         }
 
         command.env_clear();
+
+        // Precedence (lowest to highest): keychain entries -> parent env.
+        // Applying keychain first lets explicit `KEY=val animus daemon start`
+        // still win, matching the documented contract in
+        // `docs/reference/secrets.md`.
+        let mut injected_keys: BTreeSet<String> = BTreeSet::new();
+        if let Some(provider) = current_secret_snapshot_provider() {
+            // Request only the secrets the plugin's manifest declares
+            // AND that are not already satisfied by the parent
+            // environment. The latter avoids touching the keychain for
+            // entries an explicit `KEY=val animus daemon start` will
+            // overwrite anyway — important on locked-keychain
+            // platforms that prompt on access. (codex round-7 P2.)
+            let requested: Vec<String> = options
+                .env_allowlist
+                .iter()
+                .filter(|name| std::env::var_os(name.as_str()).is_none())
+                .cloned()
+                .collect();
+            let snapshot = if requested.is_empty() {
+                std::collections::BTreeMap::new()
+            } else {
+                provider.snapshot_filtered(&requested)
+            };
+            let mut total: usize = 0;
+            let mut injected = 0usize;
+            let mut skipped = 0usize;
+            for (key, value) in snapshot {
+                let next = total.saturating_add(key.len()).saturating_add(value.len());
+                if next > MAX_INJECTED_SECRET_BYTES {
+                    skipped += 1;
+                    warn!(
+                        plugin = %name,
+                        skipped_key = %key,
+                        "secret entry skipped: would exceed {MAX_INJECTED_SECRET_BYTES}-byte cumulative cap"
+                    );
+                    continue;
+                }
+                command.env(&key, value);
+                injected_keys.insert(key);
+                total = next;
+                injected += 1;
+            }
+            if injected > 0 || skipped > 0 {
+                debug!(plugin = %name, injected, skipped, "merged keychain-backed secrets into plugin env");
+            }
+        }
+
         for var in &allow {
             if let Some(value) = std::env::var_os(var) {
                 command.env(var, value);
@@ -518,6 +649,16 @@ impl PluginHost {
         }
 
         for missing in &options.missing_required_env {
+            // Suppress the warning when the keychain already satisfied
+            // the requirement during the snapshot merge above. The
+            // `missing_required_env` list was computed at
+            // `for_manifest` time from `std::env` only, so without this
+            // check every successful keychain-backed spawn would print
+            // a spurious "plugin will likely fail" warning.
+            // (codex round-2 P3.)
+            if injected_keys.contains(missing) {
+                continue;
+            }
             warn!(
                 plugin = %name,
                 env_var = %missing,
@@ -1499,6 +1640,155 @@ mod tests {
         host2.shutdown().await.ok();
         host3.shutdown().await.ok();
         clear_process_slot_factory_for_test();
+    }
+
+    /// Provider used by the secret-injection tests. Returns whatever map
+    /// the test seeds it with.
+    #[derive(Debug)]
+    struct FixedSnapshotProvider(std::collections::BTreeMap<String, String>);
+
+    impl SecretSnapshotProvider for FixedSnapshotProvider {
+        fn snapshot(&self) -> std::collections::BTreeMap<String, String> {
+            self.0.clone()
+        }
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // intentional: serializes process-wide secret provider across spawn
+    async fn secret_injection_forwards_keychain_entries_declared_in_manifest() {
+        let _guard = slot_factory_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let mut snap = std::collections::BTreeMap::new();
+        snap.insert("ANIMUS_SECRET_INJECTED".to_string(), "from-keychain".to_string());
+        install_secret_snapshot_provider_for_test(Arc::new(FixedSnapshotProvider(snap)));
+
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = write_env_dump_plugin(dir.path());
+        let env_out = dir.path().join("env.out");
+
+        let manifest_env = vec![EnvRequirement {
+            name: "ANIMUS_SECRET_INJECTED".to_string(),
+            description: None,
+            sensitive: true,
+            required: true,
+        }];
+        let opts =
+            PluginSpawnOptions::for_manifest("env-dump-plugin", &manifest_env, std::iter::empty::<String>(), None);
+
+        let host = PluginHost::spawn_with_options(&plugin, &[env_out.to_str().unwrap()], opts).await.expect("spawn");
+        let _ = host.shutdown().await;
+        clear_secret_snapshot_provider_for_test();
+
+        let env = read_env_dump(&env_out);
+        assert_eq!(env.get("ANIMUS_SECRET_INJECTED").map(String::as_str), Some("from-keychain"));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // intentional: serializes process-wide secret provider across spawn
+    async fn secret_injection_skips_entries_not_declared_in_manifest() {
+        let _guard = slot_factory_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let mut snap = std::collections::BTreeMap::new();
+        snap.insert("ANIMUS_SECRET_UNDECLARED".to_string(), "from-keychain".to_string());
+        install_secret_snapshot_provider_for_test(Arc::new(FixedSnapshotProvider(snap)));
+
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = write_env_dump_plugin(dir.path());
+        let env_out = dir.path().join("env.out");
+
+        // Empty manifest -> empty allowlist -> the keychain entry must
+        // NOT be injected (preserves the env trust boundary).
+        let host = PluginHost::spawn_with_options(&plugin, &[env_out.to_str().unwrap()], PluginSpawnOptions::default())
+            .await
+            .expect("spawn");
+        let _ = host.shutdown().await;
+        clear_secret_snapshot_provider_for_test();
+
+        let env = read_env_dump(&env_out);
+        assert!(
+            !env.contains_key("ANIMUS_SECRET_UNDECLARED"),
+            "undeclared keychain entry must not leak into a plugin with no manifest allowlist; saw env={env:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // intentional: serializes process-wide secret provider across spawn
+    async fn secret_injection_yields_to_parent_env_on_collision() {
+        let _guard = slot_factory_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let mut snap = std::collections::BTreeMap::new();
+        snap.insert("ANIMUS_SECRET_COLLIDE".to_string(), "from-keychain".to_string());
+        install_secret_snapshot_provider_for_test(Arc::new(FixedSnapshotProvider(snap)));
+
+        std::env::set_var("ANIMUS_SECRET_COLLIDE", "from-parent-env");
+        let manifest_env = vec![EnvRequirement {
+            name: "ANIMUS_SECRET_COLLIDE".to_string(),
+            description: None,
+            sensitive: true,
+            required: true,
+        }];
+        let opts =
+            PluginSpawnOptions::for_manifest("env-dump-plugin", &manifest_env, std::iter::empty::<String>(), None);
+
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = write_env_dump_plugin(dir.path());
+        let env_out = dir.path().join("env.out");
+
+        let host = PluginHost::spawn_with_options(&plugin, &[env_out.to_str().unwrap()], opts).await.expect("spawn");
+        let _ = host.shutdown().await;
+        std::env::remove_var("ANIMUS_SECRET_COLLIDE");
+        clear_secret_snapshot_provider_for_test();
+
+        let env = read_env_dump(&env_out);
+        assert_eq!(
+            env.get("ANIMUS_SECRET_COLLIDE").map(String::as_str),
+            Some("from-parent-env"),
+            "parent env must override keychain on collision"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // intentional: serializes process-wide secret provider across spawn
+    async fn secret_injection_respects_cumulative_byte_cap() {
+        let _guard = slot_factory_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let big = "x".repeat(MAX_INJECTED_SECRET_BYTES + 1);
+        let mut snap = std::collections::BTreeMap::new();
+        snap.insert("ANIMUS_SECRET_TINY".to_string(), "ok".to_string());
+        snap.insert("ANIMUS_SECRET_HUGE".to_string(), big);
+        install_secret_snapshot_provider_for_test(Arc::new(FixedSnapshotProvider(snap)));
+
+        let dir = tempfile::tempdir().unwrap();
+        let plugin = write_env_dump_plugin(dir.path());
+        let env_out = dir.path().join("env.out");
+
+        let manifest_env = vec![
+            EnvRequirement {
+                name: "ANIMUS_SECRET_TINY".to_string(),
+                description: None,
+                sensitive: true,
+                required: false,
+            },
+            EnvRequirement {
+                name: "ANIMUS_SECRET_HUGE".to_string(),
+                description: None,
+                sensitive: true,
+                required: false,
+            },
+        ];
+        let opts =
+            PluginSpawnOptions::for_manifest("env-dump-plugin", &manifest_env, std::iter::empty::<String>(), None);
+
+        let host = PluginHost::spawn_with_options(&plugin, &[env_out.to_str().unwrap()], opts).await.expect("spawn");
+        let _ = host.shutdown().await;
+        clear_secret_snapshot_provider_for_test();
+
+        let env = read_env_dump(&env_out);
+        assert_eq!(env.get("ANIMUS_SECRET_TINY").map(String::as_str), Some("ok"));
+        assert!(
+            !env.contains_key("ANIMUS_SECRET_HUGE"),
+            "the > {MAX_INJECTED_SECRET_BYTES}-byte entry must be skipped"
+        );
     }
 
     #[test]

@@ -156,4 +156,10 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Manage project-scoped secrets stored in the OS keychain
+    /// (v0.5.8).
+    Secret {
+        #[command(subcommand)]
+        command: SecretCommand,
+    },
 }

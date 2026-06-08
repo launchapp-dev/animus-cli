@@ -12,6 +12,7 @@ pub mod plugin_preflight;
 pub mod plugin_registry;
 pub mod principal;
 pub mod runtime_contract;
+pub mod secret_store;
 pub mod services;
 pub mod state_machines;
 pub mod store;
@@ -90,6 +91,11 @@ pub use runtime_contract::{
     build_cli_launch_contract, build_runtime_contract, cli_capabilities_for_tool, cli_capabilities_from_config,
     cli_tool_executable, cli_tool_read_only_flag, cli_tool_response_schema_flag, CliCapabilities, CliSessionResumeMode,
     CliSessionResumePlan,
+};
+pub use secret_store::{
+    enforce_injection_cap, index_path as secrets_index_path, keychain_service_name,
+    validate_key as validate_secret_key, KeyringSecretStore, MockSecretStore, SecretStore, SecretStoreError,
+    SecretStoreResult, INDEX_FILE_NAME, KEYCHAIN_SERVICE_PREFIX, MAX_INJECTED_ENV_BYTES, SECRETS_DIR_NAME,
 };
 pub use services::{
     evaluate_task_priority_policy, load_daemon_health_snapshot, load_schedule_state, load_trigger_state,

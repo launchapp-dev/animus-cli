@@ -158,6 +158,9 @@ Visible top-level commands:
 - `flavor`
 - `self`
 - `metrics`
+- `cost`
+- `auth`
+- `secret`
 
 Use these reference docs instead of hand-maintained summaries:
 

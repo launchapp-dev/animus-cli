@@ -28,6 +28,7 @@ which = "8"
 toml = "1.0"
 serde_yaml = "0.9"
 thiserror = "1"
+keyring = { version = "3", default-features = false, features = ["apple-native", "linux-native-sync-persistent", "windows-native", "crypto-rust"] }
 
 [lints]
 workspace = true

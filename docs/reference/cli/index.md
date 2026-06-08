@@ -8,6 +8,7 @@ Complete reference of every `animus` command, subcommand, and key flag. This tre
 |---|---|
 | `--json` | Machine-readable JSON output (`animus.cli.v1` envelope) |
 | `--project-root <PATH>` | Override project root resolution for the current command |
+| `--as <PRINCIPAL>` | Impersonate a declared principal for daemon-backed operations. Honor-system on local sockets, warned loudly, and ignored when the active RBAC policy is `single-user` |
 
 ---
 
@@ -259,6 +260,14 @@ animus
 │
 ├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)
 │   └── whoami               Print the currently resolved principal (id + kind + peer OS user)
+│
+├── secret                   Manage project-scoped secrets stored in the OS keychain (v0.5.8)
+│   ├── set                  Store a secret (value from --value or stdin)
+│   ├── get                  Print a stored value
+│   ├── list                 List stored KEY names (never values)
+│   ├── rm                   Remove a stored secret
+│   ├── import-env           Bulk-import KEY=VALUE pairs from a .env file
+│   └── export-env           Export keychain entries to a .env file (loud warn)
 │
 └── help                     Print this message or the help of the given subcommand(s)
 ```

@@ -183,6 +183,13 @@ where
     // slot bounded by `RuntimeQuotas::plugin_process_max`.
     crate::quotas::install_runtime_quota_process_slot_factory();
 
+    // v0.5.8 secrets: wire keychain-backed secrets into the plugin spawn
+    // path and the workflow YAML interpolator. Both installs are
+    // first-installer-wins, so tests that pre-install a mock keep theirs.
+    let secrets_project_root = std::path::Path::new(project_root);
+    let _ = crate::quotas::install_keychain_secret_provider_for(secrets_project_root);
+    let _ = crate::quotas::install_keychain_workflow_resolver_for(secrets_project_root);
+
     hooks.handle_event(DaemonRunEvent::Startup { project_root: primary_root.clone(), daemon_pid })?;
 
     // Preflight BEFORE flipping persisted daemon status to Running. A first-time
