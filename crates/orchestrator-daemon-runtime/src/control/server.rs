@@ -31,6 +31,7 @@ use tokio::task::JoinHandle;
 use super::connection::ControlConnection;
 use super::policy::{ConnectionPrincipal, PolicyState};
 use super::workflow_events::WorkflowEventBroadcaster;
+use orchestrator_plugin_host::PluginStatusRegistry;
 
 /// Environment variable that disables the control server entirely when
 /// set to a truthy value.
@@ -205,8 +206,39 @@ impl ControlServer {
         broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
         policy: PolicyState,
     ) -> Result<ControlServerHandle, ControlError> {
+        Self::start_with_policy_and_observability(project_root, surface, broadcaster, policy, None).await
+    }
+
+    /// Like [`Self::start_with_workflow_events`] but additionally wires a
+    /// [`PluginStatusRegistry`] for the `plugin/status` RPC method.
+    pub async fn start_with_observability(
+        project_root: &Path,
+        surface: Arc<dyn ControlSurface>,
+        broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        status_registry: Option<Arc<PluginStatusRegistry>>,
+    ) -> Result<ControlServerHandle, ControlError> {
+        Self::start_with_policy_and_observability(
+            project_root,
+            surface,
+            broadcaster,
+            PolicyState::single_user(),
+            status_registry,
+        )
+        .await
+    }
+
+    /// v0.5.8 canonical full-featured constructor: RBAC policy + workflow
+    /// event broadcaster + plugin status registry, all wired through the
+    /// accept loop and each spawned [`ControlConnection`].
+    pub async fn start_with_policy_and_observability(
+        project_root: &Path,
+        surface: Arc<dyn ControlSurface>,
+        broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        policy: PolicyState,
+        status_registry: Option<Arc<PluginStatusRegistry>>,
+    ) -> Result<ControlServerHandle, ControlError> {
         let socket_path = control_socket_path(project_root);
-        Self::start_with_socket_policy_and_workflow_events(socket_path, surface, broadcaster, policy).await
+        Self::start_with_socket_full(socket_path, surface, broadcaster, policy, status_registry).await
     }
 
     /// Bind at an explicit socket path. Used by tests where the
@@ -230,11 +262,12 @@ impl ControlServer {
         surface: Arc<dyn ControlSurface>,
         broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
     ) -> Result<ControlServerHandle, ControlError> {
-        Self::start_with_socket_policy_and_workflow_events(
+        Self::start_with_socket_full(
             socket_path,
             surface,
             broadcaster,
             PolicyState::single_user(),
+            None,
         )
         .await
     }
@@ -247,6 +280,29 @@ impl ControlServer {
         surface: Arc<dyn ControlSurface>,
         broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
         policy: PolicyState,
+    ) -> Result<ControlServerHandle, ControlError> {
+        Self::start_with_socket_full(socket_path, surface, broadcaster, policy, None).await
+    }
+
+    #[cfg(unix)]
+    pub async fn start_with_socket_and_observability(
+        socket_path: PathBuf,
+        surface: Arc<dyn ControlSurface>,
+        broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        status_registry: Option<Arc<PluginStatusRegistry>>,
+    ) -> Result<ControlServerHandle, ControlError> {
+        Self::start_with_socket_full(socket_path, surface, broadcaster, PolicyState::single_user(), status_registry)
+            .await
+    }
+
+    /// v0.5.8 canonical full-featured socket-level constructor.
+    #[cfg(unix)]
+    pub async fn start_with_socket_full(
+        socket_path: PathBuf,
+        surface: Arc<dyn ControlSurface>,
+        broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        policy: PolicyState,
+        status_registry: Option<Arc<PluginStatusRegistry>>,
     ) -> Result<ControlServerHandle, ControlError> {
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent)
@@ -269,6 +325,7 @@ impl ControlServer {
             socket_path.clone(),
             broadcaster,
             policy,
+            status_registry,
         ));
 
         Ok(ControlServerHandle { socket_path, accept_task: Some(accept_task), shutdown_tx })
@@ -303,6 +360,27 @@ impl ControlServer {
     ) -> Result<ControlServerHandle, ControlError> {
         Err(ControlError::Unavailable("control server not supported on this platform"))
     }
+
+    #[cfg(not(unix))]
+    pub async fn start_with_socket_and_observability(
+        _socket_path: PathBuf,
+        _surface: Arc<dyn ControlSurface>,
+        _broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        _status_registry: Option<Arc<PluginStatusRegistry>>,
+    ) -> Result<ControlServerHandle, ControlError> {
+        Err(ControlError::Unavailable("control server not supported on this platform"))
+    }
+
+    #[cfg(not(unix))]
+    pub async fn start_with_socket_full(
+        _socket_path: PathBuf,
+        _surface: Arc<dyn ControlSurface>,
+        _broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+        _policy: PolicyState,
+        _status_registry: Option<Arc<PluginStatusRegistry>>,
+    ) -> Result<ControlServerHandle, ControlError> {
+        Err(ControlError::Unavailable("control server not supported on this platform"))
+    }
 }
 
 /// Background task: accept connections until the shutdown signal fires.
@@ -320,6 +398,7 @@ async fn accept_loop(
     socket_path: PathBuf,
     broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
     policy: PolicyState,
+    status_registry: Option<Arc<PluginStatusRegistry>>,
 ) {
     loop {
         tokio::select! {
@@ -342,12 +421,16 @@ async fn accept_loop(
                             Some(user) => Arc::new(ConnectionPrincipal::from_peer_os_user(user, &policy_clone)),
                             None => Arc::new(ConnectionPrincipal::anonymous()),
                         };
+                        let status_registry_clone = status_registry.clone();
                         tokio::spawn(async move {
                             let mut connection = ControlConnection::new(stream, surface)
                                 .with_policy(policy_clone)
                                 .with_principal(principal);
                             if let Some(b) = broadcaster_clone {
                                 connection = connection.with_workflow_event_broadcaster(b);
+                            }
+                            if let Some(r) = status_registry_clone {
+                                connection = connection.with_plugin_status_registry(r);
                             }
                             if let Err(err) = connection.serve().await {
                                 tracing::debug!(

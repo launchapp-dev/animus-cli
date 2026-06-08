@@ -190,7 +190,8 @@ animus
 │   ├── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`). The lockfile records sha256 + version for every installed plugin so an `install --force` or tampered-binary scenario is visible to operators
 │   │   ├── list             List every entry currently recorded in the plugin lockfile
 │   │   └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
-│   └── doctor               Per-role view of installed plugins. Shows every preflight role with its installed plugins (by installed_kind + native_kind) and flags duplicates so collisions are visible without spelunking through the lockfile (v0.5.7)
+│   ├── doctor               Per-role view of installed plugins. Shows every preflight role with its installed plugins (by installed_kind + native_kind) and flags duplicates so collisions are visible without spelunking through the lockfile (v0.5.7)
+│   └── status               Per-plugin runtime status (pid, state, last RPC, restart count, last error). Answers "why does this plugin feel stuck?" by surfacing the supervisor's restart counter for every discovered plugin (v0.5.8)
 │
 ├── runner                   Inspect provider-plugin health and orphaned CLI processes
 │   ├── health               Show provider plugin health (one row per discovered provider) and daemon health
@@ -262,6 +263,9 @@ animus
 │
 ├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)
 │   └── whoami               Print the currently resolved principal (id + kind + peer OS user)
+│
+├── events                   Stream workflow lifecycle events from the daemon (v0.5.8)
+│   └── tail                 Subscribe to `workflow/events` and render phase_started / phase_completed / workflow_completed / workflow_failed; supports `--workflow-id`, client-side `--since`, `--json`. The stream naturally terminates when a `--workflow-id` filter sees workflow_completed/workflow_failed; otherwise it follows until Ctrl-C.
 │
 └── help                     Print this message or the help of the given subcommand(s)
 ```

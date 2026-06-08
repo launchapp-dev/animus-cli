@@ -6,6 +6,7 @@ pub mod lockfile;
 mod registry;
 pub mod session;
 pub mod signature_verifier;
+pub mod status;
 mod subject_router;
 mod transport;
 
@@ -29,6 +30,10 @@ pub use registry::PluginRegistry;
 pub use signature_verifier::{
     cosign_available, verify_plugin_binary_keyless, verify_plugin_install, PolicyMode, SignaturePolicy,
     TrustedPublisher, VerificationResult, GITHUB_OIDC_ISSUER,
+};
+pub use status::{
+    global_status_registry, install_global_status_registry, PluginLastError, PluginRuntimeState, PluginRuntimeStatus,
+    PluginStatusRegistry, PluginStatusResponse, StatusRegistryObserver, PLUGIN_STATUS_PROTOCOL_VERSION,
 };
 pub use subject_router::{KindAliasMap, SubjectRouter};
 pub use transport::StdioTransport;

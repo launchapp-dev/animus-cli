@@ -104,6 +104,14 @@ impl PluginSessionBackend {
         let provider_tool = provider_tool.into();
         let display_name = format!("Plugin Provider ({plugin_name})");
         let supervisor = Arc::new(PluginSupervisor::with_defaults(plugin_name.clone()));
+        // Adopt the process-global plugin status registry as the default
+        // dispatch observer whenever one has been installed (i.e. inside the
+        // daemon). CLI processes that never install a registry get a no-op,
+        // preserving the historical zero-overhead default.
+        let dispatch_observer: Arc<dyn DispatchObserver> = match crate::status::global_status_registry() {
+            Some(registry) => crate::status::StatusRegistryObserver::new(registry),
+            None => Arc::new(NoopDispatchObserver),
+        };
         Self {
             plugin_name,
             binary_path,
@@ -113,7 +121,7 @@ impl PluginSessionBackend {
             env_required: Vec::new(),
             sessions: Arc::new(StdMutex::new(HashMap::new())),
             supervisor,
-            dispatch_observer: Arc::new(NoopDispatchObserver),
+            dispatch_observer,
             declared_methods: Vec::new(),
         }
     }
@@ -304,6 +312,9 @@ impl PluginSessionBackend {
         let host = match PluginHost::spawn_with_options(&self.binary_path, &[], spawn_options).await {
             Ok(host) => host,
             Err(error) => {
+                if let Some(registry) = crate::status::global_status_registry() {
+                    registry.record_exit(&self.plugin_name, Some(("SpawnFailed".to_string(), error.to_string())));
+                }
                 let message = format!("plugin '{}' spawn failed: {error}", self.plugin_name);
                 if let Some(logger) = self.project_logger() {
                     logger.error("plugin.dispatch.spawn", &message).err(error.to_string()).emit();
@@ -312,9 +323,16 @@ impl PluginSessionBackend {
             }
         };
 
+        if let Some(registry) = crate::status::global_status_registry() {
+            registry.record_spawn(&self.plugin_name, host.child_pid());
+        }
+
         let init_result = match host.handshake().await {
             Ok(result) => result,
             Err(error) => {
+                if let Some(registry) = crate::status::global_status_registry() {
+                    registry.record_exit(&self.plugin_name, Some(("HandshakeFailed".to_string(), error.to_string())));
+                }
                 graceful_shutdown(host).await;
                 let message = format!(
                     "plugin '{}' handshake failed: {error}; to bypass this plugin and use the in-tree backend, set ANIMUS_PROVIDER_DISABLE_PLUGIN=1 and restart the daemon",
@@ -517,6 +535,9 @@ impl PluginSessionBackend {
                         }
                         let _ = graceful_shutdown(host).await;
 
+                        if let Some(registry) = crate::status::global_status_registry() {
+                            registry.record_restart(&plugin_name_for_task);
+                        }
                         match supervisor_for_task.record_restart() {
                             Ok(()) => {}
                             Err(SupervisorError::TooManyRestarts { plugin, count, window }) => {
@@ -920,7 +941,11 @@ fn scrub_runtime_contract_env(extras: &mut Value, allowed: &std::collections::Ha
 }
 
 async fn graceful_shutdown(host: PluginHost) {
+    let plugin_name = host.name().to_string();
     let _ = tokio::time::timeout(Duration::from_secs(PLUGIN_SHUTDOWN_TIMEOUT_SECS), host.shutdown()).await;
+    if let Some(registry) = crate::status::global_status_registry() {
+        registry.record_exit(&plugin_name, None);
+    }
 }
 
 enum ResponseOutcome {

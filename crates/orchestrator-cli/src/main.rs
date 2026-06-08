@@ -201,6 +201,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Auth { command } => {
             services::operations::handle_auth(command, cli.as_principal.clone(), cli.json).await
         }
+        Command::Events { command } => services::operations::handle_events(command, &project_root, cli.json).await,
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
@@ -250,7 +251,8 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Update(_)
                 | Command::Metrics { .. }
                 | Command::Cost { .. }
-                | Command::Auth { .. } => {
+                | Command::Auth { .. }
+                | Command::Events { .. } => {
                     unreachable!("command handled before hub initialization")
                 }
             }
@@ -336,6 +338,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Metrics { .. } => CommandGroup::Metrics,
         Command::Cost { .. } => CommandGroup::Cost,
         Command::Auth { .. } => CommandGroup::Auth,
+        Command::Events { .. } => CommandGroup::Events,
     }
 }
 

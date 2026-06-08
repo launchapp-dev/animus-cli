@@ -160,4 +160,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: AuthCommand,
     },
+    /// Stream workflow lifecycle events from the daemon (v0.5.8).
+    Events {
+        #[command(subcommand)]
+        command: EventsCommand,
+    },
 }

@@ -104,6 +104,7 @@ pub(crate) enum CommandGroup {
     Metrics,
     Cost,
     Auth,
+    Events,
     Other,
 }
 

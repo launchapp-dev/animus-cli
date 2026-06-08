@@ -57,6 +57,15 @@ pub(crate) enum PluginCommand {
     /// `native_kind` are untouched. Only the user-facing `installed_kind` —
     /// the prefix the SubjectRouter dispatches against — changes.
     Rename(PluginRenameArgs),
+    /// Per-plugin runtime status (pid, state, last RPC, restart count, last
+    /// error). Answers "why does this plugin feel stuck?" by surfacing the
+    /// supervisor's restart counter for every discovered plugin. As of
+    /// v0.5.8 only provider plugin runtimes report live pid/last_rpc/restart
+    /// fields; other kinds (subject_backend, trigger, log_storage,
+    /// transport, queue, workflow_runner) appear as `discovered` until their
+    /// spawners are wired through the same status registry. See
+    /// TODO(codex-p2) markers in `daemon/run_daemon.rs`.
+    Status(PluginStatusArgs),
 }
 
 #[derive(Debug, Args)]
@@ -75,6 +84,18 @@ pub(crate) struct PluginRenameArgs {
     #[arg(long, default_value_t = false)]
     pub(crate) force: bool,
     /// Emit the result envelope as JSON.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginStatusArgs {
+    /// Limit the report to one plugin by name. When omitted, every known
+    /// plugin is listed.
+    #[arg(value_name = "NAME")]
+    pub(crate) name: Option<String>,
+    /// Emit results as JSON (animus.cli.v1 envelope when paired with --json
+    /// at the root).
     #[arg(long, default_value_t = false)]
     pub(crate) json: bool,
 }

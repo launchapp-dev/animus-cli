@@ -3,6 +3,7 @@ mod marketplace;
 mod new;
 mod scaffold;
 mod signing;
+mod status;
 
 pub(crate) use control_routing::build_plugin_routing;
 pub(crate) use marketplace::{
@@ -281,6 +282,10 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
         PluginCommand::Lock(cmd) => handle_plugin_lock(cmd, project_root).await,
         PluginCommand::Doctor(args) => handle_plugin_doctor(args, project_root, json).await,
         PluginCommand::Rename(args) => handle_plugin_rename(args, project_root, json),
+        PluginCommand::Status(mut args) => {
+            args.json = args.json || json;
+            status::handle_plugin_status(args, project_root).await
+        }
     }
 }
 
