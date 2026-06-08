@@ -24,6 +24,9 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux build deps (libdbus for keyring crate)
+        run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev pkg-config
+
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
 
