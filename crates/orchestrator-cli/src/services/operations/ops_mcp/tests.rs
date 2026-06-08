@@ -1480,3 +1480,30 @@ fn mcp_plugin_list_routes_via_control() {
     assert_eq!(args[0], "plugin");
     assert_eq!(args[1], "list");
 }
+
+#[tokio::test]
+async fn daemon_status_inproc_returns_value_without_subprocess() {
+    use super::daemon_inproc::daemon_status_inproc;
+    let temp = TempDir::new().expect("tempdir");
+    let project_root = temp.path().to_string_lossy().to_string();
+    let value = daemon_status_inproc(&project_root, None).await.expect("inproc status should not panic");
+    assert!(value.is_string() || value.is_object(), "expected DaemonStatus or DaemonStatusResponse JSON, got {value}");
+}
+
+#[tokio::test]
+async fn daemon_health_inproc_returns_value_without_subprocess() {
+    use super::daemon_inproc::daemon_health_inproc;
+    let temp = TempDir::new().expect("tempdir");
+    let project_root = temp.path().to_string_lossy().to_string();
+    let value = daemon_health_inproc(&project_root, None).await.expect("inproc health should not panic");
+    assert!(value.is_object(), "expected DaemonHealth or DaemonHealthResponse JSON, got {value}");
+}
+
+#[tokio::test]
+async fn daemon_agents_inproc_returns_value_without_subprocess() {
+    use super::daemon_inproc::daemon_agents_inproc;
+    let temp = TempDir::new().expect("tempdir");
+    let project_root = temp.path().to_string_lossy().to_string();
+    let value = daemon_agents_inproc(&project_root, None).await.expect("inproc agents should not panic");
+    assert!(value.is_object(), "expected agents object, got {value}");
+}

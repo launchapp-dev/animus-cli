@@ -31,6 +31,8 @@
 //!   success).
 
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::sync::Arc;
 
 use crate::control::control_socket_path;
 use animus_control_protocol::{
@@ -71,6 +73,8 @@ pub const ANIMUS_AS_PRINCIPAL_ENV: &str = "ANIMUS_AS_PRINCIPAL";
 #[derive(Debug, Clone)]
 pub struct ControlClient {
     socket_path: PathBuf,
+    #[cfg(unix)]
+    cached_stream: Arc<tokio::sync::Mutex<Option<UnixStream>>>,
 }
 
 impl ControlClient {
@@ -89,9 +93,13 @@ impl ControlClient {
         // Probe-connect to verify the socket is actually accepting
         // connections. A stale socket file (left by a crashed daemon)
         // exists but fails to connect — treat that as "daemon not
-        // running" rather than as a hard error.
+        // running" rather than as a hard error. The probed stream is
+        // cached so the first `call_raw` reuses it instead of opening a
+        // second socket — see the cached_stream field on ControlClient.
         match UnixStream::connect(&socket_path).await {
-            Ok(_stream) => Ok(Some(Self { socket_path })),
+            Ok(stream) => {
+                Ok(Some(Self { socket_path, cached_stream: Arc::new(tokio::sync::Mutex::new(Some(stream))) }))
+            }
             Err(err) if err.kind() == std::io::ErrorKind::ConnectionRefused => Ok(None),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(err) => Err(anyhow!("failed to connect to control socket {}: {err}", socket_path.display())),
@@ -108,7 +116,12 @@ impl ControlClient {
 
     /// Explicit constructor for tests that point a client at an
     /// arbitrary socket path (e.g. a tempdir).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
+    pub fn from_socket_path(socket_path: PathBuf) -> Self {
+        Self { socket_path, cached_stream: Arc::new(tokio::sync::Mutex::new(None)) }
+    }
+
+    #[cfg(all(test, not(unix)))]
     pub fn from_socket_path(socket_path: PathBuf) -> Self {
         Self { socket_path }
     }
@@ -117,6 +130,15 @@ impl ControlClient {
     /// tests.
     pub fn socket_path(&self) -> &Path {
         &self.socket_path
+    }
+
+    /// Consume the probe-connect stream cached by [`Self::try_connect`]
+    /// so the first RPC after construction reuses the connection
+    /// instead of opening a second AF_UNIX socket. Subsequent calls
+    /// receive `None` and open a fresh stream.
+    #[cfg(unix)]
+    async fn take_cached_stream(&self) -> Option<UnixStream> {
+        self.cached_stream.lock().await.take()
     }
 
     /// Issue one JSON-RPC request and decode the response into `R`.
@@ -149,9 +171,12 @@ impl ControlClient {
     /// by tests that need to inspect the error payload directly.
     #[cfg(unix)]
     pub async fn call_raw(&self, method: &str, params: Option<Value>) -> Result<RpcResponse> {
-        let stream = UnixStream::connect(&self.socket_path)
-            .await
-            .with_context(|| format!("connect to {}", self.socket_path.display()))?;
+        let stream = match self.take_cached_stream().await {
+            Some(stream) => stream,
+            None => UnixStream::connect(&self.socket_path)
+                .await
+                .with_context(|| format!("connect to {}", self.socket_path.display()))?,
+        };
         let (read_half, mut write_half) = stream.into_split();
         let mut reader = BufReader::new(read_half);
 
@@ -371,9 +396,12 @@ impl ControlClient {
         use tokio::net::UnixStream;
 
         let method = method_names::METHOD_DAEMON_LOGS;
-        let stream = UnixStream::connect(&self.socket_path)
-            .await
-            .with_context(|| format!("connect to {}", self.socket_path.display()))?;
+        let stream = match self.take_cached_stream().await {
+            Some(stream) => stream,
+            None => UnixStream::connect(&self.socket_path)
+                .await
+                .with_context(|| format!("connect to {}", self.socket_path.display()))?,
+        };
         let (read_half, mut write_half) = stream.into_split();
         let mut reader = BufReader::new(read_half);
 
@@ -453,9 +481,12 @@ impl ControlClient {
         F: FnMut(animus_control_protocol::types::WorkflowEvent) -> bool,
     {
         let method = method_names::METHOD_WORKFLOW_EVENTS;
-        let mut stream = UnixStream::connect(&self.socket_path)
-            .await
-            .with_context(|| format!("connect to {}", self.socket_path.display()))?;
+        let mut stream = match self.take_cached_stream().await {
+            Some(stream) => stream,
+            None => UnixStream::connect(&self.socket_path)
+                .await
+                .with_context(|| format!("connect to {}", self.socket_path.display()))?,
+        };
         let params = serde_json::to_value(&request).context("serialize workflow/events params")?;
         let rpc_request = RpcRequest::new(Value::from(1u64), method.to_string(), Some(params));
         let mut bytes = serde_json::to_vec(&rpc_request).context("serialize workflow/events request")?;
@@ -686,6 +717,102 @@ mod tests {
                 let _ = write_half.flush().await;
             }
         })
+    }
+
+    /// Counts inbound connects so the double-connect fix can be asserted
+    /// explicitly. A `try_connect` + first `call_raw` together must
+    /// produce exactly one accept on the server side; pre-fix this was
+    /// two (the probe-connect + the call-connect).
+    async fn spawn_counting_server(
+        socket_path: PathBuf,
+    ) -> (tokio::task::JoinHandle<()>, Arc<std::sync::atomic::AtomicUsize>) {
+        use std::sync::atomic::AtomicUsize;
+        let listener = UnixListener::bind(&socket_path).expect("bind");
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter_clone = counter.clone();
+        let handle = tokio::spawn(async move {
+            for _ in 0..4 {
+                let Ok((stream, _)) = listener.accept().await else {
+                    return;
+                };
+                counter_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let (read_half, mut write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                    continue;
+                }
+                let request: RpcRequest = match serde_json::from_str(line.trim_end()) {
+                    Ok(req) => req,
+                    Err(_) => continue,
+                };
+                let response = RpcResponse::ok(request.id, serde_json::json!({"running": true}));
+                let mut bytes = serde_json::to_vec(&response).expect("ser");
+                bytes.push(b'\n');
+                let _ = write_half.write_all(&bytes).await;
+                let _ = write_half.flush().await;
+            }
+        });
+        (handle, counter)
+    }
+
+    #[tokio::test]
+    async fn try_connect_then_call_opens_one_socket_not_two() {
+        let socket_path = short_sock_path();
+        let (server, counter) = spawn_counting_server(socket_path.clone()).await;
+
+        // Simulate `try_connect` against the same path by constructing
+        // the client through the public probe-and-cache path. We do the
+        // probe-connect here directly so we don't need the real
+        // scoped_state_root resolution.
+        let stream = UnixStream::connect(&socket_path).await.expect("probe connect");
+        let client = ControlClient {
+            socket_path: socket_path.clone(),
+            cached_stream: Arc::new(tokio::sync::Mutex::new(Some(stream))),
+        };
+
+        let _: serde_json::Value =
+            tokio::time::timeout(Duration::from_secs(5), client.call("daemon/status", Value::Null))
+                .await
+                .expect("timeout")
+                .expect("call");
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "first call_raw must reuse the cached probe stream, not open a second AF_UNIX socket"
+        );
+        let _ = std::fs::remove_file(socket_path);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn second_call_after_cache_consumed_opens_fresh_socket() {
+        let socket_path = short_sock_path();
+        let (server, counter) = spawn_counting_server(socket_path.clone()).await;
+
+        let stream = UnixStream::connect(&socket_path).await.expect("probe connect");
+        let client = ControlClient {
+            socket_path: socket_path.clone(),
+            cached_stream: Arc::new(tokio::sync::Mutex::new(Some(stream))),
+        };
+
+        let _: serde_json::Value =
+            tokio::time::timeout(Duration::from_secs(5), client.call("daemon/status", Value::Null))
+                .await
+                .expect("timeout")
+                .expect("call");
+        let _: serde_json::Value =
+            tokio::time::timeout(Duration::from_secs(5), client.call("daemon/status", Value::Null))
+                .await
+                .expect("timeout")
+                .expect("call");
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "second call must open a fresh socket once the cached stream is consumed"
+        );
+        let _ = std::fs::remove_file(socket_path);
+        server.abort();
     }
 
     #[tokio::test]

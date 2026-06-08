@@ -43,13 +43,17 @@ impl DaemonOpsRoutingImpl {
 impl DaemonOpsRouting for DaemonOpsRoutingImpl {
     async fn daemon_status(&self) -> Result<DaemonStatusResponse, ControlError> {
         let project_root_str = self.project_root_str();
-        let snapshot = orchestrator_core::load_daemon_health_snapshot(self.project_root.as_path())
+        let snapshot = orchestrator_core::load_daemon_status_snapshot_fast(self.project_root.as_path())
             .await
             .map_err(|err| ControlError::Internal(format!("daemon/status: {err:#}")))?;
         let mut status = snapshot.status;
-        let pid = read_daemon_pid(&project_root_str);
-        if let Some(pid) = pid {
-            let alive = is_process_alive(pid);
+        let runtime_pid = read_daemon_pid(&project_root_str);
+        let pid = runtime_pid.or(snapshot.daemon_pid);
+        if let Some(active_pid) = pid {
+            let alive = match (runtime_pid, snapshot.daemon_pid, snapshot.process_alive) {
+                (Some(rt), Some(snap), Some(alive)) if rt == snap => alive,
+                _ => is_process_alive(active_pid),
+            };
             if !alive && matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
                 status = DaemonStatus::Crashed;
                 remove_daemon_pid(&project_root_str);

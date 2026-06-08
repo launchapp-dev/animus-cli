@@ -38,6 +38,8 @@ mod common_types;
 mod compaction;
 #[path = "ops_mcp/daemon.rs"]
 mod daemon;
+#[path = "ops_mcp/daemon_inproc.rs"]
+mod daemon_inproc;
 #[path = "ops_mcp/daemon_inputs.rs"]
 mod daemon_inputs;
 #[path = "ops_mcp/daemon_tools.rs"]

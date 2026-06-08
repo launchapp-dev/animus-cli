@@ -1,4 +1,6 @@
+use super::daemon_inproc::{daemon_agents_inproc, daemon_health_inproc, daemon_status_inproc, wrap_tool_result};
 use super::*;
+use rmcp::model::CallToolResult;
 
 #[tool_router(router = daemon_tool_router, vis = "pub(super)")]
 impl AoMcpServer {
@@ -28,8 +30,15 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_daemon_status(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.daemon.status", vec!["daemon".to_string(), "status".to_string()], params.0.project_root)
-            .await
+        let payload = wrap_tool_result(
+            "animus.daemon.status",
+            daemon_status_inproc(&self.default_project_root, params.0.project_root).await,
+        );
+        if super::daemon_inproc::is_tool_error(&payload) {
+            Ok(CallToolResult::structured_error(payload))
+        } else {
+            Ok(CallToolResult::structured(payload))
+        }
     }
 
     #[tool(
@@ -38,8 +47,15 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_daemon_health(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.daemon.health", vec!["daemon".to_string(), "health".to_string()], params.0.project_root)
-            .await
+        let payload = wrap_tool_result(
+            "animus.daemon.health",
+            daemon_health_inproc(&self.default_project_root, params.0.project_root).await,
+        );
+        if super::daemon_inproc::is_tool_error(&payload) {
+            Ok(CallToolResult::structured_error(payload))
+        } else {
+            Ok(CallToolResult::structured(payload))
+        }
     }
 
     #[tool(
@@ -86,8 +102,15 @@ impl AoMcpServer {
         input_schema = ao_schema_for_type::<ProjectRootInput>()
     )]
     async fn ao_daemon_agents(&self, params: Parameters<ProjectRootInput>) -> Result<CallToolResult, McpError> {
-        self.run_tool("animus.daemon.agents", vec!["daemon".to_string(), "agents".to_string()], params.0.project_root)
-            .await
+        let payload = wrap_tool_result(
+            "animus.daemon.agents",
+            daemon_agents_inproc(&self.default_project_root, params.0.project_root).await,
+        );
+        if super::daemon_inproc::is_tool_error(&payload) {
+            Ok(CallToolResult::structured_error(payload))
+        } else {
+            Ok(CallToolResult::structured(payload))
+        }
     }
 
     #[tool(
