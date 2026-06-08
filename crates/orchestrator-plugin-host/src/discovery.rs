@@ -11,6 +11,7 @@ use tokio::io::AsyncReadExt;
 use crate::host::PLUGIN_BASE_ENV_ALLOWLIST;
 use crate::lockfile::PluginLockfile;
 use crate::manifest_cache::ManifestCache;
+use crate::scope::PluginScope;
 
 /// Hard ceiling on how long a plugin gets to print its manifest before the
 /// host kills the child and surfaces a discovery warning. Manifests are
@@ -84,6 +85,7 @@ pub struct PluginDiscovery {
     project_root: Option<PathBuf>,
     config_path: Option<PathBuf>,
     include_system_path: bool,
+    scope: Option<PluginScope>,
 }
 
 /// A binary the discovery walker found and now needs a manifest for.
@@ -303,6 +305,19 @@ impl PluginDiscovery {
         self
     }
 
+    /// Apply a [`PluginScope`] filter to the discovered set. Plugins
+    /// outside the scope are removed from the returned `discovered`
+    /// list AFTER the manifest probe completes — warnings for failed
+    /// probes still surface so operators retain diagnostic info on
+    /// out-of-scope plugins whose manifest is broken.
+    ///
+    /// When this builder method is not called, [`PluginScopeMode::All`]
+    /// semantics apply (the v0.5.8 behavior).
+    pub fn with_scope(mut self, scope: PluginScope) -> Self {
+        self.scope = Some(scope);
+        self
+    }
+
     pub fn discover(&self) -> Result<Vec<DiscoveredPlugin>> {
         Ok(self.discover_with_warnings()?.0)
     }
@@ -404,6 +419,46 @@ impl PluginDiscovery {
             }
         }
 
+        // Auto-load the project scope when a `project_root` is set but
+        // no explicit `with_scope(...)` override has been supplied. This
+        // keeps the dozen-or-so direct PluginDiscovery callers in the
+        // workspace honoring `.animus/plugin-scope.yaml` without each
+        // having to wire the scope loader manually. Builders that want
+        // unrestricted discovery can still pass
+        // `PluginScope::unrestricted()` explicitly.
+        let scope_owned;
+        let effective_scope: Option<&PluginScope> = match &self.scope {
+            Some(s) => Some(s),
+            None => match &self.project_root {
+                Some(root) => {
+                    scope_owned = PluginScope::load_for_project(root).unwrap_or_else(|err| {
+                        tracing::warn!(
+                            error = %err,
+                            "failed to auto-load plugin scope; falling back to unrestricted discovery"
+                        );
+                        PluginScope::unrestricted()
+                    });
+                    Some(&scope_owned)
+                }
+                None => None,
+            },
+        };
+        if let Some(scope) = effective_scope {
+            if !scope.admits_everything() {
+                let before = discovered.len();
+                discovered.retain(|plugin| scope.admits(plugin));
+                let removed = before.saturating_sub(discovered.len());
+                if removed > 0 {
+                    tracing::debug!(
+                        scope_mode = scope.mode.as_wire(),
+                        removed,
+                        kept = discovered.len(),
+                        "plugin scope filter applied"
+                    );
+                }
+            }
+        }
+
         Ok((discovered, warnings))
     }
 
@@ -497,7 +552,15 @@ impl PluginDiscovery {
 }
 
 pub fn discover_plugins(project_root: impl Into<PathBuf>) -> Result<Vec<DiscoveredPlugin>> {
-    PluginDiscovery::new().with_project_root(project_root).discover()
+    let root: PathBuf = project_root.into();
+    let scope = PluginScope::load_for_project(&root).unwrap_or_else(|err| {
+        tracing::warn!(
+            error = %err,
+            "failed to load plugin scope; falling back to unrestricted discovery"
+        );
+        PluginScope::unrestricted()
+    });
+    PluginDiscovery::new().with_project_root(root).with_scope(scope).discover()
 }
 
 /// Discover all installed plugins whose manifest `plugin_kind` equals
@@ -962,7 +1025,7 @@ mod tests {
         let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
         let plugin = temp.path().join("renamed-bin");
         let manifest = serde_json::json!({
-            "name": "animus-subject-default",
+            "name": "animus-provider-default",
             "version": "0.1.0",
             "plugin_kind": "subject_backend",
             "description": "test",
@@ -978,7 +1041,7 @@ mod tests {
         fs::write(
             &config_path,
             format!(
-                "plugins:\n  custom-task:\n    binary: {}\n    name: animus-subject-default\n    name_override: custom-task\n",
+                "plugins:\n  custom-task:\n    binary: {}\n    name: animus-provider-default\n    name_override: custom-task\n",
                 plugin.to_string_lossy()
             ),
         )
@@ -1489,6 +1552,119 @@ mod tests {
         );
         assert_eq!(warnings[0].name, plugin_name);
         assert_eq!(warnings[0].source, DiscoverySource::ProjectLocal);
+    }
+
+    // ---- per-project scope filter (v0.5.9) -----------------------------
+
+    #[cfg(unix)]
+    #[test]
+    fn scope_filter_allowlist_drops_out_of_scope_plugins() {
+        use crate::scope::{PluginScope, PluginScopeMode};
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        let keep_path = install_dir.join("animus-provider-default");
+        let drop_path = install_dir.join("animus-provider-linear");
+        write_executable_plugin(&keep_path, "animus-provider-default");
+        write_executable_plugin(&drop_path, "animus-provider-linear");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        let mut scope = PluginScope { mode: PluginScopeMode::Allowlist, ..PluginScope::default() };
+        scope.allow.insert("animus-provider-default".to_string());
+
+        let (discovered, _warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_scope(scope)
+            .discover_with_warnings()
+            .expect("discover");
+
+        let names: BTreeSet<&str> = discovered.iter().map(|p| p.name.as_str()).collect();
+        assert!(names.contains("animus-provider-default"), "in-scope plugin must remain, got {names:?}");
+        assert!(!names.contains("animus-provider-linear"), "out-of-scope plugin must be filtered, got {names:?}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scope_filter_all_mode_returns_full_set() {
+        use crate::scope::PluginScope;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        let one = install_dir.join("animus-provider-default");
+        let two = install_dir.join("animus-provider-linear");
+        write_executable_plugin(&one, "animus-provider-default");
+        write_executable_plugin(&two, "animus-provider-linear");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        let scope = PluginScope::unrestricted();
+        let (discovered, _warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_scope(scope)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert_eq!(discovered.len(), 2, "mode=all must return every discovered plugin");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scope_filter_preserves_warnings_for_out_of_scope_failed_plugin() {
+        use crate::scope::{PluginScope, PluginScopeMode};
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        let broken = install_dir.join("animus-provider-broken");
+        fs::write(&broken, "#!/bin/sh\nexit 2\n").expect("write broken");
+        let mut perms = fs::metadata(&broken).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&broken, perms).expect("chmod");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        // Allowlist that does NOT include the broken plugin — but discovery
+        // must still emit a warning so operators see the failed probe.
+        let mut scope = PluginScope { mode: PluginScopeMode::Allowlist, ..PluginScope::default() };
+        scope.allow.insert("animus-provider-default".to_string());
+
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_scope(scope)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(discovered.is_empty(), "broken plugin must not appear in discovered set");
+        assert_eq!(warnings.len(), 1, "warning must survive scope filter, got {warnings:?}");
+        assert_eq!(warnings[0].name, "animus-provider-broken");
     }
 
     #[cfg(unix)]

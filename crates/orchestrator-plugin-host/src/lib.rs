@@ -5,6 +5,7 @@ mod host;
 pub mod lockfile;
 pub mod manifest_cache;
 mod registry;
+pub mod scope;
 pub mod session;
 pub mod signature_verifier;
 pub mod status;
@@ -42,6 +43,7 @@ pub use manifest_cache::{CachedEntry, ManifestCache};
 #[cfg(test)]
 pub(crate) static TEST_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub use registry::PluginRegistry;
+pub use scope::{PluginScope, PluginScopeMode, PLUGIN_SCOPE_FILE, PLUGIN_SCOPE_SCHEMA_V1};
 pub use signature_verifier::{
     cosign_available, verify_plugin_binary_keyless, verify_plugin_install, PolicyMode, SignaturePolicy,
     TrustedPublisher, VerificationResult, GITHUB_OIDC_ISSUER,

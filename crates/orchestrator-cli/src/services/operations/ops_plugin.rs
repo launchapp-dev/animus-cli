@@ -2,6 +2,7 @@ mod control_routing;
 mod marketplace;
 mod new;
 mod scaffold;
+mod scope;
 mod signing;
 mod status;
 
@@ -38,7 +39,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     invalid_input_error, not_found_error, print_value, PluginCallArgs, PluginCommand, PluginDoctorArgs, PluginInfoArgs,
     PluginInstallArgs, PluginInstallDefaultsArgs, PluginListArgs, PluginLockCommand, PluginLockListArgs,
-    PluginLockVerifyArgs, PluginPingArgs, PluginRenameArgs, PluginScaffoldCommand, PluginUninstallArgs,
+    PluginLockVerifyArgs, PluginPingArgs, PluginRenameArgs, PluginScaffoldCommand, PluginScopeCommand,
+    PluginUninstallArgs,
 };
 
 #[derive(Debug, Serialize)]
@@ -287,6 +289,20 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
             status::handle_plugin_status(args, project_root).await
         }
         PluginCommand::Cache(cmd) => handle_plugin_cache(cmd, json),
+        PluginCommand::Scope(cmd) => match cmd {
+            PluginScopeCommand::Show(mut args) => {
+                args.json = args.json || json;
+                scope::handle_plugin_scope_show(args, project_root).await
+            }
+            PluginScopeCommand::Set(mut args) => {
+                args.json = args.json || json;
+                scope::handle_plugin_scope_set(args, project_root).await
+            }
+            PluginScopeCommand::Reset(mut args) => {
+                args.json = args.json || json;
+                scope::handle_plugin_scope_reset(args, project_root).await
+            }
+        },
     }
 }
 
@@ -1937,9 +1953,12 @@ fn pick_installed_kind_for_install(
 }
 
 fn discover(project_root: &str, include_system_path: bool) -> Result<Vec<DiscoveredPlugin>> {
+    let root = Path::new(project_root);
+    let scope = scope::load_project_scope(root);
     PluginDiscovery::new()
-        .with_project_root(Path::new(project_root))
+        .with_project_root(root)
         .include_system_path(include_system_path)
+        .with_scope(scope)
         .discover()
         .context("plugin discovery failed")
 }
@@ -1948,9 +1967,12 @@ fn discover_with_warnings(
     project_root: &str,
     include_system_path: bool,
 ) -> Result<(Vec<DiscoveredPlugin>, Vec<DiscoveryWarning>)> {
+    let root = Path::new(project_root);
+    let scope = scope::load_project_scope(root);
     PluginDiscovery::new()
-        .with_project_root(Path::new(project_root))
+        .with_project_root(root)
         .include_system_path(include_system_path)
+        .with_scope(scope)
         .discover_with_warnings()
         .context("plugin discovery failed")
 }

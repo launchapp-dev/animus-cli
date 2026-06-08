@@ -74,6 +74,13 @@ pub(crate) enum PluginCommand {
     /// rewrite the lockfile, or `list` to debug cache contents.
     #[command(subcommand)]
     Cache(PluginCacheCommand),
+    /// Per-project plugin scope (`.animus/plugin-scope.yaml`). Lets a
+    /// project opt into a subset of the globally installed plugin set so
+    /// discovery, preflight, and the plugin-status registry iterate just
+    /// the project's relevant plugins instead of every binary in
+    /// `~/.animus/plugins/`.
+    #[command(subcommand)]
+    Scope(PluginScopeCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -97,6 +104,65 @@ pub(crate) struct PluginCacheClearArgs {
 #[derive(Debug, Args)]
 pub(crate) struct PluginCacheListArgs {
     /// Emit results as JSON.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum PluginScopeCommand {
+    /// Print the effective scope (mode + resolved admit-set) for the
+    /// current project. Reads `<project>/.animus/plugin-scope.yaml` and
+    /// merges with the active flavor's required plugin list when
+    /// `mode: flavor-only` is in effect.
+    Show(PluginScopeShowArgs),
+    /// Write `<project>/.animus/plugin-scope.yaml` with the supplied
+    /// mode + allow/extras/require sets. Merges additively on repeat
+    /// invocations only when `--replace` is omitted; with `--replace`
+    /// the file is overwritten with exactly the flags supplied.
+    Set(PluginScopeSetArgs),
+    /// Delete `<project>/.animus/plugin-scope.yaml`. Discovery falls
+    /// back to the default scope (`mode: flavor-only` when a flavor
+    /// manifest is present, otherwise `mode: all`).
+    Reset(PluginScopeResetArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginScopeShowArgs {
+    /// Emit the result envelope as JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginScopeSetArgs {
+    /// Scope mode: `all`, `flavor-only`, or `allowlist`.
+    #[arg(long, value_name = "MODE", value_parser = ["all", "flavor-only", "allowlist"])]
+    pub(crate) mode: Option<String>,
+    /// Plugin name to add to the `allow:` list. Repeatable.
+    #[arg(long = "allow", value_name = "NAME")]
+    pub(crate) allow: Vec<String>,
+    /// Plugin name to add to the `extras:` list (layered on top of the
+    /// flavor's required set in `mode: flavor-only`). Repeatable.
+    #[arg(long = "extras", value_name = "NAME")]
+    pub(crate) extras: Vec<String>,
+    /// Role-style declaration to record in `require:` (e.g.
+    /// `subject_kind:task`). The discovery filter does not consume these
+    /// directly — they are surfaced for the daemon's preflight layer.
+    /// Repeatable.
+    #[arg(long = "require", value_name = "ROLE")]
+    pub(crate) require: Vec<String>,
+    /// When set, overwrite the existing scope file with exactly the
+    /// supplied flags instead of merging additively.
+    #[arg(long, default_value_t = false)]
+    pub(crate) replace: bool,
+    /// Emit the result envelope as JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginScopeResetArgs {
+    /// Emit the result envelope as JSON instead of human-readable text.
     #[arg(long, default_value_t = false)]
     pub(crate) json: bool,
 }

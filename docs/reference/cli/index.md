@@ -193,9 +193,13 @@ animus
 │   │   └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
 │   ├── doctor               Per-role view of installed plugins. Shows every preflight role with its installed plugins (by installed_kind + native_kind) and flags duplicates so collisions are visible without spelunking through the lockfile (v0.5.7)
 │   ├── status               Per-plugin runtime status (pid, state, last RPC, restart count, last error). Answers "why does this plugin feel stuck?" by surfacing the supervisor's restart counter for every discovered plugin (v0.5.8)
-│   └── cache                Inspect or wipe the on-disk plugin manifest cache (`~/.animus/cache/manifests/`) that backs the v0.5.9 discovery speed-up (v0.5.9)
-│       ├── clear            Remove every cached manifest entry; discovery repopulates on next call
-│       └── list             List cached entries with sha256, size, and mtime
+│   ├── cache                Inspect or wipe the on-disk plugin manifest cache (`~/.animus/cache/manifests/`) that backs the v0.5.9 discovery speed-up (v0.5.9)
+│   │   ├── clear            Remove every cached manifest entry; discovery repopulates on next call
+│   │   └── list             List cached entries with sha256, size, and mtime
+│   └── scope                Per-project plugin scope (`.animus/plugin-scope.yaml`). Lets a project opt into a subset of the globally installed plugin set so discovery, preflight, and the plugin-status registry iterate just the project's relevant plugins (v0.5.9)
+│       ├── show             Print the effective scope (mode + resolved admit-set) for the current project
+│       ├── set              Write `.animus/plugin-scope.yaml` with the supplied mode + allow/extras/require sets
+│       └── reset            Delete `.animus/plugin-scope.yaml` and fall back to the default scope
 │
 ├── runner                   Inspect provider-plugin health and orphaned CLI processes
 │   ├── health               Show provider plugin health (one row per discovered provider) and daemon health
