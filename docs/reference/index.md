@@ -15,6 +15,7 @@ Formal specifications and exhaustive listings for the Animus CLI.
 | [MCP Tools](mcp-tools.md) | All MCP tools exposed by `animus mcp serve` |
 | [Configuration](configuration.md) | Config files, environment variables, and precedence |
 | [Secrets](secrets.md) | Project-scoped OS keychain storage, CLI flows, and precedence |
+| [Chat](chat.md) | Multi-turn `animus chat` conversations and the provider-owned continuity model |
 | [Data Layout](data-layout.md) | Project-local `.animus/` config plus repo-scoped runtime state |
 | [Status Values & Enums](status-values.md) | All accepted enum values across the system |
 | [Security](security.md) | Plugin signature trust model, lockfile policy, kill switches, and multi-tenant + RBAC roadmap |

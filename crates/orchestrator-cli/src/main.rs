@@ -253,6 +253,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Update(args) => services::operations::handle_update(args, &project_root, cli.json).await,
         Command::Metrics { command } => services::operations::handle_metrics(command, &project_root, cli.json).await,
         Command::Cost { command } => services::operations::handle_cost(command, &project_root, cli.json).await,
+        Command::Chat { command } => services::runtime::handle_chat(command, &project_root, cli.json).await,
         Command::Auth { command } => {
             services::operations::handle_auth(command, cli.as_principal.clone(), cli.json).await
         }
@@ -310,6 +311,7 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Update(_)
                 | Command::Metrics { .. }
                 | Command::Cost { .. }
+                | Command::Chat { .. }
                 | Command::Auth { .. }
                 | Command::Events { .. }
                 | Command::State { .. }
@@ -374,6 +376,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Version => CommandGroup::Version,
         Command::Daemon { .. } => CommandGroup::Daemon,
         Command::Agent { .. } => CommandGroup::Agent,
+        Command::Chat { .. } => CommandGroup::Chat,
         Command::Project { .. } => CommandGroup::Project,
         Command::Queue { .. } => CommandGroup::Queue,
         Command::Workflow { .. } => CommandGroup::Workflow,

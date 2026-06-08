@@ -14,18 +14,21 @@ use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::Serialize;
 
 use crate::cli_types::{
-    CostCommand, CostSummaryArgs, CostTopArgs, CostTopBy, CostTrendWindow, CostTrendsArgs, CostWorkflowArgs,
+    CostCommand, CostConversationArgs, CostSummaryArgs, CostTopArgs, CostTopBy, CostTrendWindow, CostTrendsArgs,
+    CostWorkflowArgs,
 };
 use crate::print_value;
 use crate::services::cost::{
     aggregator::COST_STATE_SCHEMA_ID, enforce_caps, load_cost_state, save_cost_state, scan_runs, CostState, PhaseCost,
     WorkflowCost,
 };
+use crate::services::runtime::runtime_chat::store::{ConversationStore, FileConversationStore};
 
 const SUMMARY_SCHEMA: &str = "animus.cost.summary.v1";
 const WORKFLOW_SCHEMA: &str = "animus.cost.workflow.v1";
 const TOP_SCHEMA: &str = "animus.cost.top.v1";
 const TRENDS_SCHEMA: &str = "animus.cost.trends.v1";
+const CONVERSATION_SCHEMA: &str = "animus.cost.conversation.v1";
 
 pub(crate) async fn handle_cost(command: CostCommand, project_root: &str, json: bool) -> Result<()> {
     let project_path = Path::new(project_root);
@@ -34,6 +37,91 @@ pub(crate) async fn handle_cost(command: CostCommand, project_root: &str, json: 
         CostCommand::Workflow(args) => handle_workflow(project_path, args, json),
         CostCommand::Top(args) => handle_top(project_path, args, json),
         CostCommand::Trends(args) => handle_trends(project_path, args, json),
+        CostCommand::Conversation(args) => handle_conversation(project_path, args, json),
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct ConversationCostView {
+    schema: &'static str,
+    conversation_id: String,
+    assistant_turns: usize,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    input_tokens: u64,
+    output_tokens: u64,
+}
+
+/// Fold per-turn token + USD spend for a single chat conversation.
+///
+/// Token totals mirror the workflow aggregator (`input + output + reasoning`)
+/// and cost precedence mirrors the run scanner (provider-reported `cost_usd`
+/// first, else estimate from the turn's model + tokens via the published
+/// rates) so `animus cost conversation` agrees with `animus cost` semantics
+/// (codex round-5 P2).
+fn aggregate_conversation_cost(
+    conversation_id: &str,
+    messages: &[crate::services::runtime::runtime_chat::store::ChatMessage],
+) -> ConversationCostView {
+    let mut assistant_turns = 0usize;
+    let mut total_tokens = 0u64;
+    let mut total_cost_usd = 0.0f64;
+    let mut input_tokens = 0u64;
+    let mut output_tokens = 0u64;
+    for message in messages {
+        if message.usage.is_none() && message.cost_usd.is_none() {
+            continue;
+        }
+        assistant_turns += 1;
+        let turn_tokens = message.usage.as_ref().map_or(0u64, |usage| {
+            u64::from(usage.input) + u64::from(usage.output) + u64::from(usage.reasoning.unwrap_or(0))
+        });
+        if let Some(usage) = &message.usage {
+            input_tokens += u64::from(usage.input);
+            output_tokens += u64::from(usage.output);
+        }
+        total_tokens += turn_tokens;
+        let turn_cost = message.cost_usd.or_else(|| {
+            message
+                .model
+                .as_deref()
+                .and_then(|model| crate::services::cost::model_rates::estimate_cost_usd(model, turn_tokens))
+        });
+        if let Some(cost) = turn_cost {
+            total_cost_usd += cost;
+        }
+    }
+    ConversationCostView {
+        schema: CONVERSATION_SCHEMA,
+        conversation_id: conversation_id.to_string(),
+        assistant_turns,
+        total_tokens,
+        total_cost_usd,
+        input_tokens,
+        output_tokens,
+    }
+}
+
+/// Aggregate per-turn token + USD spend for a single chat conversation by
+/// folding the `usage` / `cost_usd` fields recorded on each assistant
+/// [`ChatMessage`](crate::services::runtime::runtime_chat::store::ChatMessage).
+fn handle_conversation(project_path: &Path, args: CostConversationArgs, json: bool) -> Result<()> {
+    let store = FileConversationStore::for_project(project_path)?;
+    if store.load_meta(&args.conversation_id)?.is_none() {
+        return Err(anyhow!("conversation '{}' not found", args.conversation_id));
+    }
+    let messages = store.load_messages(&args.conversation_id)?;
+    let view = aggregate_conversation_cost(&args.conversation_id, &messages);
+    if json {
+        print_value(&view, json)
+    } else {
+        println!("animus cost — conversation {}", view.conversation_id);
+        println!(
+            "  spend:  ${:.4} across {} tokens ({} in / {} out)",
+            view.total_cost_usd, view.total_tokens, view.input_tokens, view.output_tokens
+        );
+        println!("  turns:  {} assistant turns with recorded usage", view.assistant_turns);
+        Ok(())
     }
 }
 
@@ -495,6 +583,65 @@ fn parse_duration(input: &str) -> Result<Duration> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::runtime::runtime_chat::store::{ChatMessage, ChatRole};
+
+    fn assistant_turn(input: u32, output: u32, reasoning: Option<u32>, model: &str, cost: Option<f64>) -> ChatMessage {
+        ChatMessage {
+            seq: 1,
+            role: ChatRole::Assistant,
+            content: "reply".into(),
+            recorded_at: "2026-06-08T00:00:00Z".into(),
+            tool: Some("claude".into()),
+            model: Some(model.into()),
+            usage: Some(protocol::TokenUsage { input, output, reasoning, cache_read: None, cache_write: None }),
+            cost_usd: cost,
+        }
+    }
+
+    #[test]
+    fn conversation_cost_includes_reasoning_tokens() {
+        // input 100 + output 40 + reasoning 60 = 200 total tokens.
+        let messages = vec![assistant_turn(100, 40, Some(60), "claude-sonnet-4-6", Some(0.01))];
+        let view = aggregate_conversation_cost("c1", &messages);
+        assert_eq!(view.total_tokens, 200, "reasoning tokens must be included in the total");
+        assert_eq!(view.input_tokens, 100);
+        assert_eq!(view.output_tokens, 40);
+        assert_eq!(view.assistant_turns, 1);
+    }
+
+    #[test]
+    fn conversation_cost_estimates_from_model_when_provider_omits_cost() {
+        // No cost_usd, but model + tokens are known: 1M sonnet tokens @ $6/M.
+        let messages = vec![assistant_turn(600_000, 400_000, None, "claude-sonnet-4-6", None)];
+        let view = aggregate_conversation_cost("c1", &messages);
+        assert_eq!(view.total_tokens, 1_000_000);
+        assert!((view.total_cost_usd - 6.0).abs() < 1e-6, "expected $6 estimate, got {}", view.total_cost_usd);
+    }
+
+    #[test]
+    fn conversation_cost_prefers_provider_reported_cost() {
+        let messages = vec![assistant_turn(1000, 1000, None, "claude-sonnet-4-6", Some(0.25))];
+        let view = aggregate_conversation_cost("c1", &messages);
+        assert!((view.total_cost_usd - 0.25).abs() < 1e-9, "provider cost must win over estimate");
+    }
+
+    #[test]
+    fn conversation_cost_skips_user_only_turns() {
+        let user = ChatMessage {
+            seq: 0,
+            role: ChatRole::User,
+            content: "hi".into(),
+            recorded_at: "2026-06-08T00:00:00Z".into(),
+            tool: None,
+            model: None,
+            usage: None,
+            cost_usd: None,
+        };
+        let view = aggregate_conversation_cost("c1", &[user]);
+        assert_eq!(view.assistant_turns, 0);
+        assert_eq!(view.total_tokens, 0);
+        assert_eq!(view.total_cost_usd, 0.0);
+    }
 
     #[test]
     fn parse_duration_accepts_supported_units() {

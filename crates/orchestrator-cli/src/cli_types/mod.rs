@@ -1,5 +1,6 @@
 mod agent_types;
 mod auth_types;
+mod chat_types;
 mod cost_types;
 mod daemon_types;
 mod doctor_types;
@@ -33,6 +34,7 @@ mod workflow_types;
 
 pub(crate) use agent_types::*;
 pub(crate) use auth_types::*;
+pub(crate) use chat_types::*;
 pub(crate) use cost_types::*;
 pub(crate) use daemon_types::*;
 pub(crate) use doctor_types::*;
