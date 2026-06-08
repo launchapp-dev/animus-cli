@@ -106,6 +106,7 @@ pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
         schedules: Vec::new(),
         triggers: Vec::new(),
         daemon: None,
+        secrets: BTreeMap::new(),
     }
 }
 

@@ -51,6 +51,20 @@ pub(super) enum YamlPhaseEntry {
     Rich(HashMap<String, YamlPhaseRichConfig>),
 }
 
+/// Permissive YAML representation of a worktree block.
+///
+/// Authors may write either the long form (`worktree: { mode: skip, ... }`)
+/// or the short form (`worktree: skip`). The parser normalizes both into
+/// `WorktreeConfig`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum YamlPhaseWorktree {
+    /// `worktree: skip` short-form scalar (auto / required / skip).
+    Mode(String),
+    /// `worktree: { mode: ..., cleanup: ..., base_ref: ... }` long-form map.
+    Full(WorktreeConfig),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct YamlWorkflowDefinition {
     pub(super) id: String,
@@ -64,6 +78,8 @@ pub(super) struct YamlWorkflowDefinition {
     pub(super) post_success: Option<YamlPostSuccessConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) variables: Vec<WorkflowVariable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) worktree: Option<YamlPhaseWorktree>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -164,6 +180,8 @@ pub(super) struct YamlPhaseDefinition {
     pub(super) default_tool: Option<String>,
     #[serde(default)]
     pub(super) idempotency: Idempotency,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) worktree: Option<YamlPhaseWorktree>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -200,4 +218,9 @@ pub(super) struct YamlWorkflowFile {
     pub(super) triggers: Vec<WorkflowTrigger>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) daemon: Option<DaemonConfig>,
+    /// Top-level declarative secret references. Each entry maps a logical
+    /// secret name to a process env var; reference values with
+    /// `${secret.<name>}` in any YAML scalar.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(super) secrets: BTreeMap<String, SecretRef>,
 }

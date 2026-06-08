@@ -21,10 +21,103 @@ workflows:       # Named workflow pipelines
 schedules:       # Cron-driven workflow dispatch
 triggers:        # Event-driven workflow dispatch
 daemon:          # Daemon-wide runtime tuning
+secrets:         # Declarative secret references (v0.5.5+)
 ```
 
 All sections are optional. Multiple YAML files in `.animus/workflows/` are merged,
 and project YAML can override installed pack workflows.
+
+---
+
+## secrets (v0.5.5+)
+
+Declares logical secret names backed by process environment variables.
+Reference them in any YAML scalar with `${secret.<name>}` — resolution
+happens at config-compile time, with the file path and line number
+included in any error.
+
+```yaml
+secrets:
+  linear_token:
+    env: LINEAR_API_TOKEN
+    required: true                # default; compile-fails if unset
+    description: Linear GraphQL token
+  optional_pat:
+    env: OPTIONAL_GITHUB_PAT
+    required: false               # resolves to empty string when unset
+
+mcp_servers:
+  linear:
+    command: linear-mcp
+    env:
+      LINEAR_API_TOKEN: "${secret.linear_token}"
+```
+
+### Resolution semantics
+
+- The mapped env var is read at compile time. Required-but-unset env vars
+  fail the compile.
+- Referencing an undeclared key (`${secret.unknown}`) fails the compile.
+- The compiled `workflow-config.v2.json` contains the *resolved string*
+  — plugins consume the same scalar shape they always did. There is no
+  runtime secret-store indirection.
+
+### Sensitive-interpolation lint
+
+When a workflow YAML contains `${VAR}` whose name matches
+`TOKEN|KEY|SECRET|PASSWORD` (case-insensitive) and the reference is
+**not** inside the `secrets:` block or a `*_env:` declaration field
+(which name env vars rather than interpolate their values), the
+compiler emits a warning to stderr. This is a hint to move the value
+under `secrets:`; it does not fail the compile, since trusted
+workflows may have legitimate uses for direct env-var references.
+
+---
+
+## worktree (v0.5.5+)
+
+Controls whether the workflow runner creates a fresh git worktree for
+the phase. Available at the workflow level (under a workflow
+definition) and at the phase level (where it overrides the workflow
+default).
+
+```yaml
+phases:
+  doc-update:
+    mode: agent
+    agent: writer
+    directive: "Update docs."
+    worktree: skip                 # short-form scalar
+
+workflows:
+  - id: standard
+    phases: [requirements, implementation, code-review]
+    worktree:
+      mode: auto                   # auto | required | skip
+      cleanup: true                # remove worktree on success (default true)
+      base_ref: main               # branch to fork from (default: project default)
+```
+
+### Modes
+
+- `auto` (default) — create a worktree when the subject implies write
+  work. Matches the historical, always-on behavior.
+- `required` — always create a worktree; fail-fast if creation fails.
+  Use this when the phase **must** be isolated from the project root.
+- `skip` — never create a worktree; the phase runs in the project
+  root. Use this for read-only / report-only phases.
+
+A phase-level `worktree:` always overrides the workflow-level value.
+The short-form `worktree: skip` expands to `{ mode: skip, cleanup: true, base_ref: null }`.
+
+### Runtime split
+
+The kernel **parses, validates, and surfaces** the `worktree:` block on
+the compiled workflow config. Actual worktree creation is owned by the
+installed workflow runner plugin (`launchapp-dev/animus-workflow-runner-default`
+v0.4.0+). Older runners that don't yet understand the field treat it
+as `auto`; upgrade the runner plugin via `animus plugin install-defaults`
+to pick up `required` and `skip` enforcement.
 
 ---
 

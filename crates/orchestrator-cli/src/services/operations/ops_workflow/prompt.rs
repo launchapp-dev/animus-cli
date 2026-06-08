@@ -403,6 +403,7 @@ mod tests {
                 manual: None,
                 default_tool: None,
                 idempotency: orchestrator_core::Idempotency::Unknown,
+                worktree: None,
             },
         );
         phase.directive = Some("Implement {{release_name}} safely.".to_string());

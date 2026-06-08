@@ -295,6 +295,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            worktree: None,
         };
         let ctx = make_ctx_with_yaml_override("implementation", override_def);
 
@@ -335,6 +336,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            worktree: None,
         };
         let ctx = make_ctx_with_yaml_override("implementation", override_def);
 
@@ -368,6 +370,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            worktree: None,
         };
         let ctx = make_ctx_with_yaml_override("implementation", sparse);
 
@@ -401,6 +404,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            worktree: None,
         };
         agent_runtime_config.phases.insert("implementation".to_string(), sparse);
         let workflow = builtin_workflow_config();
@@ -459,6 +463,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            worktree: None,
         };
         agent_runtime_config.phases.insert("implementation".to_string(), sparse);
         let workflow = builtin_workflow_config();
@@ -511,6 +516,7 @@ mod tests {
             manual: None,
             default_tool: None,
             idempotency: Default::default(),
+            worktree: None,
         };
         agent_runtime_config.phases.insert("implementation".to_string(), sparse);
         let workflow = builtin_workflow_config();

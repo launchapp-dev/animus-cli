@@ -527,6 +527,8 @@ pub struct PhaseExecutionDefinition {
     pub default_tool: Option<String>,
     #[serde(default)]
     pub idempotency: Idempotency,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<crate::workflow_config::WorktreeConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1198,7 +1200,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
-                },
+                    worktree: None,                },
             ),
             (
                 "requirements".to_string(),
@@ -1225,7 +1227,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
-                },
+                    worktree: None,                },
             ),
             (
                 "research".to_string(),
@@ -1252,7 +1254,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
-                },
+                    worktree: None,                },
             ),
             (
                 "ux-research".to_string(),
@@ -1272,7 +1274,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
-                },
+                    worktree: None,                },
             ),
             (
                 "wireframe".to_string(),
@@ -1292,7 +1294,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
-                },
+                    worktree: None,                },
             ),
             (
                 "mockup-review".to_string(),
@@ -1312,7 +1314,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
-                },
+                    worktree: None,                },
             ),
             (
                 "implementation".to_string(),
@@ -1350,7 +1352,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     manual: None,
                     default_tool: None,
                     idempotency: Idempotency::Unknown,
-                },
+                    worktree: None,                },
             ),
         ]),
         cli_tools: BTreeMap::new(),
@@ -1675,6 +1677,7 @@ pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConf
         schedules: Vec::new(),
         triggers: Vec::new(),
         daemon: None,
+        secrets: BTreeMap::new(),
     };
     crate::workflow_config::write_workflow_yaml_overlay(
         project_root,
@@ -2208,6 +2211,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         workflow.tools.insert(
@@ -2308,6 +2312,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         workflow.workflows.push(crate::workflow_config::WorkflowDefinition {
@@ -2317,6 +2322,7 @@ cli_tools:
             phases: vec!["pack-review".to_string().into()],
             post_success: None,
             variables: Vec::new(),
+            worktree: None,
         });
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
 
@@ -2541,6 +2547,7 @@ cli_tools:
             manual: None,
             default_tool: None,
             idempotency: Idempotency::Unknown,
+            worktree: None,
         };
 
         let json = serde_json::to_string(&definition).expect("serialize");
@@ -2594,6 +2601,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         validate_agent_runtime_config(&config).expect("valid command-mode config");
@@ -2619,6 +2627,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2663,6 +2672,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2707,6 +2717,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2751,6 +2762,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2795,6 +2807,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2843,6 +2856,7 @@ cli_tools:
                 }),
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -2887,6 +2901,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         assert_eq!(config.phase_mode("lint"), Some(PhaseExecutionMode::Command));
@@ -2938,6 +2953,7 @@ cli_tools:
             manual: None,
             default_tool: None,
             idempotency: Idempotency::Unknown,
+            worktree: None,
         };
 
         let json = serde_json::to_string_pretty(&definition).expect("serialize");
@@ -3019,6 +3035,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3063,6 +3080,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3371,6 +3389,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         assert_eq!(config.phase_system_prompt("custom-phase"), Some("Phase-level prompt override"));
@@ -3398,6 +3417,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         assert_eq!(config.phase_system_prompt("custom-phase"), Some("Agent profile prompt"));
@@ -3425,6 +3445,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         assert_eq!(config.phase_system_prompt("custom-phase"), Some("Agent profile prompt"));
@@ -3470,6 +3491,7 @@ cli_tools:
             manual: None,
             default_tool: None,
             idempotency: Idempotency::Unknown,
+            worktree: None,
         };
         let json = serde_json::to_string(&definition).expect("serialize");
         assert!(!json.contains("system_prompt"));
@@ -3508,6 +3530,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3541,6 +3564,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3574,6 +3598,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3619,6 +3644,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         let err = validate_agent_runtime_config(&config).unwrap_err();
@@ -3664,6 +3690,7 @@ cli_tools:
                 manual: None,
                 default_tool: None,
                 idempotency: Idempotency::Unknown,
+                worktree: None,
             },
         );
         validate_agent_runtime_config(&config).expect("valid decision contract should pass validation");

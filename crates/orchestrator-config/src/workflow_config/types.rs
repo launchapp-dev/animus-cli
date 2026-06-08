@@ -126,6 +126,97 @@ pub struct WorkflowVariable {
     pub default: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorktreeMode {
+    /// Create a worktree when the subject implies write work (legacy behavior).
+    #[default]
+    Auto,
+    /// Always require a fresh worktree; fail-fast if it can't be created.
+    Required,
+    /// Never create a worktree; the phase runs in the project root.
+    Skip,
+}
+
+/// Workflow- or phase-level worktree control. Authors may shorten to a single
+/// `worktree: skip` scalar in YAML; the parser expands that into
+/// `{ mode: Skip, .. }` with defaults.
+///
+/// The kernel surfaces this on the compiled `WorkflowConfig` but does NOT
+/// itself create or remove worktrees — that lives in the out-of-tree
+/// `launchapp-dev/animus-workflow-runner-default` plugin (v0.4.0+). Older
+/// runner plugins ignore the field and behave as `Auto`.
+// TODO(codex-p2): wire mode + base_ref + cleanup into
+// animus-workflow-runner-default's `WorkflowSession::ensure_cwd()` so
+// `required` and `skip` enforce, not just document, runtime behavior.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct WorktreeConfig {
+    #[serde(default)]
+    pub mode: WorktreeMode,
+    #[serde(default = "default_worktree_cleanup")]
+    pub cleanup: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+}
+
+impl Default for WorktreeConfig {
+    fn default() -> Self {
+        Self { mode: WorktreeMode::Auto, cleanup: default_worktree_cleanup(), base_ref: None }
+    }
+}
+
+pub(crate) fn default_worktree_cleanup() -> bool {
+    true
+}
+
+impl WorktreeConfig {
+    pub fn skip() -> Self {
+        Self { mode: WorktreeMode::Skip, cleanup: default_worktree_cleanup(), base_ref: None }
+    }
+
+    pub fn required() -> Self {
+        Self { mode: WorktreeMode::Required, cleanup: default_worktree_cleanup(), base_ref: None }
+    }
+
+    pub(crate) fn parse_mode(value: &str) -> Result<WorktreeMode> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "auto" => Ok(WorktreeMode::Auto),
+            "required" => Ok(WorktreeMode::Required),
+            "skip" => Ok(WorktreeMode::Skip),
+            other => Err(anyhow!("invalid worktree mode '{}' (expected auto, required, or skip)", other)),
+        }
+    }
+
+    /// Convert the permissive YAML representation (`YamlPhaseWorktree`) into
+    /// the canonical `WorktreeConfig`. Accepts a short-form scalar
+    /// (`worktree: skip`) or a long-form map.
+    pub(crate) fn from_yaml(yaml: super::yaml_types::YamlPhaseWorktree) -> Result<Self> {
+        match yaml {
+            super::yaml_types::YamlPhaseWorktree::Mode(scalar) => {
+                let mode = Self::parse_mode(&scalar)?;
+                Ok(Self { mode, cleanup: default_worktree_cleanup(), base_ref: None })
+            }
+            super::yaml_types::YamlPhaseWorktree::Full(config) => Ok(config),
+        }
+    }
+}
+
+/// Top-level declarative secret reference. `${secret.<key>}` interpolation
+/// resolves the named env var at compile time; required-but-unset fails the
+/// compile with a file path + line number diagnostic.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SecretRef {
+    pub env: String,
+    #[serde(default = "default_secret_required")]
+    pub required: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+pub(crate) fn default_secret_required() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDefinition {
     pub id: String,
@@ -138,6 +229,8 @@ pub struct WorkflowDefinition {
     pub post_success: Option<PostSuccessConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<WorkflowVariable>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeConfig>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -625,6 +718,8 @@ pub struct WorkflowConfig {
     pub triggers: Vec<WorkflowTrigger>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub daemon: Option<DaemonConfig>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secrets: BTreeMap<String, SecretRef>,
 }
 
 impl Default for WorkflowConfig {

@@ -8,6 +8,41 @@ All notable changes to this project will be documented in this file.
 
 - docs(workflow-yaml): document `schedules`, `triggers`, and `daemon` top-level blocks — features have shipped but had no authoring documentation. Added per-type config tables for `file_watcher`, `webhook`, `github_webhook`, and `plugin` triggers, runtime semantics for cron schedules (missed runs not replayed; `run_count` vs `missed_count`), and the full `DaemonConfig` field surface. Cross-linked from `docs/reference/configuration.md`.
 
+### Added (v0.5.5)
+
+- **`worktree:` block on workflows and phases.** Workflow YAML now accepts
+  `worktree: { mode: auto|required|skip, cleanup, base_ref }` at the
+  workflow level and (with short-form `worktree: skip` support) at the
+  per-phase level. `mode: required` fails-fast if a worktree can't be
+  created; `mode: skip` keeps the phase in the project root; phase-level
+  values always override the workflow-level default. Replaces the
+  previously implicit, always-on worktree creation in the workflow
+  runner.
+- **`secrets:` block + `${secret.<name>}` interpolation.** Workflow YAML
+  now declares logical secret names mapped to process env vars:
+
+  ```yaml
+  secrets:
+    linear_token:
+      env: LINEAR_API_TOKEN
+      required: true
+  mcp_servers:
+    linear:
+      env: { LINEAR_API_TOKEN: "${secret.linear_token}" }
+  ```
+
+  Resolution happens at config-compile time. Required-but-unset env
+  vars and references to undeclared keys fail the compile with the
+  YAML file path and 1-based line number. The compiled
+  `workflow-config.v2.json` contains the resolved string — plugins
+  consume the same scalar shape they always did.
+- **Sensitive-interpolation lint.** When a workflow YAML interpolates
+  `${VAR}` whose name matches `TOKEN|KEY|SECRET|PASSWORD`
+  (case-insensitive) *outside* the `secrets:` block or a `*_env:`
+  declaration field, the compiler emits a warning to stderr suggesting
+  the author move it under `secrets:`. The lint is a warning, not an
+  error — trusted workflows may have legitimate uses.
+
 ## [0.5.4] - 2026-06-05
 
 ### Removed (v0.5.4 surface-shrink)
