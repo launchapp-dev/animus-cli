@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.8] - 2026-06-08
+
+This wave is the **observability + reliability** + **secrets** + **state**
+release. Eight parallel agents shipped one cohesive set:
+
+- **Project secrets via OS keychain**: `animus secret set/get/list/rm/import-env/export-env`
+  with manifest-filtered injection into plugin processes and `${VAR}` workflow YAML fallback.
+- **RBAC small core**: Principal + policy.rbac config + chokepoint #1 +
+  peer-cred + `animus auth whoami` + global `--as <principal>`.
+- **Observability**: `animus events tail` + `animus plugin status`.
+- **Hot reload**: notify-based watcher + ArcSwap snapshot for
+  `.animus/workflows.yaml` + `animus workflow config reload`.
+- **Doctor --fix**: stale daemon pid, orphan worktrees, zombie phase
+  sessions, merged agent branches.
+- **State export/import**: versioned `animus.state.export.v1` tar.zst
+  with MANIFEST.json + safe-by-default import.
+- **Workflow YAML diagnostics**: rustc-style file:line:col + did-you-mean
+  for parse errors.
+- **Self-update**: `animus update` top-level alias with atomic binary swap.
+- **Plugin bulk-update**: `animus plugin update --all/--kind/--name`
+  with diff preview and semver-aware "ahead of pin" detection.
+- **Workflow YAML quality-of-life**: `worktree: true|false` boolean
+  shorthand alongside the string short-form and long-form map.
+- **Plugin rename verb** + multi-kind subject backend collision check +
+  `name_override` round-trip through discovery.
+
 ### Added (v0.5.8)
 
 - **`animus plugin rename <PLUGIN_NAME> --to <NEW_KIND>`** — post-install
