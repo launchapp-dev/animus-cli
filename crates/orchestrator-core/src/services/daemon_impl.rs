@@ -31,6 +31,42 @@ async fn mutate_daemon_state<T>(hub: &FileServiceHub, mutator: impl FnOnce(&mut 
     Ok(output)
 }
 
+/// Fast subset of [`DaemonHealth`] returned by
+/// [`load_daemon_status_snapshot_fast`]. Skips the SQLite-backed queued-task
+/// count and the provider-plugin executability scan that
+/// [`load_daemon_health_snapshot`] does, so callers that only need
+/// "is the daemon running?" pay one stat + one pid read + one liveness
+/// probe instead of a multi-hundred-millisecond round trip.
+#[derive(Debug, Clone)]
+pub struct DaemonStatusSnapshot {
+    pub status: DaemonStatus,
+    pub daemon_pid: Option<u32>,
+    pub process_alive: Option<bool>,
+}
+
+pub async fn load_daemon_status_snapshot_fast(project_root: &Path) -> Result<DaemonStatusSnapshot> {
+    let state_file = protocol::scoped_state_root(project_root)
+        .unwrap_or_else(|| project_root.join(".animus"))
+        .join("core-state.json");
+    let snapshot = state_store::load_daemon_state_snapshot(&state_file);
+
+    let daemon_pid = daemon_pid_for_status(project_root);
+    let process_alive = daemon_pid.map(daemon_process_alive_for_status);
+
+    let mut status = snapshot.daemon_status;
+    if matches!(status, DaemonStatus::Running | DaemonStatus::Paused)
+        && daemon_pid.is_some()
+        && process_alive == Some(false)
+    {
+        status = DaemonStatus::Crashed;
+    }
+    if matches!(status, DaemonStatus::Stopped) && process_alive == Some(true) {
+        status = DaemonStatus::Running;
+    }
+
+    Ok(DaemonStatusSnapshot { status, daemon_pid, process_alive })
+}
+
 pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHealth> {
     let state_file = protocol::scoped_state_root(project_root)
         .unwrap_or_else(|| project_root.join(".animus"))
@@ -462,6 +498,51 @@ mod tests {
         let state = hub.state.read().await;
         assert_eq!(state.daemon_status, DaemonStatus::Running);
         assert_eq!(state.runner_pid, None, "v0.5.3: runner_pid is always None after sidecar removal");
+    }
+
+    #[tokio::test]
+    async fn fast_snapshot_returns_stopped_for_empty_project() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let snapshot = load_daemon_status_snapshot_fast(temp.path())
+            .await
+            .expect("fast snapshot should succeed for empty project");
+        assert_eq!(snapshot.status, DaemonStatus::Stopped);
+        assert!(snapshot.daemon_pid.is_none());
+        assert!(snapshot.process_alive.is_none());
+    }
+
+    #[tokio::test]
+    async fn fast_snapshot_matches_full_snapshot_status_for_empty_project() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fast = load_daemon_status_snapshot_fast(temp.path()).await.expect("fast snapshot");
+        let full = load_daemon_health_snapshot(temp.path()).await.expect("full snapshot");
+        assert_eq!(fast.status, full.status, "fast snapshot must report the same DaemonStatus as the full snapshot");
+        assert_eq!(fast.daemon_pid, full.daemon_pid);
+        assert_eq!(fast.process_alive, full.process_alive);
+    }
+
+    #[tokio::test]
+    async fn fast_snapshot_does_not_open_sqlite() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let scoped = protocol::scoped_state_root(temp.path()).unwrap_or_else(|| temp.path().join(".animus"));
+        let _ = load_daemon_status_snapshot_fast(temp.path()).await.expect("fast snapshot");
+        // The full snapshot opens the per-project SQLite store
+        // (count_tasks_with_status). The fast snapshot must not — if it
+        // did, the scoped store directory would carry the typical
+        // `tasks.db`, `tasks.db-wal`, or `tasks.db-shm` files. Assert
+        // none materialized.
+        let store_dir = scoped.join("store");
+        if store_dir.exists() {
+            for entry in std::fs::read_dir(&store_dir).expect("read store dir") {
+                let entry = entry.expect("dir entry");
+                let name = entry.file_name();
+                let name = name.to_string_lossy();
+                assert!(
+                    !name.ends_with(".db") && !name.ends_with(".db-wal") && !name.ends_with(".db-shm"),
+                    "fast snapshot must not open SQLite; found {name}"
+                );
+            }
+        }
     }
 
     #[tokio::test]

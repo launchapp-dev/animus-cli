@@ -74,6 +74,12 @@ pub async fn load_daemon_health_snapshot(project_root: &Path) -> Result<DaemonHe
     daemon_impl::load_daemon_health_snapshot(project_root).await
 }
 
+pub use daemon_impl::DaemonStatusSnapshot;
+
+pub async fn load_daemon_status_snapshot_fast(project_root: &Path) -> Result<DaemonStatusSnapshot> {
+    daemon_impl::load_daemon_status_snapshot_fast(project_root).await
+}
+
 pub fn plan_task_priority_rebalance(
     tasks: &[OrchestratorTask],
     options: TaskPriorityRebalanceOptions,

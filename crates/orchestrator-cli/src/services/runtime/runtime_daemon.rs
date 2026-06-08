@@ -74,7 +74,7 @@ pub(super) fn get_daemon_pid(project_root: &str) -> Result<Option<u32>> {
     DaemonRuntimeState::get_daemon_pid(project_root)
 }
 
-pub(super) fn set_daemon_pid(project_root: &str, daemon_pid: Option<u32>) -> Result<()> {
+pub(crate) fn set_daemon_pid(project_root: &str, daemon_pid: Option<u32>) -> Result<()> {
     DaemonRuntimeState::set_daemon_pid(project_root, daemon_pid)
 }
 
@@ -94,11 +94,11 @@ fn write_daemon_pid(project_root: &str, pid: u32) {
     DaemonRuntimeState::write_daemon_pid_file(project_root, pid);
 }
 
-fn remove_daemon_pid(project_root: &str) {
+pub(crate) fn remove_daemon_pid(project_root: &str) {
     DaemonRuntimeState::remove_daemon_pid_file(project_root);
 }
 
-fn read_daemon_pid(project_root: &str) -> Option<u32> {
+pub(crate) fn read_daemon_pid(project_root: &str) -> Option<u32> {
     DaemonRuntimeState::read_daemon_pid_file(project_root)
 }
 
@@ -121,9 +121,15 @@ pub(crate) async fn handle_daemon_status_command(project_root: &str, json: bool)
         }
     }
 
-    let mut status = orchestrator_core::load_daemon_health_snapshot(Path::new(project_root)).await?.status;
-    if let Some(pid) = read_daemon_pid(project_root) {
-        let alive = is_process_alive(pid);
+    let snapshot = orchestrator_core::load_daemon_status_snapshot_fast(Path::new(project_root)).await?;
+    let mut status = snapshot.status;
+    let runtime_pid = read_daemon_pid(project_root);
+    let pid = runtime_pid.or(snapshot.daemon_pid);
+    if let Some(pid) = pid {
+        let alive = match (runtime_pid, snapshot.daemon_pid, snapshot.process_alive) {
+            (Some(rt), Some(snap), Some(alive)) if rt == snap => alive,
+            _ => is_process_alive(pid),
+        };
         if !alive && matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
             status = DaemonStatus::Crashed;
             remove_daemon_pid(project_root);
