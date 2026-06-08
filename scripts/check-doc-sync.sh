@@ -22,8 +22,17 @@ extract_cli_source() {
     if ($in_enum && /^\}/) {
       $in_enum = 0;
     }
+    if ($in_enum && /^\s*#\[command\(name = "([^"]+)"\)\]/) {
+      $pending_name = $1;
+      next;
+    }
     if ($in_enum && /^\s+([A-Z][A-Za-z0-9_]*)\s*[({,]/) {
-      print lc($1), "\n";
+      if (defined $pending_name && length $pending_name) {
+        print $pending_name, "\n";
+      } else {
+        print lc($1), "\n";
+      }
+      undef $pending_name;
     }
   ' "$cli_source" | sort -u
 }

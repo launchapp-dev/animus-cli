@@ -98,9 +98,9 @@ pub struct TriggerEvent {
 - **`action_hint`** — advisory. `RunWorkflow` and `CreateTask` are the
   defined variants; the host falls back to the trigger's `workflow_ref`
   when omitted.
-- **`payload`** — opaque JSON forwarded to the spawned workflow as
+- **`payload`** - opaque JSON forwarded to the spawned workflow as
   input. Workflow YAML templates can reference it as
-  `{{trigger.payload.<key>}}`.
+  `&#123;&#123;trigger.payload.<key>&#125;&#125;`.
 
 ### Acknowledgements
 
@@ -390,8 +390,7 @@ publishing details that apply to every plugin kind.
   the workflow YAML reference, including the `triggers:` section.
 - [`docs/reference/cli/index.md`](../reference/cli/index.md) —
   `animus plugin scaffold` and `animus plugin install` reference.
-- [`examples/triggers/fswatch/`](../../examples/triggers/fswatch/) —
-  worked reference implementation.
+- `examples/triggers/fswatch/README.md` — worked reference implementation.
 - [`crates/animus-plugin-protocol/src/lib.rs`](../../crates/animus-plugin-protocol/src/lib.rs)
   — the wire-shape source of truth.
 - [`crates/orchestrator-daemon-runtime/src/schedule/trigger_supervisor.rs`](../../crates/orchestrator-daemon-runtime/src/schedule/trigger_supervisor.rs)
