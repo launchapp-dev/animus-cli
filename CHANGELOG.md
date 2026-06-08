@@ -13,6 +13,34 @@ All notable changes to this project will be documented in this file.
   changes (the on-disk binary, manifest, and `native_kind` stay put).
   `--force` auto-increments past a collision (`requirement` -> `requirement-2`)
   instead of failing. Emits an `animus.plugin.rename.v1` envelope.
+- **`Principal` type + `policy.rbac` config (small core).** Introduces
+  `orchestrator_core::principal::Principal` (User / Daemon /
+  ServiceAccount) and a `RbacMode` enum (`single-user` default,
+  `enforce` opt-in). Single-user installs are bit-identical — the
+  permission hook is a no-op unless `enforce` is set.
+- **`~/.animus/principals.yaml` auto-bootstrap.** On first run the
+  daemon writes a one-principal default file mapping the current OS
+  user to an `admin`-roled `local` principal. Existing files are
+  never overwritten (collision guard from the design doc).
+- **Chokepoint #1: control-dispatch permission hook.** Every
+  control RPC routes through `check_principal_can`. Under enforce,
+  a hardcoded role table allows `admin: *` and `viewer: *.read`;
+  everything else fails closed with `permission_denied`.
+- **Peer-cred resolution on the Unix socket (`cfg(unix)`).** The
+  accept loop calls `getpeereid` (BSD/macOS) or `SO_PEERCRED` (Linux)
+  and resolves the peer UID to an OS username and a declared
+  `PrincipalEntry`. Honors the design doc §"Identity sources"
+  resolution chain.
+- **`animus auth whoami` + global `--as <principal>` flag.** The
+  CLI surfaces the effective principal and propagates `--as`
+  honor-system via a `$/setPrincipal` notification at every
+  control connection. Warns loudly on use.
+- **Audit-log shim.** `AuditActor::Principal { id, kind }` carries
+  typed principal fields alongside the legacy `actor` string —
+  additive; existing readers parse unchanged.
+- v0.6 deferrals: per-tenant scope migration, per-principal secret
+  routing, plugin-host trust changes, and chokepoints #2-#4. See
+  [`docs/architecture/multi-tenant-rbac-v0.5.5.md`](docs/architecture/multi-tenant-rbac-v0.5.5.md).
 
 ### Fixed (v0.5.8)
 

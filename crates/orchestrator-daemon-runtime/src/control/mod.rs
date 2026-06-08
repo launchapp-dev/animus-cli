@@ -39,6 +39,7 @@ pub mod client;
 pub mod connection;
 pub mod dispatch;
 pub mod log_redact;
+pub mod policy;
 pub mod routing;
 pub mod server;
 pub mod streaming;
@@ -47,10 +48,14 @@ pub mod workflow_events;
 #[cfg(test)]
 mod tests;
 
-pub use client::{is_method_unavailable, ControlClient};
+pub use client::{is_method_unavailable, ControlClient, ANIMUS_AS_PRINCIPAL_ENV};
 #[cfg(unix)]
 pub use connection::ControlConnection;
 pub use dispatch::{InProcessSurface, InProcessSurfaceBuilder};
+pub use policy::{
+    check_method as check_policy_method, parse_set_principal, permission_denied_error, AsOverrideError,
+    ConnectionPrincipal, PolicyState, SetPrincipalParams, METHOD_SET_PRINCIPAL,
+};
 pub use routing::{AgentRouting, DaemonOpsRouting, PluginRouting, QueueRouting, WorkflowRouting};
 pub use server::{
     control_server_disable_env_set, control_socket_path, ControlServer, ControlServerHandle, CONTROL_SERVER_DISABLE_ENV,

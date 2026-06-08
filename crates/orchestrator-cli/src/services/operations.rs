@@ -1,4 +1,5 @@
 mod ops_agent;
+mod ops_auth;
 mod ops_common;
 mod ops_cost;
 mod ops_doctor;
@@ -24,6 +25,7 @@ mod ops_web;
 mod ops_workflow;
 
 pub(crate) use ops_agent::*;
+pub(crate) use ops_auth::*;
 use ops_common::*;
 pub(crate) use ops_cost::*;
 pub(crate) use ops_doctor::*;

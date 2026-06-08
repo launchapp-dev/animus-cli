@@ -1,4 +1,5 @@
 mod agent_types;
+mod auth_types;
 mod cost_types;
 mod daemon_types;
 mod doctor_types;
@@ -27,6 +28,7 @@ mod web_types;
 mod workflow_types;
 
 pub(crate) use agent_types::*;
+pub(crate) use auth_types::*;
 pub(crate) use cost_types::*;
 pub(crate) use daemon_types::*;
 pub(crate) use doctor_types::*;
@@ -181,6 +183,23 @@ mod tests {
     fn parses_top_level_status_command() {
         let cli = Cli::try_parse_from(["animus", "status"]).expect("status command should parse");
         assert!(matches!(cli.command, Command::Status));
+    }
+
+    #[test]
+    fn parses_auth_whoami_command() {
+        let cli = Cli::try_parse_from(["animus", "auth", "whoami"]).expect("auth whoami should parse");
+        match cli.command {
+            Command::Auth { command: AuthCommand::Whoami } => {}
+            other => panic!("expected auth whoami, got {other:?}"),
+        }
+        assert!(cli.as_principal.is_none());
+    }
+
+    #[test]
+    fn parses_global_as_flag() {
+        let cli =
+            Cli::try_parse_from(["animus", "--as", "alice", "auth", "whoami"]).expect("--as should parse globally");
+        assert_eq!(cli.as_principal.as_deref(), Some("alice"));
     }
 
     #[test]

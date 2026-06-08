@@ -44,6 +44,9 @@ use animus_control_protocol::{
     ControlError,
 };
 
+use super::policy::{
+    check_method as check_policy_method, parse_set_principal, ConnectionPrincipal, PolicyState, METHOD_SET_PRINCIPAL,
+};
 use super::workflow_events::{SubscriberItem, WorkflowEventBroadcaster, WorkflowEventFilter};
 use animus_plugin_protocol::{error_codes, RpcError, RpcRequest, RpcResponse};
 use futures_util::StreamExt;
@@ -63,13 +66,26 @@ pub struct ControlConnection {
     stream: UnixStream,
     surface: Arc<dyn ControlSurface>,
     workflow_event_broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
+    policy: PolicyState,
+    principal: Arc<ConnectionPrincipal>,
 }
 
 impl ControlConnection {
     /// Build a new connection bound to `stream`, dispatching via
     /// `surface`.
+    ///
+    /// The policy defaults to single-user and the principal to the
+    /// daemon-owning OS user. Production accept loops should override
+    /// both via [`Self::with_policy`] and [`Self::with_principal`] so
+    /// peer credentials propagate.
     pub fn new(stream: UnixStream, surface: Arc<dyn ControlSurface>) -> Self {
-        Self { stream, surface, workflow_event_broadcaster: None }
+        Self {
+            stream,
+            surface,
+            workflow_event_broadcaster: None,
+            policy: PolicyState::single_user(),
+            principal: Arc::new(ConnectionPrincipal::anonymous()),
+        }
     }
 
     /// Attach a [`WorkflowEventBroadcaster`] so `workflow/events`
@@ -78,6 +94,21 @@ impl ControlConnection {
     /// implement it on the v0.1.10 trait) and surfaces `method_not_found`.
     pub fn with_workflow_event_broadcaster(mut self, broadcaster: Arc<WorkflowEventBroadcaster>) -> Self {
         self.workflow_event_broadcaster = Some(broadcaster);
+        self
+    }
+
+    /// Override the RBAC policy used by chokepoint #1. The accept loop
+    /// clones the daemon's shared [`PolicyState`] into every connection.
+    pub fn with_policy(mut self, policy: PolicyState) -> Self {
+        self.policy = policy;
+        self
+    }
+
+    /// Override the per-connection principal. The accept loop builds
+    /// one from the peer credentials (`getpeereid`) so honest peer-uid
+    /// resolution happens before any client message is read.
+    pub fn with_principal(mut self, principal: Arc<ConnectionPrincipal>) -> Self {
+        self.principal = principal;
         self
     }
 
@@ -96,6 +127,8 @@ impl ControlConnection {
         let mut reader = BufReader::new(read_half);
         let writer = Arc::new(ConnectionWriter::new(write_half));
         let broadcaster = self.workflow_event_broadcaster.clone();
+        let policy = self.policy.clone();
+        let principal = Arc::clone(&self.principal);
 
         let mut line = String::new();
         loop {
@@ -124,7 +157,7 @@ impl ControlConnection {
             let surface = Arc::clone(&self.surface);
             let writer_clone = Arc::clone(&writer);
             let broadcaster_clone = broadcaster.clone();
-            dispatch_request(&surface, &writer_clone, frame, broadcaster_clone.as_ref()).await?;
+            dispatch_request(&surface, &writer_clone, frame, broadcaster_clone.as_ref(), &policy, &principal).await?;
         }
     }
 }
@@ -197,9 +230,11 @@ async fn dispatch_request(
     writer: &Arc<ConnectionWriter>,
     frame: RpcRequest,
     broadcaster: Option<&Arc<WorkflowEventBroadcaster>>,
+    policy: &PolicyState,
+    principal: &Arc<ConnectionPrincipal>,
 ) -> std::io::Result<()> {
     let id = frame.id.clone();
-    let result = invoke_surface(surface, writer, &frame, broadcaster).await;
+    let result = invoke_surface(surface, writer, &frame, broadcaster, policy, principal).await;
     match result {
         Ok(Some(value)) => {
             let response = RpcResponse::ok(id, value);
@@ -225,8 +260,36 @@ async fn invoke_surface(
     writer: &Arc<ConnectionWriter>,
     frame: &RpcRequest,
     broadcaster: Option<&Arc<WorkflowEventBroadcaster>>,
+    policy: &PolicyState,
+    principal: &Arc<ConnectionPrincipal>,
 ) -> Result<Option<Value>, RpcError> {
     let params = frame.params.clone().unwrap_or(Value::Null);
+
+    // v0.5.8 chokepoint #1: honor-system --as override via JSON-RPC
+    // notification. The CLI sends `$/setPrincipal` at connection open
+    // when the global --as flag is passed; the daemon updates the
+    // per-connection principal and surfaces a permission_denied error
+    // when peer credentials disallow the impersonation under enforce.
+    if frame.method == METHOD_SET_PRINCIPAL {
+        let parsed = parse_set_principal(&params)?;
+        principal.apply_as_override(&parsed.principal, policy).map_err(|e| e.into_rpc_error())?;
+        return Ok(Some(serde_json::json!({
+            "principal": { "id": principal.effective().id(), "kind": principal.effective().kind() }
+        })));
+    }
+
+    // v0.5.8 chokepoint #1: permission gate on every dispatched method.
+    // No-op under RbacMode::SingleUser so existing installs see no
+    // behavior change. JSON-RPC meta methods (`$/cancelRequest`) are
+    // exempted so a viewer that opened a permitted subscription can
+    // still cancel it without needing a separate permission grant.
+    // (codex round-7 P2)
+    if !frame.method.starts_with("$/") {
+        if let Some(err) = check_policy_method(policy, principal, frame.method.as_str()) {
+            return Err(err);
+        }
+    }
+
     match frame.method.as_str() {
         // ----- JSON-RPC meta: cancellation ---------------------------
         // `$/cancelRequest` is a JSON-RPC notification (no response).

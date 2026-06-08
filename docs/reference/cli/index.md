@@ -257,6 +257,9 @@ animus
 │   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`
 │   └── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets
 │
+├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)
+│   └── whoami               Print the currently resolved principal (id + kind + peer OS user)
+│
 └── help                     Print this message or the help of the given subcommand(s)
 ```
 

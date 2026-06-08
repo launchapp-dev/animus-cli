@@ -56,6 +56,14 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 #[cfg(unix)]
 use tokio::net::UnixStream;
 
+/// v0.5.8 honor-system `--as <principal>` carrier env var.
+///
+/// The CLI sets this when the global `--as` flag is passed; the
+/// [`ControlClient`] reads it on every `call_raw` and sends
+/// `$/setPrincipal` ahead of the actual RPC. Honor-system: the daemon
+/// rejects mismatches under `policy.rbac=enforce` via peer-cred.
+pub const ANIMUS_AS_PRINCIPAL_ENV: &str = "ANIMUS_AS_PRINCIPAL";
+
 /// Handle to the daemon control socket for one CLI invocation.
 ///
 /// Cheap to clone; carries only a socket path. Each [`Self::call`]
@@ -141,16 +149,20 @@ impl ControlClient {
     /// by tests that need to inspect the error payload directly.
     #[cfg(unix)]
     pub async fn call_raw(&self, method: &str, params: Option<Value>) -> Result<RpcResponse> {
-        let mut stream = UnixStream::connect(&self.socket_path)
+        let stream = UnixStream::connect(&self.socket_path)
             .await
             .with_context(|| format!("connect to {}", self.socket_path.display()))?;
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+
+        apply_as_principal_handshake(&mut write_half, &mut reader).await?;
+
         let request = RpcRequest::new(serde_json::Value::from(1u64), method.to_string(), params);
         let mut bytes = serde_json::to_vec(&request).context("serialize RPC request")?;
         bytes.push(b'\n');
-        stream.write_all(&bytes).await.context("write RPC request")?;
-        stream.flush().await.context("flush RPC request")?;
-        let (read_half, _write_half) = stream.into_split();
-        let mut reader = BufReader::new(read_half);
+        write_half.write_all(&bytes).await.context("write RPC request")?;
+        write_half.flush().await.context("flush RPC request")?;
+
         let mut line = String::new();
         let n = reader.read_line(&mut line).await.context("read RPC response")?;
         if n == 0 {
@@ -350,18 +362,23 @@ impl ControlClient {
         use tokio::net::UnixStream;
 
         let method = method_names::METHOD_DAEMON_LOGS;
-        let mut stream = UnixStream::connect(&self.socket_path)
+        let stream = UnixStream::connect(&self.socket_path)
             .await
             .with_context(|| format!("connect to {}", self.socket_path.display()))?;
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+
+        // v0.5.8 honor-system --as propagation also on streaming
+        // connections (codex round-3 fix). Without this, `animus
+        // --as ... logs ...` would silently bypass the chokepoint.
+        apply_as_principal_handshake(&mut write_half, &mut reader).await?;
+
         let params = serde_json::to_value(&request).context("serialize daemon/logs params")?;
         let rpc_request = RpcRequest::new(Value::from(1u64), method.to_string(), Some(params));
         let mut bytes = serde_json::to_vec(&rpc_request).context("serialize daemon/logs request")?;
         bytes.push(b'\n');
-        stream.write_all(&bytes).await.context("write daemon/logs request")?;
-        stream.flush().await.context("flush daemon/logs request")?;
-
-        let (read_half, _write_half) = stream.into_split();
-        let mut reader = BufReader::new(read_half);
+        write_half.write_all(&bytes).await.context("write daemon/logs request")?;
+        write_half.flush().await.context("flush daemon/logs request")?;
         let mut line = String::new();
         let n = reader.read_line(&mut line).await.context("read daemon/logs ack")?;
         if n == 0 {
@@ -408,6 +425,51 @@ impl ControlClient {
     pub async fn daemon_logs(&self, _request: DaemonLogsRequest, _limit: usize) -> Result<Vec<DaemonLogEntry>> {
         Err(anyhow!("control client daemon/logs: control socket not supported on this platform"))
     }
+}
+
+/// v0.5.8 honor-system `--as` handshake.
+///
+/// Sends `$/setPrincipal` ahead of the actual RPC and waits for the
+/// daemon's ack before proceeding. Both [`ControlClient::call_raw`]
+/// and the streaming `daemon/logs` path call this so impersonation
+/// works uniformly across one-shot and streaming RPCs.
+///
+/// Returns `Err` when the daemon rejects the impersonation
+/// (permission_denied under enforce). On `Ok`, the caller may safely
+/// write the actual method frame.
+#[cfg(unix)]
+async fn apply_as_principal_handshake<W, R>(write_half: &mut W, reader: &mut tokio::io::BufReader<R>) -> Result<()>
+where
+    W: tokio::io::AsyncWriteExt + Unpin,
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use animus_plugin_protocol::{RpcRequest, RpcResponse};
+    use tokio::io::AsyncBufReadExt;
+
+    let Some(principal) = std::env::var(ANIMUS_AS_PRINCIPAL_ENV).ok().filter(|v| !v.is_empty()) else {
+        return Ok(());
+    };
+    let setp_request = RpcRequest::new(
+        serde_json::Value::from(0u64),
+        "$/setPrincipal".to_string(),
+        Some(serde_json::json!({ "principal": principal })),
+    );
+    let mut setp_bytes = serde_json::to_vec(&setp_request).context("serialize $/setPrincipal request")?;
+    setp_bytes.push(b'\n');
+    write_half.write_all(&setp_bytes).await.context("write $/setPrincipal request")?;
+    write_half.flush().await.context("flush $/setPrincipal request")?;
+
+    let mut setp_line = String::new();
+    let n = reader.read_line(&mut setp_line).await.context("read $/setPrincipal response")?;
+    if n == 0 {
+        return Err(anyhow!("control server closed connection during $/setPrincipal"));
+    }
+    let setp_response: RpcResponse = serde_json::from_str(setp_line.trim_end())
+        .with_context(|| format!("parse $/setPrincipal RPC response: {setp_line}"))?;
+    if let Some(error) = setp_response.error {
+        return Err(rpc_error_to_anyhow("$/setPrincipal", &error));
+    }
+    Ok(())
 }
 
 /// Translate a JSON-RPC error from the daemon into a CLI-side anyhow
