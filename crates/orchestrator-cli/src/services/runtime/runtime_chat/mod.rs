@@ -184,6 +184,39 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
 
     let producer = ResolverTurnProducer::for_project(&project_root_path);
 
+    // Resolve the per-agent MCP server set (profile ∪ skill ∪ --mcp-server
+    // additions − the built-in animus when --no-animus-mcp), then assemble
+    // the runtime contract the provider receives so the chat agent sees the
+    // MCP servers its profile/skill declares. Plain chat (no --agent/--skill)
+    // defaults to the built-in `animus` server only.
+    let scope = crate::services::runtime::agent_mcp::resolve_agent_scope(
+        &project_root_path,
+        &args.tool,
+        args.agent.as_deref(),
+        args.skill.as_deref(),
+    )?;
+    let scope_selected = args.agent.is_some() || args.skill.is_some();
+    let mcp_contract = crate::services::runtime::agent_mcp::assemble_agent_mcp_contract(
+        &project_root_path,
+        &args.tool,
+        &model,
+        &scope.profile_servers,
+        &scope.skill_servers,
+        &args.mcp_server,
+        &scope.tool_policy,
+        scope_selected,
+        args.no_animus_mcp,
+    )?;
+
+    // Provider CLIs that auto-discover a cwd-local `.mcp.json` (claude-code)
+    // register MCP servers from that file, not the runtime contract, so the
+    // per-agent set is also materialized there. The merge is additive — it
+    // upserts only the resolved Animus-scoped names and preserves any
+    // user-authored entries.
+    if let Some(contract) = mcp_contract.as_ref() {
+        crate::services::runtime::agent_mcp::materialize_mcp_json(&cwd, contract)?;
+    }
+
     // Sink selection: --json => JSONL stdout; --stream (no json) => text;
     // neither => discard streaming and print the final transcript turn.
     let mut sink: Box<dyn ChatStreamSink> = if json {
@@ -202,6 +235,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         cwd,
         project_root: project_root_path.clone(),
         reasoning_effort: args.reasoning_effort.map(|level| level.as_str()),
+        mcp_contract: mcp_contract.as_ref(),
     };
 
     let assistant_seq = run_turn(&producer, &store, sink.as_mut(), ctx).await?;

@@ -160,6 +160,10 @@ pub(crate) struct TurnContext<'a> {
     /// Provider reasoning/thinking effort (`low`/`medium`/`high`), threaded
     /// into `extras.reasoning_effort` for the provider transport to map.
     pub reasoning_effort: Option<&'a str>,
+    /// Per-agent MCP runtime contract for this conversation, threaded into
+    /// `extras.runtime_contract` so the provider wires the profile/skill-
+    /// scoped MCP servers. `None` when the tool cannot speak MCP.
+    pub mcp_contract: Option<&'a Value>,
 }
 
 /// Run a single conversation turn.
@@ -338,6 +342,16 @@ async fn drive_once(
     if let Some(level) = ctx.reasoning_effort {
         if let Value::Object(map) = &mut extras {
             map.insert("reasoning_effort".to_string(), Value::String(level.to_string()));
+        }
+    }
+
+    // Per-agent MCP runtime contract rides on extras.runtime_contract so the
+    // provider plugin wires the profile/skill-scoped MCP servers. Applies to
+    // both the resume and replay paths so tool access is consistent across a
+    // conversation.
+    if let Some(contract) = ctx.mcp_contract {
+        if let Value::Object(map) = &mut extras {
+            map.insert("runtime_contract".to_string(), contract.clone());
         }
     }
 
@@ -671,6 +685,7 @@ mod tests {
             cwd: tmp.path().to_path_buf(),
             project_root: tmp.path().to_path_buf(),
             reasoning_effort: None,
+            mcp_contract: None,
         }
     }
 

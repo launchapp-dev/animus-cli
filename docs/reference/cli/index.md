@@ -369,6 +369,31 @@ A caller-supplied override always wins: if a runtime contract already carries
 codex's `model_reasoning_effort` config key or claude's `--effort` flag, the
 transport leaves it untouched.
 
+### `animus agent run` / `animus chat send` (per-agent MCP servers)
+
+Ad-hoc agents now receive the MCP servers their selected profile / skill
+declares — a trading agent gets the trading servers, a marketing agent gets
+the marketing ones — instead of no MCP servers at all. The resolved set is
+the profile's `mcp_servers` ∪ the skill's `mcp_servers` ∪ `--mcp-server`
+additions, minus the built-in `animus` server when `--no-animus-mcp` is
+passed. Each name is resolved against the project's `mcp_servers` map
+(workflow YAML `mcp_servers` first, then `.animus/config.json`); the name
+`animus` resolves to the built-in `animus mcp serve` stdio surface. OAuth
+`authorization_code` servers are routed through `animus-mcp-proxy`, the same
+as workflow runs.
+
+| Flag | Description |
+|---|---|
+| `--agent <AGENT_ID>` | Select an agent profile; the run receives that profile's declared `mcp_servers`. On `animus agent run` this is applied only when no `--runtime-contract-json` (or `runtime_contract` in `--context-json`) was supplied — a caller-supplied contract is never clobbered. |
+| `--skill <SKILL>` | Select a skill; its declared `mcp_servers` are unioned into the resolved set. An unknown skill name is an error. |
+| `--mcp-server <NAME>` | Add an MCP server by name (repeatable). The name must exist in the project's `mcp_servers` map, or `animus` for the built-in surface; an unknown name is an error. |
+| `--no-animus-mcp` | Drop the built-in `animus` server from the resolved set. |
+
+When no profile/skill names any server (plain `animus chat send` or a bare
+`animus agent run`), the baseline set is just the built-in `animus` server so
+the agent still has the Animus tools. A tool whose CLI cannot speak MCP
+(`cli/capabilities/supports_mcp` is false) receives no MCP wiring.
+
 ### `animus logs tail`
 
 Tail recent persisted log entries from the active log storage backend. This is

@@ -223,6 +223,14 @@ Plugins:
   discovery tools.
 - `animus.memory.*` is always exposed from the top-level MCP server; injected
   workflow agents only see it when their profile enables memory capability.
+- Ad-hoc agents (`animus chat send`, `animus agent run`) now receive the MCP
+  servers their selected profile/skill declares, resolved by name against the
+  project's `mcp_servers` map — a trading agent gets the trading servers, a
+  marketing agent gets the marketing ones. Use `--agent` / `--skill` to select
+  the scope, `--mcp-server <name>` to add more, and `--no-animus-mcp` to drop
+  the built-in `animus` server. A plain chat (no profile/skill) defaults to the
+  `animus` server only. See the per-agent MCP server section in the
+  [CLI Command Surface](../reference/cli/index.md).
 
 See also: [MCP Tools Reference](../reference/mcp-tools.md),
 [CLI Command Surface](../reference/cli/index.md), and

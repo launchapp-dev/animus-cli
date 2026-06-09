@@ -146,6 +146,39 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         .or_else(|| context_str(context_object.as_ref(), "model"))
         .unwrap_or_else(|| protocol::default_model_for_tool(&tool).unwrap_or("claude-sonnet-4-6").to_string());
 
+    // When the caller did NOT supply a runtime_contract (neither
+    // `--runtime-contract-json` nor a `runtime_contract` key in
+    // `--context-json`), assemble one from the agent's profile/skill MCP
+    // servers so an ad-hoc `animus agent run` agent sees the MCP servers its
+    // profile/skill declares. A caller-supplied contract is never clobbered.
+    if runtime_contract_value.is_none() {
+        let scope = crate::services::runtime::agent_mcp::resolve_agent_scope(
+            &project_root_path,
+            &tool,
+            args.agent.as_deref(),
+            args.skill.as_deref(),
+        )?;
+        let scope_selected = args.agent.is_some() || args.skill.is_some();
+        if let Some(contract) = crate::services::runtime::agent_mcp::assemble_agent_mcp_contract(
+            &project_root_path,
+            &tool,
+            &model,
+            &scope.profile_servers,
+            &scope.skill_servers,
+            &args.mcp_server,
+            &scope.tool_policy,
+            scope_selected,
+            args.no_animus_mcp,
+        )? {
+            // Provider CLIs that auto-discover a cwd-local `.mcp.json`
+            // (claude-code) register MCP servers from that file rather than
+            // the runtime contract, so materialize the per-agent set there
+            // too (additive merge that preserves user-authored entries).
+            crate::services::runtime::agent_mcp::materialize_mcp_json(&cwd, &contract)?;
+            extras.insert("runtime_contract".to_string(), contract);
+        }
+    }
+
     Ok(SessionRequest {
         tool,
         model,
@@ -331,5 +364,101 @@ impl ProviderClient {
         Err(anyhow!(
             "agent cancel through provider plugins is not yet supported; in-flight cancel via process signal only"
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::AgentRunArgs;
+
+    fn base_args(project_root: &str) -> AgentRunArgs {
+        AgentRunArgs {
+            run_id: None,
+            tool: "claude".to_string(),
+            model: Some("claude-sonnet-4-6".to_string()),
+            prompt: Some("hi".to_string()),
+            reasoning_effort: None,
+            cwd: Some(project_root.to_string()),
+            timeout_secs: None,
+            context_json: None,
+            runtime_contract_json: None,
+            detach: false,
+            stream: true,
+            save_jsonl: false,
+            jsonl_dir: None,
+            start_runner: false,
+            runner_scope: None,
+            agent: None,
+            skill: None,
+            mcp_server: Vec::new(),
+            no_animus_mcp: false,
+        }
+    }
+
+    #[test]
+    fn agent_run_without_caller_contract_gets_assembled_animus_baseline() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let args = base_args(&root_str);
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+
+        let contract = request
+            .extras
+            .pointer("/runtime_contract")
+            .expect("a runtime_contract must be assembled when the caller supplied none");
+        // Plain agent run defaults to the built-in animus stdio server.
+        assert!(
+            contract.pointer("/mcp/stdio/command").and_then(Value::as_str).is_some(),
+            "assembled contract must wire the animus stdio server; contract: {contract}"
+        );
+    }
+
+    #[test]
+    fn agent_run_does_not_clobber_a_caller_supplied_runtime_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let mut args = base_args(&root_str);
+        // A caller-supplied contract with a sentinel marker the assembler
+        // would never produce.
+        args.runtime_contract_json =
+            Some(r#"{"cli":{"name":"claude"},"sentinel":"caller-owned","mcp":{}}"#.to_string());
+
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        let contract = request.extras.pointer("/runtime_contract").expect("caller contract must survive");
+        assert_eq!(
+            contract.pointer("/sentinel").and_then(Value::as_str),
+            Some("caller-owned"),
+            "a caller-supplied runtime_contract must NOT be clobbered by the assembler"
+        );
+        // The assembler must not have run, so no animus stdio injection.
+        assert!(
+            contract.pointer("/mcp/stdio/command").is_none(),
+            "assembler must not touch a caller-supplied contract; contract: {contract}"
+        );
+    }
+
+    #[test]
+    fn agent_run_no_animus_mcp_drops_the_builtin() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let mut args = base_args(&root_str);
+        args.no_animus_mcp = true;
+
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        // With --no-animus-mcp and no other servers, the resolved set is
+        // empty; the contract still builds but wires no animus stdio server.
+        if let Some(contract) = request.extras.pointer("/runtime_contract") {
+            assert!(
+                contract.pointer("/mcp/stdio/command").is_none(),
+                "--no-animus-mcp must drop the built-in animus server; contract: {contract}"
+            );
+        }
     }
 }
