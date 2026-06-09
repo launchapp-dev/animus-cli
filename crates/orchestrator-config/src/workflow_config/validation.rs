@@ -411,6 +411,31 @@ fn validate_oauth_config(server_name: &str, transport: Option<&str>, oauth: &Oau
                 errors.push(format!("{} must not be set for flow=\"manual_bearer\"", field("scopes")));
             }
         }
+        OauthFlow::AuthorizationCode => {
+            // Discovery + DCR fill in the token/authorization endpoints, so
+            // none of the machine-to-machine `*_env` fields apply. Reject
+            // them so a misplaced credential pointer surfaces at validation
+            // time rather than being silently ignored.
+            for (value, name) in [
+                (&oauth.client_id_env, "client_id_env"),
+                (&oauth.client_secret_env, "client_secret_env"),
+                (&oauth.refresh_token_env, "refresh_token_env"),
+                (&oauth.bearer_env, "bearer_env"),
+                (&oauth.token_url, "token_url"),
+            ] {
+                if value.is_some() {
+                    errors.push(format!("{} must not be set for flow=\"authorization_code\"", field(name)));
+                }
+            }
+            // A blank/whitespace-only pinned `client_id` is a config typo: the
+            // auth flow would treat `Some("")` as a pinned-client flow and
+            // skip Dynamic Client Registration with an empty id, failing later
+            // at the browser/token-exchange step. Reject it here. Omit the key
+            // entirely to use DCR.
+            if oauth.client_id.as_ref().is_some_and(|id| id.trim().is_empty()) {
+                errors.push(format!("{} must not be blank for flow=\"authorization_code\"", field("client_id")));
+            }
+        }
     }
 }
 

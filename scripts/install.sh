@@ -151,6 +151,20 @@ main() {
   rm -f "${INSTALL_DIR}/ao"
   ln -s "${INSTALL_DIR}/animus" "${INSTALL_DIR}/ao"
 
+  # OAuth MCP proxy (v0.6+): the `animus-mcp-proxy` stdio bridge ships
+  # alongside `animus` so OAuth-protected MCP servers (authorization_code
+  # flow) can spawn it. Installed best-effort: new archives carry it, older
+  # archives don't, and the binary is only needed once a project configures
+  # an authorization_code MCP server.
+  if [[ -f "${stage_dir}/animus-mcp-proxy" ]]; then
+    rm -f "${INSTALL_DIR}/animus-mcp-proxy"
+    cp "${stage_dir}/animus-mcp-proxy" "${INSTALL_DIR}/animus-mcp-proxy"
+    chmod +x "${INSTALL_DIR}/animus-mcp-proxy"
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign &>/dev/null; then
+      codesign --force --sign - "${INSTALL_DIR}/animus-mcp-proxy" 2>/dev/null || true
+    fi
+  fi
+
   # Workflow runner: prefer the v0.5 plugin install. If the archive
   # carries the legacy runner binary, drop it next to other CLI binaries
   # so an upgrading daemon keeps dispatching while the operator runs

@@ -10,6 +10,7 @@ members = [
   "crates/orchestrator-core",
   "crates/orchestrator-cli",
   "crates/animus-runtime-shared",
+  "crates/animus-mcp-oauth",
 ]
 default-members = [
   "crates/orchestrator-cli",
@@ -40,6 +41,7 @@ orchestrator-core = { path = "crates/orchestrator-core" }
 # `launchapp-dev/animus-runtime-shared` v0.1.0 for the plugin to consume;
 # inside this workspace it lives vendored under `crates/animus-runtime-shared`.
 animus-runtime-shared = { path = "crates/animus-runtime-shared" }
+animus-mcp-oauth = { path = "crates/animus-mcp-oauth" }
 croner = "3.0.1"
 
 [profile.release]

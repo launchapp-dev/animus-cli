@@ -546,6 +546,12 @@ pub struct OauthConfig {
     /// contract assembly. Defaults to true.
     #[serde(default = "default_oauth_cache")]
     pub cache: bool,
+    /// Pre-registered OAuth client id for the interactive
+    /// `authorization_code` flow. When unset, the daemon performs Dynamic
+    /// Client Registration (RFC 7591) against the discovered registration
+    /// endpoint. Ignored by the machine-to-machine flows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
 }
 
 fn default_oauth_cache() -> bool {
@@ -558,6 +564,12 @@ pub enum OauthFlow {
     ClientCredentials,
     RefreshToken,
     ManualBearer,
+    /// Interactive OAuth 2.1 authorization-code + PKCE flow. The daemon
+    /// drives discovery, Dynamic Client Registration, browser login, and
+    /// token exchange via `animus mcp auth <server>`, then repoints the
+    /// agent at a local auth-free stdio proxy (`animus-mcp-proxy`) instead
+    /// of injecting a bearer header. Tokens persist in the OS keychain.
+    AuthorizationCode,
 }
 
 impl OauthFlow {
@@ -566,6 +578,7 @@ impl OauthFlow {
             OauthFlow::ClientCredentials => "client_credentials",
             OauthFlow::RefreshToken => "refresh_token",
             OauthFlow::ManualBearer => "manual_bearer",
+            OauthFlow::AuthorizationCode => "authorization_code",
         }
     }
 }

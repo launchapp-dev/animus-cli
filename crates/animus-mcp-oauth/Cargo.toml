@@ -1,0 +1,44 @@
+[package]
+name = "animus-mcp-oauth"
+version = "0.1.0"
+edition = "2021"
+license = "Elastic-2.0"
+description = "Interactive OAuth (auth_code/PKCE) for protected MCP servers plus the animus-mcp-proxy stdio bridge"
+
+[dependencies]
+anyhow = "1.0"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "process", "time", "net", "signal"] }
+tokio-util = "0.7"
+tracing = "0.1"
+clap = { version = "4.5", features = ["derive", "env"] }
+url = "2"
+sha2 = "0.10"
+dirs = "6.0"
+webbrowser = "1"
+async-trait = "0.1"
+chrono = { version = "0.4", features = ["serde"] }
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
+protocol = { path = "../protocol" }
+orchestrator-core = { path = "../orchestrator-core" }
+orchestrator-config = { workspace = true }
+rmcp = { version = "1.7", features = [
+    "auth",
+    "client",
+    "server",
+    "transport-io",
+    "transport-streamable-http-client",
+    "transport-streamable-http-client-reqwest",
+] }
+
+[dev-dependencies]
+tempfile = "3"
+axum = "0.8"
+http = "1"
+serde_json = "1"
+reqwest = { version = "0.12", features = ["json"] }
+
+[lints]
+workspace = true
