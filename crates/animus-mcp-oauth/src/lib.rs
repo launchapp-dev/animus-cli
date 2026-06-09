@@ -21,7 +21,10 @@ pub mod keychain_store;
 pub mod proxy;
 
 pub use config::{resolve_principal_id, resolve_server_url, ServerResolution, ServerResolutionError};
-pub use flow::{auth_logout, auth_status, run_auth, AuthOutcome, AuthStatus, ServerAuthState};
+pub use flow::{
+    auth_logout, auth_status, run_auth, AuthOutcome, AuthPreview, AuthResult, AuthStatus, Confirm, ConfirmDecision,
+    DryRunOutcome, RunAuthOptions, ServerAuthState,
+};
 pub use keychain_store::{derive_keychain_key, KeychainCredentialStore};
 
 /// Install the process-default rustls crypto provider (aws-lc-rs) once.

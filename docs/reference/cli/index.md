@@ -230,7 +230,7 @@ animus
 ├── mcp                      Run the Animus MCP service endpoint
 │   ├── serve                Start the MCP server in the current process
 │   ├── memory               Start the memory context MCP server for workflow phases
-│   ├── auth <server>        Authenticate an OAuth-protected MCP server (discovery + DCR + auth_code/PKCE + browser login); tokens stored in the OS keychain. --url for servers not in config; --scopes to override
+│   ├── auth <server>        Authenticate an OAuth-protected MCP server (discovery + DCR + auth_code/PKCE + browser login); tokens stored in the OS keychain. Least-privilege: with no --scopes/config scopes, requests NONE (server default). Previews scopes + asks y/N before opening the browser. --url for servers not in config; --scopes to override; --yes to skip the prompt; --dry-run to resolve scopes without authorizing
 │   ├── auth-status          Show which OAuth-protected MCP servers are authenticated, with token expiry per principal. --server + --url to inspect a URL-bound token not in config
 │   └── auth-logout <server> Delete stored OAuth tokens for an MCP server. --url to address a token authenticated against a not-in-config URL
 │

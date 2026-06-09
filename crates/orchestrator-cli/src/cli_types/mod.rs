@@ -213,6 +213,46 @@ mod tests {
     }
 
     #[test]
+    fn parses_mcp_auth_with_scopes_yes_dry_run() {
+        let cli = Cli::try_parse_from([
+            "animus",
+            "mcp",
+            "auth",
+            "robinhood-trading",
+            "--scopes",
+            "read:positions,trade",
+            "--yes",
+            "--dry-run",
+        ])
+        .expect("mcp auth flags should parse");
+        match cli.command {
+            Command::Mcp { command: McpCommand::Auth(args) } => {
+                assert_eq!(args.server, "robinhood-trading");
+                assert_eq!(
+                    args.scopes.as_deref(),
+                    Some(["read:positions".to_string(), "trade".to_string()].as_slice())
+                );
+                assert!(args.yes);
+                assert!(args.dry_run);
+            }
+            other => panic!("expected mcp auth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mcp_auth_defaults_no_yes_no_dry_run_no_scopes() {
+        let cli = Cli::try_parse_from(["animus", "mcp", "auth", "github"]).expect("bare mcp auth should parse");
+        match cli.command {
+            Command::Mcp { command: McpCommand::Auth(args) } => {
+                assert!(args.scopes.is_none(), "no --scopes means least-privilege default");
+                assert!(!args.yes);
+                assert!(!args.dry_run);
+            }
+            other => panic!("expected mcp auth, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_auth_whoami_command() {
         let cli = Cli::try_parse_from(["animus", "auth", "whoami"]).expect("auth whoami should parse");
         match cli.command {

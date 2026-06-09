@@ -437,24 +437,54 @@ pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str, cli_json
 async fn handle_mcp_auth(args: crate::McpAuthArgs, project_root: &str, cli_json: bool) -> Result<()> {
     let root = Path::new(project_root);
     let scopes = args.scopes.clone();
-    let outcome = animus_mcp_oauth::run_auth(root, &args.server, args.url.as_deref(), scopes.as_deref()).await?;
+    let opts = animus_mcp_oauth::RunAuthOptions {
+        url_override: args.url.as_deref(),
+        scopes_override: scopes.as_deref(),
+        assume_yes: args.yes,
+        json: cli_json,
+        dry_run: args.dry_run,
+        confirm: animus_mcp_oauth::Confirm::Interactive,
+    };
+    let result = animus_mcp_oauth::run_auth(root, &args.server, opts).await?;
 
-    if !cli_json {
-        let expiry = outcome.expires_at.map(|e| e.to_rfc3339()).unwrap_or_else(|| "unknown".to_string());
-        println!(
-            "Authenticated `{}` (principal `{}`, client_id `{}`). Token expires: {}. Refresh token: {}.",
-            outcome.server,
-            outcome.principal,
-            outcome.client_id,
-            expiry,
-            if outcome.has_refresh_token { "yes" } else { "no" }
-        );
-        if !outcome.granted_scopes.is_empty() {
-            println!("Granted scopes: {}", outcome.granted_scopes.join(", "));
+    match result {
+        animus_mcp_oauth::AuthResult::DryRun(dry) => {
+            if cli_json {
+                return crate::shared::print_value(dry, true);
+            }
+            let scopes = if dry.requested_scopes.is_empty() {
+                "(none — server default / minimal)".to_string()
+            } else {
+                dry.requested_scopes.join(", ")
+            };
+            println!("Dry run for `{}` ({}):", dry.server, dry.base_url);
+            println!("  requested scopes: {scopes}");
+            println!(
+                "  client registration: {}",
+                if dry.would_register_client { "would run DCR" } else { "would use pinned client_id" }
+            );
+            println!("  no browser opened, no tokens obtained.");
+            Ok(())
         }
-        return Ok(());
+        animus_mcp_oauth::AuthResult::Completed(outcome) => {
+            if cli_json {
+                return crate::shared::print_value(outcome, true);
+            }
+            let expiry = outcome.expires_at.map(|e| e.to_rfc3339()).unwrap_or_else(|| "unknown".to_string());
+            println!(
+                "Authenticated `{}` (principal `{}`, client_id `{}`). Token expires: {}. Refresh token: {}.",
+                outcome.server,
+                outcome.principal,
+                outcome.client_id,
+                expiry,
+                if outcome.has_refresh_token { "yes" } else { "no" }
+            );
+            if !outcome.granted_scopes.is_empty() {
+                println!("Granted scopes: {}", outcome.granted_scopes.join(", "));
+            }
+            Ok(())
+        }
     }
-    crate::shared::print_value(outcome, true)
 }
 
 async fn handle_mcp_auth_status(args: crate::McpAuthStatusArgs, project_root: &str, cli_json: bool) -> Result<()> {

@@ -25,8 +25,17 @@ pub(crate) struct McpAuthArgs {
     #[arg(long)]
     pub url: Option<String>,
     /// Comma-separated OAuth scopes to request (overrides config scopes).
+    /// When omitted, no extra scopes are requested and the server applies its
+    /// own minimal default (least-privilege).
     #[arg(long, value_delimiter = ',')]
     pub scopes: Option<Vec<String>>,
+    /// Skip the consent prompt and open the browser immediately.
+    #[arg(long)]
+    pub yes: bool,
+    /// Resolve discovery + scopes and report them without opening a browser
+    /// or obtaining any token.
+    #[arg(long)]
+    pub dry_run: bool,
 }
 
 #[derive(Debug, clap::Args)]
