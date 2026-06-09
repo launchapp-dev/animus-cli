@@ -1266,28 +1266,149 @@ fn failed_phase_keeps_status_synced_with_machine_state() {
 
 #[test]
 fn load_workflow_ref_index_decodes_compressed_workflow_blobs() {
-    use crate::workflow::state_manager::{load_workflow_ref_index, WorkflowStateManager};
-    use tempfile::TempDir;
-    let tmp = TempDir::new().unwrap();
-    let home = tmp.path().join("home");
-    std::fs::create_dir_all(&home).unwrap();
-    // No EnvVarGuard available in this crate without the test-utils
-    // feature; use a process-wide HOME swap guarded by the global
-    // ENV_LOCK that other workflow tests already serialize on. This
-    // test is structurally serial-safe because we restore HOME
-    // before returning.
-    let prev_home = std::env::var_os("HOME");
-    std::env::set_var("HOME", home.to_string_lossy().as_ref());
-    let project_root = tmp.path().join("project");
-    std::fs::create_dir_all(&project_root).unwrap();
-    let manager = WorkflowStateManager::new(&project_root);
+    use crate::workflow::state_manager::load_workflow_ref_index;
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
     let workflow = make_workflow(WorkflowStatus::Running);
-    manager.save(&workflow).unwrap();
-    let index = load_workflow_ref_index(&project_root).unwrap();
-    if let Some(prev) = prev_home {
-        std::env::set_var("HOME", prev);
-    } else {
-        std::env::remove_var("HOME");
-    }
+    manager.save(&workflow).expect("save workflow");
+    let index = load_workflow_ref_index(temp.path()).expect("load workflow ref index");
     assert_eq!(index.get("WF-test").map(String::as_str), Some("standard-workflow"));
+}
+
+#[test]
+fn state_manager_cleanup_deletes_old_terminal_workflows() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut old_completed = make_workflow(WorkflowStatus::Completed);
+    old_completed.id = "WF-old-completed".to_string();
+    old_completed.machine_state = WorkflowMachineState::Completed;
+    old_completed.completed_at = Some(Utc::now() - chrono::Duration::hours(48));
+    manager.save(&old_completed).expect("save old completed workflow");
+
+    let mut old_failed = make_workflow(WorkflowStatus::Failed);
+    old_failed.id = "WF-old-failed".to_string();
+    old_failed.machine_state = WorkflowMachineState::Failed;
+    old_failed.started_at = Utc::now() - chrono::Duration::hours(48);
+    manager.save(&old_failed).expect("save old failed workflow");
+
+    let mut running = make_workflow(WorkflowStatus::Running);
+    running.id = "WF-running".to_string();
+    running.started_at = Utc::now() - chrono::Duration::hours(48);
+    manager.save(&running).expect("save running workflow");
+
+    let mut recent_completed = make_workflow(WorkflowStatus::Completed);
+    recent_completed.id = "WF-recent-completed".to_string();
+    recent_completed.machine_state = WorkflowMachineState::Completed;
+    recent_completed.completed_at = Some(Utc::now());
+    manager.save(&recent_completed).expect("save recent completed workflow");
+
+    let result = manager.cleanup_terminal_workflows(24).expect("cleanup terminal workflows");
+    assert_eq!(result.deleted, 2);
+
+    let remaining: Vec<String> =
+        manager.list_all().expect("list all workflows").into_iter().map(|workflow| workflow.id).collect();
+    assert!(remaining.contains(&"WF-running".to_string()));
+    assert!(remaining.contains(&"WF-recent-completed".to_string()));
+    assert!(!remaining.contains(&"WF-old-completed".to_string()));
+    assert!(!remaining.contains(&"WF-old-failed".to_string()));
+}
+
+#[test]
+fn lifecycle_double_pause_is_noop() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut workflow = executor.bootstrap(
+        "WF-double-pause".to_string(),
+        WorkflowRunInput::for_task("TASK-pause".to_string(), Some("standard-workflow".to_string())),
+    );
+
+    executor.pause(&mut workflow);
+    assert_eq!(workflow.status, WorkflowStatus::Paused);
+    assert_eq!(workflow.machine_state, WorkflowMachineState::Paused);
+
+    executor.pause(&mut workflow);
+    assert_eq!(workflow.status, WorkflowStatus::Paused);
+    assert_eq!(workflow.machine_state, WorkflowMachineState::Paused);
+}
+
+#[test]
+fn lifecycle_resume_on_running_is_noop() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut workflow = executor.bootstrap(
+        "WF-resume-running".to_string(),
+        WorkflowRunInput::for_task("TASK-resume-running".to_string(), Some("standard-workflow".to_string())),
+    );
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    let machine_state_before = workflow.machine_state;
+    let attempt_before = workflow.phases[workflow.current_phase_index].attempt;
+
+    executor.resume(&mut workflow);
+
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.machine_state, machine_state_before);
+    assert_eq!(workflow.phases[workflow.current_phase_index].attempt, attempt_before);
+}
+
+#[test]
+fn resume_manager_detects_interrupted_failed_and_escalated_workflows() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut failed = make_workflow(WorkflowStatus::Failed);
+    failed.id = "WF-failed".to_string();
+    failed.machine_state = WorkflowMachineState::Failed;
+    manager.save(&failed).expect("save failed workflow");
+
+    let mut escalated = make_workflow(WorkflowStatus::Escalated);
+    escalated.id = "WF-escalated".to_string();
+    escalated.machine_state = WorkflowMachineState::HumanEscalated;
+    manager.save(&escalated).expect("save escalated workflow");
+
+    let mut completed = make_workflow(WorkflowStatus::Completed);
+    completed.id = "WF-completed".to_string();
+    completed.machine_state = WorkflowMachineState::Completed;
+    completed.completed_at = Some(Utc::now());
+    manager.save(&completed).expect("save completed workflow");
+
+    let mut resume_manager = WorkflowResumeManager::new(temp.path()).expect("resume manager");
+    resume_manager.config.resume_failed = true;
+
+    let interrupted: Vec<String> = resume_manager
+        .detect_interrupted_workflows()
+        .expect("detect interrupted workflows")
+        .into_iter()
+        .map(|workflow| workflow.id)
+        .collect();
+    assert!(interrupted.contains(&"WF-failed".to_string()));
+    assert!(interrupted.contains(&"WF-escalated".to_string()));
+    assert!(!interrupted.contains(&"WF-completed".to_string()));
+
+    resume_manager.config.resume_failed = false;
+    let interrupted: Vec<String> = resume_manager
+        .detect_interrupted_workflows()
+        .expect("detect interrupted workflows")
+        .into_iter()
+        .map(|workflow| workflow.id)
+        .collect();
+    assert!(!interrupted.contains(&"WF-failed".to_string()));
+    assert!(interrupted.contains(&"WF-escalated".to_string()));
+}
+
+#[test]
+fn load_stale_task_summaries_matches_in_progress_status() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    let mut task = make_task(TaskType::Feature, Priority::Medium);
+    task.id = "TASK-stale".to_string();
+    task.metadata.updated_at = Utc::now() - chrono::Duration::hours(48);
+    save_task(temp.path(), &task).expect("save stale in-progress task");
+
+    let stale = load_stale_task_summaries(temp.path(), Utc::now() - chrono::Duration::hours(24))
+        .expect("load stale task summaries");
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].task_id, "TASK-stale");
 }

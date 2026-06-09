@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -339,28 +339,40 @@ impl FileServiceHub {
 
         let mut state = self.state.write().await;
         *state = load_core_state_for_mutation(&self.state_file)?;
-        if let Ok(tasks) = crate::workflow::load_all_tasks(&self.project_root) {
-            if !tasks.is_empty() {
-                state.tasks = tasks;
-            }
+        let tasks = crate::workflow::load_all_tasks(&self.project_root)?;
+        if !tasks.is_empty() {
+            state.tasks = tasks;
         }
-        if let Ok(reqs) = crate::workflow::load_all_requirements(&self.project_root) {
-            if !reqs.is_empty() {
-                state.requirements = reqs;
-            }
+        let reqs = crate::workflow::load_all_requirements(&self.project_root)?;
+        if !reqs.is_empty() {
+            state.requirements = reqs;
         }
         let output = mutator(&mut state)?;
         let dirty_task_ids: Vec<String> = if state.all_tasks_dirty {
-            state.tasks.keys().cloned().collect()
+            state
+                .tasks
+                .keys()
+                .cloned()
+                .chain(state.dirty_tasks.iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
         } else {
             state.dirty_tasks.iter().cloned().collect()
         };
         let dirty_req_ids: Vec<String> = if state.all_requirements_dirty {
-            state.requirements.keys().cloned().collect()
+            state
+                .requirements
+                .keys()
+                .cloned()
+                .chain(state.dirty_requirements.iter().cloned())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect()
         } else {
             state.dirty_requirements.iter().cloned().collect()
         };
-        Self::persist_dirty_to_sqlite(&self.project_root, &state, &dirty_task_ids, &dirty_req_ids);
+        Self::persist_dirty_to_sqlite(&self.project_root, &state, &dirty_task_ids, &dirty_req_ids)?;
         state.dirty_tasks.clear();
         state.dirty_requirements.clear();
         state.all_tasks_dirty = false;
@@ -369,20 +381,37 @@ impl FileServiceHub {
         Ok((output, state.clone()))
     }
 
-    fn persist_dirty_to_sqlite(project_root: &Path, state: &CoreState, task_ids: &[String], req_ids: &[String]) {
+    fn persist_dirty_to_sqlite(
+        project_root: &Path,
+        state: &CoreState,
+        task_ids: &[String],
+        req_ids: &[String],
+    ) -> Result<()> {
+        let mut errors = Vec::new();
         for id in task_ids {
-            if let Some(task) = state.tasks.get(id) {
-                let _ = crate::workflow::save_task(project_root, task);
+            let result = if let Some(task) = state.tasks.get(id) {
+                crate::workflow::save_task(project_root, task)
             } else {
-                let _ = crate::workflow::delete_task(project_root, id);
+                crate::workflow::delete_task(project_root, id)
+            };
+            if let Err(error) = result {
+                errors.push(format!("task {id}: {error:#}"));
             }
         }
         for id in req_ids {
-            if let Some(req) = state.requirements.get(id) {
-                let _ = crate::workflow::save_requirement(project_root, req);
+            let result = if let Some(req) = state.requirements.get(id) {
+                crate::workflow::save_requirement(project_root, req)
             } else {
-                let _ = crate::workflow::delete_requirement(project_root, id);
+                crate::workflow::delete_requirement(project_root, id)
+            };
+            if let Err(error) = result {
+                errors.push(format!("requirement {id}: {error:#}"));
             }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(anyhow!("failed to persist dirty state to SQLite: {}", errors.join("; ")))
         }
     }
 

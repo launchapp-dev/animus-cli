@@ -62,7 +62,7 @@ impl WorkflowResumeManager {
     }
 
     pub fn detect_interrupted_workflows(&self) -> Result<Vec<OrchestratorWorkflow>> {
-        let all = self.state_manager.list()?;
+        let all = self.state_manager.list_all()?;
         Ok(all
             .into_iter()
             .filter(|workflow| match workflow.status {

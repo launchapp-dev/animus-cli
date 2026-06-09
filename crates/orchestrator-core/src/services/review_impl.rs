@@ -245,7 +245,23 @@ async fn request_handoff_impl(project_root: &Path, request: AgentHandoffRequestI
         resolve_workflow_id_for_run(project_root, &run_id).unwrap_or_else(|| "unknown-workflow".to_string());
     let transcript = transcript_path(project_root, &workflow_id, &root_run_id);
 
-    let history = load_history(&transcript).unwrap_or_default();
+    let history = match load_history(&transcript) {
+        Ok(history) => history,
+        Err(error) => {
+            return AgentHandoffResult {
+                handoff_id,
+                run_id,
+                root_run_id,
+                workflow_id,
+                target_role,
+                status: AgentHandoffStatus::Failed,
+                response: None,
+                error: Some(format!("failed to load handoff transcript {}: {error:#}", transcript.display())),
+                duration_ms: started_at.elapsed().as_millis() as u64,
+                depth: 0,
+            };
+        }
+    };
     let depth = history.iter().filter(|entry| entry.event == "completed" || entry.event == "failed").count();
 
     if depth >= handoff_max_depth() {

@@ -161,8 +161,9 @@ mod tests {
         let home = crate::test_env::stable_test_home().to_path_buf();
         let global_config_dir = protocol::Config::global_config_dir();
         std::fs::create_dir_all(&global_config_dir).expect("create global config dir");
-        std::fs::write(global_config_dir.join("config.json"), "{\n  \"agent_runner_token\": null\n}\n")
-            .expect("write valid global config");
+        let config_tmp = global_config_dir.join("config.json.tmp");
+        std::fs::write(&config_tmp, "{\n  \"agent_runner_token\": null\n}\n").expect("write valid global config");
+        std::fs::rename(&config_tmp, global_config_dir.join("config.json")).expect("publish valid global config");
         let machine_packs_dir = crate::machine_installed_packs_dir();
         if machine_packs_dir.exists() {
             std::fs::remove_dir_all(&machine_packs_dir).expect("clear shared machine pack fixtures");

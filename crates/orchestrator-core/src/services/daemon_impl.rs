@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{OnceLock, RwLock};
 use std::time::Instant;
 
@@ -17,18 +18,18 @@ fn daemon_health_cache() -> &'static RwLock<HashMap<PathBuf, (Instant, DaemonHea
     CACHE.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
-static NO_CACHE_FLAG: OnceLock<bool> = OnceLock::new();
+static NO_CACHE_FLAG: AtomicBool = AtomicBool::new(false);
 
 /// Process-global toggle for the in-memory daemon health snapshot
 /// cache. Mirrors the `--no-cache` global flag wired in by the CLI.
 /// Read paths return `None` when the flag is set so a stale snapshot
 /// can never be served on an explicit bypass.
 pub fn set_daemon_health_cache_disabled(value: bool) {
-    let _ = NO_CACHE_FLAG.set(value);
+    NO_CACHE_FLAG.store(value, Ordering::Relaxed);
 }
 
 fn daemon_health_cache_disabled() -> bool {
-    *NO_CACHE_FLAG.get().unwrap_or(&false)
+    NO_CACHE_FLAG.load(Ordering::Relaxed)
 }
 
 fn read_daemon_health_cache(project_root: &Path) -> Option<DaemonHealth> {
