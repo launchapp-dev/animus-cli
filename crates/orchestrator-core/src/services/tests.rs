@@ -2355,3 +2355,51 @@ async fn file_hub_subject_resolver_engages_plugin_fallback() {
         "FileServiceHub must invoke plugin fallback for unknown task ids, got: {msg}"
     );
 }
+
+fn requirement_fixture(id: &str, title: &str) -> RequirementItem {
+    let now = chrono::Utc::now();
+    RequirementItem {
+        id: id.to_string(),
+        title: title.to_string(),
+        description: format!("{title} description"),
+        body: None,
+        legacy_id: None,
+        category: None,
+        requirement_type: None,
+        acceptance_criteria: vec!["done".to_string()],
+        priority: RequirementPriority::Should,
+        status: RequirementStatus::Draft,
+        source: "test".to_string(),
+        tags: vec![],
+        links: Default::default(),
+        comments: Vec::new(),
+        relative_path: None,
+        linked_task_ids: vec![],
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[tokio::test]
+async fn file_hub_delete_requirement_removes_sqlite_row_and_does_not_resurrect() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("create hub");
+
+    let requirement = PlanningServiceApi::upsert_requirement(&hub, requirement_fixture("REQ-DEL-1", "Delete me"))
+        .await
+        .expect("upsert requirement");
+    let id = requirement.id.clone();
+
+    PlanningServiceApi::delete_requirement(&hub, &id).await.expect("delete requirement");
+
+    let stored = crate::workflow::load_all_requirements(temp.path()).expect("load requirements from sqlite");
+    assert!(!stored.contains_key(&id), "delete must remove the sqlite row");
+
+    PlanningServiceApi::upsert_requirement(&hub, requirement_fixture("REQ-DEL-2", "Keep me"))
+        .await
+        .expect("upsert second requirement");
+
+    PlanningServiceApi::get_requirement(&hub, &id).await.expect_err("deleted requirement must stay deleted");
+    let listed = PlanningServiceApi::list_requirements(&hub).await.expect("list requirements");
+    assert!(listed.iter().all(|req| req.id != id), "deleted requirement must not resurrect after later mutations");
+}

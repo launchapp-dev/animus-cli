@@ -236,10 +236,7 @@ impl WorkflowStateManager {
 
         let conn = self.open_db()?;
         let deleted = conn.execute(
-            "DELETE FROM workflows WHERE status NOT IN ('running', 'paused') AND json_extract(json, '$.completed_at') < ?1",
-            params![cutoff_str],
-        )? + conn.execute(
-            "DELETE FROM workflows WHERE status NOT IN ('running', 'paused') AND json_extract(json, '$.completed_at') IS NULL AND json_extract(json, '$.started_at') < ?1",
+            "DELETE FROM workflows WHERE status NOT IN ('running', 'paused') AND COALESCE(completed_at, started_at) < ?1",
             params![cutoff_str],
         )?;
 
@@ -1369,7 +1366,7 @@ pub fn load_stale_task_summaries(
     let mut stmt = conn.prepare(
         "SELECT id, title, updated_at
          FROM tasks
-         WHERE status = 'in_progress'
+         WHERE status = 'in-progress'
            AND updated_at IS NOT NULL
            AND updated_at < ?1
          ORDER BY updated_at ASC, id ASC",

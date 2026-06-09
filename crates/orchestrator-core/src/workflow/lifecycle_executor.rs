@@ -391,25 +391,41 @@ impl WorkflowLifecycleExecutor {
     pub fn pause(&self, workflow: &mut OrchestratorWorkflow) {
         if matches!(
             workflow.status,
-            WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled
+            WorkflowStatus::Paused
+                | WorkflowStatus::Completed
+                | WorkflowStatus::Failed
+                | WorkflowStatus::Escalated
+                | WorkflowStatus::Cancelled
         ) {
             return;
         }
 
         let mut machine = self.state_machine(workflow.machine_state);
-        machine.apply(WorkflowMachineEvent::PauseRequested).expect("pause: PauseRequested transition");
+        if let Err(error) = machine.apply(WorkflowMachineEvent::PauseRequested) {
+            tracing::warn!(workflow_id = %workflow.id, %error, "pause skipped: PauseRequested transition unavailable");
+            return;
+        }
         workflow.machine_state = machine.state();
         workflow.sync_status();
     }
 
     pub fn resume(&self, workflow: &mut OrchestratorWorkflow) {
-        if matches!(workflow.status, WorkflowStatus::Completed | WorkflowStatus::Cancelled) {
+        if matches!(
+            workflow.status,
+            WorkflowStatus::Pending | WorkflowStatus::Running | WorkflowStatus::Completed | WorkflowStatus::Cancelled
+        ) {
             return;
         }
 
         let mut machine = self.state_machine(workflow.machine_state);
-        machine.apply(WorkflowMachineEvent::ResumeRequested).expect("resume: ResumeRequested transition");
-        machine.apply(WorkflowMachineEvent::PhaseStarted).expect("resume: PhaseStarted after resume");
+        if let Err(error) = machine.apply(WorkflowMachineEvent::ResumeRequested) {
+            tracing::warn!(workflow_id = %workflow.id, %error, "resume skipped: ResumeRequested transition unavailable");
+            return;
+        }
+        if let Err(error) = machine.apply(WorkflowMachineEvent::PhaseStarted) {
+            tracing::warn!(workflow_id = %workflow.id, %error, "resume skipped: PhaseStarted transition unavailable");
+            return;
+        }
         workflow.machine_state = machine.state();
         workflow.sync_status();
         workflow.completed_at = None;

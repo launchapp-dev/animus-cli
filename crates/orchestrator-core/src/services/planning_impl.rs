@@ -240,7 +240,7 @@ impl PlanningServiceApi for FileServiceHub {
                 if state.requirements.remove(id).is_none() {
                     return Err(not_found(format!("requirement not found: {id}")));
                 }
-                state.all_requirements_dirty = true;
+                state.dirty_requirements.insert(id.to_string());
                 state.logs.push(LogEntry {
                     timestamp: Utc::now(),
                     level: LogLevel::Info,
