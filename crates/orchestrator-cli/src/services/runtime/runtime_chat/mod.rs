@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 
 use crate::shared::{canonicalize_cwd_in_project, print_ok, print_value};
-use crate::{ChatCommand, ChatGetArgs, ChatNewArgs, ChatSendArgs};
+use crate::{ChatCommand, ChatDeleteArgs, ChatGetArgs, ChatNewArgs, ChatRenameArgs, ChatSendArgs};
 
 pub(crate) mod sink;
 pub(crate) mod store;
@@ -24,7 +24,25 @@ pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: 
         ChatCommand::Send(args) => handle_chat_send(args, project_root, json).await,
         ChatCommand::Get(args) => handle_chat_get(args, project_root, json),
         ChatCommand::List => handle_chat_list(project_root, json),
+        ChatCommand::Rename(args) => handle_chat_rename(args, project_root, json),
+        ChatCommand::Delete(args) => handle_chat_delete(args, project_root, json),
     }
+}
+
+fn handle_chat_rename(args: ChatRenameArgs, project_root: &str, json: bool) -> Result<()> {
+    let store = FileConversationStore::for_project(Path::new(project_root))?;
+    let mut meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
+    let trimmed = args.title.trim();
+    meta.title = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+    store.save_meta(&meta)?;
+    print_value(serde_json::json!({ "conversation_id": meta.id, "title": meta.title }), json)
+}
+
+fn handle_chat_delete(args: ChatDeleteArgs, project_root: &str, json: bool) -> Result<()> {
+    let store = FileConversationStore::for_project(Path::new(project_root))?;
+    let existed = store.load_meta(&args.id)?.is_some();
+    store.delete(&args.id)?;
+    print_value(serde_json::json!({ "conversation_id": args.id, "deleted": existed }), json)
 }
 
 fn handle_chat_new(args: ChatNewArgs, project_root: &str, json: bool) -> Result<()> {

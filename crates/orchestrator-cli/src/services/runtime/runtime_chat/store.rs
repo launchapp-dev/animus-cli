@@ -205,6 +205,9 @@ pub(crate) trait ConversationStore: Send + Sync {
     fn load_messages(&self, id: &str) -> Result<Vec<ChatMessage>>;
     /// List all conversations, most-recently-updated first.
     fn list(&self) -> Result<Vec<ConversationSummary>>;
+    /// Permanently remove a conversation and its event log. Idempotent: a
+    /// missing conversation is not an error.
+    fn delete(&self, id: &str) -> Result<()>;
 }
 
 /// Filesystem-backed store rooted under the scoped runtime root
@@ -336,6 +339,16 @@ impl ConversationStore for FileConversationStore {
         }
         summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
         Ok(summaries)
+    }
+
+    fn delete(&self, id: &str) -> Result<()> {
+        ensure_safe_id(id)?;
+        let dir = self.conversation_dir(id);
+        if !dir.exists() {
+            return Ok(());
+        }
+        std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
+        Ok(())
     }
 }
 
@@ -520,6 +533,21 @@ mod tests {
         let legacy = r#"{"seq":1,"role":"assistant","content":"hi","recorded_at":"2026-06-08T00:00:00Z"}"#;
         let msg: ChatMessage = serde_json::from_str(legacy).expect("legacy line must still parse");
         assert!(msg.blocks.is_empty(), "missing blocks must default to empty, not error");
+    }
+
+    #[test]
+    fn delete_removes_conversation_and_is_idempotent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileConversationStore { root: tmp.path().join("chat") };
+        store.create(Some("conv-del".into())).unwrap();
+        assert!(store.load_meta("conv-del").unwrap().is_some());
+
+        store.delete("conv-del").unwrap();
+        assert!(store.load_meta("conv-del").unwrap().is_none(), "conversation removed");
+        // idempotent: deleting a missing conversation is not an error
+        store.delete("conv-del").unwrap();
+        // traversal ids are rejected
+        assert!(store.delete("../escape").is_err());
     }
 
     #[test]

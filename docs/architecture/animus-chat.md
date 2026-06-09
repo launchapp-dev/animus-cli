@@ -342,10 +342,14 @@ animus chat new [--id <id>] [--title <title>]
 animus chat send "message" [--conversation <id>] [--tool <tool>] [--model <id>] [--cwd <path>] [--stream]
 animus chat get <conversation-id>
 animus chat list
+animus chat rename <conversation-id> --title <title>
+animus chat delete <conversation-id>
 ```
 
 `--json` selects JSONL event output, `--stream` selects plain-text incremental
 output, and omitting both prints the final assistant reply after persistence.
+`rename` trims the supplied title and clears it when the value is empty;
+`delete` removes the conversation directory and is idempotent for missing ids.
 
 ## HTTP surface (transport plugin)
 

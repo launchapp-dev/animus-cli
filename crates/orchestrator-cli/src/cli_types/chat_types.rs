@@ -17,6 +17,10 @@ pub(crate) enum ChatCommand {
     Get(ChatGetArgs),
     /// List conversations, most-recently-updated first.
     List,
+    /// Set or clear a conversation's title.
+    Rename(ChatRenameArgs),
+    /// Permanently delete a conversation.
+    Delete(ChatDeleteArgs),
 }
 
 #[derive(Debug, Args)]
@@ -59,6 +63,23 @@ pub(crate) struct ChatSendArgs {
 #[derive(Debug, Args)]
 pub(crate) struct ChatGetArgs {
     /// Conversation id to read.
+    #[arg(value_name = "ID")]
+    pub(crate) id: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ChatRenameArgs {
+    /// Conversation id to rename.
+    #[arg(value_name = "ID")]
+    pub(crate) id: String,
+    /// New title. Pass an empty string to clear it.
+    #[arg(long)]
+    pub(crate) title: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ChatDeleteArgs {
+    /// Conversation id to delete.
     #[arg(value_name = "ID")]
     pub(crate) id: String,
 }

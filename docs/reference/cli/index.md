@@ -53,7 +53,9 @@ animus
 │   ├── new                  Start a new (empty) conversation and print its id
 │   ├── send                 Send a user message and stream the reply
 │   ├── get                  Print a conversation's full transcript
-│   └── list                 List conversations, most-recently-updated first
+│   ├── list                 List conversations, most-recently-updated first
+│   ├── rename               Set or clear a conversation's title (`--title`; empty clears)
+│   └── delete               Permanently delete a conversation
 │
 ├── project                  Manage project registration and metadata
 │   ├── list                 List registered projects

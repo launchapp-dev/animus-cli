@@ -53,7 +53,17 @@ animus chat get <id>
 
 # List conversations, most-recently-updated first
 animus chat list
+
+# Set or clear a conversation title
+animus chat rename <id> --title <title>
+
+# Permanently delete a conversation
+animus chat delete <id>
 ```
+
+`animus chat rename` trims surrounding whitespace from `--title`; passing an
+empty string clears the stored title. `animus chat delete` is idempotent: a
+missing conversation is treated as already deleted rather than an error.
 
 ### Streaming and output modes
 
