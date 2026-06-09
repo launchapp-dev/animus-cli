@@ -1,6 +1,6 @@
 # Installation
 
-Current workspace CLI version: **v0.5.4**. See [CHANGELOG.md](../../CHANGELOG.md)
+Current workspace CLI version: **v0.5.11**. See [CHANGELOG.md](../../CHANGELOG.md)
 for release notes and
 [`docs/migration/v0.4.11-to-v0.4.12.md`](../migration/v0.4.11-to-v0.4.12.md)
 if you are upgrading from an earlier v0.4.x.
@@ -24,7 +24,7 @@ Options:
 
 ```bash
 # Install a specific release
-ANIMUS_VERSION=v0.5.4 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
+ANIMUS_VERSION=v0.5.11 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 
 # Install into a custom directory
 ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash

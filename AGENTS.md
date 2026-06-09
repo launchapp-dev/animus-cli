@@ -36,6 +36,7 @@ Current workspace members from `Cargo.toml`:
 ```text
 crates/
 ├── animus-runtime-shared/       # Shared workflow execution/runtime-contract helpers used by daemon and workflow_runner plugins
+├── animus-mcp-oauth/            # OAuth authorization-code + PKCE helpers and proxy bridge for protected MCP servers
 ├── animus-plugin-protocol/      # In-tree stdio plugin protocol types
 ├── animus-plugin-runtime/       # Runtime helpers for plugin implementations
 ├── orchestrator-cli/            # Main `animus` binary
