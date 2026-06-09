@@ -23,7 +23,7 @@ observability, and extension rules, see
 | Workflow execution helpers | [`crates/animus-runtime-shared/src/`](../../crates/animus-runtime-shared/src/) |
 | Daemon runtime | [`crates/orchestrator-daemon-runtime/src/`](../../crates/orchestrator-daemon-runtime/src/) |
 | Plugin host | [`crates/orchestrator-plugin-host/src/`](../../crates/orchestrator-plugin-host/src/) |
-| Provider session bridge | [`crates/orchestrator-session-host/src/`](../../crates/orchestrator-session-host/src/) |
+| Provider session bridge | [`crates/orchestrator-plugin-host/src/session/`](../../crates/orchestrator-plugin-host/src/session/) |
 | Web plugin resolution | [`crates/orchestrator-cli/src/services/operations/ops_web.rs`](../../crates/orchestrator-cli/src/services/operations/ops_web.rs) |
 
 ## System Shape
@@ -34,11 +34,9 @@ flowchart TB
     CLI["orchestrator-cli<br/>animus"]
     CORE["orchestrator-core<br/>FileServiceHub"]
     CFG["orchestrator-config"]
-    STORE["orchestrator-store"]
     DAEMON["orchestrator-daemon-runtime"]
     WFR["animus-runtime-shared<br/>+ workflow_runner plugin"]
-    AR["agent-runner"]
-    SESSION["orchestrator-session-host"]
+    SESSION["orchestrator-plugin-host::session"]
     PHOST["orchestrator-plugin-host"]
     PLUGINS["provider / subject / trigger / transport plugins"]
     STATE["~/.animus/<repo-scope>"]
@@ -48,12 +46,10 @@ flowchart TB
     CLI --> CORE
     CLI --> DAEMON
     CORE --> CFG
-    CORE --> STORE
     CORE --> LOCAL
-    STORE --> STATE
+    CORE --> STATE
     DAEMON --> WFR
-    WFR --> AR
-    AR --> SESSION
+    WFR --> SESSION
     SESSION --> PHOST
     DAEMON --> PHOST
     CLI --> PHOST
@@ -65,11 +61,11 @@ flowchart TB
 | Layer | Crates | Responsibility |
 |---|---|---|
 | Interface | `orchestrator-cli` | CLI, MCP server, JSON output, operations, `animus web` plugin launch |
-| Services | `orchestrator-core`, `orchestrator-config`, `orchestrator-store` | Bootstrap, config, state mutation APIs, workflow config, atomic persistence |
-| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `agent-runner` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and runner IPC/process orchestration |
-| Providers | `orchestrator-session-host`, `oai-runner`, `orchestrator-providers` | Provider plugin sessions, OpenAI-compatible runner, compatibility helpers |
+| Services | `orchestrator-core`, `orchestrator-config` | Bootstrap, config, workflow config, and file-backed state mutation APIs |
+| Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `animus-mcp-oauth` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and protected MCP OAuth proxy/token handling |
+| Providers | `orchestrator-plugin-host::session`, external `launchapp-dev/animus-provider-oai-agent` plugin | Provider plugin sessions and the OpenAI-compatible runner binary resolved from installed plugins |
 | Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
-| Support | `orchestrator-git-ops`, `orchestrator-notifications`, `orchestrator-logging`, `protocol` | Worktrees, notifications, tracing, shared types |
+| Support | `orchestrator-logging`, `protocol` | Tracing, log plumbing, shared types, config, and repository-scope helpers |
 
 ## Startup Flow
 
@@ -79,7 +75,7 @@ especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
 current runtime mixes legacy `v0.1.13` provider/session wire crates with newer
 `v0.5.x` queue/workflow/subject protocol crates.
 
-Repo-local but not current workspace members: `crates/orchestrator-web-server/`.
+Repo-local but not current workspace members: `crates/agent-runner/`, `crates/oai-runner/`, `crates/orchestrator-web-server/`.
 
 1. Parse global flags and top-level command in `orchestrator-cli`.
 2. Resolve the project root with this precedence:

@@ -30,7 +30,7 @@ The core goals are:
 
 ## Workspace Inventory
 
-`Cargo.toml` currently declares 10 workspace members.
+`Cargo.toml` currently declares 11 workspace members.
 
 | Group | Crates |
 |---|---|
@@ -38,7 +38,7 @@ The core goals are:
 | Core services | `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config` |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared` |
 | Plugin foundation | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-protocol`, `animus-plugin-runtime` |
-| Support | `orchestrator-logging`, `protocol` |
+| Support | `orchestrator-logging`, `protocol`, `animus-mcp-oauth` |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
@@ -46,7 +46,7 @@ especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
 current runtime mixes legacy `v0.1.13` provider/session wire crates with newer
 `v0.5.x` queue/workflow/subject protocol crates.
 
-Repo-local but not current workspace members: `crates/orchestrator-web-server/`.
+Repo-local but not current workspace members: `crates/agent-runner/`, `crates/oai-runner/`, `crates/orchestrator-web-server/`.
 
 The release/runtime binary set is:
 

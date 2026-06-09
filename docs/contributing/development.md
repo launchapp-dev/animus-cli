@@ -30,13 +30,14 @@ cargo build -p orchestrator-plugin-host
 
 ## Workspace Structure
 
-The workspace is a Cargo workspace of 10 crates. The current workspace members are:
+The workspace is a Cargo workspace of 11 crates. The current workspace members are:
 
 ```text
 crates/
 ├── animus-plugin-protocol/
 ├── animus-plugin-runtime/
 ├── animus-runtime-shared/
+├── animus-mcp-oauth/
 ├── orchestrator-cli/
 ├── orchestrator-config/
 ├── orchestrator-core/
@@ -48,6 +49,8 @@ crates/
 
 Repo-local but not current workspace members:
 
+- `crates/agent-runner/`
+- `crates/oai-runner/`
 - `crates/orchestrator-web-server/`
 
 `default-members` in `Cargo.toml` include:
