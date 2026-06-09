@@ -1,8 +1,15 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
-use orchestrator_config::skill_definition::SkillDefinition;
+use orchestrator_config::skill_definition::{
+    SkillActivation, SkillCategory, SkillDefinition, SkillModelPreference, SkillPrompt,
+};
 use orchestrator_config::skill_resolution::{list_available_skills, resolve_skill};
-use orchestrator_config::skill_scoping::{load_skill_sources, AgentHostScope, SkillSourceOrigin};
+use orchestrator_config::skill_scoping::{
+    load_skill_sources, validate_skill_slug, write_project_skill_yaml, AgentHostScope, SkillSourceOrigin,
+    SkillWriteOutcome,
+};
+use orchestrator_config::AgentToolPolicy;
 use rmcp::model::CallToolResult;
 use rmcp::ErrorData as McpError;
 use schemars::JsonSchema;
@@ -45,7 +52,132 @@ pub(super) struct SkillSearchInput {
     limit: Option<usize>,
 }
 
+/// Tool/model activation gates for an authored skill. Maps directly onto
+/// [`SkillActivation`]. When both lists are empty the skill applies
+/// unconditionally (preview mode).
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct SkillActivationInput {
+    /// Tool ids the skill activates for (e.g. "claude", "codex", "gemini").
+    /// Empty = any tool.
+    #[serde(default)]
+    tools: Vec<String>,
+    /// Model ids the skill activates for. Empty = any model.
+    #[serde(default)]
+    models: Vec<String>,
+}
+
+/// Tool allow/deny policy for an authored skill. Maps onto [`AgentToolPolicy`].
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub(super) struct SkillToolPolicyInput {
+    #[serde(default)]
+    allow: Vec<String>,
+    #[serde(default)]
+    deny: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct SkillCreateInput {
+    #[serde(default)]
+    project_root: Option<String>,
+    /// Skill slug: lowercase ASCII letters/digits plus `-`/`_`, no path
+    /// separators. Becomes the file name `.animus/config/skill_definitions/<name>.yaml`.
+    name: String,
+    /// Human-readable description shown in `list`/`search`.
+    description: String,
+    /// The skill's instruction body. Stored as `prompt.system`.
+    prompt: String,
+    /// Optional discovery tags (case-insensitive substring matched by search).
+    #[serde(default)]
+    tags: Vec<String>,
+    /// Optional tool allow/deny policy. Trusted because this is a
+    /// project-scoped skill.
+    #[serde(default)]
+    tool_policy: Option<SkillToolPolicyInput>,
+    /// Optional preferred model id (e.g. "claude-sonnet-4-6").
+    #[serde(default)]
+    model: Option<String>,
+    /// Optional MCP server ids the skill should attach.
+    #[serde(default)]
+    mcp_servers: Vec<String>,
+    /// Optional category: implementation, testing, review, research,
+    /// documentation, operations, planning.
+    #[serde(default)]
+    category: Option<String>,
+    /// Optional activation gates (tool/model).
+    #[serde(default)]
+    activation: Option<SkillActivationInput>,
+    /// Optional capability overrides (e.g. {"writes_files": true}).
+    #[serde(default)]
+    capabilities: Option<BTreeMap<String, bool>>,
+    /// Refuse to overwrite an existing project skill unless true.
+    #[serde(default)]
+    overwrite: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub(super) struct SkillUpdateInput {
+    #[serde(default)]
+    project_root: Option<String>,
+    /// Slug of the existing PROJECT-scoped skill to patch.
+    name: String,
+    /// New description (replaces existing when supplied).
+    #[serde(default)]
+    description: Option<String>,
+    /// New instruction body (replaces `prompt.system` when supplied).
+    #[serde(default)]
+    prompt: Option<String>,
+    /// New tags list (replaces existing when supplied).
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    /// New tool policy (replaces existing when supplied).
+    #[serde(default)]
+    tool_policy: Option<SkillToolPolicyInput>,
+    /// New preferred model (replaces existing when supplied).
+    #[serde(default)]
+    model: Option<String>,
+    /// New MCP server list (replaces existing when supplied).
+    #[serde(default)]
+    mcp_servers: Option<Vec<String>>,
+    /// New category (replaces existing when supplied).
+    #[serde(default)]
+    category: Option<String>,
+    /// New capability overrides (replaces existing when supplied).
+    #[serde(default)]
+    capabilities: Option<BTreeMap<String, bool>>,
+}
+
 const DEFAULT_SKILL_SEARCH_LIMIT: usize = 50;
+
+fn parse_skill_category(raw: &str) -> Result<SkillCategory, McpError> {
+    serde_json::from_value::<SkillCategory>(json!(raw.trim().to_ascii_lowercase())).map_err(|_| {
+        McpError::invalid_params(
+            format!(
+                "unknown category '{}': expected one of implementation, testing, review, research, documentation, operations, planning",
+                raw.trim()
+            ),
+            None,
+        )
+    })
+}
+
+impl From<SkillActivationInput> for SkillActivation {
+    fn from(input: SkillActivationInput) -> Self {
+        SkillActivation { tools: input.tools, models: input.models }
+    }
+}
+
+impl From<SkillToolPolicyInput> for AgentToolPolicy {
+    fn from(input: SkillToolPolicyInput) -> Self {
+        AgentToolPolicy { allow: input.allow, deny: input.deny }
+    }
+}
+
+fn skill_write_outcome_str(outcome: SkillWriteOutcome) -> &'static str {
+    match outcome {
+        SkillWriteOutcome::Created => "created",
+        SkillWriteOutcome::Updated => "updated",
+    }
+}
 
 fn normalize_source_filter(raw: Option<String>) -> Option<String> {
     raw.map(|value| value.trim().to_ascii_lowercase()).filter(|value| !value.is_empty())
@@ -275,6 +407,172 @@ impl AoMcpServer {
             }
         })))
     }
+
+    #[tool(
+        name = "animus.skill.create",
+        description = "Author a PROJECT-scoped Animus skill. Writes a full-fidelity SkillDefinition as YAML to <project_root>/.animus/config/skill_definitions/<name>.yaml (the project YAML tier that resolution reads at highest priority). `name` must be a slug (lowercase ASCII letters/digits plus '-'/'_', no path separators); `description` and `prompt` are required. Optional: tags, tool_policy {allow,deny}, model, mcp_servers, category, activation {tools,models}, capabilities. Refuses to overwrite an existing skill unless `overwrite` is true. The written file is re-parsed to guarantee it round-trips, so a malformed skill is never left on disk. Project-scope only — structural fields (tool_policy, mcp_servers) are trusted because the skill is project-local. The new skill is immediately discoverable via animus.skill.list / animus.skill.search.",
+        input_schema = ao_schema_for_type::<SkillCreateInput>()
+    )]
+    async fn ao_skill_create(&self, params: Parameters<SkillCreateInput>) -> Result<CallToolResult, McpError> {
+        let SkillCreateInput {
+            project_root,
+            name,
+            description,
+            prompt,
+            tags,
+            tool_policy,
+            model,
+            mcp_servers,
+            category,
+            activation,
+            capabilities,
+            overwrite,
+        } = params.0;
+        let project_root = self.skill_project_root(project_root);
+
+        let name = validate_skill_slug(&name).map_err(|err| McpError::invalid_params(err.to_string(), None))?;
+        let description = description.trim().to_string();
+        if description.is_empty() {
+            return Err(McpError::invalid_params("description must not be empty", None));
+        }
+        let prompt_body = prompt.trim().to_string();
+        if prompt_body.is_empty() {
+            return Err(McpError::invalid_params("prompt must not be empty", None));
+        }
+
+        let category = match category.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            Some(raw) => Some(parse_skill_category(raw)?),
+            None => None,
+        };
+
+        let definition = SkillDefinition {
+            name: name.clone(),
+            version: None,
+            description,
+            category,
+            activation: activation.map(SkillActivation::from).unwrap_or_default(),
+            prompt: SkillPrompt { system: Some(prompt_body), ..SkillPrompt::default() },
+            tool_policy: tool_policy.map(AgentToolPolicy::from),
+            model: model
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .map(|preferred| SkillModelPreference { preferred: Some(preferred), fallback: None })
+                .unwrap_or_default(),
+            mcp_servers: mcp_servers.into_iter().filter(|value| !value.trim().is_empty()).collect(),
+            timeout_secs: None,
+            capabilities: capabilities.unwrap_or_default(),
+            extra_args: Vec::new(),
+            env: BTreeMap::new(),
+            codex_config_overrides: Vec::new(),
+            adapters: BTreeMap::new(),
+            tags: tags.into_iter().filter(|value| !value.trim().is_empty()).collect(),
+        };
+
+        let (path, outcome) = write_project_skill_yaml(Path::new(&project_root), &definition, overwrite)
+            .map_err(|err| McpError::invalid_params(err.to_string(), None))?;
+
+        Ok(CallToolResult::structured(json!({
+            "tool": "animus.skill.create",
+            "result": {
+                "name": name,
+                "path": path.to_string_lossy(),
+                "source": "project",
+                "outcome": skill_write_outcome_str(outcome),
+            }
+        })))
+    }
+
+    #[tool(
+        name = "animus.skill.update",
+        description = "Patch an existing PROJECT-scoped skill at .animus/config/skill_definitions/<name>.yaml. Only the supplied fields change; every other field is preserved from the existing definition. Patchable: description, prompt, tags, tool_policy {allow,deny}, model, mcp_servers, category, capabilities. Fails if the named skill does not resolve to a PROJECT source (use animus.skill.create for new skills; user/pack/agent-host skills are not editable via MCP). The rewritten file is re-parsed to guarantee it round-trips.",
+        input_schema = ao_schema_for_type::<SkillUpdateInput>()
+    )]
+    async fn ao_skill_update(&self, params: Parameters<SkillUpdateInput>) -> Result<CallToolResult, McpError> {
+        let SkillUpdateInput {
+            project_root,
+            name,
+            description,
+            prompt,
+            tags,
+            tool_policy,
+            model,
+            mcp_servers,
+            category,
+            capabilities,
+        } = params.0;
+        let project_root = self.skill_project_root(project_root);
+        let name = validate_skill_slug(&name).map_err(|err| McpError::invalid_params(err.to_string(), None))?;
+
+        let sources = load_skill_sources(Path::new(&project_root), None)
+            .map_err(|err| McpError::internal_error(format!("failed to load skill sources: {err}"), None))?;
+        let resolved = resolve_skill(&name, &sources)
+            .map_err(|err| McpError::invalid_params(format!("skill '{}' not found: {}", name, err), None))?;
+        if !matches!(resolved.source, SkillSourceOrigin::Project) {
+            return Err(McpError::invalid_params(
+                format!(
+                    "skill '{}' resolves to a {} source; only project-scoped skills can be updated via MCP",
+                    name,
+                    source_tag(&resolved.source)
+                ),
+                None,
+            ));
+        }
+
+        let mut definition = resolved.definition;
+
+        if let Some(description) = description {
+            let trimmed = description.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(McpError::invalid_params("description must not be empty", None));
+            }
+            definition.description = trimmed;
+        }
+        if let Some(prompt) = prompt {
+            let trimmed = prompt.trim().to_string();
+            if trimmed.is_empty() {
+                return Err(McpError::invalid_params("prompt must not be empty", None));
+            }
+            definition.prompt.system = Some(trimmed);
+        }
+        if let Some(tags) = tags {
+            definition.tags = tags.into_iter().filter(|value| !value.trim().is_empty()).collect();
+        }
+        if let Some(tool_policy) = tool_policy {
+            definition.tool_policy = Some(AgentToolPolicy::from(tool_policy));
+        }
+        if let Some(model) = model {
+            let trimmed = model.trim().to_string();
+            definition.model = if trimmed.is_empty() {
+                SkillModelPreference::default()
+            } else {
+                SkillModelPreference { preferred: Some(trimmed), fallback: None }
+            };
+        }
+        if let Some(mcp_servers) = mcp_servers {
+            definition.mcp_servers = mcp_servers.into_iter().filter(|value| !value.trim().is_empty()).collect();
+        }
+        if let Some(category) = category {
+            let trimmed = category.trim();
+            definition.category =
+                if trimmed.is_empty() { None } else { Some(parse_skill_category(trimmed)?) };
+        }
+        if let Some(capabilities) = capabilities {
+            definition.capabilities = capabilities;
+        }
+
+        let (path, outcome) = write_project_skill_yaml(Path::new(&project_root), &definition, true)
+            .map_err(|err| McpError::invalid_params(err.to_string(), None))?;
+
+        Ok(CallToolResult::structured(json!({
+            "tool": "animus.skill.update",
+            "result": {
+                "name": name,
+                "path": path.to_string_lossy(),
+                "source": "project",
+                "outcome": skill_write_outcome_str(outcome),
+            }
+        })))
+    }
 }
 
 #[cfg(test)]
@@ -315,7 +613,7 @@ mod skill_tool_tests {
     }
 
     #[tokio::test]
-    async fn skill_router_registers_three_tools() {
+    async fn skill_router_registers_all_tools() {
         let (_home, _guard) = isolated_home();
         let project = TempDir::new().expect("project tempdir");
         let server = new_ao_mcp_server(&project_root_for(&project));
@@ -323,7 +621,227 @@ mod skill_tool_tests {
         assert!(names.contains(&"animus.skill.list".to_string()), "router missing animus.skill.list");
         assert!(names.contains(&"animus.skill.get".to_string()), "router missing animus.skill.get");
         assert!(names.contains(&"animus.skill.search".to_string()), "router missing animus.skill.search");
+        assert!(names.contains(&"animus.skill.create".to_string()), "router missing animus.skill.create");
+        assert!(names.contains(&"animus.skill.update".to_string()), "router missing animus.skill.update");
         assert!(server.tool_router.has_route("animus.skill.list"));
+    }
+
+    fn create_input(name: &str, description: &str, prompt: &str) -> SkillCreateInput {
+        SkillCreateInput {
+            project_root: None,
+            name: name.to_string(),
+            description: description.to_string(),
+            prompt: prompt.to_string(),
+            tags: Vec::new(),
+            tool_policy: None,
+            model: None,
+            mcp_servers: Vec::new(),
+            category: None,
+            activation: None,
+            capabilities: None,
+            overwrite: false,
+        }
+    }
+
+    fn update_input(name: &str) -> SkillUpdateInput {
+        SkillUpdateInput {
+            project_root: None,
+            name: name.to_string(),
+            description: None,
+            prompt: None,
+            tags: None,
+            tool_policy: None,
+            model: None,
+            mcp_servers: None,
+            category: None,
+            capabilities: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_create_writes_yaml_and_round_trips() {
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let mut input = create_input("my-reviewer", "Reviews PRs", "You review pull requests.");
+        input.tags = vec!["review".to_string(), "quality".to_string()];
+        input.tool_policy = Some(SkillToolPolicyInput { allow: vec!["Read".to_string()], deny: vec!["Write".to_string()] });
+        input.model = Some("claude-sonnet-4-6".to_string());
+        input.mcp_servers = vec!["animus".to_string()];
+        input.category = Some("review".to_string());
+        input.capabilities = Some(BTreeMap::from([("is_review".to_string(), true)]));
+
+        let result = server.ao_skill_create(Parameters(input)).await.expect("create skill");
+        let payload = data(&result);
+        assert_eq!(payload.get("name").and_then(Value::as_str), Some("my-reviewer"));
+        assert_eq!(payload.get("source").and_then(Value::as_str), Some("project"));
+        assert_eq!(payload.get("outcome").and_then(Value::as_str), Some("created"));
+
+        let path = payload.get("path").and_then(Value::as_str).expect("path");
+        assert!(path.ends_with(".animus/config/skill_definitions/my-reviewer.yaml"), "unexpected path {path}");
+        assert!(std::path::Path::new(path).exists(), "skill file should exist on disk");
+
+        let sources = load_skill_sources(project.path(), None).expect("load sources");
+        let resolved = resolve_skill("my-reviewer", &sources).expect("resolve created skill");
+        assert!(matches!(resolved.source, SkillSourceOrigin::Project));
+        assert_eq!(resolved.definition.description, "Reviews PRs");
+        assert_eq!(resolved.definition.prompt.system.as_deref(), Some("You review pull requests."));
+        assert_eq!(resolved.definition.tags, vec!["review", "quality"]);
+        assert_eq!(resolved.definition.tool_policy.as_ref().map(|p| p.allow.clone()), Some(vec!["Read".to_string()]));
+        assert_eq!(resolved.definition.model.preferred.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(resolved.definition.mcp_servers, vec!["animus"]);
+        assert_eq!(resolved.definition.capabilities.get("is_review"), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn skill_create_then_visible_in_list_and_search() {
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let mut input = create_input("discoverable-skill", "A findable skill", "Body.");
+        input.tags = vec!["findme".to_string()];
+        server.ao_skill_create(Parameters(input)).await.expect("create skill");
+
+        let listed = server
+            .ao_skill_list(Parameters(SkillListInput { project_root: None, source: Some("project".to_string()) }))
+            .await
+            .expect("list project");
+        let list_payload = data(&listed);
+        let listed_skills = list_payload.pointer("/skills").and_then(Value::as_array).expect("skills");
+        assert!(
+            listed_skills.iter().any(|s| s.get("name").and_then(Value::as_str) == Some("discoverable-skill")),
+            "created skill should appear in animus.skill.list"
+        );
+
+        let searched = server
+            .ao_skill_search(Parameters(SkillSearchInput {
+                project_root: None,
+                query: "FINDME".to_string(),
+                source: None,
+                limit: None,
+            }))
+            .await
+            .expect("search");
+        let search_payload = data(&searched);
+        let matched = search_payload.pointer("/skills").and_then(Value::as_array).expect("skills");
+        assert!(
+            matched.iter().any(|s| s.get("name").and_then(Value::as_str) == Some("discoverable-skill")),
+            "created skill should be found by case-insensitive tag search"
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_create_refuses_overwrite_then_allows_with_flag() {
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        server
+            .ao_skill_create(Parameters(create_input("dup", "first", "first body")))
+            .await
+            .expect("first create");
+
+        let err = server
+            .ao_skill_create(Parameters(create_input("dup", "second", "second body")))
+            .await
+            .expect_err("second create without overwrite should fail");
+        assert!(err.message.contains("already exists"), "error should mention existing skill: {}", err.message);
+
+        let mut overwrite_input = create_input("dup", "second", "second body");
+        overwrite_input.overwrite = true;
+        let result = server.ao_skill_create(Parameters(overwrite_input)).await.expect("overwrite create");
+        assert_eq!(data(&result).get("outcome").and_then(Value::as_str), Some("updated"));
+
+        let sources = load_skill_sources(project.path(), None).expect("load sources");
+        let resolved = resolve_skill("dup", &sources).expect("resolve");
+        assert_eq!(resolved.definition.description, "second");
+    }
+
+    #[tokio::test]
+    async fn skill_create_rejects_bad_names_and_empty_fields() {
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        for bad in ["../escape", "Has Space", "UPPER", "with/slash", "with\\back", "  "] {
+            let result = server.ao_skill_create(Parameters(create_input(bad, "desc", "body"))).await;
+            assert!(result.is_err(), "name {bad:?} should be rejected but succeeded");
+        }
+
+        let traversal = server
+            .ao_skill_create(Parameters(create_input("../escape", "desc", "body")))
+            .await
+            .expect_err("path traversal name must be rejected");
+        assert!(traversal.message.to_lowercase().contains("path") || traversal.message.contains(".."));
+        assert!(!project.path().join("escape.yaml").exists());
+
+        let empty_desc = server
+            .ao_skill_create(Parameters(create_input("ok-name", "   ", "body")))
+            .await
+            .expect_err("empty description rejected");
+        assert!(empty_desc.message.contains("description"));
+
+        let empty_prompt = server
+            .ao_skill_create(Parameters(create_input("ok-name", "desc", "   ")))
+            .await
+            .expect_err("empty prompt rejected");
+        assert!(empty_prompt.message.contains("prompt"));
+    }
+
+    #[tokio::test]
+    async fn skill_update_patches_only_supplied_fields() {
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let mut create = create_input("patchable", "original desc", "original body");
+        create.tags = vec!["keep".to_string()];
+        create.model = Some("claude-sonnet-4-6".to_string());
+        server.ao_skill_create(Parameters(create)).await.expect("create");
+
+        let mut patch = update_input("patchable");
+        patch.description = Some("new desc".to_string());
+        let result = server.ao_skill_update(Parameters(patch)).await.expect("update");
+        assert_eq!(data(&result).get("outcome").and_then(Value::as_str), Some("updated"));
+
+        let sources = load_skill_sources(project.path(), None).expect("load sources");
+        let resolved = resolve_skill("patchable", &sources).expect("resolve");
+        assert_eq!(resolved.definition.description, "new desc");
+        assert_eq!(resolved.definition.prompt.system.as_deref(), Some("original body"));
+        assert_eq!(resolved.definition.tags, vec!["keep"]);
+        assert_eq!(resolved.definition.model.preferred.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    #[tokio::test]
+    async fn skill_update_rejects_unknown_skill() {
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let err = server
+            .ao_skill_update(Parameters(update_input("does-not-exist")))
+            .await
+            .expect_err("unknown skill update should fail");
+        assert!(err.message.contains("does-not-exist"));
+    }
+
+    #[tokio::test]
+    async fn skill_update_rejects_non_project_source() {
+        let (home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        write_agent_host_claude_skill(
+            &home,
+            "host-skill",
+            "---\nname: host-skill\ndescription: agent host skill\n---\nBody.\n",
+        );
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let mut patch = update_input("host-skill");
+        patch.description = Some("hijack".to_string());
+        let err = server.ao_skill_update(Parameters(patch)).await.expect_err("agent-host skill not editable");
+        assert!(err.message.contains("project-scoped"), "error should explain scope: {}", err.message);
     }
 
     #[tokio::test]
