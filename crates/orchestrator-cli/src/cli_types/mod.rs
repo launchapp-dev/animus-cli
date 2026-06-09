@@ -491,6 +491,19 @@ mod tests {
     }
 
     #[test]
+    fn chat_reference_mentions_send_title_flag() {
+        let chat_reference = read_doc("docs/reference/chat.md");
+        assert!(
+            chat_reference.contains("[--stream] [--title <title>]"),
+            "docs/reference/chat.md should document `animus chat send --title` in the CLI surface block"
+        );
+        assert!(
+            chat_reference.contains("`animus chat send --title` names a freshly-created conversation or renames the"),
+            "docs/reference/chat.md should explain how `animus chat send --title` behaves"
+        );
+    }
+
+    #[test]
     fn crate_map_matches_live_workspace_members() {
         let mut live = live_workspace_crates();
         let mut documented = documented_workspace_crates();

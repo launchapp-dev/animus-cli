@@ -69,6 +69,10 @@ pub(crate) struct ChatSendArgs {
     /// Reasoning/thinking effort for the provider: low, medium, or high.
     #[arg(long, value_enum, value_name = "LEVEL")]
     pub(crate) reasoning_effort: Option<ReasoningEffortArg>,
+    /// Title for the conversation. Names a freshly-created conversation, or
+    /// renames the target one. An empty string clears the title.
+    #[arg(long)]
+    pub(crate) title: Option<String>,
 }
 
 #[derive(Debug, Args)]

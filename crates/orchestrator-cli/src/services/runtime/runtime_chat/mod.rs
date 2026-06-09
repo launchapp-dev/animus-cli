@@ -108,6 +108,17 @@ fn handle_chat_export(args: ChatExportArgs, project_root: &str, json: bool) -> R
     }
 }
 
+/// Set (or clear) a conversation's title if `title` is `Some`. A no-op when
+/// `title` is `None` or the conversation is missing. An empty/whitespace title
+/// clears it back to `None`.
+fn apply_conversation_title(store: &impl ConversationStore, id: &str, title: Option<&str>) -> Result<()> {
+    let Some(title) = title else { return Ok(()) };
+    let Some(mut meta) = store.load_meta(id)? else { return Ok(()) };
+    let trimmed = title.trim();
+    meta.title = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+    store.save_meta(&meta)
+}
+
 fn handle_chat_rename(args: ChatRenameArgs, project_root: &str, json: bool) -> Result<()> {
     let store = FileConversationStore::for_project(Path::new(project_root))?;
     let mut meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
@@ -148,6 +159,11 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         }
         None => (store.create(None)?.id, true),
     };
+
+    // Apply an optional title — names a freshly-created conversation or renames
+    // the target one. Done before the turn so a crash mid-stream still leaves
+    // the conversation named.
+    apply_conversation_title(&store, &conversation_id, args.title.as_deref())?;
 
     // Surface an auto-created conversation id up front so the caller can pass
     // `--conversation <id>` on the next turn (codex round-4 P2). In `--json`
@@ -271,5 +287,27 @@ mod export_tests {
         meta.title = None;
         let md = render_markdown(&meta, &[]);
         assert!(md.contains("# conv-x"), "{md}");
+    }
+
+    #[test]
+    fn apply_title_sets_clears_and_noops() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileConversationStore::with_root_for_test(tmp.path().join("chat"));
+        store.create(Some("conv-t".into())).unwrap();
+
+        // None → leaves the title untouched.
+        apply_conversation_title(&store, "conv-t", None).unwrap();
+        assert!(store.load_meta("conv-t").unwrap().unwrap().title.is_none());
+
+        // Some(trimmed) → set.
+        apply_conversation_title(&store, "conv-t", Some("  Named  ")).unwrap();
+        assert_eq!(store.load_meta("conv-t").unwrap().unwrap().title.as_deref(), Some("Named"),);
+
+        // Some(blank) → clear.
+        apply_conversation_title(&store, "conv-t", Some("   ")).unwrap();
+        assert!(store.load_meta("conv-t").unwrap().unwrap().title.is_none());
+
+        // Missing conversation → no error.
+        apply_conversation_title(&store, "missing", Some("x")).unwrap();
     }
 }

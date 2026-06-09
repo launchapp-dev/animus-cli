@@ -51,7 +51,7 @@ animus
 │
 ├── chat                     Hold multi-turn conversations with a provider tool (v0.5.10)
 │   ├── new                  Start a new (empty) conversation and print its id
-│   ├── send                 Send a user message and stream the reply
+│   ├── send                 Send a user message and stream the reply (`--title` names the conversation)
 │   ├── get                  Print a conversation's full transcript
 │   ├── list                 List conversations, most-recently-updated first
 │   ├── rename               Set or clear a conversation's title (`--title`; empty clears)

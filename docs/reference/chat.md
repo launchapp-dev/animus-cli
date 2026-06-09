@@ -46,7 +46,8 @@ animus chat new [--id <id>] [--title <title>]
 
 # Send a turn (creates a conversation if --conversation is omitted)
 animus chat send "your message" \
-  [--conversation <id>] [--tool claude] [--model <model>] [--cwd <path>] [--stream]
+  [--conversation <id>] [--tool claude] [--model <model>] [--cwd <path>] \
+  [--stream] [--title <title>]
 
 # Read a full transcript
 animus chat get <id>
@@ -64,8 +65,10 @@ animus chat delete <id>
 animus chat export <id> [--format markdown|json] [--output <path>]
 ```
 
-`animus chat rename` trims surrounding whitespace from `--title`; passing an
-empty string clears the stored title. `animus chat delete` is idempotent: a
+`animus chat send --title` names a freshly-created conversation or renames the
+target one before the turn runs; surrounding whitespace is trimmed, and an
+empty string clears the stored title. `animus chat rename` applies the same
+trimming and clear-on-empty behavior. `animus chat delete` is idempotent: a
 missing conversation is treated as already deleted rather than an error.
 `animus chat export` defaults to Markdown, can emit the full `{ meta, messages
 }` JSON shape, and writes raw transcript content to stdout unless `--output` is
