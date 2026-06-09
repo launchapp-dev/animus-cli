@@ -1,7 +1,7 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 76 built-in tools across daemon, queue, agent, output, runner,
+registers 78 built-in tools across daemon, queue, agent, output, runner,
 workflow, plugin, skill, subject, logs, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
@@ -211,6 +211,8 @@ skills, so only prompt text and prompt directives are trusted.
 | `animus.skill.list` | Enumerate skills across all sources with optional `source` filter | `project_root`, `source` (`installed` \| `user` \| `project` \| `agent_host` \| host id like `claude-code`; `builtin` is still accepted as a backward-compatible filter but current builds do not emit builtin rows) |
 | `animus.skill.get` | Resolve a skill by name and return its full `SkillDefinition` plus provenance. Resolution priority: project > user > installed/pack > agent-host. Agent-host responses include a `notice` field explaining the structural-field strip | `project_root`, `name` |
 | `animus.skill.search` | Case-insensitive substring match over skill `name`, `description`, and `tags`. Returns the same row shape as `animus.skill.list` plus a `truncated` flag when matches exceed `limit` | `project_root`, `query`, `source`, `limit` (default 50) |
+| `animus.skill.create` | Author a project-scoped skill, written to `.animus/skills/<name>.yaml` and validated by round-tripping through the loader. Refuses to shadow an existing project skill unless `overwrite` is set | `project_root`, `name` (slug), `description`, `prompt`, `tags`, `tool_policy`, `model`, `mcp_servers`, `category`, `activation`, `capabilities`, `overwrite` |
+| `animus.skill.update` | Patch an existing project-scoped skill; only the supplied fields change, the rest are preserved. Rejects unknown or non-project skills | `project_root`, `name`, plus any of the `animus.skill.create` fields to patch |
 
 ---
 

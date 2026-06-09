@@ -7,7 +7,7 @@ For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.m
 
 ## Overview
 
-Animus currently exposes **76 built-in MCP tools** across these families:
+Animus currently exposes **78 built-in MCP tools** across these families:
 
 | Group | Tools | Purpose |
 |---|---:|---|
