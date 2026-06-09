@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use chrono::Utc;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 mod tracing_init;
@@ -215,30 +216,68 @@ impl Logger {
             Ok(g) => g,
             Err(_) => return,
         };
+        self.reopen_if_stale(&mut guard);
         if let Some(file) = guard.as_mut() {
             let _ = writeln!(file, "{}", line);
             let _ = file.flush();
         }
-        drop(guard);
-        self.rotate_if_needed();
+        self.rotate_if_needed(&mut guard);
     }
 
-    fn rotate_if_needed(&self) {
-        let size = fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
-        if size < MAX_LOG_SIZE {
-            return;
+    // After another process rotates the log, this process's handle keeps
+    // pointing at the renamed `.1` inode; detect that and reopen so new
+    // entries land in the current file.
+    #[cfg(unix)]
+    fn reopen_if_stale(&self, guard: &mut Option<File>) {
+        use std::os::unix::fs::MetadataExt;
+        let Some(file) = guard.as_ref() else { return };
+        let stale = match (file.metadata(), fs::metadata(&self.path)) {
+            (Ok(handle), Ok(path)) => handle.ino() != path.ino() || handle.dev() != path.dev(),
+            _ => true,
+        };
+        if stale {
+            *guard = OpenOptions::new().create(true).append(true).open(&self.path).ok();
         }
-        let rotated = self.path.with_extension(format!(
+    }
+
+    #[cfg(not(unix))]
+    fn reopen_if_stale(&self, _guard: &mut Option<File>) {}
+
+    fn rotated_path(&self) -> PathBuf {
+        self.path.with_extension(format!(
             "{}{}",
             self.path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default(),
             ROTATED_SUFFIX
+        ))
+    }
+
+    // Called with the `file` mutex held so the size check, rename, and
+    // reopen are atomic against in-process writers. A sidecar `.lock`
+    // file (fs2 exclusive lock) extends the same guarantee across
+    // processes (daemon + CLI share events.jsonl): the size is
+    // re-checked after acquiring it so a second process that lost the
+    // race cannot rename a near-empty fresh file over the rotated one.
+    fn rotate_if_needed(&self, guard: &mut Option<File>) {
+        if fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0) < MAX_LOG_SIZE {
+            return;
+        }
+        let lock_path = self.path.with_extension(format!(
+            "{}{}",
+            self.path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default(),
+            ".lock"
         ));
-        let _ = fs::rename(&self.path, &rotated);
-        let mut guard = match self.file.lock() {
-            Ok(g) => g,
-            Err(_) => return,
-        };
+        let lock_file = OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path).ok();
+        if let Some(lock) = &lock_file {
+            let _ = lock.lock_exclusive();
+        }
+        if fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0) >= MAX_LOG_SIZE {
+            *guard = None;
+            let _ = fs::rename(&self.path, &self.rotated_path());
+        }
         *guard = OpenOptions::new().create(true).append(true).open(&self.path).ok();
+        if let Some(lock) = &lock_file {
+            let _ = FileExt::unlock(lock);
+        }
     }
 
     pub fn info(&self, cat: impl Into<String>, msg: impl Into<String>) -> EntryBuilder<'_> {
@@ -271,11 +310,7 @@ impl Logger {
         let mut all_lines = Vec::new();
 
         // Read rotated file first (older entries)
-        let rotated = self.path.with_extension(format!(
-            "{}{}",
-            self.path.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default(),
-            ROTATED_SUFFIX
-        ));
+        let rotated = self.rotated_path();
         if rotated.exists() {
             if let Ok(file) = File::open(&rotated) {
                 for line in BufReader::new(file).lines().map_while(Result::ok) {
@@ -541,6 +576,37 @@ mod tests {
         let entries = logger.read_entries(10, None, Some(Level::Warn));
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].level, Level::Error);
+    }
+
+    #[test]
+    fn concurrent_writers_rotate_without_destroying_rotated_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let logger = Logger::open(dir.path(), "rotate.jsonl", Level::Debug);
+
+        let big = "a".repeat(1024 * 1024);
+        std::thread::scope(|scope| {
+            for _ in 0..7 {
+                scope.spawn(|| {
+                    for _ in 0..8 {
+                        logger.info("rotation", "bulk").content(big.clone()).emit();
+                    }
+                });
+            }
+        });
+
+        let rotated = logger.rotated_path();
+        assert!(rotated.exists(), "writing past MAX_LOG_SIZE must rotate");
+        let rotated_size = fs::metadata(&rotated).unwrap().len();
+        assert!(
+            rotated_size >= MAX_LOG_SIZE,
+            "rotated file must hold the full pre-rotation history, got {} bytes",
+            rotated_size
+        );
+        let current_size = fs::metadata(logger.path()).unwrap().len();
+        assert!(current_size < MAX_LOG_SIZE, "current file should restart small, got {} bytes", current_size);
+
+        let entries = logger.read_entries(1000, Some("rotation"), None);
+        assert_eq!(entries.len(), 56, "no entries may be lost across rotation");
     }
 
     #[test]
