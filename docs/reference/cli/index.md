@@ -349,6 +349,19 @@ Exit code matrix:
 | 2 | At least one required role is missing. The error envelope's `message` carries the `animus plugin install ...` fix. CI scripts and `&&` chains can rely on this. |
 | 1 | Transient plugin discovery failure (broken install index, IO error, etc.). Distinct from "ran successfully and found gaps". |
 
+### `animus agent run` / `animus chat send` (reasoning effort)
+
+Both surfaces accept a `--reasoning-effort` flag that controls how much
+reasoning/thinking budget the provider CLI spends on the turn.
+
+| Flag | Description |
+|---|---|
+| `--reasoning-effort <LEVEL>` | One of `low`, `medium`, `high`. Threaded into the provider session request as `extras.reasoning_effort`; each provider transport maps it to its own flag (codex `-c model_reasoning_effort="<level>"`, claude `--effort <level>`). Omit to leave the provider on its own default effort. The flag overrides any `reasoning_effort` configured on the agent profile or phase runtime block. |
+
+A caller-supplied override always wins: if a runtime contract already carries
+codex's `model_reasoning_effort` config key or claude's `--effort` flag, the
+transport leaves it untouched.
+
 ### `animus logs tail`
 
 Tail recent persisted log entries from the active log storage backend. This is

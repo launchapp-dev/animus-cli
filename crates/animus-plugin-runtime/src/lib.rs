@@ -123,6 +123,8 @@ struct AgentRunParams {
     response_schema: Option<Value>,
     #[serde(default)]
     runtime_contract: Option<Value>,
+    #[serde(default)]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -496,6 +498,9 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
     if let Some(contract) = params.runtime_contract {
         extras.insert("runtime_contract".to_string(), contract);
     }
+    if let Some(effort) = params.reasoning_effort {
+        extras.insert("reasoning_effort".to_string(), Value::String(effort));
+    }
     if let Some(sid) = params.session_id {
         extras.insert("session_id".to_string(), Value::String(sid));
     }
@@ -524,4 +529,47 @@ fn invalid_rpc(id: Option<Value>, message: impl Into<String>) -> RpcResponse {
 
 fn error_rpc(id: Option<Value>, error: RpcError) -> RpcResponse {
     RpcResponse::err(id, error)
+}
+
+#[cfg(test)]
+mod reasoning_effort_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn provider_info() -> ProviderInfo {
+        ProviderInfo {
+            plugin_name: "test-provider",
+            plugin_version: "0.0.0",
+            description: "test",
+            default_tool: "codex",
+            default_model: "test-model",
+        }
+    }
+
+    #[test]
+    fn build_session_request_forwards_reasoning_effort() {
+        let params: AgentRunParams = serde_json::from_value(json!({
+            "prompt": "hi",
+            "cwd": "/tmp",
+            "reasoning_effort": "high",
+        }))
+        .expect("params deserialize");
+        let request = build_session_request(&provider_info(), params);
+        assert_eq!(
+            request.extras.get("reasoning_effort").and_then(Value::as_str),
+            Some("high"),
+            "reasoning_effort must reach SessionRequest.extras for the transport to map"
+        );
+    }
+
+    #[test]
+    fn build_session_request_omits_reasoning_effort_when_absent() {
+        let params: AgentRunParams = serde_json::from_value(json!({
+            "prompt": "hi",
+            "cwd": "/tmp",
+        }))
+        .expect("params deserialize");
+        let request = build_session_request(&provider_info(), params);
+        assert!(request.extras.get("reasoning_effort").is_none(), "absent reasoning_effort must not inject the key");
+    }
 }

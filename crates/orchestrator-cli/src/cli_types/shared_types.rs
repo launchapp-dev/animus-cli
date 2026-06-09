@@ -52,3 +52,26 @@ pub(crate) enum RunnerScopeArg {
     Project,
     Global,
 }
+
+/// Reasoning / thinking effort level passed through to a provider CLI.
+///
+/// Threaded into the provider session request as `extras.reasoning_effort`;
+/// each provider transport maps it to its own flag (codex
+/// `-c model_reasoning_effort=...`, claude `--effort ...`). Omitting the
+/// flag leaves each provider on its own default effort.
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub(crate) enum ReasoningEffortArg {
+    Low,
+    Medium,
+    High,
+}
+
+impl ReasoningEffortArg {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ReasoningEffortArg::Low => "low",
+            ReasoningEffortArg::Medium => "medium",
+            ReasoningEffortArg::High => "high",
+        }
+    }
+}
