@@ -259,6 +259,9 @@ fn parse_duration(raw: &str) -> Result<ChronoDuration> {
     if trimmed.is_empty() {
         return Err(anyhow!("--since cannot be empty"));
     }
+    if trimmed.starts_with('-') {
+        return Err(anyhow!("--since '{}' is negative; duration must be positive (e.g. 30s, 5m, 2h, 1d)", trimmed));
+    }
     let (num_part, unit) = trimmed.split_at(
         trimmed
             .find(|c: char| !c.is_ascii_digit() && c != '.')
@@ -273,7 +276,11 @@ fn parse_duration(raw: &str) -> Result<ChronoDuration> {
         "m" | "min" | "mins" | "minutes" => Ok(ChronoDuration::minutes(value.max(0))),
         "h" | "hr" | "hrs" | "hour" | "hours" => Ok(ChronoDuration::hours(value.max(0))),
         "d" | "day" | "days" => Ok(ChronoDuration::days(value.max(0))),
-        other => Err(anyhow!("--since '{}' has unknown unit '{}' (use s/m/h/d)", trimmed, other)),
+        other => Err(anyhow!(
+            "--since '{}' has unknown unit '{}'; expected a single number with one unit suffix (s/m/h/d), e.g. 30s, 5m, 2h, 1d — compound durations like 1h30m are not supported",
+            trimmed,
+            other
+        )),
     }
 }
 
@@ -315,6 +322,17 @@ mod tests {
         assert_eq!(parse_duration("2d").unwrap(), ChronoDuration::days(2));
         assert!(parse_duration("forever").is_err(), "non-numeric prefix must fail");
         assert!(parse_duration("10").is_err(), "missing unit must fail");
+    }
+
+    #[test]
+    fn parse_duration_explains_negative_and_compound_inputs() {
+        let negative = parse_duration("-5h").expect_err("negative duration must fail");
+        assert!(negative.to_string().contains("duration must be positive"), "{negative}");
+
+        let compound = parse_duration("1h30m").expect_err("compound duration must fail");
+        let message = compound.to_string();
+        assert!(message.contains("unknown unit 'h30m'"), "{message}");
+        assert!(message.contains("compound durations like 1h30m are not supported"), "{message}");
     }
 
     #[test]

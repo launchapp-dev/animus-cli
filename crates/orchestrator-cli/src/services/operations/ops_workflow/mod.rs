@@ -377,7 +377,10 @@ pub(crate) async fn handle_workflow(
             // mode, so the daemon's view of workflow runs is authoritative.
             // Falls back to the local in-process query when no socket is
             // available or the daemon returns NotSupported (older daemon).
-            if json {
+            // The wire request only carries status/cursor/limit, so any
+            // filter it cannot express must take the local path instead of
+            // being silently dropped.
+            if json && workflow_list_expressible_on_wire(&args) {
                 if let Some(response) = try_workflow_list_via_control(project_root, &args).await? {
                     return print_value(response, true);
                 }
@@ -682,6 +685,24 @@ pub(crate) async fn handle_workflow(
 // method is unavailable (older daemon, mid-rollout) we treat that the
 // same as "socket missing" and degrade to local.
 
+/// True when every requested filter survives the trip over the control
+/// wire: the wire request only carries status/cursor/limit, has no
+/// sort parameter, and collapses `escalated` into `Failed`.
+fn workflow_list_expressible_on_wire(args: &crate::WorkflowListArgs) -> bool {
+    if args.workflow_ref.is_some() || args.task_id.is_some() || args.phase_id.is_some() || args.search.is_some() {
+        return false;
+    }
+    match parse_workflow_query_sort_opt(args.sort.as_deref()) {
+        Ok(sort) => {
+            if sort.unwrap_or_default() != orchestrator_core::WorkflowQuerySort::default() {
+                return false;
+            }
+        }
+        Err(_) => return false,
+    }
+    args.status.as_deref().map(|raw| !raw.trim().eq_ignore_ascii_case("escalated")).unwrap_or(true)
+}
+
 async fn try_workflow_list_via_control(
     project_root: &str,
     args: &crate::WorkflowListArgs,
@@ -850,6 +871,65 @@ mod tests {
     use super::*;
     use orchestrator_core::{InMemoryServiceHub, Priority, TaskCreateInput, TaskType};
     use std::sync::Arc;
+
+    fn list_args() -> crate::WorkflowListArgs {
+        crate::WorkflowListArgs {
+            status: None,
+            workflow_ref: None,
+            task_id: None,
+            phase_id: None,
+            search: None,
+            sort: None,
+            limit: None,
+            offset: 0,
+        }
+    }
+
+    #[test]
+    fn workflow_list_expressible_on_wire_allows_status_cursor_limit_only() {
+        assert!(workflow_list_expressible_on_wire(&list_args()));
+
+        let mut args = list_args();
+        args.status = Some("failed".to_string());
+        args.limit = Some(10);
+        args.offset = 5;
+        assert!(workflow_list_expressible_on_wire(&args));
+
+        let mut args = list_args();
+        args.sort = Some("started-at".to_string());
+        assert!(workflow_list_expressible_on_wire(&args), "default sort is expressible");
+    }
+
+    #[test]
+    fn workflow_list_expressible_on_wire_gates_local_only_filters() {
+        let mut args = list_args();
+        args.workflow_ref = Some("standard".to_string());
+        assert!(!workflow_list_expressible_on_wire(&args));
+
+        let mut args = list_args();
+        args.task_id = Some("TASK-1".to_string());
+        assert!(!workflow_list_expressible_on_wire(&args));
+
+        let mut args = list_args();
+        args.phase_id = Some("implementation".to_string());
+        assert!(!workflow_list_expressible_on_wire(&args));
+
+        let mut args = list_args();
+        args.search = Some("needle".to_string());
+        assert!(!workflow_list_expressible_on_wire(&args));
+
+        let mut args = list_args();
+        args.sort = Some("status".to_string());
+        assert!(!workflow_list_expressible_on_wire(&args));
+
+        let mut args = list_args();
+        args.sort = Some("nonsense".to_string());
+        assert!(!workflow_list_expressible_on_wire(&args));
+
+        let mut args = list_args();
+        args.status = Some("escalated".to_string());
+        assert!(!workflow_list_expressible_on_wire(&args), "wire collapses escalated into failed");
+    }
 
     #[test]
     fn set_state_machine_payload_reports_actionable_json_error() {

@@ -56,9 +56,10 @@ fn role_str(role: ChatRole) -> &'static str {
 
 /// Return a trimmed, ellipsized preview window around the first match of
 /// `query` in `content`, or `None` when there is no match. Case-insensitive
-/// matching maps positions via char-count, which is exact for ASCII content
-/// (the common case) and at worst drifts a few chars in the preview for exotic
-/// Unicode case-folding — never panics (slice bounds are clamped).
+/// matching maps the folded match offset back to an original-content char
+/// index by walking chars and counting their lowercase expansions, so the
+/// preview window stays anchored on the match even when case-folding changes
+/// lengths — never panics (slice bounds are clamped).
 fn snippet_around(content: &str, query: &str, case_insensitive: bool) -> Option<String> {
     if query.is_empty() {
         return None;
@@ -69,11 +70,25 @@ fn snippet_around(content: &str, query: &str, case_insensitive: bool) -> Option<
         (content.to_string(), query.to_string())
     };
     let byte_pos = hay.find(&needle)?;
-    let char_idx = hay[..byte_pos].chars().count();
     let chars: Vec<char> = content.chars().collect();
+    let folded_idx = hay[..byte_pos].chars().count();
+    let char_idx = if case_insensitive {
+        let mut folded_seen = 0usize;
+        let mut mapped = chars.len();
+        for (i, c) in chars.iter().enumerate() {
+            if folded_seen >= folded_idx {
+                mapped = i;
+                break;
+            }
+            folded_seen += c.to_lowercase().count();
+        }
+        mapped
+    } else {
+        folded_idx.min(chars.len())
+    };
     const PAD: usize = 30;
-    let start = char_idx.saturating_sub(PAD);
     let end = (char_idx + query.chars().count() + PAD).min(chars.len());
+    let start = char_idx.saturating_sub(PAD).min(end);
     let core: String = chars[start..end].iter().collect();
     let mut s = core.split_whitespace().collect::<Vec<_>>().join(" ");
     if start > 0 {
@@ -447,6 +462,24 @@ mod export_tests {
         let snip = snippet_around(&long, "needle", true).unwrap();
         assert!(snip.starts_with('…') && snip.ends_with('…'), "{snip}");
         assert!(snip.contains("needle"));
+    }
+
+    #[test]
+    fn snippet_around_survives_case_folding_length_changes() {
+        // 'İ' lowercases to two chars ("i\u{307}"), so the char index
+        // computed against the lowercased haystack can exceed the
+        // original content's char count.
+        let content = format!("{}NEEDLE", "İ".repeat(40));
+        let snip = snippet_around(&content, "needle", true).unwrap();
+        assert!(snip.contains("NEEDLE"), "{snip}");
+
+        let trailing = format!("straße {} NEEDLE", "İ".repeat(40));
+        let snip = snippet_around(&trailing, "needle", true).unwrap();
+        assert!(snip.contains("NEEDLE"), "{snip}");
+
+        let padded = format!("{}NEEDLE{}", "İ".repeat(100), "x".repeat(40));
+        let snip = snippet_around(&padded, "needle", true).unwrap();
+        assert!(snip.contains("NEEDLE"), "{snip}");
     }
 
     #[test]
