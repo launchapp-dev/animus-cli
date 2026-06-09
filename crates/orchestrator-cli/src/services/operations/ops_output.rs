@@ -98,11 +98,19 @@ fn infer_cli_from_jsonl(entries: &[RunJsonlEntryCli]) -> Option<String> {
     None
 }
 
+fn ensure_safe_id_segment(label: &str, value: &str) -> Result<()> {
+    if value.is_empty() || value.contains('/') || value.contains('\\') || value.contains("..") {
+        anyhow::bail!("{label} contains unsafe path segments");
+    }
+    Ok(())
+}
+
 fn artifact_dir(project_root: &str, execution_id: &str) -> PathBuf {
     Path::new(project_root).join(".animus").join("artifacts").join(execution_id)
 }
 
 fn list_artifact_infos(project_root: &str, execution_id: &str) -> Result<Vec<ArtifactInfoCli>> {
+    ensure_safe_id_segment("execution id", execution_id)?;
     let artifacts_dir = artifact_dir(project_root, execution_id);
     if !artifacts_dir.exists() {
         return Ok(Vec::new());
@@ -128,10 +136,7 @@ fn list_artifact_infos(project_root: &str, execution_id: &str) -> Result<Vec<Art
 }
 
 fn ensure_safe_workflow_id(workflow_id: &str) -> Result<()> {
-    if workflow_id.is_empty() || workflow_id.contains('/') || workflow_id.contains('\\') || workflow_id.contains("..") {
-        anyhow::bail!("workflow id contains unsafe path segments");
-    }
-    Ok(())
+    ensure_safe_id_segment("workflow id", workflow_id)
 }
 
 pub(crate) fn get_phase_outputs(
@@ -199,7 +204,13 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
         ),
         OutputCommand::Artifacts(args) => print_value(list_artifact_infos(project_root, &args.execution_id)?, json),
         OutputCommand::Download(args) => {
-            let path = artifact_dir(project_root, &args.execution_id).join(&args.artifact_id);
+            ensure_safe_id_segment("execution id", &args.execution_id)?;
+            ensure_safe_id_segment("artifact id", &args.artifact_id)?;
+            let artifacts_dir = artifact_dir(project_root, &args.execution_id);
+            let path = artifacts_dir.join(&args.artifact_id);
+            if !path.starts_with(&artifacts_dir) {
+                anyhow::bail!("artifact path escapes the artifact directory");
+            }
             let bytes = fs::read(&path).with_context(|| format!("failed to read artifact at {}", path.display()))?;
             print_value(
                 serde_json::json!({
@@ -479,6 +490,36 @@ mod tests {
     fn get_run_jsonl_entries_rejects_unsafe_run_ids() {
         let err = get_run_jsonl_entries("/tmp/project", "../escape").expect_err("unsafe run id should be rejected");
         assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    #[test]
+    fn list_artifact_infos_rejects_unsafe_execution_ids() {
+        for unsafe_id in ["", "../..", "../../etc", "a/b", "a\\b", "/etc/passwd"] {
+            let err =
+                list_artifact_infos("/tmp/project", unsafe_id).expect_err("unsafe execution id should be rejected");
+            assert!(err.to_string().contains("unsafe path segments"), "{unsafe_id}: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn output_download_rejects_traversal_ids() {
+        let unsafe_pairs = [
+            ("../..", "artifact.txt"),
+            ("exec-1", "../../../../etc/passwd"),
+            ("exec-1", "/etc/passwd"),
+            ("exec-1", "..\\escape"),
+            ("", "artifact.txt"),
+            ("exec-1", ""),
+        ];
+        for (execution_id, artifact_id) in unsafe_pairs {
+            let command = OutputCommand::Download(crate::cli_types::OutputDownloadArgs {
+                execution_id: execution_id.to_string(),
+                artifact_id: artifact_id.to_string(),
+            });
+            let err =
+                handle_output(command, "/tmp/project", true).await.expect_err("unsafe download ids should be rejected");
+            assert!(err.to_string().contains("unsafe path segments"), "{execution_id}/{artifact_id}: {err}");
+        }
     }
 
     #[test]
