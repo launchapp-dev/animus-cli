@@ -42,6 +42,34 @@ pub(crate) enum ChatRole {
     Assistant,
 }
 
+/// One step in an assistant turn's timeline — text, thinking, a tool call, or
+/// a tool result — persisted in arrival order. This lets a reloaded
+/// conversation reconstruct the same interleaved view the live stream showed
+/// (prose AND tool activity), rather than only the final aggregated text.
+/// Serialized with an internal `kind` tag.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum TurnBlock {
+    Text {
+        text: String,
+    },
+    Thinking,
+    ToolCall {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arguments: Option<serde_json::Value>,
+    },
+    ToolResult {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        success: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        output: Option<serde_json::Value>,
+    },
+}
+
 /// A normalized, provider-agnostic record of a single turn in a
 /// conversation. This is the portable artifact — it does NOT depend on any
 /// one provider's native transcript format, so downstream apps and
@@ -69,6 +97,11 @@ pub(crate) struct ChatMessage {
     /// Provider-reported USD cost for an assistant turn, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
+    /// Ordered timeline of the assistant turn (text / thinking / tool calls /
+    /// results). Empty for user turns and for assistant turns persisted before
+    /// this field existed — readers fall back to `content` in that case.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<TurnBlock>,
 }
 
 /// Conversation metadata — the thin continuity pointer plus identity.
@@ -370,6 +403,7 @@ mod tests {
                 model: None,
                 usage: None,
                 cost_usd: None,
+                blocks: Vec::new(),
             },
             ChatMessage {
                 seq: 1,
@@ -380,6 +414,7 @@ mod tests {
                 model: Some("claude-sonnet-4-6".into()),
                 usage: None,
                 cost_usd: None,
+                blocks: Vec::new(),
             },
         ];
         let prompt = render_history_prompt(&messages, "how are you?");
@@ -430,12 +465,55 @@ mod tests {
                     model: None,
                     usage: None,
                     cost_usd: None,
+                    blocks: Vec::new(),
                 },
             )
             .unwrap();
         let messages = store.load_messages("conv-test").unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].content, "q");
+    }
+
+    #[test]
+    fn assistant_blocks_round_trip_through_the_store() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileConversationStore { root: tmp.path().join("chat") };
+        store.create(Some("conv-blocks".into())).unwrap();
+        let msg = ChatMessage {
+            seq: 1,
+            role: ChatRole::Assistant,
+            content: "done".into(),
+            recorded_at: now_rfc3339(),
+            tool: Some("codex".into()),
+            model: Some("gpt-5.5".into()),
+            usage: None,
+            cost_usd: None,
+            blocks: vec![
+                TurnBlock::Text { text: "looking".into() },
+                TurnBlock::ToolCall {
+                    tool_name: Some("Read".into()),
+                    arguments: Some(serde_json::json!({ "path": "a.ts" })),
+                },
+                TurnBlock::ToolResult {
+                    tool_name: Some("Read".into()),
+                    success: Some(true),
+                    output: Some(serde_json::json!("contents")),
+                },
+                TurnBlock::Text { text: "done".into() },
+            ],
+        };
+        store.append_message("conv-blocks", &msg).unwrap();
+        let loaded = store.load_messages("conv-blocks").unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].blocks, msg.blocks, "blocks must survive a save/load round-trip");
+    }
+
+    #[test]
+    fn legacy_messages_without_blocks_default_to_empty() {
+        // A pre-existing messages.jsonl line lacks the `blocks` field entirely.
+        let legacy = r#"{"seq":1,"role":"assistant","content":"hi","recorded_at":"2026-06-08T00:00:00Z"}"#;
+        let msg: ChatMessage = serde_json::from_str(legacy).expect("legacy line must still parse");
+        assert!(msg.blocks.is_empty(), "missing blocks must default to empty, not error");
     }
 
     #[test]
@@ -466,6 +544,7 @@ mod tests {
                         model: None,
                         usage: None,
                         cost_usd: None,
+                        blocks: Vec::new(),
                     },
                 )
                 .is_err(),

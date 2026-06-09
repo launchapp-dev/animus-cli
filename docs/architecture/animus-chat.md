@@ -249,7 +249,10 @@ and artifacts already persist.**
 - **Debuggable.** `tail -f messages.jsonl` shows a live conversation.
 - **Portable but thin.** v0.5.10 keeps conversations in a dedicated chat store
   under scoped runtime state, separate from the subject router. The store is
-  intentionally minimal: metadata plus append-only messages.
+  intentionally minimal: metadata plus append-only messages. Assistant
+  messages persist both aggregated `content` and an ordered `blocks` timeline
+  (`text`, `thinking`, `tool_call`, `tool_result`) so reloads can reconstruct
+  the same interleaved view the live stream showed.
 
 We explicitly do **not** use SQLite here. Conversations are append-heavy,
 read-sequential, and rarely queried by field — JSONL is the right shape, and it

@@ -56,6 +56,25 @@ fn recorder_clear_pending_removes_file() {
 }
 
 #[test]
+fn recorder_drops_events_when_pending_is_oversized() {
+    // A stalled/failed flush must never let the buffer grow without bound.
+    // Once pending is past the cap, new events are dropped rather than
+    // appended (this is the guard against the multi-GB runaway).
+    let dir = tempdir().expect("tempdir");
+    let pending = dir.path().join("pending.jsonl");
+    // Write a buffer just over the 8 MiB record-time cap.
+    let big = "x".repeat(8 * 1024 * 1024 + 1024);
+    fs::write(&pending, &big).expect("seed oversized pending");
+    let before = fs::metadata(&pending).expect("meta").len();
+
+    let recorder = MetricsRecorder::for_pending_path(pending.clone());
+    recorder.record(EventTags::DaemonStarted {});
+
+    let after = fs::metadata(&pending).expect("meta").len();
+    assert_eq!(after, before, "oversized pending must not grow");
+}
+
+#[test]
 fn env_kill_switch_returns_true_when_set() {
     // ENV_LOCK serialization keeps this from racing with sibling env
     // mutators (shared.rs HOME guards, etc.).

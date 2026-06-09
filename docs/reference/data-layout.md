@@ -53,6 +53,10 @@ Mutable runtime state lives outside the repo:
 ├── daemon/
 │   ├── daemon.log
 │   └── pm-config.json
+├── chat/
+│   └── <conversation-id>/
+│       ├── meta.json
+│       └── messages.jsonl
 ├── docs/
 │   ├── architecture.json
 │   ├── vision.json
@@ -60,6 +64,9 @@ Mutable runtime state lives outside the repo:
 ├── logs/
 │   ├── events.jsonl
 │   └── runs/
+├── metrics/
+│   ├── pending.jsonl
+│   └── last-send.txt
 ├── runner/
 │   ├── config.json
 │   └── agent-runner.sock
@@ -85,10 +92,12 @@ Key points:
 - `config/agent-runtime-config.v2.json` stores compiled agent runtime config when a compile/write
   flow persists it under the scoped runtime root
 - `daemon/pm-config.json` stores persisted daemon settings
+- `chat/<conversation-id>/meta.json` stores the continuity pointer for a conversation, and `chat/<conversation-id>/messages.jsonl` stores the append-only portable transcript; assistant lines may include a `blocks` timeline for text, thinking, and tool activity
 - `daemon/daemon.log` is the autonomous daemon process log file
 - `logs/events.jsonl` stores redacted structured runtime events under the
   scoped state root; daemon events are still mirrored here when a
   `log_storage_backend` plugin is active
+- `metrics/pending.jsonl` buffers opt-in anonymous usage events, and `metrics/last-send.txt` records the last successful flush timestamp
 - `runner/config.json` stores the runner auth token for the resolved runner
   scope, and `runner/agent-runner.sock` is the default Unix socket path used
   by scoped runner clients

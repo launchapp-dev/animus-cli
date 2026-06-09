@@ -44,12 +44,16 @@ use orchestrator_plugin_host::session::SessionBackendResolver;
 use serde_json::{json, Value};
 
 use super::sink::{ChatStreamEvent, ChatStreamSink};
-use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationStore};
+use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationStore, TurnBlock};
 
 /// Outcome of draining one provider session.
 struct TurnOutput {
     /// Aggregated assistant text.
     text: String,
+    /// Ordered timeline of the turn (text / thinking / tool calls / results),
+    /// captured live so a reloaded conversation can show tool activity, not
+    /// just the final prose.
+    blocks: Vec<TurnBlock>,
     /// Final session id captured from `Started` / `SessionRun`.
     session_id: Option<String>,
     /// Provider-reported USD cost, if any.
@@ -190,6 +194,7 @@ pub(crate) async fn run_turn(
             model: None,
             usage: None,
             cost_usd: None,
+            blocks: Vec::new(),
         },
     )?;
     meta.message_count += 1;
@@ -279,6 +284,7 @@ pub(crate) async fn run_turn(
             model: Some(ctx.model.to_string()),
             usage: output.usage.clone(),
             cost_usd: output.cost_usd,
+            blocks: output.blocks.clone(),
         },
     )?;
     meta.message_count += 1;
@@ -343,8 +349,21 @@ async fn drive_once(
 
 /// Drain a session to completion, translating events to the sink and
 /// accumulating the assistant text + metadata.
+/// Append text to the trailing `Text` block, or start a new one — mirrors the
+/// desktop's `foldFrame` so persisted and live timelines match.
+fn push_text_block(blocks: &mut Vec<TurnBlock>, chunk: &str) {
+    if let Some(TurnBlock::Text { text }) = blocks.last_mut() {
+        text.push_str(chunk);
+    } else {
+        blocks.push(TurnBlock::Text { text: chunk.to_string() });
+    }
+}
+
 async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<TurnOutput> {
     let mut text = String::new();
+    // Ordered timeline mirroring what the live stream shows, persisted with the
+    // assistant turn so reloads can reconstruct tool activity (not just prose).
+    let mut blocks: Vec<TurnBlock> = Vec::new();
     // The plugin host emits TWO `Started` frames: the FIRST carries the host's
     // transient *control* id (a UUID minted per dispatch, removed from the host
     // session map when the run ends), and only LATER — at completion, and only
@@ -380,6 +399,7 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
             }
             SessionEvent::TextDelta { text: t } => {
                 text.push_str(&t);
+                push_text_block(&mut blocks, &t);
                 sink.emit(&ChatStreamEvent::TextDelta { text: t })?;
             }
             SessionEvent::FinalText { text: t } => {
@@ -388,14 +408,23 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
                 // body for providers that emit both.
                 if text.is_empty() {
                     text.push_str(&t);
+                    push_text_block(&mut blocks, &t);
                     sink.emit(&ChatStreamEvent::TextDelta { text: t })?;
                 }
             }
             SessionEvent::Thinking { text: t } => {
+                // Collapse consecutive thinking frames into one indicator.
+                if !matches!(blocks.last(), Some(TurnBlock::Thinking)) {
+                    blocks.push(TurnBlock::Thinking);
+                }
                 sink.emit(&ChatStreamEvent::Thinking { text: t })?;
             }
             SessionEvent::ToolCall { tool_name, arguments, .. } => {
                 last_tool_name = Some(tool_name.clone());
+                blocks.push(TurnBlock::ToolCall {
+                    tool_name: Some(tool_name.clone()),
+                    arguments: Some(arguments.clone()),
+                });
                 sink.emit(&ChatStreamEvent::ToolCall { tool_name, arguments })?;
             }
             SessionEvent::ToolResult { tool_name, success, output } => {
@@ -408,6 +437,11 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
                     Some(name) if tool_name.starts_with("toolu_") || tool_name.starts_with("call_") => name.clone(),
                     _ => tool_name,
                 };
+                blocks.push(TurnBlock::ToolResult {
+                    tool_name: Some(display_name.clone()),
+                    success: Some(success),
+                    output: Some(output.clone()),
+                });
                 sink.emit(&ChatStreamEvent::ToolResult { tool_name: display_name, success, output })?;
             }
             SessionEvent::Artifact { .. } => {}
@@ -457,7 +491,7 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
         }
     }
 
-    Ok(TurnOutput { text, session_id, cost_usd, usage, stale_session, fatal_error })
+    Ok(TurnOutput { text, blocks, session_id, cost_usd, usage, stale_session, fatal_error })
 }
 
 /// Heuristic for "the resumed native session is gone/invalid" so we can fall

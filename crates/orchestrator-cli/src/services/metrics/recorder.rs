@@ -11,6 +11,24 @@ use super::metrics_state_dir;
 const PENDING_FILE: &str = "pending.jsonl";
 const LAST_SEND_FILE: &str = "last-send.txt";
 
+/// Hard ceiling on any single metrics file we will read into memory or fold
+/// into a flush batch. A telemetry buffer past this is pathological — a
+/// runaway writer or a concurrent-flush race (which previously grew a buffer
+/// to 12 GB and made every command read it whole, exhausting RAM). Oversized
+/// files are dropped rather than loaded. 16 MiB ≈ ~150k events, far beyond any
+/// legitimate backlog.
+const MAX_METRICS_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Soft cap on `pending.jsonl` at record time. Telemetry is best-effort, so
+/// once the buffer is this large (a stalled or failing flush) new events are
+/// dropped instead of letting the file grow without bound.
+const MAX_PENDING_BYTES: u64 = 8 * 1024 * 1024;
+
+/// File length in bytes, or 0 when the path is missing/unreadable.
+fn file_len(path: &Path) -> u64 {
+    fs::metadata(path).map(|m| m.len()).unwrap_or(0)
+}
+
 /// Handle for emitting metrics events into the project's scoped state.
 ///
 /// Construction is fallible-but-quiet: every step that could prevent
@@ -55,6 +73,13 @@ impl MetricsRecorder {
     /// Append an event to the pending queue. Best-effort — IO failures
     /// here must never break the caller.
     pub(crate) fn record(&self, tags: EventTags) {
+        // Bound the buffer at the source. If a flush has stalled and the
+        // pending file is already oversized, drop the event rather than let
+        // the buffer grow without bound (telemetry is best-effort, and an
+        // unbounded buffer is what previously led to a multi-GB file).
+        if file_len(&self.pending_path) >= MAX_PENDING_BYTES {
+            return;
+        }
         let event = Event { recorded_at: Utc::now().to_rfc3339(), tags };
         let Ok(line) = serde_json::to_string(&event) else { return };
         let mut file = match OpenOptions::new().create(true).append(true).open(&self.pending_path) {
@@ -105,6 +130,10 @@ pub(crate) fn read_metrics_block_without_creating(_project_root: &Path) -> Optio
 pub(crate) fn pending_event_count(project_root: &Path) -> usize {
     let Some(dir) = metrics_state_dir(project_root) else { return 0 };
     let path = dir.join(PENDING_FILE);
+    // Never read a pathologically large buffer whole just to count lines.
+    if file_len(&path) > MAX_METRICS_FILE_BYTES {
+        return 0;
+    }
     let Ok(content) = fs::read_to_string(&path) else { return 0 };
     content.lines().filter(|line| !line.trim().is_empty()).count()
 }
@@ -201,6 +230,15 @@ fn recover_stale_flushing(dir: &Path) -> Vec<PathBuf> {
         let path = entry.path();
         if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
             if name.starts_with("flushing-") && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jsonl")) {
+                // An oversized stale snapshot is the signature of a runaway
+                // writer or a concurrent-flush race. Folding it back in would
+                // re-load it whole (RAM blowup) and re-feed the race that grew
+                // it. Delete it and move on — losing that telemetry batch is
+                // the right trade against exhausting memory.
+                if file_len(&path) > MAX_METRICS_FILE_BYTES {
+                    let _ = fs::remove_file(&path);
+                    continue;
+                }
                 stale.push(path);
             }
         }
@@ -209,6 +247,13 @@ fn recover_stale_flushing(dir: &Path) -> Vec<PathBuf> {
 }
 
 fn read_events_from(path: &Path) -> Vec<Event> {
+    // Defensive cap: a pathologically large metrics file (runaway buffer or
+    // flush race) must never be read whole — that is exactly what exhausted
+    // RAM. Treat oversized as empty; the stale-recovery path deletes such
+    // files so they can't linger.
+    if file_len(path) > MAX_METRICS_FILE_BYTES {
+        return Vec::new();
+    }
     let Ok(content) = fs::read_to_string(path) else { return Vec::new() };
     let mut events = Vec::new();
     for line in content.lines() {

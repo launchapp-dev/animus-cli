@@ -595,6 +595,7 @@ mod tests {
             model: Some(model.into()),
             usage: Some(protocol::TokenUsage { input, output, reasoning, cache_read: None, cache_write: None }),
             cost_usd: cost,
+            blocks: Vec::new(),
         }
     }
 
@@ -636,6 +637,7 @@ mod tests {
             model: None,
             usage: None,
             cost_usd: None,
+            blocks: Vec::new(),
         };
         let view = aggregate_conversation_cost("c1", &[user]);
         assert_eq!(view.assistant_turns, 0);

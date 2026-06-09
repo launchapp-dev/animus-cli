@@ -667,6 +667,16 @@ with exponential backoff (3 attempts) before being preserved in the
 pending queue for the next attempt — CLI/daemon operations are never
 blocked on the send path.
 
+The pending buffer is intentionally bounded because telemetry is
+best-effort. Current guards in `crates/orchestrator-cli/src/services/metrics/recorder.rs` are:
+
+- record-time soft cap: once `pending.jsonl` reaches 8 MiB, new events are dropped instead of letting the buffer grow without bound
+- read/flush hard cap: any single metrics file above 16 MiB is treated as pathological and is not read into memory
+- stale `flushing-*.jsonl` recovery: oversized abandoned flush snapshots are deleted instead of being folded back into the next batch
+
+This trades away some telemetry during a stalled or racing flush in exchange
+for keeping ordinary CLI commands memory-safe.
+
 ### CLI surface
 
 | Command | Effect |

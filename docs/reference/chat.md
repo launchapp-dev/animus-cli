@@ -28,6 +28,7 @@ Doing both is a bug. If Animus passed `extras.session_id` (so the tool resumes i
 Animus's store is **not** the replay engine for live sessions. It is the portable + queryable + fallback layer:
 
 - **Portable / queryable record.** The tool's native session is tool-specific and machine-local. Animus's normalized `ChatMessage` event log is what `animus chat get` / `chat list` read, what `animus chat send --stream --json` emits, and what `animus cost conversation` aggregates — all provider-agnostic.
+- **Ordered assistant timelines.** Assistant turns now persist a `blocks` timeline in arrival order (`text`, `thinking`, `tool_call`, `tool_result`) so reloads can reconstruct the same interleaved view the live stream showed. Older messages that predate this field still load cleanly and fall back to the aggregated `content` text.
 - **Resume fallback.** When no native session is alive (case 2 above), Animus replays its stored history into the prompt.
 - **Continuity pointer.** Conversation meta stores the current `session_id` + `tool` + `model`. The loop captures `SessionRun.session_id` into meta after every turn so the next turn can resume.
 
@@ -75,7 +76,7 @@ Per-turn `usage` and `cost_usd` are recorded on each assistant `ChatMessage` fro
 Conversations live under the scoped runtime root:
 
 - `~/.animus/<repo-scope>/chat/<conversation-id>/meta.json` — `ConversationMeta` (the continuity pointer: `session_id` + `tool` + `model`, plus counts and timestamps).
-- `~/.animus/<repo-scope>/chat/<conversation-id>/messages.jsonl` — append-only `ChatMessage` event log (the portable record).
+- `~/.animus/<repo-scope>/chat/<conversation-id>/messages.jsonl` — append-only `ChatMessage` event log. Assistant turns carry both aggregated `content` and, when available, an ordered `blocks[]` timeline for text/thinking/tool activity.
 
 As with all Animus state, treat these as tool-managed — use the `animus chat` surface rather than hand-editing the JSON.
 
