@@ -3173,6 +3173,99 @@ mcp_servers:
 }
 
 #[test]
+fn yaml_parses_oauth_authorization_code_block() {
+    let yaml = r#"
+mcp_servers:
+  github:
+    transport: "http"
+    url: "https://api.githubcopilot.com/mcp/"
+    oauth:
+      flow: authorization_code
+      scopes:
+        - repo
+        - read:user
+      client_id: "pre-registered-client"
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("authorization_code oauth block should parse");
+    let oauth = config.mcp_servers.get("github").unwrap().oauth.as_ref().expect("oauth present");
+    assert_eq!(oauth.flow, OauthFlow::AuthorizationCode);
+    assert_eq!(oauth.scopes, vec!["repo".to_string(), "read:user".to_string()]);
+    assert_eq!(oauth.client_id.as_deref(), Some("pre-registered-client"));
+    assert!(oauth.cache, "cache should default to true");
+}
+
+#[test]
+fn yaml_parses_minimal_oauth_authorization_code_block() {
+    // No scopes, no client_id — discovery + DCR fill everything. The minimal
+    // shape must still parse.
+    let yaml = r#"
+mcp_servers:
+  linear:
+    transport: "http"
+    url: "https://mcp.linear.app/mcp"
+    oauth:
+      flow: authorization_code
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("minimal authorization_code block should parse");
+    let oauth = config.mcp_servers.get("linear").unwrap().oauth.as_ref().expect("oauth present");
+    assert_eq!(oauth.flow, OauthFlow::AuthorizationCode);
+    assert!(oauth.scopes.is_empty());
+    assert!(oauth.client_id.is_none());
+}
+
+#[test]
+fn validation_rejects_authorization_code_with_m2m_fields() {
+    // The authorization_code flow must reject machine-to-machine credential
+    // pointers (token_url / *_env) — discovery fills those in.
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "github".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::AuthorizationCode,
+            token_url: Some("https://example.com/token".to_string()),
+            client_id_env: Some("LEFTOVER".to_string()),
+            client_secret_env: None,
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec!["repo".to_string()],
+            audience: None,
+            cache: true,
+            client_id: None,
+        }),
+    );
+    let err = crate::workflow_config::validate_workflow_config(&config)
+        .expect_err("authorization_code with token_url/*_env must fail validation");
+    let msg = err.to_string();
+    assert!(msg.contains("token_url"), "should reject token_url: {msg}");
+    assert!(msg.contains("client_id_env"), "should reject client_id_env: {msg}");
+}
+
+#[test]
+fn validation_rejects_authorization_code_with_blank_client_id() {
+    // A blank pinned client_id is a typo that would otherwise skip DCR with
+    // an empty id; validation must reject it.
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "github".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::AuthorizationCode,
+            token_url: None,
+            client_id_env: None,
+            client_secret_env: None,
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec!["repo".to_string()],
+            audience: None,
+            cache: true,
+            client_id: Some("   ".to_string()),
+        }),
+    );
+    let err = crate::workflow_config::validate_workflow_config(&config)
+        .expect_err("authorization_code with blank client_id must fail validation");
+    assert!(err.to_string().contains("client_id"), "should reject blank client_id: {err}");
+}
+
+#[test]
 fn validation_accepts_oauth_client_credentials() {
     let mut config = builtin_workflow_config();
     config.mcp_servers.insert(
@@ -3187,6 +3280,7 @@ fn validation_accepts_oauth_client_credentials() {
             scopes: vec!["read".to_string()],
             audience: None,
             cache: true,
+            client_id: None,
         }),
     );
     validate_workflow_config(&config).expect("complete cc oauth block should validate");
@@ -3207,6 +3301,7 @@ fn validation_rejects_client_credentials_missing_token_url() {
             scopes: vec![],
             audience: None,
             cache: true,
+            client_id: None,
         }),
     );
     let err = validate_workflow_config(&config).expect_err("missing token_url should fail");
@@ -3232,6 +3327,7 @@ fn validation_rejects_client_credentials_missing_client_secret_env() {
             scopes: vec![],
             audience: None,
             cache: true,
+            client_id: None,
         }),
     );
     let err = validate_workflow_config(&config).expect_err("missing client_secret_env should fail");
@@ -3257,6 +3353,7 @@ fn validation_rejects_manual_bearer_without_bearer_env() {
             scopes: vec![],
             audience: None,
             cache: false,
+            client_id: None,
         }),
     );
     let err = validate_workflow_config(&config).expect_err("missing bearer_env should fail");
@@ -3290,6 +3387,7 @@ fn validation_rejects_oauth_on_stdio_transport() {
                 scopes: vec![],
                 audience: None,
                 cache: false,
+                client_id: None,
             }),
         },
     );
@@ -3321,6 +3419,7 @@ fn validation_rejects_oauth_token_url_with_missing_host() {
                 scopes: vec![],
                 audience: None,
                 cache: true,
+                client_id: None,
             }),
         );
         let err = validate_workflow_config(&config).expect_err("expected error for {bad:?}");
@@ -3347,6 +3446,7 @@ fn validation_rejects_refresh_token_with_bearer_env() {
             scopes: vec![],
             audience: None,
             cache: true,
+            client_id: None,
         }),
     );
     let err = validate_workflow_config(&config).expect_err("bearer_env must not coexist with refresh_token");

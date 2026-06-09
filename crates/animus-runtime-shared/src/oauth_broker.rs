@@ -113,6 +113,8 @@ fn oauth_config_fingerprint(oauth: &OauthConfig) -> String {
     hasher.update(oauth.scopes.join(",").as_bytes());
     hasher.update(b"|audience=");
     hasher.update(oauth.audience.as_deref().unwrap_or("").as_bytes());
+    hasher.update(b"|client_id=");
+    hasher.update(oauth.client_id.as_deref().unwrap_or("").as_bytes());
     let digest = hasher.finalize();
     let mut hex = String::with_capacity(32);
     for byte in &digest[..16] {
@@ -302,6 +304,20 @@ pub fn resolve_token(
                 }
                 Err(err) => Err(anyhow!("OAuth resolution failed for `{}`: {}", server_name, err)),
             }
+        }
+        OauthFlow::AuthorizationCode => {
+            // The interactive authorization_code flow does NOT resolve a
+            // bearer header here. The runtime-contract assembler instead
+            // repoints the agent at the local `animus-mcp-proxy`, which
+            // pulls live tokens from the keychain and refreshes them. If
+            // this arm is hit, the caller mis-routed an authorization_code
+            // server through the header-injection broker.
+            bail!(
+                "OAuth resolution failed for `{}`: flow=\"authorization_code\" is served by the \
+                 stdio proxy, not the header-injection broker; run `animus mcp auth {}`",
+                server_name,
+                server_name
+            )
         }
     }
 }
@@ -565,6 +581,7 @@ mod tests {
             scopes: vec!["read".to_string(), "write".to_string()],
             audience: Some("https://api.example.com".to_string()),
             cache: true,
+            client_id: None,
         }
     }
 
@@ -681,6 +698,7 @@ mod tests {
             scopes: vec![],
             audience: None,
             cache: false,
+            client_id: None,
         };
         let env = StaticEnv(BTreeMap::from([("MANUAL_BEARER".to_string(), "plain-token".to_string())]));
         let client = MockClient::new(vec![]);
@@ -704,6 +722,7 @@ mod tests {
             scopes: vec![],
             audience: None,
             cache: true,
+            client_id: None,
         };
         let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
         let client = MockClient::new(vec![
@@ -774,6 +793,7 @@ mod tests {
             scopes: vec![],
             audience: None,
             cache: false,
+            client_id: None,
         };
         let env = StaticEnv(BTreeMap::from([("REFRESH_TOKEN".to_string(), "rt".to_string())]));
         // REFRESH_CLIENT_ID intentionally unset.

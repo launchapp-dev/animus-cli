@@ -9,6 +9,10 @@ default-run = "animus"
 name = "animus"
 path = "src/main.rs"
 
+[[bin]]
+name = "animus-mcp-proxy"
+path = "src/bin/animus_mcp_proxy.rs"
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive", "env"] }
@@ -39,6 +43,7 @@ animus-session-backend = { workspace = true }
 which = "8"
 orchestrator-daemon-runtime = { workspace = true }
 animus-runtime-shared = { workspace = true }
+animus-mcp-oauth = { workspace = true }
 orchestrator-config = { workspace = true }
 dirs = "6.0"
 uuid = { version = "1", features = ["v4"] }

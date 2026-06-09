@@ -294,7 +294,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Output { command } => {
                     services::operations::handle_output(command, &project_root, cli.json).await
                 }
-                Command::Mcp { command } => services::operations::handle_mcp(command, &project_root).await,
+                Command::Mcp { command } => services::operations::handle_mcp(command, &project_root, cli.json).await,
                 Command::Web { command } => {
                     services::operations::handle_web(command, hub.clone(), &project_root, cli.json).await
                 }

@@ -120,7 +120,7 @@ jobs:
           STAGE_DIR="ao-${VERSION}-${TARGET}"
           mkdir -p "${STAGE_DIR}"
 
-          BINARIES=(animus)
+          BINARIES=(animus animus-mcp-proxy)
           for binary in "${BINARIES[@]}"; do
             cp "target/${TARGET}/release/${binary}" "${STAGE_DIR}/"
           done
@@ -133,7 +133,7 @@ jobs:
           import os
           from pathlib import Path
 
-          binaries = ["animus"]
+          binaries = ["animus", "animus-mcp-proxy"]
           metadata = {
               "schema": "animus.release.v1",
               "version": os.environ["VERSION"],
@@ -164,7 +164,7 @@ jobs:
           STAGE_DIR="ao-${VERSION}-${TARGET}"
           ARCHIVE_PATH="${STAGE_DIR}.tar.gz"
 
-          REQUIRED_FILES=(animus release-metadata.json)
+          REQUIRED_FILES=(animus animus-mcp-proxy release-metadata.json)
           for file in "${REQUIRED_FILES[@]}"; do
             if [[ ! -f "${STAGE_DIR}/${file}" ]]; then
               echo "missing required staged file: ${STAGE_DIR}/${file}" >&2
@@ -185,7 +185,7 @@ jobs:
           stage_dir = Path(os.environ["STAGE_DIR"])
           metadata_path = stage_dir / "release-metadata.json"
           metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
-          expected_binaries = ["animus"]
+          expected_binaries = ["animus", "animus-mcp-proxy"]
 
           accepted_schemas = ("animus.release.v1", "ao.release.v1")
           if metadata.get("schema") not in accepted_schemas:
@@ -228,7 +228,7 @@ jobs:
           $Version = "${{ steps.version.outputs.value }}"
           $Target = "${{ matrix.target }}"
           $StageDir = "ao-$Version-$Target"
-          $Binaries = @("animus")
+          $Binaries = @("animus", "animus-mcp-proxy")
           $BinaryFiles = @($Binaries | ForEach-Object { "$_.exe" })
 
           New-Item -ItemType Directory -Path $StageDir -Force | Out-Null
@@ -261,7 +261,7 @@ jobs:
           $StageDir = "ao-$Version-$Target"
           $ArchivePath = "$StageDir.zip"
 
-          $Binaries = @("animus")
+          $Binaries = @("animus", "animus-mcp-proxy")
           $BinaryFiles = @($Binaries | ForEach-Object { "$_.exe" })
           $RequiredFiles = @($BinaryFiles) + "release-metadata.json"
           foreach ($File in $RequiredFiles) {

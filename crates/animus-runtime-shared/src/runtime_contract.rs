@@ -546,17 +546,95 @@ pub fn inject_workflow_mcp_servers_with_project_root(
     }
 }
 
+/// Base name of the proxy binary (no platform suffix).
+const MCP_PROXY_BIN: &str = "animus-mcp-proxy";
+
+/// Resolve the `animus-mcp-proxy` binary path. The proxy ships in the same
+/// package as the `animus` CLI, so it sits next to whichever `animus` binary
+/// is in use. Resolution order:
+///
+/// 1. Sibling of the daemon-supplied host CLI path
+///    (`ANIMUS_HOST_CLI_PATH` / the in-process override) — this is the
+///    installed `animus`, even when contract assembly runs inside the
+///    workflow-runner subprocess whose `current_exe()` is the runner.
+/// 2. Sibling of the current executable.
+/// 3. Bare name (PATH lookup).
+///
+/// On Windows the sibling carries the `.exe` suffix that Cargo emits.
+fn mcp_proxy_command() -> String {
+    let file_name = format!("{MCP_PROXY_BIN}{}", std::env::consts::EXE_SUFFIX);
+
+    // (1) Sibling of the host CLI path.
+    if let Some(host_cli) = memory_mcp_stdio_command_override() {
+        if let Some(dir) = std::path::Path::new(&host_cli).parent() {
+            let candidate = dir.join(&file_name);
+            if candidate.exists() {
+                return candidate.display().to_string();
+            }
+        }
+    }
+
+    // (2) Sibling of the current executable.
+    if let Some(candidate) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(&file_name)))
+        .filter(|candidate| candidate.exists())
+    {
+        return candidate.display().to_string();
+    }
+
+    // (3) PATH lookup.
+    MCP_PROXY_BIN.to_string()
+}
+
+/// Rewrite an `authorization_code` MCP server entry to launch the local
+/// `animus-mcp-proxy` over stdio instead of pointing the agent at the
+/// upstream HTTP URL. The proxy reads the live keychain token, injects the
+/// bearer, and refreshes on expiry/401 — so the agent connects to a local
+/// auth-free endpoint. Returns the rewritten entry.
+///
+/// The selected definition's `url` is passed as `--url` so the proxy binds to
+/// exactly the upstream the contract selected, rather than re-resolving the
+/// server name (which could pick a same-named entry from a different config
+/// source).
+fn build_oauth_proxy_entry(
+    name: &str,
+    url: Option<&str>,
+    env: &std::collections::BTreeMap<String, String>,
+    project_root: &str,
+) -> Value {
+    let mut args =
+        vec!["--server".to_string(), name.to_string(), "--project-root".to_string(), project_root.to_string()];
+    if let Some(url) = url.filter(|u| !u.trim().is_empty()) {
+        args.push("--url".to_string());
+        args.push(url.to_string());
+    }
+    serde_json::json!({
+        "command": mcp_proxy_command(),
+        "args": args,
+        "env": env,
+        "transport": "stdio",
+    })
+}
+
 /// Shape a single MCP server entry for `/mcp/additional_servers`. Resolves
 /// the OAuth bearer token (if configured) and adds a `headers` map carrying
 /// `Authorization: Bearer <token>`. OAuth resolution failures are logged
 /// and the entry is emitted WITHOUT the bearer header — the downstream MCP
 /// call will surface the auth error to the user instead of the kernel
 /// silently dropping the server. (Tokens themselves are never logged.)
+///
+/// The `authorization_code` flow is the exception: instead of injecting a
+/// header, the agent's entry is repointed at the local `animus-mcp-proxy`
+/// stdio bridge.
 fn build_additional_mcp_server_entry(
     name: &str,
     definition: &orchestrator_config::McpServerDefinition,
     project_root: &str,
 ) -> Value {
+    if definition.oauth.as_ref().is_some_and(|o| o.flow == orchestrator_config::OauthFlow::AuthorizationCode) {
+        return build_oauth_proxy_entry(name, definition.url.as_deref(), &definition.env, project_root);
+    }
     let mut entry_json = serde_json::json!({
         "command": definition.command,
         "args": definition.args,
@@ -593,6 +671,13 @@ fn build_project_mcp_server_entry(
     definition: &protocol::ProjectMcpServerEntry,
     project_root: &str,
 ) -> Value {
+    if let Some(oauth_value) = definition.oauth.as_ref() {
+        if let Ok(oauth) = serde_json::from_value::<orchestrator_config::OauthConfig>(oauth_value.clone()) {
+            if oauth.flow == orchestrator_config::OauthFlow::AuthorizationCode {
+                return build_oauth_proxy_entry(name, definition.url.as_deref(), &definition.env, project_root);
+            }
+        }
+    }
     let mut entry_json = serde_json::json!({
         "command": definition.command,
         "args": definition.args,
@@ -1446,6 +1531,7 @@ mod tests {
                     scopes: vec![],
                     audience: None,
                     cache: false,
+                    client_id: None,
                 }),
             },
         );
@@ -1486,5 +1572,95 @@ mod tests {
         assert_eq!(header, "Bearer tok-xyz");
 
         std::env::remove_var(bearer_env_name);
+    }
+
+    #[test]
+    fn authorization_code_flow_rewrites_entry_to_stdio_proxy() {
+        // The interactive authorization_code flow must NOT inject a bearer
+        // header. Instead the agent's entry is repointed at the local
+        // `animus-mcp-proxy` over stdio, which pulls the live token from the
+        // keychain. This is a pure-function assertion over the rewritten
+        // entry shape (no network, no keychain).
+        use orchestrator_config::workflow_config::{OauthConfig, OauthFlow};
+        let mut env = BTreeMap::new();
+        env.insert("EXTRA".to_string(), "1".to_string());
+        let definition = McpServerDefinition {
+            command: "ignored".to_string(),
+            args: vec!["ignored".to_string()],
+            transport: Some("http".to_string()),
+            url: Some("https://api.githubcopilot.com/mcp/".to_string()),
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env,
+            oauth: Some(OauthConfig {
+                flow: OauthFlow::AuthorizationCode,
+                token_url: None,
+                client_id_env: None,
+                client_secret_env: None,
+                refresh_token_env: None,
+                bearer_env: None,
+                scopes: vec!["repo".to_string()],
+                audience: None,
+                cache: true,
+                client_id: None,
+            }),
+        };
+
+        let entry = build_additional_mcp_server_entry("github", &definition, "/tmp/proj");
+
+        // Repointed at the proxy over stdio; upstream URL is dropped so the
+        // agent never talks to the OAuth endpoint directly.
+        assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("stdio"));
+        assert!(entry.get("url").is_none(), "proxy entry must not carry the upstream url");
+        let command = entry.pointer("/command").and_then(Value::as_str).expect("command set");
+        assert!(command.contains("animus-mcp-proxy"), "command should be the proxy binary, got {command}");
+        let args: Vec<&str> = entry
+            .pointer("/args")
+            .and_then(Value::as_array)
+            .expect("args set")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            args,
+            vec!["--server", "github", "--project-root", "/tmp/proj", "--url", "https://api.githubcopilot.com/mcp/"]
+        );
+        // Env is preserved.
+        assert_eq!(entry.pointer("/env/EXTRA").and_then(Value::as_str), Some("1"));
+        // No Authorization header is injected for this flow.
+        assert!(entry.pointer("/headers").is_none(), "authorization_code must not inject a header");
+    }
+
+    #[test]
+    fn project_authorization_code_flow_rewrites_entry_to_stdio_proxy() {
+        let mut env = BTreeMap::new();
+        env.insert("K".to_string(), "v".to_string());
+        let definition = protocol::ProjectMcpServerEntry {
+            command: "ignored".to_string(),
+            args: vec![],
+            env,
+            assign_to: vec![],
+            transport: Some("http".to_string()),
+            url: Some("https://mcp.linear.app/mcp".to_string()),
+            oauth: Some(serde_json::json!({ "flow": "authorization_code", "scopes": ["read"] })),
+        };
+
+        let entry = build_project_mcp_server_entry("linear", &definition, "/tmp/proj2");
+
+        assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("stdio"));
+        assert!(entry.get("url").is_none());
+        let command = entry.pointer("/command").and_then(Value::as_str).expect("command set");
+        assert!(command.contains("animus-mcp-proxy"), "command should be the proxy binary, got {command}");
+        let args: Vec<&str> = entry
+            .pointer("/args")
+            .and_then(Value::as_array)
+            .expect("args set")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            args,
+            vec!["--server", "linear", "--project-root", "/tmp/proj2", "--url", "https://mcp.linear.app/mcp"]
+        );
     }
 }

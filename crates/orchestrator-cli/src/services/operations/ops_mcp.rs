@@ -416,7 +416,7 @@ fn read_file_with_mtime(path: &Path) -> Result<(String, Option<u64>), std::io::E
     Ok((compact_json_text(content), modified))
 }
 
-pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str) -> Result<()> {
+pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str, cli_json: bool) -> Result<()> {
     match command {
         McpCommand::Serve => {
             let service = new_ao_mcp_server(project_root).serve(stdio()).await?;
@@ -428,7 +428,72 @@ pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str) -> Resul
             service.waiting().await?;
             Ok(())
         }
+        McpCommand::Auth(args) => handle_mcp_auth(args, project_root, cli_json).await,
+        McpCommand::AuthStatus(args) => handle_mcp_auth_status(args, project_root, cli_json).await,
+        McpCommand::AuthLogout(args) => handle_mcp_auth_logout(args, project_root, cli_json).await,
     }
+}
+
+async fn handle_mcp_auth(args: crate::McpAuthArgs, project_root: &str, cli_json: bool) -> Result<()> {
+    let root = Path::new(project_root);
+    let scopes = args.scopes.clone();
+    let outcome = animus_mcp_oauth::run_auth(root, &args.server, args.url.as_deref(), scopes.as_deref()).await?;
+
+    if !cli_json {
+        let expiry = outcome.expires_at.map(|e| e.to_rfc3339()).unwrap_or_else(|| "unknown".to_string());
+        println!(
+            "Authenticated `{}` (principal `{}`, client_id `{}`). Token expires: {}. Refresh token: {}.",
+            outcome.server,
+            outcome.principal,
+            outcome.client_id,
+            expiry,
+            if outcome.has_refresh_token { "yes" } else { "no" }
+        );
+        if !outcome.granted_scopes.is_empty() {
+            println!("Granted scopes: {}", outcome.granted_scopes.join(", "));
+        }
+        return Ok(());
+    }
+    crate::shared::print_value(outcome, true)
+}
+
+async fn handle_mcp_auth_status(args: crate::McpAuthStatusArgs, project_root: &str, cli_json: bool) -> Result<()> {
+    let root = Path::new(project_root);
+    let status = animus_mcp_oauth::auth_status(root, args.server.as_deref(), args.url.as_deref()).await?;
+
+    if !cli_json {
+        if status.servers.is_empty() {
+            println!("No OAuth-protected (authorization_code) MCP servers found in config.");
+            return Ok(());
+        }
+        for s in &status.servers {
+            let state = if !s.authenticated {
+                "not authenticated".to_string()
+            } else if s.expired && s.has_refresh_token {
+                "authenticated (access token expired — proxy will refresh)".to_string()
+            } else if s.expired {
+                format!("authenticated (token expired, no refresh token — re-run `animus mcp auth {}`)", s.server)
+            } else {
+                let expiry = s.expires_at.map(|e| e.to_rfc3339()).unwrap_or_else(|| "no expiry".to_string());
+                format!("authenticated (expires {expiry})")
+            };
+            println!("{} [principal {}]: {}", s.server, s.principal, state);
+        }
+        return Ok(());
+    }
+    crate::shared::print_value(status, true)
+}
+
+async fn handle_mcp_auth_logout(args: crate::McpAuthLogoutArgs, project_root: &str, cli_json: bool) -> Result<()> {
+    let root = Path::new(project_root);
+    let had = animus_mcp_oauth::auth_logout(root, &args.server, args.url.as_deref()).await?;
+    let message = if had {
+        format!("Logged out `{}`; stored tokens deleted.", args.server)
+    } else {
+        format!("No stored tokens for `{}`.", args.server)
+    };
+    crate::shared::print_ok(&message, cli_json);
+    Ok(())
 }
 
 fn ao_schema_for_type<T: JsonSchema + std::any::Any>() -> std::sync::Arc<JsonObject> {
