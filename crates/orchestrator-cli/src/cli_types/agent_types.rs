@@ -164,6 +164,26 @@ pub(crate) struct AgentRunArgs {
     pub(crate) start_runner: bool,
     #[arg(long, value_enum, value_name = "SCOPE", help = "Runner config scope: project or global.")]
     pub(crate) runner_scope: Option<RunnerScopeArg>,
+    #[arg(
+        long,
+        value_name = "AGENT_ID",
+        help = "Agent profile whose declared MCP servers this run receives (when no --runtime-contract-json is supplied)."
+    )]
+    pub(crate) agent: Option<String>,
+    #[arg(
+        long,
+        value_name = "SKILL",
+        help = "Skill whose declared MCP servers are added to this run's set (unioned with the profile's)."
+    )]
+    pub(crate) skill: Option<String>,
+    #[arg(
+        long = "mcp-server",
+        value_name = "NAME",
+        help = "Additional MCP server to wire by name (repeatable). 'animus' selects the built-in stdio surface."
+    )]
+    pub(crate) mcp_server: Vec<String>,
+    #[arg(long, help = "Drop the built-in 'animus' MCP server from the resolved set.")]
+    pub(crate) no_animus_mcp: bool,
 }
 
 #[derive(Debug, Args)]

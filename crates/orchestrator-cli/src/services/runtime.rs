@@ -1,3 +1,4 @@
+pub(crate) mod agent_mcp;
 pub(crate) mod execution_fact_projection;
 pub(crate) mod runtime_agent;
 pub(crate) mod runtime_chat;

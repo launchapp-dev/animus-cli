@@ -39,6 +39,10 @@ mod tests {
             jsonl_dir: None,
             start_runner: false,
             runner_scope: None,
+            agent: None,
+            skill: None,
+            mcp_server: Vec::new(),
+            no_animus_mcp: false,
         }
     }
 

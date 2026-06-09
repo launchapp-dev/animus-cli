@@ -75,6 +75,23 @@ pub(crate) struct ChatSendArgs {
     /// renames the target one. An empty string clears the title.
     #[arg(long)]
     pub(crate) title: Option<String>,
+    /// Agent profile whose declared MCP servers this chat agent receives.
+    /// The profile's `mcp_servers` names are resolved against the project's
+    /// `mcp_servers` map.
+    #[arg(long, value_name = "AGENT_ID")]
+    pub(crate) agent: Option<String>,
+    /// Skill whose declared MCP servers are added to this chat agent's set
+    /// (unioned with the profile's, when an `--agent` is also selected).
+    #[arg(long, value_name = "SKILL")]
+    pub(crate) skill: Option<String>,
+    /// Additional MCP server to wire by name (repeatable). Each name is
+    /// looked up in the project's `mcp_servers` map; `animus` selects the
+    /// built-in stdio surface.
+    #[arg(long = "mcp-server", value_name = "NAME")]
+    pub(crate) mcp_server: Vec<String>,
+    /// Drop the built-in `animus` MCP server from the resolved set.
+    #[arg(long)]
+    pub(crate) no_animus_mcp: bool,
 }
 
 #[derive(Debug, Args)]

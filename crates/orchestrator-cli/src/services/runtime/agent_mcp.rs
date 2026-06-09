@@ -1,0 +1,1631 @@
+//! Per-agent MCP server wiring for the ad-hoc `animus chat` and
+//! `animus agent run` paths.
+//!
+//! Workflow runs already give each phase the MCP servers its agent
+//! profile / skill declares (the daemon-side `inject_*` machinery in
+//! `animus-runtime-shared`). The ad-hoc paths historically wired NO MCP
+//! servers at all — an `animus chat` or `animus agent run` agent could not
+//! see the Animus tools, let alone a profile's trading or marketing
+//! servers.
+//!
+//! [`assemble_agent_mcp_contract`] closes that gap. It resolves the
+//! SELECTED set of server names for one ad-hoc run (profile ∪ skill ∪ CLI
+//! additions − the built-in `animus` when disabled), maps each name to its
+//! `McpServerDefinition` (or the built-in `animus` stdio surface), and
+//! builds the `runtime_contract` value the provider plugin consumes via
+//! `SessionRequest.extras.runtime_contract`.
+//!
+//! The injection itself REUSES the workflow runner's machinery — fed the
+//! filtered, per-agent name set rather than the whole project map — so a
+//! trading agent gets the trading servers and a marketing agent gets the
+//! marketing servers, never a blanket set. OAuth `authorization_code`
+//! servers are rewritten to the local `animus-mcp-proxy` by that same
+//! reused machinery.
+
+use std::collections::BTreeSet;
+use std::path::Path;
+
+use anyhow::{anyhow, Context, Result};
+use serde_json::Value;
+use tracing::warn;
+
+use animus_runtime_shared::config_context::RuntimeConfigContext;
+use animus_runtime_shared::runtime_contract::{
+    inject_default_stdio_mcp_with_config, inject_named_mcp_servers, set_mcp_tool_policy,
+};
+use orchestrator_config::agent_runtime_config::AgentToolPolicy;
+
+/// The built-in MCP server name. Resolves to the `animus mcp serve` stdio
+/// command rather than a project `mcp_servers` entry.
+const BUILTIN_ANIMUS_SERVER: &str = "animus";
+
+/// Phase id used only for the diagnostic context the reused
+/// `inject_named_mcp_servers` helper threads into its (already pre-empted)
+/// unknown-server error. Ad-hoc runs have no phase, so this is a label.
+const ADHOC_PHASE_LABEL: &str = "chat";
+
+/// Resolve the `animus` CLI command used to launch the built-in
+/// `animus mcp serve` stdio MCP server. The running executable IS the
+/// `animus` binary, so `current_exe()` is the authoritative source; falls
+/// back to `ANIMUS_HOST_CLI_PATH` when the executable path cannot be read.
+fn animus_cli_command() -> Option<String> {
+    if let Ok(path) = std::env::current_exe() {
+        return Some(path.to_string_lossy().into_owned());
+    }
+    std::env::var("ANIMUS_HOST_CLI_PATH").ok().filter(|value| !value.trim().is_empty())
+}
+
+/// Resolve the per-agent MCP server set for an ad-hoc run and build the
+/// `runtime_contract` value the provider receives via
+/// `extras.runtime_contract`.
+///
+/// The resolved server set is:
+///
+/// 1. `profile_servers` — the agent profile's `mcp_servers` (empty when no
+///    `--agent` is selected), UNION
+/// 2. `skill_servers` — the loaded skill's `mcp_servers` (empty when no
+///    `--skill` is given), UNION
+/// 3. `extra_servers` — repeatable `--mcp-server <name>` additions, MINUS
+/// 4. the built-in `animus` server when `disable_animus` is set
+///    (`--no-animus-mcp`).
+///
+/// When NO profile/skill is selected (`scope_selected == false`) the
+/// baseline set is just `animus` (plus any `--mcp-server` additions) so a
+/// plain `animus chat` still has the Animus tools. When a profile/skill IS
+/// selected, its declared `mcp_servers` are authoritative — an intentionally
+/// empty profile yields an empty set, not the `animus` fallback.
+///
+/// Each resolved name maps to a server definition:
+///
+/// * `animus` → the built-in stdio surface via `inject_default_stdio_mcp_with_config`
+///   (`["--project-root", <root>, "mcp", "serve"]`).
+/// * any other name → the project's `mcp_servers` definition (workflow YAML
+///   `mcp_servers` first, then project `.animus` config), injected via the
+///   reused [`inject_named_mcp_servers`] machinery (which rewrites OAuth
+///   `authorization_code` servers to the `animus-mcp-proxy` command).
+/// * a name that is neither `animus` nor defined anywhere → a clear error.
+///
+/// Returns `Ok(None)` when the tool cannot speak MCP
+/// (`cli/capabilities/supports_mcp` is false, or the tool is unknown) — the
+/// caller injects nothing in that case. Otherwise returns the runtime
+/// contract `Value`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assemble_agent_mcp_contract(
+    project_root: &Path,
+    tool: &str,
+    model: &str,
+    profile_servers: &[String],
+    skill_servers: &[String],
+    extra_servers: &[String],
+    tool_policy: &AgentToolPolicy,
+    scope_selected: bool,
+    disable_animus: bool,
+) -> Result<Option<Value>> {
+    // Base contract carries the per-tool `cli` block (including
+    // `cli/capabilities/supports_mcp`) plus an empty `mcp` block the
+    // inject_* helpers fill in. An unknown/unsupported tool yields `None`.
+    let Some(mut runtime_contract) = animus_runtime_shared::build_runtime_contract(tool, model, "") else {
+        return Ok(None);
+    };
+
+    // Honor `supports_mcp`: a tool that cannot speak MCP gets nothing.
+    let supports_mcp =
+        runtime_contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool).unwrap_or(false);
+    if !supports_mcp {
+        return Ok(None);
+    }
+
+    let resolved = resolve_server_names(profile_servers, skill_servers, extra_servers, scope_selected, disable_animus);
+
+    // The built-in `animus` server resolves to the stdio surface, never a
+    // project `mcp_servers` lookup. Split it out so the named-server
+    // injection only sees real project/workflow definitions.
+    let include_animus = resolved.contains(BUILTIN_ANIMUS_SERVER);
+    let named_servers: Vec<String> =
+        resolved.iter().filter(|name| name.as_str() != BUILTIN_ANIMUS_SERVER).cloned().collect();
+
+    if include_animus {
+        // The daemon-side `inject_default_stdio_mcp` resolves the `animus`
+        // binary from an init-extension override that the ad-hoc CLI path
+        // does not install. Resolve it from the running executable so the
+        // built-in `animus mcp serve` stdio surface is wired here. When the
+        // binary cannot be resolved the stdio injection is skipped rather
+        // than recursively self-launching the wrong binary.
+        let mut mcp_config = protocol::McpRuntimeConfig::default();
+        if let Some(command) = animus_cli_command() {
+            mcp_config.stdio_command = Some(command);
+        }
+        inject_default_stdio_mcp_with_config(&mut runtime_contract, &project_root.to_string_lossy(), &mcp_config);
+
+        // Mirror the shared IPC path: when a stdio MCP command is injected
+        // (no HTTP endpoint), flip `mcp.enforce_only` and seed
+        // `allowed_tool_prefixes`. Providers that consume the runtime
+        // contract's `mcp` block skip native MCP setup unless these are set,
+        // so without this the stdio server would be silently ignored by the
+        // contract path (the `.mcp.json` path is unaffected).
+        let stdio_injected = runtime_contract
+            .pointer("/mcp/stdio/command")
+            .and_then(Value::as_str)
+            .is_some_and(|c| !c.trim().is_empty());
+        if stdio_injected {
+            let agent_id = runtime_contract
+                .pointer("/mcp/agent_id")
+                .and_then(Value::as_str)
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or(BUILTIN_ANIMUS_SERVER)
+                .to_string();
+            if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
+                mcp.insert("enforce_only".to_string(), Value::Bool(true));
+                let prefixes = protocol::default_allowed_tool_prefixes(&agent_id);
+                mcp.insert("allowed_tool_prefixes".to_string(), serde_json::json!(prefixes));
+            }
+        }
+    }
+
+    if !named_servers.is_empty() {
+        let project_root_str = project_root.to_string_lossy().into_owned();
+        let ctx = RuntimeConfigContext::load(&project_root_str);
+
+        // Pre-validate each requested name against the SELECTED definition
+        // sources so an unknown name yields the spec's clear error rather
+        // than the skill-flavored message the reused helper would emit.
+        for name in &named_servers {
+            let in_workflow = ctx.workflow_config.config.mcp_servers.contains_key(name);
+            let in_project = protocol::Config::load_or_default(&project_root_str)
+                .map(|config| config.mcp_servers.contains_key(name))
+                .unwrap_or(false);
+            if !in_workflow && !in_project {
+                return Err(anyhow!("unknown MCP server '{name}'; not defined in project mcp_servers"));
+            }
+        }
+
+        // Reuse the workflow runner's name-keyed injection on the FILTERED
+        // per-agent set. It looks each name up in workflow YAML then project
+        // config and rewrites OAuth `authorization_code` servers to the
+        // `animus-mcp-proxy` stdio bridge.
+        inject_named_mcp_servers(&mut runtime_contract, &project_root_str, &ctx, ADHOC_PHASE_LABEL, &named_servers)?;
+    }
+
+    // Apply the selected profile/skill's allow/deny tool policy to
+    // `/mcp/tool_policy` so an ad-hoc agent honors the SAME MCP tool
+    // restrictions a workflow run would (e.g. a profile that denies
+    // `animus.daemon.stop`). `set_mcp_tool_policy` no-ops on an empty policy.
+    set_mcp_tool_policy(&mut runtime_contract, tool_policy);
+
+    // Drop the `cli.launch` and `cli.session` blocks before handing the
+    // contract to the provider. `build_runtime_contract` builds `cli.launch`
+    // from the EMPTY placeholder prompt this assembler passes (the real
+    // prompt is owned by the per-turn `SessionRequest`, not known here). A
+    // provider that honors `runtime_contract.cli.launch` would otherwise
+    // launch its CLI with that empty prompt and never receive the user's
+    // message. The ad-hoc path only wants the per-agent `mcp` block; the
+    // provider keeps its own launch driven by the request prompt/model.
+    // `cli.name` + `cli.capabilities` are left intact as harmless metadata.
+    if let Some(cli) = runtime_contract.get_mut("cli").and_then(Value::as_object_mut) {
+        cli.remove("launch");
+        cli.remove("session");
+    }
+
+    Ok(Some(runtime_contract))
+}
+
+/// Top-level `.mcp.json` key recording which `mcpServers` entries Animus
+/// materialized. Lets a later ad-hoc run REPLACE its own prior generated set
+/// (so per-agent scoping holds across runs) without ever touching
+/// user-authored entries.
+const ANIMUS_MANAGED_MARKER: &str = "_animusManagedServers";
+
+/// Convert an assembled runtime contract's `mcp` block into the
+/// claude-code `mcpServers` shape (`{ "<name>": { command|url, ... } }`).
+///
+/// Provider CLIs that auto-discover a cwd-local `.mcp.json` (claude-code)
+/// register MCP servers from that file rather than the runtime contract, so
+/// the per-agent set must ALSO be materialized there for tools to actually
+/// reach the wrapped CLI. The stdio `animus` server becomes a
+/// `command`/`args` entry; each `additional_servers` entry is copied
+/// through, EXCEPT that any resolved `Authorization`/auth header is dropped:
+/// `.mcp.json` lives in the run cwd (often inside the repo) and persisting a
+/// live bearer token to disk would leak the secret. OAuth
+/// `authorization_code` servers are unaffected — they are already rewritten
+/// to a headerless `animus-mcp-proxy` stdio entry that pulls the live token
+/// from the keychain at connect time.
+fn contract_mcp_servers_for_mcp_json(runtime_contract: &Value) -> serde_json::Map<String, Value> {
+    let mut servers = serde_json::Map::new();
+
+    if let Some(stdio) = runtime_contract.pointer("/mcp/stdio").and_then(Value::as_object) {
+        if let Some(command) = stdio.get("command").and_then(Value::as_str) {
+            let mut entry = serde_json::Map::new();
+            entry.insert("command".to_string(), Value::String(command.to_string()));
+            if let Some(args) = stdio.get("args") {
+                entry.insert("args".to_string(), args.clone());
+            }
+            let name = runtime_contract
+                .pointer("/mcp/agent_id")
+                .and_then(Value::as_str)
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or(BUILTIN_ANIMUS_SERVER);
+            servers.insert(name.to_string(), Value::Object(entry));
+        }
+    }
+
+    if let Some(additional) = runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object) {
+        for (name, entry) in additional {
+            let (sanitized, stripped_secret) = strip_secret_material(entry.clone());
+            // An entry that required a secret we refuse to persist would be
+            // written to `.mcp.json` in an unusable (unauthenticated / env-
+            // less) form, so skip materializing it entirely. It still rides
+            // on the runtime contract for contract-consuming providers, and
+            // for `.mcp.json`-consuming providers an omitted server fails
+            // loudly rather than connecting without its credentials.
+            if stripped_secret {
+                warn!(
+                    server = %name,
+                    "Skipping .mcp.json materialization for an MCP server whose resolved secret cannot be persisted to disk"
+                );
+                continue;
+            }
+            servers.insert(name.clone(), normalize_http_entry(sanitized));
+        }
+    }
+
+    servers
+}
+
+/// Drop a vacuous `command: ""` / `args: []` from an HTTP MCP entry. The
+/// runtime-contract additional-server shape always carries `command`/`args`
+/// (empty for HTTP servers), but a claude-style `.mcp.json` selects stdio
+/// when a non-empty `command` is present — leaving an empty `command`
+/// alongside a `url` is ambiguous and can make the client try (and fail) to
+/// launch an empty stdio command instead of connecting to the URL.
+fn normalize_http_entry(mut entry: Value) -> Value {
+    let has_url = entry.get("url").and_then(Value::as_str).is_some_and(|u| !u.trim().is_empty());
+    if !has_url {
+        return entry;
+    }
+    if let Some(obj) = entry.as_object_mut() {
+        let command_empty = obj.get("command").and_then(Value::as_str).map(|c| c.trim().is_empty()).unwrap_or(true);
+        if command_empty {
+            obj.remove("command");
+            // An args array is only meaningful with a command.
+            if obj.get("args").and_then(Value::as_array).is_some_and(|a| a.is_empty()) {
+                obj.remove("args");
+            }
+        }
+    }
+    entry
+}
+
+/// Strip resolved secret material from an MCP server entry before it is
+/// written to the cwd-local `.mcp.json`. That file lives in the run cwd
+/// (often inside — and committable to — the user's repo), so a resolved
+/// `Authorization: Bearer <token>` (from the OAuth broker for
+/// `manual_bearer` / `client_credentials` / `refresh_token` flows) is
+/// dropped, and `env` values are kept ONLY when they are still unresolved
+/// `${VAR}` placeholders (which the provider CLI expands itself at launch —
+/// no secret lands on disk). Any literal `env` value is dropped, since it
+/// may be a resolved credential. The `authorization_code` flow is
+/// unaffected: it is already rewritten to a headerless, env-free
+/// `animus-mcp-proxy` stdio entry that pulls the live token from the
+/// keychain at connect time.
+///
+/// Returns `(sanitized_entry, stripped_secret)`. `stripped_secret` is `true`
+/// when a literal `env` value or an `Authorization` header was removed — the
+/// caller should then SKIP materializing the (now-incomplete) entry to
+/// `.mcp.json` rather than write a server that would launch without its
+/// credentials.
+fn strip_secret_material(mut entry: Value) -> (Value, bool) {
+    let mut stripped_secret = false;
+    if let Some(obj) = entry.as_object_mut() {
+        if let Some(env) = obj.get_mut("env").and_then(Value::as_object_mut) {
+            // Keep only `${VAR}`-style passthroughs; drop literal (possibly
+            // resolved-secret) values so they never land on disk.
+            let before = env.len();
+            env.retain(|_, value| value.as_str().is_some_and(is_env_placeholder));
+            if env.len() != before {
+                stripped_secret = true;
+            }
+            if env.is_empty() {
+                obj.remove("env");
+            }
+        }
+        if let Some(headers) = obj.get_mut("headers").and_then(Value::as_object_mut) {
+            let before = headers.len();
+            headers.retain(|key, _| !key.eq_ignore_ascii_case("authorization"));
+            if headers.len() != before {
+                stripped_secret = true;
+            }
+            if headers.is_empty() {
+                obj.remove("headers");
+            }
+        }
+    }
+    (entry, stripped_secret)
+}
+
+/// Whether an env value is an unresolved `${VAR}` / `${VAR:-default}`
+/// placeholder (safe to persist; the provider CLI expands it) rather than a
+/// literal value (which may be a resolved secret).
+fn is_env_placeholder(value: &str) -> bool {
+    let trimmed = value.trim();
+    trimmed.starts_with("${") && trimmed.ends_with('}')
+}
+
+/// Merge the per-agent MCP server set into the cwd-local `.mcp.json` so a
+/// provider CLI that auto-discovers it (claude-code) registers the servers.
+///
+/// User-authored entries are always preserved. Animus-managed entries are
+/// REPLACED wholesale on each run (tracked via the [`ANIMUS_MANAGED_MARKER`]
+/// key): a prior run's generated servers are removed before the current
+/// run's resolved set is written, so switching from a trading profile to a
+/// marketing profile in the same cwd does not leave the trading server
+/// visible. A `.mcp.json` that is absent is created; one that is malformed
+/// is left untouched (best-effort) so a hand-authored file is never
+/// corrupted. Returns the set of server names written, for logging.
+///
+/// Concurrency note: `.mcp.json` is the cwd-shared file a provider CLI
+/// auto-discovers, so two ad-hoc runs with different scopes in the SAME cwd
+/// at the same time can race — the second run's write may land before the
+/// first provider process reads the file. This mirrors the inherent
+/// single-`.mcp.json`-per-directory model the provider CLI imposes (the
+/// runtime contract each process carries is unaffected and remains correct).
+///
+/// TODO(codex-p2): for true per-run isolation under overlapping ad-hoc runs
+/// in one cwd, materialize into a per-run config path and point the provider
+/// at it once provider plugins accept an explicit MCP-config path.
+pub(crate) fn materialize_mcp_json(cwd: &Path, runtime_contract: &Value) -> Result<Vec<String>> {
+    let resolved = contract_mcp_servers_for_mcp_json(runtime_contract);
+    let mcp_path = cwd.join(".mcp.json");
+
+    let existing = std::fs::read_to_string(&mcp_path);
+    // When this run resolves to NO servers and there is no existing file,
+    // there is nothing to write or clean — don't create an empty `.mcp.json`.
+    if resolved.is_empty() && existing.is_err() {
+        return Ok(Vec::new());
+    }
+
+    let mut root: serde_json::Map<String, Value> = match &existing {
+        Ok(content) => match serde_json::from_str::<Value>(content) {
+            Ok(Value::Object(map)) => map,
+            // A non-object or malformed `.mcp.json` is left untouched to
+            // avoid clobbering a hand-authored file we can't safely merge.
+            Ok(_) | Err(_) => return Ok(Vec::new()),
+        },
+        Err(_) => serde_json::Map::new(),
+    };
+
+    // Names Animus wrote on a previous run — remove them first so this run's
+    // resolved set fully replaces the prior generated set without disturbing
+    // user-authored entries. This runs even when the current set is EMPTY
+    // (e.g. `--no-animus-mcp` with no other servers), so an opt-out actually
+    // removes the servers a previous run materialized rather than leaving
+    // them auto-discoverable.
+    let prior_managed: Vec<String> = root
+        .get(ANIMUS_MANAGED_MARKER)
+        .and_then(Value::as_array)
+        .map(|names| names.iter().filter_map(Value::as_str).map(ToOwned::to_owned).collect())
+        .unwrap_or_default();
+
+    let mut mcp_servers = root.get("mcpServers").and_then(Value::as_object).cloned().unwrap_or_default();
+    for stale in &prior_managed {
+        mcp_servers.remove(stale);
+    }
+
+    // A name that still exists in `mcpServers` after stale-removal is a
+    // user-authored entry (it was never recorded as Animus-managed). We do
+    // NOT overwrite it — destroying a user's MCP config just by starting a
+    // chat in that cwd would be the more dangerous failure. The tradeoff: a
+    // provider that auto-discovers `.mcp.json` then sees the user's entry for
+    // that name rather than Animus's resolved project/workflow definition.
+    // We surface this loudly so the user can rename one side; the entry still
+    // rides on the runtime contract for contract-consuming providers.
+    //
+    // TODO(codex-p2): consider an isolated generated MCP config dir so a
+    // colliding user entry never shadows the resolved per-agent server for
+    // `.mcp.json`-consuming providers, without mutating the user's file.
+    let mut written = Vec::with_capacity(resolved.len());
+    let mut skipped_user_owned = Vec::new();
+    for (name, entry) in resolved {
+        if mcp_servers.contains_key(&name) {
+            skipped_user_owned.push(name);
+            continue;
+        }
+        written.push(name.clone());
+        mcp_servers.insert(name, entry);
+    }
+    written.sort();
+    if !skipped_user_owned.is_empty() {
+        skipped_user_owned.sort();
+        warn!(
+            servers = ?skipped_user_owned,
+            "Preserving user-authored .mcp.json entries that collide with resolved Animus server names; \
+             the agent will use the existing entry for these names. Rename one side to wire the Animus-scoped server instead."
+        );
+    }
+
+    // Nothing changed and there was nothing managed before — avoid rewriting
+    // a purely user-authored file (no marker churn, no needless writes).
+    if written.is_empty() && prior_managed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if mcp_servers.is_empty() {
+        root.remove("mcpServers");
+    } else {
+        root.insert("mcpServers".to_string(), Value::Object(mcp_servers));
+    }
+    if written.is_empty() {
+        root.remove(ANIMUS_MANAGED_MARKER);
+    } else {
+        root.insert(
+            ANIMUS_MANAGED_MARKER.to_string(),
+            Value::Array(written.iter().cloned().map(Value::String).collect()),
+        );
+    }
+
+    let serialized = format!("{}\n", serde_json::to_string_pretty(&Value::Object(root))?);
+    std::fs::write(&mcp_path, serialized)
+        .with_context(|| format!("failed to write MCP config at {}", mcp_path.display()))?;
+    Ok(written)
+}
+
+/// The MCP server names an `--agent` profile and `--skill` declare,
+/// resolved from project config. Either component is empty when its flag is
+/// absent.
+#[derive(Debug)]
+pub(crate) struct ResolvedAgentScope {
+    /// The agent profile's `mcp_servers` (empty when `--agent` is absent).
+    pub(crate) profile_servers: Vec<String>,
+    /// The loaded skill's `mcp_servers` (empty when `--skill` is absent).
+    pub(crate) skill_servers: Vec<String>,
+    /// The merged allow/deny tool policy from the selected profile + skill.
+    /// Empty when neither restricts tools. Applied to `/mcp/tool_policy` so
+    /// an ad-hoc agent honors the same MCP tool restrictions a workflow run
+    /// would (e.g. a profile that denies `animus.daemon.stop`).
+    pub(crate) tool_policy: orchestrator_config::agent_runtime_config::AgentToolPolicy,
+}
+
+/// Resolve the MCP server names that an `--agent` profile and `--skill`
+/// declare, reading the agent runtime config and skill sources for the
+/// project.
+///
+/// `tool` is the provider tool the run targets; it selects the skill's
+/// tool-adapter so adapter-declared MCP servers
+/// (`adapters.<tool>.mcp_servers`) are included alongside the skill's
+/// top-level `mcp_servers`.
+///
+/// An unknown `--agent` profile and an unknown `--skill` are both hard
+/// errors so a typo never silently drops the servers the caller expected
+/// (which would leave the agent on the bare `animus` baseline, masking the
+/// mistake).
+pub(crate) fn resolve_agent_scope(
+    project_root: &Path,
+    tool: &str,
+    agent: Option<&str>,
+    skill: Option<&str>,
+) -> Result<ResolvedAgentScope> {
+    let mut tool_policy = orchestrator_config::agent_runtime_config::AgentToolPolicy::default();
+    let profile_servers = match agent {
+        Some(agent_id) => {
+            // Mirror `inject_workflow_mcp_servers_with_project_root`'s
+            // precedence exactly: the workflow YAML `agent_profiles` entry's
+            // `mcp_servers` win, but when the YAML profile leaves them EMPTY
+            // the agent runtime config profile's `mcp_servers` are used as the
+            // fallback. A profile present in NEITHER source errors.
+            let workflow = orchestrator_core::load_workflow_config_or_default(project_root);
+            let yaml_profile = workflow.config.agent_profiles.get(agent_id).cloned();
+            let runtime_config = orchestrator_core::load_agent_runtime_config_or_default(project_root);
+            let runtime_profile = runtime_config.agent_profile(agent_id).cloned();
+
+            if yaml_profile.is_none() && runtime_profile.is_none() {
+                return Err(anyhow!(
+                    "unknown agent profile '{agent_id}'; not defined in this project's workflow YAML agent_profiles or agent runtime config"
+                ));
+            }
+
+            // Tool policy: the YAML profile's policy wins; fall back to the
+            // runtime profile's policy when the YAML profile declares none.
+            let yaml_policy =
+                yaml_profile.as_ref().map(|p| &p.tool_policy).filter(|p| !p.allow.is_empty() || !p.deny.is_empty());
+            let policy_source = yaml_policy.or_else(|| {
+                runtime_profile.as_ref().map(|p| &p.tool_policy).filter(|p| !p.allow.is_empty() || !p.deny.is_empty())
+            });
+            if let Some(policy) = policy_source {
+                tool_policy.allow.extend(policy.allow.iter().cloned());
+                tool_policy.deny.extend(policy.deny.iter().cloned());
+            }
+
+            // Servers: YAML profile's win, with the runtime profile as the
+            // empty-list fallback (matching the workflow injection path).
+            let yaml_servers = yaml_profile.map(|p| p.mcp_servers).filter(|servers| !servers.is_empty());
+            match yaml_servers {
+                Some(servers) => servers,
+                None => runtime_profile.map(|p| p.mcp_servers).unwrap_or_default(),
+            }
+        }
+        None => Vec::new(),
+    };
+
+    let skill_servers = match skill {
+        Some(skill_name) => {
+            let resolved = orchestrator_config::skill_resolution::resolve_skills_for_project(
+                &[skill_name.to_string()],
+                project_root,
+            )?;
+            match resolved.into_iter().next() {
+                // Apply the skill for the target tool so adapter-declared
+                // MCP servers (`adapters.<tool>.mcp_servers`) and the skill's
+                // tool_policy are merged with the skill's top-level values.
+                Some(skill) => {
+                    let applied = orchestrator_config::skill_definition::apply_skill_for_tool(&skill.definition, tool);
+                    if let Some(policy) = applied.tool_policy {
+                        tool_policy.allow.extend(policy.allow);
+                        tool_policy.deny.extend(policy.deny);
+                    }
+                    applied.mcp_servers
+                }
+                None => Vec::new(),
+            }
+        }
+        None => Vec::new(),
+    };
+
+    // De-duplicate the merged allow/deny lists so a server listed by both the
+    // profile and the skill is not repeated.
+    tool_policy.allow.sort();
+    tool_policy.allow.dedup();
+    tool_policy.deny.sort();
+    tool_policy.deny.dedup();
+
+    Ok(ResolvedAgentScope { profile_servers, skill_servers, tool_policy })
+}
+
+/// Build the de-duplicated, ordered-by-name set of MCP server names for an
+/// ad-hoc run: profile ∪ skill ∪ extras.
+///
+/// The built-in `animus` baseline is added ONLY for a plain ad-hoc run that
+/// selected no scope (`scope_selected == false`) — so a bare `animus chat`
+/// still has the Animus tools. When a `--agent`/`--skill` IS selected, its
+/// declared `mcp_servers` are authoritative: an intentionally EMPTY profile
+/// (e.g. the builtin `default` with `mcp_servers: []`) yields an empty set,
+/// not the `animus` fallback. `--mcp-server` additions always apply, and the
+/// `animus` server is dropped when `disable_animus` is set.
+fn resolve_server_names(
+    profile_servers: &[String],
+    skill_servers: &[String],
+    extra_servers: &[String],
+    scope_selected: bool,
+    disable_animus: bool,
+) -> BTreeSet<String> {
+    let mut set: BTreeSet<String> = BTreeSet::new();
+
+    for name in profile_servers.iter().chain(skill_servers.iter()) {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            set.insert(trimmed.to_string());
+        }
+    }
+
+    // Only a plain run (no profile/skill selected) gets the `animus`
+    // baseline. A selected profile/skill's declared set — even if empty —
+    // is authoritative.
+    if !scope_selected {
+        set.insert(BUILTIN_ANIMUS_SERVER.to_string());
+    }
+
+    for name in extra_servers {
+        let trimmed = name.trim();
+        if !trimmed.is_empty() {
+            set.insert(trimmed.to_string());
+        }
+    }
+
+    if disable_animus {
+        set.remove(BUILTIN_ANIMUS_SERVER);
+    }
+
+    set
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn plain_chat_defaults_to_animus_only() {
+        let resolved = resolve_server_names(&[], &[], &[], false, false);
+        assert_eq!(resolved.iter().cloned().collect::<Vec<_>>(), vec!["animus".to_string()]);
+    }
+
+    #[test]
+    fn selected_profile_with_empty_servers_gets_no_animus_fallback() {
+        // A `--agent` whose profile declares NO mcp_servers must receive an
+        // EMPTY set, not the animus baseline — the empty scope is intentional.
+        let resolved = resolve_server_names(&[], &[], &[], /* scope_selected */ true, false);
+        assert!(resolved.is_empty(), "a selected empty-scope profile must get no servers; got {resolved:?}");
+    }
+
+    #[test]
+    fn profile_servers_do_not_implicitly_add_animus() {
+        // A profile that names only `trading` must NOT silently gain the
+        // built-in animus server — it is scoped to exactly what it declared.
+        let resolved = resolve_server_names(&names(&["trading"]), &[], &[], true, false);
+        assert_eq!(resolved.iter().cloned().collect::<Vec<_>>(), vec!["trading".to_string()]);
+    }
+
+    #[test]
+    fn profile_listing_animus_keeps_it() {
+        let resolved = resolve_server_names(&names(&["animus", "trading"]), &[], &[], true, false);
+        assert_eq!(resolved.iter().cloned().collect::<Vec<_>>(), vec!["animus".to_string(), "trading".to_string()]);
+    }
+
+    #[test]
+    fn skill_servers_union_with_profile() {
+        let resolved = resolve_server_names(&names(&["trading"]), &names(&["analytics"]), &[], true, false);
+        assert_eq!(resolved.iter().cloned().collect::<Vec<_>>(), vec!["analytics".to_string(), "trading".to_string()]);
+    }
+
+    #[test]
+    fn extra_servers_add_to_the_set() {
+        let resolved = resolve_server_names(&names(&["trading"]), &[], &names(&["extra"]), true, false);
+        assert_eq!(resolved.iter().cloned().collect::<Vec<_>>(), vec!["extra".to_string(), "trading".to_string()]);
+    }
+
+    #[test]
+    fn no_animus_drops_the_builtin_from_plain_chat() {
+        // Plain chat would default to `animus`; --no-animus-mcp removes it,
+        // leaving only the explicit additions.
+        let resolved = resolve_server_names(&[], &[], &names(&["extra"]), false, true);
+        assert_eq!(resolved.iter().cloned().collect::<Vec<_>>(), vec!["extra".to_string()]);
+    }
+
+    #[test]
+    fn no_animus_drops_the_builtin_even_when_profile_lists_it() {
+        let resolved = resolve_server_names(&names(&["animus", "trading"]), &[], &[], true, true);
+        assert_eq!(resolved.iter().cloned().collect::<Vec<_>>(), vec!["trading".to_string()]);
+    }
+
+    #[test]
+    fn whitespace_only_names_are_ignored() {
+        // Plain run (scope not selected): blank profile/skill names are
+        // dropped, the baseline animus is added, the trimmed extra included.
+        let resolved = resolve_server_names(&names(&["  "]), &names(&[""]), &names(&["  trading  "]), false, false);
+        assert_eq!(resolved.iter().cloned().collect::<Vec<_>>(), vec!["animus".to_string(), "trading".to_string()]);
+    }
+
+    #[test]
+    fn unsupported_tool_injects_nothing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "definitely-not-a-real-tool",
+            "some-model",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(contract.is_none(), "an unknown/unsupported tool must inject no MCP contract");
+    }
+
+    #[test]
+    fn plain_chat_injects_only_the_animus_stdio_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP so a contract is built");
+
+        // The built-in animus server is wired as a stdio command.
+        let command = contract.pointer("/mcp/stdio/command").and_then(Value::as_str);
+        assert!(command.is_some(), "plain chat must wire the animus stdio server; contract: {contract}");
+        let args: Vec<&str> = contract
+            .pointer("/mcp/stdio/args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert!(args.contains(&"mcp"), "args: {args:?}");
+        assert!(args.contains(&"serve"), "args: {args:?}");
+        // No project/workflow servers were named, so none are injected.
+        assert!(
+            contract.pointer("/mcp/additional_servers").is_none(),
+            "plain chat must not inject any additional (project) servers"
+        );
+    }
+
+    #[test]
+    fn assembled_contract_strips_cli_launch_so_provider_keeps_its_own() {
+        // The assembler passes an EMPTY placeholder prompt to
+        // build_runtime_contract, so any `cli.launch` it built would launch
+        // the provider CLI with no prompt. The launch/session blocks must be
+        // stripped, leaving the mcp block plus harmless cli metadata.
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        assert!(
+            contract.pointer("/cli/launch").is_none(),
+            "cli.launch must be stripped so the provider keeps its own prompt-driven launch; contract: {contract}"
+        );
+        assert!(contract.pointer("/cli/session").is_none(), "cli.session must be stripped; contract: {contract}");
+        // The mcp block survives so the provider still wires the servers.
+        assert!(
+            contract.pointer("/mcp/stdio/command").is_some(),
+            "the mcp block must survive the cli strip; contract: {contract}"
+        );
+    }
+
+    #[test]
+    fn no_animus_mcp_skips_the_stdio_server() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            true,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        assert!(
+            contract.pointer("/mcp/stdio/command").is_none(),
+            "--no-animus-mcp must drop the built-in animus stdio server; contract: {contract}"
+        );
+    }
+
+    #[test]
+    fn unknown_named_server_errors_clearly() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true, // scope_selected
+            false,
+        )
+        .expect_err("an undefined server name must error");
+        let message = err.to_string();
+        assert!(
+            message.contains("unknown MCP server 'trading'"),
+            "error should name the unknown server clearly; got: {message}"
+        );
+    }
+
+    #[test]
+    fn selected_profile_with_no_servers_assembles_empty_mcp_block() {
+        // `--agent <profile-with-empty-mcp_servers>` must NOT fall back to
+        // the animus baseline: an empty scope is authoritative.
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[], // profile declares no servers
+            &[], // no skill servers
+            &[], // no --mcp-server
+            &AgentToolPolicy::default(),
+            true, // scope WAS selected (a --agent was passed)
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        assert!(
+            contract.pointer("/mcp/stdio/command").is_none(),
+            "a selected empty-scope profile must not wire the animus baseline; contract: {contract}"
+        );
+        assert!(
+            contract.pointer("/mcp/additional_servers").is_none(),
+            "a selected empty-scope profile must wire no additional servers; contract: {contract}"
+        );
+    }
+
+    #[test]
+    fn http_server_entry_drops_empty_command_for_mcp_json() {
+        // An HTTP-only project server has command:"" in the contract; the
+        // materialized .mcp.json entry must drop the empty command so a
+        // client does not try to launch an empty stdio process.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = project_with_http_servers(&tmp, &["trading"]);
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        materialize_mcp_json(&root, &contract).unwrap();
+        let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
+        let entry = on_disk.pointer("/mcpServers/trading").expect("trading entry present");
+        assert!(
+            entry.get("command").is_none(),
+            "an HTTP server's empty command must be dropped from .mcp.json; entry: {entry}"
+        );
+        assert_eq!(
+            entry.pointer("/url").and_then(Value::as_str),
+            Some("https://example.com/mcp/trading"),
+            "the HTTP url must be preserved; entry: {entry}"
+        );
+        assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("http"));
+    }
+
+    /// Write a project `.animus/config.json` whose `mcp_servers` map defines
+    /// the named HTTP servers (no command needed for HTTP transport), and
+    /// return the canonicalized project root the helper will see.
+    fn project_with_http_servers(tmp: &tempfile::TempDir, server_names: &[&str]) -> std::path::PathBuf {
+        let root = tmp.path().to_path_buf();
+        let mut config = protocol::Config::load_or_default(&root.to_string_lossy())
+            .expect("default config should load for a fresh temp project");
+        for name in server_names {
+            config.mcp_servers.insert(
+                name.to_string(),
+                protocol::ProjectMcpServerEntry {
+                    command: String::new(),
+                    args: Vec::new(),
+                    env: std::collections::BTreeMap::new(),
+                    assign_to: Vec::new(),
+                    transport: Some("http".to_string()),
+                    url: Some(format!("https://example.com/mcp/{name}")),
+                    oauth: None,
+                },
+            );
+        }
+        config.save(&root.to_string_lossy()).expect("config save should succeed");
+        // Match the canonicalization `Config::config_path` performs so the
+        // returned root resolves to the same path the helper reads.
+        root.canonicalize().unwrap_or(root)
+    }
+
+    fn additional_server_names(contract: &Value) -> Vec<String> {
+        contract
+            .pointer("/mcp/additional_servers")
+            .and_then(Value::as_object)
+            .map(|servers| servers.keys().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn trading_profile_gets_only_trading_not_every_project_server() {
+        // The project defines THREE servers, but a profile that names only
+        // `trading` must receive ONLY trading — proving the per-agent scope
+        // is the SELECTED set, not the whole project map.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = project_with_http_servers(&tmp, &["trading", "hubspot", "analytics"]);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+
+        let injected = additional_server_names(&contract);
+        assert_eq!(injected, vec!["trading".to_string()], "trading profile must get ONLY trading; got {injected:?}");
+        assert_eq!(
+            contract.pointer("/mcp/additional_servers/trading/url").and_then(Value::as_str),
+            Some("https://example.com/mcp/trading")
+        );
+    }
+
+    #[test]
+    fn marketing_profile_gets_its_own_servers_proving_per_agent_scoping() {
+        // A different profile in the SAME project gets a DIFFERENT slice —
+        // hubspot + analytics — never the trading server.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = project_with_http_servers(&tmp, &["trading", "hubspot", "analytics"]);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["hubspot", "analytics"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true, // scope_selected
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+
+        let mut injected = additional_server_names(&contract);
+        injected.sort();
+        assert_eq!(
+            injected,
+            vec!["analytics".to_string(), "hubspot".to_string()],
+            "marketing profile must get hubspot+analytics, never trading; got {injected:?}"
+        );
+    }
+
+    #[test]
+    fn extra_mcp_server_flag_adds_to_the_resolved_profile_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = project_with_http_servers(&tmp, &["trading", "extra"]);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &names(&["extra"]),
+            &AgentToolPolicy::default(),
+            true, // scope_selected
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+
+        let mut injected = additional_server_names(&contract);
+        injected.sort();
+        assert_eq!(injected, vec!["extra".to_string(), "trading".to_string()], "--mcp-server must ADD to the set");
+    }
+
+    #[test]
+    fn skill_servers_union_into_the_injected_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = project_with_http_servers(&tmp, &["trading", "analytics"]);
+
+        // Pass skill servers directly (skill resolution is tested at the
+        // resolve_server_names layer); this asserts the union reaches the
+        // injected contract.
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &names(&["analytics"]),
+            &[],
+            &AgentToolPolicy::default(),
+            true, // scope_selected
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+
+        let mut injected = additional_server_names(&contract);
+        injected.sort();
+        assert_eq!(injected, vec!["analytics".to_string(), "trading".to_string()]);
+    }
+
+    #[test]
+    fn materialize_mcp_json_writes_animus_server_in_claude_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        let written = materialize_mcp_json(tmp.path(), &contract).unwrap();
+        assert_eq!(written, vec!["animus".to_string()]);
+
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(tmp.path().join(".mcp.json")).unwrap()).unwrap();
+        assert!(
+            on_disk.pointer("/mcpServers/animus/command").and_then(Value::as_str).is_some(),
+            "animus server must be written in claude mcpServers shape; file: {on_disk}"
+        );
+        let args: Vec<&str> = on_disk
+            .pointer("/mcpServers/animus/args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert!(args.contains(&"mcp") && args.contains(&"serve"), "args: {args:?}");
+    }
+
+    #[test]
+    fn materialize_mcp_json_preserves_user_authored_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        // A user-authored .mcp.json with a custom server.
+        std::fs::write(
+            tmp.path().join(".mcp.json"),
+            r#"{"mcpServers":{"my-custom":{"command":"foo","args":["bar"]}}}"#,
+        )
+        .unwrap();
+
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        materialize_mcp_json(tmp.path(), &contract).unwrap();
+
+        let on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(tmp.path().join(".mcp.json")).unwrap()).unwrap();
+        // Both the user entry and the upserted animus entry are present.
+        assert_eq!(
+            on_disk.pointer("/mcpServers/my-custom/command").and_then(Value::as_str),
+            Some("foo"),
+            "user-authored entry must be preserved; file: {on_disk}"
+        );
+        assert!(
+            on_disk.pointer("/mcpServers/animus/command").and_then(Value::as_str).is_some(),
+            "animus entry must be upserted; file: {on_disk}"
+        );
+    }
+
+    #[test]
+    fn materialize_mcp_json_strips_resolved_authorization_header() {
+        // A manual-bearer HTTP server resolves an Authorization header into
+        // the contract; that live token must NOT be persisted to the
+        // cwd-local .mcp.json (which may sit inside the repo).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let bearer_env = "ANIMUS_TEST_ADHOC_BEARER";
+        std::env::set_var(bearer_env, "tok-secret-123");
+        let mut config = protocol::Config::load_or_default(&root.to_string_lossy()).unwrap();
+        config.mcp_servers.insert(
+            "trading".to_string(),
+            protocol::ProjectMcpServerEntry {
+                command: String::new(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                assign_to: Vec::new(),
+                transport: Some("http".to_string()),
+                url: Some("https://trading.example.com/mcp".to_string()),
+                oauth: Some(serde_json::json!({ "flow": "manual_bearer", "bearer_env": bearer_env })),
+            },
+        );
+        config.save(&root.to_string_lossy()).unwrap();
+        let root = root.canonicalize().unwrap_or(root);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        // The contract itself carries the bearer header (workflow-runner
+        // path needs it); the materialized file must NOT.
+        materialize_mcp_json(&root, &contract).unwrap();
+        // The bearer server requires a secret we refuse to persist, so it is
+        // omitted entirely; if no file was written at all that already proves
+        // the token never reached disk.
+        let on_disk = std::fs::read_to_string(root.join(".mcp.json")).unwrap_or_default();
+        std::env::remove_var(bearer_env);
+        assert!(
+            !on_disk.contains("tok-secret-123"),
+            "a resolved bearer token must never be persisted to .mcp.json; file: {on_disk}"
+        );
+        assert!(
+            !on_disk.to_ascii_lowercase().contains("authorization"),
+            "the Authorization header must never be persisted to .mcp.json; file: {on_disk}"
+        );
+        // The server is omitted (not written incomplete) because it needs a
+        // stripped secret to function.
+        if !on_disk.is_empty() {
+            let parsed: Value = serde_json::from_str(&on_disk).unwrap();
+            assert!(
+                parsed.pointer("/mcpServers/trading").is_none(),
+                "a bearer-auth server must be omitted from .mcp.json, not written unauthenticated; file: {on_disk}"
+            );
+        }
+    }
+
+    #[test]
+    fn materialize_mcp_json_replaces_prior_animus_servers_but_keeps_user_entries() {
+        // Run 1 materializes `trading`; run 2 (a marketing profile) must
+        // REPLACE it with hubspot/analytics — the trading server must not
+        // linger — while a user-authored entry survives both runs.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = project_with_http_servers(&tmp, &["trading", "hubspot", "analytics"]);
+        // Seed a user-authored entry.
+        std::fs::write(root.join(".mcp.json"), r#"{"mcpServers":{"my-custom":{"command":"foo"}}}"#).unwrap();
+
+        let run1 = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true, // scope_selected
+            true, // --no-animus-mcp so only `trading` is materialized
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        materialize_mcp_json(&root, &run1).unwrap();
+
+        let run2 = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["hubspot", "analytics"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true, // scope_selected
+            true,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        materialize_mcp_json(&root, &run2).unwrap();
+
+        let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
+        let servers = on_disk.pointer("/mcpServers").and_then(Value::as_object).unwrap();
+        assert!(servers.contains_key("hubspot") && servers.contains_key("analytics"), "run 2 servers present");
+        assert!(
+            !servers.contains_key("trading"),
+            "the prior run's trading server must be removed so per-agent scoping holds; servers: {servers:?}"
+        );
+        assert!(
+            servers.contains_key("my-custom"),
+            "user-authored entries must survive across runs; servers: {servers:?}"
+        );
+    }
+
+    #[test]
+    fn empty_resolved_set_removes_prior_animus_servers_but_keeps_user_entries() {
+        // After a run materializes `animus`, a later run with an EMPTY set
+        // (--no-animus-mcp, no other servers) must REMOVE the prior animus
+        // entry so the opt-out is honored, while preserving user entries.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        // Run 1: plain chat → materializes `animus`.
+        let run1 = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        materialize_mcp_json(&root, &run1).unwrap();
+        // Add a user-authored entry after run 1.
+        let mut on_disk: Value =
+            serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
+        on_disk["mcpServers"]["my-custom"] = serde_json::json!({ "command": "foo" });
+        std::fs::write(root.join(".mcp.json"), serde_json::to_string_pretty(&on_disk).unwrap()).unwrap();
+
+        // Run 2: --no-animus-mcp, no other servers → empty resolved set.
+        let run2 = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            true,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        let written = materialize_mcp_json(&root, &run2).unwrap();
+        assert!(written.is_empty(), "an empty resolved set writes no managed servers");
+
+        let after: Value = serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
+        assert!(
+            after.pointer("/mcpServers/animus").is_none(),
+            "the prior animus server must be removed when the new set is empty; file: {after}"
+        );
+        assert_eq!(
+            after.pointer("/mcpServers/my-custom/command").and_then(Value::as_str),
+            Some("foo"),
+            "user-authored entries must survive the cleanup; file: {after}"
+        );
+        assert!(after.get(ANIMUS_MANAGED_MARKER).is_none(), "marker should be cleared when nothing is managed");
+    }
+
+    #[test]
+    fn unknown_agent_profile_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let err = resolve_agent_scope(tmp.path(), "claude", Some("does-not-exist-profile"), None)
+            .expect_err("an unknown --agent profile must error");
+        assert!(
+            err.to_string().contains("unknown agent profile 'does-not-exist-profile'"),
+            "error should name the unknown profile; got: {err}"
+        );
+    }
+
+    #[test]
+    fn skill_adapter_mcp_servers_are_included_via_apply_skill_for_tool() {
+        // resolve_agent_scope applies the skill for the target tool so
+        // adapter-declared MCP servers are merged with top-level ones. This
+        // asserts the underlying merge that resolve_agent_scope relies on:
+        // a skill with `mcp_servers: [top]` and `adapters.claude.mcp_servers:
+        // [adapter]` yields BOTH when applied for `claude`.
+        let yaml = "name: with-adapter\n\
+                    mcp_servers:\n  - top-server\n\
+                    adapters:\n  claude:\n    mcp_servers:\n      - adapter-server\n";
+        let skill =
+            orchestrator_config::skill_definition::parse_skill_definition(yaml).expect("skill yaml should parse");
+        let applied = orchestrator_config::skill_definition::apply_skill_for_tool(&skill, "claude");
+        assert!(
+            applied.mcp_servers.contains(&"top-server".to_string()),
+            "top-level skill mcp_servers must be included; got {:?}",
+            applied.mcp_servers
+        );
+        assert!(
+            applied.mcp_servers.contains(&"adapter-server".to_string()),
+            "adapter-declared mcp_servers for the target tool must be included; got {:?}",
+            applied.mcp_servers
+        );
+    }
+
+    #[test]
+    fn known_agent_profile_resolves_its_servers() {
+        // The builtin agent runtime config defines a `default` profile.
+        let tmp = tempfile::tempdir().unwrap();
+        let scope = resolve_agent_scope(tmp.path(), "claude", Some("default"), None)
+            .expect("a known builtin profile must resolve without error");
+        // We don't assert specific servers (config-defined), only that the
+        // known profile path does not error.
+        let _ = scope.profile_servers;
+    }
+
+    #[test]
+    fn materialize_mcp_json_skips_servers_with_literal_env_secrets() {
+        // A stdio server whose env carries a literal (possibly resolved
+        // secret) value cannot be written to .mcp.json without either leaking
+        // the secret or launching the server without it — so the entry is
+        // omitted entirely rather than materialized incomplete.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let mut config = protocol::Config::load_or_default(&root.to_string_lossy()).unwrap();
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("API_KEY".to_string(), "super-secret-value".to_string());
+        config.mcp_servers.insert(
+            "trading".to_string(),
+            protocol::ProjectMcpServerEntry {
+                command: "trading-mcp".to_string(),
+                args: vec!["--serve".to_string()],
+                env,
+                assign_to: Vec::new(),
+                transport: Some("stdio".to_string()),
+                url: None,
+                oauth: None,
+            },
+        );
+        config.save(&root.to_string_lossy()).unwrap();
+        let root = root.canonicalize().unwrap_or(root);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        materialize_mcp_json(&root, &contract).unwrap();
+        let on_disk = std::fs::read_to_string(root.join(".mcp.json")).unwrap_or_default();
+        assert!(
+            !on_disk.contains("super-secret-value") && !on_disk.contains("API_KEY"),
+            "the resolved secret must never reach .mcp.json; file: {on_disk}"
+        );
+        // The whole entry is omitted (it would be unusable without its env).
+        if !on_disk.is_empty() {
+            let parsed: Value = serde_json::from_str(&on_disk).unwrap();
+            assert!(
+                parsed.pointer("/mcpServers/trading").is_none(),
+                "a server needing a stripped secret must be omitted, not written incomplete; file: {on_disk}"
+            );
+        }
+    }
+
+    #[test]
+    fn materialize_mcp_json_preserves_placeholder_only_env_servers() {
+        // A server whose env is entirely `${VAR}` placeholders carries no
+        // resolved secret, so it IS materialized with its env intact (the
+        // provider CLI expands the placeholders itself at launch).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let mut config = protocol::Config::load_or_default(&root.to_string_lossy()).unwrap();
+        let mut env = std::collections::BTreeMap::new();
+        env.insert("PLACEHOLDER_KEY".to_string(), "${SOME_VAR}".to_string());
+        config.mcp_servers.insert(
+            "trading".to_string(),
+            protocol::ProjectMcpServerEntry {
+                command: "trading-mcp".to_string(),
+                args: Vec::new(),
+                env,
+                assign_to: Vec::new(),
+                transport: Some("stdio".to_string()),
+                url: None,
+                oauth: None,
+            },
+        );
+        config.save(&root.to_string_lossy()).unwrap();
+        let root = root.canonicalize().unwrap_or(root);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        materialize_mcp_json(&root, &contract).unwrap();
+        let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            on_disk.pointer("/mcpServers/trading/env/PLACEHOLDER_KEY").and_then(Value::as_str),
+            Some("${SOME_VAR}"),
+            "a placeholder-only env server must be materialized with its env intact; file: {on_disk}"
+        );
+        assert_eq!(on_disk.pointer("/mcpServers/trading/command").and_then(Value::as_str), Some("trading-mcp"));
+    }
+
+    #[test]
+    fn materialize_mcp_json_does_not_overwrite_user_authored_colliding_entry() {
+        // A user-authored `.mcp.json` with an `animus` entry (no Animus
+        // marker) must NOT be clobbered just by starting a chat.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        std::fs::write(
+            root.join(".mcp.json"),
+            r#"{"mcpServers":{"animus":{"command":"user-owned-animus","args":["custom"]}}}"#,
+        )
+        .unwrap();
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        let written = materialize_mcp_json(&root, &contract).unwrap();
+        assert!(written.is_empty(), "a colliding user entry must not be reported as written");
+
+        let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(root.join(".mcp.json")).unwrap()).unwrap();
+        assert_eq!(
+            on_disk.pointer("/mcpServers/animus/command").and_then(Value::as_str),
+            Some("user-owned-animus"),
+            "the user's animus entry must be preserved, not overwritten; file: {on_disk}"
+        );
+    }
+
+    #[test]
+    fn agent_tool_policy_is_injected_into_the_contract() {
+        // A profile's deny list (e.g. denying animus.daemon.stop) must reach
+        // /mcp/tool_policy so the ad-hoc agent honors the restriction.
+        let tmp = tempfile::tempdir().unwrap();
+        let policy = AgentToolPolicy {
+            allow: vec!["animus.subject.*".to_string()],
+            deny: vec!["animus.daemon.stop".to_string()],
+        };
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &policy,
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+
+        let deny: Vec<&str> = contract
+            .pointer("/mcp/tool_policy/deny")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert!(
+            deny.contains(&"animus.daemon.stop"),
+            "the profile deny list must reach /mcp/tool_policy/deny; contract: {contract}"
+        );
+        let allow: Vec<&str> = contract
+            .pointer("/mcp/tool_policy/allow")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert!(allow.contains(&"animus.subject.*"), "the allow list must reach /mcp/tool_policy/allow");
+    }
+
+    #[test]
+    fn empty_tool_policy_leaves_no_tool_policy_block() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        assert!(
+            contract.pointer("/mcp/tool_policy").is_none(),
+            "an empty policy must not add a tool_policy block; contract: {contract}"
+        );
+    }
+
+    #[test]
+    fn plain_chat_contract_enables_mcp_enforcement_for_stdio() {
+        // Providers that consume the runtime contract's mcp block skip native
+        // MCP setup unless enforce_only is set when a stdio command is
+        // injected. Assert the assembler flips it (mirrors the IPC path).
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        assert_eq!(
+            contract.pointer("/mcp/enforce_only").and_then(Value::as_bool),
+            Some(true),
+            "stdio injection must enable enforce_only; contract: {contract}"
+        );
+        let prefixes =
+            contract.pointer("/mcp/allowed_tool_prefixes").and_then(Value::as_array).expect("prefixes present");
+        assert!(!prefixes.is_empty(), "allowed_tool_prefixes must be seeded; contract: {contract}");
+    }
+
+    #[test]
+    fn materialize_mcp_json_leaves_malformed_file_untouched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let malformed = "{ this is not valid json ]";
+        std::fs::write(tmp.path().join(".mcp.json"), malformed).unwrap();
+
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        let written = materialize_mcp_json(tmp.path(), &contract).unwrap();
+        assert!(written.is_empty(), "a malformed .mcp.json must be left untouched, not merged");
+        assert_eq!(
+            std::fs::read_to_string(tmp.path().join(".mcp.json")).unwrap(),
+            malformed,
+            "malformed file content must be preserved verbatim"
+        );
+    }
+
+    #[test]
+    fn oauth_authorization_code_server_is_rewritten_to_the_proxy() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let mut config = protocol::Config::load_or_default(&root.to_string_lossy()).unwrap();
+        config.mcp_servers.insert(
+            "linear".to_string(),
+            protocol::ProjectMcpServerEntry {
+                command: String::new(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                assign_to: Vec::new(),
+                transport: Some("http".to_string()),
+                url: Some("https://mcp.linear.app/mcp".to_string()),
+                oauth: Some(serde_json::json!({ "flow": "authorization_code", "scopes": ["read"] })),
+            },
+        );
+        config.save(&root.to_string_lossy()).unwrap();
+        let root = root.canonicalize().unwrap_or(root);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["linear"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+
+        let entry = contract.pointer("/mcp/additional_servers/linear").expect("linear server should be injected");
+        // OAuth authorization_code servers are repointed at the local
+        // animus-mcp-proxy stdio bridge rather than the upstream URL.
+        assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("stdio"));
+        assert!(entry.get("url").is_none(), "proxy entry must not carry the upstream url");
+        let command = entry.pointer("/command").and_then(Value::as_str).expect("proxy command");
+        assert!(command.contains("animus-mcp-proxy"), "expected the proxy binary; got {command}");
+    }
+}
