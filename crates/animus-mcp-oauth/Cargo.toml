@@ -34,6 +34,7 @@ rmcp = { version = "1.7", features = [
 ] }
 
 [dev-dependencies]
+protocol = { path = "../protocol", features = ["test-utils"] }
 tempfile = "3"
 axum = "0.8"
 http = "1"
