@@ -4,6 +4,43 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.12] - 2026-06-09
+
+**Agents reach Animus + project MCP servers, author skills, and tune
+thinking effort — plus MCP OAuth.** This release makes the agent surface
+genuinely usable: an ad-hoc agent now gets the MCP servers its profile/skill
+declares, can create skills, and OAuth-protected MCP servers work through a
+local proxy.
+
+### Added
+- **Per-agent MCP wiring** — `animus chat` and `animus agent run` now give an
+  agent the MCP servers its **profile/skill declares** (a trading agent gets
+  trading servers, a marketing agent gets marketing servers), resolved by name
+  against the project `mcp_servers` map. Flags: `--agent`, `--skill`,
+  `--mcp-server <name>` (add more), `--no-animus-mcp` (drop the built-in).
+  Materializes the per-agent set into the cwd `.mcp.json` the CLI tool reads,
+  with secrets stripped. OAuth servers route through `animus-mcp-proxy`.
+- **MCP OAuth** — `animus mcp auth/auth-status/auth-logout` + `animus-mcp-proxy`
+  (stdio bridge), built on rmcp 1.7's auth engine with OS-keychain token
+  storage. Discovery + DCR + auth_code/PKCE + loopback callback. Least-privilege
+  scope default + preview/confirm before the browser + `--dry-run`/`--yes`.
+- **`animus.skill.create` / `animus.skill.update`** MCP tools — agents author
+  project-scoped skills to `.animus/skills/<name>.yaml` (validated, overwrite-
+  guarded, round-trip-verified). Joins the existing `skill.list/get/search`.
+- **`--reasoning-effort low|medium|high`** on `animus agent run` + `chat send`
+  (and a `reasoning_effort` agent/phase config field) — codex
+  `-c model_reasoning_effort`, claude `--effort`.
+- **`animus chat search <query>`** — grep conversation transcripts across the
+  scope (case-insensitive, `--limit`, `--case-sensitive`).
+
+### Fixed
+- Chat `tool_result` streams the full tool **output** + correct tool name.
+- MCP built-in tool count published in the docs synced to 78.
+
+### Provider compatibility (run `animus plugin update`)
+- codex / opencode / gemini providers stream tool/command activity correctly
+  against current CLI versions; codex/claude pick up `--reasoning-effort`.
+
 ## [0.5.11] - 2026-06-08
 
 **Chat streaming fidelity + the full provider matrix.** `animus chat send
