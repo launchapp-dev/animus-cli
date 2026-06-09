@@ -10,4 +10,8 @@ pub(crate) enum MetricsCommand {
     Disable,
     /// Force-send any buffered events to the configured endpoint. Debug helper.
     Flush,
+    /// Sweep every repo-scoped metrics dir for orphaned/oversized `flushing-*`
+    /// snapshots and oversized `pending.jsonl`, reclaiming disk. Safe to run any
+    /// time — guards against the runaway buffer that once grew to multi-GB.
+    Cleanup,
 }

@@ -97,7 +97,7 @@ Key points:
 - `logs/events.jsonl` stores redacted structured runtime events under the
   scoped state root; daemon events are still mirrored here when a
   `log_storage_backend` plugin is active
-- `metrics/pending.jsonl` buffers opt-in anonymous usage events, and `metrics/last-send.txt` records the last successful flush timestamp
+- `metrics/pending.jsonl` buffers opt-in anonymous usage events, `metrics/flushing-*.jsonl` holds rotated in-flight batches during a flush, and `metrics/last-send.txt` records the last successful flush timestamp
 - `runner/config.json` stores the runner auth token for the resolved runner
   scope, and `runner/agent-runner.sock` is the default Unix socket path used
   by scoped runner clients

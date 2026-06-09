@@ -268,6 +268,55 @@ fn read_events_from(path: &Path) -> Vec<Event> {
     events
 }
 
+/// What a [`cleanup_metrics_dir`] sweep reclaimed from one metrics directory.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct CleanupReport {
+    pub flushing_removed: usize,
+    pub bytes_reclaimed: u64,
+    pub pending_truncated: bool,
+}
+
+/// Proactively reclaim a metrics directory: delete `flushing-*` snapshots that
+/// are oversized (pathological) or older than `stale_after_secs` (orphaned by a
+/// dead flush), and drop an oversized `pending.jsonl`. This is the manual
+/// counterpart to the opportunistic guard in [`recover_stale_flushing`] — it
+/// runs without needing a flush and sweeps regardless of the current project.
+pub(crate) fn cleanup_metrics_dir(dir: &Path, stale_after_secs: u64) -> CleanupReport {
+    let mut report = CleanupReport::default();
+    let now = std::time::SystemTime::now();
+    if let Ok(read) = fs::read_dir(dir) {
+        for entry in read.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            if !(name.starts_with("flushing-") && path.extension().is_some_and(|e| e.eq_ignore_ascii_case("jsonl"))) {
+                continue;
+            }
+            let len = file_len(&path);
+            let oversized = len > MAX_METRICS_FILE_BYTES;
+            let stale = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| now.duration_since(t).ok())
+                .map(|age| age.as_secs() >= stale_after_secs)
+                .unwrap_or(false);
+            if (oversized || stale) && fs::remove_file(&path).is_ok() {
+                report.flushing_removed += 1;
+                report.bytes_reclaimed += len;
+            }
+        }
+    }
+    let pending = dir.join(PENDING_FILE);
+    let pending_len = file_len(&pending);
+    if pending_len > MAX_PENDING_BYTES && fs::remove_file(&pending).is_ok() {
+        report.bytes_reclaimed += pending_len;
+        report.pending_truncated = true;
+    }
+    report
+}
+
 /// Removes a previously-rotated flushing file after a successful send.
 pub(crate) fn delete_rotated(rotated: &Path) {
     let _ = fs::remove_file(rotated);

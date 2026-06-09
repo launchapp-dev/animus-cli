@@ -271,7 +271,8 @@ animus
 │   ├── status               Show enabled flag, install_id, pending event count, last-send timestamp
 │   ├── enable               Opt in to anonymous metrics (skips the first-run prompt re-show)
 │   ├── disable              Opt out and drop any buffered events
-│   └── flush                Force-send buffered events to the configured endpoint (debug)
+│   ├── flush                Force-send buffered events to the configured endpoint (debug)
+│   └── cleanup              Sweep all scopes for orphaned/oversized flushing snapshots + oversized buffers
 │
 ├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
 │   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders

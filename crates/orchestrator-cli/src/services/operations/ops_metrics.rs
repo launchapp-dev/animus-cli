@@ -6,10 +6,16 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::services::metrics::recorder::{
-    last_send_timestamp, pending_event_count, read_metrics_block_without_creating,
+    cleanup_metrics_dir, last_send_timestamp, pending_event_count, read_metrics_block_without_creating,
 };
 use crate::services::metrics::{flush_pending, FlushOutcome};
 use crate::{print_value, MetricsCommand};
+
+/// Remove `flushing-*` snapshots older than this many seconds during a
+/// `metrics cleanup` sweep. A real flush completes in well under a second
+/// (the CLI-exit timeout caps it at 200ms), so 10 minutes is a wide margin
+/// that only catches files orphaned by a dead process.
+const CLEANUP_STALE_AFTER_SECS: u64 = 600;
 
 #[derive(Debug, Serialize)]
 struct MetricsStatus {
@@ -39,6 +45,16 @@ struct MetricsFlushResult {
     last_status: Option<u16>,
 }
 
+#[derive(Debug, Serialize)]
+struct MetricsCleanupResult {
+    action: &'static str,
+    scopes_swept: usize,
+    flushing_removed: usize,
+    bytes_reclaimed: u64,
+    pending_dropped: usize,
+    message: String,
+}
+
 pub(crate) async fn handle_metrics(command: MetricsCommand, project_root: &str, json: bool) -> Result<()> {
     let project_path = Path::new(project_root);
     match command {
@@ -46,7 +62,47 @@ pub(crate) async fn handle_metrics(command: MetricsCommand, project_root: &str, 
         MetricsCommand::Enable => handle_enable(project_path, json),
         MetricsCommand::Disable => handle_disable(project_path, json),
         MetricsCommand::Flush => handle_flush(project_path, json).await,
+        MetricsCommand::Cleanup => handle_cleanup(json),
     }
+}
+
+/// Sweep every `~/.animus/<scope>/metrics/` dir for orphaned/oversized flushing
+/// snapshots and oversized pending buffers. Operates across all scopes (not
+/// just the current project) because a runaway buffer in any scope is read by
+/// every command in that scope.
+fn handle_cleanup(json: bool) -> Result<()> {
+    let scopes_root = Config::global_config_dir();
+    let mut scopes_swept = 0usize;
+    let mut flushing_removed = 0usize;
+    let mut bytes_reclaimed = 0u64;
+    let mut pending_dropped = 0usize;
+    if let Ok(read) = std::fs::read_dir(&scopes_root) {
+        for entry in read.flatten() {
+            let metrics_dir = entry.path().join("metrics");
+            if !metrics_dir.is_dir() {
+                continue;
+            }
+            scopes_swept += 1;
+            let report = cleanup_metrics_dir(&metrics_dir, CLEANUP_STALE_AFTER_SECS);
+            flushing_removed += report.flushing_removed;
+            bytes_reclaimed += report.bytes_reclaimed;
+            if report.pending_truncated {
+                pending_dropped += 1;
+            }
+        }
+    }
+    let result = MetricsCleanupResult {
+        action: "cleanup",
+        scopes_swept,
+        flushing_removed,
+        bytes_reclaimed,
+        pending_dropped,
+        message: format!(
+            "swept {scopes_swept} scope(s); removed {flushing_removed} flushing file(s), \
+             dropped {pending_dropped} oversized buffer(s), reclaimed {bytes_reclaimed} bytes"
+        ),
+    };
+    print_value(result, json)
 }
 
 fn handle_status(project_root: &Path, json: bool) -> Result<()> {

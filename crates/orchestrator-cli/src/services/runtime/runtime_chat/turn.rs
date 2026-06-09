@@ -424,9 +424,17 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
                 }
             }
             SessionEvent::Thinking { text: t } => {
-                // Collapse consecutive thinking frames into one indicator.
-                if !matches!(blocks.last(), Some(TurnBlock::Thinking)) {
-                    blocks.push(TurnBlock::Thinking);
+                // Accumulate consecutive thinking frames into one block so the
+                // reasoning text is preserved (and reloadable), not just an
+                // indicator.
+                match blocks.last_mut() {
+                    Some(TurnBlock::Thinking { text }) => {
+                        if !text.is_empty() && !t.is_empty() {
+                            text.push('\n');
+                        }
+                        text.push_str(&t);
+                    }
+                    _ => blocks.push(TurnBlock::Thinking { text: t.clone() }),
                 }
                 sink.emit(&ChatStreamEvent::Thinking { text: t })?;
             }

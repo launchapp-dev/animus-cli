@@ -53,7 +53,12 @@ pub(crate) enum TurnBlock {
     Text {
         text: String,
     },
-    Thinking,
+    Thinking {
+        /// Accumulated reasoning text for this thinking block. Defaults to empty
+        /// so a legacy `{"kind":"thinking"}` line (no text) still deserializes.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        text: String,
+    },
     ToolCall {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         tool_name: Option<String>,
@@ -489,6 +494,7 @@ mod tests {
             usage: None,
             cost_usd: None,
             blocks: vec![
+                TurnBlock::Thinking { text: "let me reason".into() },
                 TurnBlock::Text { text: "looking".into() },
                 TurnBlock::ToolCall {
                     tool_name: Some("Read".into()),
