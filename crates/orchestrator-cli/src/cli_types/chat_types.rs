@@ -23,6 +23,8 @@ pub(crate) enum ChatCommand {
     Delete(ChatDeleteArgs),
     /// Export a conversation transcript as Markdown or JSON.
     Export(ChatExportArgs),
+    /// Search conversation transcripts across the scope.
+    Search(ChatSearchArgs),
 }
 
 /// Output format for `animus chat export`.
@@ -110,4 +112,17 @@ pub(crate) struct ChatExportArgs {
     /// Write to this file instead of stdout.
     #[arg(long, value_name = "PATH")]
     pub(crate) output: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ChatSearchArgs {
+    /// Text to find in conversation transcripts.
+    #[arg(value_name = "QUERY")]
+    pub(crate) query: String,
+    /// Maximum number of matches to return.
+    #[arg(long, default_value_t = 20)]
+    pub(crate) limit: usize,
+    /// Match case-sensitively (default is case-insensitive).
+    #[arg(long)]
+    pub(crate) case_sensitive: bool,
 }

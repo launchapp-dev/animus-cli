@@ -56,7 +56,8 @@ animus
 │   ├── list                 List conversations, most-recently-updated first
 │   ├── rename               Set or clear a conversation's title (`--title`; empty clears)
 │   ├── delete               Permanently delete a conversation
-│   └── export               Export a transcript (`--format markdown|json`, `--output <path>`)
+│   ├── export               Export a transcript (`--format markdown|json`, `--output <path>`)
+│   └── search               Grep conversation transcripts across the scope (`--limit`, `--case-sensitive`)
 │
 ├── project                  Manage project registration and metadata
 │   ├── list                 List registered projects

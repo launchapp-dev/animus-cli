@@ -12,8 +12,9 @@ use anyhow::Context;
 use crate::shared::{canonicalize_cwd_in_project, print_ok, print_value};
 use crate::{
     ChatCommand, ChatDeleteArgs, ChatExportArgs, ChatExportFormat, ChatGetArgs, ChatNewArgs, ChatRenameArgs,
-    ChatSendArgs,
+    ChatSearchArgs, ChatSendArgs,
 };
+use serde::Serialize;
 
 pub(crate) mod sink;
 pub(crate) mod store;
@@ -32,7 +33,96 @@ pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: 
         ChatCommand::Rename(args) => handle_chat_rename(args, project_root, json),
         ChatCommand::Delete(args) => handle_chat_delete(args, project_root, json),
         ChatCommand::Export(args) => handle_chat_export(args, project_root, json),
+        ChatCommand::Search(args) => handle_chat_search(args, project_root, json),
     }
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+struct SearchMatch {
+    conversation_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    role: &'static str,
+    seq: u64,
+    snippet: String,
+}
+
+fn role_str(role: ChatRole) -> &'static str {
+    match role {
+        ChatRole::User => "user",
+        ChatRole::Assistant => "assistant",
+    }
+}
+
+/// Return a trimmed, ellipsized preview window around the first match of
+/// `query` in `content`, or `None` when there is no match. Case-insensitive
+/// matching maps positions via char-count, which is exact for ASCII content
+/// (the common case) and at worst drifts a few chars in the preview for exotic
+/// Unicode case-folding — never panics (slice bounds are clamped).
+fn snippet_around(content: &str, query: &str, case_insensitive: bool) -> Option<String> {
+    if query.is_empty() {
+        return None;
+    }
+    let (hay, needle) = if case_insensitive {
+        (content.to_lowercase(), query.to_lowercase())
+    } else {
+        (content.to_string(), query.to_string())
+    };
+    let byte_pos = hay.find(&needle)?;
+    let char_idx = hay[..byte_pos].chars().count();
+    let chars: Vec<char> = content.chars().collect();
+    const PAD: usize = 30;
+    let start = char_idx.saturating_sub(PAD);
+    let end = (char_idx + query.chars().count() + PAD).min(chars.len());
+    let core: String = chars[start..end].iter().collect();
+    let mut s = core.split_whitespace().collect::<Vec<_>>().join(" ");
+    if start > 0 {
+        s.insert(0, '…');
+    }
+    if end < chars.len() {
+        s.push('…');
+    }
+    Some(s)
+}
+
+/// Scan every conversation (newest-first) for `query`, collecting up to `limit`
+/// matches with a preview snippet.
+fn search_conversations(
+    store: &impl ConversationStore,
+    query: &str,
+    case_insensitive: bool,
+    limit: usize,
+) -> Result<Vec<SearchMatch>> {
+    let mut out = Vec::new();
+    if query.is_empty() {
+        return Ok(out);
+    }
+    for summary in store.list()? {
+        if out.len() >= limit {
+            break;
+        }
+        for m in store.load_messages(&summary.id)? {
+            if out.len() >= limit {
+                break;
+            }
+            if let Some(snippet) = snippet_around(&m.content, query, case_insensitive) {
+                out.push(SearchMatch {
+                    conversation_id: summary.id.clone(),
+                    title: summary.title.clone(),
+                    role: role_str(m.role),
+                    seq: m.seq,
+                    snippet,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn handle_chat_search(args: ChatSearchArgs, project_root: &str, json: bool) -> Result<()> {
+    let store = FileConversationStore::for_project(Path::new(project_root))?;
+    let matches = search_conversations(&store, &args.query, !args.case_sensitive, args.limit)?;
+    print_value(matches, json)
 }
 
 /// Render a conversation transcript as Markdown — title, a metadata line, then
@@ -309,5 +399,45 @@ mod export_tests {
 
         // Missing conversation → no error.
         apply_conversation_title(&store, "missing", Some("x")).unwrap();
+    }
+
+    #[test]
+    fn snippet_around_matches_and_ellipsizes() {
+        assert!(snippet_around("hello AUTH world", "auth", true).unwrap().to_lowercase().contains("auth"));
+        assert_eq!(snippet_around("hello world", "xyz", true), None);
+        assert_eq!(snippet_around("hello", "", true), None);
+        // case-sensitive miss
+        assert_eq!(snippet_around("AUTH", "auth", false), None);
+        // ellipsis on both ends when the match is in the middle of a long body
+        let long = format!("{} needle {}", "a".repeat(100), "b".repeat(100));
+        let snip = snippet_around(&long, "needle", true).unwrap();
+        assert!(snip.starts_with('…') && snip.ends_with('…'), "{snip}");
+        assert!(snip.contains("needle"));
+    }
+
+    #[test]
+    fn search_conversations_finds_limits_and_respects_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileConversationStore::with_root_for_test(tmp.path().join("chat"));
+        store.create(Some("conv-s".into())).unwrap();
+        store.append_message("conv-s", &msg(ChatRole::User, "Please fix the AUTH bug", vec![])).unwrap();
+        store.append_message("conv-s", &msg(ChatRole::Assistant, "done, no issues", vec![])).unwrap();
+
+        // case-insensitive hit on the user message
+        let m = search_conversations(&store, "auth", true, 20).unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].conversation_id, "conv-s");
+        assert_eq!(m[0].role, "user");
+        assert!(m[0].snippet.to_lowercase().contains("auth"), "{}", m[0].snippet);
+
+        // case-sensitive "auth" does not match "AUTH"
+        assert!(search_conversations(&store, "auth", false, 20).unwrap().is_empty());
+
+        // empty query → no matches
+        assert!(search_conversations(&store, "", true, 20).unwrap().is_empty());
+
+        // limit is respected
+        store.append_message("conv-s", &msg(ChatRole::User, "auth again", vec![])).unwrap();
+        assert_eq!(search_conversations(&store, "auth", true, 1).unwrap().len(), 1);
     }
 }
