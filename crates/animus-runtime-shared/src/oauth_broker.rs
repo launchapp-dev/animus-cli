@@ -425,12 +425,22 @@ fn lookup_env(env: &dyn EnvLookup, name: &str, server: &str) -> Result<String> {
 }
 
 fn read_cache(path: &Path) -> Result<Option<CachedToken>> {
-    match fs::read_to_string(path) {
-        Ok(contents) => {
-            let parsed: CachedToken = serde_json::from_str(&contents)
-                .with_context(|| format!("failed to parse OAuth cache at {}", path.display()))?;
-            Ok(Some(parsed))
-        }
+    match fs::read(path) {
+        Ok(contents) => match serde_json::from_slice::<CachedToken>(&contents) {
+            Ok(parsed) => Ok(Some(parsed)),
+            Err(err) => {
+                // A corrupt cache file (truncated write, hand-edit, disk
+                // fault) must degrade to a fresh fetch, not brick MCP auth
+                // until the file is hand-deleted.
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "OAuth cache file is corrupt; treating as cache miss and removing it"
+                );
+                let _ = fs::remove_file(path);
+                Ok(None)
+            }
+        },
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(err) => Err(anyhow!("failed to read OAuth cache at {}: {}", path.display(), err)),
     }
@@ -751,6 +761,31 @@ mod tests {
             "second call should send the rotated refresh token, got form={:?}",
             last.form
         );
+    }
+
+    #[test]
+    fn corrupt_cache_file_is_treated_as_miss_and_removed() {
+        let env = StaticEnv(BTreeMap::from([
+            ("EXAMPLE_CLIENT_ID".to_string(), "id".to_string()),
+            ("EXAMPLE_CLIENT_SECRET".to_string(), "secret".to_string()),
+        ]));
+        let client = MockClient::new(vec![Ok(TokenFetchResponse {
+            access_token: "fresh".to_string(),
+            expires_in: Some(3600),
+            refresh_token: None,
+        })]);
+        let temp = tempdir().expect("tempdir");
+        let cache_path = temp.path().join(cache_filename_for_server("svc"));
+        fs::write(&cache_path, "{\"access_token\":\"trunc").expect("write truncated cache");
+
+        let token = resolve_token("svc", &cc_config(), temp.path(), &env, &client)
+            .expect("corrupt cache must fall back to a fresh fetch");
+        assert_eq!(token.access_token, "fresh");
+        assert_eq!(client.call_count(), 1, "corrupt cache must force a network fetch");
+
+        let raw = fs::read_to_string(&cache_path).expect("fresh token should be re-cached");
+        let cached: CachedToken = serde_json::from_str(&raw).expect("re-written cache must parse");
+        assert_eq!(cached.access_token, "fresh");
     }
 
     #[test]
