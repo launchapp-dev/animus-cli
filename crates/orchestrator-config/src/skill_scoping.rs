@@ -522,6 +522,77 @@ pub fn project_skills_dir(project_root: &Path) -> PathBuf {
     project_root.join(".animus").join("config").join("skill_definitions")
 }
 
+/// Validate that a skill name is a safe single-segment slug: lowercase ASCII
+/// alphanumerics plus `-`/`_`, no path separators, no traversal. Returns the
+/// trimmed name on success. Used to gate authoring writes so a caller can
+/// never escape the project skill directory.
+pub fn validate_skill_slug(name: &str) -> Result<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("skill name must not be empty");
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") {
+        anyhow::bail!("skill name must not contain path separators or '..': {trimmed:?}");
+    }
+    let valid = trimmed.chars().all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_');
+    if !valid {
+        anyhow::bail!("skill name must be a slug (lowercase ASCII letters, digits, '-', '_'): {trimmed:?}");
+    }
+    Ok(trimmed.to_string())
+}
+
+/// Where a project-scoped authored skill is written as a single
+/// full-fidelity YAML `SkillDefinition`. Lives under [`project_skills_dir`]
+/// (the YAML tier that `load_skill_sources` reads), keyed by the skill slug.
+pub fn project_skill_yaml_path(project_root: &Path, name: &str) -> PathBuf {
+    project_skills_dir(project_root).join(format!("{name}.yaml"))
+}
+
+/// Outcome of a project-skill authoring write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillWriteOutcome {
+    Created,
+    Updated,
+}
+
+/// Serialize a [`SkillDefinition`] to YAML and write it as a project-scoped
+/// skill at `.animus/config/skill_definitions/<name>.yaml`.
+///
+/// The definition is validated (slug name + structural rules) before writing,
+/// and the serialized YAML is re-parsed to guarantee it round-trips through the
+/// skill parser — a malformed skill is never left on disk. When `overwrite` is
+/// `false` and a skill file already exists at the target path, this fails
+/// without touching the file.
+///
+/// This is the single serialization path for authored project skills; callers
+/// (CLI and MCP) must not hand-roll YAML.
+pub fn write_project_skill_yaml(
+    project_root: &Path,
+    definition: &SkillDefinition,
+    overwrite: bool,
+) -> Result<(PathBuf, SkillWriteOutcome)> {
+    let name = validate_skill_slug(&definition.name)?;
+    validate_skill_definition(definition)?;
+
+    let path = project_skill_yaml_path(project_root, &name);
+    let existed = path.exists();
+    if existed && !overwrite {
+        anyhow::bail!("skill '{name}' already exists at {} (pass overwrite=true to replace it)", path.display());
+    }
+
+    let yaml = serde_yaml::to_string(definition)
+        .map_err(|e| anyhow::anyhow!("failed to serialize skill '{name}' to YAML: {e}"))?;
+    crate::skill_definition::parse_skill_definition(&yaml)
+        .map_err(|e| anyhow::anyhow!("authored skill '{name}' failed round-trip validation: {e}"))?;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|e| anyhow::anyhow!("failed to create {}: {e}", parent.display()))?;
+    }
+    fs::write(&path, yaml.as_bytes()).map_err(|e| anyhow::anyhow!("failed to write {}: {e}", path.display()))?;
+
+    Ok((path, if existed { SkillWriteOutcome::Updated } else { SkillWriteOutcome::Created }))
+}
+
 pub fn project_markdown_skills_dir(project_root: &Path) -> PathBuf {
     project_root.join(".animus").join("skills")
 }
@@ -1795,5 +1866,55 @@ Body.
             })
             .expect("project-scoped codex source should be present");
         assert!(codex.skills.contains_key("rust-tips"));
+    }
+
+    #[test]
+    fn validate_skill_slug_accepts_and_rejects() {
+        assert_eq!(validate_skill_slug("  my-skill_1 ").unwrap(), "my-skill_1");
+        for bad in ["", "  ", "Upper", "has space", "../escape", "a/b", "a\\b", "dot.dot"] {
+            assert!(validate_skill_slug(bad).is_err(), "expected {bad:?} to be rejected");
+        }
+    }
+
+    #[test]
+    fn write_project_skill_yaml_round_trips_through_loader() {
+        let tmp = TempDir::new().unwrap();
+        let definition: SkillDefinition = serde_yaml::from_str(
+            "name: authored\ndescription: authored skill\ntool_policy:\n  allow: [Read]\nmcp_servers: [animus]\ntags: [t1]\n",
+        )
+        .unwrap();
+
+        let (path, outcome) = write_project_skill_yaml(tmp.path(), &definition, false).unwrap();
+        assert_eq!(outcome, SkillWriteOutcome::Created);
+        assert_eq!(path, project_skills_dir(tmp.path()).join("authored.yaml"));
+
+        let loaded = load_skills_from_directory(&project_skills_dir(tmp.path())).unwrap();
+        let got = loaded.get("authored").expect("authored skill should load");
+        assert_eq!(got.description, "authored skill");
+        assert_eq!(got.mcp_servers, vec!["animus"]);
+        assert_eq!(got.tool_policy.as_ref().map(|p| p.allow.clone()), Some(vec!["Read".to_string()]));
+    }
+
+    #[test]
+    fn write_project_skill_yaml_overwrite_guard() {
+        let tmp = TempDir::new().unwrap();
+        let definition: SkillDefinition = serde_yaml::from_str("name: guard\ndescription: v1\n").unwrap();
+        write_project_skill_yaml(tmp.path(), &definition, false).unwrap();
+
+        let updated: SkillDefinition = serde_yaml::from_str("name: guard\ndescription: v2\n").unwrap();
+        assert!(write_project_skill_yaml(tmp.path(), &updated, false).is_err());
+
+        let (_, outcome) = write_project_skill_yaml(tmp.path(), &updated, true).unwrap();
+        assert_eq!(outcome, SkillWriteOutcome::Updated);
+        let loaded = load_skills_from_directory(&project_skills_dir(tmp.path())).unwrap();
+        assert_eq!(loaded.get("guard").unwrap().description, "v2");
+    }
+
+    #[test]
+    fn write_project_skill_yaml_rejects_bad_slug() {
+        let tmp = TempDir::new().unwrap();
+        let definition: SkillDefinition = serde_yaml::from_str("name: \"../escape\"\ndescription: x\n").unwrap();
+        assert!(write_project_skill_yaml(tmp.path(), &definition, true).is_err());
+        assert!(!tmp.path().join("escape.yaml").exists());
     }
 }

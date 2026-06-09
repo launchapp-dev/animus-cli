@@ -553,8 +553,7 @@ impl AoMcpServer {
         }
         if let Some(category) = category {
             let trimmed = category.trim();
-            definition.category =
-                if trimmed.is_empty() { None } else { Some(parse_skill_category(trimmed)?) };
+            definition.category = if trimmed.is_empty() { None } else { Some(parse_skill_category(trimmed)?) };
         }
         if let Some(capabilities) = capabilities {
             definition.capabilities = capabilities;
@@ -666,7 +665,8 @@ mod skill_tool_tests {
 
         let mut input = create_input("my-reviewer", "Reviews PRs", "You review pull requests.");
         input.tags = vec!["review".to_string(), "quality".to_string()];
-        input.tool_policy = Some(SkillToolPolicyInput { allow: vec!["Read".to_string()], deny: vec!["Write".to_string()] });
+        input.tool_policy =
+            Some(SkillToolPolicyInput { allow: vec!["Read".to_string()], deny: vec!["Write".to_string()] });
         input.model = Some("claude-sonnet-4-6".to_string());
         input.mcp_servers = vec!["animus".to_string()];
         input.category = Some("review".to_string());
@@ -738,10 +738,7 @@ mod skill_tool_tests {
         let project = TempDir::new().expect("project tempdir");
         let server = new_ao_mcp_server(&project_root_for(&project));
 
-        server
-            .ao_skill_create(Parameters(create_input("dup", "first", "first body")))
-            .await
-            .expect("first create");
+        server.ao_skill_create(Parameters(create_input("dup", "first", "first body"))).await.expect("first create");
 
         let err = server
             .ao_skill_create(Parameters(create_input("dup", "second", "second body")))
