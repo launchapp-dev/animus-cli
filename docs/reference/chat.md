@@ -59,11 +59,17 @@ animus chat rename <id> --title <title>
 
 # Permanently delete a conversation
 animus chat delete <id>
+
+# Export a conversation transcript as Markdown or JSON
+animus chat export <id> [--format markdown|json] [--output <path>]
 ```
 
 `animus chat rename` trims surrounding whitespace from `--title`; passing an
 empty string clears the stored title. `animus chat delete` is idempotent: a
 missing conversation is treated as already deleted rather than an error.
+`animus chat export` defaults to Markdown, can emit the full `{ meta, messages
+}` JSON shape, and writes raw transcript content to stdout unless `--output` is
+supplied.
 
 ### Streaming and output modes
 

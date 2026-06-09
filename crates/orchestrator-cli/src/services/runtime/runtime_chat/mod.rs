@@ -7,15 +7,20 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Result};
 
+use anyhow::Context;
+
 use crate::shared::{canonicalize_cwd_in_project, print_ok, print_value};
-use crate::{ChatCommand, ChatDeleteArgs, ChatGetArgs, ChatNewArgs, ChatRenameArgs, ChatSendArgs};
+use crate::{
+    ChatCommand, ChatDeleteArgs, ChatExportArgs, ChatExportFormat, ChatGetArgs, ChatNewArgs, ChatRenameArgs,
+    ChatSendArgs,
+};
 
 pub(crate) mod sink;
 pub(crate) mod store;
 pub(crate) mod turn;
 
 use sink::{ChatStreamSink, JsonlStdoutSink, NullSink, TextStdoutSink};
-use store::{ConversationStore, FileConversationStore};
+use store::{ChatMessage, ChatRole, ConversationMeta, ConversationStore, FileConversationStore, TurnBlock};
 use turn::{run_turn, ResolverTurnProducer, TurnContext};
 
 pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: bool) -> Result<()> {
@@ -26,6 +31,80 @@ pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: 
         ChatCommand::List => handle_chat_list(project_root, json),
         ChatCommand::Rename(args) => handle_chat_rename(args, project_root, json),
         ChatCommand::Delete(args) => handle_chat_delete(args, project_root, json),
+        ChatCommand::Export(args) => handle_chat_export(args, project_root, json),
+    }
+}
+
+/// Render a conversation transcript as Markdown — title, a metadata line, then
+/// each turn with a role heading, its prose, and a compact "Tools" summary.
+fn render_markdown(meta: &ConversationMeta, messages: &[ChatMessage]) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    let title = meta.title.clone().unwrap_or_else(|| meta.id.clone());
+    let tool = meta.tool.as_deref().unwrap_or("?");
+    let model = meta.model.as_deref().unwrap_or("?");
+    let _ = writeln!(out, "# {title}\n");
+    let _ = writeln!(
+        out,
+        "> tool: {tool} · model: {model} · {} messages · updated {}\n",
+        meta.message_count, meta.updated_at
+    );
+    for m in messages {
+        match m.role {
+            ChatRole::User => {
+                let _ = writeln!(out, "### 🧑 You\n");
+            }
+            ChatRole::Assistant => {
+                let t = m.tool.as_deref().unwrap_or(tool);
+                let md = m.model.as_deref().unwrap_or(model);
+                let _ = writeln!(out, "### 🤖 Assistant · {t}/{md}\n");
+            }
+        }
+        let _ = writeln!(out, "{}\n", m.content.trim());
+        let tools: Vec<&str> = m
+            .blocks
+            .iter()
+            .filter_map(|b| match b {
+                TurnBlock::ToolCall { tool_name, .. } => tool_name.as_deref(),
+                _ => None,
+            })
+            .collect();
+        if !tools.is_empty() {
+            let _ = writeln!(out, "_Tools: {}_\n", tools.join(", "));
+        }
+    }
+    out
+}
+
+fn handle_chat_export(args: ChatExportArgs, project_root: &str, json: bool) -> Result<()> {
+    let store = FileConversationStore::for_project(Path::new(project_root))?;
+    let meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
+    let messages = store.load_messages(&args.id)?;
+    let (content, format_label) = match args.format {
+        ChatExportFormat::Json => {
+            (serde_json::to_string_pretty(&serde_json::json!({ "meta": meta, "messages": messages }))?, "json")
+        }
+        ChatExportFormat::Markdown => (render_markdown(&meta, &messages), "markdown"),
+    };
+    match args.output.as_deref() {
+        Some(path) => {
+            std::fs::write(path, &content).with_context(|| format!("writing {path}"))?;
+            print_value(
+                serde_json::json!({
+                    "conversation_id": meta.id,
+                    "format": format_label,
+                    "output": path,
+                    "bytes": content.len(),
+                }),
+                json,
+            )
+        }
+        None => {
+            // Raw transcript to stdout — the content IS the output here, so we
+            // bypass the `animus.cli.v1` envelope regardless of `--json`.
+            println!("{content}");
+            Ok(())
+        }
     }
 }
 
@@ -133,4 +212,64 @@ fn handle_chat_list(project_root: &str, json: bool) -> Result<()> {
     let store = FileConversationStore::for_project(Path::new(project_root))?;
     let summaries = store.list()?;
     print_value(summaries, json)
+}
+
+#[cfg(test)]
+mod export_tests {
+    use super::*;
+
+    fn sample_meta() -> ConversationMeta {
+        ConversationMeta {
+            id: "conv-x".into(),
+            tool: Some("codex".into()),
+            model: Some("gpt-5.5".into()),
+            session_id: None,
+            title: Some("My Chat".into()),
+            created_at: "2026-06-09T00:00:00Z".into(),
+            updated_at: "2026-06-09T01:00:00Z".into(),
+            message_count: 2,
+        }
+    }
+
+    fn msg(role: ChatRole, content: &str, blocks: Vec<TurnBlock>) -> ChatMessage {
+        ChatMessage {
+            seq: 0,
+            role,
+            content: content.into(),
+            recorded_at: "2026-06-09T00:30:00Z".into(),
+            tool: matches!(role, ChatRole::Assistant).then(|| "codex".to_string()),
+            model: matches!(role, ChatRole::Assistant).then(|| "gpt-5.5".to_string()),
+            usage: None,
+            cost_usd: None,
+            blocks,
+        }
+    }
+
+    #[test]
+    fn markdown_renders_title_meta_roles_and_tools() {
+        let messages = vec![
+            msg(ChatRole::User, "hello", vec![]),
+            msg(
+                ChatRole::Assistant,
+                "hi there",
+                vec![TurnBlock::ToolCall { tool_name: Some("Read".into()), arguments: None }],
+            ),
+        ];
+        let md = render_markdown(&sample_meta(), &messages);
+        assert!(md.contains("# My Chat"), "{md}");
+        assert!(md.contains("tool: codex · model: gpt-5.5 · 2 messages"), "{md}");
+        assert!(md.contains("### 🧑 You"), "{md}");
+        assert!(md.contains("hello"), "{md}");
+        assert!(md.contains("### 🤖 Assistant · codex/gpt-5.5"), "{md}");
+        assert!(md.contains("hi there"), "{md}");
+        assert!(md.contains("_Tools: Read_"), "{md}");
+    }
+
+    #[test]
+    fn markdown_falls_back_to_id_when_untitled() {
+        let mut meta = sample_meta();
+        meta.title = None;
+        let md = render_markdown(&meta, &[]);
+        assert!(md.contains("# conv-x"), "{md}");
+    }
 }

@@ -1,4 +1,4 @@
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 
 use super::ReasoningEffortArg;
 
@@ -21,6 +21,17 @@ pub(crate) enum ChatCommand {
     Rename(ChatRenameArgs),
     /// Permanently delete a conversation.
     Delete(ChatDeleteArgs),
+    /// Export a conversation transcript as Markdown or JSON.
+    Export(ChatExportArgs),
+}
+
+/// Output format for `animus chat export`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum ChatExportFormat {
+    /// Human-readable Markdown transcript.
+    Markdown,
+    /// Full `{ meta, messages }` JSON (same shape as `chat get`).
+    Json,
 }
 
 #[derive(Debug, Args)]
@@ -82,4 +93,17 @@ pub(crate) struct ChatDeleteArgs {
     /// Conversation id to delete.
     #[arg(value_name = "ID")]
     pub(crate) id: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ChatExportArgs {
+    /// Conversation id to export.
+    #[arg(value_name = "ID")]
+    pub(crate) id: String,
+    /// Output format.
+    #[arg(long, value_enum, default_value = "markdown")]
+    pub(crate) format: ChatExportFormat,
+    /// Write to this file instead of stdout.
+    #[arg(long, value_name = "PATH")]
+    pub(crate) output: Option<String>,
 }

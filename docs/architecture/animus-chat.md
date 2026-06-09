@@ -344,12 +344,16 @@ animus chat get <conversation-id>
 animus chat list
 animus chat rename <conversation-id> --title <title>
 animus chat delete <conversation-id>
+animus chat export <conversation-id> [--format markdown|json] [--output <path>]
 ```
 
 `--json` selects JSONL event output, `--stream` selects plain-text incremental
 output, and omitting both prints the final assistant reply after persistence.
 `rename` trims the supplied title and clears it when the value is empty;
 `delete` removes the conversation directory and is idempotent for missing ids.
+`export` renders a portable transcript as Markdown by default or the full
+stored `{ meta, messages }` JSON, printing raw content to stdout unless an
+output path is supplied.
 
 ## HTTP surface (transport plugin)
 
