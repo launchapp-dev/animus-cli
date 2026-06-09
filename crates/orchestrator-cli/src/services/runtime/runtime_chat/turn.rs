@@ -153,6 +153,9 @@ pub(crate) struct TurnContext<'a> {
     pub user_message: &'a str,
     pub cwd: PathBuf,
     pub project_root: PathBuf,
+    /// Provider reasoning/thinking effort (`low`/`medium`/`high`), threaded
+    /// into `extras.reasoning_effort` for the provider transport to map.
+    pub reasoning_effort: Option<&'a str>,
 }
 
 /// Run a single conversation turn.
@@ -316,13 +319,21 @@ async fn drive_once(
     //      through the backend's resume RPC (and mirrored into extras so a
     //      provider that only honors the param fallback still resumes).
     //      !resumed => prompt is full history + no session_id anywhere.
-    let (prompt, extras, resume_id) = if resumed {
+    let (prompt, mut extras, resume_id) = if resumed {
         let session_id =
             resume_session_id.ok_or_else(|| anyhow!("internal: resume requested without a session_id"))?.to_string();
         (ctx.user_message.to_string(), json!({ "session_id": session_id.clone() }), Some(session_id))
     } else {
         (render_history_prompt(prior_history, ctx.user_message), Value::Object(Default::default()), None)
     };
+
+    // Provider reasoning/thinking effort rides on extras for the transport
+    // to map to its own flag; applies to both the resume and replay paths.
+    if let Some(level) = ctx.reasoning_effort {
+        if let Value::Object(map) = &mut extras {
+            map.insert("reasoning_effort".to_string(), Value::String(level.to_string()));
+        }
+    }
 
     let request = SessionRequest {
         tool: ctx.tool.to_string(),
@@ -617,7 +628,18 @@ mod tests {
             user_message: msg,
             cwd: tmp.path().to_path_buf(),
             project_root: tmp.path().to_path_buf(),
+            reasoning_effort: None,
         }
+    }
+
+    fn ctx_with_effort<'a>(
+        id: &'a str,
+        tool: &'a str,
+        msg: &'a str,
+        tmp: &tempfile::TempDir,
+        effort: &'a str,
+    ) -> TurnContext<'a> {
+        TurnContext { reasoning_effort: Some(effort), ..ctx(id, tool, msg, tmp) }
     }
 
     #[tokio::test]
@@ -647,6 +669,53 @@ mod tests {
             _ => None,
         });
         assert_eq!(started, Some(false));
+    }
+
+    #[tokio::test]
+    async fn reasoning_effort_absent_leaves_extras_without_the_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let producer = MockProducer::new(vec![text_turn("hi", "sess-1")]);
+        let mut sink = CapturingSink::new();
+
+        run_turn(&producer, &store, &mut sink, ctx("c1", "claude", "hello", &tmp)).await.unwrap();
+
+        let reqs = producer.requests();
+        assert!(
+            reqs[0].extras.get("reasoning_effort").is_none(),
+            "absent --reasoning-effort must not inject the key; extras: {}",
+            reqs[0].extras
+        );
+    }
+
+    #[tokio::test]
+    async fn reasoning_effort_threaded_into_extras_on_replay_and_resume() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), text_turn("a2", "sess-1")]);
+
+        let mut sink = CapturingSink::new();
+        run_turn(&producer, &store, &mut sink, ctx_with_effort("c1", "claude", "q1", &tmp, "high")).await.unwrap();
+        let mut sink2 = CapturingSink::new();
+        run_turn(&producer, &store, &mut sink2, ctx_with_effort("c1", "claude", "q2", &tmp, "high")).await.unwrap();
+
+        let reqs = producer.requests();
+        assert_eq!(reqs.len(), 2);
+        // Replay (first) turn carries the effort.
+        assert_eq!(
+            reqs[0].extras.get("reasoning_effort").and_then(Value::as_str),
+            Some("high"),
+            "first turn (replay path) must carry reasoning_effort"
+        );
+        // Resume (second) turn carries BOTH the session_id and the effort.
+        assert_eq!(reqs[1].extras.get("session_id").and_then(Value::as_str), Some("sess-1"));
+        assert_eq!(
+            reqs[1].extras.get("reasoning_effort").and_then(Value::as_str),
+            Some("high"),
+            "second turn (resume path) must carry reasoning_effort alongside session_id"
+        );
     }
 
     #[tokio::test]

@@ -232,6 +232,7 @@ mod tests {
             tool: "claude".to_string(),
             model: Some("claude-sonnet-4-6".to_string()),
             prompt: Some("test".to_string()),
+            reasoning_effort: None,
             cwd: None,
             context_json: None,
             timeout_secs: None,

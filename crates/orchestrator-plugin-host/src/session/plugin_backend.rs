@@ -296,7 +296,15 @@ impl PluginSessionBackend {
         } else if let Some(sid) = extras.get("session_id") {
             params["session_id"] = sid.clone();
         }
-        for key in ["system_prompt", "claude_profile", "mcp_servers", "tools", "response_schema", "runtime_contract"] {
+        for key in [
+            "system_prompt",
+            "claude_profile",
+            "mcp_servers",
+            "tools",
+            "response_schema",
+            "runtime_contract",
+            "reasoning_effort",
+        ] {
             if let Some(value) = extras.get(key) {
                 params[key] = value.clone();
             }
@@ -1402,6 +1410,41 @@ mod tests {
             data: None,
         });
         assert_eq!(classify(&plugin_side), RetryDecision::StructuredError);
+    }
+
+    /// `reasoning_effort` placed on `SessionRequest.extras` must reach the
+    /// plugin as a top-level RPC param. The provider plugins flatten unknown
+    /// top-level params into `AgentRunRequest.extras` and forward them onto
+    /// the session backend's `extras`, where the codex/claude transports read
+    /// `extras.reasoning_effort`. If `build_run_params` drops the key, the
+    /// `--reasoning-effort` flag is a silent no-op for plugin-backed runs.
+    #[test]
+    fn build_run_params_forwards_reasoning_effort() {
+        let backend = fresh_backend();
+        let request = SessionRequest {
+            tool: "codex".to_string(),
+            model: "gpt-5-codex".to_string(),
+            prompt: "hi".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({ "reasoning_effort": "high" }),
+        };
+        let params = backend.build_run_params(&request, None);
+        assert_eq!(
+            params.get("reasoning_effort").and_then(Value::as_str),
+            Some("high"),
+            "reasoning_effort must be forwarded as a top-level RPC param"
+        );
+
+        // Absent => the key must not appear at all (regression: every provider
+        // behaves exactly as before when no effort is requested).
+        let bare = SessionRequest { extras: json!({}), ..request };
+        let bare_params = backend.build_run_params(&bare, None);
+        assert!(bare_params.get("reasoning_effort").is_none(), "absent reasoning_effort must not inject the key");
     }
 
     /// The plugin runtime serializes the provider's own session_id under the

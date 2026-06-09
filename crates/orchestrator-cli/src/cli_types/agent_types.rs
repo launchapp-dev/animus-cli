@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
-use super::{parse_positive_u64, RunnerScopeArg};
+use super::{parse_positive_u64, ReasoningEffortArg, RunnerScopeArg};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentCommand {
@@ -117,6 +117,13 @@ pub(crate) struct AgentRunArgs {
     pub(crate) model: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Prompt text to send to the agent.")]
     pub(crate) prompt: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "LEVEL",
+        help = "Reasoning/thinking effort for the provider: low, medium, or high. Overrides any configured value."
+    )]
+    pub(crate) reasoning_effort: Option<ReasoningEffortArg>,
     #[arg(long, value_name = "PATH", help = "Working directory for the run. Must resolve inside the project root.")]
     pub(crate) cwd: Option<String>,
     #[arg(

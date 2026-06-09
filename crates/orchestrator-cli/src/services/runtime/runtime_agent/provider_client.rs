@@ -106,6 +106,14 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         }
     }
 
+    // Reasoning effort: the `--reasoning-effort` flag wins over any
+    // `reasoning_effort` forwarded through `--context-json`. Stored as a
+    // lowercase string that the provider transports map to their own flag
+    // (codex `-c model_reasoning_effort`, claude `--effort`).
+    if let Some(level) = args.reasoning_effort {
+        extras.insert("reasoning_effort".to_string(), Value::String(level.as_str().to_string()));
+    }
+
     // `--runtime-contract-json` wins over a `runtime_contract` key
     // forwarded through `--context-json` (matches the deleted
     // sidecar's precedence). Cache the parsed value so we can read the

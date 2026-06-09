@@ -88,6 +88,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         user_message: &args.message,
         cwd,
         project_root: project_root_path.clone(),
+        reasoning_effort: args.reasoning_effort.map(|level| level.as_str()),
     };
 
     let assistant_seq = run_turn(&producer, &store, sink.as_mut(), ctx).await?;

@@ -306,6 +306,7 @@ agents:
 | `model` | string | no | LLM model identifier |
 | `tool` | string | no | CLI tool to invoke (claude, codex, gemini, etc.) |
 | `tool_profile` | string | no | Named global Claude profile to resolve into launch env; only valid for `claude` |
+| `reasoning_effort` | string | no | Provider reasoning/thinking effort: `low`, `medium`, or `high`. Mapped per provider (codex `-c model_reasoning_effort="<level>"`, claude `--effort <level>`); other providers ignore it. Validated at compile time |
 | `mcp_servers` | string[] | no | Names of `mcp_servers` entries this agent can use |
 | `skills` | string[] | no | Skill identifiers to attach. Skills resolve from built-ins, `.animus/config/skill_definitions/*.yml`, and Markdown skills such as `.animus/skills/<name>/SKILL.md` or `.animus/skills/<name>.md` |
 | `capabilities` | map\<string, bool\> | no | Capability flags |
@@ -398,6 +399,15 @@ Phase `skills` are validated during config load. At runtime they can inject prom
 When `runtime.tool_profile` is set, the effective tool must resolve to
 `claude`. Animus looks up the named profile in the user's global config and injects
 its environment into the Claude launch contract.
+
+The phase `runtime` block accepts the same provider knobs as an agent
+profile — including `reasoning_effort` (`low`/`medium`/`high`). Resolution
+cascades **phase runtime → agent profile**: a non-empty `runtime.reasoning_effort`
+on the phase wins over the agent profile's value, mirroring how `model` and
+`tool` cascade. The resolved level maps per provider (codex
+`-c model_reasoning_effort`, claude `--effort`) and is validated at compile
+time. The `animus agent run` / `animus chat send` `--reasoning-effort` flag
+overrides both.
 
 ### evals (experimental — runtime enforcement deferred)
 

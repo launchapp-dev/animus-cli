@@ -1,5 +1,7 @@
 use clap::{Args, Subcommand};
 
+use super::ReasoningEffortArg;
+
 /// `animus chat` — hold multi-turn conversations with a provider tool.
 ///
 /// Continuity is owned by the wrapped CLI tool's native session; Animus
@@ -49,6 +51,9 @@ pub(crate) struct ChatSendArgs {
     /// Stream assistant output incrementally as it arrives.
     #[arg(long)]
     pub(crate) stream: bool,
+    /// Reasoning/thinking effort for the provider: low, medium, or high.
+    #[arg(long, value_enum, value_name = "LEVEL")]
+    pub(crate) reasoning_effort: Option<ReasoningEffortArg>,
 }
 
 #[derive(Debug, Args)]

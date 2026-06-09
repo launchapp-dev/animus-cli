@@ -1979,6 +1979,14 @@ fn validate_phase_definition(
                 phase_id
             ));
         }
+
+        if runtime.reasoning_effort.as_deref().is_some_and(|value| !is_valid_reasoning_effort(value)) {
+            return Err(anyhow!(
+                "phases['{}'].runtime.reasoning_effort must be one of low, medium, high (got '{}')",
+                phase_id,
+                runtime.reasoning_effort.as_deref().unwrap_or_default()
+            ));
+        }
     }
 
     if let Some(evals) = definition.evals.as_ref() {
@@ -2119,6 +2127,16 @@ fn backfill_agent_system_prompts(config: &mut AgentRuntimeConfig) {
     }
 }
 
+/// Reasoning/thinking effort levels accepted by the runtime config and the
+/// `--reasoning-effort` CLI flag. Provider transports map these to their own
+/// flags (codex `model_reasoning_effort`, claude `--effort`).
+pub const REASONING_EFFORT_LEVELS: &[&str] = &["low", "medium", "high"];
+
+fn is_valid_reasoning_effort(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    REASONING_EFFORT_LEVELS.contains(&normalized.as_str())
+}
+
 fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
     fn is_valid_codex_config_override(value: &str) -> bool {
         let Some((key, expr)) = value.split_once('=') else {
@@ -2189,6 +2207,14 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
 
         if profile.codex_config_overrides.iter().any(|value| !is_valid_codex_config_override(value.trim())) {
             return Err(anyhow!("agents['{}'].codex_config_overrides values must use key=value syntax", agent_id));
+        }
+
+        if profile.reasoning_effort.as_deref().is_some_and(|value| !is_valid_reasoning_effort(value)) {
+            return Err(anyhow!(
+                "agents['{}'].reasoning_effort must be one of low, medium, high (got '{}')",
+                agent_id,
+                profile.reasoning_effort.as_deref().unwrap_or_default()
+            ));
         }
 
         if profile.role.as_deref().is_some_and(|value| value.trim().is_empty()) {
@@ -4110,6 +4136,34 @@ phases:
         let err = validate_agent_runtime_config(&config).expect_err("empty checks must fail");
         let msg = format!("{:#}", err);
         assert!(msg.contains("must declare at least one check"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_rejects_invalid_agent_reasoning_effort() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("default").expect("profile exists");
+        profile.reasoning_effort = Some("turbo".to_string());
+        let err = validate_agent_runtime_config(&config).expect_err("invalid effort must fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("reasoning_effort must be one of"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_accepts_valid_agent_reasoning_effort() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("default").expect("profile exists");
+        profile.reasoning_effort = Some("High".to_string());
+        validate_agent_runtime_config(&config).expect("case-insensitive valid effort must pass");
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_rejects_invalid_phase_reasoning_effort() {
+        let mut config = builtin_agent_runtime_config();
+        let phase = config.phases.get_mut("implementation").expect("phase exists");
+        phase.runtime = Some(AgentRuntimeOverrides { reasoning_effort: Some("max".to_string()), ..Default::default() });
+        let err = validate_agent_runtime_config(&config).expect_err("invalid phase effort must fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("runtime.reasoning_effort must be one of"), "got: {msg}");
     }
 
     #[test]
