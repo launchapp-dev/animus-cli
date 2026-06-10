@@ -119,11 +119,25 @@ impl CredentialStore for KeychainCredentialStore {
             .get(&self.key)
             .map_err(|err| AuthError::InternalError(format!("keychain read failed: {err}")))?;
         match raw {
-            Some(json) => {
-                let creds: StoredCredentials = serde_json::from_str(&json)
-                    .map_err(|err| AuthError::InternalError(format!("stored credential parse failed: {err}")))?;
-                Ok(Some(creds))
-            }
+            Some(json) => match serde_json::from_str::<StoredCredentials>(&json) {
+                Ok(creds) => Ok(Some(creds)),
+                Err(err) => {
+                    // A corrupt/unparseable keychain entry must degrade to
+                    // "no stored credentials", not an InternalError: an
+                    // error here bricks proxy connect, `mcp auth-status`,
+                    // AND `mcp auth-logout` (which loads before clearing) —
+                    // the repair commands would be blocked by the very
+                    // corruption they repair. The entry is left in place
+                    // (never auto-deleted: the parse failure may be version
+                    // skew, and `save`/`clear` overwrite or remove it).
+                    tracing::warn!(
+                        key = %self.key,
+                        error = %err,
+                        "stored MCP OAuth credentials are unparseable; treating as unauthenticated (run `animus mcp auth` to re-authenticate)"
+                    );
+                    Ok(None)
+                }
+            },
             None => Ok(None),
         }
     }
@@ -234,5 +248,19 @@ mod tests {
 
         store.clear().await.unwrap();
         assert!(store.load().await.unwrap().is_none(), "cleared store loads None");
+    }
+
+    #[tokio::test]
+    async fn corrupt_stored_credentials_load_as_none_and_clear_still_removes_them() {
+        let secrets: Arc<dyn SecretStore> = Arc::new(MockSecretStore::new());
+        let store =
+            KeychainCredentialStore::new(secrets.clone(), "github", "default", "https://api.githubcopilot.com/mcp/");
+        secrets.set(store.key(), "{\"client_id\": truncated-garbage").expect("seed corrupt entry");
+
+        let loaded = store.load().await.expect("corrupt credentials must not error the load path");
+        assert!(loaded.is_none(), "corrupt credentials must read as unauthenticated");
+
+        store.clear().await.expect("logout must clear an unparseable entry");
+        assert!(secrets.get(store.key()).expect("keychain read").is_none(), "corrupt entry must be removed");
     }
 }
