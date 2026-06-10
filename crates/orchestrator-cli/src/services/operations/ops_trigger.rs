@@ -84,6 +84,7 @@ pub(crate) async fn handle_trigger(command: TriggerCommand, project_root: &str, 
 
             // Directly queue the event to TriggerState (bypasses HTTP server,
             // useful for local testing without running the daemon web server).
+            let _state_lock = orchestrator_core::lock_trigger_state(Path::new(project_root))?;
             let mut state = orchestrator_core::load_trigger_state(Path::new(project_root)).unwrap_or_default();
             let run_state = state.triggers.entry(trigger_id.clone()).or_default();
 

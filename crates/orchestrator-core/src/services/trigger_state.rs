@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 const TRIGGER_STATE_FILE_NAME: &str = "trigger-state.json";
+const TRIGGER_STATE_LOCK_FILE_NAME: &str = "trigger-state.lock";
 
 /// Persisted state for all configured event triggers.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -58,6 +59,30 @@ fn trigger_state_path(project_root: &Path) -> PathBuf {
     scoped_root.join("state").join(TRIGGER_STATE_FILE_NAME)
 }
 
+/// Acquire an exclusive cross-process/cross-task lock guarding
+/// load→mutate→save cycles on `trigger-state.json`. Hold the returned
+/// `File` for the full read-modify-write; the lock releases on drop.
+/// Multiple writers (trigger plugin event router, tick-loop trigger
+/// dispatch, `animus trigger fire`) otherwise interleave and silently
+/// lose or duplicate pending events.
+pub fn lock_trigger_state(project_root: &Path) -> Result<std::fs::File> {
+    let lock_path = trigger_state_path(project_root).with_file_name(TRIGGER_STATE_LOCK_FILE_NAME);
+    lock_file_exclusive(&lock_path)
+}
+
+fn lock_file_exclusive(lock_path: &Path) -> Result<std::fs::File> {
+    use fs2::FileExt;
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create trigger state directory {}", parent.display()))?;
+    }
+    let file = std::fs::File::create(lock_path)
+        .with_context(|| format!("failed to create trigger state lock file {}", lock_path.display()))?;
+    file.lock_exclusive()
+        .with_context(|| format!("failed to acquire trigger state lock at {}", lock_path.display()))?;
+    Ok(file)
+}
+
 pub fn load_trigger_state(project_root: &Path) -> Result<TriggerState> {
     let path = trigger_state_path(project_root);
     if !path.exists() {
@@ -93,6 +118,33 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let loaded = load_trigger_state(temp.path()).expect("load default state");
         assert!(loaded.triggers.is_empty());
+    }
+
+    #[test]
+    fn lock_trigger_state_is_exclusive() {
+        use fs2::FileExt;
+        let temp = tempdir().expect("tempdir");
+        // Test the path-parameterized seam directly: lock_trigger_state's
+        // path derivation goes through HOME, which other tests in this crate
+        // swap process-wide.
+        let lock_path = temp.path().join(super::TRIGGER_STATE_LOCK_FILE_NAME);
+        let held = lock_file_exclusive(&lock_path).expect("first lock acquires");
+
+        let contender = std::fs::OpenOptions::new().write(true).open(&lock_path).expect("open lock file");
+        assert!(contender.try_lock_exclusive().is_err(), "second lock must be refused while the first is held");
+
+        drop(held);
+        // Release-on-close is not instantaneous under parallel test load on
+        // macOS; only eventual acquirability is the contract.
+        let mut reacquired = contender.try_lock_exclusive();
+        for _ in 0..100 {
+            if reacquired.is_ok() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            reacquired = contender.try_lock_exclusive();
+        }
+        assert!(reacquired.is_ok(), "lock must be acquirable after the holder drops");
     }
 
     #[test]

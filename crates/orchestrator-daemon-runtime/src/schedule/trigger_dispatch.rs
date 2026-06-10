@@ -53,6 +53,17 @@ impl TriggerDispatch {
             return Vec::new();
         }
 
+        let _state_lock = match orchestrator_core::lock_trigger_state(std::path::Path::new(project_root)) {
+            Ok(lock) => lock,
+            Err(error) => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    error = %error,
+                    "failed to lock trigger state; deferring trigger processing to next tick"
+                );
+                return Vec::new();
+            }
+        };
         let mut state = orchestrator_core::load_trigger_state(std::path::Path::new(project_root)).unwrap_or_default();
         let mut outcomes = Vec::new();
 

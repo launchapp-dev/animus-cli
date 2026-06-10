@@ -61,44 +61,12 @@ pub async fn dispatch_queued_entries_via_runner(
                         entry_id = %entry.entry_id,
                         "queue/lease returned duplicate subject within batch; releasing extra entry back to pending"
                     );
-                    if let Err(error) = plugin_clients::call_queue_release_pending(
+                    release_leased_entry_to_pending(
                         project_root_path,
                         &entry.entry_id,
                         "within-batch-duplicate-subject",
                     )
-                    .await
-                    {
-                        // Older queue plugins (pre-v0.2.0 of animus-queue-default) don't
-                        // implement queue/release_pending — they'd return method-not-found
-                        // and we'd strand the entry as Assigned forever. Fall back to
-                        // completion(CANCELLED) so old plugins at least move the entry to
-                        // a terminal state. This trades silently dropping legitimate
-                        // queued work (the codex-v1 P1 we just fixed) for not stranding
-                        // the queue on old plugins; preflight already requires queue
-                        // v0.2.0+ for v0.5 so production should rarely hit this path.
-                        warn!(
-                            actor = protocol::ACTOR_DAEMON,
-                            entry_id = %entry.entry_id,
-                            error = %error,
-                            "queue plugin queue/release_pending failed; falling back to completion(cancelled)"
-                        );
-                        let req = QueueCompletionRequest {
-                            entry_id: entry.entry_id.clone(),
-                            status: queue_proto::completion_status::CANCELLED.to_string(),
-                            workflow_ref: None,
-                            workflow_id: None,
-                        };
-                        if let Err(completion_error) =
-                            plugin_clients::call_queue_completion(project_root_path, &req).await
-                        {
-                            warn!(
-                                actor = protocol::ACTOR_DAEMON,
-                                entry_id = %entry.entry_id,
-                                error = %completion_error,
-                                "queue plugin queue/completion fallback (within-batch duplicate) also failed; entry may be stranded as Assigned"
-                            );
-                        }
-                    }
+                    .await;
                     continue;
                 }
                 plugin_owned_subject_keys.insert(subject_key);
@@ -137,7 +105,10 @@ pub async fn dispatch_queued_entries_via_runner(
         }
     }
 
-    let mut notice_sink = CliDispatchNoticeSink { plugin_owned_subject_keys: plugin_owned_subject_keys.clone() };
+    let mut notice_sink = CliDispatchNoticeSink {
+        plugin_owned_subject_keys: plugin_owned_subject_keys.clone(),
+        hard_failed_subject_keys: std::collections::HashSet::new(),
+    };
     let summary = execute_dispatch_plan_via_runner(root, process_manager, &planned_starts, limit, &mut notice_sink);
 
     if !leased_entry_ids.is_empty() {
@@ -149,6 +120,15 @@ pub async fn dispatch_queued_entries_via_runner(
             };
             let subject_key = planned.dispatch.subject_key();
             if started_keys.contains(&subject_key) {
+                continue;
+            }
+            // Only entries whose spawn hard-failed are closed as FAILED.
+            // Entries the runner never attempted (dispatch limit reached
+            // mid-batch) or that were rejected recoverably (workflow
+            // concurrency cap) go back to Pending for the next tick —
+            // closing them would permanently drop legitimate queued work.
+            if !notice_sink.hard_failed_subject_keys.contains(&subject_key) {
+                release_leased_entry_to_pending(project_root_path, entry_id, "spawn-deferred").await;
                 continue;
             }
             let req = QueueCompletionRequest {
@@ -171,8 +151,43 @@ pub async fn dispatch_queued_entries_via_runner(
     Ok(summary)
 }
 
+/// Release a leased queue entry back to Pending so a later tick can retry it.
+///
+/// Older queue plugins (pre-v0.2.0 of animus-queue-default) don't implement
+/// queue/release_pending — they'd return method-not-found and we'd strand the
+/// entry as Assigned forever. Fall back to completion(CANCELLED) so old
+/// plugins at least move the entry to a terminal state. This trades silently
+/// dropping legitimate queued work (the codex-v1 P1 we just fixed) for not
+/// stranding the queue on old plugins; preflight already requires queue
+/// v0.2.0+ for v0.5 so production should rarely hit this path.
+async fn release_leased_entry_to_pending(project_root_path: &std::path::Path, entry_id: &str, reason: &str) {
+    if let Err(error) = plugin_clients::call_queue_release_pending(project_root_path, entry_id, reason).await {
+        warn!(
+            actor = protocol::ACTOR_DAEMON,
+            entry_id = %entry_id,
+            error = %error,
+            "queue plugin queue/release_pending failed; falling back to completion(cancelled)"
+        );
+        let req = QueueCompletionRequest {
+            entry_id: entry_id.to_string(),
+            status: queue_proto::completion_status::CANCELLED.to_string(),
+            workflow_ref: None,
+            workflow_id: None,
+        };
+        if let Err(completion_error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
+            warn!(
+                actor = protocol::ACTOR_DAEMON,
+                entry_id = %entry_id,
+                error = %completion_error,
+                "queue plugin queue/completion fallback ({reason}) also failed; entry may be stranded as Assigned"
+            );
+        }
+    }
+}
+
 struct CliDispatchNoticeSink {
     plugin_owned_subject_keys: std::collections::HashSet<String>,
+    hard_failed_subject_keys: std::collections::HashSet<String>,
 }
 
 impl DispatchNoticeSink for CliDispatchNoticeSink {
@@ -190,11 +205,20 @@ impl DispatchNoticeSink for CliDispatchNoticeSink {
                 );
             }
             DispatchNotice::Failed { dispatch, error } => {
+                self.hard_failed_subject_keys.insert(dispatch.subject_key());
                 warn!(
                     actor = protocol::ACTOR_DAEMON,
                     subject_id = %dispatch.subject_key(),
                     error = %error,
                     "failed to start workflow runner"
+                );
+            }
+            DispatchNotice::Deferred { dispatch, reason } => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    subject_id = %dispatch.subject_key(),
+                    reason = %reason,
+                    "workflow runner spawn deferred; entry returns to pending for next tick"
                 );
             }
             _ => {}

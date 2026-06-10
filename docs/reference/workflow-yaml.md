@@ -928,22 +928,27 @@ the schedule at that workflow instead.
 
 - Schedules are evaluated each daemon scheduler tick (default 5s, configurable
   via the persisted daemon project config; see [`daemon`](#daemon) below).
-- Missed runs (daemon down at fire time) are **not** replayed when the daemon comes
-  back up — schedules fire forward-only from the next tick that matches the cron
-  expression.
+- An occurrence that falls between ticks (long tick, `interval_secs` above 60)
+  is caught up on the next tick. Only the **most recent** missed occurrence
+  fires — older occurrences inside the catch-up window are skipped, so a
+  schedule resuming after a gap never replays a backlog. The catch-up scan
+  only looks back 10 minutes: runs missed for longer (daemon down at fire
+  time, `active_hours` window closed) are **not** replayed — schedules fire
+  forward-only from the next occurrence.
 - Per-schedule activity is tracked under the scoped runtime state in
   `ScheduleRunState` with three counters:
-  - `last_run` — UTC timestamp of the most recent dispatch attempt. Updated
-    when the schedule fires AND the daemon got far enough to invoke the
-    spawn — including spawn failures other than tick-budget exhaustion (this
-    prevents the same minute from retrying every tick).
+  - `last_run` — UTC timestamp of the cron occurrence covered by the most
+    recent dispatch attempt. Updated when the schedule fires AND the daemon
+    got far enough to invoke the spawn — including spawn failures other than
+    tick-budget exhaustion and the workflow-concurrency cap (this prevents
+    the same occurrence from retrying every tick).
   - `run_count` — total dispatch attempts since project init (successes and
     non-budget spawn failures both increment it).
-  - `missed_count` — increments only when the per-tick budget rejected the
-    spawn slot; `last_run` is **not** updated in that case so the schedule
-    gets another shot on the next tick within the same cron minute. Ticks
-    skipped outside `active_hours` do not touch either counter — the whole
-    schedule branch is bypassed.
+  - `missed_count` — increments only when the per-tick budget or the
+    workflow-concurrency cap rejected the spawn slot; `last_run` is **not**
+    updated in that case so the schedule gets another shot at the same
+    occurrence on the next tick. Ticks skipped outside `active_hours` do not
+    touch either counter — the whole schedule branch is bypassed.
 
 See `crates/orchestrator-core/src/services/schedule_state.rs` for the on-disk
 schema.

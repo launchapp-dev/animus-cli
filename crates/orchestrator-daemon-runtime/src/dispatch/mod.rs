@@ -42,5 +42,5 @@ pub use dispatch_workflow_start_summary::DispatchWorkflowStartSummary;
 #[cfg(unix)]
 #[allow(unused_imports)]
 pub use event_pipe::SubprocessEventPipe;
-pub use process_manager::ProcessManager;
+pub use process_manager::{ProcessManager, WorkflowConcurrencyCapReached};
 pub use ready_dispatch_plan::PlannedDispatchStart;
