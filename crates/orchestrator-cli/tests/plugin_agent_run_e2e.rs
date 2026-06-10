@@ -189,10 +189,8 @@ async fn agent_run_errors_when_provider_plugin_missing() {
     let empty = tempfile::tempdir().expect("tempdir");
     let isolated_home = tempfile::tempdir().expect("isolated home tempdir");
     let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(isolated_home.path().to_string_lossy().as_ref()));
-    let _path = protocol::test_utils::EnvVarGuard::set(
-        "ANIMUS_PLUGIN_PATH",
-        Some(empty.path().to_string_lossy().as_ref()),
-    );
+    let _path =
+        protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_PATH", Some(empty.path().to_string_lossy().as_ref()));
     let _dir =
         protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty.path().to_string_lossy().as_ref()));
 
