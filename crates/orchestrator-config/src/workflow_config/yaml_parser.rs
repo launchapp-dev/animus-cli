@@ -636,7 +636,20 @@ pub fn parse_yaml_workflow_config_with_base_and_source(
     base: &WorkflowConfig,
     source_path: Option<&Path>,
 ) -> Result<WorkflowConfig> {
-    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None)
+    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None, None)
+}
+
+/// Variant used by the YAML compiler after `${VAR}` / `${secret.X}`
+/// interpolation. `original` is the pre-interpolation file content; parse
+/// diagnostics render their source excerpt from it so resolved secret
+/// values never appear in error output.
+pub(crate) fn parse_yaml_workflow_config_with_base_source_and_original(
+    yaml_str: &str,
+    base: &WorkflowConfig,
+    source_path: Option<&Path>,
+    original: &str,
+) -> Result<WorkflowConfig> {
+    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None, Some(original))
 }
 
 pub(crate) fn parse_yaml_workflow_config_confined_to_pack(
@@ -644,8 +657,9 @@ pub(crate) fn parse_yaml_workflow_config_confined_to_pack(
     base: &WorkflowConfig,
     source_path: &Path,
     pack_root: &Path,
+    original: &str,
 ) -> Result<WorkflowConfig> {
-    parse_yaml_workflow_config_internal(yaml_str, base, Some(source_path), Some(pack_root))
+    parse_yaml_workflow_config_internal(yaml_str, base, Some(source_path), Some(pack_root), Some(original))
 }
 
 /// Known top-level YAML keys recognized by `YamlWorkflowFile`. Used when
@@ -805,16 +819,42 @@ fn widen_excerpt_to_value(
     diag.with_excerpt_from(yaml_str, line, col, end)
 }
 
+/// Replace a diagnostic's excerpt with one rendered from the ORIGINAL
+/// pre-interpolation content. The line/column were computed on the
+/// interpolated text, so they can drift when substituted values contain
+/// newlines, but excerpt lines always show the raw `${VAR}` / `${secret.X}`
+/// references instead of resolved values.
+fn rebuild_excerpt_from_original(
+    mut diag: super::yaml_diagnostic::YamlDiagnostic,
+    original: &str,
+) -> super::yaml_diagnostic::YamlDiagnostic {
+    diag.excerpt = None;
+    let Some(line) = diag.line else {
+        return diag;
+    };
+    let col = diag.col.unwrap_or(1);
+    diag.with_excerpt_from(original, line, col, 0)
+}
+
 fn parse_yaml_workflow_config_internal(
     yaml_str: &str,
     base: &WorkflowConfig,
     source_path: Option<&Path>,
     pack_root: Option<&Path>,
+    original: Option<&str>,
 ) -> Result<WorkflowConfig> {
     let yaml_file: YamlWorkflowFile = match serde_yaml::from_str(yaml_str) {
         Ok(file) => file,
         Err(err) => {
-            let diag = enrich_diagnostic(wrap_serde_yaml_error(&err, yaml_str, source_path), yaml_str);
+            let mut diag = enrich_diagnostic(wrap_serde_yaml_error(&err, yaml_str, source_path), yaml_str);
+            // TODO(codex-p2): serde deserialization messages can quote the
+            // offending scalar, so a resolved secret used in a typed position
+            // (e.g. an enum field) can still leak via `diag.message`; scrubbing
+            // it requires plumbing resolved secret values into this parser or
+            // redacting at the yaml_compiler error boundary.
+            if let Some(original) = original.filter(|original| *original != yaml_str) {
+                diag = rebuild_excerpt_from_original(diag, original);
+            }
             return Err(anyhow!("{}", diag));
         }
     };

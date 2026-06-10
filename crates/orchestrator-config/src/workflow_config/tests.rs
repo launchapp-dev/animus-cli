@@ -1317,7 +1317,7 @@ workflows:
     assert_eq!(server.tools, vec!["search", "shell"]);
     let tool = config.tools.get("cli-gpt").expect("tool definition should be parsed");
     assert_eq!(tool.executable, "gpt-cli");
-    assert!(tool.supports_mcp);
+    assert_eq!(tool.supports_mcp, Some(true));
     assert_eq!(tool.context_window, Some(64000));
     assert_eq!(tool.base_args, vec!["--json"]);
     let integrations = config.integrations.as_ref().expect("integrations should be parsed");
@@ -1829,8 +1829,8 @@ fn validate_rejects_invalid_unified_sections() {
         "cli-gpt".to_string(),
         ToolDefinition {
             executable: "".to_string(),
-            supports_mcp: true,
-            supports_write: false,
+            supports_mcp: Some(true),
+            supports_write: Some(false),
             context_window: Some(0),
             base_args: vec!["".to_string()],
             supports_streaming: None,
@@ -2234,6 +2234,18 @@ fn expand_variables_leaves_unknown_patterns() {
     let text = "Hello {{UNKNOWN}} world";
     let result = expand_variables(text, &vars);
     assert_eq!(result, "Hello {{UNKNOWN}} world");
+}
+
+#[test]
+fn expand_variables_does_not_rescan_substituted_values() {
+    let mut vars = HashMap::new();
+    vars.insert("A".to_string(), "uses {{B}} inside".to_string());
+    vars.insert("B".to_string(), "b-value".to_string());
+    let text = "first {{A}} then {{B}}";
+    let expected = "first uses {{B}} inside then b-value";
+    for _ in 0..16 {
+        assert_eq!(expand_variables(text, &vars), expected, "expansion must be deterministic and non-recursive");
+    }
 }
 
 #[test]
@@ -3015,6 +3027,143 @@ workflows:
     let server = compiled.mcp_servers.get("linear").expect("linear server present");
     assert_eq!(server.env.get("LINEAR_API_TOKEN").map(|s| s.as_str()), Some("resolved-value"));
     assert_eq!(compiled.secrets.get("api").map(|s| s.env.as_str()), Some("ANIMUS_TEST_E2E_SECRET"));
+}
+
+#[test]
+fn yaml_compile_emits_env_values_verbatim_without_rescanning() {
+    // Env values containing `$$`, `${`, or `${secret.X}` must land in the
+    // compiled config verbatim — never collapsed, re-parsed, or resolved
+    // as secrets by a second interpolation pass.
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
+    let _v1 = EnvVarGuard::set("ANIMUS_TEST_DOLLARS_VALUE", "pa$$word");
+    let _v2 = EnvVarGuard::set("ANIMUS_TEST_BRACE_VALUE", "open ${ brace");
+    let _v3 = EnvVarGuard::set("ANIMUS_TEST_INJECTION_VALUE", "${secret.api}");
+    let _v4 = EnvVarGuard::set("ANIMUS_TEST_REAL_SECRET", "should-not-leak");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
+    let yaml = r#"
+secrets:
+  api:
+    env: ANIMUS_TEST_REAL_SECRET
+mcp_servers:
+  linear:
+    transport: stdio
+    command: linear-mcp
+    env:
+      DOLLARS: "${ANIMUS_TEST_DOLLARS_VALUE}"
+      BRACE: "${ANIMUS_TEST_BRACE_VALUE}"
+      INJECTION: "${ANIMUS_TEST_INJECTION_VALUE}"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "Be a SWE."
+workflows:
+- id: flow
+  phases: [build]
+"#;
+    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
+
+    let compiled = compile_yaml_workflow_files(temp.path()).expect("compile").expect("Some");
+    let server = compiled.mcp_servers.get("linear").expect("linear server present");
+    assert_eq!(server.env.get("DOLLARS").map(|s| s.as_str()), Some("pa$$word"));
+    assert_eq!(server.env.get("BRACE").map(|s| s.as_str()), Some("open ${ brace"));
+    assert_eq!(server.env.get("INJECTION").map(|s| s.as_str()), Some("${secret.api}"));
+}
+
+#[test]
+fn yaml_parse_error_excerpt_shows_original_reference_not_resolved_secret() {
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
+    // A secret value that, once substituted, produces a YAML scan error on
+    // the line carrying the reference. The rustc-style excerpt must render
+    // the original `${secret.api}` reference, not the resolved value.
+    let _v = EnvVarGuard::set("ANIMUS_TEST_EXCERPT_SECRET", "zzz-leak-zzz: x: y");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
+    let yaml = r#"
+secrets:
+  api:
+    env: ANIMUS_TEST_EXCERPT_SECRET
+default_workflow_ref: ${secret.api}
+"#;
+    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
+
+    let err = compile_yaml_workflow_files(temp.path()).expect_err("compile should fail");
+    let display = format!("{:#}", err);
+    assert!(!display.contains("zzz-leak-zzz"), "resolved secret leaked into diagnostics: {display}");
+    let debug = format!("{:#?}", err);
+    assert!(!debug.contains("zzz-leak-zzz"), "resolved secret leaked into diagnostics: {debug}");
+}
+
+#[test]
+fn yaml_merge_field_merges_daemon_blocks_across_overlays() {
+    let base_yaml = r#"
+daemon:
+  auto_run_ready: true
+  active_hours: "09:00-17:00"
+  pool_size: 4
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+"#;
+    let overlay_yaml = r#"
+daemon:
+  pool_size: 2
+"#;
+    let base = parse_yaml_workflow_config(base_yaml).expect("parse base");
+    let overlay = parse_yaml_workflow_config(overlay_yaml).expect("parse overlay");
+    let merged = merge_yaml_into_config(base, overlay);
+    let daemon = merged.daemon.expect("daemon block present");
+    assert!(daemon.auto_run_ready, "earlier overlay's auto_run_ready must survive a later daemon block");
+    assert_eq!(daemon.active_hours.as_deref(), Some("09:00-17:00"));
+    assert_eq!(daemon.pool_size, Some(2), "later overlay's explicit field must win");
+}
+
+#[test]
+fn validation_surfaces_malformed_trigger_configs() {
+    let mut config = builtin_workflow_config();
+    config.workflows.push(WorkflowDefinition {
+        id: "flow".to_string(),
+        name: "Flow".to_string(),
+        description: String::new(),
+        phases: vec!["implementation".to_string().into()],
+        post_success: None,
+        variables: Vec::new(),
+        worktree: None,
+        budget: None,
+    });
+    config.triggers.push(WorkflowTrigger {
+        id: "bad-webhook".to_string(),
+        trigger_type: TriggerType::Webhook,
+        workflow_ref: Some("flow".to_string()),
+        enabled: true,
+        config: serde_json::json!({ "secret_env": 123 }),
+        input: None,
+    });
+    config.triggers.push(WorkflowTrigger {
+        id: "bad-watcher".to_string(),
+        trigger_type: TriggerType::FileWatcher,
+        workflow_ref: Some("flow".to_string()),
+        enabled: true,
+        config: serde_json::json!({ "paths": "not-a-list" }),
+        input: None,
+    });
+
+    let err = validate_workflow_config(&config).expect_err("malformed trigger configs should fail validation");
+    let msg = format!("{:#}", err);
+    assert!(msg.contains("triggers['bad-webhook'].config is not a valid webhook config"), "{msg}");
+    assert!(msg.contains("triggers['bad-watcher'].config is not a valid file_watcher config"), "{msg}");
+    assert!(!msg.contains("paths must not be empty"), "type error must not masquerade as empty paths: {msg}");
 }
 
 fn http_oauth_server(oauth: OauthConfig) -> McpServerDefinition {

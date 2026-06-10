@@ -137,12 +137,9 @@ pub fn canonical_model_id(model_id: &str) -> String {
         | "minimax/m2-5"
         | "minimax/minimax-m2.5"
         | "openrouter/minimax/minimax-m2.7" => "openrouter/minimax/minimax-m2.7".to_string(),
-        "minimax-m2.1"
-        | "minimax-m2-1"
-        | "minimax/m2.1"
-        | "minimax/m2-1"
-        | "minimax/minimax-m2.1"
-        | "minimax/MiniMax-M2.1" => "minimax/MiniMax-M2.1".to_string(),
+        "minimax-m2.1" | "minimax-m2-1" | "minimax/m2.1" | "minimax/m2-1" | "minimax/minimax-m2.1" => {
+            "minimax/MiniMax-M2.1".to_string()
+        }
         _ => trimmed.to_string(),
     }
 }

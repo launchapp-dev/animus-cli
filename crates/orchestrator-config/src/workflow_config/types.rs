@@ -455,11 +455,26 @@ pub fn resolve_workflow_variables(
 }
 
 pub fn expand_variables(text: &str, vars: &HashMap<String, String>) -> String {
-    let mut result = text.to_string();
-    for (key, value) in vars {
-        let pattern = format!("{{{{{}}}}}", key);
-        result = result.replace(&pattern, value);
+    let mut result = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        let Some(end) = rest[start + 2..].find("}}") else {
+            break;
+        };
+        let name = &rest[start + 2..start + 2 + end];
+        match vars.get(name) {
+            Some(value) => {
+                result.push_str(&rest[..start]);
+                result.push_str(value);
+                rest = &rest[start + 2 + end + 2..];
+            }
+            None => {
+                result.push_str(&rest[..=start]);
+                rest = &rest[start + 1..];
+            }
+        }
     }
+    result.push_str(rest);
     result
 }
 
@@ -592,10 +607,10 @@ pub struct PhaseMcpBinding {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDefinition {
     pub executable: String,
-    #[serde(default)]
-    pub supports_mcp: bool,
-    #[serde(default)]
-    pub supports_write: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_mcp: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_write: Option<bool>,
     #[serde(default)]
     pub context_window: Option<usize>,
     #[serde(default)]
@@ -729,7 +744,14 @@ pub(crate) fn default_debounce_secs() -> u64 {
 
 impl FileWatcherTriggerConfig {
     pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value(value.clone()).unwrap_or_default()
+        Self::try_from_value(value).unwrap_or_default()
+    }
+
+    pub fn try_from_value(value: &Value) -> Result<Self, serde_json::Error> {
+        if value.is_null() {
+            return Ok(Self::default());
+        }
+        serde_json::from_value(value.clone())
     }
 }
 
@@ -758,7 +780,14 @@ pub struct WebhookTriggerConfig {
 
 impl WebhookTriggerConfig {
     pub fn from_value(value: &Value) -> Self {
-        serde_json::from_value(value.clone()).unwrap_or_default()
+        Self::try_from_value(value).unwrap_or_default()
+    }
+
+    pub fn try_from_value(value: &Value) -> Result<Self, serde_json::Error> {
+        if value.is_null() {
+            return Ok(Self::default());
+        }
+        serde_json::from_value(value.clone())
     }
 }
 

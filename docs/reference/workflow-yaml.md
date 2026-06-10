@@ -995,6 +995,11 @@ Omitting `config:` entirely makes the field default to `Value::Null`, which
 the parser falls back through `WebhookTriggerConfig::default()` to
 `max_triggers_per_minute = 0`, and the config validator rejects that
 (`triggers['<id>'].config.max_triggers_per_minute must be greater than zero`).
+A `config:` block whose fields have the wrong type (e.g. `secret_env: 123`) is
+rejected at validation time with the underlying deserialization error
+(`triggers['<id>'].config is not a valid webhook config: ...`) instead of being
+silently replaced with defaults — a malformed `secret_env` can no longer
+silently disable signature verification.
 
 ### `file_watcher` config
 
@@ -1154,12 +1159,12 @@ no `set` subcommand) or the equivalent CLI flags on
 
 `schedules:` and `triggers:` entries merge by `id` across all
 `.animus/workflows/*.yaml` files (later overlays override earlier entries with
-the same id). The `daemon:` block does **not** field-merge: as each overlay is
-applied the YAML compiler runs `yaml.daemon.or(base.daemon)`, where `yaml` is
-the overlay being applied. The result is that any overlay which defines a
-`daemon:` block replaces the previously-accumulated block wholesale — fields
-defined only in earlier overlays are dropped. Keep `daemon:` in a single
-workflow YAML file to avoid losing settings to a partial later override.
+the same id). The `daemon:` block **field-merges**: as each overlay is applied,
+only the fields the overlay explicitly sets override the previously-accumulated
+block — fields defined only in earlier overlays survive a later partial
+`daemon:` block. One caveat: `auto_run_ready` is a plain boolean (an omitted
+value is indistinguishable from an explicit `false`), so once an earlier
+overlay sets it to `true` a later overlay cannot reset it to `false`.
 
 ---
 

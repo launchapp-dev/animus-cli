@@ -718,7 +718,8 @@ fn default_success_exit_codes() -> Vec<i32> {
 }
 
 fn lookup_case_insensitive<'a, T>(map: &'a BTreeMap<String, T>, key: &str) -> Option<&'a T> {
-    map.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(key)).map(|(_, value)| value)
+    map.get(key)
+        .or_else(|| map.iter().find(|(candidate, _)| candidate.eq_ignore_ascii_case(key)).map(|(_, value)| value))
 }
 
 fn trim_nonempty(value: Option<&str>) -> Option<&str> {
@@ -742,7 +743,7 @@ impl AgentRuntimeConfig {
     }
 
     pub fn phase_execution(&self, phase_id: &str) -> Option<&PhaseExecutionDefinition> {
-        lookup_case_insensitive(&self.phases, phase_id).or_else(|| self.phases.get("default"))
+        lookup_case_insensitive(&self.phases, phase_id).or_else(|| lookup_case_insensitive(&self.phases, "default"))
     }
 
     pub fn phase_mode(&self, phase_id: &str) -> Option<PhaseExecutionMode> {
@@ -1566,9 +1567,15 @@ fn merge_workflow_runtime_overlay(base: &mut AgentRuntimeConfig, workflow: &crat
             response_schema_flag: None,
         });
         entry.executable = Some(definition.executable.clone());
-        entry.supports_mcp = Some(definition.supports_mcp);
-        entry.supports_file_editing = Some(definition.supports_write);
-        entry.max_context_tokens = definition.context_window;
+        if definition.supports_mcp.is_some() {
+            entry.supports_mcp = definition.supports_mcp;
+        }
+        if definition.supports_write.is_some() {
+            entry.supports_file_editing = definition.supports_write;
+        }
+        if definition.context_window.is_some() {
+            entry.max_context_tokens = definition.context_window;
+        }
         if definition.supports_streaming.is_some() {
             entry.supports_streaming = definition.supports_streaming;
         }
@@ -1618,6 +1625,11 @@ pub(crate) fn merge_agent_runtime_overlay(base: &mut AgentRuntimeConfig, overlay
     }
 }
 
+// TODO(review): overlays cannot reset a field back to its default — the
+// emptiness / `!= default` guards below cannot distinguish "omitted" from
+// "explicitly set to the default value". Fixing this requires a
+// presence-aware overlay shape (Option-wrapped fields) for AgentProfile,
+// which touches every serde consumer of the profile maps; deferred.
 fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     if overlay.name.is_some() {
         base.name = overlay.name.clone();
@@ -1765,8 +1777,8 @@ pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConf
                         tool_id.clone(),
                         crate::workflow_config::ToolDefinition {
                             executable: executable.clone(),
-                            supports_mcp: cli_tool.supports_mcp.unwrap_or(false),
-                            supports_write: cli_tool.supports_file_editing.unwrap_or(false),
+                            supports_mcp: cli_tool.supports_mcp,
+                            supports_write: cli_tool.supports_file_editing,
                             context_window: cli_tool.max_context_tokens,
                             base_args: Vec::new(),
                             supports_streaming: cli_tool.supports_streaming,
@@ -2295,6 +2307,72 @@ mod tests {
     use crate::test_support::{env_lock, EnvVarGuard};
     use std::fs;
 
+    #[test]
+    fn workflow_tool_redeclare_with_executable_only_preserves_capabilities() {
+        let mut base = builtin_agent_runtime_config();
+        base.cli_tools.insert(
+            "claude".to_string(),
+            CliToolConfig {
+                executable: Some("claude".to_string()),
+                supports_file_editing: Some(true),
+                supports_streaming: Some(true),
+                supports_tool_use: Some(true),
+                supports_vision: Some(true),
+                supports_long_context: Some(true),
+                max_context_tokens: Some(200_000),
+                supports_mcp: Some(true),
+                read_only_flag: Some("--read-only".to_string()),
+                response_schema_flag: None,
+            },
+        );
+        let mut workflow = crate::workflow_config::builtin_workflow_config();
+        workflow.tools.insert(
+            "claude".to_string(),
+            crate::workflow_config::ToolDefinition {
+                executable: "claude-custom".to_string(),
+                supports_mcp: None,
+                supports_write: None,
+                context_window: None,
+                base_args: vec![],
+                supports_streaming: None,
+                supports_tool_use: None,
+                supports_vision: None,
+                supports_long_context: None,
+                read_only_flag: None,
+                response_schema_flag: None,
+            },
+        );
+
+        merge_workflow_runtime_overlay(&mut base, &workflow);
+
+        let tool = base.cli_tools.get("claude").expect("tool present");
+        assert_eq!(tool.executable.as_deref(), Some("claude-custom"));
+        assert_eq!(tool.max_context_tokens, Some(200_000), "omitted context_window must not wipe the prior value");
+        assert_eq!(tool.supports_mcp, Some(true), "omitted supports_mcp must not flip to false");
+        assert_eq!(tool.supports_file_editing, Some(true), "omitted supports_write must not flip to false");
+    }
+
+    #[test]
+    fn phase_execution_prefers_exact_key_and_falls_back_to_default_case_insensitively() {
+        let mut config = builtin_agent_runtime_config();
+        let template = config.phases.values().next().expect("builtin has phases").clone();
+        config.phases.clear();
+        let mut exact = template.clone();
+        exact.agent_id = Some("exact-agent".to_string());
+        let mut cased = template.clone();
+        cased.agent_id = Some("cased-agent".to_string());
+        let mut fallback = template;
+        fallback.agent_id = Some("default-agent".to_string());
+        config.phases.insert("Build".to_string(), cased);
+        config.phases.insert("build".to_string(), exact);
+        config.phases.insert("Default".to_string(), fallback);
+
+        let resolved = config.phase_execution("build").expect("phase resolves");
+        assert_eq!(resolved.agent_id.as_deref(), Some("exact-agent"), "exact key must win over case-insensitive");
+        let fallback = config.phase_execution("nonexistent").expect("default fallback resolves");
+        assert_eq!(fallback.agent_id.as_deref(), Some("default-agent"), "default fallback must be case-insensitive");
+    }
+
     fn write_pack_agent_overlay_fixture(root: &std::path::Path, pack_id: &str, version: &str) {
         fs::create_dir_all(root.join("workflows")).expect("create workflows");
         fs::create_dir_all(root.join("runtime")).expect("create runtime");
@@ -2477,8 +2555,8 @@ cli_tools:
             "custom-runner".to_string(),
             crate::workflow_config::ToolDefinition {
                 executable: "custom-runner-bin".to_string(),
-                supports_mcp: true,
-                supports_write: true,
+                supports_mcp: Some(true),
+                supports_write: Some(true),
                 context_window: Some(42_000),
                 base_args: vec![],
                 supports_streaming: None,
@@ -4025,8 +4103,8 @@ phases:
             "full-tool".to_string(),
             crate::workflow_config::ToolDefinition {
                 executable: "full-tool-bin".to_string(),
-                supports_mcp: true,
-                supports_write: true,
+                supports_mcp: Some(true),
+                supports_write: Some(true),
                 context_window: Some(128_000),
                 base_args: vec![],
                 supports_streaming: Some(true),

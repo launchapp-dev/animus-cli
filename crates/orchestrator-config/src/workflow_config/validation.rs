@@ -1031,21 +1031,39 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
 
         match trigger.trigger_type {
             crate::workflow_config::TriggerType::FileWatcher => {
-                let fw_config = crate::workflow_config::FileWatcherTriggerConfig::from_value(&trigger.config);
-                if fw_config.paths.is_empty() {
-                    errors.push(format!(
-                        "triggers['{}'].config.paths must not be empty for file_watcher triggers",
-                        trigger_id
-                    ));
+                match crate::workflow_config::FileWatcherTriggerConfig::try_from_value(&trigger.config) {
+                    Ok(fw_config) => {
+                        if fw_config.paths.is_empty() {
+                            errors.push(format!(
+                                "triggers['{}'].config.paths must not be empty for file_watcher triggers",
+                                trigger_id
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        errors.push(format!(
+                            "triggers['{}'].config is not a valid file_watcher config: {}",
+                            trigger_id, error
+                        ));
+                    }
                 }
             }
             crate::workflow_config::TriggerType::Webhook | crate::workflow_config::TriggerType::GithubWebhook => {
-                let wh_config = crate::workflow_config::WebhookTriggerConfig::from_value(&trigger.config);
-                if wh_config.max_triggers_per_minute == 0 {
-                    errors.push(format!(
-                        "triggers['{}'].config.max_triggers_per_minute must be greater than zero",
-                        trigger_id
-                    ));
+                match crate::workflow_config::WebhookTriggerConfig::try_from_value(&trigger.config) {
+                    Ok(wh_config) => {
+                        if wh_config.max_triggers_per_minute == 0 {
+                            errors.push(format!(
+                                "triggers['{}'].config.max_triggers_per_minute must be greater than zero",
+                                trigger_id
+                            ));
+                        }
+                    }
+                    Err(error) => {
+                        errors.push(format!(
+                            "triggers['{}'].config is not a valid webhook config: {}",
+                            trigger_id, error
+                        ));
+                    }
                 }
             }
             crate::workflow_config::TriggerType::Plugin => {
