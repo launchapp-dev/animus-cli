@@ -77,6 +77,27 @@ fn runner_secret_allowlist() -> Vec<String> {
     out
 }
 
+/// Recoverable spawn rejection: the workflow concurrency cap is reached.
+/// Callers must NOT treat the dispatch as poisoned — leave the entry queued
+/// (or release it back to pending) so the next tick retries it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowConcurrencyCapReached {
+    pub active: usize,
+    pub cap: usize,
+}
+
+impl std::fmt::Display for WorkflowConcurrencyCapReached {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "workflow concurrency cap reached ({} active, max {}); leaving entry queued for next tick",
+            self.active, self.cap
+        )
+    }
+}
+
+impl std::error::Error for WorkflowConcurrencyCapReached {}
+
 struct WorkflowProcess {
     subject_key: String,
     subject_id: String,
@@ -190,11 +211,7 @@ impl ProcessManager {
     pub fn spawn_workflow_runner(&mut self, dispatch: &SubjectDispatch, project_root: &str) -> Result<()> {
         if let Some(cap) = self.workflow_concurrency_max {
             if self.processes.len() >= cap {
-                anyhow::bail!(
-                    "workflow concurrency cap reached ({} active, max {}); leaving entry queued for next tick",
-                    self.processes.len(),
-                    cap
-                );
+                return Err(anyhow::Error::new(WorkflowConcurrencyCapReached { active: self.processes.len(), cap }));
             }
         }
 
@@ -439,7 +456,9 @@ impl ProcessManager {
                 if process.started_at.elapsed().as_secs() > timeout {
                     let pid = process.child.lock().ok().and_then(|c| c.id());
                     if let Some(pid) = pid {
-                        protocol::graceful_kill_process(pid as i32);
+                        // graceful_kill_process sleeps up to ~5.2s; run it on
+                        // the blocking pool so it cannot pin an async worker.
+                        let _ = tokio::task::spawn_blocking(move || protocol::graceful_kill_process(pid as i32)).await;
                     }
                     drain_stderr_reader(&mut process.stderr_reader).await;
                     // Drain the event pipe before the WorkflowProcess is

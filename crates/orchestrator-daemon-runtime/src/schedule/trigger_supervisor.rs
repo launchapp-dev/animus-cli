@@ -241,15 +241,22 @@ impl TriggerPluginRunner for ProcessTriggerRunner {
             Err(error) => return SessionOutcome::SpawnError(format!("spawn failed: {error:#}")),
         };
         if let Err(error) = host.handshake().await {
+            let _ = host.shutdown().await;
             return SessionOutcome::SpawnError(format!("handshake failed: {error:#}"));
         }
         let mut notifications = host.subscribe_notifications();
         let watch = TriggerWatchParams { cursor: None, config: Some(collect_plugin_trigger_config(project_root)) };
         let watch_params = match serde_json::to_value(watch) {
             Ok(value) => value,
-            Err(error) => return SessionOutcome::SpawnError(format!("encode watch params: {error}")),
+            Err(error) => {
+                let _ = host.shutdown().await;
+                return SessionOutcome::SpawnError(format!("encode watch params: {error}"));
+            }
         };
-        let _ = host.request(TRIGGER_METHOD_WATCH, Some(watch_params)).await;
+        if let Err(error) = host.request(TRIGGER_METHOD_WATCH, Some(watch_params)).await {
+            let _ = host.shutdown().await;
+            return SessionOutcome::SpawnError(format!("trigger/watch failed: code {}: {}", error.code, error.message));
+        }
 
         notify_started();
 
@@ -672,6 +679,13 @@ fn route_event(project_root: &Path, event: &TriggerEvent) -> bool {
         return false;
     }
 
+    let _state_lock = match orchestrator_core::lock_trigger_state(project_root) {
+        Ok(lock) => lock,
+        Err(error) => {
+            warn!(trigger_id, error = %error, "failed to lock trigger state; dropping plugin trigger event");
+            return false;
+        }
+    };
     let mut state: orchestrator_core::TriggerState =
         orchestrator_core::load_trigger_state(project_root).unwrap_or_default();
     let run_state = state.triggers.entry(trigger_id.to_string()).or_default();

@@ -27,6 +27,7 @@ pub use dispatch::{
     ready_dispatch_limit, ready_dispatch_limit_for_options, schedule_headroom, workflow_current_phase_id,
     CompletedProcess, CompletionReconciliationPlan, DispatchNotice, DispatchNoticeSink, DispatchSelectionSource,
     DispatchWorkflowStart, DispatchWorkflowStartSummary, PlannedDispatchStart, ProcessManager, TickBudget,
+    WorkflowConcurrencyCapReached,
 };
 /// v0.5.1 P2 #6.2 round-3: daemon-side reattach client surface, exposed for
 /// integration tests and out-of-tree daemons that want to call

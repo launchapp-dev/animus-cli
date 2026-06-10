@@ -210,11 +210,18 @@ where
                     // build failed). Return the slot to the budget so the
                     // remaining schedules + triggers can still use it.
                     budget.release();
-                    self.services.dispatch_notice(DispatchNotice::ScheduleDispatchFailed {
-                        schedule_id: schedule_id.to_string(),
-                        dispatch: dispatch.clone(),
-                        error: error.to_string(),
-                    });
+                    if error.downcast_ref::<crate::WorkflowConcurrencyCapReached>().is_some() {
+                        // Recoverable capacity rejection: record as missed so
+                        // last_run stays untouched and the occurrence re-fires
+                        // on the next tick instead of being consumed.
+                        budget_rejected.push(schedule_id.to_string());
+                    } else {
+                        self.services.dispatch_notice(DispatchNotice::ScheduleDispatchFailed {
+                            schedule_id: schedule_id.to_string(),
+                            dispatch: dispatch.clone(),
+                            error: error.to_string(),
+                        });
+                    }
                     Err(error)
                 }
             }
@@ -228,7 +235,12 @@ where
                 // minute.
                 self.services.record_schedule_dispatch_missed(root, &outcome.schedule_id, &outcome.status);
             } else {
-                self.services.record_schedule_dispatch_attempt(root, &outcome.schedule_id, now, &outcome.status);
+                self.services.record_schedule_dispatch_attempt(
+                    root,
+                    &outcome.schedule_id,
+                    outcome.run_at,
+                    &outcome.status,
+                );
             }
         }
     }

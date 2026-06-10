@@ -5,7 +5,7 @@ use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
 };
 use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
-use orchestrator_core::{TaskStatus, WorkflowRunInput, WorkflowStateManager, WorkflowStatus};
+use orchestrator_core::{TaskStatus, WorkflowStateManager, WorkflowStatus};
 use orchestrator_daemon_runtime::{
     default_slim_project_tick_driver, CompletedProcess, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
     DispatchNotice, DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary, ProcessManager,
@@ -139,10 +139,10 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         limit: usize,
         process_manager: Option<&mut ProcessManager>,
     ) -> Result<DispatchWorkflowStartSummary> {
-        let mut summary = match process_manager {
-            Some(process_manager) => dispatch_queued_entries_via_runner(root, process_manager, limit).await?,
-            None => DispatchWorkflowStartSummary::default(),
+        let Some(process_manager) = process_manager else {
+            return Ok(DispatchWorkflowStartSummary::default());
         };
+        let mut summary = dispatch_queued_entries_via_runner(root, process_manager, limit).await?;
 
         let remaining = limit.saturating_sub(summary.started);
         if remaining > 0 {
@@ -161,23 +161,47 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                 })
                 .map(|w| w.task_id.clone())
                 .collect();
+            let active_subject_ids = process_manager.active_subject_ids();
             let ready_tasks: Vec<_> = tasks
                 .iter()
-                .filter(|t| t.status == TaskStatus::Ready && !active_task_ids.contains(&t.id))
+                .filter(|t| {
+                    t.status == TaskStatus::Ready
+                        && !active_task_ids.contains(&t.id)
+                        && !active_subject_ids.contains(&t.id)
+                })
                 .take(remaining)
                 .collect();
+            // Post-v0.5 the daemon has no in-process workflow executor:
+            // `hub.workflows().run(...)` would only bootstrap a Running
+            // record that nothing executes (zombie-cancelled ~90s later,
+            // blocking the task). Spawn the workflow_runner plugin instead —
+            // the same path queue dispatch uses; the runner creates and
+            // drives the workflow record itself.
+            let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(root));
             for task in ready_tasks {
-                if let Ok(workflow) = hub.workflows().run(WorkflowRunInput::for_task(task.id.clone(), None)).await {
-                    let _ = hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await;
-                    summary.started += 1;
-                    summary.started_workflows.push(DispatchWorkflowStart {
-                        dispatch: protocol::SubjectDispatch::for_task(
-                            task.id.clone(),
-                            workflow.workflow_ref.unwrap_or_default(),
-                        ),
-                        workflow_id: Some(workflow.id),
-                        selection_source: DispatchSelectionSource::ReadyQueue,
-                    });
+                let workflow_ref = if task.is_frontend_related() {
+                    orchestrator_core::UI_UX_WORKFLOW_REF.to_string()
+                } else {
+                    workflow_config.config.default_workflow_ref.clone()
+                };
+                let dispatch = protocol::SubjectDispatch::for_task(task.id.clone(), workflow_ref);
+                match process_manager.spawn_workflow_runner(&dispatch, root) {
+                    Ok(()) => {
+                        let _ = hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await;
+                        summary.started += 1;
+                        summary.started_workflows.push(DispatchWorkflowStart {
+                            dispatch,
+                            workflow_id: None,
+                            selection_source: DispatchSelectionSource::ReadyQueue,
+                        });
+                    }
+                    Err(error) => {
+                        self.logger
+                            .error("process", format!("failed to start runner for ready task {}", task.id))
+                            .err(error.to_string())
+                            .emit();
+                        break;
+                    }
                 }
             }
         }
@@ -204,6 +228,12 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                 self.logger
                     .error("process", format!("failed to start runner for {}", dispatch.subject_key()))
                     .err(error)
+                    .emit();
+            }
+            DispatchNotice::Deferred { dispatch, reason } => {
+                self.logger
+                    .info("process", format!("deferred runner spawn for {} to next tick", dispatch.subject_key()))
+                    .meta(serde_json::json!({"reason": reason}))
                     .emit();
             }
             DispatchNotice::Started { dispatch, .. } => {

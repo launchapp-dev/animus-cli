@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{Datelike, Timelike};
+use chrono::Timelike;
 use croner::parser::{CronParser, Seconds, Year};
 use tracing::warn;
 
@@ -23,7 +23,10 @@ impl ScheduleDispatch {
     {
         let config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
         let state = orchestrator_core::load_schedule_state(std::path::Path::new(project_root)).unwrap_or_default();
-        let due = evaluate_schedules(&config.config.schedules, &state, now);
+        let active_hours = config.config.daemon.as_ref().and_then(|daemon| daemon.active_hours.clone());
+        let due = evaluate_schedules(&config.config.schedules, &state, now, |occurrence| {
+            Self::allows_proactive_dispatch(active_hours.as_deref(), occurrence.with_timezone(&chrono::Local).time())
+        });
         if due.is_empty() {
             return Vec::new();
         }
@@ -32,10 +35,10 @@ impl ScheduleDispatch {
             config.config.schedules.iter().map(|schedule| (schedule.id.as_str(), schedule)).collect();
 
         let mut outcomes = Vec::with_capacity(due.len());
-        for schedule_id in due {
+        for (schedule_id, run_at) in due {
             if let Some(schedule) = schedule_lookup.get(schedule_id.as_str()) {
                 let status = dispatch_schedule(&schedule_id, schedule, now, "schedule", &mut spawn_pipeline);
-                outcomes.push(ScheduleDispatchOutcome { schedule_id, status });
+                outcomes.push(ScheduleDispatchOutcome { schedule_id, run_at, status });
             }
         }
 
@@ -85,20 +88,30 @@ where
     status
 }
 
+/// `occurrence_allowed` is the active-hours gate applied to the caught-up
+/// occurrence itself: an occurrence that fell inside a closed `active_hours`
+/// window (but within the catch-up horizon) must be skipped, not replayed
+/// when the window reopens.
 fn evaluate_schedules(
     schedules: &[orchestrator_core::workflow_config::WorkflowSchedule],
     state: &orchestrator_core::ScheduleState,
     now: chrono::DateTime<chrono::Utc>,
-) -> Vec<String> {
+    occurrence_allowed: impl Fn(chrono::DateTime<chrono::Utc>) -> bool,
+) -> Vec<(String, chrono::DateTime<chrono::Utc>)> {
     let mut due = Vec::new();
     for schedule in schedules {
         if !schedule.enabled {
             continue;
         }
 
-        match cron_matches(&schedule.cron, now) {
-            Ok(true) => {}
-            Ok(false) => continue,
+        let last_run = state.schedules.get(&schedule.id).and_then(|run_state| run_state.last_run);
+        match due_occurrence(&schedule.cron, last_run, now) {
+            Ok(Some(occurrence)) => {
+                if occurrence_allowed(occurrence) {
+                    due.push((schedule.id.clone(), occurrence));
+                }
+            }
+            Ok(None) => {}
             Err(error) => {
                 warn!(
                     actor = protocol::ACTOR_DAEMON,
@@ -107,27 +120,65 @@ fn evaluate_schedules(
                     error = %error,
                     "schedule has invalid cron expression"
                 );
-                continue;
             }
         }
-
-        if let Some(run_state) = state.schedules.get(&schedule.id) {
-            if let Some(last_run) = run_state.last_run {
-                if last_run.year() == now.year()
-                    && last_run.month() == now.month()
-                    && last_run.day() == now.day()
-                    && last_run.hour() == now.hour()
-                    && last_run.minute() == now.minute()
-                {
-                    continue;
-                }
-            }
-        }
-
-        due.push(schedule.id.clone());
     }
 
     due
+}
+
+/// How far back the catch-up scan looks for a missed cron occurrence. Wide
+/// enough to absorb long ticks and `interval_secs` well above 60, but narrow
+/// enough that occurrences suppressed for hours (daemon stopped, schedules
+/// gated off by `active_hours`) are NOT replayed when dispatch resumes —
+/// the documented behavior is that those fires are skipped, not delayed.
+const CATCH_UP_HORIZON_MINS: i64 = 10;
+
+/// Returns the most recent cron occurrence that is due at `now`, or `None`
+/// when the schedule should not fire on this tick.
+///
+/// With a recorded `last_run` this is the latest occurrence at or before
+/// `now` that is strictly after `max(last_run, now - CATCH_UP_HORIZON_MINS)`
+/// — so an occurrence missed by a long tick or `interval_secs > 60` still
+/// fires on the next tick instead of being silently skipped. Taking the
+/// latest (not the earliest) caps catch-up at one fire total: when dispatch
+/// resumes after a gap (e.g. the `active_hours` window reopens), older
+/// occurrences inside the horizon are skipped rather than replayed one tick
+/// at a time. Without a `last_run` (first evaluation) the schedule only
+/// fires when `now` lands inside a matching minute, so a fresh daemon never
+/// replays a stale backlog.
+fn due_occurrence(
+    expression: &str,
+    last_run: Option<chrono::DateTime<chrono::Utc>>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+    let expression = expression.trim();
+    if expression.is_empty() {
+        return Ok(None);
+    }
+
+    let Some(last_run) = last_run else {
+        let normalized = now
+            .with_second(0)
+            .and_then(|value| value.with_nanosecond(0))
+            .expect("utc timestamps should support zero second normalization");
+        return Ok(cron_matches(expression, now)?.then_some(normalized));
+    };
+
+    let parser = CronParser::builder().seconds(Seconds::Disallowed).year(Year::Disallowed).build();
+    let cron = parser.parse(expression).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    let catch_up_from = std::cmp::max(last_run, now - chrono::Duration::minutes(CATCH_UP_HORIZON_MINS));
+    let mut due = None;
+    let mut cursor = catch_up_from;
+    loop {
+        let next = cron.find_next_occurrence(&cursor, false).map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        if next > now {
+            break;
+        }
+        due = Some(next);
+        cursor = next;
+    }
+    Ok(due)
 }
 
 fn cron_matches(expression: &str, now: chrono::DateTime<chrono::Utc>) -> Result<bool> {
@@ -244,7 +295,7 @@ mod tests {
             enabled: false,
         }];
         let state = orchestrator_core::ScheduleState::default();
-        let due = evaluate_schedules(&schedules, &state, now);
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
 
         assert!(due.is_empty());
     }
@@ -261,9 +312,9 @@ mod tests {
             enabled: true,
         }];
         let state = orchestrator_core::ScheduleState::default();
-        let due = evaluate_schedules(&schedules, &state, now);
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
 
-        assert_eq!(due, vec!["midday".to_string()]);
+        assert_eq!(due, vec![("midday".to_string(), now)]);
     }
 
     #[test]
@@ -278,9 +329,9 @@ mod tests {
             enabled: true,
         }];
         let state = orchestrator_core::ScheduleState::default();
-        let due = evaluate_schedules(&schedules, &state, now);
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
 
-        assert_eq!(due, vec!["daily".to_string()]);
+        assert_eq!(due, vec![("daily".to_string(), now)]);
     }
 
     #[test]
@@ -295,7 +346,7 @@ mod tests {
             enabled: true,
         }];
         let state = orchestrator_core::ScheduleState::default();
-        let due = evaluate_schedules(&schedules, &state, now);
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
 
         assert!(due.is_empty());
     }
@@ -321,8 +372,127 @@ mod tests {
                 missed_count: 0,
             },
         );
-        let due = evaluate_schedules(&schedules, &state, now);
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
 
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn evaluate_schedules_catches_up_missed_occurrence() {
+        // The 12:00 occurrence fell between ticks (long tick / large
+        // interval_secs): the daemon last fired 11:00 and the next tick only
+        // lands at 12:05. The 12:00 occurrence must still fire instead of
+        // being silently skipped.
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:05:42Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "hourly".to_string(),
+            cron: "0 * * * *".to_string(),
+            workflow_ref: Some("standard-workflow".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let mut state = orchestrator_core::ScheduleState::default();
+        state.schedules.insert(
+            "hourly".to_string(),
+            orchestrator_core::ScheduleRunState {
+                last_run: Some("2026-03-04T11:00:00Z".parse().unwrap()),
+                last_status: "dispatched".to_string(),
+                run_count: 1,
+                missed_count: 0,
+            },
+        );
+
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
+        assert_eq!(due, vec![("hourly".to_string(), "2026-03-04T12:00:00Z".parse().unwrap())]);
+
+        // Recording last_run = 12:00 fully catches up: the next occurrence
+        // (13:00) is in the future, so nothing further fires this tick.
+        state.schedules.get_mut("hourly").unwrap().last_run = Some("2026-03-04T12:00:00Z".parse().unwrap());
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn evaluate_schedules_fires_only_latest_occurrence_after_gap() {
+        // A per-minute cron resuming after a dispatch gap (active_hours
+        // window reopened at 09:00) must fire only the most recent
+        // occurrence, not replay the 08:5x backlog inside the horizon one
+        // tick at a time.
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T09:00:05Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "every-minute".to_string(),
+            cron: "* * * * *".to_string(),
+            workflow_ref: Some("standard-workflow".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let mut state = orchestrator_core::ScheduleState::default();
+        state.schedules.insert(
+            "every-minute".to_string(),
+            orchestrator_core::ScheduleRunState {
+                last_run: Some("2026-03-03T17:00:00Z".parse().unwrap()),
+                last_status: "dispatched".to_string(),
+                run_count: 1,
+                missed_count: 0,
+            },
+        );
+
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
+        assert_eq!(due, vec![("every-minute".to_string(), "2026-03-04T09:00:00Z".parse().unwrap())]);
+
+        // Recording last_run = 09:00 leaves nothing due until 09:01.
+        state.schedules.get_mut("every-minute").unwrap().last_run = Some("2026-03-04T09:00:00Z".parse().unwrap());
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn evaluate_schedules_does_not_replay_occurrences_older_than_horizon() {
+        // Occurrences suppressed for longer than the catch-up horizon (daemon
+        // stopped, active_hours gate closed) are skipped, not replayed: a
+        // daily 08:00 cron must not get a delayed run when dispatch resumes
+        // at 09:00.
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T09:00:10Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "morning".to_string(),
+            cron: "0 8 * * *".to_string(),
+            workflow_ref: Some("standard-workflow".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let mut state = orchestrator_core::ScheduleState::default();
+        state.schedules.insert(
+            "morning".to_string(),
+            orchestrator_core::ScheduleRunState {
+                last_run: Some("2026-03-03T08:00:00Z".parse().unwrap()),
+                last_status: "dispatched".to_string(),
+                run_count: 1,
+                missed_count: 0,
+            },
+        );
+
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
+        assert!(due.is_empty(), "08:00 fire suppressed past the horizon must not replay at 09:00");
+    }
+
+    #[test]
+    fn evaluate_schedules_first_run_requires_matching_minute() {
+        // Without any recorded last_run there is nothing to catch up from;
+        // the schedule only fires when now lands inside a matching minute.
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:34:00Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "hourly".to_string(),
+            cron: "0 * * * *".to_string(),
+            workflow_ref: Some("standard-workflow".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let state = orchestrator_core::ScheduleState::default();
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
         assert!(due.is_empty());
     }
 
@@ -377,7 +547,7 @@ mod tests {
             orchestrator_core::project_schedule_dispatch_attempt(
                 project_root.to_string_lossy().as_ref(),
                 &outcome.schedule_id,
-                now,
+                outcome.run_at,
                 &outcome.status,
             );
         }
@@ -389,7 +559,11 @@ mod tests {
         assert_eq!(calls[0].2.as_deref(), Some(r#"{"scope":"nightly"}"#));
         assert_eq!(
             outcomes,
-            vec![ScheduleDispatchOutcome { schedule_id: "nightly".to_string(), status: "dispatched".to_string() }]
+            vec![ScheduleDispatchOutcome {
+                schedule_id: "nightly".to_string(),
+                run_at: now,
+                status: "dispatched".to_string()
+            }]
         );
 
         let state = orchestrator_core::load_schedule_state(project_root).expect("schedule state loads");
@@ -491,7 +665,7 @@ mod tests {
     #[test]
     fn active_hours_gate_skips_due_schedules() {
         let (schedules, state, now) = make_due_schedule();
-        let due = evaluate_schedules(&schedules, &state, now);
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
         assert!(!due.is_empty(), "schedule should be due at this time");
 
         let outside_hours = chrono::NaiveTime::from_hms_opt(14, 0, 0).unwrap();
@@ -502,7 +676,7 @@ mod tests {
     #[test]
     fn active_hours_gate_allows_due_schedules_inside_window() {
         let (schedules, state, now) = make_due_schedule();
-        let due = evaluate_schedules(&schedules, &state, now);
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
         assert!(!due.is_empty(), "schedule should be due at this time");
 
         let inside_hours = chrono::NaiveTime::from_hms_opt(23, 0, 0).unwrap();
@@ -513,7 +687,7 @@ mod tests {
     #[test]
     fn active_hours_unset_allows_all_schedules() {
         let (schedules, state, now) = make_due_schedule();
-        let due = evaluate_schedules(&schedules, &state, now);
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
         assert!(!due.is_empty(), "schedule should be due");
 
         let within =
