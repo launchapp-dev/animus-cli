@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Context, Result};
 
 use crate::agent_runtime_config::{
-    AgentProfile, CommandCwdMode, EvalCheck, EvalsConfig, PhaseCommandDefinition, PhaseExecutionMode,
+    AgentProfileOverlay, CommandCwdMode, EvalCheck, EvalsConfig, PhaseCommandDefinition, PhaseExecutionMode,
     PhaseManualDefinition,
 };
 use crate::PhaseExecutionDefinition;
@@ -29,17 +29,18 @@ const SYSTEM_PROMPT_FILE_MAX_BYTES: u64 = 1024 * 1024;
 ///
 /// When `models` is empty, existing `model`/`fallback_models` are left intact.
 pub fn resolve_agent_model_references(
-    profile: &mut crate::agent_runtime_config::AgentProfile,
+    profile: &mut AgentProfileOverlay,
     registry: &BTreeMap<String, super::yaml_types::ModelRegistryEntry>,
 ) {
-    if profile.models.is_empty() {
+    let models = profile.models.as_deref().unwrap_or_default();
+    if models.is_empty() {
         return;
     }
 
-    let mut resolved_models: Vec<String> = Vec::with_capacity(profile.models.len());
-    let mut resolved_tools: Vec<Option<String>> = Vec::with_capacity(profile.models.len());
+    let mut resolved_models: Vec<String> = Vec::with_capacity(models.len());
+    let mut resolved_tools: Vec<Option<String>> = Vec::with_capacity(models.len());
 
-    for name in &profile.models {
+    for name in models {
         let trimmed = name.trim();
         if trimmed.is_empty() {
             continue;
@@ -60,21 +61,37 @@ pub fn resolve_agent_model_references(
         return;
     }
 
-    // Set primary model (and optional tool) from the first resolved entry
-    profile.model = Some(resolved_models.remove(0));
-    if let Some(tool) = resolved_tools.remove(0) {
-        profile.tool = Some(tool);
-    }
+    // Set primary model (and tool) from the first resolved entry
+    let primary_model = resolved_models.remove(0);
+    profile.tool = match resolved_tools.remove(0) {
+        Some(tool) => Some(tool),
+        // The `models:` chain is authoritative for routing: when the
+        // selected primary has no registry tool, derive it from the model
+        // id so a base profile's tool cannot route the new model to the
+        // wrong provider.
+        None => Some(protocol::tool_for_model_id(&primary_model).to_string()),
+    };
+    profile.model = Some(primary_model);
 
     // Remaining resolved entries become fallbacks
     if !resolved_models.is_empty() {
-        profile.fallback_models = resolved_models;
+        profile.fallback_models = Some(resolved_models);
         // Build fallback_tools: use explicit tool if provided, else empty (auto-derived at runtime)
-        profile.fallback_tools = resolved_tools.into_iter().flatten().collect();
+        profile.fallback_tools = Some(resolved_tools.into_iter().flatten().collect());
+    } else {
+        // A single-entry `models:` list is authoritative for the whole
+        // chain: explicitly clear inherited fallbacks unless the profile
+        // declared its own `fallback_models` / `fallback_tools` alongside.
+        if profile.fallback_models.is_none() {
+            profile.fallback_models = Some(Vec::new());
+        }
+        if profile.fallback_tools.is_none() {
+            profile.fallback_tools = Some(Vec::new());
+        }
     }
 
     // Clear the name list after expansion to avoid double-expansion
-    profile.models.clear();
+    profile.models = None;
 }
 
 pub(super) fn parse_cwd_mode(value: &str) -> Result<CommandCwdMode> {
@@ -485,7 +502,7 @@ fn find_field_line_in_agent(yaml_str: &str, agent_id: &str, field_name: &str) ->
 }
 
 pub(crate) fn resolve_agent_system_prompt_files_confined_to_pack(
-    agent_profiles: &mut BTreeMap<String, AgentProfile>,
+    agent_profiles: &mut BTreeMap<String, AgentProfileOverlay>,
     yaml_str: &str,
     source_path: &Path,
     pack_root: &Path,
@@ -494,7 +511,7 @@ pub(crate) fn resolve_agent_system_prompt_files_confined_to_pack(
 }
 
 fn resolve_agent_system_prompt_files_internal(
-    agent_profiles: &mut BTreeMap<String, AgentProfile>,
+    agent_profiles: &mut BTreeMap<String, AgentProfileOverlay>,
     yaml_str: &str,
     source_path: Option<&Path>,
     pack_root: Option<&Path>,
@@ -524,7 +541,7 @@ fn resolve_agent_system_prompt_files_internal(
             ));
         }
 
-        let inline_set = !profile.system_prompt.trim().is_empty();
+        let inline_set = profile.system_prompt.as_deref().is_some_and(|prompt| !prompt.trim().is_empty());
         if inline_set {
             let line = find_field_line_in_agent(yaml_str, agent_id, "system_prompt_file");
             let line_suffix = line.map(|l| format!(" line {}", l)).unwrap_or_default();
@@ -621,7 +638,7 @@ fn resolve_agent_system_prompt_files_internal(
             )
         })?;
 
-        profile.system_prompt = contents;
+        profile.system_prompt = Some(contents);
         profile.system_prompt_file = None;
     }
     Ok(())
@@ -636,20 +653,23 @@ pub fn parse_yaml_workflow_config_with_base_and_source(
     base: &WorkflowConfig,
     source_path: Option<&Path>,
 ) -> Result<WorkflowConfig> {
-    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None, None)
+    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None, None, &BTreeMap::new())
 }
 
 /// Variant used by the YAML compiler after `${VAR}` / `${secret.X}`
 /// interpolation. `original` is the pre-interpolation file content; parse
 /// diagnostics render their source excerpt from it so resolved secret
-/// values never appear in error output.
+/// values never appear in error output. `resolved_secrets` maps each
+/// substituted secret name to its resolved value so error text built from
+/// the post-interpolation content can be redacted before surfacing.
 pub(crate) fn parse_yaml_workflow_config_with_base_source_and_original(
     yaml_str: &str,
     base: &WorkflowConfig,
     source_path: Option<&Path>,
     original: &str,
+    resolved_secrets: &BTreeMap<String, String>,
 ) -> Result<WorkflowConfig> {
-    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None, Some(original))
+    parse_yaml_workflow_config_internal(yaml_str, base, source_path, None, Some(original), resolved_secrets)
 }
 
 pub(crate) fn parse_yaml_workflow_config_confined_to_pack(
@@ -658,8 +678,16 @@ pub(crate) fn parse_yaml_workflow_config_confined_to_pack(
     source_path: &Path,
     pack_root: &Path,
     original: &str,
+    resolved_secrets: &BTreeMap<String, String>,
 ) -> Result<WorkflowConfig> {
-    parse_yaml_workflow_config_internal(yaml_str, base, Some(source_path), Some(pack_root), Some(original))
+    parse_yaml_workflow_config_internal(
+        yaml_str,
+        base,
+        Some(source_path),
+        Some(pack_root),
+        Some(original),
+        resolved_secrets,
+    )
 }
 
 /// Known top-level YAML keys recognized by `YamlWorkflowFile`. Used when
@@ -836,7 +864,52 @@ fn rebuild_excerpt_from_original(
     diag.with_excerpt_from(original, line, col, 0)
 }
 
+/// Replace each resolved `${secret.<name>}` VALUE occurring in `message`
+/// with `[redacted:<name>]`. Values shorter than 4 characters are skipped:
+/// they are too likely to occur incidentally in unrelated diagnostic text
+/// (line numbers, short words), which would mangle the message without
+/// meaningfully protecting the secret.
+fn redact_resolved_secret_values(message: &str, resolved_secrets: &BTreeMap<String, String>) -> String {
+    let mut redacted = message.to_string();
+    // Longest value first so an overlapping shorter secret cannot split a
+    // longer one and leave its tail in the diagnostic.
+    let mut entries: Vec<(&String, &String)> = resolved_secrets.iter().filter(|(_, value)| value.len() >= 4).collect();
+    entries.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    for (name, value) in entries {
+        let marker = format!("[redacted:{}]", name);
+        redacted = redacted.replace(value.as_str(), &marker);
+        // serde quotes offending scalars with Rust `{:?}` escaping
+        // (backslashes, quotes, control characters), so redact that
+        // rendering of the value too.
+        let escaped = format!("{:?}", value);
+        let escaped_inner = &escaped[1..escaped.len() - 1];
+        if escaped_inner != value {
+            redacted = redacted.replace(escaped_inner, &marker);
+        }
+    }
+    redacted
+}
+
 fn parse_yaml_workflow_config_internal(
+    yaml_str: &str,
+    base: &WorkflowConfig,
+    source_path: Option<&Path>,
+    pack_root: Option<&Path>,
+    original: Option<&str>,
+    resolved_secrets: &BTreeMap<String, String>,
+) -> Result<WorkflowConfig> {
+    parse_yaml_workflow_config_unredacted(yaml_str, base, source_path, pack_root, original).map_err(|err| {
+        let rendered = format!("{:#}", err);
+        let redacted = redact_resolved_secret_values(&rendered, resolved_secrets);
+        if redacted == rendered {
+            err
+        } else {
+            anyhow!("{}", redacted)
+        }
+    })
+}
+
+fn parse_yaml_workflow_config_unredacted(
     yaml_str: &str,
     base: &WorkflowConfig,
     source_path: Option<&Path>,
@@ -847,11 +920,6 @@ fn parse_yaml_workflow_config_internal(
         Ok(file) => file,
         Err(err) => {
             let mut diag = enrich_diagnostic(wrap_serde_yaml_error(&err, yaml_str, source_path), yaml_str);
-            // TODO(codex-p2): serde deserialization messages can quote the
-            // offending scalar, so a resolved secret used in a typed position
-            // (e.g. an enum field) can still leak via `diag.message`; scrubbing
-            // it requires plumbing resolved secret values into this parser or
-            // redacting at the yaml_compiler error boundary.
             if let Some(original) = original.filter(|original| *original != yaml_str) {
                 diag = rebuild_excerpt_from_original(diag, original);
             }
@@ -939,7 +1007,7 @@ pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_runtime_config::AgentProfile;
+    use crate::agent_runtime_config::AgentProfileOverlay;
 
     fn make_test_registry() -> BTreeMap<String, super::super::yaml_types::ModelRegistryEntry> {
         let mut registry = BTreeMap::new();
@@ -964,37 +1032,11 @@ mod tests {
         registry
     }
 
-    fn make_empty_profile() -> AgentProfile {
-        AgentProfile {
-            name: None,
-            description: "test".to_string(),
-            system_prompt: "test prompt".to_string(),
-            system_prompt_file: None,
-            role: None,
-            persona: None,
-            memory: Default::default(),
-            communication: Default::default(),
-            mcp_servers: vec![],
-            tool_policy: Default::default(),
-            skills: vec![],
-            capabilities: BTreeMap::new(),
-            mcp_server_configs: None,
-            structured_capabilities: None,
-            project_overrides: None,
-            models: vec![],
-            tool: None,
-            tool_profile: None,
-            model: None,
-            fallback_models: vec![],
-            fallback_tools: vec![],
-            reasoning_effort: None,
-            web_search: None,
-            network_access: None,
-            timeout_secs: None,
-            max_attempts: None,
-            extra_args: vec![],
-            codex_config_overrides: vec![],
-            max_continuations: None,
+    fn make_empty_profile() -> AgentProfileOverlay {
+        AgentProfileOverlay {
+            description: Some("test".to_string()),
+            system_prompt: Some("test prompt".to_string()),
+            ..AgentProfileOverlay::default()
         }
     }
 
@@ -1002,43 +1044,47 @@ mod tests {
     fn model_registry_resolves_primary_and_fallbacks() {
         let registry = make_test_registry();
         let mut profile = make_empty_profile();
-        profile.models = vec!["claude-opus".to_string(), "gpt4o".to_string()];
+        profile.models = Some(vec!["claude-opus".to_string(), "gpt4o".to_string()]);
 
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(profile.tool.as_deref(), Some("claude"));
-        assert_eq!(profile.fallback_models, vec!["gpt-4o"]);
-        assert_eq!(profile.fallback_tools, vec!["oai-runner"]);
-        assert!(profile.models.is_empty(), "name list should be cleared after expansion");
+        assert_eq!(profile.fallback_models.clone().unwrap_or_default(), vec!["gpt-4o"]);
+        assert_eq!(profile.fallback_tools.clone().unwrap_or_default(), vec!["oai-runner"]);
+        assert!(profile.models.is_none(), "name list should be cleared after expansion");
     }
 
     #[test]
     fn model_registry_resolves_single_entry_as_primary_only() {
         let registry = make_test_registry();
         let mut profile = make_empty_profile();
-        profile.models = vec!["o4-mini".to_string()];
+        profile.models = Some(vec!["o4-mini".to_string()]);
 
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("o4-mini"));
-        assert!(profile.tool.is_none(), "no explicit tool in registry → no override");
-        assert!(profile.fallback_models.is_empty());
-        assert!(profile.fallback_tools.is_empty());
+        assert_eq!(
+            profile.tool.as_deref(),
+            Some(protocol::tool_for_model_id("o4-mini")),
+            "no explicit tool in registry → derived from the model id"
+        );
+        assert!(profile.fallback_models.as_deref().unwrap_or_default().is_empty());
+        assert!(profile.fallback_tools.as_deref().unwrap_or_default().is_empty());
     }
 
     #[test]
     fn model_registry_non_registry_name_treated_as_literal_model_id() {
         let registry = make_test_registry();
         let mut profile = make_empty_profile();
-        profile.models = vec!["claude-opus".to_string(), "deepseek-v3".to_string()];
+        profile.models = Some(vec!["claude-opus".to_string(), "deepseek-v3".to_string()]);
 
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
-        assert_eq!(profile.fallback_models, vec!["deepseek-v3"]);
+        assert_eq!(profile.fallback_models.clone().unwrap_or_default(), vec!["deepseek-v3"]);
         // deepseek-v3 isn't in registry, so no explicit fallback_tool
-        assert!(profile.fallback_tools.is_empty());
+        assert!(profile.fallback_tools.as_deref().unwrap_or_default().is_empty());
     }
 
     #[test]
@@ -1050,7 +1096,7 @@ mod tests {
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("existing-model"));
-        assert!(profile.fallback_models.is_empty());
+        assert!(profile.fallback_models.as_deref().unwrap_or_default().is_empty());
     }
 
     #[test]
@@ -1058,31 +1104,31 @@ mod tests {
         let registry = make_test_registry();
         let mut profile = make_empty_profile();
         profile.model = Some("hardcoded-model".to_string());
-        profile.fallback_models = vec!["hardcoded-fallback".to_string()];
+        profile.fallback_models = Some(vec!["hardcoded-fallback".to_string()]);
 
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("hardcoded-model"));
-        assert_eq!(profile.fallback_models, vec!["hardcoded-fallback"]);
+        assert_eq!(profile.fallback_models.clone().unwrap_or_default(), vec!["hardcoded-fallback"]);
     }
 
     #[test]
     fn model_registry_skips_empty_name_entries() {
         let registry = make_test_registry();
         let mut profile = make_empty_profile();
-        profile.models = vec!["".to_string(), "claude-opus".to_string(), "  ".to_string()];
+        profile.models = Some(vec!["".to_string(), "claude-opus".to_string(), "  ".to_string()]);
 
         resolve_agent_model_references(&mut profile, &registry);
 
         assert_eq!(profile.model.as_deref(), Some("claude-sonnet-4-20250514"));
-        assert!(profile.fallback_models.is_empty());
+        assert!(profile.fallback_models.as_deref().unwrap_or_default().is_empty());
     }
 
     #[test]
     fn model_registry_tool_override_takes_precedence_over_profile_tool() {
         let registry = make_test_registry();
         let mut profile = make_empty_profile();
-        profile.models = vec!["claude-opus".to_string()];
+        profile.models = Some(vec!["claude-opus".to_string()]);
         profile.tool = Some("original-tool".to_string());
 
         resolve_agent_model_references(&mut profile, &registry);
@@ -1120,8 +1166,8 @@ phases:
         let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
         assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(swe.tool.as_deref(), Some("claude"));
-        assert_eq!(swe.fallback_models, vec!["gpt-4o"]);
-        assert_eq!(swe.fallback_tools, vec!["oai-runner"]);
+        assert_eq!(swe.fallback_models.clone().unwrap_or_default(), vec!["gpt-4o"]);
+        assert_eq!(swe.fallback_tools.clone().unwrap_or_default(), vec!["oai-runner"]);
     }
 
     #[test]
@@ -1161,8 +1207,8 @@ workflows:
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
         let architect = config.agent_profiles.get("architect").expect("architect agent");
         assert_eq!(architect.name.as_deref(), Some("Mira"));
-        assert!(architect.memory.enabled);
-        assert!(architect.communication.enabled);
+        assert!(architect.memory.clone().unwrap_or_default().enabled);
+        assert!(architect.communication.clone().unwrap_or_default().enabled);
         assert!(config.agent_channels.contains_key("engineering"));
     }
 
@@ -1189,8 +1235,8 @@ phases:
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
         let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
         assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
-        assert_eq!(swe.fallback_models, vec!["gpt-4o", "o4-mini"]);
-        assert_eq!(swe.fallback_tools, vec!["oai-runner"]);
+        assert_eq!(swe.fallback_models.clone().unwrap_or_default(), vec!["gpt-4o", "o4-mini"]);
+        assert_eq!(swe.fallback_tools.clone().unwrap_or_default(), vec!["oai-runner"]);
     }
 
     #[test]
@@ -1254,9 +1300,9 @@ phases:
         let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
         assert_eq!(swe.model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(swe.tool.as_deref(), Some("claude"));
-        assert_eq!(swe.fallback_models, vec!["gpt-4o", "o4-mini"]);
+        assert_eq!(swe.fallback_models.clone().unwrap_or_default(), vec!["gpt-4o", "o4-mini"]);
         // Only secondary has explicit tool; tertiary has none → only "oai-runner" in fallback_tools
-        assert_eq!(swe.fallback_tools, vec!["oai-runner"]);
+        assert_eq!(swe.fallback_tools.clone().unwrap_or_default(), vec!["oai-runner"]);
     }
 
     #[test]
@@ -1276,7 +1322,7 @@ phases:
         let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
         let swe = config.agent_profiles.get("swe").expect("swe agent should exist");
         assert!(swe.model.is_none());
-        assert!(swe.fallback_models.is_empty());
+        assert!(swe.fallback_models.as_deref().unwrap_or_default().is_empty());
     }
 
     #[test]
@@ -1306,7 +1352,7 @@ phases:
         let config = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
             .expect("parse yaml with source path");
         let analyst = config.agent_profiles.get("analyst").expect("analyst agent");
-        assert_eq!(analyst.system_prompt, prompt_body);
+        assert_eq!(analyst.system_prompt.as_deref(), Some(prompt_body));
         assert!(analyst.system_prompt_file.is_none(), "system_prompt_file should be consumed");
     }
 
@@ -1337,7 +1383,7 @@ phases:
         let config = parse_yaml_workflow_config_with_base_and_source(&yaml, &base, Some(&yaml_path))
             .expect("parse yaml with absolute path");
         let analyst = config.agent_profiles.get("analyst").expect("analyst agent");
-        assert_eq!(analyst.system_prompt, "absolute prompt body");
+        assert_eq!(analyst.system_prompt.as_deref(), Some("absolute prompt body"));
     }
 
     #[test]
@@ -1473,18 +1519,18 @@ phases:
         let base = builtin_workflow_config();
         let config = parse_yaml_workflow_config_with_base_and_source(yaml, &base, Some(&yaml_path))
             .expect("parse should succeed");
-        assert_eq!(config.agent_profiles.get("analyst").unwrap().system_prompt, body);
+        assert_eq!(config.agent_profiles.get("analyst").unwrap().system_prompt.as_deref(), Some(body));
     }
 
     #[test]
     fn agent_profile_serde_roundtrip_with_system_prompt_file() {
         let mut profile = make_empty_profile();
-        profile.system_prompt = String::new();
+        profile.system_prompt = None;
         profile.system_prompt_file = Some("prompts/agent.md".to_string());
 
         let json = serde_json::to_string(&profile).expect("serialize");
         assert!(json.contains("system_prompt_file"), "field should be present: {json}");
-        let back: AgentProfile = serde_json::from_str(&json).expect("deserialize");
+        let back: AgentProfileOverlay = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back.system_prompt_file.as_deref(), Some("prompts/agent.md"));
     }
 

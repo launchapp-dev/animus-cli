@@ -508,9 +508,10 @@ pub(crate) fn resolve_agent_scope(
         Some(agent_id) => {
             // Mirror `inject_workflow_mcp_servers_with_project_root`'s
             // precedence exactly: the workflow YAML `agent_profiles` entry's
-            // `mcp_servers` win, but when the YAML profile leaves them EMPTY
-            // the agent runtime config profile's `mcp_servers` are used as the
-            // fallback. A profile present in NEITHER source errors.
+            // `mcp_servers` win when explicitly declared (even when declared
+            // empty); when the YAML profile OMITS them the agent runtime
+            // config profile's `mcp_servers` are used as the fallback. A
+            // profile present in NEITHER source errors.
             let workflow = orchestrator_core::load_workflow_config_or_default(project_root);
             let yaml_profile = workflow.config.agent_profiles.get(agent_id).cloned();
             let runtime_config = orchestrator_core::load_agent_runtime_config_or_default(project_root);
@@ -524,8 +525,7 @@ pub(crate) fn resolve_agent_scope(
 
             // Tool policy: the YAML profile's policy wins; fall back to the
             // runtime profile's policy when the YAML profile declares none.
-            let yaml_policy =
-                yaml_profile.as_ref().map(|p| &p.tool_policy).filter(|p| !p.allow.is_empty() || !p.deny.is_empty());
+            let yaml_policy = yaml_profile.as_ref().and_then(|p| p.tool_policy.as_ref());
             let policy_source = yaml_policy.or_else(|| {
                 runtime_profile.as_ref().map(|p| &p.tool_policy).filter(|p| !p.allow.is_empty() || !p.deny.is_empty())
             });
@@ -534,9 +534,10 @@ pub(crate) fn resolve_agent_scope(
                 tool_policy.deny.extend(policy.deny.iter().cloned());
             }
 
-            // Servers: YAML profile's win, with the runtime profile as the
-            // empty-list fallback (matching the workflow injection path).
-            let yaml_servers = yaml_profile.map(|p| p.mcp_servers).filter(|servers| !servers.is_empty());
+            // Servers: YAML profile's win when declared, with the runtime
+            // profile as the omitted-field fallback (matching the workflow
+            // injection path).
+            let yaml_servers = yaml_profile.and_then(|p| p.mcp_servers);
             match yaml_servers {
                 Some(servers) => servers,
                 None => runtime_profile.map(|p| p.mcp_servers).unwrap_or_default(),

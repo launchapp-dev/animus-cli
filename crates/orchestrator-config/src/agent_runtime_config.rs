@@ -441,6 +441,174 @@ pub struct AgentProfile {
     pub max_continuations: Option<usize>,
 }
 
+/// Presence-aware overlay shape for [`AgentProfile`]. Every field is
+/// `Option`-wrapped so a YAML/JSON overlay that explicitly sets a field to
+/// its default value (e.g. `memory: { enabled: false }` or `mcp_servers: []`)
+/// still wins over the base profile, while an omitted field inherits the
+/// base value. Serialization skips absent fields, and deserialization
+/// accepts the exact same input shape as [`AgentProfile`].
+///
+/// TODO(codex-p2): fields that are already `Option` on [`AgentProfile`]
+/// (e.g. `model`, `system_prompt_file`) cannot be reset to `None` by an
+/// overlay — `field: null` deserializes identically to an omitted key, so
+/// the merge inherits the base value. Distinguishing explicit null would
+/// need a double-`Option` (or sentinel) wrapper on those fields.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct AgentProfileOverlay {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_file: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub persona: Option<AgentPersonaConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<AgentMemoryConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub communication: Option<AgentCommunicationConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_servers: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_policy: Option<AgentToolPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<BTreeMap<String, bool>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_server_configs: Option<BTreeMap<String, AgentMcpServerConfig>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub structured_capabilities: Option<AgentCapabilities>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_overrides: Option<BTreeMap<String, AgentProjectOverrides>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub models: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_models: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback_tools: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_search: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub network_access: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_args: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_config_overrides: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_continuations: Option<usize>,
+}
+
+impl AgentProfileOverlay {
+    /// Materialize a full [`AgentProfile`] from this overlay alone, filling
+    /// absent fields with their defaults. Used when an overlay introduces an
+    /// agent that has no base profile to merge onto.
+    pub fn to_profile(&self) -> AgentProfile {
+        let mut profile = AgentProfile::default();
+        merge_agent_profile(&mut profile, self);
+        profile
+    }
+
+    /// Layer `overlay` onto `self` field by field: every field `overlay`
+    /// declares (even explicitly at its default) wins, every omitted field
+    /// keeps `self`'s value. Used when multiple workflow YAML files or pack
+    /// overlays define the same agent id.
+    pub fn merge_from(&mut self, overlay: &AgentProfileOverlay) {
+        macro_rules! take_declared {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    if overlay.$field.is_some() {
+                        self.$field = overlay.$field.clone();
+                    }
+                )+
+            };
+        }
+        take_declared!(
+            name,
+            description,
+            system_prompt,
+            system_prompt_file,
+            role,
+            persona,
+            memory,
+            communication,
+            mcp_servers,
+            tool_policy,
+            skills,
+            capabilities,
+            mcp_server_configs,
+            structured_capabilities,
+            project_overrides,
+            models,
+            tool,
+            tool_profile,
+            model,
+            fallback_models,
+            fallback_tools,
+            reasoning_effort,
+            web_search,
+            network_access,
+            timeout_secs,
+            max_attempts,
+            extra_args,
+            codex_config_overrides,
+            max_continuations,
+        );
+    }
+}
+
+impl From<AgentProfile> for AgentProfileOverlay {
+    fn from(profile: AgentProfile) -> Self {
+        Self {
+            name: profile.name,
+            description: Some(profile.description),
+            system_prompt: Some(profile.system_prompt),
+            system_prompt_file: profile.system_prompt_file,
+            role: profile.role,
+            persona: profile.persona,
+            memory: Some(profile.memory),
+            communication: Some(profile.communication),
+            mcp_servers: Some(profile.mcp_servers),
+            tool_policy: Some(profile.tool_policy),
+            skills: Some(profile.skills),
+            capabilities: Some(profile.capabilities),
+            mcp_server_configs: profile.mcp_server_configs,
+            structured_capabilities: profile.structured_capabilities,
+            project_overrides: profile.project_overrides,
+            models: Some(profile.models),
+            tool: profile.tool,
+            tool_profile: profile.tool_profile,
+            model: profile.model,
+            fallback_models: Some(profile.fallback_models),
+            fallback_tools: Some(profile.fallback_tools),
+            reasoning_effort: profile.reasoning_effort,
+            web_search: profile.web_search,
+            network_access: profile.network_access,
+            timeout_secs: profile.timeout_secs,
+            max_attempts: profile.max_attempts,
+            extra_args: Some(profile.extra_args),
+            codex_config_overrides: Some(profile.codex_config_overrides),
+            max_continuations: profile.max_continuations,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PhaseCommandDefinition {
     pub program: String,
@@ -663,7 +831,7 @@ pub struct AgentRuntimeOverlay {
     #[serde(default)]
     pub tools_allowlist: Vec<String>,
     #[serde(default)]
-    pub agents: BTreeMap<String, AgentProfile>,
+    pub agents: BTreeMap<String, AgentProfileOverlay>,
     #[serde(default)]
     pub phases: BTreeMap<String, PhaseExecutionDefinition>,
     #[serde(default)]
@@ -1546,7 +1714,7 @@ fn merge_workflow_runtime_overlay(base: &mut AgentRuntimeConfig, workflow: &crat
         match base.agents.get_mut(agent_id) {
             Some(existing) => merge_agent_profile(existing, profile),
             None => {
-                base.agents.insert(agent_id.clone(), profile.clone());
+                base.agents.insert(agent_id.clone(), profile.to_profile());
             }
         }
     }
@@ -1608,7 +1776,7 @@ pub(crate) fn merge_agent_runtime_overlay(base: &mut AgentRuntimeConfig, overlay
         match base.agents.get_mut(agent_id) {
             Some(existing) => merge_agent_profile(existing, profile),
             None => {
-                base.agents.insert(agent_id.clone(), profile.clone());
+                base.agents.insert(agent_id.clone(), profile.to_profile());
             }
         }
     }
@@ -1625,20 +1793,15 @@ pub(crate) fn merge_agent_runtime_overlay(base: &mut AgentRuntimeConfig, overlay
     }
 }
 
-// TODO(review): overlays cannot reset a field back to its default — the
-// emptiness / `!= default` guards below cannot distinguish "omitted" from
-// "explicitly set to the default value". Fixing this requires a
-// presence-aware overlay shape (Option-wrapped fields) for AgentProfile,
-// which touches every serde consumer of the profile maps; deferred.
-fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
+fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfileOverlay) {
     if overlay.name.is_some() {
         base.name = overlay.name.clone();
     }
-    if !overlay.description.trim().is_empty() {
-        base.description = overlay.description.clone();
+    if let Some(description) = &overlay.description {
+        base.description = description.clone();
     }
-    if !overlay.system_prompt.trim().is_empty() {
-        base.system_prompt = overlay.system_prompt.clone();
+    if let Some(system_prompt) = &overlay.system_prompt {
+        base.system_prompt = system_prompt.clone();
     }
     if overlay.system_prompt_file.is_some() {
         base.system_prompt_file = overlay.system_prompt_file.clone();
@@ -1649,23 +1812,23 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     if overlay.persona.is_some() {
         base.persona = overlay.persona.clone();
     }
-    if overlay.memory != AgentMemoryConfig::default() {
-        base.memory = overlay.memory.clone();
+    if let Some(memory) = &overlay.memory {
+        base.memory = memory.clone();
     }
-    if overlay.communication != AgentCommunicationConfig::default() {
-        base.communication = overlay.communication.clone();
+    if let Some(communication) = &overlay.communication {
+        base.communication = communication.clone();
     }
-    if !overlay.mcp_servers.is_empty() {
-        base.mcp_servers = overlay.mcp_servers.clone();
+    if let Some(mcp_servers) = &overlay.mcp_servers {
+        base.mcp_servers = mcp_servers.clone();
     }
-    if !overlay.tool_policy.allow.is_empty() || !overlay.tool_policy.deny.is_empty() {
-        base.tool_policy = overlay.tool_policy.clone();
+    if let Some(tool_policy) = &overlay.tool_policy {
+        base.tool_policy = tool_policy.clone();
     }
-    if !overlay.skills.is_empty() {
-        base.skills = overlay.skills.clone();
+    if let Some(skills) = &overlay.skills {
+        base.skills = skills.clone();
     }
-    if !overlay.capabilities.is_empty() {
-        base.capabilities = overlay.capabilities.clone();
+    if let Some(capabilities) = &overlay.capabilities {
+        base.capabilities = capabilities.clone();
     }
     if overlay.mcp_server_configs.is_some() {
         base.mcp_server_configs = overlay.mcp_server_configs.clone();
@@ -1685,14 +1848,14 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     if overlay.model.is_some() {
         base.model = overlay.model.clone();
     }
-    if !overlay.fallback_models.is_empty() {
-        base.fallback_models = overlay.fallback_models.clone();
+    if let Some(fallback_models) = &overlay.fallback_models {
+        base.fallback_models = fallback_models.clone();
     }
-    if !overlay.fallback_tools.is_empty() {
-        base.fallback_tools = overlay.fallback_tools.clone();
+    if let Some(fallback_tools) = &overlay.fallback_tools {
+        base.fallback_tools = fallback_tools.clone();
     }
-    if !overlay.models.is_empty() {
-        base.models = overlay.models.clone();
+    if let Some(models) = &overlay.models {
+        base.models = models.clone();
     }
     if overlay.reasoning_effort.is_some() {
         base.reasoning_effort = overlay.reasoning_effort.clone();
@@ -1709,11 +1872,11 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     if overlay.max_attempts.is_some() {
         base.max_attempts = overlay.max_attempts;
     }
-    if !overlay.extra_args.is_empty() {
-        base.extra_args = overlay.extra_args.clone();
+    if let Some(extra_args) = &overlay.extra_args {
+        base.extra_args = extra_args.clone();
     }
-    if !overlay.codex_config_overrides.is_empty() {
-        base.codex_config_overrides = overlay.codex_config_overrides.clone();
+    if let Some(codex_config_overrides) = &overlay.codex_config_overrides {
+        base.codex_config_overrides = codex_config_overrides.clone();
     }
     if overlay.max_continuations.is_some() {
         base.max_continuations = overlay.max_continuations;
@@ -1763,7 +1926,11 @@ pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConf
         workflows: Vec::new(),
         checkpoint_retention: crate::workflow_config::WorkflowCheckpointRetentionConfig::default(),
         phase_definitions: config.phases.clone(),
-        agent_profiles: config.agents.clone(),
+        agent_profiles: config
+            .agents
+            .iter()
+            .map(|(agent_id, profile)| (agent_id.clone(), AgentProfileOverlay::from(profile.clone())))
+            .collect(),
         agent_channels: BTreeMap::new(),
         tools_allowlist: config.tools_allowlist.clone(),
         mcp_servers: BTreeMap::new(),
@@ -2521,7 +2688,7 @@ cli_tools:
         let mut overlay_agent = builtin.agent_profile("po").expect("builtin po profile should exist").clone();
         overlay_agent.mcp_servers.clear();
         overlay_agent.skills.clear();
-        workflow.agent_profiles.insert("workflow-test-agent".to_string(), overlay_agent);
+        workflow.agent_profiles.insert("workflow-test-agent".to_string(), overlay_agent.into());
         workflow.phase_definitions.insert(
             "workflow-test-phase".to_string(),
             PhaseExecutionDefinition {
@@ -2630,7 +2797,7 @@ cli_tools:
         project_agent.mcp_servers.clear();
         project_agent.skills.clear();
         project_agent.capabilities.clear();
-        workflow.agent_profiles.insert("project-agent".to_string(), project_agent);
+        workflow.agent_profiles.insert("project-agent".to_string(), project_agent.into());
         workflow.phase_definitions.insert(
             "pack-review".to_string(),
             PhaseExecutionDefinition {
@@ -4521,7 +4688,7 @@ agents:
             "system_prompt": "base prompt"
         }))
         .expect("base profile");
-        let overlay: AgentProfile = serde_json::from_value(serde_json::json!({
+        let overlay: AgentProfileOverlay = serde_json::from_value(serde_json::json!({
             "system_prompt_file": "prompts/overlay.md"
         }))
         .expect("overlay profile");
@@ -4529,6 +4696,58 @@ agents:
         merge_agent_profile(&mut base, &overlay);
         assert_eq!(base.system_prompt_file.as_deref(), Some("prompts/overlay.md"));
         assert_eq!(base.system_prompt, "base prompt");
+    }
+
+    #[test]
+    fn merge_agent_profile_explicit_default_values_override_base() {
+        let mut base: AgentProfile = serde_json::from_value(serde_json::json!({
+            "description": "base description",
+            "memory": { "enabled": true, "scope": "project" },
+            "mcp_servers": ["animus", "github"],
+            "skills": ["base-skill"],
+            "capabilities": { "memory": true },
+            "fallback_models": ["base-fallback"]
+        }))
+        .expect("base profile");
+        let overlay: AgentProfileOverlay = serde_json::from_value(serde_json::json!({
+            "memory": { "enabled": false },
+            "mcp_servers": [],
+            "skills": [],
+            "capabilities": {},
+            "fallback_models": []
+        }))
+        .expect("overlay profile");
+
+        merge_agent_profile(&mut base, &overlay);
+        assert!(!base.memory.enabled, "explicit memory.enabled=false must win over the base");
+        assert!(base.mcp_servers.is_empty(), "explicit empty mcp_servers must clear the base list");
+        assert!(base.skills.is_empty(), "explicit empty skills must clear the base list");
+        assert!(base.capabilities.is_empty(), "explicit empty capabilities must clear the base map");
+        assert!(base.fallback_models.is_empty(), "explicit empty fallback_models must clear the base list");
+        assert_eq!(base.description, "base description", "absent overlay fields must inherit the base value");
+    }
+
+    #[test]
+    fn merge_agent_profile_absent_fields_inherit_base() {
+        let mut base: AgentProfile = serde_json::from_value(serde_json::json!({
+            "description": "base description",
+            "memory": { "enabled": true },
+            "mcp_servers": ["animus"],
+            "skills": ["base-skill"],
+            "model": "base-model"
+        }))
+        .expect("base profile");
+        let overlay: AgentProfileOverlay = serde_json::from_value(serde_json::json!({
+            "model": "overlay-model"
+        }))
+        .expect("overlay profile");
+
+        merge_agent_profile(&mut base, &overlay);
+        assert_eq!(base.model.as_deref(), Some("overlay-model"));
+        assert!(base.memory.enabled);
+        assert_eq!(base.mcp_servers, vec!["animus".to_string()]);
+        assert_eq!(base.skills, vec!["base-skill".to_string()]);
+        assert_eq!(base.description, "base description");
     }
 
     #[test]
@@ -4600,7 +4819,7 @@ agents:
         let manifest = crate::load_pack_manifest(&pack_root).expect("load manifest");
         let overlay = crate::load_pack_agent_runtime_overlay(&manifest).expect("load overlay").expect("overlay");
         let agent = overlay.agents.get("pack-agent").expect("pack-agent");
-        assert_eq!(agent.system_prompt, prompt_body);
+        assert_eq!(agent.system_prompt.as_deref(), Some(prompt_body));
         assert!(agent.system_prompt_file.is_none());
     }
 
@@ -4611,7 +4830,7 @@ agents:
             "system_prompt_file": "prompts/base.md"
         }))
         .expect("base profile");
-        let overlay: AgentProfile = serde_json::from_value(serde_json::json!({
+        let overlay: AgentProfileOverlay = serde_json::from_value(serde_json::json!({
             "system_prompt": "overlay prompt"
         }))
         .expect("overlay profile");

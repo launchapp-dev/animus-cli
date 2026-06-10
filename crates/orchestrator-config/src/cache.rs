@@ -17,7 +17,11 @@ use sha2::{Digest, Sha256};
 
 use crate::workflow_config::LoadedWorkflowConfig;
 
-pub const WORKFLOW_CACHE_SCHEMA: &str = "animus.cache.workflow-config.v1";
+// v2: agent_profiles switched to the presence-aware AgentProfileOverlay
+// shape. v1 entries serialized every profile field explicitly, which a
+// presence-aware reader would misread as explicit overrides, so they must
+// be treated as misses.
+pub const WORKFLOW_CACHE_SCHEMA: &str = "animus.cache.workflow-config.v2";
 
 /// Bumped on any change to the compile pipeline that affects output
 /// for unchanged YAML/manifest inputs (e.g. built-in workflow base

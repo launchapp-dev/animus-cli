@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 
 use crate::agent_runtime_config::{
-    default_eval_expected_exit as default_eval_expected_exit_value, AgentProfile, AgentRuntimeConfig, EvalKind,
+    default_eval_expected_exit as default_eval_expected_exit_value, AgentProfileOverlay, AgentRuntimeConfig, EvalKind,
     EvalsConfig, PhaseExecutionMode,
 };
 
@@ -213,10 +213,15 @@ pub fn validate_workflow_and_runtime_configs_with_project_root(
 
     for (agent_id, profile) in &workflow.agent_profiles {
         if let Some(profile_name) = trim_nonempty(profile.tool_profile.as_deref()) {
+            let resolved_tool = resolve_tool_id(profile.tool.as_deref(), profile.model.as_deref()).or_else(|| {
+                runtime
+                    .agent_profile(agent_id)
+                    .and_then(|profile| resolve_tool_id(profile.tool.as_deref(), profile.model.as_deref()))
+            });
             validate_claude_profile_selection(
                 &format!("agent_profiles['{}'].tool_profile", agent_id),
                 profile_name,
-                resolve_tool_id(profile.tool.as_deref(), profile.model.as_deref()).as_deref(),
+                resolved_tool.as_deref(),
                 known_claude_profiles.as_ref(),
                 &mut errors,
             );
@@ -242,8 +247,12 @@ pub fn validate_workflow_and_runtime_configs_with_project_root(
             .or_else(|| {
                 definition.agent_id.as_deref().and_then(|agent_id| {
                     lookup_workflow_agent_profile(workflow, agent_id)
-                        .or_else(|| runtime.agent_profile(agent_id))
                         .and_then(|profile| resolve_tool_id(profile.tool.as_deref(), profile.model.as_deref()))
+                        .or_else(|| {
+                            runtime
+                                .agent_profile(agent_id)
+                                .and_then(|profile| resolve_tool_id(profile.tool.as_deref(), profile.model.as_deref()))
+                        })
                 })
             });
         validate_claude_profile_selection(
@@ -272,7 +281,7 @@ fn resolve_tool_id(tool: Option<&str>, model: Option<&str>) -> Option<String> {
         .or_else(|| trim_nonempty(model).map(|value| protocol::tool_for_model_id(value).to_string()))
 }
 
-fn lookup_workflow_agent_profile<'a>(workflow: &'a WorkflowConfig, agent_id: &str) -> Option<&'a AgentProfile> {
+fn lookup_workflow_agent_profile<'a>(workflow: &'a WorkflowConfig, agent_id: &str) -> Option<&'a AgentProfileOverlay> {
     workflow
         .agent_profiles
         .iter()
@@ -793,23 +802,25 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                     .push(format!("agent_profiles['{}'].persona.customizations must not contain empty keys", agent_id));
             }
         }
-        if profile.memory.scope.as_deref().is_some_and(|value| value.trim().is_empty()) {
+        let memory = profile.memory.clone().unwrap_or_default();
+        let communication = profile.communication.clone().unwrap_or_default();
+        if memory.scope.as_deref().is_some_and(|value| value.trim().is_empty()) {
             errors.push(format!("agent_profiles['{}'].memory.scope must not be empty", agent_id));
         }
-        if profile.memory.max_context_chars == Some(0) {
+        if memory.max_context_chars == Some(0) {
             errors.push(format!("agent_profiles['{}'].memory.max_context_chars must be greater than 0", agent_id));
         }
-        if profile.communication.max_context_chars == Some(0) {
+        if communication.max_context_chars == Some(0) {
             errors
                 .push(format!("agent_profiles['{}'].communication.max_context_chars must be greater than 0", agent_id));
         }
         validate_skill_references(
             format!("agent_profiles['{}'].skills", agent_id).as_str(),
-            &profile.skills,
+            profile.skills.as_deref().unwrap_or_default(),
             project_root,
             &mut errors,
         );
-        for server in &profile.mcp_servers {
+        for server in profile.mcp_servers.as_deref().unwrap_or_default() {
             if server.trim().is_empty() {
                 errors.push(format!("agent_profiles['{}'].mcp_servers must not contain empty values", agent_id));
                 continue;
@@ -821,16 +832,13 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                 ));
             }
         }
-        if profile.communication.enabled
-            && profile.communication.channels.is_empty()
-            && profile.communication.can_message.is_empty()
-        {
+        if communication.enabled && communication.channels.is_empty() && communication.can_message.is_empty() {
             errors.push(format!(
                 "agent_profiles['{}'].communication requires at least one channel or can_message target when enabled",
                 agent_id
             ));
         }
-        for channel in &profile.communication.channels {
+        for channel in &communication.channels {
             if channel.trim().is_empty() {
                 errors.push(format!(
                     "agent_profiles['{}'].communication.channels must not contain empty values",
@@ -858,7 +866,7 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                 )),
             }
         }
-        for target in &profile.communication.can_message {
+        for target in &communication.can_message {
             if target.trim().is_empty() {
                 errors.push(format!(
                     "agent_profiles['{}'].communication.can_message must not contain empty values",
