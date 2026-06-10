@@ -26,7 +26,7 @@ animus
 │   ├── health               Show daemon health diagnostics
 │   ├── pause                Pause daemon scheduling
 │   ├── resume               Resume daemon scheduling
-│   ├── events               Stream or tail daemon event history
+│   ├── events               Print recent daemon event history and exit; `--follow` keeps streaming new events until Ctrl-C
 │   ├── logs                 Read daemon logs
 │   ├── stream               Stream structured log events in real-time across daemon, workflows, and runs
 │   ├── clear-logs           Clear daemon logs
