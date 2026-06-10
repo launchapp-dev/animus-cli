@@ -26,12 +26,14 @@
 //!    is supplied AND the file exists OR the parent `.animus/` exists.
 //! 2. Global `~/.animus/plugins.lock` fallback.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -111,6 +113,13 @@ pub struct PluginLockfile {
     /// to. Skipped from the serialized form.
     #[serde(skip)]
     path: PathBuf,
+    /// Names explicitly removed from this in-memory snapshot since it was
+    /// loaded. Consulted by [`Self::save`]'s locked merge so an entry a
+    /// concurrent process installed after this snapshot was loaded
+    /// survives the save, while an explicit [`Self::remove`] still deletes
+    /// its entry. Skipped from the serialized form.
+    #[serde(skip)]
+    removed: BTreeSet<String>,
 }
 
 fn default_schema_version() -> String {
@@ -188,6 +197,7 @@ impl PluginLockfile {
             generated_at: Utc::now().to_rfc3339(),
             plugins: Vec::new(),
             path: path.to_path_buf(),
+            removed: BTreeSet::new(),
         }
     }
 
@@ -203,6 +213,7 @@ impl PluginLockfile {
 
     /// Insert or replace an entry. Returns the prior entry when one existed.
     pub fn upsert(&mut self, entry: LockEntry) -> Option<LockEntry> {
+        self.removed.remove(&entry.name);
         if let Some(idx) = self.plugins.iter().position(|e| e.name == entry.name) {
             let prior = std::mem::replace(&mut self.plugins[idx], entry);
             return Some(prior);
@@ -212,8 +223,11 @@ impl PluginLockfile {
     }
 
     /// Remove an entry by name. Returns the removed entry, or `None` if no
-    /// such entry existed.
+    /// such entry existed. The name is recorded as removed either way so a
+    /// subsequent [`Self::save`] drops it even when a concurrent process
+    /// re-wrote the on-disk file after this snapshot was loaded.
     pub fn remove(&mut self, name: &str) -> Option<LockEntry> {
+        self.removed.insert(name.to_string());
         let idx = self.plugins.iter().position(|e| e.name == name)?;
         Some(self.plugins.remove(idx))
     }
@@ -241,24 +255,75 @@ impl PluginLockfile {
     }
 
     /// Persist the lockfile to its bound path. Creates parent dirs as
-    /// needed and writes atomically (write to `<path>.tmp`, then rename).
+    /// needed and writes atomically (write to a unique pid+uuid temp file,
+    /// then rename — mirrors `manifest_cache::insert`).
+    ///
+    /// Concurrent writers (e.g. two `animus plugin install` runs) are
+    /// serialized behind an exclusive [`fs2`] lock on a `<path>.lock`
+    /// sidecar held for the full read-merge-write. Under that lock the
+    /// on-disk file is re-read and entries a concurrent process added
+    /// since this snapshot was loaded are merged back in, so neither run
+    /// erases the other's entry; names passed to [`Self::remove`] stay
+    /// removed.
     pub fn save(&mut self) -> Result<()> {
-        self.generated_at = Utc::now().to_rfc3339();
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("failed to create lockfile parent dir {}", parent.display()))?;
         }
+        let _guard = acquire_save_lock(&self.path)?;
+
+        // Merge-on-save: keep on-disk entries this snapshot never saw. A
+        // file that no longer parses is treated as absent so the
+        // documented `--force-rewrite-lockfile` remediation (save an empty
+        // snapshot over corrupt bytes) keeps working.
+        if let Ok(on_disk) = Self::load_or_empty(&self.path) {
+            for entry in on_disk.plugins {
+                if self.removed.contains(&entry.name) || self.find(&entry.name).is_some() {
+                    continue;
+                }
+                self.plugins.push(entry);
+            }
+        }
+
+        self.generated_at = Utc::now().to_rfc3339();
         let serialized = toml::to_string_pretty(self).context("failed to serialize plugin lockfile")?;
-        let tmp = self.path.with_extension("lock.tmp");
+        let file_name = self.path.file_name().and_then(|value| value.to_str()).unwrap_or("plugins.lock");
+        let tmp = self.path.with_file_name(format!(
+            "{file_name}.tmp-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
         {
             let mut handle = fs::File::create(&tmp).with_context(|| format!("failed to open {}", tmp.display()))?;
             handle.write_all(serialized.as_bytes()).with_context(|| format!("failed to write {}", tmp.display()))?;
             handle.sync_all().ok();
         }
-        fs::rename(&tmp, &self.path)
-            .with_context(|| format!("failed to install lockfile {} (from {})", self.path.display(), tmp.display()))?;
+        if let Err(err) = fs::rename(&tmp, &self.path) {
+            let _ = fs::remove_file(&tmp);
+            return Err(anyhow::Error::new(err).context(format!(
+                "failed to install lockfile {} (from {})",
+                self.path.display(),
+                tmp.display()
+            )));
+        }
+        self.removed.clear();
         Ok(())
     }
+}
+
+/// Acquire an exclusive cross-process lock on the `<path>.lock` sidecar
+/// guarding lockfile writes. Hold the returned `File` for the full
+/// read-merge-write inside [`PluginLockfile::save`]; the lock releases on
+/// drop. Two concurrent `animus plugin install` runs otherwise interleave
+/// their read-modify-write cycles and one silently erases the other's
+/// entry.
+fn acquire_save_lock(path: &Path) -> Result<fs::File> {
+    let file_name = path.file_name().and_then(|value| value.to_str()).unwrap_or("plugins.lock");
+    let lock_path = path.with_file_name(format!("{file_name}.lock"));
+    let file = fs::File::create(&lock_path)
+        .with_context(|| format!("failed to create lockfile write guard at {}", lock_path.display()))?;
+    file.lock_exclusive().with_context(|| format!("failed to acquire exclusive lock on {}", lock_path.display()))?;
+    Ok(file)
 }
 
 fn schema_compatible(version: &str) -> bool {
@@ -433,6 +498,78 @@ mod tests {
         assert_eq!(removed.name, "drop-me");
         assert!(lock.find("drop-me").is_none());
         assert!(lock.remove("drop-me").is_none());
+    }
+
+    fn entry(name: &str, sha_char: char) -> LockEntry {
+        LockEntry {
+            name: name.to_string(),
+            version: "v1".to_string(),
+            artifact_sha256: sha_char.to_string().repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now_str(),
+            installed_kind: None,
+            native_kind: None,
+        }
+    }
+
+    /// Two concurrent read-modify-write cycles (two `animus plugin install`
+    /// runs) must both land: the sidecar lock + merge-on-save keeps the file
+    /// valid TOML and preserves both entries regardless of interleaving.
+    #[test]
+    fn concurrent_saves_preserve_both_entries() {
+        for _ in 0..10 {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("plugins.lock");
+
+            let spawn_installer = |name: &'static str, sha_char: char| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let mut lock = PluginLockfile::load_or_empty(&path).expect("load");
+                    lock.upsert(entry(name, sha_char));
+                    lock.save().expect("save");
+                })
+            };
+            let a = spawn_installer("plugin-a", 'a');
+            let b = spawn_installer("plugin-b", 'b');
+            a.join().expect("thread a");
+            b.join().expect("thread b");
+
+            let reloaded = PluginLockfile::load_or_empty(&path).expect("concurrent saves must yield valid TOML");
+            let names: Vec<&str> = reloaded.plugins.iter().map(|e| e.name.as_str()).collect();
+            assert!(names.contains(&"plugin-a"), "entry from thread a must survive; got {names:?}");
+            assert!(names.contains(&"plugin-b"), "entry from thread b must survive; got {names:?}");
+        }
+    }
+
+    /// The merge-on-save must not resurrect an explicitly removed entry,
+    /// while still preserving an entry a concurrent process added after this
+    /// snapshot was loaded.
+    #[test]
+    fn save_merges_concurrent_entries_but_honors_removals() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("plugins.lock");
+
+        let mut seed = PluginLockfile::empty_at(&path);
+        seed.upsert(entry("keep-me", 'a'));
+        seed.upsert(entry("drop-me", 'b'));
+        seed.save().unwrap();
+
+        // Snapshot loaded before the concurrent write below.
+        let mut snapshot = PluginLockfile::load_or_empty(&path).unwrap();
+
+        // Concurrent process installs another plugin.
+        let mut concurrent = PluginLockfile::load_or_empty(&path).unwrap();
+        concurrent.upsert(entry("added-concurrently", 'c'));
+        concurrent.save().unwrap();
+
+        snapshot.remove("drop-me");
+        snapshot.save().unwrap();
+
+        let reloaded = PluginLockfile::load_or_empty(&path).unwrap();
+        let names: Vec<&str> = reloaded.plugins.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains(&"keep-me"), "untouched entry must survive; got {names:?}");
+        assert!(names.contains(&"added-concurrently"), "concurrent entry must survive; got {names:?}");
+        assert!(!names.contains(&"drop-me"), "removed entry must stay removed; got {names:?}");
     }
 
     #[test]

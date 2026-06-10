@@ -40,7 +40,7 @@ pub trait ProjectTickHooks {
         Ok(0)
     }
 
-    async fn reconcile_stale_in_progress_tasks(&mut self, _root: &str) -> Result<usize> {
+    async fn reconcile_stale_in_progress_tasks(&mut self, _root: &str, _stale_threshold_hours: u64) -> Result<usize> {
         Ok(0)
     }
 

@@ -1,10 +1,19 @@
 use std::collections::HashMap;
+use std::time::Duration;
 
 use animus_plugin_protocol::RpcError;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
 use crate::PluginHost;
+
+/// Generous upper bound for a single subject-backend RPC routed through
+/// [`SubjectRouter::route_call`]. Subject ops are CRUD against a local
+/// store and should complete in milliseconds; the deadline exists so a
+/// wedged plugin (alive but not responding) cannot pin a daemon dispatch
+/// task forever on the otherwise-untimed request path. Expiry surfaces as
+/// an `RpcError` with the protocol's `TIMEOUT` code.
+const SUBJECT_ROUTE_TIMEOUT: Duration = Duration::from_mins(2);
 
 /// Subject-kind registration parsed from a plugin's declared
 /// `subject_kinds`. A pattern ending in `.*` matches any kind whose dotted
@@ -285,7 +294,8 @@ impl SubjectRouter {
             (_, other) => other,
         };
 
-        let mut response = host.request(&translated_method, translated_params).await?;
+        let mut response =
+            host.request_with_timeout(&translated_method, translated_params, SUBJECT_ROUTE_TIMEOUT).await?;
 
         // Inbound translation: rewrite the top-level `kind` field AND the
         // `<kind>:` prefix in `id` fields so callers continue to see the

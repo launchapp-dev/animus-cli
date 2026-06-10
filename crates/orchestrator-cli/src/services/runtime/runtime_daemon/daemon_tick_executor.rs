@@ -59,43 +59,15 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         reconcile_manual_phase_timeouts(hub, root).await
     }
 
-    async fn reconcile_stale_in_progress_tasks(&mut self, hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
-        let tasks = hub.tasks().list().await?;
-        let in_progress_tasks: Vec<_> = tasks.iter().filter(|t| t.status == TaskStatus::InProgress).collect();
-        if in_progress_tasks.is_empty() {
-            return Ok(0);
-        }
-
-        let workflows = hub.workflows().list().await?;
-        let mut reconciled = 0usize;
-        for task in in_progress_tasks {
-            let task_workflows: Vec<_> = workflows.iter().filter(|w| w.task_id == task.id).collect();
-            if task_workflows.is_empty() {
-                continue;
-            }
-            let all_terminal = task_workflows.iter().all(|w| {
-                matches!(
-                    w.status,
-                    WorkflowStatus::Completed
-                        | WorkflowStatus::Failed
-                        | WorkflowStatus::Cancelled
-                        | WorkflowStatus::Escalated
-                )
-            });
-            if all_terminal {
-                let any_success = task_workflows
-                    .iter()
-                    .any(|w| matches!(w.status, WorkflowStatus::Completed | WorkflowStatus::Escalated));
-                // Only auto-transition to Blocked on failure. Task completion is never
-                // automatic — only an agent or human should mark a task done after
-                // verifying the work actually landed.
-                if !any_success {
-                    let _ = hub.tasks().set_status(&task.id, TaskStatus::Blocked, false).await;
-                    reconciled += 1;
-                }
-            }
-        }
-        Ok(reconciled)
+    async fn reconcile_stale_in_progress_tasks(
+        &mut self,
+        hub: Arc<dyn ServiceHub>,
+        _root: &str,
+        active_subject_ids: &std::collections::HashSet<String>,
+        stale_threshold_hours: u64,
+    ) -> Result<usize> {
+        let grace_secs = i64::try_from(stale_threshold_hours.saturating_mul(3600)).unwrap_or(i64::MAX);
+        reconcile_stale_in_progress_tasks_for_hub(hub, active_subject_ids, grace_secs).await
     }
 
     async fn cleanup_stale_workflows(
@@ -255,6 +227,86 @@ impl DefaultProjectTickServices for CliProjectTickServices {
     }
 }
 
+/// Reconcile InProgress tasks against their workflow records.
+///
+/// Two cases:
+///
+/// 1. All workflows for the task are terminal with no success, AND the
+///    latest terminal transition postdates the task's own last status
+///    transition: the task is stale residue of a crashed/failed workflow
+///    — block it. An operator who reset the task to InProgress AFTER the
+///    workflows ended is working it manually (no new workflow row) and
+///    must not be re-blocked every tick. The marker is
+///    `metadata.status_changed_at` (only bumped by status applications,
+///    not by ordinary field edits), falling back to `updated_at` for
+///    records persisted before that field existed.
+/// 2. Zero workflow records, no active runner process for the task, and
+///    the task's last transition is older than the daemon's stale
+///    in-progress threshold (`--stale-threshold-hours`, default 24h):
+///    nothing will ever pick it up — reset it to Ready (not Blocked) so
+///    dispatch can retry it. Human-assigned tasks are exempt: a person
+///    may legitimately hold a claim without any workflow row, and there
+///    is no post-hoc marker distinguishing a daemon dispatch whose runner
+///    died pre-bootstrap from a manual claim.
+pub(crate) async fn reconcile_stale_in_progress_tasks_for_hub(
+    hub: Arc<dyn ServiceHub>,
+    active_subject_ids: &std::collections::HashSet<String>,
+    grace_secs: i64,
+) -> Result<usize> {
+    let tasks = hub.tasks().list().await?;
+    let in_progress_tasks: Vec<_> = tasks.iter().filter(|t| t.status == TaskStatus::InProgress).collect();
+    if in_progress_tasks.is_empty() {
+        return Ok(0);
+    }
+
+    let workflows = hub.workflows().list().await?;
+    let now = chrono::Utc::now();
+    let mut reconciled = 0usize;
+    for task in in_progress_tasks {
+        let last_transition_at = task.metadata.status_changed_at.unwrap_or(task.metadata.updated_at);
+        let task_workflows: Vec<_> = workflows.iter().filter(|w| w.task_id == task.id).collect();
+        if task_workflows.is_empty() {
+            if active_subject_ids.contains(&task.id) {
+                continue;
+            }
+            if matches!(task.assignee, orchestrator_core::Assignee::Human { .. }) {
+                continue;
+            }
+            if (now - last_transition_at).num_milliseconds() > grace_secs.saturating_mul(1000) {
+                let _ = hub.tasks().set_status(&task.id, TaskStatus::Ready, false).await;
+                reconciled += 1;
+            }
+            continue;
+        }
+        let all_terminal = task_workflows.iter().all(|w| {
+            matches!(
+                w.status,
+                WorkflowStatus::Completed
+                    | WorkflowStatus::Failed
+                    | WorkflowStatus::Cancelled
+                    | WorkflowStatus::Escalated
+            )
+        });
+        if all_terminal {
+            let any_success = task_workflows
+                .iter()
+                .any(|w| matches!(w.status, WorkflowStatus::Completed | WorkflowStatus::Escalated));
+            // Only auto-transition to Blocked on failure. Task completion is never
+            // automatic — only an agent or human should mark a task done after
+            // verifying the work actually landed.
+            if !any_success {
+                let latest_terminal_at = task_workflows.iter().map(|w| w.completed_at.unwrap_or(w.started_at)).max();
+                if latest_terminal_at.is_some_and(|terminal_at| last_transition_at >= terminal_at) {
+                    continue;
+                }
+                let _ = hub.tasks().set_status(&task.id, TaskStatus::Blocked, false).await;
+                reconciled += 1;
+            }
+        }
+    }
+    Ok(reconciled)
+}
+
 pub(crate) type SlimProjectTickDriver<'a> = DefaultSlimProjectTickDriver<'a, CliProjectTickServices>;
 
 pub(crate) fn slim_project_tick_driver<'a>(
@@ -263,4 +315,207 @@ pub(crate) fn slim_project_tick_driver<'a>(
     logger: Arc<Logger>,
 ) -> SlimProjectTickDriver<'a> {
     default_slim_project_tick_driver(CliProjectTickServices::new(args, logger), process_manager)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::await_holding_lock)]
+
+    use super::reconcile_stale_in_progress_tasks_for_hub;
+    use crate::shared::test_env_lock;
+    use orchestrator_core::{
+        services::ServiceHub, FileServiceHub, Priority, TaskCreateInput, TaskStatus, TaskType, WorkflowRunInput,
+    };
+    use protocol::test_utils::EnvVarGuard;
+    use std::collections::HashSet;
+    use std::process::Command as ProcessCommand;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn init_git_repo(temp: &TempDir) {
+        let init = ProcessCommand::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git init should run");
+        assert!(init.success(), "git init should succeed");
+        for args in [
+            ["config", "user.email", "ao-test@example.com"].as_slice(),
+            ["config", "user.name", "Animus Test"].as_slice(),
+        ] {
+            let status =
+                ProcessCommand::new("git").args(args).current_dir(temp.path()).status().expect("git config should run");
+            assert!(status.success(), "git config should succeed");
+        }
+        std::fs::write(temp.path().join("README.md"), "# test\n").expect("readme should be written");
+        let add =
+            ProcessCommand::new("git").args(["add", "README.md"]).current_dir(temp.path()).status().expect("git add");
+        assert!(add.success(), "git add should succeed");
+        let commit = ProcessCommand::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git commit should run");
+        assert!(commit.success(), "initial commit should succeed");
+    }
+
+    async fn hub_with_task(temp: &TempDir, title: &str) -> (Arc<dyn ServiceHub>, String) {
+        init_git_repo(temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: title.to_string(),
+                description: "stale in-progress reconciliation test".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        (hub, task.id)
+    }
+
+    #[tokio::test]
+    async fn stale_in_progress_task_with_failed_workflow_is_still_blocked() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let (hub, task_id) = hub_with_task(&temp, "crashed workflow residue").await;
+
+        hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task_id.clone(), None))
+            .await
+            .expect("workflow should start");
+        hub.workflows().cancel(&workflow.id).await.expect("workflow should cancel");
+
+        // An ordinary field edit after the crash bumps `updated_at` but is
+        // NOT a status transition — it must not shield the task from
+        // reconciliation.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        hub.tasks()
+            .update(
+                &task_id,
+                orchestrator_core::TaskUpdateInput {
+                    title: None,
+                    description: None,
+                    priority: Some(Priority::High),
+                    status: None,
+                    assignee: None,
+                    tags: None,
+                    updated_by: None,
+                    deadline: None,
+                    linked_architecture_entities: None,
+                },
+            )
+            .await
+            .expect("task field edit should apply");
+        // A no-op re-application of the current status is not a transition
+        // either.
+        hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("no-op status write should apply");
+
+        let reconciled = reconcile_stale_in_progress_tasks_for_hub(hub.clone(), &HashSet::new(), 90)
+            .await
+            .expect("reconciliation should run");
+        assert_eq!(reconciled, 1, "task whose only workflow ended after its last transition must be reconciled");
+        let task = hub.tasks().get(&task_id).await.expect("task should reload");
+        assert_eq!(task.status, TaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn manually_reset_in_progress_task_is_not_reblocked() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let (hub, task_id) = hub_with_task(&temp, "manually worked task").await;
+
+        hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task_id.clone(), None))
+            .await
+            .expect("workflow should start");
+        hub.workflows().cancel(&workflow.id).await.expect("workflow should cancel");
+
+        // Operator resets the task and works it manually — no new workflow
+        // row. The task's own transition now postdates the terminal
+        // workflow, so the reconciler must leave it alone on every tick.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        hub.tasks().set_status(&task_id, TaskStatus::Ready, false).await.expect("task should reset");
+        hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
+
+        for _ in 0..2 {
+            let reconciled = reconcile_stale_in_progress_tasks_for_hub(hub.clone(), &HashSet::new(), 90)
+                .await
+                .expect("reconciliation should run");
+            assert_eq!(reconciled, 0, "manually reset task must not be re-blocked");
+            let task = hub.tasks().get(&task_id).await.expect("task should reload");
+            assert_eq!(task.status, TaskStatus::InProgress);
+        }
+    }
+
+    #[tokio::test]
+    async fn in_progress_task_with_no_workflows_resets_to_ready_after_grace() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let (hub, task_id) = hub_with_task(&temp, "abandoned in-progress task").await;
+
+        hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+
+        let reconciled = reconcile_stale_in_progress_tasks_for_hub(hub.clone(), &HashSet::new(), 0)
+            .await
+            .expect("reconciliation should run");
+        assert_eq!(reconciled, 1, "abandoned task beyond the grace age must be reconciled");
+        let task = hub.tasks().get(&task_id).await.expect("task should reload");
+        assert_eq!(task.status, TaskStatus::Ready, "abandoned task is reset to Ready, not Blocked");
+    }
+
+    #[tokio::test]
+    async fn in_progress_task_with_no_workflows_is_left_alone_within_grace_or_while_runner_active() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let (hub, task_id) = hub_with_task(&temp, "freshly dispatched task").await;
+
+        hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
+
+        // Within the grace window: untouched.
+        let reconciled = reconcile_stale_in_progress_tasks_for_hub(hub.clone(), &HashSet::new(), 3600)
+            .await
+            .expect("reconciliation should run");
+        assert_eq!(reconciled, 0);
+        assert_eq!(hub.tasks().get(&task_id).await.expect("task should reload").status, TaskStatus::InProgress);
+
+        // Beyond the grace window but with a live runner process for the
+        // subject (record not bootstrapped yet): untouched.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let active: HashSet<String> = HashSet::from([task_id.clone()]);
+        let reconciled = reconcile_stale_in_progress_tasks_for_hub(hub.clone(), &active, 0)
+            .await
+            .expect("reconciliation should run");
+        assert_eq!(reconciled, 0);
+        assert_eq!(hub.tasks().get(&task_id).await.expect("task should reload").status, TaskStatus::InProgress);
+
+        // Human-assigned claims are never auto-reset, even beyond the
+        // grace: a person may legitimately work a task with no workflow
+        // row.
+        hub.tasks()
+            .assign_human(&task_id, "operator".to_string(), "test".to_string())
+            .await
+            .expect("task should be human-assigned");
+        let reconciled = reconcile_stale_in_progress_tasks_for_hub(hub.clone(), &HashSet::new(), 0)
+            .await
+            .expect("reconciliation should run");
+        assert_eq!(reconciled, 0);
+        assert_eq!(hub.tasks().get(&task_id).await.expect("task should reload").status, TaskStatus::InProgress);
+    }
 }

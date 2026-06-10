@@ -168,6 +168,31 @@ The `<principal>` is the RBAC default principal (`local` in the single-user
 default), so a future multi-user surface can hold distinct tokens per user
 without a storage migration.
 
+## Recovery
+
+- **Corrupt keychain credentials never block their own repair.** If the
+  stored `StoredCredentials` JSON is unparseable (truncated write, schema
+  skew), it is treated as *no stored credentials*: the proxy reports the
+  server as needing `animus mcp auth <server>`, `animus mcp auth-status`
+  shows it unauthenticated, and `animus mcp auth-logout` still clears the
+  entry. Re-running `animus mcp auth` overwrites it.
+- **Broker-backed `refresh_token` flows self-heal a dead rotation chain.**
+  The broker caches rotated refresh tokens per server under
+  `~/.animus/<scope>/mcp-oauth-cache/`. If the server rejects the cached
+  refresh token with an explicit RFC 6749 `invalid_grant`, the cache entry
+  is deleted and the env-var seed is retried within the same resolution
+  (other failures — `invalid_client`, 429/5xx, transport errors — keep the
+  cached rotation chain intact). Each
+  cache entry also records a hash of the seed env var's *value* (never the
+  plaintext), so re-minting the seed (a new token in the same env var)
+  invalidates the stale entry automatically; a cache populated while the
+  seed was present stays usable in a process where the env var is absent.
+- **Concurrent resolutions can't revoke a rotating grant family.** Cached
+  broker flows serialize the expiry-check → refresh → cache-write cycle
+  behind a per-server file lock and re-read the cache after acquiring it,
+  so parallel phases perform one token POST instead of racing the same
+  refresh token.
+
 ## Security
 
 - The redirect-callback listener binds **loopback only** (`127.0.0.1:<ephemeral>`).

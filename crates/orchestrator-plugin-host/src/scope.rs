@@ -140,6 +140,13 @@ pub struct PluginScope {
     /// Path the scope was loaded from, if any. `None` means the scope
     /// was synthesized from defaults (no `plugin-scope.yaml` on disk).
     pub source_path: Option<PathBuf>,
+    /// Diagnostic recorded when a flavor manifest was located on disk but
+    /// failed to parse: `(manifest_path, error)`. The scope stays
+    /// fail-closed (`flavor-only` with an empty admit set), and discovery
+    /// surfaces this as a [`crate::DiscoveryWarning`] so the operator sees
+    /// why every plugin was filtered out instead of a bare "plugin not
+    /// installed" symptom.
+    pub flavor_manifest_error: Option<(PathBuf, String)>,
 }
 
 impl Default for PluginScope {
@@ -151,6 +158,7 @@ impl Default for PluginScope {
             extras: BTreeSet::new(),
             flavor_plugins: BTreeSet::new(),
             source_path: None,
+            flavor_manifest_error: None,
         }
     }
 }
@@ -174,10 +182,27 @@ impl PluginScope {
     /// [`load_flavor_required_slugs_from_disk`] — and any parse failure
     /// degrades to "no flavor plugins resolved" rather than erroring,
     /// matching the documented "default-deny on broken flavor" policy.
+    /// The failure is loud, not silent: it is logged at `warn` and
+    /// recorded on [`PluginScope::flavor_manifest_error`] so discovery
+    /// can surface it as a [`crate::DiscoveryWarning`].
     pub fn load_for_project(project_root: &Path) -> Result<Self> {
-        let flavor_plugins = load_flavor_required_slugs_from_disk(project_root).unwrap_or_default();
+        let (flavor_plugins, flavor_manifest_error) = match load_flavor_required_slugs_from_disk(project_root) {
+            Ok(plugins) => (plugins, None),
+            Err(err) => {
+                let manifest_path = locate_default_flavor_manifest(project_root)
+                    .unwrap_or_else(|| project_root.join(FLAVOR_DEFAULT_MANIFEST_REL));
+                tracing::warn!(
+                    manifest = %manifest_path.display(),
+                    error = %format!("{err:#}"),
+                    "flavor manifest failed to load; flavor-only scope will admit NO plugins until it is fixed"
+                );
+                (BTreeSet::new(), Some((manifest_path, format!("{err:#}"))))
+            }
+        };
         let flavor_present = !flavor_plugins.is_empty() || locate_default_flavor_manifest(project_root).is_some();
-        Self::load_for_project_with_flavor(project_root, &flavor_plugins, flavor_present)
+        let mut scope = Self::load_for_project_with_flavor(project_root, &flavor_plugins, flavor_present)?;
+        scope.flavor_manifest_error = flavor_manifest_error;
+        Ok(scope)
     }
 
     /// Resolve the scope for a given project root.
@@ -233,6 +258,7 @@ impl PluginScope {
             extras: BTreeSet::new(),
             flavor_plugins: flavor_plugins.clone(),
             source_path: None,
+            flavor_manifest_error: None,
         })
     }
 
@@ -269,6 +295,7 @@ impl PluginScope {
             extras: parsed.extras.into_iter().collect(),
             flavor_plugins: flavor_plugins.clone(),
             source_path: Some(path.to_path_buf()),
+            flavor_manifest_error: None,
         })
     }
 
@@ -345,7 +372,7 @@ impl PluginScope {
         // names admit, so a renamed install with a non-matching
         // override must NOT be silently admitted via its manifest name.
         if matches!(self.mode, PluginScopeMode::FlavorOnly) && plugin.name != plugin.manifest.name {
-            return self.flavor_plugins.iter().any(|s| s == &plugin.manifest.name);
+            return self.admits_by_name(&plugin.manifest.name);
         }
         false
     }
@@ -646,6 +673,40 @@ extras:
             source: crate::discovery::DiscoverySource::PluginPath,
         };
         assert!(scope.admits(&renamed), "renamed plugin matching flavor slug via manifest name must admit");
+    }
+
+    #[test]
+    fn admits_honors_name_override_via_extras_fallback() {
+        let mut scope = PluginScope { mode: PluginScopeMode::FlavorOnly, ..PluginScope::default() };
+        scope.extras.insert("animus-subject-default".to_string());
+
+        // The manifest-name fallback must consult the same union as
+        // `effective_admit_set()` (flavor plugins PLUS extras), so a
+        // renamed install whose manifest name only appears in `extras:`
+        // still admits.
+        let renamed = DiscoveredPlugin {
+            name: "custom-task".to_string(),
+            path: PathBuf::from("/tmp/custom-task"),
+            manifest: manifest("animus-subject-default", "subject_backend"),
+            source: crate::discovery::DiscoverySource::PluginPath,
+        };
+        assert!(scope.admits(&renamed), "renamed plugin matching an extras slug via manifest name must admit");
+    }
+
+    #[test]
+    fn load_for_project_records_error_and_fails_closed_on_broken_flavor_manifest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let flavors = temp.path().join("flavors");
+        std::fs::create_dir_all(&flavors).expect("mkdir flavors");
+        std::fs::write(flavors.join("default.toml"), "this is [not valid TOML\n").expect("write broken flavor");
+
+        let scope = PluginScope::load_for_project(temp.path()).expect("load");
+        assert_eq!(scope.mode, PluginScopeMode::FlavorOnly, "broken flavor must stay fail-closed");
+        assert!(scope.effective_admit_set().is_empty());
+        assert!(!scope.admits(&plugin("animus-subject-default")));
+        let (path, reason) = scope.flavor_manifest_error.as_ref().expect("parse failure must be recorded");
+        assert_eq!(path, &flavors.join("default.toml"));
+        assert!(reason.contains("failed to parse flavor manifest"), "unexpected reason: {reason}");
     }
 
     #[test]

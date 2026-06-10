@@ -448,11 +448,43 @@ impl PluginDiscovery {
             },
         };
         if let Some(scope) = effective_scope {
+            // A flavor manifest that exists but failed to parse leaves the
+            // scope fail-closed (flavor-only with an EMPTY admit set).
+            // Surface that as a DiscoveryWarning so `animus plugin list`
+            // shows the real cause instead of every plugin silently
+            // disappearing behind a "plugin not installed" symptom. When an
+            // explicit `.animus/plugin-scope.yaml` overrides the mode, the
+            // broken manifest does not gate discovery — say so instead of
+            // claiming plugins were filtered out.
+            if let Some((manifest_path, reason)) = scope.flavor_manifest_error.as_ref() {
+                let consequence = if matches!(scope.mode, crate::scope::PluginScopeMode::FlavorOnly) {
+                    "flavor-only scope admits NO plugins until it is fixed"
+                } else {
+                    "discovery is unaffected because the project's plugin-scope file overrides the mode"
+                };
+                warnings.push(DiscoveryWarning {
+                    name: manifest_path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("flavor-manifest")
+                        .to_string(),
+                    path: manifest_path.clone(),
+                    source: DiscoverySource::ProjectLocal,
+                    reason: format!("flavor manifest failed to load; {consequence}: {reason}"),
+                });
+            }
             if !scope.admits_everything() {
                 let before = discovered.len();
                 discovered.retain(|plugin| scope.admits(plugin));
                 let removed = before.saturating_sub(discovered.len());
-                if removed > 0 {
+                if removed > 0 && scope.effective_admit_set().is_empty() {
+                    tracing::info!(
+                        scope_mode = scope.mode.as_wire(),
+                        removed,
+                        "plugin scope filter removed every discovered plugin: the effective admit set is empty \
+                         (broken or empty flavor manifest?)"
+                    );
+                } else if removed > 0 {
                     tracing::debug!(
                         scope_mode = scope.mode.as_wire(),
                         removed,
@@ -490,7 +522,16 @@ impl PluginDiscovery {
             // pre-v0.5.8 entries that never recorded the override.
             let effective_name =
                 entry.name_override.clone().or_else(|| entry.name.clone()).unwrap_or_else(|| logical_name.clone());
+            if seen.contains(&effective_name) {
+                continue;
+            }
             let Some(path) = find_binary(&expand_home(&entry.binary)) else {
+                // Reserve the name even when the configured binary is gone so
+                // a lower-precedence directory scan can't silently shadow a
+                // stale explicit config entry. The warning still surfaces so
+                // operators fix the entry instead of being routed to an
+                // unintended copy.
+                seen.insert(effective_name.clone());
                 let reason = format!("configured binary not found: {}", entry.binary);
                 tracing::warn!(
                     plugin = %logical_name,
@@ -507,9 +548,6 @@ impl PluginDiscovery {
                 continue;
             };
             let name = effective_name;
-            if seen.contains(&name) {
-                continue;
-            }
             if entry.skip_manifest_check_at_install {
                 tracing::warn!(
                     plugin = %name,
@@ -1669,6 +1707,95 @@ mod tests {
         assert!(discovered.is_empty(), "broken plugin must not appear in discovered set");
         assert_eq!(warnings.len(), 1, "warning must survive scope filter, got {warnings:?}");
         assert_eq!(warnings[0].name, "animus-provider-broken");
+    }
+
+    /// A flavor manifest that exists but fails to parse must not silently
+    /// filter every plugin: discovery stays fail-closed (flavor-only with an
+    /// empty admit set) but surfaces a [`DiscoveryWarning`] naming the broken
+    /// manifest so `animus plugin list` shows the real cause.
+    #[cfg(unix)]
+    #[test]
+    fn broken_flavor_manifest_surfaces_discovery_warning() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+        let _clear_flavors_dir = EnvVarGuard::set("ANIMUS_FLAVORS_DIR", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        let installed = install_dir.join("animus-provider-default");
+        write_executable_plugin(&installed, "animus-provider-default");
+
+        let project_root = temp.path().join("project");
+        let flavors = project_root.join("flavors");
+        fs::create_dir_all(&flavors).expect("mkdir flavors");
+        let manifest_path = flavors.join("default.toml");
+        fs::write(&manifest_path, "this is [not valid TOML\n").expect("write broken flavor");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        // No explicit scope: the auto-load path resolves the broken flavor.
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_project_root(&project_root)
+            .with_config_path(&empty_config)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(discovered.is_empty(), "broken flavor must stay fail-closed, got {discovered:?}");
+        let flavor_warning = warnings
+            .iter()
+            .find(|w| w.path == manifest_path)
+            .unwrap_or_else(|| panic!("expected a warning for the broken flavor manifest, got {warnings:?}"));
+        assert!(
+            flavor_warning.reason.contains("flavor manifest failed to load"),
+            "unexpected reason: {}",
+            flavor_warning.reason
+        );
+    }
+
+    /// A configured plugin whose binary is missing must still reserve its
+    /// name so a lower-precedence directory scan cannot silently shadow the
+    /// stale explicit config entry.
+    #[cfg(unix)]
+    #[test]
+    fn missing_configured_binary_blocks_lower_precedence_shadow() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        // Lower-precedence copy in the global install dir that would shadow
+        // the broken config entry if the name were not reserved.
+        let shadow = install_dir.join("animus-plugin-stale");
+        write_executable_plugin(&shadow, "animus-plugin-stale");
+
+        let config_path = temp.path().join("plugins.yaml");
+        fs::write(
+            &config_path,
+            "plugins:\n  animus-plugin-stale:\n    binary: /tmp/definitely-not-a-real-plugin-binary-xyz123\n",
+        )
+        .expect("write config");
+
+        let (discovered, warnings) =
+            PluginDiscovery::new().with_config_path(&config_path).discover_with_warnings().expect("discover");
+
+        assert!(
+            discovered.is_empty(),
+            "global install dir copy must not shadow the broken explicit config entry, got {discovered:?}"
+        );
+        assert_eq!(warnings.len(), 1, "expected exactly one warning, got {warnings:?}");
+        assert_eq!(warnings[0].name, "animus-plugin-stale");
+        assert!(warnings[0].reason.contains("not found"));
     }
 
     #[cfg(unix)]

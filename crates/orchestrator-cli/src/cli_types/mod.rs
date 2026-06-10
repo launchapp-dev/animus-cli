@@ -207,6 +207,42 @@ mod tests {
     }
 
     #[test]
+    fn daemon_events_defaults_to_one_shot_without_follow() {
+        let cli =
+            Cli::try_parse_from(["animus", "daemon", "events", "--limit", "10"]).expect("daemon events should parse");
+        match cli.command {
+            Command::Daemon { command: DaemonCommand::Events(args) } => {
+                assert_eq!(args.limit, Some(10));
+                assert!(!args.follow, "daemon events must print and exit unless --follow is passed");
+            }
+            other => panic!("expected daemon events, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_events_follow_accepts_bare_flag_and_explicit_values() {
+        let bare = Cli::try_parse_from(["animus", "daemon", "events", "--follow"]).expect("bare --follow should parse");
+        match bare.command {
+            Command::Daemon { command: DaemonCommand::Events(args) } => assert!(args.follow),
+            other => panic!("expected daemon events, got {other:?}"),
+        }
+
+        let explicit_true = Cli::try_parse_from(["animus", "daemon", "events", "--follow", "true"])
+            .expect("--follow true should parse");
+        match explicit_true.command {
+            Command::Daemon { command: DaemonCommand::Events(args) } => assert!(args.follow),
+            other => panic!("expected daemon events, got {other:?}"),
+        }
+
+        let explicit_false = Cli::try_parse_from(["animus", "daemon", "events", "--follow", "false"])
+            .expect("--follow false should parse");
+        match explicit_false.command {
+            Command::Daemon { command: DaemonCommand::Events(args) } => assert!(!args.follow),
+            other => panic!("expected daemon events, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parses_top_level_status_command() {
         let cli = Cli::try_parse_from(["animus", "status"]).expect("status command should parse");
         assert!(matches!(cli.command, Command::Status));

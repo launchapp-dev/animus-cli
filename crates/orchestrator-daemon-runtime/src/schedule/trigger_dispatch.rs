@@ -66,6 +66,7 @@ impl TriggerDispatch {
         };
         let mut state = orchestrator_core::load_trigger_state(std::path::Path::new(project_root)).unwrap_or_default();
         let mut outcomes = Vec::new();
+        let mut state_dirty = false;
 
         // --- file_watcher processing ---
         for trigger in file_watcher_triggers {
@@ -91,19 +92,28 @@ impl TriggerDispatch {
             // Scan watched paths for newer mtimes.
             let current_max_mtime = scan_max_mtime(project_root, &fw_config.paths, &fw_config.ignore);
 
-            if last_known_mtime == 0 {
-                // First tick: seed the mtime baseline without dispatching.
-                // This prevents a spurious dispatch on daemon startup for files
-                // that already exist.
+            if run_state.extra.is_none() {
+                // First tick this watch is ever evaluated: seed the mtime
+                // baseline without dispatching. This prevents a spurious
+                // dispatch on daemon startup for files that already exist.
+                // A baseline of 0 (no matching files yet) is seeded too, so
+                // a file appearing later counts as a change, not a re-seed.
                 run_state.extra = Some(serde_json::json!({ "last_mtime_secs": current_max_mtime }));
+                state_dirty = true;
             } else if current_max_mtime > last_known_mtime {
                 // A file has been modified since last check — fire the trigger.
                 let status = dispatch_trigger(&trigger.id, trigger, now, "file-watcher", &mut spawn_pipeline);
 
-                run_state.last_dispatched = Some(now);
+                if status == "dispatched" {
+                    // Spawn accepted — advance the baseline and bookkeeping.
+                    run_state.last_dispatched = Some(now);
+                    run_state.dispatch_count += 1;
+                    run_state.extra = Some(serde_json::json!({ "last_mtime_secs": current_max_mtime }));
+                }
+                // On failure the baseline stays put so the next tick retries
+                // the same change instead of silently consuming it.
                 run_state.last_status = status.clone();
-                run_state.dispatch_count += 1;
-                run_state.extra = Some(serde_json::json!({ "last_mtime_secs": current_max_mtime }));
+                state_dirty = true;
 
                 outcomes.push(TriggerDispatchOutcome { trigger_id: trigger.id.clone(), status });
             }
@@ -146,6 +156,7 @@ impl TriggerDispatch {
                     run_state.last_dispatched = Some(now);
                     run_state.last_status = status.clone();
                     run_state.dispatch_count += 1;
+                    state_dirty = true;
 
                     outcomes.push(TriggerDispatchOutcome { trigger_id: trigger.id.clone(), status });
                 } else {
@@ -153,14 +164,16 @@ impl TriggerDispatch {
                     // tick. Update last_status so ops can see the failure
                     // reason without losing the event.
                     run_state.last_status = status.clone();
+                    state_dirty = true;
                     outcomes.push(TriggerDispatchOutcome { trigger_id: trigger.id.clone(), status });
                     break;
                 }
             }
         }
 
-        // Persist updated state (best-effort).
-        let state_dirty = !outcomes.is_empty() || state.triggers.values().any(|s| s.extra.is_some());
+        // Persist updated state only when something actually changed
+        // (best-effort) — avoids rewriting + fsyncing the state file on
+        // every tick once a file-watcher baseline has been seeded.
         if state_dirty {
             let _ = orchestrator_core::save_trigger_state(std::path::Path::new(project_root), &state);
         }
@@ -452,6 +465,141 @@ mod tests {
         );
         // File mtime > baseline → dispatch occurs
         assert_eq!(outcomes.len(), 1);
+    }
+
+    #[test]
+    fn process_due_triggers_keeps_file_watcher_baseline_when_spawn_fails() {
+        // Regression mirroring the webhook peek-then-pop fix: previously the
+        // file-watcher branch advanced the mtime baseline, last_dispatched,
+        // and dispatch_count even when the spawn closure returned Err (tick
+        // budget exhausted / concurrency cap), so the change event was
+        // silently consumed and never retried.
+        let temp = tempdir().expect("tempdir");
+        let project_root = temp.path();
+
+        let watched_file = project_root.join("retry.rs");
+        std::fs::write(&watched_file, "// retry test").expect("write file");
+
+        write_trigger_config(project_root, "retry-watcher", &[watched_file.to_string_lossy().as_ref()]);
+
+        let t0: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
+
+        // Seed tick (no dispatch).
+        let _ =
+            TriggerDispatch::process_due_triggers(project_root.to_string_lossy().as_ref(), t0, |_id, _dispatch| Ok(()));
+
+        // Reset the baseline to a very old mtime so the file appears newer.
+        let mut state = orchestrator_core::load_trigger_state(project_root).expect("load state");
+        if let Some(run) = state.triggers.get_mut("retry-watcher") {
+            run.last_dispatched = None;
+            run.extra = Some(json!({ "last_mtime_secs": 1u64 }));
+        }
+        orchestrator_core::save_trigger_state(project_root, &state).expect("save state");
+
+        // Tick with a failing spawn — the change must NOT be consumed.
+        let t1 = t0 + chrono::Duration::seconds(3);
+        let outcomes =
+            TriggerDispatch::process_due_triggers(project_root.to_string_lossy().as_ref(), t1, |_id, _dispatch| {
+                Err(anyhow::anyhow!("tick budget exhausted"))
+            });
+        assert_eq!(outcomes.len(), 1);
+        assert_ne!(outcomes[0].status, "dispatched");
+
+        let state_after = orchestrator_core::load_trigger_state(project_root).expect("load state after");
+        let run = state_after.triggers.get("retry-watcher").expect("trigger state");
+        assert_eq!(
+            run.extra.as_ref().and_then(|v| v.get("last_mtime_secs")).and_then(|v| v.as_u64()),
+            Some(1),
+            "mtime baseline must not advance when spawn fails"
+        );
+        assert!(run.last_dispatched.is_none(), "last_dispatched must not be set on failure");
+        assert_eq!(run.dispatch_count, 0, "no dispatch_count increment on failure");
+
+        // Next tick with a working spawn retries the same change.
+        let t2 = t0 + chrono::Duration::seconds(6);
+        let outcomes =
+            TriggerDispatch::process_due_triggers(project_root.to_string_lossy().as_ref(), t2, |_id, _dispatch| Ok(()));
+        assert_eq!(outcomes.len(), 1, "failed change must be retried on the next tick");
+        assert_eq!(outcomes[0].status, "dispatched");
+
+        let state_after = orchestrator_core::load_trigger_state(project_root).expect("load state after retry");
+        let run = state_after.triggers.get("retry-watcher").expect("trigger state");
+        assert_eq!(run.dispatch_count, 1);
+        assert_eq!(run.last_dispatched, Some(t2));
+    }
+
+    #[test]
+    fn process_due_triggers_fires_when_first_file_appears_after_seed() {
+        // A watch whose glob matches nothing seeds a baseline of 0. When the
+        // first matching file later appears, that transition must dispatch
+        // instead of being swallowed as another baseline seed.
+        let temp = tempdir().expect("tempdir");
+        let project_root = temp.path();
+
+        let watched_file = project_root.join("appears-later.rs");
+        write_trigger_config(project_root, "first-file", &[watched_file.to_string_lossy().as_ref()]);
+
+        let t0: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
+
+        // Seed tick with no matching files: baseline 0, no dispatch.
+        let outcomes =
+            TriggerDispatch::process_due_triggers(project_root.to_string_lossy().as_ref(), t0, |_id, _dispatch| Ok(()));
+        assert!(outcomes.is_empty(), "seed tick must not dispatch");
+
+        let state = orchestrator_core::load_trigger_state(project_root).expect("load state");
+        let run = state.triggers.get("first-file").expect("trigger state");
+        assert_eq!(
+            run.extra.as_ref().and_then(|v| v.get("last_mtime_secs")).and_then(|v| v.as_u64()),
+            Some(0),
+            "empty glob should seed a zero baseline"
+        );
+
+        // The first matching file appears.
+        std::fs::write(&watched_file, "fn main() {}").expect("write file");
+
+        let t1 = t0 + chrono::Duration::seconds(3);
+        let outcomes =
+            TriggerDispatch::process_due_triggers(project_root.to_string_lossy().as_ref(), t1, |_id, _dispatch| Ok(()));
+        assert_eq!(outcomes.len(), 1, "first file appearing after the seed tick must dispatch");
+        assert_eq!(outcomes[0].status, "dispatched");
+    }
+
+    #[test]
+    fn process_due_triggers_does_not_rewrite_state_when_nothing_changed() {
+        // Once the baseline is seeded, an idle tick (no file changes, no
+        // pending webhook events) must not rewrite + fsync the state file.
+        let temp = tempdir().expect("tempdir");
+        let project_root = temp.path();
+
+        let watched_file = project_root.join("idle.rs");
+        std::fs::write(&watched_file, "// idle").expect("write file");
+
+        write_trigger_config(project_root, "idle-watcher", &[watched_file.to_string_lossy().as_ref()]);
+
+        let t0: DateTime<Utc> = "2026-04-01T10:00:00Z".parse().unwrap();
+
+        // Seed tick writes the baseline.
+        let _ =
+            TriggerDispatch::process_due_triggers(project_root.to_string_lossy().as_ref(), t0, |_id, _dispatch| Ok(()));
+
+        let state_path = protocol::scoped_state_root(project_root)
+            .unwrap_or_else(|| project_root.join(".animus"))
+            .join("state")
+            .join("trigger-state.json");
+        let mtime_after_seed =
+            std::fs::metadata(&state_path).and_then(|m| m.modified()).expect("state file mtime after seed");
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // Idle tick: nothing changed → no rewrite.
+        let t1 = t0 + chrono::Duration::seconds(3);
+        let outcomes =
+            TriggerDispatch::process_due_triggers(project_root.to_string_lossy().as_ref(), t1, |_id, _dispatch| Ok(()));
+        assert!(outcomes.is_empty());
+
+        let mtime_after_idle =
+            std::fs::metadata(&state_path).and_then(|m| m.modified()).expect("state file mtime after idle tick");
+        assert_eq!(mtime_after_seed, mtime_after_idle, "idle tick must not rewrite the trigger state file");
     }
 
     #[test]

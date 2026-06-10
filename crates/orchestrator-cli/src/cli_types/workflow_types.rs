@@ -15,9 +15,9 @@ pub(crate) enum WorkflowCommand {
         #[command(subcommand)]
         command: WorkflowCheckpointCommand,
     },
-    /// Run a workflow. Enqueues to daemon by default; use --sync to run in terminal.
+    /// Run a workflow. Spawns a detached workflow_runner by default; use --sync to run in terminal.
     Run(WorkflowRunArgs),
-    /// Resume a paused workflow.
+    /// Resume a paused workflow and respawn its workflow_runner.
     Resume(WorkflowResumeArgs),
     /// Check whether a workflow can be resumed.
     ResumeStatus(IdArgs),

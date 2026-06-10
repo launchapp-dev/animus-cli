@@ -17,9 +17,22 @@
 //!   (plus optional `client_id` / `client_secret`) to `token_url`. If the
 //!   response carries a new `refresh_token`, the cache file is updated so
 //!   the next phase uses the rotated token; the original env var stays
-//!   untouched (documented limitation).
+//!   untouched. When the server rejects the cached (rotated) refresh token
+//!   with an explicit RFC 6749 `invalid_grant`, the cache entry is deleted
+//!   and the env-var seed is retried within the same call, so a revoked
+//!   rotation chain recovers without hand-deleting cache files. The cache
+//!   entry also records a hash
+//!   of the seed env var's VALUE: re-minting the seed invalidates the stale
+//!   entry, while a cache populated when the seed was present stays usable
+//!   in a process where the env var is absent.
 //! - `manual_bearer`: plain env-var read. Escape hatch for tokens minted
 //!   by an external system.
+//!
+//! Cached flows serialize the whole check-expiry → fetch/refresh →
+//! write-cache critical section behind a per-cache-file advisory lock
+//! (`.lock` sidecar), and re-check the cache after acquiring it — so two
+//! concurrent resolutions (daemon pool phases, parallel runners) perform a
+//! single token POST instead of racing a rotating refresh token.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -80,11 +93,26 @@ pub struct CachedToken {
     /// read after upgrade.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_fingerprint: Option<String>,
+    /// SHA-256 (hex) of the refresh seed env var's VALUE at fetch time —
+    /// never the plaintext. A re-minted seed must invalidate the cached
+    /// rotation chain so the new seed is POSTed instead of the stale
+    /// grant. Compared only when both sides are known: a cache populated
+    /// while the seed was present stays usable in a process where the env
+    /// var is absent, and a pre-upgrade cache entry (no recorded hash)
+    /// stays usable rather than re-POSTing a seed the provider may have
+    /// already invalidated — the grant-rejection fallback recovers it if
+    /// the cached chain really is dead, and the hash is recorded on the
+    /// next refresh.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_seed_sha256: Option<String>,
 }
 
 impl CachedToken {
-    fn is_fresh(&self, now: DateTime<Utc>, expected_fingerprint: &str) -> bool {
+    fn is_fresh(&self, now: DateTime<Utc>, expected_fingerprint: &str, current_seed_sha256: Option<&str>) -> bool {
         if self.config_fingerprint.as_deref() != Some(expected_fingerprint) {
+            return false;
+        }
+        if !self.seed_matches(current_seed_sha256) {
             return false;
         }
         match self.expires_at {
@@ -92,6 +120,29 @@ impl CachedToken {
             Some(expiry) => expiry.signed_duration_since(now).num_seconds() > EXPIRY_SKEW_SECS,
         }
     }
+
+    fn seed_matches(&self, current_seed_sha256: Option<&str>) -> bool {
+        match (current_seed_sha256, self.refresh_seed_sha256.as_deref()) {
+            (None, _) | (_, None) => true,
+            (Some(current), Some(stored)) => stored == current,
+        }
+    }
+}
+
+/// SHA-256 hex of the refresh seed env var's current VALUE, when the
+/// flow has a `refresh_token_env` and the var is set and non-empty.
+fn current_refresh_seed_sha256(oauth: &OauthConfig, env: &dyn EnvLookup) -> Option<String> {
+    use sha2::{Digest, Sha256};
+
+    let seed =
+        oauth.refresh_token_env.as_deref().and_then(|name| env.get(name)).filter(|value| !value.trim().is_empty())?;
+    let digest = Sha256::digest(seed.as_bytes());
+    let mut hex = String::with_capacity(64);
+    for byte in digest {
+        use std::fmt::Write;
+        let _ = write!(hex, "{byte:02x}");
+    }
+    Some(hex)
 }
 
 fn oauth_config_fingerprint(oauth: &OauthConfig) -> String {
@@ -144,6 +195,56 @@ pub struct TokenFetchResponse {
     pub refresh_token: Option<String>,
 }
 
+/// Typed client-rejection error (4xx) from the token endpoint, kept
+/// distinguishable from transport/server failures so the refresh flow can
+/// classify `invalid_grant` rejections (revoked/expired refresh token)
+/// and discard the cached grant. Carries only the URL, status, and the
+/// charset-restricted RFC 6749 `error` code — never the response body
+/// (see `ReqwestTokenClient::fetch`).
+#[derive(Debug, Clone)]
+pub struct TokenEndpointRejection {
+    pub token_url: String,
+    pub status: u16,
+    pub oauth_error: Option<String>,
+}
+
+impl std::fmt::Display for TokenEndpointRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "OAuth token endpoint {} returned status {}", self.token_url, self.status)?;
+        if let Some(code) = self.oauth_error.as_deref() {
+            write!(f, " ({code})")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for TokenEndpointRejection {}
+
+/// Extract the RFC 6749 `error` code from a token-endpoint error body.
+/// Only a short, charset-restricted token is retained — the body itself
+/// (which may echo client_id/client_secret/refresh_token back) is never
+/// stored, logged, or propagated.
+fn extract_oauth_error_code(body: &[u8]) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_slice(body).ok()?;
+    let code = value.get("error")?.as_str()?.trim();
+    if code.is_empty() || code.len() > 64 || !code.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '_') {
+        return None;
+    }
+    Some(code.to_ascii_lowercase())
+}
+
+/// True only for an explicit RFC 6749 `invalid_grant` rejection: the
+/// refresh grant itself is invalid/revoked/expired, so the cached
+/// rotation chain is dead and retrying it cannot succeed. Every other
+/// failure — `invalid_client`, `unauthorized_client`, missing/garbled
+/// error bodies, 429/5xx, transport errors — keeps the cache: the grant
+/// may still be valid once the credential/config problem is fixed, and
+/// evicting it would discard the only usable rotated refresh token.
+fn is_grant_rejection(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<TokenEndpointRejection>()
+        .is_some_and(|rejection| rejection.oauth_error.as_deref() == Some("invalid_grant"))
+}
+
 #[derive(Debug, Deserialize)]
 struct OauthTokenResponseRaw {
     access_token: String,
@@ -181,10 +282,19 @@ impl TokenClient for ReqwestTokenClient {
             // token endpoints (and forward proxies) echo request fields
             // — client_id, client_secret, refresh_token — back into
             // error responses, and `err` flows into structured logs via
-            // `tracing::warn`. The status is the only field that we can
-            // safely surface without risking credential exposure.
-            // Drain the body so the connection can be released.
-            let _ = response.bytes();
+            // `tracing::warn`. Only the status and the charset-restricted
+            // RFC 6749 `error` code are surfaced; the body is drained so
+            // the connection can be released.
+            let body = response.bytes().ok();
+            if status.is_client_error() {
+                let oauth_error = body.as_deref().and_then(extract_oauth_error_code);
+                return Err(TokenEndpointRejection {
+                    token_url: request.token_url.clone(),
+                    status: status.as_u16(),
+                    oauth_error,
+                }
+                .into());
+            }
             bail!("OAuth token endpoint {} returned status {}", request.token_url, status);
         }
         let raw: OauthTokenResponseRaw = response
@@ -226,20 +336,9 @@ pub fn resolve_token(
     env: &dyn EnvLookup,
     client: &dyn TokenClient,
 ) -> Result<ResolvedOauthToken> {
-    let now = Utc::now();
     let cache_path = cache_dir.join(cache_filename_for_server(server_name));
     let fingerprint = oauth_config_fingerprint(oauth);
-
-    if oauth.cache && matches!(oauth.flow, OauthFlow::ClientCredentials | OauthFlow::RefreshToken) {
-        if let Some(cached) = read_cache(&cache_path)? {
-            if cached.is_fresh(now, &fingerprint) {
-                return Ok(ResolvedOauthToken {
-                    access_token: cached.access_token,
-                    header_name: "Authorization".to_string(),
-                });
-            }
-        }
-    }
+    let current_seed = current_refresh_seed_sha256(oauth, env);
 
     match oauth.flow {
         OauthFlow::ManualBearer => {
@@ -252,8 +351,80 @@ pub fn resolve_token(
             })?;
             Ok(ResolvedOauthToken { access_token: token, header_name: "Authorization".to_string() })
         }
-        OauthFlow::ClientCredentials => {
-            let mut token = fetch_client_credentials(server_name, oauth, env, client)?;
+        OauthFlow::ClientCredentials | OauthFlow::RefreshToken => {
+            // Serialize the whole check-expiry → fetch/refresh → write-
+            // cache critical section across processes. Two runners that
+            // both see an expired access token must not POST the same
+            // refresh token twice — rotating providers revoke the whole
+            // grant family on refresh-token reuse.
+            let _lock = if oauth.cache { acquire_cache_lock(&cache_path) } else { None };
+
+            // Re-read under the lock: another process may have refreshed
+            // (and rotated the refresh token) while we waited.
+            let cached = if oauth.cache { read_cache(&cache_path)? } else { None };
+            if let Some(fresh) =
+                cached.as_ref().filter(|c| c.is_fresh(Utc::now(), &fingerprint, current_seed.as_deref()))
+            {
+                return Ok(ResolvedOauthToken {
+                    access_token: fresh.access_token.clone(),
+                    header_name: "Authorization".to_string(),
+                });
+            }
+
+            let mut token = if oauth.flow == OauthFlow::ClientCredentials {
+                let mut token = fetch_client_credentials(server_name, oauth, env, client)?;
+                token.refresh_seed_sha256 = current_seed;
+                token
+            } else {
+                // Only reuse a cached refresh token when the on-disk
+                // fingerprint AND seed hash match the current config. A
+                // mismatch (e.g. the user pointed the refresh flow at a new
+                // refresh_token_env env var, or re-minted the seed value)
+                // should fall back to the env-var seed rather than POST the
+                // previous-config refresh token.
+                let cached_entry = cached
+                    .as_ref()
+                    .filter(|c| c.config_fingerprint.as_deref() == Some(fingerprint.as_str()))
+                    .filter(|c| c.seed_matches(current_seed.as_deref()));
+                let cached_seed = cached_entry.and_then(|c| c.refresh_seed_sha256.clone());
+                let cached_refresh =
+                    cached_entry.and_then(|c| c.refresh_token.clone()).filter(|v| !v.trim().is_empty());
+                match fetch_refresh_token(server_name, oauth, env, client, cached_refresh.as_deref()) {
+                    Ok(mut token) => {
+                        // A refresh driven by the cached grant still
+                        // descends from the seed recorded on the cache
+                        // entry — preserve that association when the env
+                        // var is absent in this process, so a later
+                        // process that has the seed set again recognizes
+                        // the rotated chain instead of retrying the
+                        // (possibly invalidated) seed.
+                        token.refresh_seed_sha256 = if cached_refresh.is_some() {
+                            current_seed.clone().or(cached_seed)
+                        } else {
+                            current_seed.clone()
+                        };
+                        token
+                    }
+                    Err(err) if cached_refresh.is_some() && is_grant_rejection(&err) => {
+                        // The cached (rotated) refresh token was rejected by
+                        // the server with an explicit `invalid_grant`.
+                        // Without this fallback the cache is a permanent
+                        // dead end: the stale entry shadows the env seed
+                        // forever.
+                        tracing::warn!(
+                            server = server_name,
+                            error = %err,
+                            "cached refresh token rejected; discarding cache entry and retrying with the env-var seed"
+                        );
+                        let _ = fs::remove_file(&cache_path);
+                        let mut token = fetch_refresh_token(server_name, oauth, env, client, None)
+                            .map_err(|err| wrap_resolution_error(server_name, err))?;
+                        token.refresh_seed_sha256 = current_seed.clone();
+                        token
+                    }
+                    Err(err) => return Err(wrap_resolution_error(server_name, err)),
+                }
+            };
             token.config_fingerprint = Some(fingerprint);
             if oauth.cache {
                 // Best-effort cache write: if persistence fails (read-
@@ -269,41 +440,6 @@ pub fn resolve_token(
                 }
             }
             Ok(ResolvedOauthToken { access_token: token.access_token, header_name: "Authorization".to_string() })
-        }
-        OauthFlow::RefreshToken => {
-            // Only reuse a cached refresh token when the on-disk
-            // fingerprint matches the current config. Mismatched config
-            // (e.g. the user pointed the refresh flow at a new
-            // refresh_token_env env var) should fall back to the env-var
-            // seed rather than POST the previous-config refresh token.
-            let cached_refresh = if oauth.cache {
-                read_cache(&cache_path)?
-                    .filter(|c| c.config_fingerprint.as_deref() == Some(fingerprint.as_str()))
-                    .and_then(|c| c.refresh_token)
-                    .filter(|v| !v.trim().is_empty())
-            } else {
-                None
-            };
-            match fetch_refresh_token(server_name, oauth, env, client, cached_refresh.as_deref()) {
-                Ok(mut token) => {
-                    token.config_fingerprint = Some(fingerprint);
-                    if oauth.cache {
-                        // Best-effort cache write (see ClientCredentials arm).
-                        if let Err(err) = write_cache(&cache_path, &token) {
-                            tracing::warn!(
-                                server = server_name,
-                                error = %err,
-                                "OAuth token refreshed but persisting cache failed; will refetch on next phase"
-                            );
-                        }
-                    }
-                    Ok(ResolvedOauthToken {
-                        access_token: token.access_token,
-                        header_name: "Authorization".to_string(),
-                    })
-                }
-                Err(err) => Err(anyhow!("OAuth resolution failed for `{}`: {}", server_name, err)),
-            }
         }
         OauthFlow::AuthorizationCode => {
             // The interactive authorization_code flow does NOT resolve a
@@ -408,6 +544,7 @@ fn materialize_cached_token(response: TokenFetchResponse, prior_refresh: Option<
         refresh_token,
         obtained_at: now,
         config_fingerprint: None,
+        refresh_seed_sha256: None,
     }
 }
 
@@ -422,6 +559,64 @@ fn lookup_env(env: &dyn EnvLookup, name: &str, server: &str) -> Result<String> {
     env.get(name)
         .filter(|v| !v.trim().is_empty())
         .ok_or_else(|| anyhow!("OAuth resolution failed for `{}`: env var `{}` is not set or is empty", server, name))
+}
+
+/// Prefix an error with the standard resolution-failure context unless it
+/// already carries it (config/env errors from `lookup_env` and
+/// `require_value` are pre-wrapped), so callers never see the prefix
+/// doubled.
+fn wrap_resolution_error(server_name: &str, err: anyhow::Error) -> anyhow::Error {
+    let message = err.to_string();
+    if message.starts_with("OAuth resolution failed for ") {
+        err
+    } else {
+        anyhow!("OAuth resolution failed for `{}`: {}", server_name, message)
+    }
+}
+
+/// Acquire the per-cache-file advisory lock (`<cache>.lock` sidecar,
+/// created on demand, never deleted). The flock is released when the
+/// returned handle drops. Best-effort: a lock failure (read-only home
+/// dir, unsupported filesystem) degrades to unlocked resolution with a
+/// warning rather than failing the auth — matching the best-effort
+/// cache-write posture.
+fn acquire_cache_lock(cache_path: &Path) -> Option<fs::File> {
+    use fs2::FileExt;
+
+    let lock_path = cache_path.with_file_name(format!(
+        "{}.lock",
+        cache_path.file_name().and_then(|name| name.to_str()).unwrap_or("oauth-cache")
+    ));
+    if let Some(parent) = lock_path.parent() {
+        if let Err(err) = fs::create_dir_all(parent) {
+            tracing::warn!(
+                path = %lock_path.display(),
+                error = %err,
+                "failed to create OAuth cache lock dir; proceeding without cross-process lock"
+            );
+            return None;
+        }
+    }
+    let lock_file = match fs::OpenOptions::new().create(true).truncate(false).write(true).open(&lock_path) {
+        Ok(file) => file,
+        Err(err) => {
+            tracing::warn!(
+                path = %lock_path.display(),
+                error = %err,
+                "failed to open OAuth cache lock file; proceeding without cross-process lock"
+            );
+            return None;
+        }
+    };
+    if let Err(err) = lock_file.lock_exclusive() {
+        tracing::warn!(
+            path = %lock_path.display(),
+            error = %err,
+            "failed to acquire OAuth cache lock; proceeding without cross-process lock"
+        );
+        return None;
+    }
+    Some(lock_file)
 }
 
 fn read_cache(path: &Path) -> Result<Option<CachedToken>> {
@@ -605,11 +800,11 @@ mod tests {
 
     struct MockClient {
         calls: Mutex<RefCell<Vec<TokenFetchRequest>>>,
-        responses: Mutex<RefCell<Vec<Result<TokenFetchResponse, String>>>>,
+        responses: Mutex<RefCell<Vec<Result<TokenFetchResponse, anyhow::Error>>>>,
     }
 
     impl MockClient {
-        fn new(responses: Vec<Result<TokenFetchResponse, String>>) -> Self {
+        fn new(responses: Vec<Result<TokenFetchResponse, anyhow::Error>>) -> Self {
             Self { calls: Mutex::new(RefCell::new(Vec::new())), responses: Mutex::new(RefCell::new(responses)) }
         }
         fn call_count(&self) -> usize {
@@ -618,13 +813,15 @@ mod tests {
         fn last_form(&self) -> Vec<(String, String)> {
             self.calls.lock().unwrap().borrow().last().cloned().map(|r| r.form).unwrap_or_default()
         }
+        fn form_at(&self, index: usize) -> Vec<(String, String)> {
+            self.calls.lock().unwrap().borrow().get(index).cloned().map(|r| r.form).unwrap_or_default()
+        }
     }
 
     impl TokenClient for MockClient {
         fn fetch(&self, request: TokenFetchRequest) -> Result<TokenFetchResponse> {
             self.calls.lock().unwrap().borrow_mut().push(request);
-            let next = self.responses.lock().unwrap().borrow_mut().remove(0);
-            next.map_err(|err| anyhow!(err))
+            self.responses.lock().unwrap().borrow_mut().remove(0)
         }
     }
 
@@ -763,6 +960,351 @@ mod tests {
         );
     }
 
+    fn refresh_config() -> OauthConfig {
+        OauthConfig {
+            flow: OauthFlow::RefreshToken,
+            token_url: Some("https://auth.example.com/token".to_string()),
+            client_id_env: None,
+            client_secret_env: None,
+            refresh_token_env: Some("EXAMPLE_REFRESH".to_string()),
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+            client_id: None,
+        }
+    }
+
+    #[test]
+    fn rejected_cached_refresh_token_falls_back_to_env_seed_and_clears_stale_cache() {
+        let oauth = refresh_config();
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let client = MockClient::new(vec![
+            Ok(TokenFetchResponse {
+                access_token: "access-1".to_string(),
+                expires_in: Some(1),
+                refresh_token: Some("rt-rotated".to_string()),
+            }),
+            Err(TokenEndpointRejection {
+                token_url: "https://auth.example.com/token".to_string(),
+                status: 400,
+                oauth_error: Some("invalid_grant".to_string()),
+            }
+            .into()),
+            Ok(TokenFetchResponse {
+                access_token: "access-2".to_string(),
+                expires_in: Some(3600),
+                refresh_token: Some("rt-rotated-2".to_string()),
+            }),
+        ]);
+        let temp = tempdir().expect("tempdir");
+
+        let first = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("first ok");
+        assert_eq!(first.access_token, "access-1");
+
+        let second = resolve_token("svc", &oauth, temp.path(), &env, &client)
+            .expect("rejected cached refresh token must fall back to the env seed");
+        assert_eq!(second.access_token, "access-2");
+        assert_eq!(client.call_count(), 3);
+        assert!(
+            client.form_at(1).iter().any(|(k, v)| k == "refresh_token" && v == "rt-rotated"),
+            "second POST should have tried the cached rotated token"
+        );
+        assert!(
+            client.form_at(2).iter().any(|(k, v)| k == "refresh_token" && v == "rt-original"),
+            "fallback POST must use the env-var seed"
+        );
+
+        let cache_path = temp.path().join(cache_filename_for_server("svc"));
+        let cached: CachedToken =
+            serde_json::from_str(&fs::read_to_string(&cache_path).expect("cache rewritten")).expect("cache parses");
+        assert_eq!(cached.access_token, "access-2");
+        assert_eq!(cached.refresh_token.as_deref(), Some("rt-rotated-2"));
+    }
+
+    #[test]
+    fn non_invalid_grant_client_error_does_not_discard_cached_refresh_token() {
+        // Codex round-3 [P2] regression guard: a 401 `invalid_client`
+        // (e.g. a temporarily wrong client secret) is NOT a dead grant.
+        // Evicting the cache on it would discard the only usable rotated
+        // refresh token — once the credential is fixed, recovery would
+        // require re-minting the seed.
+        let oauth = refresh_config();
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let client = MockClient::new(vec![
+            Ok(TokenFetchResponse {
+                access_token: "access-1".to_string(),
+                expires_in: Some(1),
+                refresh_token: Some("rt-rotated".to_string()),
+            }),
+            Err(TokenEndpointRejection {
+                token_url: "https://auth.example.com/token".to_string(),
+                status: 401,
+                oauth_error: Some("invalid_client".to_string()),
+            }
+            .into()),
+        ]);
+        let temp = tempdir().expect("tempdir");
+
+        let _ = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("first ok");
+        let err = resolve_token("svc", &oauth, temp.path(), &env, &client).unwrap_err().to_string();
+        assert!(err.contains("svc"), "error should name the server: {err}");
+        assert_eq!(client.call_count(), 2, "a non-grant rejection must not trigger the env-seed retry");
+
+        let cache_path = temp.path().join(cache_filename_for_server("svc"));
+        let cached: CachedToken =
+            serde_json::from_str(&fs::read_to_string(&cache_path).expect("cache kept")).expect("cache parses");
+        assert_eq!(
+            cached.refresh_token.as_deref(),
+            Some("rt-rotated"),
+            "a non-invalid_grant 4xx must not invalidate the cached rotation chain"
+        );
+    }
+
+    #[test]
+    fn oauth_error_code_extraction_is_strict() {
+        assert_eq!(extract_oauth_error_code(br#"{"error":"invalid_grant"}"#).as_deref(), Some("invalid_grant"));
+        assert_eq!(extract_oauth_error_code(br#"{"error":"Invalid_Grant"}"#).as_deref(), Some("invalid_grant"));
+        assert!(extract_oauth_error_code(b"not json").is_none());
+        assert!(extract_oauth_error_code(br#"{"error_description":"x"}"#).is_none());
+        assert!(
+            extract_oauth_error_code(br#"{"error":"echoed secret=hunter2 refresh=rt-1"}"#).is_none(),
+            "free-form error strings (which could echo credentials) must be dropped"
+        );
+    }
+
+    #[test]
+    fn resolution_errors_are_not_double_wrapped() {
+        // The env seed is missing AND the cached grant gets an
+        // invalid_grant rejection: the fallback path's error must carry
+        // the `OAuth resolution failed` prefix exactly once.
+        let oauth = refresh_config();
+        let seeded_env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let client = MockClient::new(vec![
+            Ok(TokenFetchResponse {
+                access_token: "access-1".to_string(),
+                expires_in: Some(1),
+                refresh_token: Some("rt-rotated".to_string()),
+            }),
+            Err(TokenEndpointRejection {
+                token_url: "https://auth.example.com/token".to_string(),
+                status: 400,
+                oauth_error: Some("invalid_grant".to_string()),
+            }
+            .into()),
+        ]);
+        let temp = tempdir().expect("tempdir");
+
+        let _ = resolve_token("svc", &oauth, temp.path(), &seeded_env, &client).expect("first ok");
+        let empty_env = StaticEnv(BTreeMap::new());
+        let err = resolve_token("svc", &oauth, temp.path(), &empty_env, &client).unwrap_err().to_string();
+        assert_eq!(
+            err.matches("OAuth resolution failed for").count(),
+            1,
+            "resolution-failure prefix must appear exactly once: {err}"
+        );
+        assert!(err.contains("EXAMPLE_REFRESH"), "error should name the missing seed env var: {err}");
+    }
+
+    #[test]
+    fn server_error_does_not_discard_cached_refresh_token() {
+        let oauth = refresh_config();
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let client = MockClient::new(vec![
+            Ok(TokenFetchResponse {
+                access_token: "access-1".to_string(),
+                expires_in: Some(1),
+                refresh_token: Some("rt-rotated".to_string()),
+            }),
+            Err(anyhow!("OAuth token endpoint https://auth.example.com/token returned status 503")),
+        ]);
+        let temp = tempdir().expect("tempdir");
+
+        let _ = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("first ok");
+        let err = resolve_token("svc", &oauth, temp.path(), &env, &client).unwrap_err().to_string();
+        assert!(err.contains("svc"), "error should name the server: {err}");
+        assert_eq!(client.call_count(), 2, "a transient server error must not trigger the env-seed retry");
+
+        let cache_path = temp.path().join(cache_filename_for_server("svc"));
+        let cached: CachedToken =
+            serde_json::from_str(&fs::read_to_string(&cache_path).expect("cache kept")).expect("cache parses");
+        assert_eq!(
+            cached.refresh_token.as_deref(),
+            Some("rt-rotated"),
+            "a 5xx must not invalidate the cached rotation chain"
+        );
+    }
+
+    #[test]
+    fn reminted_refresh_seed_value_bypasses_fresh_cache() {
+        let oauth = refresh_config();
+        let client = MockClient::new(vec![
+            Ok(TokenFetchResponse {
+                access_token: "access-old-seed".to_string(),
+                expires_in: Some(3600),
+                refresh_token: None,
+            }),
+            Ok(TokenFetchResponse {
+                access_token: "access-new-seed".to_string(),
+                expires_in: Some(3600),
+                refresh_token: None,
+            }),
+        ]);
+        let temp = tempdir().expect("tempdir");
+
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "seed-1".to_string())]));
+        let first = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("first ok");
+        assert_eq!(first.access_token, "access-old-seed");
+
+        // Re-minting the seed env var VALUE must bypass the still-fresh
+        // cache entry (stored seed hash mismatch → cache miss → new seed
+        // POSTed).
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "seed-2".to_string())]));
+        let second = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("second ok");
+        assert_eq!(second.access_token, "access-new-seed", "re-minted seed must not reuse the stale cache");
+        assert_eq!(client.call_count(), 2);
+        assert!(
+            client.form_at(1).iter().any(|(k, v)| k == "refresh_token" && v == "seed-2"),
+            "the re-minted env seed must be POSTed, not the cached grant"
+        );
+    }
+
+    #[test]
+    fn cached_token_stays_usable_when_seed_env_is_absent() {
+        // Codex round-1 [P2] regression guard: a cache populated while the
+        // seed env var was set must remain usable in a later process where
+        // the env var is unset — the env seed only matters on a cold cache
+        // or when its value actually changed.
+        let oauth = refresh_config();
+        let client = MockClient::new(vec![
+            Ok(TokenFetchResponse {
+                access_token: "access-1".to_string(),
+                expires_in: Some(3600),
+                refresh_token: Some("rt-rotated".to_string()),
+            }),
+            Ok(TokenFetchResponse {
+                access_token: "access-2".to_string(),
+                expires_in: Some(3600),
+                refresh_token: None,
+            }),
+        ]);
+        let temp = tempdir().expect("tempdir");
+
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let first = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("first ok");
+        assert_eq!(first.access_token, "access-1");
+
+        let empty_env = StaticEnv(BTreeMap::new());
+        let second = resolve_token("svc", &oauth, temp.path(), &empty_env, &client)
+            .expect("fresh cache must satisfy resolution without the seed env var");
+        assert_eq!(second.access_token, "access-1", "the fresh cached token must be reused");
+        assert_eq!(client.call_count(), 1, "no fetch may happen while the cache is fresh");
+
+        // After expiry the cached ROTATED refresh token must still be
+        // usable without the seed env var.
+        let cache_path = temp.path().join(cache_filename_for_server("svc"));
+        let mut cached: CachedToken =
+            serde_json::from_str(&fs::read_to_string(&cache_path).expect("cache exists")).expect("cache parses");
+        cached.expires_at = Some(Utc::now() - chrono::Duration::seconds(120));
+        fs::write(&cache_path, serde_json::to_vec_pretty(&cached).expect("serialize")).expect("rewrite cache");
+
+        let third = resolve_token("svc", &oauth, temp.path(), &empty_env, &client)
+            .expect("expired cache with rotated refresh token must refresh without the seed env var");
+        assert_eq!(third.access_token, "access-2");
+        assert!(
+            client.form_at(1).iter().any(|(k, v)| k == "refresh_token" && v == "rt-rotated"),
+            "the cached rotated refresh token must be POSTed when the seed env var is absent"
+        );
+
+        // The no-env refresh must preserve the seed association: a later
+        // process with the ORIGINAL seed env var set again must recognize
+        // the rotated chain (fresh cache hit), not retry the stale seed.
+        let fourth = resolve_token("svc", &oauth, temp.path(), &env, &client)
+            .expect("fresh cache must satisfy resolution when the original seed env var returns");
+        assert_eq!(fourth.access_token, "access-2", "the rotated chain's fresh token must be reused");
+        assert_eq!(client.call_count(), 2, "the original seed must not be retried after a no-env refresh");
+    }
+
+    #[test]
+    fn legacy_cache_entry_without_seed_hash_stays_usable_and_is_migrated() {
+        // Codex round-2 [P2] regression guard: cache files written before
+        // `refresh_seed_sha256` existed deserialize the field as `None`.
+        // They must NOT be treated as a seed mismatch while the seed env
+        // var is set — bypassing the cached rotation chain re-POSTs the
+        // original seed, which a rotating provider may have already
+        // invalidated. The hash is recorded on the next refresh instead.
+        let oauth = refresh_config();
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let client = MockClient::new(vec![Ok(TokenFetchResponse {
+            access_token: "access-2".to_string(),
+            expires_in: Some(3600),
+            refresh_token: None,
+        })]);
+        let temp = tempdir().expect("tempdir");
+        let cache_path = temp.path().join(cache_filename_for_server("svc"));
+
+        let legacy_fresh = CachedToken {
+            access_token: "legacy-access".to_string(),
+            expires_at: Some(Utc::now() + chrono::Duration::seconds(3600)),
+            refresh_token: Some("rt-rotated".to_string()),
+            obtained_at: Utc::now(),
+            config_fingerprint: Some(oauth_config_fingerprint(&oauth)),
+            refresh_seed_sha256: None,
+        };
+        fs::write(&cache_path, serde_json::to_vec_pretty(&legacy_fresh).expect("serialize"))
+            .expect("seed legacy cache");
+
+        let first = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("first ok");
+        assert_eq!(first.access_token, "legacy-access", "a fresh legacy cache entry must be reused");
+        assert_eq!(client.call_count(), 0, "a fresh legacy cache entry must not trigger a fetch");
+
+        // Once expired, the legacy entry's ROTATED refresh token must be
+        // POSTed (not the env seed), and the rewritten entry must record
+        // the seed hash so future re-mint detection works.
+        let mut expired = legacy_fresh;
+        expired.expires_at = Some(Utc::now() - chrono::Duration::seconds(120));
+        fs::write(&cache_path, serde_json::to_vec_pretty(&expired).expect("serialize")).expect("rewrite cache");
+
+        let second = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("second ok");
+        assert_eq!(second.access_token, "access-2");
+        assert!(
+            client.form_at(0).iter().any(|(k, v)| k == "refresh_token" && v == "rt-rotated"),
+            "the legacy cached rotated refresh token must be POSTed, not the env seed"
+        );
+        let migrated: CachedToken =
+            serde_json::from_str(&fs::read_to_string(&cache_path).expect("cache rewritten")).expect("cache parses");
+        assert!(migrated.refresh_seed_sha256.is_some(), "refresh must record the seed hash on legacy entries");
+    }
+
+    #[test]
+    fn concurrent_resolutions_perform_a_single_token_fetch() {
+        // Two racing resolutions must serialize on the cache lock: the
+        // loser re-reads the winner's freshly written token instead of
+        // POSTing a second (grant-revoking) refresh. The mock holds ONE
+        // response, so a second fetch would panic the losing thread.
+        let env = StaticEnv(BTreeMap::from([
+            ("EXAMPLE_CLIENT_ID".to_string(), "id".to_string()),
+            ("EXAMPLE_CLIENT_SECRET".to_string(), "secret".to_string()),
+        ]));
+        let client = MockClient::new(vec![Ok(TokenFetchResponse {
+            access_token: "once".to_string(),
+            expires_in: Some(3600),
+            refresh_token: None,
+        })]);
+        let temp = tempdir().expect("tempdir");
+        let config = cc_config();
+
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = (0..2)
+                .map(|_| scope.spawn(|| resolve_token("svc", &config, temp.path(), &env, &client).expect("resolve ok")))
+                .collect();
+            for handle in handles {
+                assert_eq!(handle.join().expect("resolver thread").access_token, "once");
+            }
+        });
+        assert_eq!(client.call_count(), 1, "racing resolutions must share one token fetch");
+    }
+
     #[test]
     fn corrupt_cache_file_is_treated_as_miss_and_removed() {
         let env = StaticEnv(BTreeMap::from([
@@ -804,7 +1346,7 @@ mod tests {
             ("EXAMPLE_CLIENT_ID".to_string(), "id".to_string()),
             ("EXAMPLE_CLIENT_SECRET".to_string(), "secret".to_string()),
         ]));
-        let client = MockClient::new(vec![Err("token endpoint returned 503".to_string())]);
+        let client = MockClient::new(vec![Err(anyhow!("token endpoint returned 503"))]);
         let temp = tempdir().expect("tempdir");
         let err = resolve_token("svc", &cc_config(), temp.path(), &env, &client).unwrap_err().to_string();
         assert!(err.contains("svc"), "error should name the server: {err}");

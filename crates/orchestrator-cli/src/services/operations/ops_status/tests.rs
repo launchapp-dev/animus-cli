@@ -43,6 +43,7 @@ fn make_task(id: &str, title: &str, status: TaskStatus, completed_at: Option<Dat
             updated_by: "test".to_string(),
             started_at: None,
             completed_at,
+            status_changed_at: None,
             version: 1,
         },
         deadline: None,

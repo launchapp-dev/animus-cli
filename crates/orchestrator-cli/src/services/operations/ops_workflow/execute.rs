@@ -40,12 +40,41 @@ pub(crate) async fn handle_workflow_execute(
     }
     let vars = super::parse_workflow_vars(&args.vars)?;
 
-    hub.daemon().start(Default::default()).await?;
+    // Re-attach invocations (`--workflow-id`, including the detached
+    // children spawned by the async `workflow run` path) must not mutate
+    // daemon lifecycle state: `daemon().start` persists a Running status
+    // without a daemon pid, which would make `animus status` report a
+    // healthy daemon after the child exits.
+    if args.workflow_id.is_none() {
+        hub.daemon().start(Default::default()).await?;
+    }
 
     let task_id_for_sync = args.task_id.clone();
     let phase_filter = args.phase.clone();
     let task_id_for_output = args.task_id.clone();
     let requirement_id_for_output = args.requirement_id.clone();
+
+    // Re-attaching to an existing workflow record: the persisted record is
+    // authoritative for subject, input, and vars. Register this process in
+    // the workflow-runner pid registry so the daemon's orphan reconciler
+    // treats the run as live for as long as we drive the plugin.
+    let existing_workflow = match args.workflow_id.as_deref() {
+        Some(workflow_id) => Some(hub.workflows().get(workflow_id).await?),
+        None => None,
+    };
+    // Best-effort: a registry write failure must not abort execution —
+    // the workflow would otherwise have no driver at all even though the
+    // caller was told the runner started. Without the entry the orphan
+    // reconciler may cancel a long run, which is the lesser failure mode.
+    let _runner_pid_guard = existing_workflow.as_ref().and_then(|workflow| {
+        match super::phases::WorkflowRunnerPidGuard::register(project_root, &workflow.id) {
+            Ok(guard) => Some(guard),
+            Err(error) => {
+                tracing::warn!(workflow_id = %workflow.id, error = %error, "failed to register workflow runner pid");
+                None
+            }
+        }
+    });
 
     // v0.5.1 fold-in: route `workflow/execute` exclusively through the
     // installed `workflow_runner` plugin. The in-tree fallback path
@@ -56,23 +85,38 @@ pub(crate) async fn handle_workflow_execute(
     // a runtime that the rest of v0.5.1 no longer exercises.
     let plugin_input_json: Option<serde_json::Value> =
         args.input_json.as_deref().map(serde_json::from_str).transpose()?;
-    let plugin_request = workflow_proto::WorkflowExecuteRequest {
-        workflow_id: args.workflow_id.clone(),
-        subject_dispatch: None,
-        subject_ref: None,
-        task_id: args.task_id.clone(),
-        requirement_id: args.requirement_id.clone(),
-        title: args.title.clone(),
-        description: args.description.clone(),
-        workflow_ref: args.workflow_ref.clone(),
-        input: plugin_input_json,
-        vars,
-        model: args.model.clone(),
-        tool: args.tool.clone(),
-        phase_timeout_secs: args.phase_timeout_secs,
-        phase_filter: phase_filter.clone(),
-        phase_routing: None,
-        mcp_config: None,
+    let plugin_request = if let Some(existing) = existing_workflow.as_ref() {
+        let mut request = super::phases::workflow_execute_request_for_existing(existing);
+        if args.workflow_ref.is_some() {
+            request.workflow_ref = args.workflow_ref.clone();
+        }
+        if plugin_input_json.is_some() {
+            request.input = plugin_input_json;
+        }
+        request.model = args.model.clone();
+        request.tool = args.tool.clone();
+        request.phase_timeout_secs = args.phase_timeout_secs;
+        request.phase_filter = phase_filter.clone();
+        request
+    } else {
+        workflow_proto::WorkflowExecuteRequest {
+            workflow_id: None,
+            subject_dispatch: None,
+            subject_ref: None,
+            task_id: args.task_id.clone(),
+            requirement_id: args.requirement_id.clone(),
+            title: args.title.clone(),
+            description: args.description.clone(),
+            workflow_ref: args.workflow_ref.clone(),
+            input: plugin_input_json,
+            vars,
+            model: args.model.clone(),
+            tool: args.tool.clone(),
+            phase_timeout_secs: args.phase_timeout_secs,
+            phase_filter: phase_filter.clone(),
+            phase_routing: None,
+            mcp_config: None,
+        }
     };
     let project_root_path = std::path::Path::new(project_root);
     let plugin_result =
@@ -106,6 +150,24 @@ pub(crate) async fn handle_workflow_execute(
                 None,
             )
             .await;
+        } else if let (true, Some(status)) = (existing_workflow.is_some(), parsed_status) {
+            // workflow-id-only invocations (detached async-run children,
+            // manual `--sync --workflow-id` resumes) carry no --task-id;
+            // derive the subject from the persisted record so the task
+            // status projection still lands.
+            if let Ok(reloaded) = hub.workflows().get(plugin_result.workflow_id.as_str()).await {
+                project_terminal_workflow_result(
+                    hub.clone(),
+                    project_root,
+                    reloaded.subject.id(),
+                    Some(reloaded.task_id.as_str()),
+                    reloaded.workflow_ref.as_deref(),
+                    Some(reloaded.id.as_str()),
+                    status,
+                    reloaded.failure_reason.as_deref(),
+                )
+                .await;
+            }
         }
     }
     if json {

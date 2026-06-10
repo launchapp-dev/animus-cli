@@ -26,7 +26,7 @@ animus
 │   ├── health               Show daemon health diagnostics
 │   ├── pause                Pause daemon scheduling
 │   ├── resume               Resume daemon scheduling
-│   ├── events               Stream or tail daemon event history
+│   ├── events               Print recent daemon event history and exit; `--follow` keeps streaming new events until Ctrl-C
 │   ├── logs                 Read daemon logs
 │   ├── stream               Stream structured log events in real-time across daemon, workflows, and runs
 │   ├── clear-logs           Clear daemon logs
@@ -86,8 +86,8 @@ animus
 │   │   ├── list             List checkpoints for a workflow
 │   │   ├── get              Get a specific checkpoint for a workflow
 │   │   └── prune            Prune checkpoints using count and/or age retention
-│   ├── run                  Run a workflow. Enqueues to daemon by default; use --sync to run in terminal
-│   ├── resume               Resume a paused workflow
+│   ├── run                  Run a workflow. Spawns a detached workflow_runner by default; use --sync to run in terminal (both require the workflow_runner plugin)
+│   ├── resume               Resume a paused workflow and respawn its workflow_runner
 │   ├── resume-status        Check whether a workflow can be resumed
 │   ├── pause                Pause an active workflow (confirmation required)
 │   ├── cancel               Cancel a workflow (confirmation required)

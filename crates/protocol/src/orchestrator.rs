@@ -472,6 +472,13 @@ pub struct TaskMetadata {
     pub started_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub completed_at: Option<DateTime<Utc>>,
+    /// Timestamp of the most recent status application. Unlike
+    /// `updated_at` (bumped by any field edit), this only moves when the
+    /// task's status itself changes, so reconciliation logic can compare
+    /// it against workflow terminal times. `None` for records persisted
+    /// before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status_changed_at: Option<DateTime<Utc>>,
     #[serde(default = "default_task_version")]
     pub version: u32,
 }

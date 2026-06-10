@@ -142,6 +142,24 @@ fn extract_vars_from_params(
     out
 }
 
+/// Extract the wire-side `params.overrides` map (packed by the CLI's
+/// `try_workflow_run_via_control`) into the detached-runner execution
+/// overrides, mirroring [`extract_vars_from_params`]. Missing or
+/// non-object payloads degrade to defaults so older CLI binaries keep
+/// round-tripping cleanly.
+fn extract_runner_overrides_from_params(
+    params: &std::collections::BTreeMap<String, serde_json::Value>,
+) -> super::phases::DetachedRunnerOverrides {
+    let Some(serde_json::Value::Object(obj)) = params.get("overrides") else {
+        return super::phases::DetachedRunnerOverrides::default();
+    };
+    super::phases::DetachedRunnerOverrides {
+        model: obj.get("model").and_then(serde_json::Value::as_str).map(ToOwned::to_owned),
+        tool: obj.get("tool").and_then(serde_json::Value::as_str).map(ToOwned::to_owned),
+        phase_timeout_secs: obj.get("phase_timeout_secs").and_then(serde_json::Value::as_u64),
+    }
+}
+
 #[async_trait]
 impl WorkflowRouting for WorkflowRoutingImpl {
     async fn workflow_list(&self, request: WireListRequest) -> Result<WireListResponse, ControlError> {
@@ -180,8 +198,15 @@ impl WorkflowRouting for WorkflowRoutingImpl {
         // path. Any non-string values are stringified via
         // `Value::to_string()` so callers always see a valid scalar.
         let vars = extract_vars_from_params(&request.params);
+        let overrides = extract_runner_overrides_from_params(&request.params);
         let input = WorkflowRunInput::for_task(request.task_id, request.definition).with_vars(vars);
-        let workflow = hub.workflows().run(input).await.map_err(internal)?;
+        // Post-v0.5 the daemon has no in-process workflow executor: a bare
+        // `workflows.run(...)` would only bootstrap a Running record that
+        // nothing drives. Hand execution to a detached workflow_runner
+        // spawn (same path as the local CLI `workflow run`).
+        let workflow = super::phases::start_workflow_with_runner(hub, &self.project_root_str(), input, overrides)
+            .await
+            .map_err(internal)?;
         Ok(WireRunStart {
             workflow_id: workflow.id,
             status: core_status_to_wire(workflow.status),
@@ -202,8 +227,11 @@ impl WorkflowRouting for WorkflowRoutingImpl {
             ));
         }
         let vars = extract_vars_from_params(&request.params);
+        let overrides = extract_runner_overrides_from_params(&request.params);
         let input = WorkflowRunInput::for_task(task_id, Some(request.definition)).with_vars(vars);
-        let workflow = hub.workflows().run(input).await.map_err(internal)?;
+        let workflow = super::phases::start_workflow_with_runner(hub, &self.project_root_str(), input, overrides)
+            .await
+            .map_err(internal)?;
         Ok(WireRunStart {
             workflow_id: workflow.id,
             status: core_status_to_wire(workflow.status),
@@ -222,13 +250,13 @@ impl WorkflowRouting for WorkflowRoutingImpl {
 
     async fn workflow_resume(&self, request: WireResumeRequest) -> Result<Unit, ControlError> {
         let hub = self.hub()?;
-        let _ = dispatch_workflow_event(
-            hub,
-            &self.project_root_str(),
-            WorkflowEvent::Resume { workflow_id: request.id, feedback: None },
-        )
-        .await
-        .map_err(internal)?;
+        // Same contract as the local CLI resume: spawn the workflow_runner
+        // for the resumed workflow so the Running record has a live driver
+        // and the orphan reconciler does not cancel it on the next tick.
+        let _ =
+            super::phases::resume_workflow_with_runner(hub, &self.project_root_str(), &request.id, request.feedback)
+                .await
+                .map_err(internal)?;
         Ok(Unit::default())
     }
 
@@ -269,6 +297,28 @@ mod tests {
         assert_eq!(extracted.len(), 2, "both vars should survive the control round-trip");
         assert_eq!(extracted.get("release_name").map(String::as_str), Some("Mercury"));
         assert_eq!(extracted.get("rollout_pct").map(String::as_str), Some("25"));
+    }
+
+    #[test]
+    fn extract_runner_overrides_from_params_round_trips_and_defaults() {
+        // The CLI packs --model / --tool / --phase-timeout-secs into
+        // `params["overrides"]`; the daemon side must reverse the
+        // projection so control-wire runs honor the same execution
+        // overrides as the local async path.
+        let mut params: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        params.insert(
+            "overrides".to_string(),
+            json!({ "model": "claude-sonnet-4-6", "tool": "claude", "phase_timeout_secs": 120 }),
+        );
+        let overrides = extract_runner_overrides_from_params(&params);
+        assert_eq!(overrides.model.as_deref(), Some("claude-sonnet-4-6"));
+        assert_eq!(overrides.tool.as_deref(), Some("claude"));
+        assert_eq!(overrides.phase_timeout_secs, Some(120));
+
+        // Older CLI binaries send no overrides key; degrade to defaults.
+        let empty: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        let overrides = extract_runner_overrides_from_params(&empty);
+        assert!(overrides.model.is_none() && overrides.tool.is_none() && overrides.phase_timeout_secs.is_none());
     }
 
     #[test]

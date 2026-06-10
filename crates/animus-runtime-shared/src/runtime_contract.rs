@@ -459,7 +459,9 @@ pub fn inject_project_mcp_servers(
         return;
     }
     let agent_id = ctx.phase_agent_id(phase_id);
-    let mut servers = serde_json::Map::new();
+    let existing =
+        runtime_contract.pointer("/mcp/additional_servers").and_then(Value::as_object).cloned().unwrap_or_default();
+    let mut servers = existing;
     for (name, entry) in &project_config.mcp_servers {
         let assigned = entry.assign_to.is_empty()
             || agent_id.as_deref().is_some_and(|id| entry.assign_to.iter().any(|a| a.eq_ignore_ascii_case(id)));
@@ -981,6 +983,58 @@ mod tests {
             runtime_contract.pointer("/mcp/additional_servers").is_none(),
             "named MCP injection should not duplicate the primary animus server"
         );
+    }
+
+    #[test]
+    fn inject_project_mcp_servers_merges_with_existing_additional_servers() {
+        let temp = tempfile::tempdir().expect("tempdir for project root");
+        let project_root = temp.path().to_string_lossy().to_string();
+        let animus_dir = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus_dir).expect("create .animus dir");
+        std::fs::write(
+            animus_dir.join("config.json"),
+            serde_json::json!({
+                "mcp_servers": {
+                    "project-db": { "command": "node", "args": ["db.js"] }
+                }
+            })
+            .to_string(),
+        )
+        .expect("write project config");
+
+        let loaded_workflow_config = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: builtin_workflow_config().schema.clone(),
+                version: builtin_workflow_config().version,
+                hash: workflow_config_hash(&builtin_workflow_config()),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: builtin_workflow_config(),
+            path: PathBuf::from("builtin"),
+        };
+        let ctx = RuntimeConfigContext {
+            agent_runtime_config: builtin_agent_runtime_config(),
+            workflow_config: loaded_workflow_config,
+        };
+
+        let mut runtime_contract = serde_json::json!({
+            "mcp": {
+                "additional_servers": {
+                    "workflow-server": { "command": "wf", "args": [] }
+                }
+            }
+        });
+        inject_project_mcp_servers(&mut runtime_contract, &project_root, &ctx, "research");
+
+        let additional_servers = runtime_contract
+            .pointer("/mcp/additional_servers")
+            .and_then(Value::as_object)
+            .expect("additional_servers should exist");
+        assert!(
+            additional_servers.contains_key("workflow-server"),
+            "project injection must merge with (not overwrite) previously injected servers"
+        );
+        assert!(additional_servers.contains_key("project-db"), "project server should be injected");
     }
 
     fn workflow_config_with_phase_agent(phase_id: &str, agent_id: &str) -> LoadedWorkflowConfig {

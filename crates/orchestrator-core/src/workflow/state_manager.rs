@@ -168,6 +168,18 @@ impl WorkflowStateManager {
         Ok(workflows)
     }
 
+    pub fn list_active(&self) -> Result<Vec<OrchestratorWorkflow>> {
+        let conn = self.open_db()?;
+        let mut stmt = conn.prepare("SELECT json FROM workflows WHERE status IN ('pending', 'running', 'paused')")?;
+        let workflows = stmt
+            .query_map([], |row| row.get::<_, Vec<u8>>(0))?
+            .filter_map(|r| r.ok())
+            .filter_map(|data| decompress_json(&data).ok())
+            .filter_map(|json| serde_json::from_str::<OrchestratorWorkflow>(&json).ok())
+            .collect();
+        Ok(workflows)
+    }
+
     pub fn list_all(&self) -> Result<Vec<OrchestratorWorkflow>> {
         let conn = self.open_db()?;
         let mut stmt = conn.prepare("SELECT json FROM workflows")?;

@@ -16,7 +16,7 @@ use tracing::{error, warn};
 /// workflow record before any executor has a chance to register a pid
 /// file. Cancelling those within the same tick wipes the user's intent
 /// before the scheduler picks them up.
-const ORPHAN_RECONCILIATION_GRACE_SECS: i64 = 90;
+pub(crate) const ORPHAN_RECONCILIATION_GRACE_SECS: i64 = 90;
 
 pub async fn recover_orphaned_running_workflows(
     hub: Arc<dyn ServiceHub>,
@@ -180,6 +180,102 @@ pub async fn reconcile_manual_phase_timeouts(hub: Arc<dyn ServiceHub>, project_r
     }
 
     Ok(reconciled)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::await_holding_lock)]
+
+    use super::recover_orphaned_running_workflows;
+    use crate::shared::test_env_lock;
+    use orchestrator_core::{
+        register_workflow_runner_pid, services::ServiceHub, unregister_workflow_runner_pid, FileServiceHub, Priority,
+        TaskCreateInput, TaskType, WorkflowRunInput, WorkflowStateManager, WorkflowStatus,
+    };
+    use protocol::test_utils::EnvVarGuard;
+    use std::collections::HashSet;
+    use std::process::Command as ProcessCommand;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    fn init_git_repo(temp: &TempDir) {
+        let init = ProcessCommand::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git init should run");
+        assert!(init.success(), "git init should succeed");
+        for args in [
+            ["config", "user.email", "ao-test@example.com"].as_slice(),
+            ["config", "user.name", "Animus Test"].as_slice(),
+        ] {
+            let status =
+                ProcessCommand::new("git").args(args).current_dir(temp.path()).status().expect("git config should run");
+            assert!(status.success(), "git config should succeed");
+        }
+        std::fs::write(temp.path().join("README.md"), "# test\n").expect("readme should be written");
+        let add =
+            ProcessCommand::new("git").args(["add", "README.md"]).current_dir(temp.path()).status().expect("git add");
+        assert!(add.success(), "git add should succeed");
+        let commit = ProcessCommand::new("git")
+            .args(["commit", "-m", "initial"])
+            .current_dir(temp.path())
+            .status()
+            .expect("git commit should run");
+        assert!(commit.success(), "initial commit should succeed");
+    }
+
+    #[tokio::test]
+    async fn registered_runner_pid_shields_old_running_workflow_from_orphan_cancel() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        init_git_repo(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "resumed workflow".to_string(),
+                description: "orphan reconciler liveness test".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .await
+            .expect("workflow should start");
+
+        // Simulate a resumed workflow: started_at far in the past, well
+        // beyond the orphan grace, status Running.
+        let manager = WorkflowStateManager::new(temp.path());
+        let mut stored = manager.load(&workflow.id).expect("workflow should load");
+        stored.started_at = chrono::Utc::now() - chrono::Duration::hours(2);
+        manager.save(&stored).expect("backdated workflow should save");
+
+        // While a live runner pid is registered (the mechanism `workflow
+        // resume` uses), the reconciler must leave the workflow alone.
+        register_workflow_runner_pid(temp.path(), &workflow.id, std::process::id()).expect("pid should register");
+        let recovered = recover_orphaned_running_workflows(hub.clone(), &project_root, &HashSet::new()).await;
+        assert_eq!(recovered, 0, "live runner pid must shield the resumed workflow");
+        let reloaded = hub.workflows().get(&workflow.id).await.expect("workflow should reload");
+        assert_eq!(reloaded.status, WorkflowStatus::Running);
+
+        // Once the runner is gone, the same workflow is reconciled.
+        unregister_workflow_runner_pid(temp.path(), &workflow.id).expect("pid should unregister");
+        let recovered = recover_orphaned_running_workflows(hub.clone(), &project_root, &HashSet::new()).await;
+        assert_eq!(recovered, 1, "orphaned workflow without a live runner must be cancelled");
+        let reloaded = hub.workflows().get(&workflow.id).await.expect("workflow should reload");
+        assert_eq!(reloaded.status, WorkflowStatus::Cancelled);
+    }
 }
 
 fn workflow_is_waiting_on_manual_phase(project_root: &str, workflow: &orchestrator_core::OrchestratorWorkflow) -> bool {

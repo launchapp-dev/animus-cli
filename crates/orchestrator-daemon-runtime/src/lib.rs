@@ -37,6 +37,12 @@ pub use dispatch::{
 pub mod reattach {
     pub use crate::dispatch::reattach::*;
 }
+/// Daemon-spawned runner records (`runs/_pending/agents/*.json`), exposed so
+/// out-of-process callers (e.g. `animus workflow resume`) can detect a live
+/// daemon-owned runner for a subject before spawning a second one.
+pub mod agent_record {
+    pub use crate::dispatch::agent_record::*;
+}
 pub use log_storage::{
     clear_log_storage_handle, current_log_storage_handle, discover_log_storage_backends, install_log_storage_handle,
     log_storage_disable_env_set, resolve_log_storage_dispatch, spawn_log_storage_supervisor, LogStorageDispatch,

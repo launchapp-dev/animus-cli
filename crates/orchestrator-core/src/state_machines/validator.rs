@@ -2,10 +2,35 @@ use std::collections::HashSet;
 
 use anyhow::{anyhow, Result};
 
+use crate::types::{WorkflowMachineEvent, WorkflowMachineState};
+
 use super::schema::{
     RegistryEntry, RequirementLifecycleDefinition, StateMachinesDocument, WorkflowMachineDefinition,
     STATE_MACHINES_SCHEMA_ID, STATE_MACHINES_VERSION,
 };
+
+const EXECUTOR_REQUIRED_WORKFLOW_TRANSITIONS: &[(WorkflowMachineState, WorkflowMachineEvent)] = &[
+    (WorkflowMachineState::EvaluateTransition, WorkflowMachineEvent::PhaseStarted),
+    (WorkflowMachineState::EvaluateTransition, WorkflowMachineEvent::NoMorePhases),
+    (WorkflowMachineState::RunPhase, WorkflowMachineEvent::PhaseSucceeded),
+    (WorkflowMachineState::RunPhase, WorkflowMachineEvent::PhaseFailed),
+    (WorkflowMachineState::RunPhase, WorkflowMachineEvent::PhaseSkipped),
+    (WorkflowMachineState::RunPhase, WorkflowMachineEvent::CancelRequested),
+    (WorkflowMachineState::EvaluateGates, WorkflowMachineEvent::GatesPassed),
+    (WorkflowMachineState::EvaluateGates, WorkflowMachineEvent::GatesFailed),
+    (WorkflowMachineState::EvaluateGates, WorkflowMachineEvent::PolicyDecisionReady),
+    (WorkflowMachineState::EvaluateGates, WorkflowMachineEvent::PhaseTargetSelected),
+    (WorkflowMachineState::ApplyTransition, WorkflowMachineEvent::Start),
+    (WorkflowMachineState::ApplyTransition, WorkflowMachineEvent::PhaseStarted),
+    (WorkflowMachineState::ApplyTransition, WorkflowMachineEvent::NoMorePhases),
+    (WorkflowMachineState::ApplyTransition, WorkflowMachineEvent::RetryPhaseStarted),
+    // TODO(codex-p2): legacy custom state-machine JSON written before the
+    // merge-conflict transitions existed now fails validation and falls back
+    // to the builtin machine (with a logged warning). Consider a migration
+    // shim if real configs surface without these two transitions.
+    (WorkflowMachineState::Completed, WorkflowMachineEvent::MergeConflictDetected),
+    (WorkflowMachineState::MergeConflict, WorkflowMachineEvent::MergeConflictResolved),
+];
 
 pub fn validate_state_machines_document(document: &StateMachinesDocument) -> Result<()> {
     let mut errors = Vec::new();
@@ -42,6 +67,14 @@ fn validate_workflow_machine_definition(definition: &WorkflowMachineDefinition) 
 
     if definition.terminal_states.is_empty() {
         errors.push("terminal_states must include at least one state".to_string());
+    }
+
+    let mut required_transitions = vec![(definition.initial_state, WorkflowMachineEvent::Start)];
+    required_transitions.extend(EXECUTOR_REQUIRED_WORKFLOW_TRANSITIONS.iter().copied());
+    for (from, event) in required_transitions {
+        if !definition.transitions.iter().any(|transition| transition.from == from && transition.event == event) {
+            errors.push(format!("missing executor-required transition from {from:?} on {event:?}"));
+        }
     }
 
     let guard_ids = registry_ids(&definition.guards, "guards", &mut errors);
@@ -145,6 +178,20 @@ mod tests {
     fn builtin_definition_validates() {
         let document = builtin_state_machines_document();
         validate_state_machines_document(&document).expect("builtin config should validate");
+    }
+
+    #[test]
+    fn machine_missing_executor_required_transition_is_rejected() {
+        let mut document = builtin_state_machines_document();
+        document.workflow.transitions.retain(|transition| {
+            !(transition.from == WorkflowMachineState::RunPhase
+                && transition.event == WorkflowMachineEvent::PhaseSucceeded)
+        });
+        let error = validate_state_machines_document(&document).expect_err("should fail");
+        assert!(
+            error.to_string().contains("missing executor-required transition from RunPhase on PhaseSucceeded"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
