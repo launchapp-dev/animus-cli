@@ -16,12 +16,13 @@ operate on the public registry. Plugin mutation tools that touch installed
 binaries can still accept `project_root` so project-local `.animus/plugins.lock`
 participates in integrity tracking when present.
 
-**OAuth-protected upstream MCP servers.** Connecting *agents* to MCP servers
-that require interactive OAuth login (GitHub, Linear, Notion, …) is handled by
-the `animus mcp auth` CLI surface and the `animus-mcp-proxy` stdio bridge, not
-by an MCP tool. See [`mcp-oauth.md`](mcp-oauth.md). The proxy is launched
-automatically for any MCP server configured with the `authorization_code`
-oauth flow.
+**OAuth-protected upstream MCP servers.** Connecting *agents* to OAuth-backed
+MCP servers is handled by the `animus mcp auth` CLI surface plus the
+`animus-mcp-proxy` stdio bridge, not by an MCP tool. See
+[`mcp-oauth.md`](mcp-oauth.md). The proxy is launched automatically for any
+MCP server configured with an `oauth:` block: `authorization_code` reads from
+the OS keychain, while `manual_bearer`, `client_credentials`, and
+`refresh_token` resolve through the OAuth broker.
 
 **v0.4.4 note — subject surface is now mandatory for tasks and requirements.** The legacy
 `animus.task.*` / `animus.requirements.*` / `animus.cloud.*` / `animus.errors.*` MCP tool

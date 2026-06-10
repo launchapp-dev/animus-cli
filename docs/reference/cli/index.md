@@ -380,8 +380,7 @@ additions, minus the built-in `animus` server when `--no-animus-mcp` is
 passed. Each name is resolved against the project's `mcp_servers` map
 (workflow YAML `mcp_servers` first, then `.animus/config.json`); the name
 `animus` resolves to the built-in `animus mcp serve` stdio surface. OAuth
-`authorization_code` servers are routed through `animus-mcp-proxy`, the same
-as workflow runs.
+servers are routed through `animus-mcp-proxy`, the same as workflow runs.
 
 | Flag | Description |
 |---|---|

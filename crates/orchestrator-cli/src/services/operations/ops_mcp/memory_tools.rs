@@ -409,6 +409,23 @@ mod memory_tool_tests {
         payload.get("error").and_then(Value::as_str).unwrap_or_default().to_string()
     }
 
+    // Run an async memory-tool body with HOME pinned to a private tempdir and
+    // the crate-wide env lock held, so the HOME-derived storage scope is
+    // deterministic and immune to sibling tests that mutate HOME process-wide.
+    // `block_on` keeps the std mutex guard out of any `.await` frame, avoiding
+    // clippy::await_holding_lock while still serializing against every other
+    // env-aware test in this crate.
+    fn with_isolated_scope<F: std::future::Future<Output = ()>>(body: F) {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(body);
+    }
+
     #[tokio::test]
     async fn memory_router_has_all_four_tools() {
         let server = new_memory_mcp_server("/tmp/project");
@@ -420,200 +437,210 @@ mod memory_tool_tests {
         assert!(server.tool_router.has_route("animus.memory.get"));
     }
 
-    #[tokio::test]
-    async fn memory_append_then_get_roundtrip() {
-        let project = tempdir().expect("tempdir");
-        let project_root = project.path().to_string_lossy().to_string();
-        let server = new_memory_mcp_server(&project_root);
+    #[test]
+    fn memory_append_then_get_roundtrip() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_memory_mcp_server(&project_root);
 
-        let append = server
-            .ao_memory_append(Parameters(MemoryAppendInput {
-                agent_id: "architect".to_string(),
-                text: "Prefer explicit contracts.".to_string(),
-                source: Some("phase:architecture".to_string()),
-                project_root: None,
-            }))
-            .await
-            .expect("append should not error");
-        let appended = data(&append);
-        let entry_id = appended.pointer("/entry/id").and_then(Value::as_str).expect("entry id").to_string();
-
-        let fetched = server
-            .ao_memory_get(Parameters(MemoryGetInput {
-                agent_id: "architect".to_string(),
-                entry_id: None,
-                project_root: None,
-            }))
-            .await
-            .expect("get should not error");
-        let payload = data(&fetched);
-        let entries = payload.pointer("/entries").and_then(Value::as_array).expect("entries");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].pointer("/text").and_then(Value::as_str), Some("Prefer explicit contracts."));
-        assert_eq!(entries[0].pointer("/source").and_then(Value::as_str), Some("phase:architecture"));
-
-        let fetched_by_id = server
-            .ao_memory_get(Parameters(MemoryGetInput {
-                agent_id: "architect".to_string(),
-                entry_id: Some(entry_id.clone()),
-                project_root: None,
-            }))
-            .await
-            .expect("get by id should not error");
-        let entry = data(&fetched_by_id).pointer("/entry").cloned().expect("entry field");
-        assert_eq!(entry.pointer("/id").and_then(Value::as_str), Some(entry_id.as_str()));
-    }
-
-    #[tokio::test]
-    async fn memory_list_returns_appended_entries_and_respects_prefix() {
-        let project = tempdir().expect("tempdir");
-        let project_root = project.path().to_string_lossy().to_string();
-        let server = new_memory_mcp_server(&project_root);
-
-        for text in ["decision: ship", "decision: revert", "note: ignored"] {
-            server
+            let append = server
                 .ao_memory_append(Parameters(MemoryAppendInput {
                     agent_id: "architect".to_string(),
-                    text: text.to_string(),
+                    text: "Prefer explicit contracts.".to_string(),
+                    source: Some("phase:architecture".to_string()),
+                    project_root: None,
+                }))
+                .await
+                .expect("append should not error");
+            let appended = data(&append);
+            let entry_id = appended.pointer("/entry/id").and_then(Value::as_str).expect("entry id").to_string();
+
+            let fetched = server
+                .ao_memory_get(Parameters(MemoryGetInput {
+                    agent_id: "architect".to_string(),
+                    entry_id: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("get should not error");
+            let payload = data(&fetched);
+            let entries = payload.pointer("/entries").and_then(Value::as_array).expect("entries");
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].pointer("/text").and_then(Value::as_str), Some("Prefer explicit contracts."));
+            assert_eq!(entries[0].pointer("/source").and_then(Value::as_str), Some("phase:architecture"));
+
+            let fetched_by_id = server
+                .ao_memory_get(Parameters(MemoryGetInput {
+                    agent_id: "architect".to_string(),
+                    entry_id: Some(entry_id.clone()),
+                    project_root: None,
+                }))
+                .await
+                .expect("get by id should not error");
+            let entry = data(&fetched_by_id).pointer("/entry").cloned().expect("entry field");
+            assert_eq!(entry.pointer("/id").and_then(Value::as_str), Some(entry_id.as_str()));
+        });
+    }
+
+    #[test]
+    fn memory_list_returns_appended_entries_and_respects_prefix() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_memory_mcp_server(&project_root);
+
+            for text in ["decision: ship", "decision: revert", "note: ignored"] {
+                server
+                    .ao_memory_append(Parameters(MemoryAppendInput {
+                        agent_id: "architect".to_string(),
+                        text: text.to_string(),
+                        source: None,
+                        project_root: None,
+                    }))
+                    .await
+                    .expect("append");
+            }
+
+            let all = server
+                .ao_memory_list(Parameters(MemoryListInput {
+                    agent_id: "architect".to_string(),
+                    prefix: None,
+                    limit: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("list");
+            assert_eq!(data(&all).pointer("/count").and_then(Value::as_u64), Some(3));
+
+            let filtered = server
+                .ao_memory_list(Parameters(MemoryListInput {
+                    agent_id: "architect".to_string(),
+                    prefix: Some("decision:".to_string()),
+                    limit: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("list with prefix");
+            let payload = data(&filtered);
+            assert_eq!(payload.pointer("/count").and_then(Value::as_u64), Some(2));
+            let entries = payload.pointer("/entries").and_then(Value::as_array).expect("entries");
+            assert!(entries.iter().all(|entry| entry
+                .pointer("/text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.starts_with("decision:"))));
+        });
+    }
+
+    #[test]
+    fn memory_clear_single_entry_keeps_other_entries() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_memory_mcp_server(&project_root);
+
+            let first = server
+                .ao_memory_append(Parameters(MemoryAppendInput {
+                    agent_id: "architect".to_string(),
+                    text: "First".to_string(),
                     source: None,
                     project_root: None,
                 }))
                 .await
-                .expect("append");
-        }
+                .expect("append first");
+            let first_id = data(&first).pointer("/entry/id").and_then(Value::as_str).expect("id").to_string();
 
-        let all = server
-            .ao_memory_list(Parameters(MemoryListInput {
-                agent_id: "architect".to_string(),
-                prefix: None,
-                limit: None,
-                project_root: None,
-            }))
-            .await
-            .expect("list");
-        assert_eq!(data(&all).pointer("/count").and_then(Value::as_u64), Some(3));
-
-        let filtered = server
-            .ao_memory_list(Parameters(MemoryListInput {
-                agent_id: "architect".to_string(),
-                prefix: Some("decision:".to_string()),
-                limit: None,
-                project_root: None,
-            }))
-            .await
-            .expect("list with prefix");
-        let payload = data(&filtered);
-        assert_eq!(payload.pointer("/count").and_then(Value::as_u64), Some(2));
-        let entries = payload.pointer("/entries").and_then(Value::as_array).expect("entries");
-        assert!(entries.iter().all(|entry| entry
-            .pointer("/text")
-            .and_then(Value::as_str)
-            .is_some_and(|text| text.starts_with("decision:"))));
-    }
-
-    #[tokio::test]
-    async fn memory_clear_single_entry_keeps_other_entries() {
-        let project = tempdir().expect("tempdir");
-        let project_root = project.path().to_string_lossy().to_string();
-        let server = new_memory_mcp_server(&project_root);
-
-        let first = server
-            .ao_memory_append(Parameters(MemoryAppendInput {
-                agent_id: "architect".to_string(),
-                text: "First".to_string(),
-                source: None,
-                project_root: None,
-            }))
-            .await
-            .expect("append first");
-        let first_id = data(&first).pointer("/entry/id").and_then(Value::as_str).expect("id").to_string();
-
-        server
-            .ao_memory_append(Parameters(MemoryAppendInput {
-                agent_id: "architect".to_string(),
-                text: "Second".to_string(),
-                source: None,
-                project_root: None,
-            }))
-            .await
-            .expect("append second");
-
-        let cleared = server
-            .ao_memory_clear(Parameters(MemoryClearInput {
-                agent_id: "architect".to_string(),
-                entry_id: Some(first_id.clone()),
-                delete_all: None,
-                project_root: None,
-            }))
-            .await
-            .expect("clear single");
-        let payload = data(&cleared);
-        assert_eq!(payload.pointer("/deleted_count").and_then(Value::as_u64), Some(1));
-        let remaining = payload.pointer("/entries").and_then(Value::as_array).expect("entries");
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0].pointer("/text").and_then(Value::as_str), Some("Second"));
-    }
-
-    #[tokio::test]
-    async fn memory_clear_all_wipes_every_entry() {
-        let project = tempdir().expect("tempdir");
-        let project_root = project.path().to_string_lossy().to_string();
-        let server = new_memory_mcp_server(&project_root);
-
-        for text in ["a", "b", "c"] {
             server
                 .ao_memory_append(Parameters(MemoryAppendInput {
                     agent_id: "architect".to_string(),
-                    text: text.to_string(),
+                    text: "Second".to_string(),
                     source: None,
                     project_root: None,
                 }))
                 .await
-                .expect("append");
-        }
+                .expect("append second");
 
-        let cleared = server
-            .ao_memory_clear(Parameters(MemoryClearInput {
-                agent_id: "architect".to_string(),
-                entry_id: None,
-                delete_all: Some(true),
-                project_root: None,
-            }))
-            .await
-            .expect("clear all");
-        let payload = data(&cleared);
-        assert_eq!(payload.pointer("/deleted_count").and_then(Value::as_str), Some("all"));
-        let entries = payload.pointer("/entries").and_then(Value::as_array).expect("entries");
-        assert!(entries.is_empty());
-
-        let after = server
-            .ao_memory_list(Parameters(MemoryListInput {
-                agent_id: "architect".to_string(),
-                prefix: None,
-                limit: None,
-                project_root: None,
-            }))
-            .await
-            .expect("list after clear");
-        assert_eq!(data(&after).pointer("/count").and_then(Value::as_u64), Some(0));
+            let cleared = server
+                .ao_memory_clear(Parameters(MemoryClearInput {
+                    agent_id: "architect".to_string(),
+                    entry_id: Some(first_id.clone()),
+                    delete_all: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("clear single");
+            let payload = data(&cleared);
+            assert_eq!(payload.pointer("/deleted_count").and_then(Value::as_u64), Some(1));
+            let remaining = payload.pointer("/entries").and_then(Value::as_array).expect("entries");
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].pointer("/text").and_then(Value::as_str), Some("Second"));
+        });
     }
 
-    #[tokio::test]
-    async fn memory_clear_without_target_returns_error() {
-        let project = tempdir().expect("tempdir");
-        let project_root = project.path().to_string_lossy().to_string();
-        let server = new_memory_mcp_server(&project_root);
+    #[test]
+    fn memory_clear_all_wipes_every_entry() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_memory_mcp_server(&project_root);
 
-        let result = server
-            .ao_memory_clear(Parameters(MemoryClearInput {
-                agent_id: "architect".to_string(),
-                entry_id: None,
-                delete_all: None,
-                project_root: None,
-            }))
-            .await
-            .expect("clear should still produce a structured result");
-        assert!(error_message(&result).contains("entry_id or delete_all"));
+            for text in ["a", "b", "c"] {
+                server
+                    .ao_memory_append(Parameters(MemoryAppendInput {
+                        agent_id: "architect".to_string(),
+                        text: text.to_string(),
+                        source: None,
+                        project_root: None,
+                    }))
+                    .await
+                    .expect("append");
+            }
+
+            let cleared = server
+                .ao_memory_clear(Parameters(MemoryClearInput {
+                    agent_id: "architect".to_string(),
+                    entry_id: None,
+                    delete_all: Some(true),
+                    project_root: None,
+                }))
+                .await
+                .expect("clear all");
+            let payload = data(&cleared);
+            assert_eq!(payload.pointer("/deleted_count").and_then(Value::as_str), Some("all"));
+            let entries = payload.pointer("/entries").and_then(Value::as_array).expect("entries");
+            assert!(entries.is_empty());
+
+            let after = server
+                .ao_memory_list(Parameters(MemoryListInput {
+                    agent_id: "architect".to_string(),
+                    prefix: None,
+                    limit: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("list after clear");
+            assert_eq!(data(&after).pointer("/count").and_then(Value::as_u64), Some(0));
+        });
+    }
+
+    #[test]
+    fn memory_clear_without_target_returns_error() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_memory_mcp_server(&project_root);
+
+            let result = server
+                .ao_memory_clear(Parameters(MemoryClearInput {
+                    agent_id: "architect".to_string(),
+                    entry_id: None,
+                    delete_all: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("clear should still produce a structured result");
+            assert!(error_message(&result).contains("entry_id or delete_all"));
+        });
     }
 
     #[tokio::test]

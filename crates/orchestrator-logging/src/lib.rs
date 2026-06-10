@@ -272,7 +272,7 @@ impl Logger {
         }
         if fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0) >= MAX_LOG_SIZE {
             *guard = None;
-            let _ = fs::rename(&self.path, &self.rotated_path());
+            let _ = fs::rename(&self.path, self.rotated_path());
         }
         *guard = OpenOptions::new().create(true).append(true).open(&self.path).ok();
         if let Some(lock) = &lock_file {

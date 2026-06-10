@@ -1744,12 +1744,15 @@ mod tests {
         use orchestrator_core::{services::ServiceHub, FileServiceHub};
         use protocol::test_utils::EnvVarGuard;
         use serde_json::json;
-        use std::sync::{Arc, Mutex, MutexGuard};
+        use std::sync::{Arc, MutexGuard};
         use tempfile::TempDir;
 
+        // Serialize on the crate-wide env lock — these tests mutate HOME /
+        // ANIMUS_CONFIG_DIR, which are process-global, so a private mutex
+        // would still race sibling modules (and the memory-tool tests that
+        // read HOME-derived scope).
         fn lock_env() -> MutexGuard<'static, ()> {
-            static LOCK: Mutex<()> = Mutex::new(());
-            LOCK.lock().unwrap_or_else(|p| p.into_inner())
+            crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner())
         }
 
         // Seed a workflow + checkpoint for a SAFE-to-auto-advance phase.
@@ -2204,12 +2207,14 @@ mod tests {
     mod decision_gate {
         use super::super::phase_requires_explicit_decision_for_resume;
         use protocol::test_utils::EnvVarGuard;
-        use std::sync::{Mutex, MutexGuard};
+        use std::sync::MutexGuard;
         use tempfile::TempDir;
 
+        // Shared crate-wide env lock (see the sibling module above) so HOME /
+        // ANIMUS_CONFIG_DIR mutations serialize against every other env-aware
+        // test in this crate, not just within this module.
         fn lock_env() -> MutexGuard<'static, ()> {
-            static LOCK: Mutex<()> = Mutex::new(());
-            LOCK.lock().unwrap_or_else(|p| p.into_inner())
+            crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner())
         }
 
         // Use an isolated empty project for tests that only need built-in

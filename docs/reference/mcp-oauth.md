@@ -1,12 +1,12 @@
-# MCP OAuth (interactive `authorization_code`)
+# MCP OAuth (`authorization_code` + broker-backed M2M flows)
 
 Animus can handle the OAuth login for OAuth-protected MCP servers (GitHub,
 Linear, Notion, …) itself and expose them to agents through a local,
-auth-free stdio proxy. This is the **interactive** `authorization_code` flow.
-It sits alongside the machine-to-machine OAuth broker
-([`docs/reference/secrets.md`](secrets.md) and the `oauth:` block in
-[`workflow-yaml.md`](workflow-yaml.md)); the M2M flows
-(`client_credentials`, `refresh_token`, `manual_bearer`) are unchanged.
+auth-free stdio proxy. For the interactive case this is the
+`authorization_code` flow. For machine-to-machine servers
+(`client_credentials`, `refresh_token`, `manual_bearer`), the same proxy now
+resolves the live bearer through the OAuth broker at connect time instead of
+embedding a resolved `Authorization` header into the agent contract.
 
 ## How it works
 
@@ -21,14 +21,16 @@ It sits alongside the machine-to-machine OAuth broker
    exchanges the code for tokens.
 2. Tokens are stored in the **OS keychain** (the same store as
    `animus secret`), keyed per server + principal.
-3. At workflow runtime, any MCP server configured with the
-   `authorization_code` flow is **repointed at `animus-mcp-proxy`** in the
-   agent's MCP config. The agent talks to the local proxy over stdio with no
-   auth. The proxy injects the live bearer token upstream and refreshes it
-   before expiry and on a `401`.
+3. At runtime, any MCP server configured with an `oauth:` block is
+   **repointed at `animus-mcp-proxy`** in the agent's MCP config. The agent
+   talks to the local proxy over stdio with no auth. The proxy injects the
+   live bearer token upstream and refreshes or re-resolves it on expiry and
+   on a `401`.
 
-The OAuth protocol itself is driven by [`rmcp`](https://crates.io/crates/rmcp)
-1.7's `AuthorizationManager` / `AuthorizationSession`. Animus does not
+The interactive OAuth protocol is driven by
+[`rmcp`](https://crates.io/crates/rmcp) 1.7's `AuthorizationManager` /
+`AuthorizationSession`. For broker-backed M2M flows, `animus-mcp-proxy`
+delegates bearer resolution to the Animus OAuth broker. Animus does not
 hand-roll OAuth, PKCE, or token exchange.
 
 ## Configuration
@@ -194,9 +196,15 @@ assembler, not by hand, but can be run directly:
 animus-mcp-proxy --server github [--url https://api.githubcopilot.com/mcp/] [--project-root .]
 ```
 
-It reads the live token from the keychain (written by `animus mcp auth`),
-serves the agent an auth-free stdio MCP endpoint, and forwards to the upstream
-with the bearer injected and refreshed on expiry/`401`.
+It serves the agent an auth-free stdio MCP endpoint and forwards to the
+upstream with a live bearer token:
+
+- `authorization_code`: from the OS keychain entry written by
+  `animus mcp auth`
+- `manual_bearer`, `client_credentials`, `refresh_token`: from the OAuth
+  broker at connect time
+
+On upstream auth failure it retries once with a forced refresh/re-resolution.
 
 ## Limitations
 

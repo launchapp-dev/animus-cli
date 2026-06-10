@@ -229,8 +229,11 @@ Plugins:
   marketing agent gets the marketing ones. Use `--agent` / `--skill` to select
   the scope, `--mcp-server <name>` to add more, and `--no-animus-mcp` to drop
   the built-in `animus` server. A plain chat (no profile/skill) defaults to the
-  `animus` server only. See the per-agent MCP server section in the
-  [CLI Command Surface](../reference/cli/index.md).
+  `animus` server only. The same resolved set is mirrored onto both the
+  runtime contract and the provider-facing `mcp_servers` request field, and
+  any server with an `oauth:` block is routed through `animus-mcp-proxy`
+  instead of exposing a bearer token directly. See the per-agent MCP server
+  section in the [CLI Command Surface](../reference/cli/index.md).
 
 See also: [MCP Tools Reference](../reference/mcp-tools.md),
 [CLI Command Surface](../reference/cli/index.md), and

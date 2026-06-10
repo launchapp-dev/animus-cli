@@ -334,9 +334,13 @@ mod tests {
 
     // Pins PATH (under the shared env lock) so concurrent tests that clobber
     // PATH cannot break the `ps`/`sleep`/`true` spawns these tests rely on.
+    // The returned tuple keeps the lock held for the caller's full body — drop
+    // both guards together so PATH is restored before the lock is released.
     #[cfg(unix)]
-    fn pin_path_for_process_spawns() -> protocol::test_utils::EnvVarGuard {
-        protocol::test_utils::EnvVarGuard::set("PATH", Some("/bin:/usr/bin"))
+    fn pin_path_for_process_spawns() -> (std::sync::MutexGuard<'static, ()>, protocol::test_utils::EnvVarGuard) {
+        let lock = crate::dispatch::test_env::lock().lock().unwrap_or_else(|p| p.into_inner());
+        let path = protocol::test_utils::EnvVarGuard::set("PATH", Some("/bin:/usr/bin"));
+        (lock, path)
     }
 
     fn write_record_into(dir: &std::path::Path, record: &AgentSpawnRecord) -> std::io::Result<std::path::PathBuf> {

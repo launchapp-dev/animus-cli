@@ -183,12 +183,12 @@ YAML), see
 
 ### HTTP transport with OAuth (v0.5.5)
 
-For HTTP-transport MCP servers (`transport: http` + `url:`), Animus can resolve
-an OAuth bearer token at contract-assembly time and inject it as an
-`Authorization: Bearer <token>` header into the additional MCP server entry
-passed to the agent. This lets `codex`, `gemini`, `opencode`, and any other
-HTTP-MCP-aware tool talk to OAuth-gated MCP endpoints without each tool
-implementing its own auth flow.
+For HTTP-transport MCP servers (`transport: http` + `url:`), Animus rewrites
+any server with an `oauth:` block to the local `animus-mcp-proxy` stdio
+bridge. The agent never receives a resolved bearer token directly; the proxy
+resolves the live credential itself at connect time, injects
+`Authorization: Bearer <token>` upstream, and retries once after an upstream
+auth failure.
 
 ```yaml
 mcp_servers:
@@ -217,9 +217,10 @@ mcp_servers:
 | `audience` | optional | Auth0-style `audience=` parameter. |
 | `cache` | optional | When `false`, the on-disk token cache is bypassed. Default `true`. |
 
-Tokens are cached under `~/.animus/<repo-scope>/mcp-oauth-cache/<server>.json`
-with `0600` permissions on Unix and a 60-second skew margin before the
-recorded `expires_at`. Setting `cache: false` skips the cache entirely.
+For `authorization_code`, the proxy uses the OS keychain entry created by
+`animus mcp auth`. For broker-backed M2M flows, bearer resolution and cache
+behavior stay inside the OAuth broker; the resolved token never rides the
+runtime contract, `.mcp.json`, or provider argv.
 
 **Flows:**
 
@@ -236,10 +237,10 @@ recorded `expires_at`. Setting `cache: false` skips the cache entirely.
   refresh, no expiry. The escape hatch for tokens minted by an external
   system.
 
-**Failure modes:** A failed token fetch logs a structured warning and emits
-the MCP entry **without** the bearer header — the downstream HTTP MCP call
-then surfaces the auth error directly to the user instead of the kernel
-silently dropping the server. Token text never appears in logs.
+**Failure modes:** A failed token resolution leaves the proxy entry intact and
+the downstream MCP call surfaces the auth error from the proxy at runtime. The
+agent contract is not downgraded to an unauthenticated HTTP entry.
+Token text never appears in logs.
 
 **Validation:** `oauth` is only valid with `transport: http`. Missing
 required env-var pointers or `token_url` fail the configuration compile
