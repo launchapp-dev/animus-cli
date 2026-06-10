@@ -393,7 +393,7 @@ pub(super) struct YamlPhaseDefinition {
     pub(super) evals: Option<YamlEvalsConfig>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(super) struct YamlWorkflowFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) default_workflow_ref: Option<String>,

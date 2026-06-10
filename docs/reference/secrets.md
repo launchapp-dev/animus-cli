@@ -66,6 +66,8 @@ When a plugin asks for `LINEAR_API_TOKEN` at spawn time:
 
 Workflow YAML `${VAR}` interpolation follows the same chain: `std::env` first, then the keychain, then the `${VAR:-default}` fallback. `${VAR:?error}` shapes still fail with file path + line number when neither source has the value.
 
+When a keychain-resolved `${VAR}` value (or a `${secret.<name>}` value) would be echoed back in a YAML parse diagnostic, the compiler replaces it with `[redacted:<name>]`. Values resolved from the explicit process environment are not redacted. References inside YAML comments are never interpolated, so a commented-out `# export ${LINEAR_TOKEN}` line cannot fail the compile or pull a value out of the keychain.
+
 ## Migration: `.env` → keychain
 
 ```sh

@@ -364,9 +364,8 @@ pub(crate) fn upsert_phase_definition(
     definition: orchestrator_core::PhaseExecutionDefinition,
 ) -> Result<Value> {
     let mut workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
-    if workflow.phase_catalog.keys().all(|existing| !existing.eq_ignore_ascii_case(phase_id)) {
-        workflow.phase_catalog.insert(
-            phase_id.to_string(),
+    let catalog_entry =
+        workflow.phase_catalog.keys().all(|existing| !existing.eq_ignore_ascii_case(phase_id)).then(|| {
             orchestrator_core::PhaseUiDefinition {
                 label: title_case_phase_id(phase_id),
                 description: String::new(),
@@ -375,9 +374,12 @@ pub(crate) fn upsert_phase_definition(
                 docs_url: None,
                 tags: Vec::new(),
                 visible: true,
-            },
-        );
+            }
+        });
+    if let Some(entry) = catalog_entry.clone() {
+        workflow.phase_catalog.insert(phase_id.to_string(), entry);
     }
+    workflow.phase_definitions.insert(phase_id.to_string(), definition.clone());
 
     let mut runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
     runtime.phases.insert(phase_id.to_string(), definition.clone());
@@ -387,8 +389,16 @@ pub(crate) fn upsert_phase_definition(
         &runtime,
         Some(Path::new(project_root)),
     )?;
-    orchestrator_core::write_agent_runtime_config(Path::new(project_root), &runtime)?;
-    orchestrator_core::write_workflow_config(Path::new(project_root), &workflow)?;
+    // Persist only the upserted definition into the generated overlay. The
+    // compiled `workflow` / `runtime` configs above carry resolved `${VAR}` /
+    // `${secret.X}` values and must never be serialized back into the
+    // project tree.
+    orchestrator_core::upsert_generated_workflow_phase(
+        Path::new(project_root),
+        phase_id,
+        &definition,
+        catalog_entry.as_ref(),
+    )?;
 
     Ok(serde_json::json!({
         "phase_id": phase_id,
@@ -399,6 +409,11 @@ pub(crate) fn upsert_phase_definition(
 
 pub(crate) fn remove_phase_definition(project_root: &str, phase_id: &str) -> Result<Value> {
     let workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
+    // TODO(codex-p2): when the phase is a generated-overlay OVERRIDE of a
+    // hand-authored YAML/pack definition, removing the override leaves the
+    // phase defined and pipeline references valid — this check should not
+    // block that case. Requires compiling sources minus the generated
+    // overlays to detect the underlying definition.
     if workflow
         .workflows
         .iter()
@@ -416,7 +431,13 @@ pub(crate) fn remove_phase_definition(project_root: &str, phase_id: &str) -> Res
         .ok_or_else(|| anyhow!("phase '{}' does not exist", phase_id))?;
     runtime.phases.remove(&normalized_phase_id);
 
-    orchestrator_core::write_agent_runtime_config(Path::new(project_root), &runtime)?;
+    let removed = orchestrator_core::remove_generated_workflow_phase(Path::new(project_root), &normalized_phase_id)?;
+    if !removed {
+        return Err(anyhow!(
+            "phase '{}' is not defined in the generated overlays (.animus/workflows/generated-workflow.yaml, generated-runtime.yaml); remove it from the workflow YAML source or pack that defines it",
+            normalized_phase_id
+        ));
+    }
     Ok(serde_json::json!({
         "removed": normalized_phase_id,
         "agent_runtime_hash": orchestrator_core::agent_runtime_config::agent_runtime_config_hash(&runtime),
@@ -432,6 +453,9 @@ pub(crate) fn preview_phase_removal(project_root: &str, phase_id: &str) -> Resul
         .cloned()
         .ok_or_else(|| anyhow!("phase '{}' does not exist", phase_id))?;
 
+    let can_remove =
+        orchestrator_core::generated_workflow_phase_is_defined(Path::new(project_root), &normalized_phase_id)?;
+
     let mut envelope = dry_run_envelope(
         "workflow.phases.remove",
         serde_json::json!({"phase_id": &normalized_phase_id}),
@@ -440,7 +464,16 @@ pub(crate) fn preview_phase_removal(project_root: &str, phase_id: &str) -> Resul
         &format!("rerun 'animus workflow phases remove --phase {} --confirm {}' to apply", phase_id, phase_id),
     );
     if let Some(obj) = envelope.as_object_mut() {
-        obj.insert("can_remove".to_string(), serde_json::json!(true));
+        obj.insert("can_remove".to_string(), serde_json::json!(can_remove));
+        if !can_remove {
+            obj.insert(
+                "reason".to_string(),
+                serde_json::json!(format!(
+                    "phase '{}' is not defined in the generated overlays; remove it from the workflow YAML source or pack that defines it",
+                    normalized_phase_id
+                )),
+            );
+        }
     }
     Ok(envelope)
 }
@@ -461,7 +494,10 @@ pub(crate) fn upsert_pipeline(project_root: &str, pipeline: orchestrator_core::W
         &runtime,
         Some(Path::new(project_root)),
     )?;
-    orchestrator_core::write_workflow_config(Path::new(project_root), &workflow)?;
+    // Persist only the upserted pipeline into the generated overlay; the
+    // compiled `workflow` config carries resolved secret values and must not
+    // be serialized back into the project tree.
+    orchestrator_core::upsert_generated_workflow_pipeline(Path::new(project_root), &pipeline)?;
 
     Ok(serde_json::json!({
         "pipeline": pipeline,
@@ -686,7 +722,7 @@ pub(crate) async fn reject_manual_phase(
 mod tests {
     #![allow(clippy::await_holding_lock)]
 
-    use super::reject_manual_phase;
+    use super::{reject_manual_phase, remove_phase_definition, upsert_phase_definition, upsert_pipeline};
     use crate::shared::test_env_lock;
     use orchestrator_core::{
         load_agent_runtime_config, services::ServiceHub, write_agent_runtime_config, FileServiceHub,
@@ -752,6 +788,143 @@ mod tests {
     // `animus-workflow-runner-default` pack conformance suite. The in-tree
     // version was deleted in v0.5.1 round-2; the ignored test was dropped in
     // the v0.5.1 DELTA bundle as a surface-shrink.
+
+    const UPSERT_SECRET_VALUE: &str = "zzz-upsert-leak-zzz";
+
+    fn write_secret_using_workflows_yaml(temp: &TempDir) {
+        let animus_dir = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus_dir).expect(".animus dir should be created");
+        let yaml = r#"
+secrets:
+  api:
+    env: ANIMUS_TEST_UPSERT_SECRET
+mcp_servers:
+  linear:
+    transport: stdio
+    command: linear-mcp
+    env:
+      LINEAR_API_TOKEN: "${secret.api}"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build."
+  lint:
+    mode: agent
+    agent: swe
+    directive: "Lint."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "Be a SWE."
+workflows:
+- id: flow
+  phases: [build]
+"#;
+        std::fs::write(animus_dir.join("workflows.yaml"), yaml).expect("workflows.yaml should be written");
+    }
+
+    fn generated_overlay_path(temp: &TempDir, file_name: &str) -> std::path::PathBuf {
+        temp.path().join(".animus").join("workflows").join(file_name)
+    }
+
+    #[test]
+    fn upsert_phase_definition_keeps_resolved_secrets_out_of_generated_overlay() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let _secret_guard = EnvVarGuard::set("ANIMUS_TEST_UPSERT_SECRET", Some(UPSERT_SECRET_VALUE));
+        init_git_repo(&temp);
+        write_secret_using_workflows_yaml(&temp);
+
+        let project_root = temp.path().to_string_lossy().to_string();
+        let definition: orchestrator_core::PhaseExecutionDefinition = serde_json::from_value(serde_json::json!({
+            "mode": "agent",
+            "agent_id": "swe",
+            "directive": "Do the custom thing."
+        }))
+        .expect("definition should parse");
+        upsert_phase_definition(&project_root, "custom-phase", definition).expect("upsert should succeed");
+
+        let generated = generated_overlay_path(&temp, "generated-workflow.yaml");
+        let content = std::fs::read_to_string(&generated).expect("generated overlay should exist");
+        assert!(content.contains("custom-phase"), "upserted phase missing from overlay: {content}");
+        assert!(!content.contains(UPSERT_SECRET_VALUE), "resolved secret leaked into generated overlay: {content}");
+        assert!(!content.contains("mcp_servers"), "compiled mcp_servers must not be dumped: {content}");
+        assert!(
+            !generated_overlay_path(&temp, "generated-runtime.yaml").exists(),
+            "upsert must not dump the merged runtime config"
+        );
+
+        let recompiled = orchestrator_core::load_workflow_config(temp.path()).expect("recompile should succeed");
+        assert!(recompiled.phase_definitions.contains_key("custom-phase"), "phase should survive recompile");
+        let runtime = load_agent_runtime_config(temp.path()).expect("runtime should load");
+        assert!(runtime.phases.contains_key("custom-phase"), "phase should reach the runtime config");
+    }
+
+    #[test]
+    fn upsert_pipeline_keeps_resolved_secrets_out_of_generated_overlay() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let _secret_guard = EnvVarGuard::set("ANIMUS_TEST_UPSERT_SECRET", Some(UPSERT_SECRET_VALUE));
+        init_git_repo(&temp);
+        write_secret_using_workflows_yaml(&temp);
+
+        let project_root = temp.path().to_string_lossy().to_string();
+        let pipeline: orchestrator_core::WorkflowDefinition = serde_json::from_value(serde_json::json!({
+            "id": "custom-pipeline",
+            "name": "Custom Pipeline",
+            "description": "Authored via upsert.",
+            "phases": ["build"],
+            "budget": null
+        }))
+        .expect("pipeline should parse");
+        upsert_pipeline(&project_root, pipeline).expect("upsert should succeed");
+
+        let generated = generated_overlay_path(&temp, "generated-workflow.yaml");
+        let content = std::fs::read_to_string(&generated).expect("generated overlay should exist");
+        assert!(content.contains("custom-pipeline"), "upserted pipeline missing from overlay: {content}");
+        assert!(!content.contains(UPSERT_SECRET_VALUE), "resolved secret leaked into generated overlay: {content}");
+        assert!(!content.contains("mcp_servers"), "compiled mcp_servers must not be dumped: {content}");
+
+        let recompiled = orchestrator_core::load_workflow_config(temp.path()).expect("recompile should succeed");
+        assert!(
+            recompiled.workflows.iter().any(|workflow| workflow.id == "custom-pipeline"),
+            "pipeline should survive recompile"
+        );
+    }
+
+    #[test]
+    fn remove_phase_definition_prunes_generated_overlay_and_rejects_yaml_sourced_phases() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let _secret_guard = EnvVarGuard::set("ANIMUS_TEST_UPSERT_SECRET", Some(UPSERT_SECRET_VALUE));
+        init_git_repo(&temp);
+        write_secret_using_workflows_yaml(&temp);
+
+        let project_root = temp.path().to_string_lossy().to_string();
+        let definition: orchestrator_core::PhaseExecutionDefinition = serde_json::from_value(serde_json::json!({
+            "mode": "agent",
+            "agent_id": "swe",
+            "directive": "Do the custom thing."
+        }))
+        .expect("definition should parse");
+        upsert_phase_definition(&project_root, "custom-phase", definition).expect("upsert should succeed");
+
+        remove_phase_definition(&project_root, "custom-phase").expect("remove should succeed");
+        let generated = generated_overlay_path(&temp, "generated-workflow.yaml");
+        let content = std::fs::read_to_string(&generated).expect("generated overlay should exist");
+        assert!(!content.contains("custom-phase"), "removed phase should be pruned from overlay: {content}");
+        assert!(!content.contains(UPSERT_SECRET_VALUE), "resolved secret leaked into generated overlay: {content}");
+
+        let err = remove_phase_definition(&project_root, "lint").expect_err("yaml-sourced phase should not remove");
+        assert!(
+            format!("{err:#}").contains("generated overlays"),
+            "error should direct the user to the YAML source: {err:#}"
+        );
+    }
 
     struct PluginIsolationGuards {
         _home: EnvVarGuard,

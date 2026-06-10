@@ -36,8 +36,9 @@ pub(crate) use yaml_compiler::{
     collect_project_yaml_workflow_sources, compile_yaml_sources_confined_to_pack, compile_yaml_sources_with_base,
 };
 pub use yaml_compiler::{
-    compile_yaml_workflow_files, merge_yaml_into_config, validate_and_compile_yaml_workflows,
-    write_workflow_yaml_overlay, yaml_workflows_dir, CompileYamlResult,
+    compile_yaml_workflow_files, generated_workflow_phase_is_defined, merge_yaml_into_config,
+    remove_generated_workflow_phase, upsert_generated_workflow_phase, upsert_generated_workflow_pipeline,
+    validate_and_compile_yaml_workflows, write_workflow_yaml_overlay, yaml_workflows_dir, CompileYamlResult,
 };
 pub use yaml_diagnostic::{closest_match, edit_distance, wrap_serde_yaml_error, YamlDiagnostic, YamlExcerpt};
 pub(crate) use yaml_parser::resolve_agent_system_prompt_files_confined_to_pack;
