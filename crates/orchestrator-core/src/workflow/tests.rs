@@ -137,10 +137,12 @@ fn lifecycle_skip_already_done_completes_workflow_early() {
     });
     let executor = WorkflowLifecycleExecutor::default();
 
-    executor.mark_current_phase_success_with_decision(
-        &mut workflow,
-        Some(skip_decision("already_done: task already completed upstream")),
-    );
+    executor
+        .mark_current_phase_success_with_decision(
+            &mut workflow,
+            Some(skip_decision("already_done: task already completed upstream")),
+        )
+        .expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.machine_state, WorkflowMachineState::Completed);
@@ -165,10 +167,12 @@ fn lifecycle_skip_duplicate_cancels_workflow_early() {
     });
     let executor = WorkflowLifecycleExecutor::default();
 
-    executor.mark_current_phase_success_with_decision(
-        &mut workflow,
-        Some(skip_decision("duplicate: superseded by TASK-999")),
-    );
+    executor
+        .mark_current_phase_success_with_decision(
+            &mut workflow,
+            Some(skip_decision("duplicate: superseded by TASK-999")),
+        )
+        .expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Cancelled);
     assert_eq!(workflow.machine_state, WorkflowMachineState::Cancelled);
@@ -352,7 +356,7 @@ fn resume_clears_failure_and_can_complete_after_retry() {
         WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard-workflow".to_string())),
     );
 
-    executor.mark_current_phase_failed(&mut workflow, "first attempt failed".to_string());
+    executor.mark_current_phase_failed(&mut workflow, "first attempt failed".to_string()).expect("phase failure");
     assert_eq!(workflow.status, WorkflowStatus::Failed);
     assert_eq!(workflow.machine_state, WorkflowMachineState::Failed);
     assert!(workflow.failure_reason.is_some());
@@ -365,7 +369,7 @@ fn resume_clears_failure_and_can_complete_after_retry() {
     assert_eq!(workflow.phases[workflow.current_phase_index].status, WorkflowPhaseStatus::Running);
     assert_eq!(workflow.phases[workflow.current_phase_index].attempt, 2);
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.machine_state, WorkflowMachineState::Completed);
     assert!(workflow.failure_reason.is_none());
@@ -378,7 +382,7 @@ fn lifecycle_marks_completed_workflow_as_merge_conflict() {
         "WF-merge-conflict".to_string(),
         WorkflowRunInput::for_task("TASK-merge".to_string(), Some("standard-workflow".to_string())),
     );
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.status, WorkflowStatus::Completed);
     assert_eq!(workflow.machine_state, WorkflowMachineState::Completed);
     assert!(workflow.completed_at.is_some());
@@ -397,7 +401,7 @@ fn lifecycle_resolves_merge_conflict_and_clears_failure_reason() {
         "WF-merge-conflict-resolve".to_string(),
         WorkflowRunInput::for_task("TASK-merge-resolve".to_string(), Some("standard-workflow".to_string())),
     );
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     executor.mark_merge_conflict(&mut workflow, "failed to merge source branch into target branch".to_string());
     assert_eq!(workflow.machine_state, WorkflowMachineState::MergeConflict);
     assert!(workflow.failure_reason.is_some());
@@ -497,14 +501,14 @@ fn rework_routes_to_prior_phase_by_id() {
         "WF-rework-target".to_string(),
         WorkflowRunInput::for_task("TASK-rework".to_string(), Some("standard-workflow".to_string())),
     );
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
     assert_eq!(workflow.current_phase_index, 2);
 
     let decision = make_rework_decision(Some("implementation".to_string()));
-    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase_index, 1);
@@ -525,13 +529,13 @@ fn rework_without_target_reruns_current_phase() {
         "WF-rework-current".to_string(),
         WorkflowRunInput::for_task("TASK-rework-current".to_string(), Some("standard-workflow".to_string())),
     );
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
     assert_eq!(workflow.current_phase_index, 1);
     let attempt_before = workflow.phases[1].attempt;
 
     let decision = make_rework_decision(None);
-    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase_index, 1);
@@ -561,21 +565,23 @@ fn phase_with_max_attempts_1_escalates_immediately_on_rework() {
     );
 
     workflow.rework_counts.insert("implementation".to_string(), 1);
-    executor.mark_current_phase_success_with_decision(
-        &mut workflow,
-        Some(PhaseDecision {
-            kind: "phase_decision".to_string(),
-            phase_id: "implementation".to_string(),
-            verdict: PhaseDecisionVerdict::Rework,
-            reason: "needs changes".to_string(),
-            confidence: 0.5,
-            risk: WorkflowDecisionRisk::Medium,
-            evidence: Vec::new(),
-            guardrail_violations: Vec::new(),
-            commit_message: None,
-            target_phase: None,
-        }),
-    );
+    executor
+        .mark_current_phase_success_with_decision(
+            &mut workflow,
+            Some(PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "implementation".to_string(),
+                verdict: PhaseDecisionVerdict::Rework,
+                reason: "needs changes".to_string(),
+                confidence: 0.5,
+                risk: WorkflowDecisionRisk::Medium,
+                evidence: Vec::new(),
+                guardrail_violations: Vec::new(),
+                commit_message: None,
+                target_phase: None,
+            }),
+        )
+        .expect("phase success");
 
     assert_eq!(
         workflow.status,
@@ -603,21 +609,23 @@ fn phase_with_max_attempts_5_allows_more_retries() {
 
     for i in 0..4 {
         workflow.rework_counts.insert("implementation".to_string(), i);
-        executor.mark_current_phase_success_with_decision(
-            &mut workflow,
-            Some(PhaseDecision {
-                kind: "phase_decision".to_string(),
-                phase_id: "implementation".to_string(),
-                verdict: PhaseDecisionVerdict::Rework,
-                reason: format!("rework attempt {}", i + 1),
-                confidence: 0.5,
-                risk: WorkflowDecisionRisk::Medium,
-                evidence: Vec::new(),
-                guardrail_violations: Vec::new(),
-                commit_message: None,
-                target_phase: None,
-            }),
-        );
+        executor
+            .mark_current_phase_success_with_decision(
+                &mut workflow,
+                Some(PhaseDecision {
+                    kind: "phase_decision".to_string(),
+                    phase_id: "implementation".to_string(),
+                    verdict: PhaseDecisionVerdict::Rework,
+                    reason: format!("rework attempt {}", i + 1),
+                    confidence: 0.5,
+                    risk: WorkflowDecisionRisk::Medium,
+                    evidence: Vec::new(),
+                    guardrail_violations: Vec::new(),
+                    commit_message: None,
+                    target_phase: None,
+                }),
+            )
+            .expect("phase success");
 
         assert_eq!(
             workflow.status,
@@ -628,21 +636,23 @@ fn phase_with_max_attempts_5_allows_more_retries() {
     }
 
     workflow.rework_counts.insert("implementation".to_string(), 5);
-    executor.mark_current_phase_success_with_decision(
-        &mut workflow,
-        Some(PhaseDecision {
-            kind: "phase_decision".to_string(),
-            phase_id: "implementation".to_string(),
-            verdict: PhaseDecisionVerdict::Rework,
-            reason: "final rework".to_string(),
-            confidence: 0.5,
-            risk: WorkflowDecisionRisk::Medium,
-            evidence: Vec::new(),
-            guardrail_violations: Vec::new(),
-            commit_message: None,
-            target_phase: None,
-        }),
-    );
+    executor
+        .mark_current_phase_success_with_decision(
+            &mut workflow,
+            Some(PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "implementation".to_string(),
+                verdict: PhaseDecisionVerdict::Rework,
+                reason: "final rework".to_string(),
+                confidence: 0.5,
+                risk: WorkflowDecisionRisk::Medium,
+                evidence: Vec::new(),
+                guardrail_violations: Vec::new(),
+                commit_message: None,
+                target_phase: None,
+            }),
+        )
+        .expect("phase success");
     assert_eq!(workflow.status, WorkflowStatus::Escalated, "should escalate after exceeding max_attempts=5");
 }
 
@@ -659,7 +669,7 @@ fn skip_guarded_phase_skips_when_task_type_matches() {
     );
     let task = make_task(TaskType::Docs, Priority::Medium);
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.current_phase.as_deref(), Some("testing"));
     assert_eq!(workflow.status, WorkflowStatus::Running);
 
@@ -687,7 +697,7 @@ fn skip_guarded_phase_does_not_skip_when_guard_does_not_match() {
     );
     let task = make_task(TaskType::Feature, Priority::High);
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     let subject_context = task_subject_context(&task);
     executor.skip_guarded_phases(&mut workflow, &subject_context);
 
@@ -709,7 +719,7 @@ fn skip_guarded_phase_any_matching_guard_causes_skip() {
     );
     let task = make_task(TaskType::Feature, Priority::Low);
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     let subject_context = task_subject_context(&task);
     executor.skip_guarded_phases(&mut workflow, &subject_context);
 
@@ -727,7 +737,7 @@ fn skip_guarded_phase_with_empty_skip_if_runs_normally() {
     );
     let task = make_task(TaskType::Docs, Priority::Medium);
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     let subject_context = task_subject_context(&task);
     executor.skip_guarded_phases(&mut workflow, &subject_context);
 
@@ -788,7 +798,7 @@ fn skip_guarded_phases_skips_consecutive_phases() {
     );
     let task = make_task(TaskType::Docs, Priority::Medium);
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     let subject_context = task_subject_context(&task);
     executor.skip_guarded_phases(&mut workflow, &subject_context);
 
@@ -823,7 +833,7 @@ fn advance_ignores_agent_target_phase_and_uses_default_order() {
         commit_message: None,
         target_phase: Some("testing".to_string()),
     };
-    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase_index, 1);
@@ -862,12 +872,12 @@ fn rework_with_nonexistent_target_falls_back_to_current_phase() {
         "WF-rework-bad-target".to_string(),
         WorkflowRunInput::for_task("TASK-rework-bad".to_string(), Some("standard-workflow".to_string())),
     );
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
     assert_eq!(workflow.current_phase_index, 1);
 
     let decision = make_rework_decision(Some("nonexistent-phase".to_string()));
-    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase_index, 1);
@@ -919,7 +929,7 @@ fn advance_can_follow_agent_selected_target_when_yaml_allows_it() {
         commit_message: None,
         target_phase: Some("testing".to_string()),
     };
-    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase_index, 2);
@@ -943,21 +953,23 @@ fn default_max_attempts_is_3_when_no_config() {
 
     for i in 0..3 {
         workflow.rework_counts.insert("implementation".to_string(), i);
-        executor.mark_current_phase_success_with_decision(
-            &mut workflow,
-            Some(PhaseDecision {
-                kind: "phase_decision".to_string(),
-                phase_id: "implementation".to_string(),
-                verdict: PhaseDecisionVerdict::Rework,
-                reason: format!("rework {}", i + 1),
-                confidence: 0.5,
-                risk: WorkflowDecisionRisk::Medium,
-                evidence: Vec::new(),
-                guardrail_violations: Vec::new(),
-                commit_message: None,
-                target_phase: None,
-            }),
-        );
+        executor
+            .mark_current_phase_success_with_decision(
+                &mut workflow,
+                Some(PhaseDecision {
+                    kind: "phase_decision".to_string(),
+                    phase_id: "implementation".to_string(),
+                    verdict: PhaseDecisionVerdict::Rework,
+                    reason: format!("rework {}", i + 1),
+                    confidence: 0.5,
+                    risk: WorkflowDecisionRisk::Medium,
+                    evidence: Vec::new(),
+                    guardrail_violations: Vec::new(),
+                    commit_message: None,
+                    target_phase: None,
+                }),
+            )
+            .expect("phase success");
         if i < 2 {
             assert_eq!(
                 workflow.status,
@@ -969,21 +981,23 @@ fn default_max_attempts_is_3_when_no_config() {
     }
 
     workflow.rework_counts.insert("implementation".to_string(), 3);
-    executor.mark_current_phase_success_with_decision(
-        &mut workflow,
-        Some(PhaseDecision {
-            kind: "phase_decision".to_string(),
-            phase_id: "implementation".to_string(),
-            verdict: PhaseDecisionVerdict::Rework,
-            reason: "exceeds budget".to_string(),
-            confidence: 0.5,
-            risk: WorkflowDecisionRisk::Medium,
-            evidence: Vec::new(),
-            guardrail_violations: Vec::new(),
-            commit_message: None,
-            target_phase: None,
-        }),
-    );
+    executor
+        .mark_current_phase_success_with_decision(
+            &mut workflow,
+            Some(PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "implementation".to_string(),
+                verdict: PhaseDecisionVerdict::Rework,
+                reason: "exceeds budget".to_string(),
+                confidence: 0.5,
+                risk: WorkflowDecisionRisk::Medium,
+                evidence: Vec::new(),
+                guardrail_violations: Vec::new(),
+                commit_message: None,
+                target_phase: None,
+            }),
+        )
+        .expect("phase success");
     assert_eq!(
         workflow.status,
         WorkflowStatus::Escalated,
@@ -1017,13 +1031,13 @@ fn on_verdict_rework_routes_to_configured_phase() {
         "WF-verdict-rework".to_string(),
         WorkflowRunInput::for_task("TASK-verdict-rework".to_string(), Some("standard-workflow".to_string())),
     );
-    executor.mark_current_phase_success(&mut workflow);
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
     assert_eq!(workflow.current_phase_index, 2);
 
     let decision = make_rework_decision(None);
-    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision));
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase_index, 0);
@@ -1121,7 +1135,7 @@ fn on_verdict_advance_skips_to_configured_phase() {
     );
     assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase_index, 2);
@@ -1147,14 +1161,14 @@ fn no_on_verdict_uses_default_advance_behavior() {
     );
     assert_eq!(workflow.current_phase.as_deref(), Some("requirements"));
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.current_phase_index, 1);
     assert_eq!(workflow.current_phase.as_deref(), Some("implementation"));
     assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Running);
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
 
     assert_eq!(workflow.current_phase_index, 2);
     assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
@@ -1231,10 +1245,10 @@ fn status_stays_in_sync_through_lifecycle_transitions() {
     assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
     assert_eq!(workflow.status, WorkflowStatus::Running);
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
 
-    executor.mark_current_phase_success(&mut workflow);
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
     assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
     assert_eq!(workflow.status, WorkflowStatus::Completed);
 }
@@ -1260,7 +1274,7 @@ fn failed_phase_keeps_status_synced_with_machine_state() {
         WorkflowRunInput::for_task("TASK-fail-sync".to_string(), Some("standard-workflow".to_string())),
     );
 
-    executor.mark_current_phase_failed(&mut workflow, "test error".to_string());
+    executor.mark_current_phase_failed(&mut workflow, "test error".to_string()).expect("phase failure");
     assert_eq!(workflow.status, workflow.machine_state.to_workflow_status());
 }
 
@@ -1411,4 +1425,90 @@ fn load_stale_task_summaries_matches_in_progress_status() {
         .expect("load stale task summaries");
     assert_eq!(stale.len(), 1);
     assert_eq!(stale[0].task_id, "TASK-stale");
+}
+
+#[test]
+fn merge_conflict_blocks_phase_success_with_actionable_error() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut workflow = executor.bootstrap(
+        "WF-mc-success".to_string(),
+        WorkflowRunInput::for_task("TASK-mc-success".to_string(), Some("standard-workflow".to_string())),
+    );
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
+    executor.mark_merge_conflict(&mut workflow, "merge failed".to_string());
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.machine_state, WorkflowMachineState::MergeConflict);
+
+    let error =
+        executor.mark_current_phase_success(&mut workflow).expect_err("merge conflict should block phase success");
+    assert!(error.to_string().contains("merge conflict"), "unexpected error: {error}");
+    assert_eq!(workflow.machine_state, WorkflowMachineState::MergeConflict);
+    assert_eq!(workflow.failure_reason.as_deref(), Some("merge failed"));
+}
+
+#[test]
+fn merge_conflict_blocks_phase_failure_with_actionable_error() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut workflow = executor.bootstrap(
+        "WF-mc-failure".to_string(),
+        WorkflowRunInput::for_task("TASK-mc-failure".to_string(), Some("standard-workflow".to_string())),
+    );
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
+    executor.mark_merge_conflict(&mut workflow, "merge failed".to_string());
+    assert_eq!(workflow.machine_state, WorkflowMachineState::MergeConflict);
+
+    let error = executor
+        .mark_current_phase_failed(&mut workflow, "post-merge failure".to_string())
+        .expect_err("merge conflict should block phase failure");
+    assert!(error.to_string().contains("merge conflict"), "unexpected error: {error}");
+    assert_eq!(workflow.machine_state, WorkflowMachineState::MergeConflict);
+    assert_eq!(workflow.failure_reason.as_deref(), Some("merge failed"));
+    assert_eq!(workflow.phases[0].status, WorkflowPhaseStatus::Success);
+}
+
+#[test]
+fn rework_restart_refreshes_phase_started_at() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string(), "code-review".to_string()]);
+    let mut workflow = executor.bootstrap(
+        "WF-rework-started-at".to_string(),
+        WorkflowRunInput::for_task("TASK-rework-started-at".to_string(), Some("standard-workflow".to_string())),
+    );
+    executor.mark_current_phase_success(&mut workflow).expect("phase success");
+    assert_eq!(workflow.current_phase.as_deref(), Some("code-review"));
+    let original_started_at = workflow.phases[1].started_at.expect("review phase started");
+
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    let decision = make_rework_decision(None);
+    executor.mark_current_phase_success_with_decision(&mut workflow, Some(decision)).expect("phase success");
+
+    assert_eq!(workflow.phases[1].status, WorkflowPhaseStatus::Running);
+    assert!(workflow.phases[1].completed_at.is_none());
+    let restarted_at = workflow.phases[1].started_at.expect("review phase restarted");
+    assert!(restarted_at > original_started_at, "rework restart should refresh started_at");
+}
+
+#[test]
+fn phase_failure_while_paused_records_failure_and_resume_restarts() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut workflow = executor.bootstrap(
+        "WF-paused-failure".to_string(),
+        WorkflowRunInput::for_task("TASK-paused-failure".to_string(), Some("standard-workflow".to_string())),
+    );
+    executor.pause(&mut workflow);
+    assert_eq!(workflow.status, WorkflowStatus::Paused);
+    let attempt_before = workflow.phases[0].attempt;
+
+    executor.mark_current_phase_failed(&mut workflow, "agent crashed".to_string()).expect("paused failure recorded");
+    assert_eq!(workflow.status, WorkflowStatus::Paused);
+    assert_eq!(workflow.machine_state, WorkflowMachineState::Paused);
+    assert_eq!(workflow.phases[0].status, WorkflowPhaseStatus::Failed);
+    assert_eq!(workflow.phases[0].error_message.as_deref(), Some("agent crashed"));
+
+    executor.resume(&mut workflow);
+    assert_eq!(workflow.status, WorkflowStatus::Running);
+    assert_eq!(workflow.machine_state, WorkflowMachineState::RunPhase);
+    assert_eq!(workflow.phases[0].status, WorkflowPhaseStatus::Running);
+    assert_eq!(workflow.phases[0].attempt, attempt_before + 1);
+    assert!(workflow.phases[0].error_message.is_none());
+    assert!(workflow.phases[0].completed_at.is_none());
 }

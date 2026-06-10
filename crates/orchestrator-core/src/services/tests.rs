@@ -2409,3 +2409,79 @@ async fn file_hub_delete_requirement_removes_sqlite_row_and_does_not_resurrect()
     let listed = PlanningServiceApi::list_requirements(&hub).await.expect("list requirements");
     assert!(listed.iter().all(|req| req.id != id), "deleted requirement must not resurrect after later mutations");
 }
+
+#[tokio::test]
+async fn execute_requirements_skips_tasks_with_active_workflow_on_file_hub() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("create hub");
+
+    let task = TaskServiceApi::create(
+        &hub,
+        TaskCreateInput {
+            title: "Implement signup flow".to_string(),
+            description: "Implement user signup with verification and retries.".to_string(),
+            task_type: None,
+            priority: None,
+            created_by: None,
+            tags: Vec::new(),
+            linked_requirements: Vec::new(),
+            linked_architecture_entities: Vec::new(),
+        },
+    )
+    .await
+    .expect("create task");
+
+    let now = chrono::Utc::now();
+    let requirement = PlanningServiceApi::upsert_requirement(
+        &hub,
+        RequirementItem {
+            id: String::new(),
+            title: "User signup flow".to_string(),
+            description: "Implement user signup with verification and retries.".to_string(),
+            body: None,
+            legacy_id: None,
+            category: None,
+            requirement_type: None,
+            acceptance_criteria: vec![
+                "Includes automated test coverage for core acceptance criteria.".to_string(),
+                "Error handling and retry behavior is defined.".to_string(),
+            ],
+            priority: RequirementPriority::Should,
+            status: RequirementStatus::Draft,
+            source: "manual".to_string(),
+            tags: vec![],
+            links: crate::types::RequirementLinks::default(),
+            comments: vec![],
+            relative_path: None,
+            linked_task_ids: vec![task.id.clone()],
+            created_at: now,
+            updated_at: now,
+        },
+    )
+    .await
+    .expect("upsert requirement");
+
+    let active = WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task(task.id.clone(), None))
+        .await
+        .expect("start workflow for task");
+    assert_eq!(active.status, WorkflowStatus::Running);
+
+    let execution = PlanningServiceApi::execute_requirements(
+        &hub,
+        RequirementsExecutionInput {
+            requirement_ids: vec![requirement.id.clone()],
+            start_workflows: true,
+            workflow_ref: None,
+            include_wont: false,
+        },
+    )
+    .await
+    .expect("execute requirements");
+
+    assert!(execution.task_ids_reused.contains(&task.id), "existing linked task should be reused");
+    assert!(
+        execution.workflow_ids_started.is_empty(),
+        "task with an active workflow must not get a duplicate workflow, started: {:?}",
+        execution.workflow_ids_started
+    );
+}
