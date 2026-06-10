@@ -18,7 +18,7 @@ pub(crate) enum DaemonCommand {
     Pause,
     /// Resume daemon scheduling.
     Resume,
-    /// Stream or tail daemon event history.
+    /// Print recent daemon event history; pass --follow to stream.
     Events(DaemonEventsArgs),
     /// Read daemon logs.
     Logs(LogArgs),
@@ -334,14 +334,16 @@ pub(crate) struct DaemonEventsArgs {
         long,
         value_name = "COUNT",
         value_parser = parse_positive_usize,
-        help = "Maximum number of recent events to print before follow mode."
+        help = "Maximum number of recent events to print (the initial batch when --follow is set)."
     )]
     pub(crate) limit: Option<usize>,
     #[arg(
         long,
         action = ArgAction::Set,
-        default_value_t = true,
-        help = "Continue streaming new events until interrupted."
+        num_args = 0..=1,
+        default_value_t = false,
+        default_missing_value = "true",
+        help = "Continue streaming new events until interrupted; without it the command prints and exits."
     )]
     pub(crate) follow: bool,
 }

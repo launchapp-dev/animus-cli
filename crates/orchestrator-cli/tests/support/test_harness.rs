@@ -145,11 +145,44 @@ impl CliHarness {
         self.run_json_command(args)
     }
 
+    /// Run a command but fail (and kill the child) if it does not exit within
+    /// `deadline`. Use for commands where a regression could make the process
+    /// never exit, so the test reports a failure instead of hanging the suite.
+    pub fn run_json_output_within(&self, args: &[&str], deadline: std::time::Duration) -> Result<std::process::Output> {
+        let mut command = self.build_json_command(args, &[]);
+        command.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+        let mut child =
+            command.spawn().with_context(|| format!("failed to spawn animus command: {}", args.join(" ")))?;
+        let started = std::time::Instant::now();
+        loop {
+            match child.try_wait().context("failed to poll animus command")? {
+                Some(_) => return child.wait_with_output().context("failed to collect animus command output"),
+                None if started.elapsed() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    anyhow::bail!(
+                        "command did not exit within {:?}: animus --json --project-root {} {}",
+                        deadline,
+                        self.project_root.path().display(),
+                        args.join(" ")
+                    );
+                }
+                None => std::thread::sleep(std::time::Duration::from_millis(50)),
+            }
+        }
+    }
+
     fn run_json_command(&self, args: &[&str]) -> Result<std::process::Output> {
         self.run_json_command_with_env(args, &[])
     }
 
     fn run_json_command_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Result<std::process::Output> {
+        self.build_json_command(args, envs)
+            .output()
+            .with_context(|| format!("failed to execute animus command: {}", args.join(" ")))
+    }
+
+    fn build_json_command(&self, args: &[&str], envs: &[(&str, &str)]) -> Command {
         let mut command = Command::new(&self.binary_path);
         command
             .arg("--json")
@@ -164,6 +197,6 @@ impl CliHarness {
         for (key, value) in envs {
             command.env(key, value);
         }
-        command.output().with_context(|| format!("failed to execute animus command: {}", args.join(" ")))
+        command
     }
 }
