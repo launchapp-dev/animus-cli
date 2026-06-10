@@ -191,7 +191,7 @@ rejection remains a CLI-only action.
 
 ---
 
-## Skills (3 tools)
+## Skills (5 tools)
 
 Discover and inspect skill definitions across every source the project can see: installed packs,
 registry-tracked installs, user-scoped (`~/.animus/skills/`), project-scoped (`.animus/skills/`),

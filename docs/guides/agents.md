@@ -18,7 +18,7 @@ Animus currently exposes **78 built-in MCP tools** across these families:
 | `animus.queue.*` | 7 | Dispatch queue inspection and mutation |
 | `animus.output.*` | 6 | Run output, artifacts, JSONL, and live monitoring |
 | `animus.runner.*` | 3 | Runner health and orphan cleanup |
-| `animus.skill.*` | 3 | Skill discovery and inspection |
+| `animus.skill.*` | 5 | Skill discovery, inspection, and project-scoped authoring |
 | `animus.memory.*` | 4 | Project-scoped durable agent memory |
 | `animus.plugin.*` | 9 | Installed-plugin inspection/mutation plus marketplace discovery/update |
 | `animus.logs.*` | 1 | Tail log entries from the active log backend |
