@@ -7,10 +7,10 @@ use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 
 use super::builtins::builtin_workflow_config;
-use super::env_interp::{interpolate_env, interpolate_secrets, lint_sensitive_interpolations};
+use super::env_interp::{interpolate_env, interpolate_env_and_secrets, lint_sensitive_interpolations};
 use super::types::*;
 use super::yaml_parser::{
-    parse_yaml_workflow_config_confined_to_pack, parse_yaml_workflow_config_with_base_and_source,
+    parse_yaml_workflow_config_confined_to_pack, parse_yaml_workflow_config_with_base_source_and_original,
     workflow_config_to_yaml_file,
 };
 use super::yaml_types::*;
@@ -98,6 +98,10 @@ fn compile_yaml_sources_with_base_inner(
         for warning in lint_sensitive_interpolations(content, &source_label) {
             eprintln!("warning: {}", warning);
         }
+        // The env-only pass exists solely to make the `secrets:` block
+        // parseable (its `env:` mappings may themselves use `${VAR}`). The
+        // final document is produced by a single combined pass over the
+        // ORIGINAL content so substituted values are never re-scanned.
         let substituted = interpolate_env(content, &source_label)
             .with_context(|| format!("env-var interpolation failed for {}", source_label))?;
         // Allow secrets declared in earlier-merged overlays (or the base
@@ -108,13 +112,20 @@ fn compile_yaml_sources_with_base_inner(
         for (key, value) in extract_declared_secrets(&substituted) {
             declared_secrets.insert(key, value);
         }
-        let resolved = interpolate_secrets(&substituted, &source_label, &declared_secrets)
+        let resolved = interpolate_env_and_secrets(content, &source_label, &declared_secrets)
             .with_context(|| format!("secret interpolation failed for {}", source_label))?;
         let parsed = match pack_root {
-            Some(root) => parse_yaml_workflow_config_confined_to_pack(&resolved, overlay_base, path.as_path(), root)
-                .with_context(|| format!("error in pack YAML file {}", source_label))?,
-            None => parse_yaml_workflow_config_with_base_and_source(&resolved, overlay_base, Some(path.as_path()))
-                .with_context(|| format!("error in YAML file {}", source_label))?,
+            Some(root) => {
+                parse_yaml_workflow_config_confined_to_pack(&resolved, overlay_base, path.as_path(), root, content)
+                    .with_context(|| format!("error in pack YAML file {}", source_label))?
+            }
+            None => parse_yaml_workflow_config_with_base_source_and_original(
+                &resolved,
+                overlay_base,
+                Some(path.as_path()),
+                content,
+            )
+            .with_context(|| format!("error in YAML file {}", source_label))?,
         };
         merged_config = Some(match merged_config {
             None => parsed,
@@ -227,6 +238,51 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
             base.default_workflow_ref
         };
 
+    let daemon = match (base.daemon, yaml.daemon) {
+        (None, None) => None,
+        (Some(base), None) => Some(base),
+        (None, Some(overlay)) => Some(overlay),
+        (Some(mut base), Some(overlay)) => {
+            if overlay.interval_secs.is_some() {
+                base.interval_secs = overlay.interval_secs;
+            }
+            if overlay.pool_size.is_some() {
+                base.pool_size = overlay.pool_size;
+            }
+            if overlay.active_hours.is_some() {
+                base.active_hours = overlay.active_hours;
+            }
+            if overlay.auto_run_ready {
+                base.auto_run_ready = true;
+            }
+            if overlay.max_task_retries.is_some() {
+                base.max_task_retries = overlay.max_task_retries;
+            }
+            if overlay.retry_cooldown_secs.is_some() {
+                base.retry_cooldown_secs = overlay.retry_cooldown_secs;
+            }
+            if overlay.auto_merge.is_some() {
+                base.auto_merge = overlay.auto_merge;
+            }
+            if overlay.auto_pr.is_some() {
+                base.auto_pr = overlay.auto_pr;
+            }
+            if overlay.auto_commit_before_merge.is_some() {
+                base.auto_commit_before_merge = overlay.auto_commit_before_merge;
+            }
+            if overlay.auto_prune_worktrees.is_some() {
+                base.auto_prune_worktrees = overlay.auto_prune_worktrees;
+            }
+            if overlay.phase_routing.is_some() {
+                base.phase_routing = overlay.phase_routing;
+            }
+            if overlay.mcp.is_some() {
+                base.mcp = overlay.mcp;
+            }
+            Some(base)
+        }
+    };
+
     let mut secrets = base.secrets;
     for (key, value) in yaml.secrets {
         secrets.insert(key, value);
@@ -249,7 +305,7 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         integrations,
         schedules,
         triggers,
-        daemon: yaml.daemon.or(base.daemon),
+        daemon,
         secrets,
     }
 }

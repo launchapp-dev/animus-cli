@@ -226,14 +226,18 @@ where
     F: Fn(&str) -> Option<String>,
     L: Fn() -> usize,
 {
-    // Split on the first ':-' or ':?' modifier.
-    if let Some(idx) = body.find(":-") {
+    // Split on whichever of ':-' / ':?' occurs first, so a modifier payload
+    // containing the other token (e.g. `${KEY:?missing :-(}`) is not
+    // misparsed as the wrong shape.
+    let default_idx = body.find(":-");
+    let required_idx = body.find(":?");
+    if let Some(idx) = default_idx.filter(|idx| required_idx.is_none_or(|other| *idx < other)) {
         let name = body[..idx].trim();
         validate_name(name, source_label, &line_of)?;
         let default = &body[idx + 2..];
         return Ok(resolver(name).unwrap_or_else(|| default.to_string()));
     }
-    if let Some(idx) = body.find(":?") {
+    if let Some(idx) = required_idx {
         let name = body[..idx].trim();
         validate_name(name, source_label, &line_of)?;
         let message = body[idx + 2..].trim();
@@ -349,53 +353,142 @@ where
                 continue;
             }
 
-            let key = body.trim().strip_prefix(SECRET_PREFIX).unwrap_or("").trim();
-            if key.is_empty() {
+            let resolved = resolve_secret_reference(body, source_label, secrets, &resolver, || {
+                line_number_for_offset(content, start)
+            })?;
+            out.push_str(&resolved);
+            i = body_start + close_off + 1;
+            copy_from = i;
+            continue;
+        }
+
+        out.push('$');
+        i += 1;
+        copy_from = i;
+    }
+
+    out.push_str(&content[copy_from..]);
+    Ok(out)
+}
+
+fn resolve_secret_reference<F, L>(
+    body: &str,
+    source_label: &str,
+    secrets: &BTreeMap<String, SecretRef>,
+    resolver: &F,
+    line_of: L,
+) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+    L: Fn() -> usize,
+{
+    let key = body.trim().strip_prefix(SECRET_PREFIX).unwrap_or("").trim();
+    if key.is_empty() {
+        return Err(anyhow!(
+            "workflow YAML at {} line {} has an empty `${{secret.}}` reference",
+            source_label,
+            line_of()
+        ));
+    }
+    let Some(secret) = secrets.get(key) else {
+        return Err(anyhow!(
+            "workflow YAML at {} line {} references undeclared secret `{}`; add it under the top-level `secrets:` block",
+            source_label,
+            line_of(),
+            key
+        ));
+    };
+
+    let env_name = secret.env.trim();
+    if env_name.is_empty() {
+        return Err(anyhow!(
+            "workflow YAML at {} line {} secret `{}` has an empty `env` mapping",
+            source_label,
+            line_of(),
+            key
+        ));
+    }
+
+    match resolver(env_name) {
+        Some(value) => Ok(value),
+        None if secret.required => Err(anyhow!(
+            "workflow YAML at {} line {} secret `{}` requires env var {} to be set",
+            source_label,
+            line_of(),
+            key,
+            env_name
+        )),
+        // Optional and unset — resolve to empty string.
+        None => Ok(String::new()),
+    }
+}
+
+/// Resolve both `${VAR}` and `${secret.<name>}` references in a single pass
+/// over `content`, dispatching per reference on the `secret.` prefix.
+///
+/// Substituted values are never re-scanned, so env or secret values that
+/// happen to contain `$$`, `${`, or `${secret.X}` are emitted verbatim
+/// instead of being collapsed, failing compilation, or resolved as secrets.
+/// Error line numbers are always computed against the original content.
+pub fn interpolate_env_and_secrets(
+    content: &str,
+    source_label: &str,
+    secrets: &BTreeMap<String, SecretRef>,
+) -> Result<String> {
+    interpolate_env_and_secrets_with(content, source_label, secrets, lookup_env_then_secret_store)
+}
+
+pub(crate) fn interpolate_env_and_secrets_with<F>(
+    content: &str,
+    source_label: &str,
+    secrets: &BTreeMap<String, SecretRef>,
+    resolver: F,
+) -> Result<String>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let bytes = content.as_bytes();
+    let mut out = String::with_capacity(content.len());
+    let mut i = 0usize;
+    let mut copy_from = 0usize;
+
+    while i < bytes.len() {
+        if bytes[i] != b'$' {
+            i += 1;
+            continue;
+        }
+        out.push_str(&content[copy_from..i]);
+
+        // `$$` escapes a literal `$`. In the combined pass the following
+        // `{...}` (if any) is then copied through verbatim, so `$${VAR}` and
+        // `$${secret.X}` both survive as literal references.
+        if i + 1 < bytes.len() && bytes[i + 1] == b'$' {
+            out.push('$');
+            i += 2;
+            copy_from = i;
+            continue;
+        }
+
+        if i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            let start = i;
+            let body_start = i + 2;
+            let Some(close_off) = find_matching_close(&bytes[body_start..]) else {
                 let line = line_number_for_offset(content, start);
                 return Err(anyhow!(
-                    "workflow YAML at {} line {} has an empty `${{secret.}}` reference",
+                    "workflow YAML at {} line {} contains an unterminated `${{` reference",
                     source_label,
                     line
                 ));
-            }
-            let Some(secret) = secrets.get(key) else {
-                let line = line_number_for_offset(content, start);
-                return Err(anyhow!(
-                    "workflow YAML at {} line {} references undeclared secret `{}`; add it under the top-level `secrets:` block",
-                    source_label,
-                    line,
-                    key
-                ));
             };
-
-            let env_name = secret.env.trim();
-            if env_name.is_empty() {
-                let line = line_number_for_offset(content, start);
-                return Err(anyhow!(
-                    "workflow YAML at {} line {} secret `{}` has an empty `env` mapping",
-                    source_label,
-                    line,
-                    key
-                ));
-            }
-
-            match resolver(env_name) {
-                Some(value) => out.push_str(&value),
-                None if secret.required => {
-                    let line = line_number_for_offset(content, start);
-                    return Err(anyhow!(
-                        "workflow YAML at {} line {} secret `{}` requires env var {} to be set",
-                        source_label,
-                        line,
-                        key,
-                        env_name
-                    ));
-                }
-                None => {
-                    // Optional and unset — resolve to empty string.
-                }
-            }
-
+            let body = &content[body_start..body_start + close_off];
+            let resolved = if is_secret_reference(body) {
+                resolve_secret_reference(body, source_label, secrets, &resolver, || {
+                    line_number_for_offset(content, start)
+                })?
+            } else {
+                resolve_reference(body, source_label, &resolver, || line_number_for_offset(content, start))?
+            };
+            out.push_str(&resolved);
             i = body_start + close_off + 1;
             copy_from = i;
             continue;
@@ -582,6 +675,29 @@ mod tests {
     }
 
     #[test]
+    fn required_message_containing_default_token_parses_as_required() {
+        let _g = env_lock().lock().unwrap();
+        let _set = EnvVarGuard::set(KEY, "present");
+        let src = format!("a: ${{{}:?missing key :-(}}\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, "a: present\n");
+
+        let _unset = EnvVarGuard::unset(KEY);
+        let err = interpolate_env(&src, "test.yaml").unwrap_err();
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("missing key :-("), "missing custom message: {msg}");
+        assert!(msg.contains(KEY), "missing var name: {msg}");
+    }
+
+    #[test]
+    fn default_containing_required_token_parses_as_default() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::unset(KEY);
+        let out = interpolate_env(&format!("a: ${{{}:-fallback :? ok}}\n", KEY), "test.yaml").unwrap();
+        assert_eq!(out, "a: fallback :? ok\n");
+    }
+
+    #[test]
     fn lone_dollar_passes_through() {
         let _g = env_lock().lock().unwrap();
         let out = interpolate_env("note: this costs $5 in total\n", "test.yaml").unwrap();
@@ -662,6 +778,66 @@ mod tests {
         assert_eq!(out, "token: from-env\n");
 
         clear_workflow_secret_resolver_for_test();
+    }
+
+    fn secret_map(name: &str, env: &str) -> BTreeMap<String, SecretRef> {
+        let mut secrets = BTreeMap::new();
+        secrets.insert(name.to_string(), SecretRef { env: env.to_string(), required: true, description: None });
+        secrets
+    }
+
+    #[test]
+    fn combined_pass_does_not_collapse_double_dollar_in_env_values() {
+        let resolver = |key: &str| (key == "VAR").then(|| "pa$$word".to_string());
+        let out = interpolate_env_and_secrets_with("a: ${VAR}\n", "test.yaml", &BTreeMap::new(), resolver).unwrap();
+        assert_eq!(out, "a: pa$$word\n");
+    }
+
+    #[test]
+    fn combined_pass_accepts_env_values_containing_open_brace_reference() {
+        let resolver = |key: &str| (key == "VAR").then(|| "literal ${ inside".to_string());
+        let out = interpolate_env_and_secrets_with("a: ${VAR}\n", "test.yaml", &BTreeMap::new(), resolver).unwrap();
+        assert_eq!(out, "a: literal ${ inside\n");
+    }
+
+    #[test]
+    fn combined_pass_does_not_resolve_secret_references_inside_env_values() {
+        let resolver = |key: &str| match key {
+            "VAR" => Some("${secret.api}".to_string()),
+            "REAL_SECRET" => Some("should-not-leak".to_string()),
+            _ => None,
+        };
+        let secrets = secret_map("api", "REAL_SECRET");
+        let out = interpolate_env_and_secrets_with("a: ${VAR}\n", "test.yaml", &secrets, resolver).unwrap();
+        assert_eq!(out, "a: ${secret.api}\n");
+    }
+
+    #[test]
+    fn combined_pass_collapses_each_double_dollar_exactly_once() {
+        let out = interpolate_env_and_secrets_with("a: $$$$\n", "test.yaml", &BTreeMap::new(), |_| None).unwrap();
+        assert_eq!(out, "a: $$\n");
+    }
+
+    #[test]
+    fn combined_pass_resolves_env_and_secret_references_together() {
+        let resolver = |key: &str| match key {
+            "VAR" => Some("env-value".to_string()),
+            "SECRET_ENV" => Some("secret-value".to_string()),
+            _ => None,
+        };
+        let secrets = secret_map("api", "SECRET_ENV");
+        let out =
+            interpolate_env_and_secrets_with("a: ${VAR}\nb: ${secret.api}\n", "test.yaml", &secrets, resolver).unwrap();
+        assert_eq!(out, "a: env-value\nb: secret-value\n");
+    }
+
+    #[test]
+    fn combined_pass_preserves_escaped_literal_secret_reference() {
+        let resolver = |key: &str| (key == "SECRET_ENV").then(|| "should-not-leak".to_string());
+        let secrets = secret_map("api", "SECRET_ENV");
+        let out =
+            interpolate_env_and_secrets_with("prompt: $${secret.api}\n", "test.yaml", &secrets, resolver).unwrap();
+        assert_eq!(out, "prompt: ${secret.api}\n");
     }
 
     #[test]

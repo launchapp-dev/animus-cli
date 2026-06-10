@@ -83,10 +83,12 @@ fn find_existing_scope_by_origin(ao_root: &Path, project_root: &Path) -> Option<
             Ok(existing_root) => {
                 let recorded = Path::new(existing_root.trim());
                 match recorded.canonicalize() {
-                    Ok(existing_canonical) if existing_canonical == canonical => {
-                        // The marker already points at us; the caller will
-                        // also detect this via the hash path. Returning here
-                        // keeps the legacy adoption path working.
+                    // Same-file comparison (dev+ino on unix) rather than
+                    // string equality: on case-insensitive filesystems the
+                    // canonical string preserves caller casing, so the same
+                    // directory reached via differently-cased paths must
+                    // still adopt this scope instead of splitting.
+                    Ok(existing_canonical) if paths_refer_to_same_file(&existing_canonical, &canonical) => {
                         return Some(scope_dir);
                     }
                     Ok(_) => {
@@ -107,6 +109,17 @@ fn find_existing_scope_by_origin(ao_root: &Path, project_root: &Path) -> Option<
         }
     }
     None
+}
+
+fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(meta_a), Ok(meta_b)) = (std::fs::metadata(a), std::fs::metadata(b)) {
+            return meta_a.dev() == meta_b.dev() && meta_a.ino() == meta_b.ino();
+        }
+    }
+    a == b
 }
 
 pub fn sanitize_identifier(value: &str, fallback: &str) -> String {
@@ -295,6 +308,56 @@ mod tests {
         let canonical_b = clone_b.canonicalize().expect("canon b");
         assert_eq!(marker_a.trim(), canonical_a.to_string_lossy());
         assert_eq!(marker_b.trim(), canonical_b.to_string_lossy());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn paths_refer_to_same_file_follows_symlinks_and_rejects_distinct_dirs() {
+        let temp = tempdir().expect("tempdir");
+        let real = temp.path().join("real");
+        let other = temp.path().join("other");
+        let link = temp.path().join("link");
+        std::fs::create_dir_all(&real).expect("real");
+        std::fs::create_dir_all(&other).expect("other");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+
+        assert!(paths_refer_to_same_file(&real, &link));
+        assert!(!paths_refer_to_same_file(&real, &other));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn scoped_state_root_adopts_existing_scope_for_differently_cased_path() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let bin = temp.path().join("bin");
+        let repo = temp.path().join("clones").join("MixedCase");
+        std::fs::create_dir_all(home.join(".animus")).expect("ao root");
+        std::fs::create_dir_all(&repo).expect("repo");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+
+        let git_script = bin.join("git");
+        std::fs::write(&git_script, "#!/bin/sh\necho 'git@github.com:example/cased-repo.git'\n")
+            .expect("write fake git");
+        let mut perms = std::fs::metadata(&git_script).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&git_script, perms).expect("set perms");
+
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
+        let _path_guard = EnvVarGuard::set("PATH", Some(bin.to_string_lossy().as_ref()));
+
+        let original_scope = scoped_state_root(&repo).expect("original scope");
+
+        let lowercased = temp.path().join("clones").join("mixedcase");
+        if !lowercased.exists() {
+            // Case-sensitive volume — the differently-cased path is a
+            // different file and the scenario does not apply.
+            return;
+        }
+        let adopted = scoped_state_root(&lowercased).expect("adopted scope");
+        assert_eq!(adopted, original_scope, "differently-cased access must adopt the existing scope, not split");
     }
 
     #[cfg(unix)]
