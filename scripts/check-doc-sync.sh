@@ -115,6 +115,17 @@ mcp_tool_count() {
   extract_mcp_source | wc -l | tr -d ' '
 }
 
+tool_family_count() {
+  local family="$1"
+  extract_mcp_source | awk -v family="$family" 'index($0, "animus." family ".") == 1 { count++ } END { print count + 0 }'
+}
+
+cli_version() {
+  awk -F'"' '
+    $1 ~ /^version = / { print $2; exit }
+  ' "$repo_root/crates/orchestrator-cli/Cargo.toml"
+}
+
 check_surface() {
   local label="$1"
   local source_file="$2"
@@ -193,6 +204,8 @@ assert_not_contains \
 
 workspace_count="$(workspace_member_count)"
 mcp_count="$(mcp_tool_count)"
+skill_tool_count="$(tool_family_count "skill")"
+current_cli_version="v$(cli_version)"
 assert_contains \
   "$repo_root/docs/architecture/full-system-architecture.md" \
   '`Cargo.toml` currently declares '"${workspace_count}"' workspace members.' \
@@ -225,5 +238,29 @@ assert_contains \
   "$repo_root/docs/guides/agents.md" \
   "Animus currently exposes **${mcp_count} built-in MCP tools** across these families:" \
   "agents guide MCP tool count"
+assert_contains \
+  "$repo_root/docs/reference/mcp-tools.md" \
+  "## Skills (${skill_tool_count} tools)" \
+  "MCP reference skill tool count"
+assert_contains \
+  "$repo_root/docs/guides/agents.md" \
+  "| \`animus.skill.*\` | ${skill_tool_count} |" \
+  "agents guide skill tool count"
+assert_contains \
+  "$repo_root/README.md" \
+  "currently \`${current_cli_version}\` in this repo" \
+  "README current CLI version"
+assert_contains \
+  "$repo_root/README.md" \
+  "ANIMUS_VERSION=${current_cli_version}" \
+  "README install snippet version"
+assert_contains \
+  "$repo_root/docs/getting-started/installation.md" \
+  "Current workspace CLI version: **${current_cli_version}**." \
+  "installation guide current CLI version"
+assert_contains \
+  "$repo_root/docs/getting-started/installation.md" \
+  "ANIMUS_VERSION=${current_cli_version}" \
+  "installation guide install snippet version"
 
 echo "CLI command tree and MCP tool reference are in sync."
