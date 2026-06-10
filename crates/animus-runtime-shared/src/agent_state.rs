@@ -78,6 +78,32 @@ where
     serde_json::from_str(&raw).with_context(|| format!("failed to parse {}", path.display()))
 }
 
+// Cross-process advisory lock serializing read-modify-write cycles on a
+// single agent-state file. Same lock-file + exclusive-flock pattern as
+// `orchestrator_daemon_runtime::daemon_runtime_state::with_daemon_state_lock`:
+// `.lock` sidecar, created on demand, never deleted.
+fn with_state_file_lock<T>(path: &Path, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    use fs2::FileExt;
+
+    let lock_path = path
+        .with_file_name(format!("{}.lock", path.file_name().and_then(|name| name.to_str()).unwrap_or("agent-state")));
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open agent state lock at {}", lock_path.display()))?;
+    lock_file
+        .lock_exclusive()
+        .with_context(|| format!("failed to acquire agent state lock at {}", lock_path.display()))?;
+    let result = f();
+    let _ = lock_file.unlock();
+    result
+}
+
 // Agent memory writes use the same durable pattern as session checkpoints:
 // fsync the staged tempfile, atomic rename, then fsync the parent dir so
 // the rename survives power loss. See `orchestrator_core::store::fsync_rename`
@@ -124,27 +150,33 @@ pub fn append_agent_memory(
     let trimmed = text.trim();
     anyhow::ensure!(!trimmed.is_empty(), "memory text must not be empty");
 
-    let mut document = load_agent_memory(project_root, agent_id)?;
-    let now = chrono::Utc::now().to_rfc3339();
-    document.entries.push(AgentMemoryEntry {
-        id: Uuid::new_v4().to_string(),
-        created_at: now.clone(),
-        text: trimmed.to_string(),
-        source: source.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
-    });
-    document.updated_at = Some(now);
-    write_json_atomic(&agent_memory_path(project_root, agent_id), &document)?;
-    Ok(document)
+    let path = agent_memory_path(project_root, agent_id);
+    with_state_file_lock(&path, || {
+        let mut document = load_agent_memory(project_root, agent_id)?;
+        let now = chrono::Utc::now().to_rfc3339();
+        document.entries.push(AgentMemoryEntry {
+            id: Uuid::new_v4().to_string(),
+            created_at: now.clone(),
+            text: trimmed.to_string(),
+            source: source.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
+        });
+        document.updated_at = Some(now);
+        write_json_atomic(&path, &document)?;
+        Ok(document)
+    })
 }
 
 pub fn clear_agent_memory(project_root: &str, agent_id: &str) -> Result<AgentMemoryDocument> {
-    let document = AgentMemoryDocument {
-        agent_id: agent_id.to_string(),
-        updated_at: Some(chrono::Utc::now().to_rfc3339()),
-        entries: Vec::new(),
-    };
-    write_json_atomic(&agent_memory_path(project_root, agent_id), &document)?;
-    Ok(document)
+    let path = agent_memory_path(project_root, agent_id);
+    with_state_file_lock(&path, || {
+        let document = AgentMemoryDocument {
+            agent_id: agent_id.to_string(),
+            updated_at: Some(chrono::Utc::now().to_rfc3339()),
+            entries: Vec::new(),
+        };
+        write_json_atomic(&path, &document)?;
+        Ok(document)
+    })
 }
 
 pub fn delete_agent_memory_entry(
@@ -155,15 +187,18 @@ pub fn delete_agent_memory_entry(
     let trimmed = entry_id.trim();
     anyhow::ensure!(!trimmed.is_empty(), "memory entry id must not be empty");
 
-    let mut document = load_agent_memory(project_root, agent_id)?;
-    let before = document.entries.len();
-    document.entries.retain(|entry| entry.id != trimmed);
-    let removed = document.entries.len() < before;
-    if removed {
-        document.updated_at = Some(chrono::Utc::now().to_rfc3339());
-        write_json_atomic(&agent_memory_path(project_root, agent_id), &document)?;
-    }
-    Ok((document, removed))
+    let path = agent_memory_path(project_root, agent_id);
+    with_state_file_lock(&path, || {
+        let mut document = load_agent_memory(project_root, agent_id)?;
+        let before = document.entries.len();
+        document.entries.retain(|entry| entry.id != trimmed);
+        let removed = document.entries.len() < before;
+        if removed {
+            document.updated_at = Some(chrono::Utc::now().to_rfc3339());
+            write_json_atomic(&path, &document)?;
+        }
+        Ok((document, removed))
+    })
 }
 
 pub fn send_agent_message(
@@ -183,20 +218,22 @@ pub fn send_agent_message(
     anyhow::ensure!(!text.is_empty(), "message text must not be empty");
 
     let path = agent_message_path(project_root, channel);
-    let mut document: AgentMessageDocument = read_json_or_default(&path)?;
-    let message = AgentMessage {
-        id: Uuid::new_v4().to_string(),
-        channel: channel.to_string(),
-        from_agent: from_agent.to_string(),
-        to_agent: to_agent.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
-        text: text.to_string(),
-        created_at: chrono::Utc::now().to_rfc3339(),
-        workflow_id: workflow_id.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
-        phase_id: phase_id.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
-    };
-    document.messages.push(message.clone());
-    write_json_atomic(&path, &document)?;
-    Ok(message)
+    with_state_file_lock(&path, || {
+        let mut document: AgentMessageDocument = read_json_or_default(&path)?;
+        let message = AgentMessage {
+            id: Uuid::new_v4().to_string(),
+            channel: channel.to_string(),
+            from_agent: from_agent.to_string(),
+            to_agent: to_agent.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
+            text: text.to_string(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            workflow_id: workflow_id.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
+            phase_id: phase_id.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
+        };
+        document.messages.push(message.clone());
+        write_json_atomic(&path, &document)?;
+        Ok(message)
+    })
 }
 
 pub fn list_agent_messages(
@@ -284,12 +321,6 @@ mod tests {
         assert_eq!(after_noop.entries.len(), 1);
     }
 
-    // TODO: intermittently flakes under `cargo test --workspace` — even with the
-    // scoped_state_serializer mutex held, list_agent_messages occasionally returns
-    // 0 of the 2 messages just sent. Always passes in isolation
-    // (`cargo test -p workflow-runner-v2 --lib agent_state`). Suspect a parallel
-    // test mutating HOME or scope-dir state that this serializer doesn't cover.
-    #[ignore = "intermittent parallel-test race on scoped_state_serializer; passes in isolation"]
     #[test]
     fn messages_can_be_filtered_by_agent_and_channel() {
         let _serial = crate::test_env::scoped_state_serializer();
@@ -316,5 +347,57 @@ mod tests {
             list_agent_messages(&project_root, Some("engineering"), Some("architect"), None).expect("list architect");
         assert_eq!(architect.len(), 1);
         assert_eq!(architect[0].from_agent, "architect");
+    }
+
+    #[test]
+    fn concurrent_memory_appends_preserve_every_entry() {
+        let _serial = crate::test_env::scoped_state_serializer();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_root = tmp.path().to_string_lossy().to_string();
+
+        let handles: Vec<_> = (0..16)
+            .map(|index| {
+                let root = project_root.clone();
+                std::thread::spawn(move || {
+                    append_agent_memory(&root, "racer", &format!("entry-{index}"), None).expect("append memory")
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("append thread");
+        }
+
+        let loaded = load_agent_memory(&project_root, "racer").expect("load memory");
+        assert_eq!(loaded.entries.len(), 16, "every concurrent append must survive");
+        for index in 0..16 {
+            let expected = format!("entry-{index}");
+            assert!(
+                loaded.entries.iter().any(|entry| entry.text == expected),
+                "missing concurrently appended entry {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn concurrent_message_sends_preserve_every_message() {
+        let _serial = crate::test_env::scoped_state_serializer();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_root = tmp.path().to_string_lossy().to_string();
+
+        let handles: Vec<_> = (0..16)
+            .map(|index| {
+                let root = project_root.clone();
+                std::thread::spawn(move || {
+                    send_agent_message(&root, "racing", &format!("agent-{index}"), None, "hello", None, None)
+                        .expect("send message")
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("send thread");
+        }
+
+        let messages = list_agent_messages(&project_root, Some("racing"), None, None).expect("list messages");
+        assert_eq!(messages.len(), 16, "every concurrent send must survive");
     }
 }

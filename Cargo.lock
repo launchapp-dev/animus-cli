@@ -194,6 +194,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dirs 5.0.1",
+ "fs2",
  "interprocess",
  "jsonschema",
  "orchestrator-config",
