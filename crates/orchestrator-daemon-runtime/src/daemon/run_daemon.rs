@@ -285,15 +285,6 @@ where
     install_workflow_event_emitter(BroadcastWorkflowEventEmitter::new(workflow_event_broadcaster.clone()));
     install_workflow_event_broadcaster(workflow_event_broadcaster.clone());
 
-    // v0.5.1 P2 #6.2 round-3: now that the broadcaster is live, attempt to
-    // reattach to any live orphan agents detected by the earlier startup
-    // scan. Best-effort: a failure here is logged and the rest of daemon
-    // startup proceeds. Stub `if options.startup_cleanup` guards parity
-    // with the orphan-scan trigger.
-    if options.startup_cleanup {
-        attempt_orphan_agent_reattach(project_root, &primary_root, workflow_event_broadcaster.clone(), hooks)?;
-    }
-
     let control_server_handle = start_control_server_for_daemon(
         project_root,
         &primary_root,
@@ -302,6 +293,33 @@ where
         plugin_status_registry.clone(),
     )
     .await;
+
+    // v0.5.1 P2 #6.2 round-3: now that the broadcaster AND the control
+    // server are live, attempt to reattach to any live orphan agents
+    // detected by the earlier startup scan. The order matters: gap replay
+    // permanently advances the consumed offset, so it must run after the
+    // `workflow/events` subscription surface exists — replaying before the
+    // control server starts fans the events out to zero possible
+    // subscribers and marks them consumed forever. When the control server
+    // did not come up at all (disabled or bind failure) the reattach is
+    // skipped entirely so the un-replayed gap survives for the next daemon
+    // start instead of being consumed unobserved. Best-effort: a failure
+    // here is logged and the rest of daemon startup proceeds. Stub
+    // `if options.startup_cleanup` guards parity with the orphan-scan
+    // trigger.
+    // TODO(codex-p2): even with the server up, a `workflow/events`
+    // subscriber may not have registered yet when the replay runs, so the
+    // replayed events can still fan out to zero subscribers before the
+    // offset advances. And when the server is unavailable the skipped gap
+    // only survives while the orphan stays alive — if it exits first, the
+    // next scan_orphans_for_project deletes the spawn record and the
+    // decision-log gap becomes unreachable. Closing both residual windows
+    // needs the replayed events persisted into the daemon event log (or
+    // offset advancement deferred until first delivery) — tracked
+    // separately.
+    if options.startup_cleanup && control_server_handle.is_some() {
+        attempt_orphan_agent_reattach(project_root, &primary_root, workflow_event_broadcaster.clone(), hooks)?;
+    }
 
     // Trigger backend plugins. Off by default behind an env flag mirroring
     // the provider-plugin opt-out shape.
