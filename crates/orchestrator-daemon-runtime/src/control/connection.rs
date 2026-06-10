@@ -22,8 +22,9 @@
 //! - Writes go through an `Arc<Mutex<WriteHalf>>` (acquired briefly to
 //!   serialize a single frame, never held across `.await` aside from
 //!   the write itself).
-//! - Stream drivers own `JoinHandle`s and are aborted on connection
-//!   teardown via `Drop` of [`ConnectionWriter`].
+//! - Stream-driver `JoinHandle`s live in a `DriverRegistry` owned by
+//!   [`ControlConnection::serve`] — never by the drivers themselves —
+//!   so its `Drop` aborts every driver when the read loop returns.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -70,6 +71,7 @@ pub struct ControlConnection {
     policy: PolicyState,
     principal: Arc<ConnectionPrincipal>,
     plugin_status_registry: Option<Arc<PluginStatusRegistry>>,
+    shutdown_rx: Option<tokio::sync::broadcast::Receiver<()>>,
 }
 
 impl ControlConnection {
@@ -88,7 +90,17 @@ impl ControlConnection {
             policy: PolicyState::single_user(),
             principal: Arc::new(ConnectionPrincipal::anonymous()),
             plugin_status_registry: None,
+            shutdown_rx: None,
         }
+    }
+
+    /// Attach the server's shutdown broadcast so [`Self::serve`] exits
+    /// promptly at the next frame boundary when the daemon shuts down,
+    /// instead of waiting for the client to disconnect. In-flight
+    /// dispatches complete before the signal is observed.
+    pub fn with_shutdown(mut self, shutdown_rx: tokio::sync::broadcast::Receiver<()>) -> Self {
+        self.shutdown_rx = Some(shutdown_rx);
+        self
     }
 
     /// Attach a [`WorkflowEventBroadcaster`] so `workflow/events`
@@ -137,15 +149,28 @@ impl ControlConnection {
         let (read_half, write_half) = self.stream.into_split();
         let mut reader = BufReader::new(read_half);
         let writer = Arc::new(ConnectionWriter::new(write_half));
+        // Owned by this scope and never captured by driver tasks — its
+        // `Drop` aborts every still-running driver when the read loop
+        // returns (client EOF or IO error). Keeping the handles outside
+        // the `Arc<ConnectionWriter>` breaks the cycle where drivers'
+        // own writer clones would keep the abort-on-drop alive forever.
+        let drivers = DriverRegistry::default();
         let broadcaster = self.workflow_event_broadcaster.clone();
         let policy = self.policy.clone();
         let principal = Arc::clone(&self.principal);
         let status_registry = self.plugin_status_registry.clone();
+        let mut shutdown_rx = self.shutdown_rx;
 
         let mut line = String::new();
         loop {
             line.clear();
-            let n = reader.read_line(&mut line).await?;
+            let n = match shutdown_rx.as_mut() {
+                Some(rx) => tokio::select! {
+                    n = reader.read_line(&mut line) => n?,
+                    _ = rx.recv() => return Ok(()),
+                },
+                None => reader.read_line(&mut line).await?,
+            };
             if n == 0 {
                 return Ok(());
             }
@@ -173,6 +198,7 @@ impl ControlConnection {
             dispatch_request(
                 &surface,
                 &writer_clone,
+                &drivers,
                 frame,
                 broadcaster_clone.as_ref(),
                 status_registry_clone.as_ref(),
@@ -192,12 +218,11 @@ impl ControlConnection {
 /// individual write — never across an `.await` on the surface.
 struct ConnectionWriter {
     write_half: Mutex<tokio::net::unix::OwnedWriteHalf>,
-    drivers: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
 impl ConnectionWriter {
     fn new(write_half: tokio::net::unix::OwnedWriteHalf) -> Self {
-        Self { write_half: Mutex::new(write_half), drivers: Mutex::new(HashMap::new()) }
+        Self { write_half: Mutex::new(write_half) }
     }
 
     async fn write_frame<T: serde::Serialize>(&self, frame: &T) -> std::io::Result<()> {
@@ -208,9 +233,24 @@ impl ConnectionWriter {
         guard.flush().await?;
         Ok(())
     }
+}
 
-    async fn register_driver(&self, id: String, handle: JoinHandle<()>) {
-        let mut guard = self.drivers.lock().await;
+/// Tracker for active stream-driver tasks, keyed by the stringified
+/// originating request id.
+///
+/// Owned by [`ControlConnection::serve`]'s scope and only ever borrowed
+/// by the dispatch path — driver tasks never hold it, so when `serve`
+/// returns the registry drops and every remaining driver is aborted.
+/// The mutex is a `std::sync::Mutex` held only for map mutation, never
+/// across an `.await`.
+#[derive(Default)]
+struct DriverRegistry {
+    drivers: std::sync::Mutex<HashMap<String, JoinHandle<()>>>,
+}
+
+impl DriverRegistry {
+    fn register(&self, id: String, handle: JoinHandle<()>) {
+        let mut guard = self.drivers.lock().expect("driver registry mutex poisoned");
         if let Some(previous) = guard.insert(id, handle) {
             previous.abort();
         }
@@ -219,8 +259,8 @@ impl ConnectionWriter {
     /// Abort the driver task registered under `id` if present. Used by
     /// `$/cancelRequest` to stop in-flight stream emission without
     /// closing the underlying socket.
-    async fn cancel_driver(&self, id: &str) -> bool {
-        let mut guard = self.drivers.lock().await;
+    fn cancel(&self, id: &str) -> bool {
+        let mut guard = self.drivers.lock().expect("driver registry mutex poisoned");
         if let Some(handle) = guard.remove(id) {
             handle.abort();
             true
@@ -230,11 +270,9 @@ impl ConnectionWriter {
     }
 }
 
-impl Drop for ConnectionWriter {
+impl Drop for DriverRegistry {
     fn drop(&mut self) {
-        // `try_lock` cannot fail when we own the only handle (the
-        // owning task is being dropped).
-        if let Ok(mut guard) = self.drivers.try_lock() {
+        if let Ok(mut guard) = self.drivers.lock() {
             for (_id, handle) in guard.drain() {
                 handle.abort();
             }
@@ -247,9 +285,11 @@ impl Drop for ConnectionWriter {
 /// All replies write through `writer`; the function returns
 /// `Err(io::Error)` only when the write itself fails. Surface errors
 /// are turned into [`RpcResponse::err`] frames and surfaced normally.
+#[allow(clippy::too_many_arguments)]
 async fn dispatch_request(
     surface: &Arc<dyn ControlSurface>,
     writer: &Arc<ConnectionWriter>,
+    drivers: &DriverRegistry,
     frame: RpcRequest,
     broadcaster: Option<&Arc<WorkflowEventBroadcaster>>,
     status_registry: Option<&Arc<PluginStatusRegistry>>,
@@ -257,7 +297,8 @@ async fn dispatch_request(
     principal: &Arc<ConnectionPrincipal>,
 ) -> std::io::Result<()> {
     let id = frame.id.clone();
-    let result = invoke_surface(surface, writer, &frame, broadcaster, status_registry, policy, principal).await;
+    let result =
+        invoke_surface(surface, writer, drivers, &frame, broadcaster, status_registry, policy, principal).await;
     match result {
         Ok(Some(value)) => {
             let response = RpcResponse::ok(id, value);
@@ -278,9 +319,11 @@ async fn dispatch_request(
 /// emitted their own ack and spawned a driver task. Returns `Err` with
 /// a populated [`RpcError`] for any failure surface side.
 #[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments)]
 async fn invoke_surface(
     surface: &Arc<dyn ControlSurface>,
     writer: &Arc<ConnectionWriter>,
+    drivers: &DriverRegistry,
     frame: &RpcRequest,
     broadcaster: Option<&Arc<WorkflowEventBroadcaster>>,
     status_registry: Option<&Arc<PluginStatusRegistry>>,
@@ -319,12 +362,12 @@ async fn invoke_surface(
         // `$/cancelRequest` is a JSON-RPC notification (no response).
         // We look up the active driver task by stringified request id
         // and abort it. Authoritative cancellation also happens on
-        // socket close via `ConnectionWriter::drop`, but explicit
+        // socket close via `DriverRegistry::drop`, but explicit
         // cancel-while-keeping-socket-open requires this path.
         "$/cancelRequest" => {
             let target = params.get("id").cloned().unwrap_or(Value::Null);
             let driver_key = stringify_id(&Some(target));
-            let _ = writer.cancel_driver(&driver_key).await;
+            let _ = drivers.cancel(&driver_key);
             Ok(None)
         }
 
@@ -356,7 +399,7 @@ async fn invoke_surface(
         method_names::METHOD_SUBJECT_WATCH => {
             let req: SubjectWatchRequest = parse_params(params)?;
             let stream = surface.subject_watch(req).await.map_err(rpc_from_control)?;
-            spawn_stream_driver(writer, frame.id.clone(), method_names::NOTIFICATION_SUBJECT_CHANGED, stream).await?;
+            spawn_stream_driver(writer, drivers, frame.id.clone(), method_names::NOTIFICATION_SUBJECT_CHANGED, stream)?;
             Ok(Some(ack_value()))
         }
 
@@ -420,14 +463,19 @@ async fn invoke_surface(
         method_names::METHOD_DAEMON_EVENTS => {
             let req: DaemonEventsRequest = parse_params(params)?;
             let stream = surface.daemon_events(req).await.map_err(rpc_from_control)?;
-            spawn_stream_driver(writer, frame.id.clone(), method_names::NOTIFICATION_DAEMON_EVENT, stream).await?;
+            spawn_stream_driver(writer, drivers, frame.id.clone(), method_names::NOTIFICATION_DAEMON_EVENT, stream)?;
             Ok(Some(ack_value()))
         }
         method_names::METHOD_DAEMON_LOGS => {
             let req: DaemonLogsRequest = parse_params(params)?;
             let stream = surface.daemon_logs(req).await.map_err(rpc_from_control)?;
-            spawn_fallible_stream_driver(writer, frame.id.clone(), method_names::NOTIFICATION_DAEMON_LOG, stream)
-                .await?;
+            spawn_fallible_stream_driver(
+                writer,
+                drivers,
+                frame.id.clone(),
+                method_names::NOTIFICATION_DAEMON_LOG,
+                stream,
+            )?;
             Ok(Some(ack_value()))
         }
 
@@ -468,7 +516,7 @@ async fn invoke_surface(
                 data: Some(serde_json::json!({ "category": "unavailable" })),
             })?;
             let filter = WorkflowEventFilter { workflow_id: req.workflow_id, kinds: req.kinds };
-            spawn_workflow_event_driver(writer, frame.id.clone(), Arc::clone(bus), filter).await?;
+            spawn_workflow_event_driver(writer, drivers, frame.id.clone(), Arc::clone(bus), filter)?;
             Ok(Some(ack_value()))
         }
 
@@ -613,11 +661,12 @@ fn rpc_from_control(err: ControlError) -> RpcError {
 ///
 /// The notification params carry `{"id": <request_id>, "data": <T>}` so
 /// clients can correlate notifications back to the originating request.
-/// The driver registers itself with the [`ConnectionWriter`] keyed by
-/// the stringified request id; client disconnect aborts it via the
-/// writer's `Drop` impl.
-async fn spawn_stream_driver<T, S>(
+/// The driver's handle is registered with the [`DriverRegistry`] keyed
+/// by the stringified request id; client disconnect aborts it via the
+/// registry's `Drop` impl.
+fn spawn_stream_driver<T, S>(
     writer: &Arc<ConnectionWriter>,
+    drivers: &DriverRegistry,
     request_id: Option<Value>,
     notification_method: &'static str,
     mut stream: S,
@@ -643,7 +692,7 @@ where
             }
         }
     });
-    writer.register_driver(driver_key, handle).await;
+    drivers.register(driver_key, handle);
     Ok(())
 }
 
@@ -654,8 +703,9 @@ where
 /// in-band error notification, matching the upstream
 /// [`DaemonLogStream`](animus_control_protocol::control_trait::DaemonLogStream)
 /// contract that closes on a hard failure.
-async fn spawn_fallible_stream_driver<T, S>(
+fn spawn_fallible_stream_driver<T, S>(
     writer: &Arc<ConnectionWriter>,
+    drivers: &DriverRegistry,
     request_id: Option<Value>,
     notification_method: &'static str,
     mut stream: S,
@@ -685,7 +735,7 @@ where
             }
         }
     });
-    writer.register_driver(driver_key, handle).await;
+    drivers.register(driver_key, handle);
     Ok(())
 }
 
@@ -694,8 +744,9 @@ where
 /// `workflow/event` notifications. On client disconnect (write failure)
 /// the subscription is unregistered from the broadcaster so it does not
 /// leak.
-async fn spawn_workflow_event_driver(
+fn spawn_workflow_event_driver(
     writer: &Arc<ConnectionWriter>,
+    drivers: &DriverRegistry,
     request_id: Option<Value>,
     broadcaster: Arc<WorkflowEventBroadcaster>,
     filter: WorkflowEventFilter,
@@ -736,7 +787,7 @@ async fn spawn_workflow_event_driver(
             }
         }
     });
-    writer.register_driver(driver_key, handle).await;
+    drivers.register(driver_key, handle);
     Ok(())
 }
 

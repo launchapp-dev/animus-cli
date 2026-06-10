@@ -481,21 +481,26 @@ impl ControlClient {
         F: FnMut(animus_control_protocol::types::WorkflowEvent) -> bool,
     {
         let method = method_names::METHOD_WORKFLOW_EVENTS;
-        let mut stream = match self.take_cached_stream().await {
+        let stream = match self.take_cached_stream().await {
             Some(stream) => stream,
             None => UnixStream::connect(&self.socket_path)
                 .await
                 .with_context(|| format!("connect to {}", self.socket_path.display()))?,
         };
+        let (read_half, mut write_half) = stream.into_split();
+        let mut reader = BufReader::new(read_half);
+
+        // v0.5.8 honor-system --as propagation also on streaming
+        // connections, mirroring `daemon_logs`. Without this, `animus
+        // --as ... workflow events` would silently bypass the chokepoint.
+        apply_as_principal_handshake(&mut write_half, &mut reader).await?;
+
         let params = serde_json::to_value(&request).context("serialize workflow/events params")?;
         let rpc_request = RpcRequest::new(Value::from(1u64), method.to_string(), Some(params));
         let mut bytes = serde_json::to_vec(&rpc_request).context("serialize workflow/events request")?;
         bytes.push(b'\n');
-        stream.write_all(&bytes).await.context("write workflow/events request")?;
-        stream.flush().await.context("flush workflow/events request")?;
-
-        let (read_half, _write_half) = stream.into_split();
-        let mut reader = BufReader::new(read_half);
+        write_half.write_all(&bytes).await.context("write workflow/events request")?;
+        write_half.flush().await.context("flush workflow/events request")?;
         let mut ack_seen = false;
         let mut buf = String::new();
         loop {
