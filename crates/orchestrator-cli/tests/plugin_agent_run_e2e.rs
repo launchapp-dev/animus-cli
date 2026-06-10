@@ -65,12 +65,33 @@ fn build_request() -> SessionRequest {
     }
 }
 
+/// Pin the env so discovery sees ONLY the testkit mock provider: an
+/// isolated HOME/config/plugin dir keeps the developer's real
+/// `~/.animus` registry out, and an isolated project root keeps the
+/// repo's `flavors/default.toml` from activating flavor-only plugin
+/// scoping (which would filter the mock provider out of discovery).
+fn isolated_discovery_env() -> (Vec<protocol::test_utils::EnvVarGuard>, tempfile::TempDir) {
+    let isolated = tempfile::tempdir().expect("isolated env tempdir");
+    let empty = isolated.path().join("empty");
+    std::fs::create_dir_all(&empty).expect("empty plugin dir");
+    let guards = vec![
+        protocol::test_utils::EnvVarGuard::set("HOME", Some(isolated.path().to_string_lossy().as_ref())),
+        protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(empty.to_string_lossy().as_ref())),
+        protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty.to_string_lossy().as_ref())),
+        protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_PLUGIN_PATH",
+            Some(workspace_target_debug().to_string_lossy().as_ref()),
+        ),
+    ];
+    (guards, isolated)
+}
+
 #[tokio::test]
 async fn resolver_routes_mock_tool_through_plugin() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ensure_mock_provider();
-    std::env::set_var("ANIMUS_PLUGIN_PATH", workspace_target_debug());
-    let resolver = SessionBackendResolver::with_plugin_discovery(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let (_env, project) = isolated_discovery_env();
+    let resolver = SessionBackendResolver::with_plugin_discovery(project.path());
 
     let request = build_request();
     let backend = resolver.resolve(&request).expect("mock plugin should resolve");
@@ -85,10 +106,10 @@ async fn resolver_routes_mock_tool_through_plugin() {
 
 #[tokio::test]
 async fn agent_run_streams_notifications_in_order_through_plugin() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ensure_mock_provider();
-    std::env::set_var("ANIMUS_PLUGIN_PATH", workspace_target_debug());
-    let resolver = SessionBackendResolver::with_plugin_discovery(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let (_env, project) = isolated_discovery_env();
+    let resolver = SessionBackendResolver::with_plugin_discovery(project.path());
 
     let request = build_request();
     let mut run = timeout(Duration::from_secs(10), resolver.start_session(request))
@@ -164,13 +185,16 @@ async fn agent_run_streams_notifications_in_order_through_plugin() {
 /// As of v0.4.12 there is no in-tree provider fallback.
 #[tokio::test]
 async fn agent_run_errors_when_provider_plugin_missing() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let empty = tempfile::tempdir().expect("tempdir");
     let isolated_home = tempfile::tempdir().expect("isolated home tempdir");
-    let prior_home = std::env::var_os("HOME");
-    std::env::set_var("HOME", isolated_home.path());
-    std::env::set_var("ANIMUS_PLUGIN_PATH", empty.path());
-    std::env::set_var("ANIMUS_PLUGIN_DIR", empty.path());
+    let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(isolated_home.path().to_string_lossy().as_ref()));
+    let _path = protocol::test_utils::EnvVarGuard::set(
+        "ANIMUS_PLUGIN_PATH",
+        Some(empty.path().to_string_lossy().as_ref()),
+    );
+    let _dir =
+        protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty.path().to_string_lossy().as_ref()));
 
     let resolver = SessionBackendResolver::with_plugin_discovery(empty.path());
     let request = SessionRequest {
@@ -193,11 +217,4 @@ async fn agent_run_errors_when_provider_plugin_missing() {
     let msg = err.to_string();
     assert!(msg.contains("Provider plugin 'claude' not installed"), "actual: {msg}");
     assert!(msg.contains("animus plugin install launchapp-dev/animus-provider-claude"), "actual: {msg}");
-
-    std::env::remove_var("ANIMUS_PLUGIN_PATH");
-    std::env::remove_var("ANIMUS_PLUGIN_DIR");
-    match prior_home {
-        Some(value) => std::env::set_var("HOME", value),
-        None => std::env::remove_var("HOME"),
-    }
 }

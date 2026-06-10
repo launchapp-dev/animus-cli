@@ -262,26 +262,16 @@ mod daemon_logs_dispatch_tests {
         }
     }
 
-    /// RAII guard for the `ANIMUS_CONFIG_DIR` env var. Restores the
-    /// previous value (or removes the var entirely if it was unset) when
-    /// the guard drops so concurrent tests in the same process don't
-    /// pick up a stale temp path after the directory is unlinked.
+    /// RAII guard for the `ANIMUS_CONFIG_DIR` env var. Wraps the protocol
+    /// crate's `EnvVarGuard` so the mutation holds the process-wide env
+    /// lock shared with every other env-mutating test in this binary, and
+    /// restores the previous value when the guard drops.
     struct ConfigDirGuard {
-        prev: Option<std::ffi::OsString>,
+        _inner: protocol::test_utils::EnvVarGuard,
     }
     impl ConfigDirGuard {
         fn set(value: &std::path::Path) -> Self {
-            let prev = std::env::var_os("ANIMUS_CONFIG_DIR");
-            std::env::set_var("ANIMUS_CONFIG_DIR", value);
-            Self { prev }
-        }
-    }
-    impl Drop for ConfigDirGuard {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(prev) => std::env::set_var("ANIMUS_CONFIG_DIR", prev),
-                None => std::env::remove_var("ANIMUS_CONFIG_DIR"),
-            }
+            Self { _inner: protocol::test_utils::EnvVarGuard::set_os("ANIMUS_CONFIG_DIR", Some(value.as_os_str())) }
         }
     }
 

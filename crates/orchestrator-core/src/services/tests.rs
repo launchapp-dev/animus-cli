@@ -17,15 +17,10 @@ fn assert_core_state_json_is_valid(project_root: &std::path::Path) {
 }
 
 fn ensure_test_config_env() {
-    static INIT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-    INIT.get_or_init(|| {
-        crate::test_env::stable_test_home();
-        let config_dir = std::env::temp_dir().join(format!("ao-orchestrator-core-test-config-{}", std::process::id()));
-        std::fs::create_dir_all(&config_dir).expect("create test Animus config dir");
-        std::env::set_var("ANIMUS_CONFIG_DIR", &config_dir);
-        std::env::set_var("AGENT_ORCHESTRATOR_CONFIG_DIR", &config_dir);
-        std::env::set_var("ANIMUS_RUNNER_CONFIG_DIR", &config_dir);
-    });
+    // HOME and the config-dir env vars are pinned together inside
+    // `stable_test_home`'s one-time init, so the pin cannot land between
+    // two env reads of a concurrently running test.
+    crate::test_env::stable_test_home();
 }
 
 fn file_hub(project_root: &std::path::Path) -> anyhow::Result<FileServiceHub> {
@@ -937,7 +932,18 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
 }
 
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn file_hub_errors_when_requested_pipeline_is_missing_from_config() {
+    // This test needs `resolve_pack_registry` to see an empty machine packs
+    // dir — otherwise workflow-ref resolution takes the pack-overlay path
+    // and produces a different error message. Hold the pack fixture lock so
+    // the `workflow::phase_plan` pack tests cannot install fixtures into
+    // the shared `~/.animus/packs` while this resolution runs.
+    let _packs = crate::test_env::pack_fixture_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let machine_packs_dir = crate::machine_installed_packs_dir();
+    if machine_packs_dir.exists() {
+        std::fs::remove_dir_all(&machine_packs_dir).expect("clear shared machine pack fixtures");
+    }
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
 

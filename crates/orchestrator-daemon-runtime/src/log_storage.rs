@@ -605,38 +605,12 @@ mod tests {
     use orchestrator_plugin_host::{DiscoveredPlugin, DiscoverySource};
     use tempfile::TempDir;
 
-    /// Serializes env-var-touching tests so cargo's parallel runner does
-    /// not race on the disable knob. Mirrors the pattern used by the
-    /// discovery + provider resolver tests.
-    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    struct EnvGuard {
-        key: &'static str,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, prev }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let prev = std::env::var_os(key);
-            std::env::remove_var(key);
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(prev) => std::env::set_var(self.key, prev),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
+    /// Env mutation goes through the protocol crate's `EnvVarGuard`, which
+    /// holds the process-wide env lock for the guard's lifetime. That
+    /// serializes these tests against every other `EnvVarGuard` user in
+    /// this binary (`ANIMUS_CONFIG_DIR` / `ANIMUS_PLUGIN_DIR` are shared
+    /// with the dispatch and subject_dispatch test modules).
+    use protocol::test_utils::EnvVarGuard;
 
     fn fake_plugin(name: &str, path: PathBuf) -> DiscoveredPlugin {
         DiscoveredPlugin {
@@ -667,10 +641,9 @@ mod tests {
 
     #[test]
     fn discovers_zero_log_storage_backends_uses_in_tree() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let _disable = EnvGuard::unset(LOG_STORAGE_DISABLE_ENV);
-        let _animus_home = EnvGuard::set("ANIMUS_CONFIG_DIR", "/tmp/animus-test-empty-home-xyz123");
-        let _plugin_dir = EnvGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _disable = EnvVarGuard::set(LOG_STORAGE_DISABLE_ENV, None);
+        let _animus_home = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some("/tmp/animus-test-empty-home-xyz123"));
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(""));
 
         let (_temp, project_root) = isolated_project();
 
@@ -687,10 +660,9 @@ mod tests {
         // short-circuit triggers when set. Combined with the unit-level
         // tests on `log_storage_disable_env_set` below, the contract is
         // covered.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-        let _disable = EnvGuard::set(LOG_STORAGE_DISABLE_ENV, "1");
-        let _animus_home = EnvGuard::set("ANIMUS_CONFIG_DIR", "/tmp/animus-test-empty-home-xyz123");
-        let _plugin_dir = EnvGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _disable = EnvVarGuard::set(LOG_STORAGE_DISABLE_ENV, Some("1"));
+        let _animus_home = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some("/tmp/animus-test-empty-home-xyz123"));
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(""));
 
         let (_temp, project_root) = isolated_project();
         let resolution = resolve_log_storage_dispatch(&project_root).expect("resolve");
@@ -699,29 +671,27 @@ mod tests {
 
     #[test]
     fn disable_env_predicate_recognizes_truthy_values() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
-
-        let _e1 = EnvGuard::set(LOG_STORAGE_DISABLE_ENV, "1");
+        let _e1 = EnvVarGuard::set(LOG_STORAGE_DISABLE_ENV, Some("1"));
         assert!(log_storage_disable_env_set(), "'1' is truthy");
         drop(_e1);
 
-        let _e2 = EnvGuard::set(LOG_STORAGE_DISABLE_ENV, "true");
+        let _e2 = EnvVarGuard::set(LOG_STORAGE_DISABLE_ENV, Some("true"));
         assert!(log_storage_disable_env_set(), "'true' is truthy");
         drop(_e2);
 
-        let _e3 = EnvGuard::set(LOG_STORAGE_DISABLE_ENV, "TRUE");
+        let _e3 = EnvVarGuard::set(LOG_STORAGE_DISABLE_ENV, Some("TRUE"));
         assert!(log_storage_disable_env_set(), "uppercase 'TRUE' is truthy");
         drop(_e3);
 
-        let _e4 = EnvGuard::set(LOG_STORAGE_DISABLE_ENV, "0");
+        let _e4 = EnvVarGuard::set(LOG_STORAGE_DISABLE_ENV, Some("0"));
         assert!(!log_storage_disable_env_set(), "'0' is falsy");
         drop(_e4);
 
-        let _e5 = EnvGuard::set(LOG_STORAGE_DISABLE_ENV, "");
+        let _e5 = EnvVarGuard::set(LOG_STORAGE_DISABLE_ENV, Some(""));
         assert!(!log_storage_disable_env_set(), "empty is falsy");
         drop(_e5);
 
-        let _e6 = EnvGuard::unset(LOG_STORAGE_DISABLE_ENV);
+        let _e6 = EnvVarGuard::set(LOG_STORAGE_DISABLE_ENV, None);
         assert!(!log_storage_disable_env_set(), "unset is falsy");
     }
 

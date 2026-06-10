@@ -1246,20 +1246,11 @@ mod log_dispatch_tests {
     /// (reader) resolve through `protocol::scoped_state_root(project_root)`
     /// against the live `$HOME`. Different tests get distinct scope
     /// hashes (the tempdir basename is unique), so they never collide on
-    /// the same events.jsonl.
-    ///
-    /// TODO(codex-p2): a sibling test fixture
-    /// (`daemon::daemon_runtime_options::tests::stable_test_home`) mutates
-    /// process-global `HOME` without the protocol crate's shared
-    /// `EnvVarGuard` mutex. If parallel scheduling flips `HOME` between
-    /// the write and the read, the reader could resolve a different
-    /// scope than the writer. Empirically the race window is tiny
-    /// (20+ parallel runs of `cargo test -p orchestrator-daemon-runtime`
-    /// produced no failures), but the proper fix is to migrate
-    /// `stable_test_home` onto `EnvVarGuard`. That helper sits in a
-    /// crate owned by another agent in this cleanup wave, so the
-    /// retrofit is deferred.
+    /// the same events.jsonl. Pinning the crate-wide stable test HOME
+    /// first guarantees the writer and reader resolve the same scope even
+    /// when sibling tests trigger the one-time HOME pin mid-run.
     fn unique_project_root() -> (TempDir, PathBuf) {
+        crate::test_env::stable_test_home();
         let temp = TempDir::new().expect("tempdir");
         let repo = temp.path().to_path_buf();
         (temp, repo)
@@ -1393,24 +1384,15 @@ mod control_daemon_logs_plugin_route_tests {
         }
     }
 
-    /// RAII guard restoring `ANIMUS_CONFIG_DIR` after the test, mirroring
-    /// the helper in `daemon_event_log::daemon_logs_dispatch_tests`.
+    /// RAII guard restoring `ANIMUS_CONFIG_DIR` after the test. Wraps the
+    /// protocol crate's `EnvVarGuard` so the mutation holds the process-wide
+    /// env lock shared with every other env-mutating test in this binary.
     struct ConfigDirGuard {
-        prev: Option<std::ffi::OsString>,
+        _inner: protocol::test_utils::EnvVarGuard,
     }
     impl ConfigDirGuard {
         fn set(value: &std::path::Path) -> Self {
-            let prev = std::env::var_os("ANIMUS_CONFIG_DIR");
-            std::env::set_var("ANIMUS_CONFIG_DIR", value);
-            Self { prev }
-        }
-    }
-    impl Drop for ConfigDirGuard {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(prev) => std::env::set_var("ANIMUS_CONFIG_DIR", prev),
-                None => std::env::remove_var("ANIMUS_CONFIG_DIR"),
-            }
+            Self { _inner: protocol::test_utils::EnvVarGuard::set_os("ANIMUS_CONFIG_DIR", Some(value.as_os_str())) }
         }
     }
 
@@ -1572,7 +1554,7 @@ mod health_probe_env_tests {
     fn probe_options_forward_declared_env_when_set() {
         // Scope the env var to the test; the previous probe behavior used
         // `default()` and would have produced an empty allowlist.
-        std::env::set_var("FAKE_PROBE_VAR_PRESENT", "expected-value");
+        let _present = protocol::test_utils::EnvVarGuard::set("FAKE_PROBE_VAR_PRESENT", Some("expected-value"));
 
         let plugin = discovered(manifest_with_env(vec![EnvRequirement {
             name: "FAKE_PROBE_VAR_PRESENT".to_string(),
@@ -1593,8 +1575,6 @@ mod health_probe_env_tests {
             "env var is present, so missing_required_env should be empty; got {:?}",
             opts.missing_required_env
         );
-
-        std::env::remove_var("FAKE_PROBE_VAR_PRESENT");
     }
 
     /// When the var is unset, the probe still forwards the name (so the
@@ -1603,7 +1583,7 @@ mod health_probe_env_tests {
     /// "missing key" error path can run instead of a generic unhealthy.
     #[test]
     fn probe_options_report_missing_required_env_when_unset() {
-        std::env::remove_var("FAKE_PROBE_VAR_ABSENT");
+        let _absent = protocol::test_utils::EnvVarGuard::set("FAKE_PROBE_VAR_ABSENT", None);
 
         let plugin = discovered(manifest_with_env(vec![EnvRequirement {
             name: "FAKE_PROBE_VAR_ABSENT".to_string(),

@@ -114,7 +114,10 @@ mod tests {
 
         let temp_dir = tempfile::TempDir::new().expect("temp dir");
         let missing_runner = temp_dir.path().join("does-not-exist");
-        std::env::set_var("ANIMUS_WORKFLOW_RUNNER_BIN", &missing_runner);
+        let _runner_guard = protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_WORKFLOW_RUNNER_BIN",
+            Some(missing_runner.to_string_lossy().as_ref()),
+        );
 
         let mut manager = ProcessManager::new().with_workflow_concurrency_max(None);
         let starts = vec![PlannedDispatchStart {
@@ -130,7 +133,6 @@ mod tests {
             5,
             &mut sink,
         );
-        std::env::remove_var("ANIMUS_WORKFLOW_RUNNER_BIN");
 
         assert_eq!(summary.started, 0);
         assert_eq!(sink.notices.len(), 1);

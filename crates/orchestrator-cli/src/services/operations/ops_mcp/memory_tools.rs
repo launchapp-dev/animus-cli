@@ -395,6 +395,17 @@ mod memory_tool_tests {
     use serde_json::Value;
     use tempfile::tempdir;
 
+    // Agent memory lives under `protocol::scoped_state_root`, which resolves
+    // through the live `$HOME`. Pin HOME to a per-test tempdir for the whole
+    // test so sibling tests that swap HOME (via `EnvVarGuard`, which holds
+    // the process-wide env lock this guard also takes) can neither move the
+    // scope mid-test nor delete it out from under us.
+    fn isolated_home() -> (tempfile::TempDir, protocol::test_utils::EnvVarGuard) {
+        let home = tempdir().expect("home tempdir");
+        let guard = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        (home, guard)
+    }
+
     fn structured(result: &rmcp::model::CallToolResult) -> Value {
         result.structured_content.clone().expect("expected structured_content on tool result")
     }
@@ -422,6 +433,7 @@ mod memory_tool_tests {
 
     #[tokio::test]
     async fn memory_append_then_get_roundtrip() {
+        let (_home, _home_guard) = isolated_home();
         let project = tempdir().expect("tempdir");
         let project_root = project.path().to_string_lossy().to_string();
         let server = new_memory_mcp_server(&project_root);
@@ -466,6 +478,7 @@ mod memory_tool_tests {
 
     #[tokio::test]
     async fn memory_list_returns_appended_entries_and_respects_prefix() {
+        let (_home, _home_guard) = isolated_home();
         let project = tempdir().expect("tempdir");
         let project_root = project.path().to_string_lossy().to_string();
         let server = new_memory_mcp_server(&project_root);
@@ -513,6 +526,7 @@ mod memory_tool_tests {
 
     #[tokio::test]
     async fn memory_clear_single_entry_keeps_other_entries() {
+        let (_home, _home_guard) = isolated_home();
         let project = tempdir().expect("tempdir");
         let project_root = project.path().to_string_lossy().to_string();
         let server = new_memory_mcp_server(&project_root);
@@ -556,6 +570,7 @@ mod memory_tool_tests {
 
     #[tokio::test]
     async fn memory_clear_all_wipes_every_entry() {
+        let (_home, _home_guard) = isolated_home();
         let project = tempdir().expect("tempdir");
         let project_root = project.path().to_string_lossy().to_string();
         let server = new_memory_mcp_server(&project_root);
@@ -600,6 +615,7 @@ mod memory_tool_tests {
 
     #[tokio::test]
     async fn memory_clear_without_target_returns_error() {
+        let (_home, _home_guard) = isolated_home();
         let project = tempdir().expect("tempdir");
         let project_root = project.path().to_string_lossy().to_string();
         let server = new_memory_mcp_server(&project_root);

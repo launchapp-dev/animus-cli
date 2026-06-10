@@ -332,11 +332,15 @@ mod tests {
     use super::*;
     use protocol::SubjectDispatchExt;
 
-    // Pins PATH (under the shared env lock) so concurrent tests that clobber
-    // PATH cannot break the `ps`/`sleep`/`true` spawns these tests rely on.
+    // Pins PATH so concurrent tests that clobber PATH cannot break the
+    // `ps`/`sleep`/`true` spawns these tests rely on. Takes the dispatch-wide
+    // env lock first (the build_runner_command_from_dispatch tests mutate
+    // PATH under that lock) and then the protocol env lock via EnvVarGuard,
+    // so both PATH-mutating domains in this binary are excluded.
     #[cfg(unix)]
-    fn pin_path_for_process_spawns() -> protocol::test_utils::EnvVarGuard {
-        protocol::test_utils::EnvVarGuard::set("PATH", Some("/bin:/usr/bin"))
+    fn pin_path_for_process_spawns() -> (std::sync::MutexGuard<'static, ()>, protocol::test_utils::EnvVarGuard) {
+        let lock = crate::dispatch::test_env::lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        (lock, protocol::test_utils::EnvVarGuard::set("PATH", Some("/bin:/usr/bin")))
     }
 
     fn write_record_into(dir: &std::path::Path, record: &AgentSpawnRecord) -> std::io::Result<std::path::PathBuf> {
