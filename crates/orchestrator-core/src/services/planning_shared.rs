@@ -653,6 +653,7 @@ Run `animus subject update --kind requirement ...` (or upsert explicit constrain
                         updated_by: "requirement-review-loop-ai".to_string(),
                         started_at: None,
                         completed_at: None,
+                        status_changed_at: None,
                         version: 1,
                     },
                     deadline: None,

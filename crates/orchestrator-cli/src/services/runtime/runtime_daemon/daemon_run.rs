@@ -914,6 +914,17 @@ mod tests {
             .await
             .expect("task should be created");
 
+        // Crashed-workflow ordering: the task transitions to InProgress
+        // BEFORE its workflow ends. The reconciler only re-blocks tasks
+        // whose latest terminal workflow postdates the task's own last
+        // transition — setting InProgress after the cancel would look like
+        // an operator manually re-working the task and be left alone.
+        primary_hub
+            .tasks()
+            .set_status(&task.id, orchestrator_core::TaskStatus::InProgress, false)
+            .await
+            .expect("task should be stale in-progress");
+
         let workflow = primary_hub
             .workflows()
             .run(orchestrator_core::WorkflowRunInput::for_task(task.id.clone(), None))
@@ -924,12 +935,6 @@ mod tests {
         // when every workflow failed/cancelled (it never auto-completes tasks).
         let workflow = primary_hub.workflows().cancel(&workflow.id).await.expect("workflow should cancel");
         assert_eq!(workflow.status, orchestrator_core::WorkflowStatus::Cancelled);
-
-        primary_hub
-            .tasks()
-            .set_status(&task.id, orchestrator_core::TaskStatus::InProgress, false)
-            .await
-            .expect("task should be stale in-progress");
 
         let args = DaemonRunArgs {
             scheduler: DaemonSchedulerArgs {

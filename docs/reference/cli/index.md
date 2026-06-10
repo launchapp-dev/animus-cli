@@ -86,8 +86,8 @@ animus
 │   │   ├── list             List checkpoints for a workflow
 │   │   ├── get              Get a specific checkpoint for a workflow
 │   │   └── prune            Prune checkpoints using count and/or age retention
-│   ├── run                  Run a workflow. Enqueues to daemon by default; use --sync to run in terminal
-│   ├── resume               Resume a paused workflow
+│   ├── run                  Run a workflow. Spawns a detached workflow_runner by default; use --sync to run in terminal (both require the workflow_runner plugin)
+│   ├── resume               Resume a paused workflow and respawn its workflow_runner
 │   ├── resume-status        Check whether a workflow can be resumed
 │   ├── pause                Pause an active workflow (confirmation required)
 │   ├── cancel               Cancel a workflow (confirmation required)
