@@ -638,7 +638,10 @@ workflows:
     let result = compile_yaml_workflow_files(temp.path()).expect("compile should succeed");
     let config = result.expect("should have config");
     assert!(
-        config.agent_profiles.get("project-agent").is_some_and(|profile| profile.skills == vec!["project-skill"]),
+        config
+            .agent_profiles
+            .get("project-agent")
+            .is_some_and(|profile| profile.skills.as_deref().unwrap_or_default() == ["project-skill"]),
         "project-local skill reference should remain intact"
     );
 }
@@ -696,7 +699,7 @@ workflows:
         config
             .agent_profiles
             .get("project-agent")
-            .is_some_and(|profile| profile.skills == vec!["project-markdown-skill"]),
+            .is_some_and(|profile| profile.skills.as_deref().unwrap_or_default() == ["project-markdown-skill"]),
         "project markdown skill reference should remain intact"
     );
 }
@@ -1156,11 +1159,11 @@ workflows:
     let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with agent profile");
     assert!(config.agent_profiles.contains_key("researcher"));
     let researcher = &config.agent_profiles["researcher"];
-    assert_eq!(researcher.system_prompt, "You are a research agent focused on code analysis");
+    assert_eq!(researcher.system_prompt.as_deref(), Some("You are a research agent focused on code analysis"));
     assert_eq!(researcher.model.as_deref(), Some("gemini-3.1-pro-preview"));
     assert_eq!(researcher.web_search, Some(true));
-    assert_eq!(researcher.skills, vec!["deep-search"]);
-    assert_eq!(researcher.capabilities.get("code_execution"), Some(&false));
+    assert_eq!(researcher.skills.clone().unwrap_or_default(), vec!["deep-search"]);
+    assert_eq!(researcher.capabilities.clone().unwrap_or_default().get("code_execution"), Some(&false));
 }
 
 #[test]
@@ -1480,7 +1483,7 @@ workflows:
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse");
     let profile = &config.agent_profiles["researcher"];
-    assert_eq!(profile.mcp_servers, vec!["ao".to_string()]);
+    assert_eq!(profile.mcp_servers.clone().unwrap_or_default(), vec!["ao".to_string()]);
     assert!(validate_workflow_config(&config).is_ok());
 }
 
@@ -1989,22 +1992,22 @@ workflows:
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse full agent profile");
     let agent = &config.agent_profiles["full-agent"];
-    assert_eq!(agent.description, "A fully configured agent");
-    assert_eq!(agent.system_prompt, "You are a specialized agent");
+    assert_eq!(agent.description.as_deref(), Some("A fully configured agent"));
+    assert_eq!(agent.system_prompt.as_deref(), Some("You are a specialized agent"));
     assert_eq!(agent.role.as_deref(), Some("researcher"));
     assert_eq!(agent.tool.as_deref(), Some("claude"));
     assert_eq!(agent.model.as_deref(), Some("claude-sonnet-4-6"));
-    assert_eq!(agent.fallback_models, vec!["claude-haiku-4-5"]);
+    assert_eq!(agent.fallback_models.clone().unwrap_or_default(), vec!["claude-haiku-4-5"]);
     assert_eq!(agent.reasoning_effort.as_deref(), Some("high"));
     assert_eq!(agent.web_search, Some(true));
     assert_eq!(agent.network_access, Some(false));
     assert_eq!(agent.timeout_secs, Some(600));
     assert_eq!(agent.max_attempts, Some(3));
-    assert_eq!(agent.skills, vec!["deep-search", "code-analysis"]);
-    assert_eq!(agent.capabilities.get("code_execution"), Some(&true));
-    assert_eq!(agent.capabilities.get("file_write"), Some(&false));
-    assert_eq!(agent.tool_policy.allow, vec!["Read", "Grep"]);
-    assert_eq!(agent.tool_policy.deny, vec!["Write"]);
+    assert_eq!(agent.skills.clone().unwrap_or_default(), vec!["deep-search", "code-analysis"]);
+    assert_eq!(agent.capabilities.clone().unwrap_or_default().get("code_execution"), Some(&true));
+    assert_eq!(agent.capabilities.clone().unwrap_or_default().get("file_write"), Some(&false));
+    assert_eq!(agent.tool_policy.clone().unwrap_or_default().allow, vec!["Read", "Grep"]);
+    assert_eq!(agent.tool_policy.clone().unwrap_or_default().deny, vec!["Write"]);
 }
 
 #[test]
@@ -2331,11 +2334,11 @@ workflows:
     let config = result.expect("should have config");
 
     let implementer = config.agent_profiles.get("implementer").expect("implementer agent");
-    assert_eq!(implementer.system_prompt, "You are the implementer.");
+    assert_eq!(implementer.system_prompt.as_deref(), Some("You are the implementer."));
     assert!(implementer.system_prompt_file.is_none());
 
     let researcher = config.agent_profiles.get("researcher").expect("researcher agent");
-    assert_eq!(researcher.system_prompt, researcher_prompt);
+    assert_eq!(researcher.system_prompt.as_deref(), Some(researcher_prompt));
     assert!(researcher.system_prompt_file.is_none(), "field should be consumed at compile time");
 }
 
@@ -2541,11 +2544,11 @@ mcp_servers:
 
 #[test]
 fn validation_rejects_agent_reference_to_unknown_mcp_server() {
-    use crate::agent_runtime_config::AgentProfile;
+    use crate::agent_runtime_config::AgentProfileOverlay;
 
     let mut config = builtin_workflow_config();
-    let mut profile = AgentProfile::default();
-    profile.mcp_servers = vec!["does-not-exist".to_string()];
+    let mut profile = AgentProfileOverlay::default();
+    profile.mcp_servers = Some(vec!["does-not-exist".to_string()]);
     config.agent_profiles.insert("rogue".to_string(), profile);
 
     let err = validate_workflow_config(&config).expect_err("unknown server reference should fail");
@@ -3101,6 +3104,62 @@ default_workflow_ref: ${secret.api}
     assert!(!display.contains("zzz-leak-zzz"), "resolved secret leaked into diagnostics: {display}");
     let debug = format!("{:#?}", err);
     assert!(!debug.contains("zzz-leak-zzz"), "resolved secret leaked into diagnostics: {debug}");
+}
+
+#[test]
+fn yaml_parse_error_message_redacts_secret_resolved_into_typed_field() {
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
+    // A secret resolved into an int-typed position makes serde_yaml quote the
+    // offending scalar in its own error message ("invalid type: string ...").
+    // The surfaced error must name the secret instead of echoing its value.
+    let _v = EnvVarGuard::set("ANIMUS_TEST_TYPED_SECRET", "zzz-typed-leak-zzz");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
+    let yaml = r#"
+secrets:
+  api_token:
+    env: ANIMUS_TEST_TYPED_SECRET
+daemon:
+  pool_size: ${secret.api_token}
+"#;
+    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
+
+    let err = compile_yaml_workflow_files(temp.path()).expect_err("compile should fail");
+    let display = format!("{:#}", err);
+    assert!(!display.contains("zzz-typed-leak-zzz"), "resolved secret leaked into diagnostics: {display}");
+    assert!(display.contains("[redacted:api_token]"), "redaction marker should name the secret: {display}");
+    let debug = format!("{:#?}", err);
+    assert!(!debug.contains("zzz-typed-leak-zzz"), "resolved secret leaked into diagnostics: {debug}");
+}
+
+#[test]
+fn yaml_parse_error_message_redacts_escaped_secret_rendering() {
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
+    // serde quotes offending scalars with `{:?}` escaping, so a secret
+    // containing backslashes or quotes appears in the message in escaped
+    // form; the redactor must catch that rendering too.
+    let secret_value = r#"zzz\esc"leak-zzz"#;
+    let _v = EnvVarGuard::set("ANIMUS_TEST_ESCAPED_SECRET", secret_value);
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
+    let yaml = r#"
+secrets:
+  api_token:
+    env: ANIMUS_TEST_ESCAPED_SECRET
+daemon:
+  pool_size: ${secret.api_token}
+"#;
+    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
+
+    let err = compile_yaml_workflow_files(temp.path()).expect_err("compile should fail");
+    let display = format!("{:#}", err);
+    assert!(!display.contains(secret_value), "raw secret leaked into diagnostics: {display}");
+    assert!(!display.contains(r#"zzz\\esc\"leak-zzz"#), "escaped secret leaked into diagnostics: {display}");
+    assert!(display.contains("[redacted:api_token]"), "redaction marker should name the secret: {display}");
 }
 
 #[test]
@@ -3697,10 +3756,10 @@ fn seed_implementation_phase(config: &mut WorkflowConfig) {
 
 #[test]
 fn validation_rejects_pass_threshold_outside_unit_range() {
-    use crate::agent_runtime_config::{AgentProfile, EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
+    use crate::agent_runtime_config::{AgentProfileOverlay, EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
 
     let mut config = builtin_workflow_config();
-    config.agent_profiles.insert("default".to_string(), AgentProfile::default());
+    config.agent_profiles.insert("default".to_string(), AgentProfileOverlay::default());
     seed_implementation_phase(&mut config);
     let phase = config.phase_definitions.get_mut("implementation").expect("phase exists");
     phase.evals = Some(EvalsConfig {
@@ -3779,10 +3838,10 @@ fn validation_rejects_rework_on_fail_with_zero_budget() {
 
 #[test]
 fn validation_rejects_llm_judge_with_timeout_secs() {
-    use crate::agent_runtime_config::{AgentProfile, EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
+    use crate::agent_runtime_config::{AgentProfileOverlay, EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
 
     let mut config = builtin_workflow_config();
-    config.agent_profiles.insert("po-reviewer".to_string(), AgentProfile::default());
+    config.agent_profiles.insert("po-reviewer".to_string(), AgentProfileOverlay::default());
     seed_implementation_phase(&mut config);
     let phase = config.phase_definitions.get_mut("implementation").expect("phase exists");
     phase.evals = Some(EvalsConfig {

@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::yaml_diagnostic::closest_match;
 
 use crate::agent_runtime_config::{
-    default_eval_expected_exit, default_eval_pass_threshold, AgentProfile, EvalKind, EvalOnFail, Idempotency,
+    default_eval_expected_exit, default_eval_pass_threshold, AgentProfileOverlay, EvalKind, EvalOnFail, Idempotency,
     PhaseExecutionMode,
 };
 
@@ -404,7 +404,7 @@ pub(super) struct YamlWorkflowFile {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) phases: BTreeMap<String, YamlPhaseDefinition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub(super) agents: BTreeMap<String, AgentProfile>,
+    pub(super) agents: BTreeMap<String, AgentProfileOverlay>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) agent_channels: BTreeMap<String, AgentChannelConfig>,
     /// Top-level model registry. Agents reference entries by name in their

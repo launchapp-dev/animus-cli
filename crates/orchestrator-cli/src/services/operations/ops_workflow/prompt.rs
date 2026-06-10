@@ -385,7 +385,7 @@ mod tests {
         let mut workflow_config = builtin_workflow_config();
         let default_agent =
             builtin_agent_runtime_config().agent_profile("default").expect("default agent profile").clone();
-        workflow_config.agent_profiles.insert("default".to_string(), default_agent);
+        workflow_config.agent_profiles.insert("default".to_string(), default_agent.into());
         let phase = workflow_config.phase_definitions.entry("implementation".to_string()).or_insert(
             orchestrator_core::PhaseExecutionDefinition {
                 mode: orchestrator_core::PhaseExecutionMode::Agent,

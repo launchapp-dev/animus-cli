@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent_runtime_config::AgentProfile;
+use crate::agent_runtime_config::AgentProfileOverlay;
 use crate::PhaseExecutionDefinition;
 
 pub const WORKFLOW_CONFIG_SCHEMA_ID: &str = "animus.workflow-config.v2";
@@ -871,7 +871,7 @@ pub struct WorkflowConfig {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub phase_definitions: BTreeMap<String, PhaseExecutionDefinition>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub agent_profiles: BTreeMap<String, AgentProfile>,
+    pub agent_profiles: BTreeMap<String, AgentProfileOverlay>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agent_channels: BTreeMap<String, AgentChannelConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -535,7 +535,14 @@ impl ControlClient {
             if method_name == "subscription/closed" {
                 let reason =
                     frame.get("params").and_then(|p| p.get("reason")).and_then(|r| r.as_str()).unwrap_or("unknown");
-                if reason != "workflow_completed" && reason != "workflow_failed" {
+                // The daemon's terminal close sends
+                // "workflow <id> ended (workflow_completed|workflow_failed)";
+                // the bare-kind forms are kept for compatibility.
+                let terminal_close = reason == "workflow_completed"
+                    || reason == "workflow_failed"
+                    || reason.ends_with("ended (workflow_completed)")
+                    || reason.ends_with("ended (workflow_failed)");
+                if !terminal_close {
                     eprintln!("animus: workflow event subscription closed by daemon (reason: {reason})");
                 }
                 break;

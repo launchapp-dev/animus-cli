@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use std::collections::BTreeMap;
 
 use super::builtins::builtin_workflow_config;
-use super::env_interp::{interpolate_env, interpolate_env_and_secrets, lint_sensitive_interpolations};
+use super::env_interp::{interpolate_env, interpolate_env_and_secrets_collecting, lint_sensitive_interpolations};
 use super::types::*;
 use super::yaml_parser::{
     parse_yaml_workflow_config_confined_to_pack, parse_yaml_workflow_config_with_base_source_and_original,
@@ -112,18 +112,25 @@ fn compile_yaml_sources_with_base_inner(
         for (key, value) in extract_declared_secrets(&substituted) {
             declared_secrets.insert(key, value);
         }
-        let resolved = interpolate_env_and_secrets(content, &source_label, &declared_secrets)
-            .with_context(|| format!("secret interpolation failed for {}", source_label))?;
+        let (resolved, resolved_secrets) =
+            interpolate_env_and_secrets_collecting(content, &source_label, &declared_secrets)
+                .with_context(|| format!("secret interpolation failed for {}", source_label))?;
         let parsed = match pack_root {
-            Some(root) => {
-                parse_yaml_workflow_config_confined_to_pack(&resolved, overlay_base, path.as_path(), root, content)
-                    .with_context(|| format!("error in pack YAML file {}", source_label))?
-            }
+            Some(root) => parse_yaml_workflow_config_confined_to_pack(
+                &resolved,
+                overlay_base,
+                path.as_path(),
+                root,
+                content,
+                &resolved_secrets,
+            )
+            .with_context(|| format!("error in pack YAML file {}", source_label))?,
             None => parse_yaml_workflow_config_with_base_source_and_original(
                 &resolved,
                 overlay_base,
                 Some(path.as_path()),
                 content,
+                &resolved_secrets,
             )
             .with_context(|| format!("error in YAML file {}", source_label))?,
         };
@@ -164,7 +171,12 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
 
     let mut agent_profiles = base.agent_profiles;
     for (key, value) in yaml.agent_profiles {
-        agent_profiles.insert(key, value);
+        match agent_profiles.get_mut(&key) {
+            Some(existing) => existing.merge_from(&value),
+            None => {
+                agent_profiles.insert(key, value);
+            }
+        }
     }
 
     let mut agent_channels = base.agent_channels;

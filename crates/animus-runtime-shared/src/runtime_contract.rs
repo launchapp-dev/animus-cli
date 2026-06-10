@@ -385,7 +385,7 @@ pub fn inject_agent_tool_policy(runtime_contract: &mut Value, ctx: &RuntimeConfi
 
     let rt_profile = agent_id.as_deref().and_then(|id| ctx.agent_runtime_config.agent_profile(id));
 
-    let policy = wf_profile.map(|p| &p.tool_policy).or_else(|| rt_profile.map(|p| &p.tool_policy));
+    let policy = wf_profile.and_then(|p| p.tool_policy.as_ref()).or_else(|| rt_profile.map(|p| &p.tool_policy));
 
     let Some(policy) = policy else {
         return;
@@ -501,12 +501,11 @@ pub fn inject_workflow_mcp_servers_with_project_root(
         return;
     }
     let agent_id = ctx.phase_agent_id(phase_id);
-    let workflow_profile_servers: Vec<String> = agent_id
+    let workflow_profile_servers: Option<Vec<String>> = agent_id
         .as_deref()
         .and_then(|id| ctx.workflow_config.config.agent_profiles.get(id))
-        .map(|profile| profile.mcp_servers.clone())
-        .unwrap_or_default();
-    let runtime_profile_servers: Vec<String> = if workflow_profile_servers.is_empty() {
+        .and_then(|profile| profile.mcp_servers.clone());
+    let runtime_profile_servers: Vec<String> = if workflow_profile_servers.is_none() {
         agent_id
             .as_deref()
             .and_then(|id| ctx.agent_runtime_config.agent_profile(id))
@@ -516,6 +515,11 @@ pub fn inject_workflow_mcp_servers_with_project_root(
     } else {
         Vec::new()
     };
+    // An explicitly declared workflow profile scope restricts injection even
+    // when it is empty (`mcp_servers: []` means "no servers"); only a fully
+    // undeclared scope falls through to "all configured servers".
+    let scope_is_restrictive = workflow_profile_servers.is_some();
+    let workflow_profile_servers = workflow_profile_servers.unwrap_or_default();
     let phase_servers = ctx.phase_mcp_servers(phase_id);
 
     let mut allowed_servers = std::collections::BTreeSet::new();
@@ -531,7 +535,7 @@ pub fn inject_workflow_mcp_servers_with_project_root(
     let mut servers = existing;
 
     for (name, definition) in &ctx.workflow_config.config.mcp_servers {
-        if !allowed_servers.is_empty() && !allowed_servers.contains(name) {
+        if (scope_is_restrictive || !allowed_servers.is_empty()) && !allowed_servers.contains(name) {
             continue;
         }
         let entry_json = build_additional_mcp_server_entry(name, definition, project_root);

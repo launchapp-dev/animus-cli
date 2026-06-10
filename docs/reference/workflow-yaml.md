@@ -315,6 +315,12 @@ agents:
 
 Agent profiles defined in YAML are merged into the agent runtime config during compilation. Phase definitions reference agents by profile name.
 
+The merge is presence-aware per field: a field you write in YAML always wins
+over the base profile (builtin defaults or pack overlays), even when you set
+it back to its default value — `memory: { enabled: false }`, `mcp_servers: []`,
+or `skills: []` explicitly disable what a pack enabled. A field you omit
+inherits the base profile's value.
+
 When prompts get large, prefer `system_prompt_file` over embedding long prose
 directly in YAML. Relative paths resolve from the source YAML file's parent
 directory, absolute paths are allowed for project YAML, and the file contents

@@ -438,6 +438,19 @@ pub fn interpolate_env_and_secrets(
     interpolate_env_and_secrets_with(content, source_label, secrets, lookup_env_then_secret_store)
 }
 
+/// Like [`interpolate_env_and_secrets`], but also returns the map of secret
+/// name → resolved value for every `${secret.<name>}` reference that was
+/// substituted (ordinary `${VAR}` env interpolations are not collected).
+/// Callers use the map to redact resolved secret values from any
+/// user-visible diagnostics built from the substituted content.
+pub(crate) fn interpolate_env_and_secrets_collecting(
+    content: &str,
+    source_label: &str,
+    secrets: &BTreeMap<String, SecretRef>,
+) -> Result<(String, BTreeMap<String, String>)> {
+    interpolate_env_and_secrets_with_resolutions(content, source_label, secrets, lookup_env_then_secret_store)
+}
+
 pub(crate) fn interpolate_env_and_secrets_with<F>(
     content: &str,
     source_label: &str,
@@ -447,6 +460,19 @@ pub(crate) fn interpolate_env_and_secrets_with<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
+    interpolate_env_and_secrets_with_resolutions(content, source_label, secrets, resolver).map(|(out, _)| out)
+}
+
+fn interpolate_env_and_secrets_with_resolutions<F>(
+    content: &str,
+    source_label: &str,
+    secrets: &BTreeMap<String, SecretRef>,
+    resolver: F,
+) -> Result<(String, BTreeMap<String, String>)>
+where
+    F: Fn(&str) -> Option<String>,
+{
+    let mut resolutions: BTreeMap<String, String> = BTreeMap::new();
     let bytes = content.as_bytes();
     let mut out = String::with_capacity(content.len());
     let mut i = 0usize;
@@ -482,9 +508,12 @@ where
             };
             let body = &content[body_start..body_start + close_off];
             let resolved = if is_secret_reference(body) {
-                resolve_secret_reference(body, source_label, secrets, &resolver, || {
+                let value = resolve_secret_reference(body, source_label, secrets, &resolver, || {
                     line_number_for_offset(content, start)
-                })?
+                })?;
+                let key = body.trim().strip_prefix(SECRET_PREFIX).unwrap_or("").trim();
+                resolutions.insert(key.to_string(), value.clone());
+                value
             } else {
                 resolve_reference(body, source_label, &resolver, || line_number_for_offset(content, start))?
             };
@@ -500,7 +529,7 @@ where
     }
 
     out.push_str(&content[copy_from..]);
-    Ok(out)
+    Ok((out, resolutions))
 }
 
 /// Scan raw YAML for `${VAR}` references whose env-var name matches a
