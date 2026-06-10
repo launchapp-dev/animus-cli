@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use orchestrator_config::workflow_config::{
-    load_workflow_config_or_default, load_workflow_config_with_metadata, McpServerDefinition, OauthFlow,
+    load_workflow_config_or_default, load_workflow_config_with_metadata, OauthConfig, OauthFlow,
 };
 use orchestrator_core::secret_store::KeyringSecretStore;
 use orchestrator_core::SecretStore;
@@ -42,6 +42,12 @@ pub struct ServerResolution {
     /// True when the resolved server's oauth block is an
     /// `authorization_code` flow (vs absent / a machine-to-machine flow).
     pub is_authorization_code: bool,
+    /// The full oauth block when the resolved server uses a
+    /// machine-to-machine flow (`manual_bearer` / `client_credentials` /
+    /// `refresh_token`). Those servers are served by the proxy's
+    /// broker-backed bearer source rather than the keychain
+    /// `AuthorizationManager`; `None` for `authorization_code` or no oauth.
+    pub broker_oauth: Option<OauthConfig>,
 }
 
 /// Build a keychain-backed [`SecretStore`] for `project_root`, mirroring the
@@ -110,20 +116,15 @@ pub fn resolve_server_url(
         Err(_) => load_workflow_config_or_default(project_root),
     };
     if let Some(def) = loaded.config.mcp_servers.get(server) {
-        return finalize(server, url_override, def.url.clone(), authorization_code_fields(def));
+        return finalize(server, url_override, def.url.clone(), def.oauth.clone());
     }
 
     // Project config mcp_servers next.
     let project_config = protocol::Config::load_or_default(&project_root.display().to_string())
         .map_err(|err| ServerResolutionError::ProjectConfig(err.to_string()))?;
     if let Some(entry) = project_config.mcp_servers.get(server) {
-        let oauth_fields = entry.oauth.as_ref().and_then(|value| {
-            serde_json::from_value::<orchestrator_config::OauthConfig>(value.clone())
-                .ok()
-                .filter(|cfg| cfg.flow == OauthFlow::AuthorizationCode)
-                .map(|cfg| (cfg.scopes, cfg.client_id))
-        });
-        return finalize(server, url_override, entry.url.clone(), oauth_fields);
+        let oauth = entry.oauth.as_ref().and_then(|value| serde_json::from_value::<OauthConfig>(value.clone()).ok());
+        return finalize(server, url_override, entry.url.clone(), oauth);
     }
 
     // Not in config: only proceed if the user passed an explicit URL.
@@ -133,6 +134,7 @@ pub fn resolve_server_url(
             scopes: Vec::new(),
             client_id: None,
             is_authorization_code: true,
+            broker_oauth: None,
         }),
         None => Err(ServerResolutionError::UnknownServer(server.to_string())),
     }
@@ -153,25 +155,37 @@ fn workflow_yaml_present(project_root: &Path) -> bool {
         .unwrap_or(false)
 }
 
-type AuthCodeFields = (Vec<String>, Option<String>);
-
-fn authorization_code_fields(def: &McpServerDefinition) -> Option<AuthCodeFields> {
-    def.oauth
-        .as_ref()
-        .filter(|cfg| cfg.flow == OauthFlow::AuthorizationCode)
-        .map(|cfg| (cfg.scopes.clone(), cfg.client_id.clone()))
-}
-
 fn finalize(
     server: &str,
     url_override: Option<&str>,
     config_url: Option<String>,
-    oauth_fields: Option<AuthCodeFields>,
+    oauth: Option<OauthConfig>,
 ) -> Result<ServerResolution, ServerResolutionError> {
     let url = url_override
         .map(str::to_string)
         .or(config_url)
         .ok_or_else(|| ServerResolutionError::MissingUrl(server.to_string()))?;
-    let (scopes, client_id) = oauth_fields.clone().unwrap_or_default();
-    Ok(ServerResolution { url, scopes, client_id, is_authorization_code: oauth_fields.is_some() })
+    match oauth {
+        Some(cfg) if cfg.flow == OauthFlow::AuthorizationCode => Ok(ServerResolution {
+            url,
+            scopes: cfg.scopes,
+            client_id: cfg.client_id,
+            is_authorization_code: true,
+            broker_oauth: None,
+        }),
+        Some(cfg) => Ok(ServerResolution {
+            url,
+            scopes: Vec::new(),
+            client_id: None,
+            is_authorization_code: false,
+            broker_oauth: Some(cfg),
+        }),
+        None => Ok(ServerResolution {
+            url,
+            scopes: Vec::new(),
+            client_id: None,
+            is_authorization_code: false,
+            broker_oauth: None,
+        }),
+    }
 }

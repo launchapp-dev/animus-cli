@@ -481,14 +481,13 @@ pub fn inject_project_mcp_servers(
 }
 
 /// Back-compat entry point for out-of-tree `workflow_runner` plugins
-/// that pin an older `animus-runtime-shared`. The v0.5.5 OAuth broker
-/// needs a project root to place the token cache, but plugins that
-/// haven't migrated yet still call this three-argument form. The
-/// three-arg path skips OAuth resolution entirely (a token cache under
-/// an empty path would be unusable anyway). Migrating plugins should
-/// call `inject_workflow_mcp_servers_with_project_root` so HTTP MCP
-/// servers with an `oauth:` block actually receive the
-/// `Authorization: Bearer <token>` header.
+/// that pin an older `animus-runtime-shared`. The `animus-mcp-proxy`
+/// rewrite needs a project root so the proxy can resolve the server's
+/// credentials, but plugins that haven't migrated yet still call this
+/// three-argument form (the proxy entry then carries an empty
+/// `--project-root`). Migrating plugins should call
+/// `inject_workflow_mcp_servers_with_project_root` so HTTP MCP servers
+/// with an `oauth:` block get a working proxy entry.
 pub fn inject_workflow_mcp_servers(runtime_contract: &mut Value, ctx: &RuntimeConfigContext, phase_id: &str) {
     inject_workflow_mcp_servers_with_project_root(runtime_contract, ctx, phase_id, "");
 }
@@ -593,11 +592,14 @@ fn mcp_proxy_command() -> String {
     MCP_PROXY_BIN.to_string()
 }
 
-/// Rewrite an `authorization_code` MCP server entry to launch the local
+/// Rewrite an OAuth-protected MCP server entry to launch the local
 /// `animus-mcp-proxy` over stdio instead of pointing the agent at the
-/// upstream HTTP URL. The proxy reads the live keychain token, injects the
-/// bearer, and refreshes on expiry/401 — so the agent connects to a local
-/// auth-free endpoint. Returns the rewritten entry.
+/// upstream HTTP URL. The proxy resolves the live credential itself at
+/// connect time — the keychain token for `authorization_code`, the broker
+/// (`manual_bearer` / `client_credentials` / `refresh_token`) otherwise —
+/// injects the bearer, and refreshes on expiry/401, so the agent connects to
+/// a local auth-free endpoint and the resolved secret never appears in the
+/// contract, in `.mcp.json`, or on any argv. Returns the rewritten entry.
 ///
 /// The selected definition's `url` is passed as `--url` so the proxy binds to
 /// exactly the upstream the contract selected, rather than re-resolving the
@@ -623,22 +625,17 @@ fn build_oauth_proxy_entry(
     })
 }
 
-/// Shape a single MCP server entry for `/mcp/additional_servers`. Resolves
-/// the OAuth bearer token (if configured) and adds a `headers` map carrying
-/// `Authorization: Bearer <token>`. OAuth resolution failures are logged
-/// and the entry is emitted WITHOUT the bearer header — the downstream MCP
-/// call will surface the auth error to the user instead of the kernel
-/// silently dropping the server. (Tokens themselves are never logged.)
-///
-/// The `authorization_code` flow is the exception: instead of injecting a
-/// header, the agent's entry is repointed at the local `animus-mcp-proxy`
-/// stdio bridge.
+/// Shape a single MCP server entry for `/mcp/additional_servers`. Any entry
+/// with an `oauth:` block — regardless of flow — is repointed at the local
+/// `animus-mcp-proxy` stdio bridge, which resolves the live credential at
+/// connect time. No resolved bearer token ever rides the contract, so the
+/// `.mcp.json` / wire channels can carry the same entry verbatim.
 fn build_additional_mcp_server_entry(
     name: &str,
     definition: &orchestrator_config::McpServerDefinition,
     project_root: &str,
 ) -> Value {
-    if definition.oauth.as_ref().is_some_and(|o| o.flow == orchestrator_config::OauthFlow::AuthorizationCode) {
+    if definition.oauth.is_some() {
         return build_oauth_proxy_entry(name, definition.url.as_deref(), &definition.env, project_root);
     }
     let mut entry_json = serde_json::json!({
@@ -652,23 +649,6 @@ fn build_additional_mcp_server_entry(
     if let Some(url) = &definition.url {
         entry_json["url"] = serde_json::Value::String(url.clone());
     }
-    if let Some(oauth) = definition.oauth.as_ref() {
-        match crate::oauth_broker::resolve_token_for_project(name, oauth, project_root) {
-            Ok(token) => {
-                let map = crate::oauth_broker::header_map_for_token(&token);
-                let mut headers = entry_json.get("headers").and_then(Value::as_object).cloned().unwrap_or_default();
-                for (k, v) in map {
-                    headers.insert(k, Value::String(v));
-                }
-                entry_json["headers"] = Value::Object(headers);
-            }
-            Err(err) => {
-                // Token text is never embedded in the message: `err`
-                // surfaces the env-var name and endpoint URL only.
-                warn!(server = name, error = %err, "OAuth resolution failed; emitting MCP entry without bearer header");
-            }
-        }
-    }
     entry_json
 }
 
@@ -678,9 +658,16 @@ fn build_project_mcp_server_entry(
     project_root: &str,
 ) -> Value {
     if let Some(oauth_value) = definition.oauth.as_ref() {
-        if let Ok(oauth) = serde_json::from_value::<orchestrator_config::OauthConfig>(oauth_value.clone()) {
-            if oauth.flow == orchestrator_config::OauthFlow::AuthorizationCode {
+        match serde_json::from_value::<orchestrator_config::OauthConfig>(oauth_value.clone()) {
+            Ok(_) => {
                 return build_oauth_proxy_entry(name, definition.url.as_deref(), &definition.env, project_root);
+            }
+            Err(err) => {
+                warn!(
+                    server = name,
+                    error = %err,
+                    "malformed `oauth` block in project mcp_servers entry; emitting MCP entry without auth"
+                );
             }
         }
     }
@@ -694,30 +681,6 @@ fn build_project_mcp_server_entry(
     }
     if let Some(url) = &definition.url {
         entry_json["url"] = serde_json::Value::String(url.clone());
-    }
-    if let Some(oauth_value) = definition.oauth.as_ref() {
-        match serde_json::from_value::<orchestrator_config::OauthConfig>(oauth_value.clone()) {
-            Ok(oauth) => match crate::oauth_broker::resolve_token_for_project(name, &oauth, project_root) {
-                Ok(token) => {
-                    let map = crate::oauth_broker::header_map_for_token(&token);
-                    let mut headers = entry_json.get("headers").and_then(Value::as_object).cloned().unwrap_or_default();
-                    for (k, v) in map {
-                        headers.insert(k, Value::String(v));
-                    }
-                    entry_json["headers"] = Value::Object(headers);
-                }
-                Err(err) => {
-                    warn!(server = name, error = %err, "OAuth resolution failed; emitting MCP entry without bearer header");
-                }
-            },
-            Err(err) => {
-                warn!(
-                    server = name,
-                    error = %err,
-                    "malformed `oauth` block in project mcp_servers entry; emitting MCP entry without bearer header"
-                );
-            }
-        }
     }
     entry_json
 }
@@ -1552,19 +1515,13 @@ mod tests {
     }
 
     #[test]
-    fn inject_workflow_mcp_servers_attaches_oauth_bearer_header() {
+    fn inject_workflow_mcp_servers_rewrites_manual_bearer_to_stdio_proxy() {
         use orchestrator_config::workflow_config::{OauthConfig, OauthFlow};
 
-        // Use the manual_bearer flow so this test stays hermetic (no
-        // network, no real token endpoint). The runtime-contract path
-        // calls `resolve_token_for_project` which reads the env var and
-        // emits the Authorization header. Token text never appears in
-        // logs (verified by the test assertion that the entry value is
-        // exactly "Bearer <token>"; structured logs in the production
-        // path emit `error = %err` only on failure).
-        let _lock = crate::test_env::scoped_state_serializer();
-        let _home = crate::test_env::stable_test_home();
-
+        // A manual_bearer server is repointed at the local
+        // `animus-mcp-proxy` (which reads the bearer env var itself at
+        // connect time) instead of receiving a resolved Authorization
+        // header — the token must never appear anywhere in the contract.
         let bearer_env_name = "ANIMUS_TEST_BEARER_HEADER_INJECT";
         std::env::set_var(bearer_env_name, "tok-xyz");
 
@@ -1623,13 +1580,104 @@ mod tests {
         let entry = runtime_contract
             .pointer("/mcp/additional_servers/robinhood-trading")
             .expect("robinhood server should be injected");
-        let header = entry
-            .pointer("/headers/Authorization")
-            .and_then(Value::as_str)
-            .expect("Authorization header should be present");
-        assert_eq!(header, "Bearer tok-xyz");
-
         std::env::remove_var(bearer_env_name);
+        assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("stdio"));
+        assert!(entry.get("url").is_none(), "proxy entry must not carry the upstream url");
+        assert!(entry.get("headers").is_none(), "manual_bearer must not inject a resolved header");
+        let command = entry.pointer("/command").and_then(Value::as_str).expect("proxy command");
+        assert!(command.contains("animus-mcp-proxy"), "command should be the proxy binary, got {command}");
+        let args: Vec<&str> = entry
+            .pointer("/args")
+            .and_then(Value::as_array)
+            .expect("args set")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "--server",
+                "robinhood-trading",
+                "--project-root",
+                "/tmp/animus-oauth-runtime-test",
+                "--url",
+                "https://agent.robinhood.com/mcp/trading"
+            ]
+        );
+        let serialized = serde_json::to_string(&runtime_contract).unwrap();
+        assert!(
+            !serialized.contains("tok-xyz"),
+            "the resolved bearer token must never ride the contract: {serialized}"
+        );
+    }
+
+    #[test]
+    fn client_credentials_flow_rewrites_entry_to_stdio_proxy() {
+        // client_credentials servers are proxied exactly like
+        // authorization_code: no token-endpoint call happens at contract
+        // assembly and no client secret can appear in the entry.
+        use orchestrator_config::workflow_config::{OauthConfig, OauthFlow};
+        let definition = McpServerDefinition {
+            command: String::new(),
+            args: Vec::new(),
+            transport: Some("http".to_string()),
+            url: Some("https://api.example.com/mcp".to_string()),
+            config: BTreeMap::new(),
+            tools: Vec::new(),
+            env: BTreeMap::new(),
+            oauth: Some(OauthConfig {
+                flow: OauthFlow::ClientCredentials,
+                token_url: Some("https://auth.example.com/token".to_string()),
+                client_id_env: Some("CC_CLIENT_ID".to_string()),
+                client_secret_env: Some("CC_CLIENT_SECRET".to_string()),
+                refresh_token_env: None,
+                bearer_env: None,
+                scopes: vec!["read".to_string()],
+                audience: None,
+                cache: true,
+                client_id: None,
+            }),
+        };
+
+        let entry = build_additional_mcp_server_entry("cc-api", &definition, "/tmp/proj-cc");
+
+        assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("stdio"));
+        assert!(entry.get("url").is_none(), "proxy entry must not carry the upstream url");
+        assert!(entry.get("headers").is_none(), "client_credentials must not inject a resolved header");
+        let command = entry.pointer("/command").and_then(Value::as_str).expect("proxy command");
+        assert!(command.contains("animus-mcp-proxy"), "command should be the proxy binary, got {command}");
+        let args: Vec<&str> = entry
+            .pointer("/args")
+            .and_then(Value::as_array)
+            .expect("args set")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            args,
+            vec!["--server", "cc-api", "--project-root", "/tmp/proj-cc", "--url", "https://api.example.com/mcp"]
+        );
+    }
+
+    #[test]
+    fn project_manual_bearer_flow_rewrites_entry_to_stdio_proxy() {
+        let definition = protocol::ProjectMcpServerEntry {
+            command: String::new(),
+            args: vec![],
+            env: BTreeMap::new(),
+            assign_to: vec![],
+            transport: Some("http".to_string()),
+            url: Some("https://trading.example.com/mcp".to_string()),
+            oauth: Some(serde_json::json!({ "flow": "manual_bearer", "bearer_env": "TRADING_TOKEN" })),
+        };
+
+        let entry = build_project_mcp_server_entry("trading", &definition, "/tmp/proj-mb");
+
+        assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("stdio"));
+        assert!(entry.get("url").is_none());
+        assert!(entry.get("headers").is_none(), "manual_bearer must not inject a resolved header");
+        let command = entry.pointer("/command").and_then(Value::as_str).expect("proxy command");
+        assert!(command.contains("animus-mcp-proxy"), "command should be the proxy binary, got {command}");
     }
 
     #[test]
