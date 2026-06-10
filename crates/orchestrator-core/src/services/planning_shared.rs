@@ -506,6 +506,13 @@ fn unsatisfied_blocked_dependencies(lock: &CoreState, task: &OrchestratorTask) -
     issues
 }
 
+fn workflow_blocks_new_dispatch(workflow: &OrchestratorWorkflow) -> bool {
+    matches!(
+        workflow.status,
+        crate::WorkflowStatus::Running | crate::WorkflowStatus::Pending | crate::WorkflowStatus::Paused
+    ) && workflow.machine_state != crate::types::WorkflowMachineState::MergeConflict
+}
+
 pub(super) fn execute_requirements_and_record(
     lock: &mut CoreState,
     input: RequirementsExecutionInput,
@@ -646,6 +653,7 @@ Run `animus subject update --kind requirement ...` (or upsert explicit constrain
                         updated_by: "requirement-review-loop-ai".to_string(),
                         started_at: None,
                         completed_at: None,
+                        status_changed_at: None,
                         version: 1,
                     },
                     deadline: None,
@@ -676,6 +684,20 @@ Run `animus subject update --kind requirement ...` (or upsert explicit constrain
 
     let mut workflow_ids_started = Vec::new();
     if input.start_workflows {
+        let mut active_workflow_task_ids: std::collections::HashSet<String> = lock
+            .workflows
+            .values()
+            .filter(|workflow| workflow_blocks_new_dispatch(workflow))
+            .map(|workflow| workflow.task_id.clone())
+            .collect();
+        if let Some(manager) = workflow_manager {
+            for workflow in manager.list_active()? {
+                if workflow_blocks_new_dispatch(&workflow) {
+                    active_workflow_task_ids.insert(workflow.task_id.clone());
+                }
+            }
+        }
+
         for task_id in requirement_to_tasks.values().flatten() {
             let dependency_issues = {
                 let Some(task) = lock.tasks.get(task_id) else {
@@ -696,15 +718,7 @@ Run `animus subject update --kind requirement ...` (or upsert explicit constrain
                 continue;
             }
 
-            let has_active_workflow = lock.workflows.values().any(|workflow| {
-                workflow.task_id == *task_id
-                    && matches!(
-                        workflow.status,
-                        crate::WorkflowStatus::Running | crate::WorkflowStatus::Pending | crate::WorkflowStatus::Paused
-                    )
-                    && workflow.machine_state != crate::types::WorkflowMachineState::MergeConflict
-            });
-            if has_active_workflow {
+            if active_workflow_task_ids.contains(task_id) {
                 continue;
             }
 
@@ -733,6 +747,7 @@ Run `animus subject update --kind requirement ...` (or upsert explicit constrain
             } else {
                 lock.workflows.insert(workflow_id.clone(), workflow);
             }
+            active_workflow_task_ids.insert(task_id.clone());
             workflow_ids_started.push(workflow_id);
         }
     }

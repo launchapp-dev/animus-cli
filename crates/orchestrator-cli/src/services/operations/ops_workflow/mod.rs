@@ -448,11 +448,21 @@ pub(crate) async fn handle_workflow(
                 } else {
                     std::collections::HashMap::new()
                 };
+                let runner_overrides = phases::DetachedRunnerOverrides {
+                    model: args.model.clone(),
+                    tool: args.tool.clone(),
+                    phase_timeout_secs: args.phase_timeout_secs,
+                };
                 if json && args.input_json.is_none() && args.requirement_id.is_none() && args.title.is_none() {
                     if let Some(task_id) = args.task_id.as_ref() {
-                        if let Some(start) =
-                            try_workflow_run_via_control(project_root, task_id, workflow_ref.clone(), &parsed_vars)
-                                .await?
+                        if let Some(start) = try_workflow_run_via_control(
+                            project_root,
+                            task_id,
+                            workflow_ref.clone(),
+                            &parsed_vars,
+                            &runner_overrides,
+                        )
+                        .await?
                         {
                             return print_value(start, true);
                         }
@@ -474,10 +484,21 @@ pub(crate) async fn handle_workflow(
                         .await?
                     }
                 };
-                let workflow = workflows.run(dispatch.to_workflow_run_input()).await?;
+                // Post-v0.5 there is no in-process executor: a bare
+                // `workflows.run(...)` only bootstraps a Running record
+                // that nothing drives (the orphan reconciler then
+                // zombie-cancels it). Hand execution to a detached
+                // workflow_runner spawn instead.
+                let workflow = phases::start_workflow_with_runner(
+                    hub.clone(),
+                    project_root,
+                    dispatch.to_workflow_run_input(),
+                    runner_overrides,
+                )
+                .await?;
                 if !json {
                     eprintln!(
-                        "dispatched workflow {} (status={:?}) — tail with: ao daemon events --follow, or rerun with --sync to stream phase events",
+                        "dispatched workflow {} (status={:?}) — tail with: animus daemon events --follow, or rerun with --sync to stream phase events",
                         workflow.id, workflow.status
                     );
                 }
@@ -508,13 +529,11 @@ pub(crate) async fn handle_workflow(
                     return print_value(workflow, json);
                 }
             }
-            let outcome = dispatch_workflow_event(
-                hub.clone(),
-                project_root,
-                WorkflowEvent::Resume { workflow_id: args.id.clone(), feedback: None },
-            )
-            .await?;
-            let workflow = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
+            // Resume must hand execution back to a workflow_runner spawn:
+            // flipping the status alone leaves a Running record with no
+            // live runner, which the orphan reconciler cancels on the next
+            // tick (resumed workflows keep their original started_at).
+            let workflow = phases::resume_workflow_with_runner(hub.clone(), project_root, &args.id, None).await?;
             print_value(workflow, json)
         }
         WorkflowCommand::ResumeStatus(args) => {
@@ -757,6 +776,7 @@ async fn try_workflow_run_via_control(
     task_id: &str,
     definition: Option<String>,
     vars: &std::collections::HashMap<String, String>,
+    overrides: &phases::DetachedRunnerOverrides,
 ) -> Result<Option<animus_control_protocol::types::WorkflowRunStart>> {
     use animus_control_protocol::types::WorkflowRunRequest as WireRequest;
     use orchestrator_daemon_runtime::control::{is_method_unavailable, ControlClient};
@@ -774,6 +794,23 @@ async fn try_workflow_run_via_control(
         let vars_obj: serde_json::Map<String, serde_json::Value> =
             vars.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
         params.insert("vars".to_string(), serde_json::Value::Object(vars_obj));
+    }
+    // Same trick for --model / --tool / --phase-timeout-secs under the
+    // well-known `overrides` key so the daemon-spawned runner honors the
+    // same execution overrides as the local async path. Older daemons
+    // ignore the extra key.
+    if overrides.model.is_some() || overrides.tool.is_some() || overrides.phase_timeout_secs.is_some() {
+        let mut overrides_obj = serde_json::Map::new();
+        if let Some(model) = overrides.model.as_deref() {
+            overrides_obj.insert("model".to_string(), serde_json::Value::String(model.to_string()));
+        }
+        if let Some(tool) = overrides.tool.as_deref() {
+            overrides_obj.insert("tool".to_string(), serde_json::Value::String(tool.to_string()));
+        }
+        if let Some(timeout) = overrides.phase_timeout_secs {
+            overrides_obj.insert("phase_timeout_secs".to_string(), serde_json::Value::from(timeout));
+        }
+        params.insert("overrides".to_string(), serde_json::Value::Object(overrides_obj));
     }
     let request = WireRequest { task_id: task_id.to_string(), definition, params };
     match client.workflow_run(request).await {

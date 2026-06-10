@@ -77,6 +77,39 @@ fn daemon_events_returns_empty_when_no_events() -> Result<()> {
 }
 
 #[test]
+fn daemon_events_exits_after_printing_when_events_exist() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let event = serde_json::json!({
+        "schema": "animus.daemon.event.v1",
+        "id": "event-regression-1",
+        "seq": 1,
+        "timestamp": "2026-01-01T00:00:00Z",
+        "event_type": "queue",
+        "project_root": null,
+        "data": {},
+    });
+    std::fs::write(harness.config_root().join("daemon-events.jsonl"), format!("{event}\n"))?;
+
+    // Regression guard: `daemon events` used to default to follow mode and
+    // never exit once an events file existed. Without `--follow` it must
+    // print the batch and return promptly.
+    let output =
+        harness.run_json_output_within(&["daemon", "events", "--limit", "10"], std::time::Duration::from_secs(30))?;
+
+    assert!(
+        output.status.success(),
+        "daemon events should exit cleanly\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("event-regression-1"), "printed events should include the stored record, got: {stdout}");
+
+    Ok(())
+}
+
+#[test]
 fn workflow_config_validate_passes() -> Result<()> {
     let harness = CliHarness::new()?;
 

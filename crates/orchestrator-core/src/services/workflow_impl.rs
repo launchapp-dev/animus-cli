@@ -236,14 +236,18 @@ impl WorkflowServiceApi for InMemoryServiceHub {
     ) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
         let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
-        WorkflowLifecycleExecutor::default().mark_current_phase_success_with_decision(workflow, decision);
+        let mut updated = workflow.clone();
+        WorkflowLifecycleExecutor::default().mark_current_phase_success_with_decision(&mut updated, decision)?;
+        *workflow = updated;
         Ok(workflow.clone())
     }
 
     async fn fail_current_phase(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
         let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
-        WorkflowLifecycleExecutor::default().mark_current_phase_failed(workflow, error);
+        let mut updated = workflow.clone();
+        WorkflowLifecycleExecutor::default().mark_current_phase_failed(&mut updated, error)?;
+        *workflow = updated;
         Ok(workflow.clone())
     }
 
@@ -446,7 +450,7 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_verdict_routing_config(verdict_routing)
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
-        executor.mark_current_phase_success_with_decision(&mut workflow, decision);
+        executor.mark_current_phase_success_with_decision(&mut workflow, decision)?;
         if let Ok(subject_context) =
             self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
         {
@@ -504,7 +508,7 @@ impl WorkflowServiceApi for FileServiceHub {
             )?,
             state_machines,
         )
-        .mark_current_phase_failed(&mut workflow, error);
+        .mark_current_phase_failed(&mut workflow, error)?;
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
 

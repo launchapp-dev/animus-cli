@@ -137,16 +137,16 @@ const CATCH_UP_HORIZON_MINS: i64 = 10;
 /// Returns the most recent cron occurrence that is due at `now`, or `None`
 /// when the schedule should not fire on this tick.
 ///
-/// With a recorded `last_run` this is the latest occurrence at or before
-/// `now` that is strictly after `max(last_run, now - CATCH_UP_HORIZON_MINS)`
-/// — so an occurrence missed by a long tick or `interval_secs > 60` still
-/// fires on the next tick instead of being silently skipped. Taking the
-/// latest (not the earliest) caps catch-up at one fire total: when dispatch
-/// resumes after a gap (e.g. the `active_hours` window reopens), older
-/// occurrences inside the horizon are skipped rather than replayed one tick
-/// at a time. Without a `last_run` (first evaluation) the schedule only
-/// fires when `now` lands inside a matching minute, so a fresh daemon never
-/// replays a stale backlog.
+/// This is the latest occurrence at or before `now` that is strictly after
+/// `max(last_run, now - CATCH_UP_HORIZON_MINS)` — so an occurrence missed
+/// by a long tick or `interval_secs > 60` still fires on the next tick
+/// instead of being silently skipped. Taking the latest (not the earliest)
+/// caps catch-up at one fire total: when dispatch resumes after a gap
+/// (e.g. the `active_hours` window reopens), older occurrences inside the
+/// horizon are skipped rather than replayed one tick at a time. Without a
+/// `last_run` (first evaluation) the same horizon applies from
+/// `now - CATCH_UP_HORIZON_MINS`, so a fresh daemon catches up at most one
+/// recent occurrence and never replays a stale backlog.
 fn due_occurrence(
     expression: &str,
     last_run: Option<chrono::DateTime<chrono::Utc>>,
@@ -157,17 +157,13 @@ fn due_occurrence(
         return Ok(None);
     }
 
-    let Some(last_run) = last_run else {
-        let normalized = now
-            .with_second(0)
-            .and_then(|value| value.with_nanosecond(0))
-            .expect("utc timestamps should support zero second normalization");
-        return Ok(cron_matches(expression, now)?.then_some(normalized));
-    };
-
     let parser = CronParser::builder().seconds(Seconds::Disallowed).year(Year::Disallowed).build();
     let cron = parser.parse(expression).map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let catch_up_from = std::cmp::max(last_run, now - chrono::Duration::minutes(CATCH_UP_HORIZON_MINS));
+    let horizon_start = now - chrono::Duration::minutes(CATCH_UP_HORIZON_MINS);
+    let catch_up_from = match last_run {
+        Some(last_run) => std::cmp::max(last_run, horizon_start),
+        None => horizon_start,
+    };
     let mut due = None;
     let mut cursor = catch_up_from;
     loop {
@@ -181,6 +177,7 @@ fn due_occurrence(
     Ok(due)
 }
 
+#[cfg(test)]
 fn cron_matches(expression: &str, now: chrono::DateTime<chrono::Utc>) -> Result<bool> {
     let expression = expression.trim();
     if expression.is_empty() {
@@ -479,10 +476,44 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_schedules_first_run_requires_matching_minute() {
-        // Without any recorded last_run there is nothing to catch up from;
-        // the schedule only fires when now lands inside a matching minute.
-        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:34:00Z".parse().expect("timestamp should parse");
+    fn evaluate_schedules_first_run_catches_up_within_horizon() {
+        // A fresh schedule (no recorded last_run) whose cron minute fell
+        // between ticks must still fire when the tick lands inside the
+        // catch-up horizon — otherwise schedules with interval_secs > 60
+        // could miss every occurrence forever.
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:03:00Z".parse().expect("timestamp should parse");
+        let schedules = vec![orchestrator_core::WorkflowSchedule {
+            id: "hourly".to_string(),
+            cron: "0 * * * *".to_string(),
+            workflow_ref: Some("standard-workflow".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+        }];
+        let mut state = orchestrator_core::ScheduleState::default();
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
+        assert_eq!(due, vec![("hourly".to_string(), "2026-03-04T12:00:00Z".parse().unwrap())]);
+
+        // Recording last_run = 12:00 fully catches up: the occurrence fires
+        // once, not on every subsequent tick.
+        state.schedules.insert(
+            "hourly".to_string(),
+            orchestrator_core::ScheduleRunState {
+                last_run: Some("2026-03-04T12:00:00Z".parse().unwrap()),
+                last_status: "dispatched".to_string(),
+                run_count: 1,
+                missed_count: 0,
+            },
+        );
+        let due = evaluate_schedules(&schedules, &state, now, |_| true);
+        assert!(due.is_empty());
+    }
+
+    #[test]
+    fn evaluate_schedules_first_run_skips_occurrence_outside_horizon() {
+        // Without any recorded last_run, occurrences older than the catch-up
+        // horizon are skipped: a fresh daemon never replays a stale backlog.
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:20:00Z".parse().expect("timestamp should parse");
         let schedules = vec![orchestrator_core::WorkflowSchedule {
             id: "hourly".to_string(),
             cron: "0 * * * *".to_string(),
@@ -493,7 +524,7 @@ mod tests {
         }];
         let state = orchestrator_core::ScheduleState::default();
         let due = evaluate_schedules(&schedules, &state, now, |_| true);
-        assert!(due.is_empty());
+        assert!(due.is_empty(), "12:00 occurrence is past the horizon and must not fire at 12:20");
     }
 
     #[test]

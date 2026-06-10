@@ -125,11 +125,14 @@ animus daemon clear-logs
 
 ### Events
 
-Stream the event history to see what the daemon has been doing:
+Print recent event history to see what the daemon has been doing:
 
 ```bash
-animus daemon events
+animus daemon events --limit 50
 ```
+
+The command prints the requested batch and exits. Pass `--follow` to keep
+streaming new events until interrupted.
 
 ### Agent Visibility
 
@@ -197,7 +200,7 @@ animus runner orphans cleanup
 ```bash
 animus daemon start --autonomous
 animus daemon status
-animus daemon events
+animus daemon events --follow
 ```
 
 ### Pause While Making Manual Changes

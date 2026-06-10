@@ -60,14 +60,23 @@ fn scope_file_path(project_root: &Path) -> PathBuf {
 /// project root, falling back to [`PluginScope::unrestricted`] on
 /// load failure so a broken scope file never silently empties the list.
 pub(crate) fn load_project_scope(project_root: &Path) -> PluginScope {
-    let (flavor_plugins, flavor_present) = resolve_flavor_plugins(project_root);
-    PluginScope::load_for_project_with_flavor(project_root, &flavor_plugins, flavor_present).unwrap_or_else(|err| {
-        tracing::warn!(
-            error = %err,
-            "failed to load plugin scope; falling back to unrestricted discovery"
-        );
-        PluginScope::unrestricted()
-    })
+    let (flavor_plugins, flavor_present, flavor_error) = resolve_flavor_plugins_with_error(project_root);
+    let mut scope = PluginScope::load_for_project_with_flavor(project_root, &flavor_plugins, flavor_present)
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                error = %err,
+                "failed to load plugin scope; falling back to unrestricted discovery"
+            );
+            PluginScope::unrestricted()
+        });
+    // Carry the flavor parse failure onto the scope so
+    // `discover_with_warnings` surfaces it as a DiscoveryWarning in
+    // `animus plugin list` — without it the fail-closed empty admit set
+    // looks like every plugin silently vanished.
+    if scope.flavor_manifest_error.is_none() {
+        scope.flavor_manifest_error = flavor_error;
+    }
+    scope
 }
 
 /// Strip the OWNER/ prefix from a flavor manifest's slug so it lines up
@@ -84,14 +93,19 @@ fn normalize_flavor_slug(slug: &str) -> String {
 }
 
 fn resolve_flavor_plugins(project_root: &Path) -> (BTreeSet<String>, bool) {
+    let (plugins, present, _) = resolve_flavor_plugins_with_error(project_root);
+    (plugins, present)
+}
+
+fn resolve_flavor_plugins_with_error(project_root: &Path) -> (BTreeSet<String>, bool, Option<(PathBuf, String)>) {
     // See the matching note in `plugin_preflight_wiring.rs`:
     // `load_flavor_in` returns the binary-bundled default manifest when
     // no on-disk file exists, which would otherwise make every project
     // appear to have an opt-in flavor. Use `locate_flavor_manifest_in`
     // to gate presence on the on-disk file actually existing.
-    if locate_flavor_manifest_in(project_root, DEFAULT_FLAVOR_ID).is_none() {
-        return (BTreeSet::new(), false);
-    }
+    let Some(manifest_path) = locate_flavor_manifest_in(project_root, DEFAULT_FLAVOR_ID) else {
+        return (BTreeSet::new(), false, None);
+    };
     match load_flavor_in(project_root, DEFAULT_FLAVOR_ID) {
         Ok(Some(manifest)) => {
             // Include recommended plugins — see the matching note in
@@ -101,9 +115,23 @@ fn resolve_flavor_plugins(project_root: &Path) -> (BTreeSet<String>, bool) {
             // `required` would silently exclude a working install.
             let set: BTreeSet<String> =
                 manifest.all_plugin_slugs(true).into_iter().map(|s| normalize_flavor_slug(&s)).collect();
-            (set, true)
+            (set, true, None)
         }
-        _ => (BTreeSet::new(), false),
+        Ok(None) => (BTreeSet::new(), false, None),
+        Err(err) => {
+            // The manifest EXISTS but failed to read/parse/validate.
+            // Report it present so the scope stays fail-closed
+            // (`flavor-only` with an empty admit set, matching the
+            // daemon's posture) and capture the error so `animus plugin
+            // list` shows the real cause as a discovery warning.
+            let reason = format!("{err:#}");
+            tracing::warn!(
+                manifest = %manifest_path.display(),
+                error = %reason,
+                "flavor manifest failed to load; flavor-only scope will admit NO plugins until it is fixed"
+            );
+            (BTreeSet::new(), true, Some((manifest_path, reason)))
+        }
     }
 }
 
@@ -312,6 +340,22 @@ mod tests {
 
         handle_plugin_scope_reset(PluginScopeResetArgs { json: true }, &root).await.expect("reset");
         assert!(!scope_path.exists(), "reset must delete the scope file");
+    }
+
+    #[test]
+    fn load_project_scope_fails_closed_and_records_error_on_broken_flavor_manifest() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let flavors = temp.path().join("flavors");
+        std::fs::create_dir_all(&flavors).expect("mkdir flavors");
+        let manifest_path = flavors.join("default.toml");
+        std::fs::write(&manifest_path, "this is [not valid TOML\n").expect("write broken flavor");
+
+        let scope = load_project_scope(temp.path());
+        assert_eq!(scope.mode, PluginScopeMode::FlavorOnly, "broken flavor must stay fail-closed");
+        assert!(scope.effective_admit_set().is_empty());
+        let (path, reason) = scope.flavor_manifest_error.as_ref().expect("parse failure must be recorded");
+        assert_eq!(path, &manifest_path);
+        assert!(reason.contains("default.toml"), "reason should reference the manifest: {reason}");
     }
 
     #[tokio::test]

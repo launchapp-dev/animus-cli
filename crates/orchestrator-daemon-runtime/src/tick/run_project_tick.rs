@@ -56,7 +56,7 @@ where
     let (executed_workflow_phases, failed_workflow_phases) = hooks.reconcile_completed_processes(root).await?;
     let reconciled_zombie_workflows = hooks.reconcile_zombie_workflows(root).await?;
     if args.reconcile_stale {
-        hooks.reconcile_stale_in_progress_tasks(root).await?;
+        hooks.reconcile_stale_in_progress_tasks(root, args.stale_threshold_hours).await?;
     }
     let mut execution_outcome = ProjectTickExecutionOutcome {
         reconciled_workflows: reconciled_workflows + reconciled_zombie_workflows,
