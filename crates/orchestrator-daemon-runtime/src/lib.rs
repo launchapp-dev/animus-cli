@@ -63,3 +63,23 @@ pub use tick::{
     ProjectTickPreparation, ProjectTickRunMode, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput,
     ProjectTickTime, TaskStateChangeEvent, TickSummaryBuilder,
 };
+
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::sync::OnceLock;
+
+    /// Returns the per-process test home directory and pins HOME to it on
+    /// first call. Tests that resolve `protocol::scoped_state_root` (or any
+    /// other `$HOME`-derived path) must call this before touching scoped
+    /// state so the one-time HOME pin cannot land mid-test.
+    pub fn stable_test_home() -> &'static std::path::Path {
+        static HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
+        HOME.get_or_init(|| {
+            let home_dir =
+                std::env::temp_dir().join(format!("ao-daemon-rt-test-config-{}", std::process::id())).join("home");
+            std::fs::create_dir_all(&home_dir).expect("create shared daemon-runtime test home");
+            std::env::set_var("HOME", &home_dir);
+            home_dir
+        })
+    }
+}

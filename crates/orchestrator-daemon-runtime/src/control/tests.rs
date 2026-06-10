@@ -556,8 +556,10 @@ async fn connection_closes_cleanly_on_client_disconnect() {
 
 #[tokio::test]
 async fn disable_env_var_is_respected_by_helper() {
-    // We don't actually toggle the env var here (parallel tests could
-    // race), but we do verify the helper's parsing semantics.
+    // The outer guard holds the process-wide env lock for the whole test
+    // and restores the var's original value even on panic; the raw
+    // mutations inside the loops are safe under that lock.
+    let _guard = protocol::test_utils::EnvVarGuard::set(CONTROL_SERVER_DISABLE_ENV, None);
     let truthy = ["1", "true", "yes", "TRUE", "anything"];
     let falsey = ["", "0", "false", "no", "off"];
 

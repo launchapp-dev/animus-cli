@@ -120,12 +120,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    fn pack_fixture_lock() -> &'static std::sync::Mutex<()> {
-        // Pack fixture tests share `~/.animus/packs` via the stable test HOME. Serialize access so
-        // parallel tests don't race on remove_dir_all + write_pack_fixture.
-        static LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
-    }
+    use crate::test_env::pack_fixture_lock;
 
     fn test_workflow_config_with_standard_pipeline() -> orchestrator_config::WorkflowConfig {
         use orchestrator_config::{WorkflowDefinition, WorkflowPhaseEntry};
@@ -156,9 +151,25 @@ mod tests {
         config
     }
 
-    fn ensure_stable_home() -> std::sync::MutexGuard<'static, ()> {
+    /// Holds the pack fixture lock for the test's duration and clears the
+    /// shared machine packs dir both on entry and on drop, so pack fixtures
+    /// never leak into tests that resolve workflow refs without the lock.
+    struct PackFixtureHome {
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for PackFixtureHome {
+        fn drop(&mut self) {
+            let machine_packs_dir = crate::machine_installed_packs_dir();
+            if machine_packs_dir.exists() {
+                let _ = std::fs::remove_dir_all(&machine_packs_dir);
+            }
+        }
+    }
+
+    fn ensure_stable_home() -> PackFixtureHome {
         let guard = pack_fixture_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        let home = crate::test_env::stable_test_home().to_path_buf();
+        crate::test_env::stable_test_home();
         let global_config_dir = protocol::Config::global_config_dir();
         std::fs::create_dir_all(&global_config_dir).expect("create global config dir");
         let config_tmp = global_config_dir.join("config.json.tmp");
@@ -168,8 +179,7 @@ mod tests {
         if machine_packs_dir.exists() {
             std::fs::remove_dir_all(&machine_packs_dir).expect("clear shared machine pack fixtures");
         }
-        std::env::set_var("HOME", home);
-        guard
+        PackFixtureHome { _guard: guard }
     }
 
     fn write_pack_fixture(root: &std::path::Path, pack_id: &str, version: &str, workflow_id: &str) {

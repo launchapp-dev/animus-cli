@@ -461,33 +461,12 @@ mod tests {
         crate::dispatch::test_env::lock()
     }
 
+    // Env mutation goes through the protocol crate's `EnvVarGuard` so these
+    // tests also hold the process-wide env lock shared with every other
+    // `EnvVarGuard` user in this binary (e.g. the agent_record PATH pin),
+    // in addition to the dispatch-wide lock taken above.
     #[cfg(unix)]
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    #[cfg(unix)]
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: Option<&str>) -> Self {
-            let original = std::env::var(key).ok();
-            match value {
-                Some(v) => std::env::set_var(key, v),
-                None => std::env::remove_var(key),
-            }
-            Self { key, original }
-        }
-    }
-
-    #[cfg(unix)]
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.original.as_deref() {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
+    use protocol::test_utils::EnvVarGuard;
 
     #[cfg(unix)]
     #[test]

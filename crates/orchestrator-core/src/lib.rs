@@ -168,17 +168,35 @@ mod state_machine_parity;
 
 #[cfg(test)]
 pub(crate) mod test_env {
-    use std::sync::OnceLock;
+    use std::sync::{Mutex, OnceLock};
 
+    /// Pins HOME and the Animus config-dir env vars once per process, all
+    /// inside a single `OnceLock` init so the one-time mutation cannot land
+    /// between two env reads of the same test. Tests that resolve
+    /// `protocol::scoped_state_root` or `protocol::Config::global_config_dir`
+    /// must call this before touching that state.
     pub fn stable_test_home() -> &'static std::path::Path {
         static HOME: OnceLock<std::path::PathBuf> = OnceLock::new();
         HOME.get_or_init(|| {
-            let home_dir = std::env::temp_dir()
-                .join(format!("ao-orchestrator-core-test-config-{}", std::process::id()))
-                .join("home");
+            let config_dir =
+                std::env::temp_dir().join(format!("ao-orchestrator-core-test-config-{}", std::process::id()));
+            let home_dir = config_dir.join("home");
             std::fs::create_dir_all(&home_dir).expect("create shared test home dir");
+            std::env::set_var("ANIMUS_CONFIG_DIR", &config_dir);
+            std::env::set_var("AGENT_ORCHESTRATOR_CONFIG_DIR", &config_dir);
+            std::env::set_var("ANIMUS_RUNNER_CONFIG_DIR", &config_dir);
             std::env::set_var("HOME", &home_dir);
             home_dir
         })
+    }
+
+    /// Serializes every test that reads or writes the machine-installed
+    /// packs dir (`~/.animus/packs` under the stable test HOME). The pack
+    /// fixture tests in `workflow::phase_plan` install fixtures there, and
+    /// any test that depends on that dir's contents through
+    /// `crate::resolve_pack_registry` observes the same shared global state.
+    pub fn pack_fixture_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 }

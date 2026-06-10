@@ -288,30 +288,21 @@ fn render_status_dashboard_uses_required_section_order() {
 mod cache_tests {
     use super::*;
 
+    // HOME goes through `EnvVarGuard` so the swap holds the process-wide
+    // env lock for the closure's duration — raw `set_var` here used to race
+    // every test that resolves `scoped_state_root` (memory tools, daemon_run
+    // resume tests) and could delete the temp HOME out from under them. The
+    // raw mutations inside test closures stay safe under the held lock and
+    // are restored by the guards on drop.
     fn with_cache_env<F: FnOnce(&std::path::Path)>(f: F) {
         let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir");
-        let prev_home = std::env::var("HOME").ok();
-        let prev_disable = std::env::var("ANIMUS_DISABLE_CI_CACHE").ok();
-        let prev_ttl = std::env::var("ANIMUS_CI_CACHE_TTL_SECS").ok();
-        std::env::set_var("HOME", temp.path());
-        std::env::remove_var("ANIMUS_DISABLE_CI_CACHE");
-        std::env::remove_var("ANIMUS_CI_CACHE_TTL_SECS");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let _disable = protocol::test_utils::EnvVarGuard::set("ANIMUS_DISABLE_CI_CACHE", None);
+        let _ttl = protocol::test_utils::EnvVarGuard::set("ANIMUS_CI_CACHE_TTL_SECS", None);
         let project = temp.path().join("project");
         std::fs::create_dir_all(&project).expect("project dir");
         f(&project);
-        match prev_home {
-            Some(v) => std::env::set_var("HOME", v),
-            None => std::env::remove_var("HOME"),
-        }
-        match prev_disable {
-            Some(v) => std::env::set_var("ANIMUS_DISABLE_CI_CACHE", v),
-            None => std::env::remove_var("ANIMUS_DISABLE_CI_CACHE"),
-        }
-        match prev_ttl {
-            Some(v) => std::env::set_var("ANIMUS_CI_CACHE_TTL_SECS", v),
-            None => std::env::remove_var("ANIMUS_CI_CACHE_TTL_SECS"),
-        }
     }
 
     fn sample_slice() -> CiStatusSlice {

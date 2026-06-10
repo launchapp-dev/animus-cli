@@ -80,11 +80,7 @@ mod tests {
     use super::*;
 
     fn stable_test_home() -> std::path::PathBuf {
-        let home_dir =
-            std::env::temp_dir().join(format!("ao-daemon-rt-test-config-{}", std::process::id())).join("home");
-        let _ = std::fs::create_dir_all(&home_dir);
-        std::env::set_var("HOME", &home_dir);
-        home_dir
+        crate::test_env::stable_test_home().to_path_buf()
     }
 
     #[test]

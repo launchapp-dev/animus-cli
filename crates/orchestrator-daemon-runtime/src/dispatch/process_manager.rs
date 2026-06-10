@@ -678,7 +678,6 @@ mod tests {
 
     use super::*;
     use protocol::SubjectDispatchExt;
-    use std::env;
     use std::fs;
     use std::sync::Mutex;
     use tempfile::TempDir;
@@ -694,30 +693,7 @@ mod tests {
         crate::dispatch::test_env::lock()
     }
 
-    struct EnvVarGuard {
-        key: &'static str,
-        original: Option<String>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: Option<&str>) -> Self {
-            let original = env::var(key).ok();
-            match value {
-                Some(value) => env::set_var(key, value),
-                None => env::remove_var(key),
-            }
-            Self { key, original }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.original.as_deref() {
-                Some(value) => env::set_var(self.key, value),
-                None => env::remove_var(self.key),
-            }
-        }
-    }
+    use protocol::test_utils::EnvVarGuard;
 
     #[test]
     fn new_process_manager_starts_empty() {
@@ -753,6 +729,7 @@ mod tests {
         // `stdio_socket_path` so the next daemon start's orphan-scan +
         // reattach pass can find the runner's reattach listener.
         let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::test_env::stable_test_home();
 
         let temp_dir = TempDir::new().expect("temp directory");
         let runner_path = temp_dir.path().join("animus-workflow-runner");

@@ -301,40 +301,12 @@ mod tests {
     use tempfile::TempDir;
     use tokio::io::{duplex, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-    /// Serialize env-var-touching tests so cargo's parallel runner does
-    /// not race on the disable knob. Uses `tokio::sync::Mutex` (rather
-    /// than `std::sync::Mutex`) because these tests are async and need
-    /// to hold the lock across `.await` points without tripping the
-    /// `clippy::await_holding_lock` lint.
-    static ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
-    struct EnvGuard {
-        key: &'static str,
-        prev: Option<std::ffi::OsString>,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let prev = std::env::var_os(key);
-            std::env::set_var(key, value);
-            Self { key, prev }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let prev = std::env::var_os(key);
-            std::env::remove_var(key);
-            Self { key, prev }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            match self.prev.take() {
-                Some(prev) => std::env::set_var(self.key, prev),
-                None => std::env::remove_var(self.key),
-            }
-        }
-    }
+    /// Env mutation goes through the protocol crate's `EnvVarGuard`, which
+    /// holds the process-wide env lock for the guard's lifetime. That
+    /// serializes these tests against every other `EnvVarGuard` user in
+    /// this binary (`ANIMUS_CONFIG_DIR` / `ANIMUS_PLUGIN_DIR` are shared
+    /// with the dispatch and log_storage test modules).
+    use protocol::test_utils::EnvVarGuard;
 
     fn isolated_project() -> (TempDir, PathBuf) {
         let temp = tempfile::tempdir().expect("tempdir");
@@ -410,10 +382,9 @@ mod tests {
 
     #[tokio::test]
     async fn discovers_zero_subject_plugins_router_is_empty() {
-        let _guard = ENV_LOCK.lock().await;
-        let _disable = EnvGuard::unset(SUBJECT_PLUGINS_DISABLE_ENV);
-        let _animus_home = EnvGuard::set("ANIMUS_CONFIG_DIR", "/tmp/animus-test-empty-home-subj-xyz123");
-        let _plugin_dir = EnvGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _disable = EnvVarGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, None);
+        let _animus_home = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some("/tmp/animus-test-empty-home-subj-xyz123"));
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(""));
 
         let (_temp, project_root) = isolated_project();
 
@@ -469,10 +440,9 @@ mod tests {
 
     #[tokio::test]
     async fn disable_env_var_skips_discovery() {
-        let _guard = ENV_LOCK.lock().await;
-        let _disable = EnvGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, "1");
-        let _animus_home = EnvGuard::set("ANIMUS_CONFIG_DIR", "/tmp/animus-test-empty-home-subj-xyz123");
-        let _plugin_dir = EnvGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _disable = EnvVarGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, Some("1"));
+        let _animus_home = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some("/tmp/animus-test-empty-home-subj-xyz123"));
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(""));
 
         let (_temp, project_root) = isolated_project();
         let resolution = resolve_subject_dispatch(&project_root).await.expect("resolve");
@@ -506,21 +476,19 @@ mod tests {
 
     #[test]
     fn disable_env_predicate_recognizes_truthy_values() {
-        let _guard = ENV_LOCK.blocking_lock();
-
-        let _e1 = EnvGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, "1");
+        let _e1 = EnvVarGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, Some("1"));
         assert!(subject_plugins_disable_env_set(), "'1' is truthy");
         drop(_e1);
 
-        let _e2 = EnvGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, "0");
+        let _e2 = EnvVarGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, Some("0"));
         assert!(!subject_plugins_disable_env_set(), "'0' is falsy");
         drop(_e2);
 
-        let _e3 = EnvGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, "");
+        let _e3 = EnvVarGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, Some(""));
         assert!(!subject_plugins_disable_env_set(), "empty is falsy");
         drop(_e3);
 
-        let _e4 = EnvGuard::unset(SUBJECT_PLUGINS_DISABLE_ENV);
+        let _e4 = EnvVarGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, None);
         assert!(!subject_plugins_disable_env_set(), "unset is falsy");
     }
 }

@@ -50,44 +50,6 @@ fn ensure_mock_provider() {
     );
 }
 
-/// Scoped env mutation for discovery tests. Pins HOME and the plugin install
-/// dir to fresh tempdirs and points `ANIMUS_PLUGIN_PATH` at `plugin_path`, so
-/// only the supplied directory feeds discovery. Restores everything on drop.
-///
-/// The resolver must also be given a tempdir project root rather than
-/// `CARGO_MANIFEST_DIR`: this repo ships `flavors/default.toml`, and flavor
-/// auto-detection walks up parent directories — a project root inside the
-/// kernel repo flips discovery into flavor-only scope, which filters out the
-/// mock provider.
-struct EnvScope {
-    prior_home: Option<std::ffi::OsString>,
-    _home: tempfile::TempDir,
-    _empty_plugin_dir: tempfile::TempDir,
-}
-
-impl EnvScope {
-    fn isolated(plugin_path: &Path) -> Self {
-        let home = tempfile::tempdir().expect("home tempdir");
-        let empty = tempfile::tempdir().expect("plugin dir tempdir");
-        let prior_home = std::env::var_os("HOME");
-        std::env::set_var("HOME", home.path());
-        std::env::set_var("ANIMUS_PLUGIN_DIR", empty.path());
-        std::env::set_var("ANIMUS_PLUGIN_PATH", plugin_path);
-        Self { prior_home, _home: home, _empty_plugin_dir: empty }
-    }
-}
-
-impl Drop for EnvScope {
-    fn drop(&mut self) {
-        std::env::remove_var("ANIMUS_PLUGIN_PATH");
-        std::env::remove_var("ANIMUS_PLUGIN_DIR");
-        match self.prior_home.take() {
-            Some(value) => std::env::set_var("HOME", value),
-            None => std::env::remove_var("HOME"),
-        }
-    }
-}
-
 fn build_request() -> SessionRequest {
     SessionRequest {
         tool: "mock".to_string(),
@@ -103,12 +65,32 @@ fn build_request() -> SessionRequest {
     }
 }
 
+/// Pin the env so discovery sees ONLY the testkit mock provider: an
+/// isolated HOME/config/plugin dir keeps the developer's real
+/// `~/.animus` registry out, and an isolated project root keeps the
+/// repo's `flavors/default.toml` from activating flavor-only plugin
+/// scoping (which would filter the mock provider out of discovery).
+fn isolated_discovery_env() -> (Vec<protocol::test_utils::EnvVarGuard>, tempfile::TempDir) {
+    let isolated = tempfile::tempdir().expect("isolated env tempdir");
+    let empty = isolated.path().join("empty");
+    std::fs::create_dir_all(&empty).expect("empty plugin dir");
+    let guards = vec![
+        protocol::test_utils::EnvVarGuard::set("HOME", Some(isolated.path().to_string_lossy().as_ref())),
+        protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(empty.to_string_lossy().as_ref())),
+        protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty.to_string_lossy().as_ref())),
+        protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_PLUGIN_PATH",
+            Some(workspace_target_debug().to_string_lossy().as_ref()),
+        ),
+    ];
+    (guards, isolated)
+}
+
 #[tokio::test]
 async fn resolver_routes_mock_tool_through_plugin() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ensure_mock_provider();
-    let _env = EnvScope::isolated(&workspace_target_debug());
-    let project = tempfile::tempdir().expect("project root");
+    let (_env, project) = isolated_discovery_env();
     let resolver = SessionBackendResolver::with_plugin_discovery(project.path());
 
     let request = build_request();
@@ -124,10 +106,9 @@ async fn resolver_routes_mock_tool_through_plugin() {
 
 #[tokio::test]
 async fn agent_run_streams_notifications_in_order_through_plugin() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     ensure_mock_provider();
-    let _env = EnvScope::isolated(&workspace_target_debug());
-    let project = tempfile::tempdir().expect("project root");
+    let (_env, project) = isolated_discovery_env();
     let resolver = SessionBackendResolver::with_plugin_discovery(project.path());
 
     let request = build_request();
@@ -204,9 +185,16 @@ async fn agent_run_streams_notifications_in_order_through_plugin() {
 /// As of v0.4.12 there is no in-tree provider fallback.
 #[tokio::test]
 async fn agent_run_errors_when_provider_plugin_missing() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let empty = tempfile::tempdir().expect("tempdir");
-    let _env = EnvScope::isolated(empty.path());
+    let isolated_home = tempfile::tempdir().expect("isolated home tempdir");
+    let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(isolated_home.path().to_string_lossy().as_ref()));
+    let _path = protocol::test_utils::EnvVarGuard::set(
+        "ANIMUS_PLUGIN_PATH",
+        Some(empty.path().to_string_lossy().as_ref()),
+    );
+    let _dir =
+        protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty.path().to_string_lossy().as_ref()));
 
     let resolver = SessionBackendResolver::with_plugin_discovery(empty.path());
     let request = SessionRequest {
