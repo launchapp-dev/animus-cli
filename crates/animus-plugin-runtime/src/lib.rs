@@ -34,7 +34,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::{json, Value};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 
 /// Manifest + identity for a provider plugin.
@@ -127,6 +127,10 @@ struct AgentRunParams {
     reasoning_effort: Option<String>,
     #[serde(default)]
     control_session_id: Option<String>,
+    /// Forward-compat: unknown params survive into `SessionRequest.extras`
+    /// instead of being silently dropped.
+    #[serde(flatten)]
+    extras: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -137,8 +141,10 @@ struct AgentCancelParams {
 /// Map of host-minted `control_session_id` -> backend-issued session id.
 /// `agent/run` parks a [`CancelRoute::Pending`] marker before the backend
 /// starts and upgrades it to [`CancelRoute::Ready`] as soon as the backend
-/// returns its own session id; `agent/cancel` translates an incoming control
-/// id to the backend's real id before calling [`ProviderBackend::cancel`],
+/// surfaces its own session id (on `start` return, or via the first
+/// `SessionEvent::Started` that carries one); `agent/cancel` translates an
+/// incoming control id to the backend's real id before calling
+/// [`ProviderBackend::cancel`],
 /// briefly waiting out the `Pending` window. Unknown ids fall through
 /// unchanged so plugins keep working against hosts that send the provider's
 /// real id (or no control id at all).
@@ -263,11 +269,11 @@ fn print_manifest_and_exit(info: &ProviderInfo) -> ! {
     std::process::exit(0);
 }
 
-async fn handle_request<P: ProviderBackend>(
+async fn handle_request<P: ProviderBackend, W: AsyncWrite + Unpin + Send + 'static>(
     request: RpcRequest,
     info: ProviderInfo,
     backend: Arc<P>,
-    stdout: Arc<Mutex<tokio::io::Stdout>>,
+    stdout: Arc<Mutex<W>>,
     cancel_routes: CancelRoutes,
 ) {
     let id = request.id.clone();
@@ -348,7 +354,7 @@ async fn handle_request<P: ProviderBackend>(
     }
 }
 
-async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<tokio::io::Stdout>>, frame: &T) {
+async fn write_frame<T: serde::Serialize, W: AsyncWrite + Unpin>(stdout: &Arc<Mutex<W>>, frame: &T) {
     if let Ok(mut payload) = serde_json::to_string(frame) {
         payload.push('\n');
         let mut guard = stdout.lock().await;
@@ -357,17 +363,17 @@ async fn write_frame<T: serde::Serialize>(stdout: &Arc<Mutex<tokio::io::Stdout>>
     }
 }
 
-async fn send_notification(stdout: &Arc<Mutex<tokio::io::Stdout>>, method: impl Into<String>, params: Value) {
+async fn send_notification<W: AsyncWrite + Unpin>(stdout: &Arc<Mutex<W>>, method: impl Into<String>, params: Value) {
     let notification = RpcNotification::new(method, Some(params));
     write_frame(stdout, &notification).await;
 }
 
-async fn handle_agent_run<P: ProviderBackend>(
+async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
     id: Option<Value>,
     params: Option<Value>,
     info: &ProviderInfo,
     backend: Arc<P>,
-    stdout: Arc<Mutex<tokio::io::Stdout>>,
+    stdout: Arc<Mutex<W>>,
     resume_session: Option<String>,
     cancel_routes: CancelRoutes,
 ) -> RpcResponse {
@@ -407,17 +413,13 @@ async fn handle_agent_run<P: ProviderBackend>(
         }
     };
 
-    let session_id = run.session_id.clone();
+    let mut session_id = run.session_id.clone();
     if let Some(control) = control_session_id.as_deref() {
-        let mut routes = cancel_routes.lock().await;
-        match session_id.as_deref() {
-            Some(inner) => {
-                routes.insert(control.to_string(), CancelRoute::Ready(inner.to_string()));
-            }
-            None => {
-                routes.remove(control);
-            }
+        if let Some(inner) = session_id.as_deref() {
+            cancel_routes.lock().await.insert(control.to_string(), CancelRoute::Ready(inner.to_string()));
         }
+        // No id yet: keep the Pending marker; the first `Started` event that
+        // carries one upgrades the route below.
     }
     let backend_label = run.selected_backend.clone();
     let mut output = String::new();
@@ -430,9 +432,23 @@ async fn handle_agent_run<P: ProviderBackend>(
 
     while let Some(event) = run.events.recv().await {
         match event {
-            SessionEvent::Started { .. } => {}
+            SessionEvent::Started { session_id: started_id, .. } => {
+                if session_id.is_none() {
+                    if let Some(inner) = started_id {
+                        if let Some(control) = control_session_id.as_deref() {
+                            cancel_routes.lock().await.insert(control.to_string(), CancelRoute::Ready(inner.clone()));
+                        }
+                        session_id = Some(inner);
+                    }
+                }
+            }
             SessionEvent::TextDelta { text } => {
-                send_notification(&stdout, "agent/output", json!({ "text": text, "session_id": session_id })).await;
+                send_notification(
+                    &stdout,
+                    "agent/output",
+                    json!({ "text": text, "session_id": session_id, "final": false }),
+                )
+                .await;
                 output.push_str(&text);
             }
             SessionEvent::FinalText { text } => {
@@ -442,10 +458,9 @@ async fn handle_agent_run<P: ProviderBackend>(
                     json!({ "text": text, "session_id": session_id, "final": true }),
                 )
                 .await;
-                if !output.is_empty() && !output.ends_with('\n') {
-                    output.push('\n');
-                }
-                output.push_str(&text);
+                // Final text is canonical: it replaces accumulated deltas so
+                // the result's `output` never duplicates streamed text.
+                output = text;
             }
             SessionEvent::Thinking { text } => {
                 send_notification(&stdout, "agent/thinking", json!({ "text": text, "session_id": session_id })).await;
@@ -571,7 +586,7 @@ async fn handle_agent_cancel<P: ProviderBackend>(
 }
 
 fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> SessionRequest {
-    let mut extras = serde_json::Map::new();
+    let mut extras = params.extras;
     if let Some(system_prompt) = params.system_prompt {
         extras.insert("system_prompt".to_string(), Value::String(system_prompt));
     }
@@ -666,6 +681,33 @@ mod reasoning_effort_tests {
     }
 
     #[test]
+    fn build_session_request_passes_unknown_params_through_extras() {
+        let params: AgentRunParams = serde_json::from_value(json!({
+            "prompt": "hi",
+            "cwd": "/tmp",
+            "reasoning_effort": "low",
+            "control_session_id": "ctrl-9",
+            "future_field": { "nested": true },
+        }))
+        .expect("params deserialize");
+        let request = build_session_request(&provider_info(), params);
+        assert_eq!(
+            request.extras.get("future_field"),
+            Some(&json!({ "nested": true })),
+            "unknown forward-compat params must survive into SessionRequest.extras"
+        );
+        assert_eq!(
+            request.extras.get("reasoning_effort").and_then(Value::as_str),
+            Some("low"),
+            "named extras keys must still be forwarded alongside flattened ones"
+        );
+        assert!(
+            request.extras.get("control_session_id").is_none(),
+            "control_session_id is a named field and must never reach extras via the catch-all"
+        );
+    }
+
+    #[test]
     fn build_session_request_does_not_leak_control_session_id_into_extras() {
         let params: AgentRunParams = serde_json::from_value(json!({
             "prompt": "hi",
@@ -756,12 +798,36 @@ mod run_loop_tests {
         }
     }
 
+    fn test_run_without_id(events: mpsc::Receiver<SessionEvent>) -> SessionRun {
+        SessionRun { session_id: None, events, selected_backend: "test".to_string(), fallback_reason: None, pid: None }
+    }
+
     fn fresh_routes() -> CancelRoutes {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
     fn test_stdout() -> Arc<Mutex<tokio::io::Stdout>> {
         Arc::new(Mutex::new(tokio::io::stdout()))
+    }
+
+    fn capture_sink() -> Arc<Mutex<Vec<u8>>> {
+        Arc::new(Mutex::new(Vec::new()))
+    }
+
+    async fn captured_frames(sink: &Arc<Mutex<Vec<u8>>>) -> Vec<Value> {
+        String::from_utf8(sink.lock().await.clone())
+            .expect("captured frames must be utf-8")
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("captured frame must be JSON"))
+            .collect()
+    }
+
+    fn output_frames(frames: &[Value]) -> Vec<Value> {
+        frames
+            .iter()
+            .filter(|frame| frame.get("method").and_then(Value::as_str) == Some("agent/output"))
+            .filter_map(|frame| frame.get("params").cloned())
+            .collect()
     }
 
     #[tokio::test]
@@ -811,6 +877,198 @@ mod run_loop_tests {
 
         let result = response.result.expect("agent/run must return a result payload");
         assert_eq!(result.get("exit_code").and_then(Value::as_i64), Some(0));
+    }
+
+    #[tokio::test]
+    async fn final_text_replaces_accumulated_deltas_in_result_output() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        tx.send(SessionEvent::TextDelta { text: "Hello ".to_string() }).await.unwrap();
+        tx.send(SessionEvent::TextDelta { text: "world".to_string() }).await.unwrap();
+        tx.send(SessionEvent::FinalText { text: "Hello world!".to_string() }).await.unwrap();
+        tx.send(SessionEvent::Finished { exit_code: Some(0) }).await.unwrap();
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+        let sink = capture_sink();
+
+        let response = handle_agent_run(
+            Some(json!(1)),
+            Some(json!({ "prompt": "hi", "cwd": "/tmp" })),
+            &provider_info(),
+            backend,
+            sink.clone(),
+            None,
+            fresh_routes(),
+        )
+        .await;
+
+        let result = response.result.expect("agent/run must return a result payload");
+        assert_eq!(
+            result.get("output").and_then(Value::as_str),
+            Some("Hello world!"),
+            "final text is canonical and must replace accumulated deltas, not duplicate them"
+        );
+
+        let frames = captured_frames(&sink).await;
+        let outputs = output_frames(&frames);
+        assert_eq!(outputs.len(), 3, "two delta frames plus one final frame must be streamed");
+        assert_eq!(outputs[0].get("final"), Some(&json!(false)), "delta frames must carry final=false");
+        assert_eq!(outputs[1].get("final"), Some(&json!(false)), "delta frames must carry final=false");
+        assert_eq!(outputs[2].get("final"), Some(&json!(true)), "the terminal output frame must carry final=true");
+        assert_eq!(outputs[2].get("text").and_then(Value::as_str), Some("Hello world!"));
+    }
+
+    #[tokio::test]
+    async fn delta_only_runs_keep_accumulated_output() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        tx.send(SessionEvent::TextDelta { text: "Hello ".to_string() }).await.unwrap();
+        tx.send(SessionEvent::TextDelta { text: "world".to_string() }).await.unwrap();
+        tx.send(SessionEvent::Finished { exit_code: Some(0) }).await.unwrap();
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+
+        let response = handle_agent_run(
+            Some(json!(1)),
+            Some(json!({ "prompt": "hi", "cwd": "/tmp" })),
+            &provider_info(),
+            backend,
+            test_stdout(),
+            None,
+            fresh_routes(),
+        )
+        .await;
+
+        let result = response.result.expect("agent/run must return a result payload");
+        assert_eq!(
+            result.get("output").and_then(Value::as_str),
+            Some("Hello world"),
+            "without a final text event, the accumulated deltas remain the output"
+        );
+    }
+
+    #[tokio::test]
+    async fn started_event_session_id_upgrades_pending_route_and_reaches_result() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        let backend = Arc::new(TestBackend::with_run(test_run_without_id(rx)));
+        let routes = fresh_routes();
+        let info = provider_info();
+        let sink = capture_sink();
+
+        let run_backend = backend.clone();
+        let run_routes = routes.clone();
+        let run_info = info.clone();
+        let run_sink = sink.clone();
+        let run_task = tokio::spawn(async move {
+            handle_agent_run(
+                Some(json!(1)),
+                Some(json!({ "prompt": "hi", "cwd": "/tmp", "control_session_id": "ctrl-1" })),
+                &run_info,
+                run_backend,
+                run_sink,
+                None,
+                run_routes,
+            )
+            .await
+        });
+
+        for _ in 0..200 {
+            if matches!(routes.lock().await.get("ctrl-1"), Some(CancelRoute::Pending)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            matches!(routes.lock().await.get("ctrl-1"), Some(CancelRoute::Pending)),
+            "a run whose backend returns no session id must keep the Pending marker"
+        );
+
+        tx.send(SessionEvent::Started {
+            backend: "test".to_string(),
+            session_id: Some("late-id".to_string()),
+            pid: None,
+        })
+        .await
+        .unwrap();
+        for _ in 0..200 {
+            if matches!(routes.lock().await.get("ctrl-1"), Some(CancelRoute::Ready(_))) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            matches!(routes.lock().await.get("ctrl-1"), Some(CancelRoute::Ready(id)) if id == "late-id"),
+            "the Started session id must upgrade the cancel route to Ready mid-run"
+        );
+
+        let response = handle_agent_cancel(
+            Some(json!(2)),
+            Some(json!({ "session_id": "ctrl-1" })),
+            backend.clone(),
+            &info,
+            routes.clone(),
+        )
+        .await;
+        assert!(response.error.is_none(), "cancel must succeed: {:?}", response.error);
+        assert_eq!(
+            backend.cancelled(),
+            vec!["late-id".to_string()],
+            "a mid-run cancel must translate to the Started-provided session id"
+        );
+
+        tx.send(SessionEvent::Started {
+            backend: "test".to_string(),
+            session_id: Some("second-id".to_string()),
+            pid: None,
+        })
+        .await
+        .unwrap();
+        tx.send(SessionEvent::TextDelta { text: "hi".to_string() }).await.unwrap();
+        tx.send(SessionEvent::Finished { exit_code: Some(0) }).await.unwrap();
+
+        let response = run_task.await.expect("run task must finish");
+        let result = response.result.expect("agent/run must return a result payload");
+        assert_eq!(
+            result.get("session_id").and_then(Value::as_str),
+            Some("late-id"),
+            "the first Started session id wins; later Started events must not override it"
+        );
+
+        let frames = captured_frames(&sink).await;
+        let outputs = output_frames(&frames);
+        assert_eq!(
+            outputs[0].get("session_id").and_then(Value::as_str),
+            Some("late-id"),
+            "notifications after Started must carry the captured session id"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_session_id_wins_over_started_event_id() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        tx.send(SessionEvent::Started {
+            backend: "test".to_string(),
+            session_id: Some("other".to_string()),
+            pid: None,
+        })
+        .await
+        .unwrap();
+        tx.send(SessionEvent::Finished { exit_code: Some(0) }).await.unwrap();
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+
+        let response = handle_agent_run(
+            Some(json!(1)),
+            Some(json!({ "prompt": "hi", "cwd": "/tmp" })),
+            &provider_info(),
+            backend,
+            test_stdout(),
+            None,
+            fresh_routes(),
+        )
+        .await;
+
+        let result = response.result.expect("agent/run must return a result payload");
+        assert_eq!(
+            result.get("session_id").and_then(Value::as_str),
+            Some("inner-1"),
+            "a session id returned by start() must not be overridden by a Started event"
+        );
     }
 
     #[tokio::test]
