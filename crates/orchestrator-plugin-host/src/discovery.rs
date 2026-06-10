@@ -452,8 +452,16 @@ impl PluginDiscovery {
             // scope fail-closed (flavor-only with an EMPTY admit set).
             // Surface that as a DiscoveryWarning so `animus plugin list`
             // shows the real cause instead of every plugin silently
-            // disappearing behind a "plugin not installed" symptom.
+            // disappearing behind a "plugin not installed" symptom. When an
+            // explicit `.animus/plugin-scope.yaml` overrides the mode, the
+            // broken manifest does not gate discovery — say so instead of
+            // claiming plugins were filtered out.
             if let Some((manifest_path, reason)) = scope.flavor_manifest_error.as_ref() {
+                let consequence = if matches!(scope.mode, crate::scope::PluginScopeMode::FlavorOnly) {
+                    "flavor-only scope admits NO plugins until it is fixed"
+                } else {
+                    "discovery is unaffected because the project's plugin-scope file overrides the mode"
+                };
                 warnings.push(DiscoveryWarning {
                     name: manifest_path
                         .file_name()
@@ -462,9 +470,7 @@ impl PluginDiscovery {
                         .to_string(),
                     path: manifest_path.clone(),
                     source: DiscoverySource::ProjectLocal,
-                    reason: format!(
-                        "flavor manifest failed to load; flavor-only scope admits NO plugins until it is fixed: {reason}"
-                    ),
+                    reason: format!("flavor manifest failed to load; {consequence}: {reason}"),
                 });
             }
             if !scope.admits_everything() {
