@@ -403,6 +403,22 @@ pub fn upsert_generated_workflow_pipeline(project_root: &Path, pipeline: &Workfl
     write_yaml_workflow_overlay(project_root, GENERATED_WORKFLOW_OVERLAY_FILE_NAME, &file)
 }
 
+/// Whether any generated overlay file defines `phase_id` (case-insensitive).
+/// `animus workflow phases remove` can only prune overlay-defined phases, so
+/// the dry-run preview uses this to report removability accurately.
+pub fn generated_workflow_phase_is_defined(project_root: &Path, phase_id: &str) -> Result<bool> {
+    for file_name in [GENERATED_WORKFLOW_OVERLAY_FILE_NAME, GENERATED_RUNTIME_OVERLAY_FILE_NAME] {
+        if !yaml_workflows_dir(project_root).join(file_name).exists() {
+            continue;
+        }
+        let file = read_yaml_workflow_overlay_raw(project_root, file_name)?;
+        if file.phases.keys().any(|existing| existing.eq_ignore_ascii_case(phase_id)) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Remove a phase definition (and its catalog entry) from the generated
 /// overlay files. Returns `true` when at least one overlay contained the
 /// phase; `false` means the phase is defined in a hand-authored YAML source

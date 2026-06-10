@@ -145,8 +145,8 @@ pub use workflow::{
 };
 pub use workflow_config::{
     builtin_workflow_config, compile_yaml_workflow_files, ensure_workflow_config_compiled, ensure_workflow_config_file,
-    expand_variables, expand_workflow_phases, legacy_workflow_config_paths, load_workflow_config,
-    load_workflow_config_or_default, load_workflow_config_with_metadata, merge_yaml_into_config,
+    expand_variables, expand_workflow_phases, generated_workflow_phase_is_defined, legacy_workflow_config_paths,
+    load_workflow_config, load_workflow_config_or_default, load_workflow_config_with_metadata, merge_yaml_into_config,
     parse_yaml_workflow_config, remove_generated_workflow_phase, resolve_workflow_phase_plan,
     resolve_workflow_rework_attempts, resolve_workflow_skip_guards, resolve_workflow_variables,
     resolve_workflow_verdict_routing, upsert_generated_workflow_phase, upsert_generated_workflow_pipeline,

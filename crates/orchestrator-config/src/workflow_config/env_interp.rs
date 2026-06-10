@@ -232,13 +232,6 @@ where
 /// deliberately conservative: when context is ambiguous it reports no comment,
 /// which preserves the historical interpolate-everything behavior.
 fn yaml_comment_spans(content: &str) -> Vec<(usize, usize)> {
-    fn quote_can_open(bytes: &[u8], idx: usize) -> bool {
-        if idx == 0 {
-            return true;
-        }
-        matches!(bytes[idx - 1], b' ' | b'\t' | b':' | b'-' | b'[' | b'{' | b',')
-    }
-
     fn is_block_scalar_header(effective: &str) -> bool {
         let trimmed = effective.trim_end();
         let Some(token) = trimmed.rsplit([' ', '\t']).next() else {
@@ -277,6 +270,14 @@ fn yaml_comment_spans(content: &str) -> Vec<(usize, usize)> {
         }
 
         let mut comment_start: Option<usize> = None;
+        // A quote opens a quoted scalar only where a new scalar can begin:
+        // at line start, after an indicator byte (`:`, `-`, `[`, `{`, `,`),
+        // or after a whitespace-delimited anchor/tag token (`&name`, `!tag`)
+        // that itself sat at a scalar-start position. A quote that appears
+        // after plain-scalar content (`note: Build "docs # ...`) is plain
+        // text and must not swallow a following real comment.
+        let mut can_open = true;
+        let mut token: Option<(bool, u8)> = None;
         let mut i = 0usize;
         while i < bytes.len() {
             let b = bytes[i];
@@ -287,6 +288,7 @@ fn yaml_comment_spans(content: &str) -> Vec<(usize, usize)> {
                 }
                 if b == b'"' {
                     in_double = false;
+                    can_open = false;
                 }
                 i += 1;
                 continue;
@@ -298,19 +300,41 @@ fn yaml_comment_spans(content: &str) -> Vec<(usize, usize)> {
                         continue;
                     }
                     in_single = false;
+                    can_open = false;
+                }
+                i += 1;
+                continue;
+            }
+            if b == b' ' || b == b'\t' {
+                if let Some((opened_at_start, first)) = token.take() {
+                    can_open = can_open || (opened_at_start && matches!(first, b'&' | b'!'));
                 }
                 i += 1;
                 continue;
             }
             match b {
-                b'"' if quote_can_open(bytes, i) => in_double = true,
-                b'\'' if quote_can_open(bytes, i) => in_single = true,
+                b'"' if can_open => {
+                    in_double = true;
+                    token = None;
+                    i += 1;
+                    continue;
+                }
+                b'\'' if can_open => {
+                    in_single = true;
+                    token = None;
+                    i += 1;
+                    continue;
+                }
                 b'#' if i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\t' => {
                     comment_start = Some(i);
                     break;
                 }
                 _ => {}
             }
+            if token.is_none() {
+                token = Some((can_open, b));
+            }
+            can_open = matches!(b, b':' | b'-' | b'[' | b'{' | b',');
             i += 1;
         }
 
@@ -1117,6 +1141,42 @@ mod tests {
         let src = format!("prompt: |\n  body text\n# note ${{{}}}\nkey: value\n", KEY);
         let out = interpolate_env(&src, "test.yaml").unwrap();
         assert_eq!(out, src);
+    }
+
+    #[test]
+    fn unpaired_quote_in_plain_scalar_does_not_suppress_trailing_comment() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::unset(KEY);
+        let src = format!("directive: Build \"docs # see ${{{}}}\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn quote_after_indicator_still_opens_quoted_scalar() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::set(KEY, "expanded");
+        let src = format!("items: [a, \"#tag ${{{}}}\"]\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, "items: [a, \"#tag expanded\"]\n");
+    }
+
+    #[test]
+    fn quote_after_anchor_still_opens_quoted_scalar() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::set(KEY, "expanded");
+        let src = format!("directive: &d \"build # ${{{}}}\"\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, "directive: &d \"build # expanded\"\n");
+    }
+
+    #[test]
+    fn quote_after_tag_still_opens_quoted_scalar() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::set(KEY, "expanded");
+        let src = format!("directive: !!str \"build # ${{{}}}\"\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, "directive: !!str \"build # expanded\"\n");
     }
 
     #[test]

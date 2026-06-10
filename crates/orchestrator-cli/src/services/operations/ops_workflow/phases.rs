@@ -409,6 +409,11 @@ pub(crate) fn upsert_phase_definition(
 
 pub(crate) fn remove_phase_definition(project_root: &str, phase_id: &str) -> Result<Value> {
     let workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
+    // TODO(codex-p2): when the phase is a generated-overlay OVERRIDE of a
+    // hand-authored YAML/pack definition, removing the override leaves the
+    // phase defined and pipeline references valid — this check should not
+    // block that case. Requires compiling sources minus the generated
+    // overlays to detect the underlying definition.
     if workflow
         .workflows
         .iter()
@@ -448,6 +453,9 @@ pub(crate) fn preview_phase_removal(project_root: &str, phase_id: &str) -> Resul
         .cloned()
         .ok_or_else(|| anyhow!("phase '{}' does not exist", phase_id))?;
 
+    let can_remove =
+        orchestrator_core::generated_workflow_phase_is_defined(Path::new(project_root), &normalized_phase_id)?;
+
     let mut envelope = dry_run_envelope(
         "workflow.phases.remove",
         serde_json::json!({"phase_id": &normalized_phase_id}),
@@ -456,7 +464,16 @@ pub(crate) fn preview_phase_removal(project_root: &str, phase_id: &str) -> Resul
         &format!("rerun 'animus workflow phases remove --phase {} --confirm {}' to apply", phase_id, phase_id),
     );
     if let Some(obj) = envelope.as_object_mut() {
-        obj.insert("can_remove".to_string(), serde_json::json!(true));
+        obj.insert("can_remove".to_string(), serde_json::json!(can_remove));
+        if !can_remove {
+            obj.insert(
+                "reason".to_string(),
+                serde_json::json!(format!(
+                    "phase '{}' is not defined in the generated overlays; remove it from the workflow YAML source or pack that defines it",
+                    normalized_phase_id
+                )),
+            );
+        }
     }
     Ok(envelope)
 }
