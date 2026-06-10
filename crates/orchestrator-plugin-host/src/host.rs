@@ -56,6 +56,19 @@ pub const NOTIFICATION_BROADCAST_CAPACITY_ENV: &str = "ANIMUS_PLUGIN_BROADCAST_C
 /// after sending the `shutdown` RPC.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
+/// Generous upper bound for a single frame write (mutex + write_all + flush)
+/// on the untimed request path. A healthy plugin drains its stdin promptly;
+/// one that stops reading would otherwise block the writer mutex forever and
+/// wedge every queued request, including shutdown. Expiry marks the host
+/// dead and surfaces as `ConnectionLost` to callers.
+const WRITE_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Cap on the reader's unparsed frame buffer. A plugin that streams an
+/// endless (or endlessly malformed) frame without ever completing it would
+/// otherwise grow the buffer without bound; past this point the router tears
+/// down and every awaiter observes [`HostError::ConnectionLost`].
+const READER_BUFFER_CAP: usize = 8 * 1024 * 1024;
+
 /// Deadline the [`PluginHost::shutdown_transport`] flow waits for a transport
 /// plugin's `transport/shutdown` reply before moving on to the generic
 /// shutdown. Spec-compliant transports drain in-flight requests during this
@@ -201,6 +214,14 @@ pub struct PluginSpawnOptions {
     ///
     /// [`PluginManifest::notification_buffer_size`]: animus_plugin_protocol::PluginManifest::notification_buffer_size
     pub notification_capacity: Option<usize>,
+    /// The plugin manifest's declared
+    /// [`PluginManifest::notification_buffer_size`] hint. Lower precedence
+    /// than `notification_capacity`, higher than the env override and the
+    /// compiled default. Set via [`PluginSpawnOptions::with_notification_buffer_hint`]
+    /// by callers that hold the plugin's manifest at spawn time.
+    ///
+    /// [`PluginManifest::notification_buffer_size`]: animus_plugin_protocol::PluginManifest::notification_buffer_size
+    pub notification_buffer_hint: Option<usize>,
     /// Optional working directory for the spawned plugin process. When set,
     /// the host pins the child's cwd here instead of inheriting the
     /// caller's cwd. Subject-backend and provider plugins use cwd-relative
@@ -242,8 +263,19 @@ impl PluginSpawnOptions {
             plugin_label: if plugin_label.is_empty() { None } else { Some(plugin_label) },
             missing_required_env: missing_required,
             notification_capacity: None,
+            notification_buffer_hint: None,
             working_dir: None,
         }
+    }
+
+    /// Carry the plugin manifest's `notification_buffer_size` hint into the
+    /// spawn so [`resolve_broadcast_capacity`]'s documented priority chain
+    /// (explicit override → manifest hint → env override → default) actually
+    /// sees the manifest value.
+    #[must_use]
+    pub fn with_notification_buffer_hint(mut self, hint: Option<usize>) -> Self {
+        self.notification_buffer_hint = hint;
+        self
     }
 
     /// Pin the spawned plugin's working directory. Used for subject-backend
@@ -578,6 +610,7 @@ impl PluginHost {
         let mut command = tokio::process::Command::new(binary_path);
         command
             .args(args)
+            .kill_on_drop(true)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -683,7 +716,7 @@ impl PluginHost {
             }
         });
 
-        let capacity = resolve_broadcast_capacity(options.notification_capacity, None);
+        let capacity = resolve_broadcast_capacity(options.notification_capacity, options.notification_buffer_hint);
         Ok(Self::launch_with_slot(name, Box::new(stdout), Box::new(stdin), Some(child), capacity, process_slot))
     }
 
@@ -725,6 +758,26 @@ impl PluginHost {
         Self::launch_with_slot(name, reader, writer, child, notification_capacity, None)
     }
 
+    /// Test-only: build an in-memory host with an explicit reader buffer cap
+    /// so the overflow teardown path can be exercised without pushing the
+    /// production [`READER_BUFFER_CAP`] worth of bytes through a duplex.
+    #[cfg(test)]
+    fn from_streams_with_reader_buffer_cap<R, W>(name: impl Into<String>, reader: R, writer: W, cap: usize) -> Self
+    where
+        R: AsyncRead + Send + Unpin + 'static,
+        W: AsyncWrite + Send + Unpin + 'static,
+    {
+        Self::launch_full(
+            name.into(),
+            Box::new(reader),
+            Box::new(writer),
+            None,
+            DEFAULT_NOTIFICATION_BROADCAST_CAPACITY,
+            None,
+            cap,
+        )
+    }
+
     /// Variant of [`Self::launch`] that also stashes the process-quota slot
     /// alongside the child. Only `spawn_with_options` calls this with a
     /// `Some` slot; in-memory stream constructors pass `None`.
@@ -735,6 +788,19 @@ impl PluginHost {
         child: Option<Child>,
         notification_capacity: usize,
         process_slot: Option<BoxedProcessSlotGuard>,
+    ) -> Self {
+        Self::launch_full(name, reader, writer, child, notification_capacity, process_slot, READER_BUFFER_CAP)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn launch_full(
+        name: String,
+        reader: Box<dyn AsyncRead + Send + Unpin>,
+        writer: Box<dyn AsyncWrite + Send + Unpin>,
+        child: Option<Child>,
+        notification_capacity: usize,
+        process_slot: Option<BoxedProcessSlotGuard>,
+        reader_buffer_cap: usize,
     ) -> Self {
         let (notifications_tx, _) = broadcast::channel::<RpcNotification>(notification_capacity);
         let inner = Arc::new(PluginHostInner {
@@ -750,7 +816,7 @@ impl PluginHost {
         });
 
         let reader_inner = inner.clone();
-        let handle = tokio::spawn(reader_loop(reader, reader_inner, notifications_tx));
+        let handle = tokio::spawn(reader_loop(reader, reader_inner, notifications_tx, reader_buffer_cap));
         // Stash the handle synchronously so shutdown() can find it without
         // racing the spawn that owns the reader loop.
         *inner.reader_handle.lock().expect("reader_handle mutex poisoned at launch") = Some(handle);
@@ -974,7 +1040,11 @@ impl PluginHost {
         // Best-effort shutdown RPC under a tight deadline. We don't trust
         // the plugin to actually respond, so we move on regardless.
         let _ = tokio::time::timeout(SHUTDOWN_GRACE, request_raw_inner(inner.as_ref(), "shutdown", None)).await;
-        let _ = write_frame_inner(inner.as_ref(), &RpcNotification::new("exit", None)).await;
+        let _ = tokio::time::timeout(
+            SHUTDOWN_GRACE,
+            write_frame_inner(inner.as_ref(), &RpcNotification::new("exit", None)),
+        )
+        .await;
 
         // Mark the host as no longer accepting new work. Future request()
         // calls on cloned hosts short-circuit to ConnectionLost via the
@@ -1027,16 +1097,41 @@ impl PluginHost {
         params: Option<Value>,
         timeout: Duration,
     ) -> Result<RpcResponse, HostError> {
+        if !self.inner.alive.load(Ordering::Acquire) {
+            return Err(HostError::ConnectionLost);
+        }
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
 
-        if let Err(_error) = self.write_frame(&RpcRequest::new(id, method, params)).await {
-            self.inner.pending.lock().await.remove(&id);
-            return Err(HostError::ConnectionLost);
+        // One deadline covers BOTH the stdin write and the response wait so a
+        // plugin that stopped reading its stdin can't pin the caller past the
+        // requested timeout while it holds the transport_write mutex.
+        let deadline = tokio::time::Instant::now() + timeout;
+        match write_frame_bounded(self.inner.as_ref(), &RpcRequest::new(id, method, params), deadline).await {
+            Ok(()) => {}
+            Err(FrameWriteFailure::Io(_error)) => {
+                self.inner.pending.lock().await.remove(&id);
+                return Err(HostError::ConnectionLost);
+            }
+            Err(FrameWriteFailure::LockWait) => {
+                // The deadline expired while we were still queued behind
+                // another writer: no bytes from THIS frame hit the wire, so
+                // the transport stays coherent for everyone else. Only this
+                // request fails.
+                self.inner.pending.lock().await.remove(&id);
+                return Err(HostError::Timeout(timeout));
+            }
+            Err(FrameWriteFailure::MidWrite) => {
+                // The write itself blew the deadline. The frame may be
+                // half-written, so the transport can no longer be trusted;
+                // write_frame_bounded already marked the host dead and
+                // drained every parked awaiter.
+                return Err(HostError::Timeout(timeout));
+            }
         }
 
-        match tokio::time::timeout(timeout, rx).await {
+        match tokio::time::timeout_at(deadline, rx).await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(_)) => {
                 self.inner.pending.lock().await.remove(&id);
@@ -1092,13 +1187,73 @@ async fn request_raw_inner(
     }
 }
 
-async fn write_frame_inner<T: serde::Serialize>(inner: &PluginHostInner, frame: &T) -> Result<()> {
-    let mut line = serde_json::to_string(frame)?;
+/// How a deadline-bounded frame write failed. The distinction matters: a
+/// timeout while still queued on the writer mutex leaves zero bytes of this
+/// frame on the wire (transport intact), while a timeout mid-write may leave
+/// a partial frame behind (transport corrupt — host must die).
+enum FrameWriteFailure {
+    /// Serialization or I/O error from the underlying writer.
+    Io(anyhow::Error),
+    /// Deadline expired while waiting for the `transport_write` mutex. The
+    /// frame was never started; the transport is still coherent.
+    LockWait,
+    /// Deadline expired after the write began. A partial frame may be on the
+    /// wire; the host has been marked dead and pending awaiters drained.
+    MidWrite,
+}
+
+/// Write one frame with `deadline` covering both the writer-mutex wait and
+/// the write+flush. Only a mid-write expiry poisons the host.
+async fn write_frame_bounded<T: serde::Serialize>(
+    inner: &PluginHostInner,
+    frame: &T,
+    deadline: tokio::time::Instant,
+) -> std::result::Result<(), FrameWriteFailure> {
+    let mut line = match serde_json::to_string(frame) {
+        Ok(line) => line,
+        Err(error) => return Err(FrameWriteFailure::Io(error.into())),
+    };
     line.push('\n');
-    let mut writer = inner.transport_write.lock().await;
-    writer.write_all(line.as_bytes()).await?;
-    writer.flush().await?;
-    Ok(())
+    let mut writer = match tokio::time::timeout_at(deadline, inner.transport_write.lock()).await {
+        Ok(writer) => writer,
+        Err(_) => return Err(FrameWriteFailure::LockWait),
+    };
+    let write = async {
+        writer.write_all(line.as_bytes()).await?;
+        writer.flush().await?;
+        Ok::<(), std::io::Error>(())
+    };
+    match tokio::time::timeout_at(deadline, write).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => Err(FrameWriteFailure::Io(error.into())),
+        Err(_) => {
+            // A wedged plugin stopped draining its stdin while we held the
+            // transport_write mutex. Cancelling the write releases the mutex
+            // but may leave a partial frame on the wire, so the host is done:
+            // flip alive off and fail every parked awaiter.
+            inner.alive.store(false, Ordering::Release);
+            drain_pending(inner).await;
+            Err(FrameWriteFailure::MidWrite)
+        }
+    }
+}
+
+async fn write_frame_inner<T: serde::Serialize>(inner: &PluginHostInner, frame: &T) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + WRITE_FRAME_TIMEOUT;
+    match write_frame_bounded(inner, frame, deadline).await {
+        Ok(()) => Ok(()),
+        Err(FrameWriteFailure::Io(error)) => Err(error),
+        Err(FrameWriteFailure::LockWait) => Err(anyhow!(
+            "plugin '{}' stdin write timed out after {:?} waiting for the writer; frame not sent",
+            inner.name,
+            WRITE_FRAME_TIMEOUT
+        )),
+        Err(FrameWriteFailure::MidWrite) => Err(anyhow!(
+            "plugin '{}' stdin write timed out after {:?}; marking host dead",
+            inner.name,
+            WRITE_FRAME_TIMEOUT
+        )),
+    }
 }
 
 /// Fail every awaiter currently parked on the pending map. Used when the
@@ -1125,10 +1280,16 @@ async fn reader_loop(
     mut reader: Box<dyn AsyncRead + Send + Unpin>,
     inner: Arc<PluginHostInner>,
     notifications_tx: broadcast::Sender<RpcNotification>,
+    buffer_cap: usize,
 ) {
     let mut buffer: Vec<u8> = Vec::with_capacity(8 * 1024);
     let mut chunk = [0u8; 4096];
-    loop {
+    // Set after a definitively-malformed frame with no newline in sight: the
+    // rest of that line is known garbage, so drop bytes until the next
+    // newline instead of re-parsing (and re-logging) the same prefix on
+    // every chunk.
+    let mut skip_to_newline = false;
+    'read: loop {
         let n = match reader.read(&mut chunk).await {
             Ok(0) => {
                 debug!(plugin = %inner.name, "plugin stdout reached EOF; draining pending awaiters");
@@ -1140,7 +1301,26 @@ async fn reader_loop(
                 break;
             }
         };
-        buffer.extend_from_slice(&chunk[..n]);
+        let mut data = &chunk[..n];
+        if skip_to_newline {
+            match data.iter().position(|b| *b == b'\n') {
+                Some(pos) => {
+                    data = &data[pos + 1..];
+                    skip_to_newline = false;
+                }
+                None => continue,
+            }
+        }
+        buffer.extend_from_slice(data);
+        if buffer.len() > buffer_cap {
+            tracing::error!(
+                plugin = %inner.name,
+                buffered = buffer.len(),
+                cap = buffer_cap,
+                "plugin frame buffer exceeded cap without a complete frame; tearing down router"
+            );
+            break;
+        }
 
         loop {
             // Skip leading whitespace before attempting to deserialize.
@@ -1168,15 +1348,18 @@ async fn reader_loop(
                     tracing::error!(plugin = %inner.name, %error, "malformed JSON frame from plugin; skipping");
                     // Recover by discarding bytes up to the next newline
                     // so we can keep parsing any valid frames already
-                    // buffered. If no newline is in sight, wait for more
-                    // bytes — clearing the buffer here would drop unread
-                    // partial frames the plugin may complete on its next
-                    // write.
+                    // buffered. If no newline is in sight, the rest of the
+                    // line is known garbage: drop what we have and skip
+                    // incoming bytes until a newline arrives so the same
+                    // failed prefix isn't re-parsed and re-logged on every
+                    // chunk.
                     if let Some(pos) = buffer.iter().position(|b| *b == b'\n') {
                         buffer.drain(..=pos);
                         continue;
                     }
-                    break;
+                    buffer.clear();
+                    skip_to_newline = true;
+                    continue 'read;
                 }
                 None => break,
             }
@@ -1383,6 +1566,159 @@ mod tests {
             message.contains("incompatible plugin protocol") && message.contains("major version mismatch"),
             "unexpected error: {message}"
         );
+    }
+
+    /// A timed request against a host whose reader task already exited must
+    /// short-circuit with `ConnectionLost` instead of parking an awaiter that
+    /// can never be answered and burning the full timeout into a misleading
+    /// `Timeout` error.
+    #[tokio::test]
+    async fn timed_request_short_circuits_when_host_already_dead() {
+        let (host_reader, plugin_writer) = duplex(8192);
+        let (_plugin_reader, host_writer) = duplex(8192);
+        let host = PluginHost::from_streams("test", host_reader, host_writer);
+
+        // Close the plugin's stdout: the reader task sees EOF and flips alive off.
+        drop(plugin_writer);
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let started = std::time::Instant::now();
+        let err = host
+            .request_typed_with_timeout("$/ping", None, Duration::from_secs(30))
+            .await
+            .expect_err("request against a dead host must fail");
+        assert!(matches!(err, HostError::ConnectionLost), "expected ConnectionLost, got: {err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5), "alive check must short-circuit, not burn the timeout");
+    }
+
+    /// A plugin that stops draining its stdin must not pin a timed request
+    /// past its deadline: the write is covered by the same deadline as the
+    /// response wait, and expiry marks the host dead so follow-up requests
+    /// fail fast instead of queuing on the wedged writer mutex.
+    #[tokio::test]
+    async fn timed_request_write_respects_deadline_against_wedged_stdin() {
+        // Tiny write buffer + a plugin that never reads its stdin: the frame
+        // write blocks after 64 bytes.
+        let (host_reader, _plugin_writer) = duplex(8192);
+        let (_plugin_reader, host_writer) = duplex(64);
+        let host = PluginHost::from_streams("test", host_reader, host_writer);
+
+        let big_params = serde_json::json!({ "blob": "x".repeat(64 * 1024) });
+        let started = std::time::Instant::now();
+        let err = host
+            .request_typed_with_timeout("agent/run", Some(big_params), Duration::from_millis(200))
+            .await
+            .expect_err("write against a wedged stdin must fail");
+        assert!(matches!(err, HostError::Timeout(_)), "expected Timeout, got: {err:?}");
+        assert!(started.elapsed() < Duration::from_secs(5), "write must be bounded by the request deadline");
+
+        // The wedged write marked the host dead: the next request fails fast
+        // with ConnectionLost instead of queuing behind the dead transport.
+        let err = host
+            .request_typed_with_timeout("$/ping", None, Duration::from_secs(30))
+            .await
+            .expect_err("follow-up request must fail");
+        assert!(matches!(err, HostError::ConnectionLost), "expected ConnectionLost, got: {err:?}");
+    }
+
+    /// A short-timeout request that expires while still QUEUED behind another
+    /// request's write must not poison the shared host: none of its bytes hit
+    /// the wire, so only the queued request fails (plain `Timeout`) and the
+    /// host stays alive for everyone else.
+    #[tokio::test]
+    async fn lock_wait_timeout_fails_only_the_queued_request() {
+        let (host_reader, _plugin_writer) = duplex(8192);
+        let (_plugin_reader, host_writer) = duplex(64);
+        let host = PluginHost::from_streams("test", host_reader, host_writer);
+
+        // Request A wedges mid-write with a long deadline, holding the
+        // writer mutex.
+        let host_a = host.clone();
+        let blocker = tokio::spawn(async move {
+            let big = serde_json::json!({ "blob": "x".repeat(64 * 1024) });
+            host_a.request_typed_with_timeout("agent/run", Some(big), Duration::from_secs(30)).await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Request B expires waiting for the mutex: plain Timeout, host alive.
+        let err = host
+            .request_typed_with_timeout("$/ping", None, Duration::from_millis(100))
+            .await
+            .expect_err("queued request must time out");
+        assert!(matches!(err, HostError::Timeout(_)), "lock-wait expiry must be a plain Timeout, got: {err:?}");
+        assert!(host.inner.alive.load(Ordering::Acquire), "a lock-wait timeout must not mark the shared host dead");
+        blocker.abort();
+    }
+
+    /// Malformed bytes with no trailing newline must not wedge the reader:
+    /// the router drops the garbage line and resumes parsing at the next
+    /// newline, so a later valid response still reaches its awaiter.
+    #[tokio::test]
+    async fn reader_recovers_from_malformed_frame_without_trailing_newline() {
+        let (host_reader, mut plugin_writer) = duplex(8192);
+        let (plugin_reader, host_writer) = duplex(8192);
+
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(plugin_reader);
+            let mut line = String::new();
+            reader.read_line(&mut line).await.expect("read request");
+            let request: RpcRequest = serde_json::from_str(line.trim()).expect("parse request");
+
+            // Garbage with no newline, split across writes to exercise the
+            // skip-to-newline path across chunks.
+            plugin_writer.write_all(b"not json at all").await.expect("write garbage");
+            plugin_writer.flush().await.expect("flush");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            plugin_writer.write_all(b" still not json").await.expect("write more garbage");
+            plugin_writer.flush().await.expect("flush");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+
+            let response = RpcResponse::ok(request.id, serde_json::json!({ "ok": true }));
+            let mut encoded = serde_json::to_string(&response).expect("encode");
+            encoded = format!("\n{encoded}\n");
+            plugin_writer.write_all(encoded.as_bytes()).await.expect("write response");
+            plugin_writer.flush().await.expect("flush");
+        });
+
+        let host = PluginHost::from_streams("test", host_reader, host_writer);
+        let result = host
+            .request_typed_with_timeout("$/ping", None, Duration::from_secs(5))
+            .await
+            .expect("valid response after garbage line must still resolve");
+        assert_eq!(result.get("ok"), Some(&serde_json::Value::Bool(true)));
+    }
+
+    /// An endless incomplete frame (e.g. a never-terminated JSON string) must
+    /// not buffer without bound: past the cap the router tears down and every
+    /// pending awaiter observes `ConnectionLost`.
+    #[tokio::test]
+    async fn reader_tears_down_when_frame_buffer_exceeds_cap() {
+        let (host_reader, mut plugin_writer) = duplex(64 * 1024);
+        let (plugin_reader, host_writer) = duplex(8192);
+
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(plugin_reader);
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line).await;
+            // Open a JSON string and never close it: the streaming parser
+            // reports EOF-pending forever, so the buffer just grows.
+            let _ = plugin_writer.write_all(b"\"").await;
+            let chunk = vec![b'x'; 16 * 1024];
+            for _ in 0..16 {
+                if plugin_writer.write_all(&chunk).await.is_err() {
+                    return;
+                }
+            }
+        });
+
+        // Small test-only cap (128 KiB) so the overflow path is reachable
+        // without pushing the production 8 MiB through a duplex in debug mode.
+        let host = PluginHost::from_streams_with_reader_buffer_cap("test", host_reader, host_writer, 128 * 1024);
+        let err = host
+            .request_typed_with_timeout("$/ping", None, Duration::from_secs(30))
+            .await
+            .expect_err("request must fail once the buffer cap trips");
+        assert!(matches!(err, HostError::ConnectionLost), "expected ConnectionLost, got: {err:?}");
     }
 
     #[test]

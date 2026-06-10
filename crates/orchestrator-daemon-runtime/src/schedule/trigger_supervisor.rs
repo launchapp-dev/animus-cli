@@ -235,6 +235,7 @@ impl TriggerPluginRunner for ProcessTriggerRunner {
             std::iter::empty::<String>(),
             stderr_sink,
         )
+        .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
         .with_working_dir(project_root);
         let host = match PluginHost::spawn_with_options(&plugin.path, &[], options).await {
             Ok(host) => host,

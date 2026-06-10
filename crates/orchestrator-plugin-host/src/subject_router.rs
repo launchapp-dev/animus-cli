@@ -130,6 +130,24 @@ impl SubjectRouter {
         hosts: HashMap<String, PluginHost>,
         aliases: KindAliasMap,
     ) -> Result<Self> {
+        match Self::register_kinds(&hosts, &aliases).await {
+            Ok((exact_kinds, glob_kinds)) => Ok(Self { exact_kinds, glob_kinds, hosts, aliases }),
+            Err(error) => {
+                // We own the spawned hosts; dropping them without shutdown
+                // would orphan every already-live plugin child the moment
+                // one plugin fails its handshake or claims a duplicate kind.
+                for (_, host) in hosts {
+                    let _ = host.shutdown().await;
+                }
+                Err(error)
+            }
+        }
+    }
+
+    async fn register_kinds(
+        hosts: &HashMap<String, PluginHost>,
+        aliases: &KindAliasMap,
+    ) -> Result<(HashMap<String, String>, Vec<(KindPattern, String)>)> {
         let mut exact_kinds: HashMap<String, String> = HashMap::new();
         let mut glob_kinds: Vec<(KindPattern, String)> = Vec::new();
         let names = hosts.keys().cloned().collect::<Vec<_>>();
@@ -180,7 +198,7 @@ impl SubjectRouter {
             }
         }
 
-        Ok(Self { exact_kinds, glob_kinds, hosts, aliases })
+        Ok((exact_kinds, glob_kinds))
     }
 
     /// Resolve the plugin name responsible for `kind`.

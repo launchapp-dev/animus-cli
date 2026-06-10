@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use animus_plugin_protocol::{
     error_codes, HealthCheckResult, HealthStatus, InitializeResult, PluginCapabilities, PluginInfo, PluginManifest,
@@ -125,12 +125,38 @@ struct AgentRunParams {
     runtime_contract: Option<Value>,
     #[serde(default)]
     reasoning_effort: Option<String>,
+    #[serde(default)]
+    control_session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct AgentCancelParams {
     session_id: String,
 }
+
+/// Map of host-minted `control_session_id` -> backend-issued session id.
+/// `agent/run` parks a [`CancelRoute::Pending`] marker before the backend
+/// starts and upgrades it to [`CancelRoute::Ready`] as soon as the backend
+/// returns its own session id; `agent/cancel` translates an incoming control
+/// id to the backend's real id before calling [`ProviderBackend::cancel`],
+/// briefly waiting out the `Pending` window. Unknown ids fall through
+/// unchanged so plugins keep working against hosts that send the provider's
+/// real id (or no control id at all).
+type CancelRoutes = Arc<Mutex<HashMap<String, CancelRoute>>>;
+
+#[derive(Debug, Clone)]
+enum CancelRoute {
+    /// `agent/run` accepted the control id but the backend has not produced
+    /// its own session id yet; cancels for this id wait instead of falling
+    /// through with an id the backend would not recognize.
+    Pending,
+    Ready(String),
+}
+
+/// How long `agent/cancel` waits for a [`CancelRoute::Pending`] entry to turn
+/// `Ready` before falling back to the raw wire id. Kept well below the host's
+/// 10s cancel deadline so the reply still arrives in time.
+const CANCEL_PENDING_WAIT: Duration = Duration::from_secs(5);
 
 /// Trait wrapping a `SessionBackend`. Most providers can use the blanket impl on
 /// `Arc<dyn SessionBackend>` directly via [`SessionBackendProvider::new`].
@@ -185,6 +211,7 @@ pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) ->
 
     let backend = Arc::new(backend);
     let stdout = Arc::new(Mutex::new(tokio::io::stdout()));
+    let cancel_routes: CancelRoutes = Arc::new(Mutex::new(HashMap::new()));
     let stdin = tokio::io::stdin();
     let mut reader = BufReader::new(stdin).lines();
 
@@ -204,8 +231,9 @@ pub async fn run_provider<P: ProviderBackend>(info: ProviderInfo, backend: P) ->
         let backend = backend.clone();
         let stdout = stdout.clone();
         let info = info.clone();
+        let cancel_routes = cancel_routes.clone();
         tokio::spawn(async move {
-            handle_request(request, info, backend, stdout).await;
+            handle_request(request, info, backend, stdout, cancel_routes).await;
         });
     }
 
@@ -240,6 +268,7 @@ async fn handle_request<P: ProviderBackend>(
     info: ProviderInfo,
     backend: Arc<P>,
     stdout: Arc<Mutex<tokio::io::Stdout>>,
+    cancel_routes: CancelRoutes,
 ) {
     let id = request.id.clone();
     let response = match request.method.as_str() {
@@ -274,7 +303,10 @@ async fn handle_request<P: ProviderBackend>(
                 ),
             },
         ),
-        "agent/run" => Some(handle_agent_run(id, request.params, &info, backend.clone(), stdout.clone(), None).await),
+        "agent/run" => Some(
+            handle_agent_run(id, request.params, &info, backend.clone(), stdout.clone(), None, cancel_routes.clone())
+                .await,
+        ),
         "agent/resume" => {
             let resume_session = request
                 .params
@@ -282,9 +314,22 @@ async fn handle_request<P: ProviderBackend>(
                 .and_then(|p| p.get("session_id"))
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned);
-            Some(handle_agent_run(id, request.params, &info, backend.clone(), stdout.clone(), resume_session).await)
+            Some(
+                handle_agent_run(
+                    id,
+                    request.params,
+                    &info,
+                    backend.clone(),
+                    stdout.clone(),
+                    resume_session,
+                    cancel_routes.clone(),
+                )
+                .await,
+            )
         }
-        "agent/cancel" => Some(handle_agent_cancel(id, request.params, backend.clone(), &info).await),
+        "agent/cancel" => {
+            Some(handle_agent_cancel(id, request.params, backend.clone(), &info, cancel_routes.clone()).await)
+        }
         "shutdown" => Some(RpcResponse::ok(id, json!({}))),
         "exit" => std::process::exit(0),
         other if other.starts_with("$/") => None,
@@ -324,6 +369,7 @@ async fn handle_agent_run<P: ProviderBackend>(
     backend: Arc<P>,
     stdout: Arc<Mutex<tokio::io::Stdout>>,
     resume_session: Option<String>,
+    cancel_routes: CancelRoutes,
 ) -> RpcResponse {
     let params: AgentRunParams = match params.ok_or_else(|| invalid_params("missing params for agent/run")) {
         Ok(p) => match serde_json::from_value::<AgentRunParams>(p) {
@@ -333,13 +379,23 @@ async fn handle_agent_run<P: ProviderBackend>(
         Err(error) => return error_rpc(id, error),
     };
 
+    let control_session_id = params.control_session_id.clone();
     let session_request = build_session_request(info, params);
     let started_at = Instant::now();
 
+    // Park a Pending marker before the backend starts so a cancel racing the
+    // startup window waits for the real session id instead of falling through
+    // with the control id.
+    if let Some(control) = control_session_id.as_deref() {
+        cancel_routes.lock().await.insert(control.to_string(), CancelRoute::Pending);
+    }
     let run_result = backend.start(session_request, resume_session.as_deref()).await;
     let mut run = match run_result {
         Ok(run) => run,
         Err(error) => {
+            if let Some(control) = control_session_id.as_deref() {
+                cancel_routes.lock().await.remove(control);
+            }
             return error_rpc(
                 id,
                 RpcError {
@@ -347,11 +403,22 @@ async fn handle_agent_run<P: ProviderBackend>(
                     message: format!("{} session start failed: {error}", info.plugin_name),
                     data: None,
                 },
-            )
+            );
         }
     };
 
     let session_id = run.session_id.clone();
+    if let Some(control) = control_session_id.as_deref() {
+        let mut routes = cancel_routes.lock().await;
+        match session_id.as_deref() {
+            Some(inner) => {
+                routes.insert(control.to_string(), CancelRoute::Ready(inner.to_string()));
+            }
+            None => {
+                routes.remove(control);
+            }
+        }
+    }
     let backend_label = run.selected_backend.clone();
     let mut output = String::new();
     let mut metadata = Vec::<Value>::new();
@@ -425,6 +492,7 @@ async fn handle_agent_run<P: ProviderBackend>(
                 .await;
                 errors.push(message.clone());
                 if !recoverable {
+                    exit_code = Some(1);
                     break;
                 }
             }
@@ -433,6 +501,10 @@ async fn handle_agent_run<P: ProviderBackend>(
                 break;
             }
         }
+    }
+
+    if let Some(control) = control_session_id.as_deref() {
+        cancel_routes.lock().await.remove(control);
     }
 
     let duration_ms = started_at.elapsed().as_millis() as u64;
@@ -456,6 +528,7 @@ async fn handle_agent_cancel<P: ProviderBackend>(
     params: Option<Value>,
     backend: Arc<P>,
     info: &ProviderInfo,
+    cancel_routes: CancelRoutes,
 ) -> RpcResponse {
     let params: AgentCancelParams = match params.ok_or_else(|| invalid_params("missing params for agent/cancel")) {
         Ok(p) => match serde_json::from_value::<AgentCancelParams>(p) {
@@ -465,7 +538,26 @@ async fn handle_agent_cancel<P: ProviderBackend>(
         Err(error) => return error_rpc(id, error),
     };
 
-    match backend.cancel(&params.session_id).await {
+    let deadline = Instant::now() + CANCEL_PENDING_WAIT;
+    let target_session_id = loop {
+        {
+            let routes = cancel_routes.lock().await;
+            match routes.get(&params.session_id) {
+                Some(CancelRoute::Ready(inner)) => break inner.clone(),
+                // The run is still starting; wait for the backend's real id.
+                Some(CancelRoute::Pending) => {}
+                // Unknown id: pass through unchanged (back-compat with hosts
+                // that send the provider's own session id).
+                None => break params.session_id.clone(),
+            }
+        }
+        if Instant::now() >= deadline {
+            break params.session_id.clone();
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+
+    match backend.cancel(&target_session_id).await {
         Ok(()) => RpcResponse::ok(id, json!({ "session_id": params.session_id, "cancelled": true })),
         Err(error) => error_rpc(
             id,
@@ -571,5 +663,296 @@ mod reasoning_effort_tests {
         .expect("params deserialize");
         let request = build_session_request(&provider_info(), params);
         assert!(request.extras.get("reasoning_effort").is_none(), "absent reasoning_effort must not inject the key");
+    }
+
+    #[test]
+    fn build_session_request_does_not_leak_control_session_id_into_extras() {
+        let params: AgentRunParams = serde_json::from_value(json!({
+            "prompt": "hi",
+            "cwd": "/tmp",
+            "control_session_id": "ctrl-1",
+        }))
+        .expect("params deserialize");
+        let request = build_session_request(&provider_info(), params);
+        assert!(
+            request.extras.get("control_session_id").is_none(),
+            "host-internal control_session_id must not reach the wrapped backend"
+        );
+    }
+}
+
+#[cfg(test)]
+mod run_loop_tests {
+    use super::*;
+    use animus_session_backend::session::session_run::SessionRun;
+    use serde_json::json;
+    use std::time::Duration;
+    use tokio::sync::mpsc;
+
+    fn provider_info() -> ProviderInfo {
+        ProviderInfo {
+            plugin_name: "test-provider",
+            plugin_version: "0.0.0",
+            description: "test",
+            default_tool: "codex",
+            default_model: "test-model",
+        }
+    }
+
+    struct TestBackend {
+        run: Mutex<Option<SessionRun>>,
+        cancels: std::sync::Mutex<Vec<String>>,
+        start_gate: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    }
+
+    impl TestBackend {
+        fn with_run(run: SessionRun) -> Self {
+            Self {
+                run: Mutex::new(Some(run)),
+                cancels: std::sync::Mutex::new(Vec::new()),
+                start_gate: Mutex::new(None),
+            }
+        }
+
+        fn with_gated_start(run: SessionRun, gate: tokio::sync::oneshot::Receiver<()>) -> Self {
+            Self {
+                run: Mutex::new(Some(run)),
+                cancels: std::sync::Mutex::new(Vec::new()),
+                start_gate: Mutex::new(Some(gate)),
+            }
+        }
+
+        fn cancelled(&self) -> Vec<String> {
+            self.cancels.lock().expect("cancels mutex poisoned").clone()
+        }
+    }
+
+    #[async_trait]
+    impl ProviderBackend for TestBackend {
+        async fn start(
+            &self,
+            _request: SessionRequest,
+            _resume_session: Option<&str>,
+        ) -> animus_session_backend::error::Result<SessionRun> {
+            if let Some(gate) = self.start_gate.lock().await.take() {
+                let _ = gate.await;
+            }
+            Ok(self.run.lock().await.take().expect("run prepared for test backend"))
+        }
+
+        async fn cancel(&self, session_id: &str) -> animus_session_backend::error::Result<()> {
+            self.cancels.lock().expect("cancels mutex poisoned").push(session_id.to_string());
+            Ok(())
+        }
+    }
+
+    fn test_run(session_id: &str, events: mpsc::Receiver<SessionEvent>) -> SessionRun {
+        SessionRun {
+            session_id: Some(session_id.to_string()),
+            events,
+            selected_backend: "test".to_string(),
+            fallback_reason: None,
+            pid: None,
+        }
+    }
+
+    fn fresh_routes() -> CancelRoutes {
+        Arc::new(Mutex::new(HashMap::new()))
+    }
+
+    fn test_stdout() -> Arc<Mutex<tokio::io::Stdout>> {
+        Arc::new(Mutex::new(tokio::io::stdout()))
+    }
+
+    #[tokio::test]
+    async fn non_recoverable_error_reports_nonzero_exit_code() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        tx.send(SessionEvent::Error { message: "fatal provider failure".to_string(), recoverable: false })
+            .await
+            .unwrap();
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+
+        let response = handle_agent_run(
+            Some(json!(1)),
+            Some(json!({ "prompt": "hi", "cwd": "/tmp" })),
+            &provider_info(),
+            backend,
+            test_stdout(),
+            None,
+            fresh_routes(),
+        )
+        .await;
+
+        let result = response.result.expect("agent/run must return a result payload");
+        assert_eq!(
+            result.get("exit_code").and_then(Value::as_i64),
+            Some(1),
+            "a non-recoverable error must not surface as exit_code 0 (success)"
+        );
+        assert_eq!(result["errors"][0], "fatal provider failure", "errors array must be preserved");
+    }
+
+    #[tokio::test]
+    async fn finished_exit_code_still_wins_over_default() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        tx.send(SessionEvent::Finished { exit_code: Some(0) }).await.unwrap();
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+
+        let response = handle_agent_run(
+            Some(json!(1)),
+            Some(json!({ "prompt": "hi", "cwd": "/tmp" })),
+            &provider_info(),
+            backend,
+            test_stdout(),
+            None,
+            fresh_routes(),
+        )
+        .await;
+
+        let result = response.result.expect("agent/run must return a result payload");
+        assert_eq!(result.get("exit_code").and_then(Value::as_i64), Some(0));
+    }
+
+    #[tokio::test]
+    async fn agent_cancel_translates_control_id_to_backend_session_id() {
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-real", rx)));
+        let routes = fresh_routes();
+        let info = provider_info();
+
+        let run_backend = backend.clone();
+        let run_routes = routes.clone();
+        let run_info = info.clone();
+        let run_task = tokio::spawn(async move {
+            handle_agent_run(
+                Some(json!(1)),
+                Some(json!({ "prompt": "hi", "cwd": "/tmp", "control_session_id": "ctrl-1" })),
+                &run_info,
+                run_backend,
+                test_stdout(),
+                None,
+                run_routes,
+            )
+            .await
+        });
+
+        for _ in 0..200 {
+            if routes.lock().await.contains_key("ctrl-1") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            routes.lock().await.contains_key("ctrl-1"),
+            "control id must be registered as soon as the backend run starts"
+        );
+
+        let response = handle_agent_cancel(
+            Some(json!(2)),
+            Some(json!({ "session_id": "ctrl-1" })),
+            backend.clone(),
+            &info,
+            routes.clone(),
+        )
+        .await;
+        assert!(response.error.is_none(), "cancel must succeed: {:?}", response.error);
+        assert_eq!(
+            backend.cancelled(),
+            vec!["inner-real".to_string()],
+            "cancel must reach the backend with ITS OWN session id, not the host control id"
+        );
+        let result = response.result.expect("cancel result");
+        assert_eq!(result.get("session_id").and_then(Value::as_str), Some("ctrl-1"), "response echoes the wire id");
+
+        tx.send(SessionEvent::Finished { exit_code: Some(0) }).await.unwrap();
+        run_task.await.expect("run task must finish");
+        assert!(!routes.lock().await.contains_key("ctrl-1"), "route entry must be cleaned up after the run completes");
+    }
+
+    #[tokio::test]
+    async fn agent_cancel_falls_back_to_raw_session_id_when_unknown() {
+        let (_tx, rx) = mpsc::channel::<SessionEvent>(8);
+        let backend = Arc::new(TestBackend::with_run(test_run("inner-1", rx)));
+
+        let response = handle_agent_cancel(
+            Some(json!(1)),
+            Some(json!({ "session_id": "provider-native-id" })),
+            backend.clone(),
+            &provider_info(),
+            fresh_routes(),
+        )
+        .await;
+        assert!(response.error.is_none(), "cancel must succeed: {:?}", response.error);
+        assert_eq!(
+            backend.cancelled(),
+            vec!["provider-native-id".to_string()],
+            "unknown ids must pass through unchanged (back-compat with hosts that send the provider id)"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_cancel_waits_out_pending_route_while_backend_starts() {
+        let (gate_tx, gate_rx) = tokio::sync::oneshot::channel::<()>();
+        let (tx, rx) = mpsc::channel::<SessionEvent>(8);
+        let backend = Arc::new(TestBackend::with_gated_start(test_run("inner-real", rx), gate_rx));
+        let routes = fresh_routes();
+        let info = provider_info();
+
+        let run_backend = backend.clone();
+        let run_routes = routes.clone();
+        let run_info = info.clone();
+        let run_task = tokio::spawn(async move {
+            handle_agent_run(
+                Some(json!(1)),
+                Some(json!({ "prompt": "hi", "cwd": "/tmp", "control_session_id": "ctrl-1" })),
+                &run_info,
+                run_backend,
+                test_stdout(),
+                None,
+                run_routes,
+            )
+            .await
+        });
+
+        for _ in 0..200 {
+            if matches!(routes.lock().await.get("ctrl-1"), Some(CancelRoute::Pending)) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            matches!(routes.lock().await.get("ctrl-1"), Some(CancelRoute::Pending)),
+            "a pending marker must be parked before the backend produces its session id"
+        );
+
+        // Fire the cancel while the backend is still starting, then release
+        // the start gate: the cancel must wait for the real id instead of
+        // falling through with the control id.
+        let cancel_backend = backend.clone();
+        let cancel_routes = routes.clone();
+        let cancel_info = info.clone();
+        let cancel_task = tokio::spawn(async move {
+            handle_agent_cancel(
+                Some(json!(2)),
+                Some(json!({ "session_id": "ctrl-1" })),
+                cancel_backend,
+                &cancel_info,
+                cancel_routes,
+            )
+            .await
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        gate_tx.send(()).expect("release start gate");
+
+        let response = cancel_task.await.expect("cancel task must finish");
+        assert!(response.error.is_none(), "cancel must succeed: {:?}", response.error);
+        assert_eq!(
+            backend.cancelled(),
+            vec!["inner-real".to_string()],
+            "a cancel racing backend start must still reach the backend with its own session id"
+        );
+
+        tx.send(SessionEvent::Finished { exit_code: Some(0) }).await.unwrap();
+        run_task.await.expect("run task must finish");
     }
 }

@@ -1146,6 +1146,7 @@ fn build_probe_spawn_options(
         std::iter::empty::<String>(),
         None,
     )
+    .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
     .with_working_dir(project_root);
     if !options.missing_required_env.is_empty() {
         tracing::warn!(

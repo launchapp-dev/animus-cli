@@ -183,6 +183,7 @@ struct DbosInner {
     plugin_path: PathBuf,
     plugin_label: String,
     env_required: Vec<EnvRequirement>,
+    notification_buffer_hint: Option<usize>,
     workflow_run_initialized: Mutex<bool>,
 }
 
@@ -209,6 +210,7 @@ impl DbosDurableStoreClient {
                 plugin_path: plugin.path,
                 plugin_label: plugin.name,
                 env_required: plugin.manifest.env_required,
+                notification_buffer_hint: plugin.manifest.notification_buffer_size,
                 workflow_run_initialized: Mutex::new(false),
             }),
         }
@@ -243,6 +245,7 @@ impl DbosDurableStoreClient {
             PLUGIN_BASE_ENV_ALLOWLIST.iter().map(|s| (*s).to_string()),
             None,
         )
+        .with_notification_buffer_hint(self.inner.notification_buffer_hint)
         .with_working_dir(self.inner.project_root.clone());
 
         let host = PluginHost::spawn_with_options(&self.inner.plugin_path, &[], options)

@@ -78,6 +78,7 @@ async fn spawn_with_project_binding(plugin: &DiscoveredPlugin, project_root: &Pa
         PLUGIN_BASE_ENV_ALLOWLIST.iter().map(|s| (*s).to_string()),
         None,
     )
+    .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
     .with_working_dir(project_root);
 
     let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
