@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -74,10 +74,14 @@ pub struct PluginConfigEntry {
 
 #[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 struct PluginsConfig {
+    // BTreeMap so iteration order is deterministic: duplicate logical names
+    // across `plugins:` / `providers:` always resolve to the same winner
+    // (first in key order within `plugins:`, then `providers:`) instead of
+    // varying with HashMap iteration order run to run.
     #[serde(default)]
-    plugins: HashMap<String, PluginConfigEntry>,
+    plugins: BTreeMap<String, PluginConfigEntry>,
     #[serde(default)]
-    providers: HashMap<String, PluginConfigEntry>,
+    providers: BTreeMap<String, PluginConfigEntry>,
 }
 
 #[derive(Debug, Clone, Default)]

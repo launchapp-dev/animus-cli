@@ -55,10 +55,20 @@ impl PluginRegistry {
                 std::iter::empty::<String>(),
                 self.stderr_sink.clone(),
             )
+            .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
             .with_working_dir(&self.project_root);
             let host = PluginHost::spawn_with_options(&path, &[], options).await?;
-            let result = host.handshake().await?;
-            self.register_mcp_tools(name, result.capabilities.mcp_tools)?;
+            let result = match host.handshake().await {
+                Ok(result) => result,
+                Err(error) => {
+                    let _ = host.shutdown().await;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = self.register_mcp_tools(name, result.capabilities.mcp_tools) {
+                let _ = host.shutdown().await;
+                return Err(error);
+            }
             self.running.insert(name.to_string(), host);
         }
 

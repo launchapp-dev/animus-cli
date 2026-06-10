@@ -210,6 +210,7 @@ pub async fn resolve_subject_dispatch(project_root: &Path) -> Result<SubjectDisp
             std::iter::empty::<String>(),
             None,
         )
+        .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
         .with_working_dir(project_root);
         let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
             .await

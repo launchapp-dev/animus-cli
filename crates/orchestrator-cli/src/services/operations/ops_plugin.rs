@@ -712,6 +712,7 @@ fn spawn_options_for_discovered(plugin: &DiscoveredPlugin) -> PluginSpawnOptions
         std::iter::empty::<String>(),
         None,
     )
+    .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
 }
 
 /// Spawn the named plugin, complete the handshake, and return manifest +

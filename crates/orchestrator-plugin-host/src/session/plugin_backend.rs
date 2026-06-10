@@ -96,6 +96,10 @@ pub struct PluginSessionBackend {
     /// back to all-false for plugin-specific capabilities" (the most
     /// conservative posture — never overclaim).
     pub(crate) declared_methods: Vec<String>,
+    /// The plugin manifest's `notification_buffer_size` hint, forwarded to
+    /// the spawn options so the host's broadcast capacity honors the
+    /// documented priority chain.
+    pub(crate) notification_buffer_hint: Option<usize>,
 }
 
 impl PluginSessionBackend {
@@ -123,7 +127,17 @@ impl PluginSessionBackend {
             supervisor,
             dispatch_observer,
             declared_methods: Vec::new(),
+            notification_buffer_hint: None,
         }
+    }
+
+    /// Plumb the plugin manifest's `notification_buffer_size` hint so spawned
+    /// hosts size their notification broadcast channel per the documented
+    /// priority chain (spawn override → manifest hint → env → default).
+    #[must_use]
+    pub fn with_notification_buffer_hint(mut self, hint: Option<usize>) -> Self {
+        self.notification_buffer_hint = hint;
+        self
     }
 
     /// Plumb the plugin manifest's declared method list so
@@ -244,7 +258,8 @@ impl PluginSessionBackend {
             &self.env_required,
             extras,
             self.stderr_sink_for(),
-        );
+        )
+        .with_notification_buffer_hint(self.notification_buffer_hint);
         // Pin cwd to the project root so provider plugins (and the CLIs
         // they spawn) resolve project-local files predictably regardless
         // of which shell started the daemon.
@@ -261,8 +276,8 @@ impl PluginSessionBackend {
     fn stderr_sink_for(&self) -> Option<PluginStderrSink> {
         let root = self.project_root.clone()?;
         let plugin_name = self.plugin_name.clone();
+        let logger = Logger::for_project(&root);
         Some(Arc::new(move |emitting_plugin: &str, line: &str| {
-            let logger = Logger::for_project(&root);
             logger
                 .warn("plugin.stderr", line)
                 .meta(json!({
@@ -273,13 +288,19 @@ impl PluginSessionBackend {
         }))
     }
 
-    fn build_run_params(&self, request: &SessionRequest, resume_session: Option<&str>) -> Value {
+    fn build_run_params(
+        &self,
+        request: &SessionRequest,
+        resume_session: Option<&str>,
+        control_session_id: &str,
+    ) -> Value {
         let extras = request.extras.as_object().cloned().unwrap_or_default();
         let mut params = json!({
             "prompt": request.prompt,
             "model": request.model,
             "cwd": request.cwd,
             "env": request.env_vars.iter().cloned().collect::<std::collections::HashMap<_, _>>(),
+            "control_session_id": control_session_id,
         });
 
         if let Some(project_root) = &request.project_root {
@@ -343,7 +364,7 @@ impl PluginSessionBackend {
                 }
                 graceful_shutdown(host).await;
                 let message = format!(
-                    "plugin '{}' handshake failed: {error}; to bypass this plugin and use the in-tree backend, set ANIMUS_PROVIDER_DISABLE_PLUGIN=1 and restart the daemon",
+                    "plugin '{}' handshake failed: {error}; reinstall or upgrade the provider plugins with `animus plugin install-defaults` and restart the daemon",
                     self.plugin_name
                 );
                 if let Some(logger) = self.project_logger() {
@@ -384,9 +405,9 @@ impl PluginSessionBackend {
         // secrets. See codex round-1 P2.
         let allowed = self.allowed_env_keys();
         scrub_runtime_contract_env(&mut request.extras, &allowed);
-        let params = self.build_run_params(&request, resume_session.as_deref());
         let backend_label = format!("plugin:{}", self.plugin_name);
         let control_session_id = Uuid::new_v4().to_string();
+        let params = self.build_run_params(&request, resume_session.as_deref(), &control_session_id);
         let run_timeout = Duration::from_secs(request.timeout_secs.unwrap_or(DEFAULT_PLUGIN_RUN_TIMEOUT_SECS));
         let started_at = Instant::now();
 
@@ -1151,13 +1172,17 @@ pub struct DiscoveredProviderPlugin {
     /// Forwarded into `PluginSessionBackend::declared_methods` so the
     /// backend reports honest `SessionCapabilities`.
     pub declared_methods: Vec<String>,
+    /// The manifest's `notification_buffer_size` hint, forwarded so spawned
+    /// hosts honor the documented broadcast-capacity priority chain.
+    pub notification_buffer_size: Option<usize>,
 }
 
 impl DiscoveredProviderPlugin {
     pub fn into_backend(self) -> Arc<PluginSessionBackend> {
         let mut backend = PluginSessionBackend::new(self.plugin_name, self.binary_path, self.provider_tool)
             .with_env_required(self.env_required)
-            .with_declared_methods(self.declared_methods);
+            .with_declared_methods(self.declared_methods)
+            .with_notification_buffer_hint(self.notification_buffer_size);
         if let Some(root) = self.project_root {
             backend = backend.with_project_root(root);
         }
@@ -1183,6 +1208,7 @@ pub fn discover_provider_plugins(project_root: &std::path::Path) -> Vec<Discover
                 .unwrap_or_else(|| plugin.name.clone());
             let env_required = plugin.manifest.env_required.clone();
             let declared_methods = plugin.manifest.capabilities.clone();
+            let notification_buffer_size = plugin.manifest.notification_buffer_size;
             DiscoveredProviderPlugin {
                 plugin_name: plugin.name,
                 provider_tool,
@@ -1190,6 +1216,7 @@ pub fn discover_provider_plugins(project_root: &std::path::Path) -> Vec<Discover
                 project_root: Some(project_root.clone()),
                 env_required,
                 declared_methods,
+                notification_buffer_size,
             }
         })
         .collect()
@@ -1433,7 +1460,7 @@ mod tests {
             env_vars: Vec::new(),
             extras: json!({ "reasoning_effort": "high" }),
         };
-        let params = backend.build_run_params(&request, None);
+        let params = backend.build_run_params(&request, None, "ctrl-test");
         assert_eq!(
             params.get("reasoning_effort").and_then(Value::as_str),
             Some("high"),
@@ -1443,8 +1470,42 @@ mod tests {
         // Absent => the key must not appear at all (regression: every provider
         // behaves exactly as before when no effort is requested).
         let bare = SessionRequest { extras: json!({}), ..request };
-        let bare_params = backend.build_run_params(&bare, None);
+        let bare_params = backend.build_run_params(&bare, None, "ctrl-test");
         assert!(bare_params.get("reasoning_effort").is_none(), "absent reasoning_effort must not inject the key");
+    }
+
+    /// The host-minted control_session_id must ride along on every
+    /// `agent/run` / `agent/resume` request so the plugin runtime can map it
+    /// to the backend's own session id and translate mid-run `agent/cancel`
+    /// calls. Without it the plugin only learns the control id at cancel
+    /// time, when its backend no longer recognizes the id.
+    #[test]
+    fn build_run_params_includes_control_session_id() {
+        let backend = fresh_backend();
+        let request = SessionRequest {
+            tool: "test".to_string(),
+            model: "m".to_string(),
+            prompt: "hi".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({}),
+        };
+        let control_session_id = Uuid::new_v4().to_string();
+        let params = backend.build_run_params(&request, None, &control_session_id);
+        assert_eq!(
+            params.get("control_session_id").and_then(Value::as_str),
+            Some(control_session_id.as_str()),
+            "agent/run params must carry the host's control_session_id for cancel translation"
+        );
+        // Resume path keeps both ids distinct: `session_id` is the provider's
+        // resume target, `control_session_id` is the host's cancel key.
+        let resume_params = backend.build_run_params(&request, Some("sess-provider"), &control_session_id);
+        assert_eq!(resume_params.get("session_id").and_then(Value::as_str), Some("sess-provider"));
+        assert_eq!(resume_params.get("control_session_id").and_then(Value::as_str), Some(control_session_id.as_str()));
     }
 
     /// The plugin runtime serializes the provider's own session_id under the
@@ -1695,7 +1756,7 @@ mod tests {
             env_vars: filtered,
             extras: Value::Object(Default::default()),
         };
-        let params = backend.build_run_params(&req, None);
+        let params = backend.build_run_params(&req, None, "ctrl-test");
         let env_obj = params.get("env").and_then(Value::as_object).expect("env param must be an object");
         assert!(env_obj.contains_key("OPENAI_API_KEY"), "manifest-declared key reaches RPC env param");
         assert!(env_obj.contains_key("PATH"), "base-allowlist key reaches RPC env param");

@@ -55,6 +55,7 @@ fn spawn_options_for_transport(plugin: &DiscoveredPlugin) -> PluginSpawnOptions 
         std::iter::empty::<String>(),
         None,
     )
+    .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
 }
 
 pub(crate) async fn handle_web(
