@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
 
 pub struct DaemonRuntimeState;
@@ -28,22 +29,28 @@ impl DaemonRuntimeState {
     }
 
     pub fn set_daemon_pid(project_root: &str, daemon_pid: Option<u32>) -> Result<()> {
-        let mut state = load_daemon_runtime_state(project_root)?;
-        state.daemon_pid = daemon_pid;
-        save_daemon_runtime_state(project_root, &state)
+        with_daemon_state_lock(project_root, || {
+            let mut state = load_daemon_runtime_state(project_root)?;
+            state.daemon_pid = daemon_pid;
+            save_daemon_runtime_state(project_root, &state)
+        })
     }
 
     pub fn set_runtime_paused(project_root: &str, paused: bool) -> Result<()> {
-        let mut state = load_daemon_runtime_state(project_root)?;
-        state.runtime_paused = paused;
-        save_daemon_runtime_state(project_root, &state)
+        with_daemon_state_lock(project_root, || {
+            let mut state = load_daemon_runtime_state(project_root)?;
+            state.runtime_paused = paused;
+            save_daemon_runtime_state(project_root, &state)
+        })
     }
 
     pub fn set_shutdown_requested(project_root: &str, requested: bool, timeout_secs: Option<u64>) -> Result<()> {
-        let mut state = load_daemon_runtime_state(project_root)?;
-        state.shutdown_requested = requested;
-        state.shutdown_timeout_secs = if requested { timeout_secs } else { None };
-        save_daemon_runtime_state(project_root, &state)
+        with_daemon_state_lock(project_root, || {
+            let mut state = load_daemon_runtime_state(project_root)?;
+            state.shutdown_requested = requested;
+            state.shutdown_timeout_secs = if requested { timeout_secs } else { None };
+            save_daemon_runtime_state(project_root, &state)
+        })
     }
 
     pub fn is_shutdown_requested(project_root: &str) -> Result<(bool, Option<u64>)> {
@@ -79,6 +86,25 @@ fn scoped_daemon_dir(project_root: &str) -> PathBuf {
 
 fn daemon_runtime_state_path(project_root: &str) -> PathBuf {
     scoped_daemon_dir(project_root).join("daemon-state.json")
+}
+
+fn with_daemon_state_lock<T>(project_root: &str, f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let dir = scoped_daemon_dir(project_root);
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create daemon runtime state directory {}", dir.display()))?;
+    let lock_path = dir.join("daemon-state.lock");
+    let lock_file = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("failed to open daemon state lock at {}", lock_path.display()))?;
+    lock_file
+        .lock_exclusive()
+        .with_context(|| format!("failed to acquire daemon state lock at {}", lock_path.display()))?;
+    let result = f();
+    let _ = lock_file.unlock();
+    result
 }
 
 fn daemon_pid_path(project_root: &str) -> PathBuf {

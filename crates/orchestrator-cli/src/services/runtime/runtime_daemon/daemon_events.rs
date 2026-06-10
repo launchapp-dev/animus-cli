@@ -14,13 +14,25 @@ pub(crate) fn daemon_events_log_path() -> PathBuf {
     DaemonEventLog::log_path()
 }
 
-fn read_all_nonempty_lines(path: &Path) -> Result<Vec<String>> {
+fn read_all_nonempty_lines(path: &Path, follow_offset: Option<&mut u64>) -> Result<Vec<String>> {
     if !path.exists() {
         return Ok(Vec::new());
     }
 
     let content = std::fs::read_to_string(path)?;
-    Ok(content.lines().map(str::trim).filter(|line| !line.is_empty()).map(ToOwned::to_owned).collect())
+    // In follow mode, only consume up to the last complete
+    // newline-terminated line and derive the offset from the bytes
+    // actually consumed; a partial tail is re-read once the writer
+    // finishes the line.
+    let consumed_end = match follow_offset {
+        Some(offset) => {
+            let end = content.rfind('\n').map(|idx| idx + 1).unwrap_or(0);
+            *offset = end as u64;
+            end
+        }
+        None => content.len(),
+    };
+    Ok(content[..consumed_end].lines().map(str::trim).filter(|line| !line.is_empty()).map(ToOwned::to_owned).collect())
 }
 
 fn read_nonempty_lines_since(path: &Path, offset: &mut u64) -> Result<Vec<String>> {
@@ -37,11 +49,20 @@ fn read_nonempty_lines_since(path: &Path, offset: &mut u64) -> Result<Vec<String
 
     use std::io::{Read, Seek, SeekFrom};
     file.seek(SeekFrom::Start(*offset))?;
-    let mut buffer = String::new();
-    file.read_to_string(&mut buffer)?;
-    *offset = len;
+    let mut buffer = Vec::new();
+    file.read_to_end(&mut buffer)?;
+    let Some(newline_idx) = buffer.iter().rposition(|&b| b == b'\n') else {
+        return Ok(Vec::new());
+    };
+    let consumed = &buffer[..=newline_idx];
+    *offset += consumed.len() as u64;
 
-    Ok(buffer.lines().map(str::trim).filter(|line| !line.is_empty()).map(ToOwned::to_owned).collect())
+    Ok(String::from_utf8_lossy(consumed)
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 #[cfg(test)]
@@ -198,13 +219,13 @@ pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool
 
     loop {
         let lines = if first_iteration {
-            let mut lines = read_all_nonempty_lines(&path)?;
+            let follow_offset = args.follow.then_some(&mut offset);
+            let mut lines = read_all_nonempty_lines(&path, follow_offset)?;
             if let Some(limit) = args.limit {
                 if lines.len() > limit {
                     lines = lines.split_off(lines.len() - limit);
                 }
             }
-            offset = std::fs::metadata(&path).map(|metadata| metadata.len()).unwrap_or(0);
             lines
         } else {
             read_nonempty_lines_since(&path, &mut offset)?

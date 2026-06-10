@@ -387,6 +387,7 @@ where
 
     let mut interval = Duration::from_secs(options.interval_secs.max(1));
     let mut sigterm_stream = SigtermStream::new()?;
+    let mut sigint_stream = SigintStream::new()?;
     loop {
         // Hot-reload runtime-reconfigurable settings from persisted project config
         // so that `animus.daemon config-set` changes take effect without restart.
@@ -418,10 +419,6 @@ where
             })?,
         }
 
-        if externally_paused {
-            break;
-        }
-
         drain_trigger_events(&primary_root, &trigger_event_queue, hooks)?;
 
         if let Err(error) = hooks.flush_notifications(&primary_root).await {
@@ -447,7 +444,7 @@ where
         }
 
         tokio::select! {
-            _ = tokio::signal::ctrl_c() => {
+            _ = sigint_stream.recv() => {
                 hooks.handle_event(DaemonRunEvent::Draining {
                     project_root: primary_root.clone(),
                     trigger: "ctrl_c".to_string(),
@@ -996,6 +993,37 @@ fn discover_plugins_for_daemon<H: DaemonRunHooks>(
         }
     }
     Ok(())
+}
+
+struct SigintStream {
+    #[cfg(unix)]
+    inner: tokio::signal::unix::Signal,
+}
+
+impl SigintStream {
+    fn new() -> Result<Self> {
+        #[cfg(unix)]
+        {
+            let inner = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                .context("failed to subscribe to SIGINT")?;
+            Ok(Self { inner })
+        }
+        #[cfg(not(unix))]
+        {
+            Ok(Self {})
+        }
+    }
+
+    async fn recv(&mut self) {
+        #[cfg(unix)]
+        {
+            self.inner.recv().await;
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    }
 }
 
 struct SigtermStream {

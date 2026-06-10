@@ -508,6 +508,12 @@ mod tests {
         let empty_plugin_dir = tempfile::tempdir().expect("tempdir");
         let _plugin =
             EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty_plugin_dir.path().to_str().expect("utf-8 tempdir")));
+        // Pin ANIMUS_CONFIG_DIR too: kind-based discovery consults the
+        // real `~/.animus/plugins.yaml` registry otherwise, and a dev
+        // machine with an installed workflow_runner plugin pre-empts the
+        // precedence under test.
+        let _config =
+            EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(empty_plugin_dir.path().to_str().expect("utf-8 tempdir")));
 
         // Resolve `current_exe`'s parent dir; that's where the resolver
         // looks for siblings. We can't move `current_exe`, but we CAN
@@ -579,6 +585,8 @@ mod tests {
         let empty_plugin_dir = tempfile::tempdir().expect("tempdir");
         let _plugin =
             EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty_plugin_dir.path().to_str().expect("utf-8 tempdir")));
+        let _config =
+            EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(empty_plugin_dir.path().to_str().expect("utf-8 tempdir")));
 
         let exe = std::env::current_exe().expect("current_exe");
         let exe_dir = exe.parent().expect("exe parent");
@@ -631,6 +639,8 @@ mod tests {
         let empty_plugin_dir = tempfile::tempdir().expect("tempdir");
         let _plugin =
             EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty_plugin_dir.path().to_str().expect("utf-8 tempdir")));
+        let _config =
+            EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(empty_plugin_dir.path().to_str().expect("utf-8 tempdir")));
 
         // Make sure no sibling lookup succeeds: pick a scratch PATH dir
         // that's far from `current_exe`.
@@ -688,6 +698,9 @@ mod tests {
 
         let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let _clear = EnvVarGuard::set("ANIMUS_WORKFLOW_RUNNER_BIN", None);
+        let empty_config_dir = tempfile::tempdir().expect("tempdir");
+        let _config =
+            EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(empty_config_dir.path().to_str().expect("utf-8 tempdir")));
 
         let plugin_dir = tempfile::tempdir().expect("tempdir");
         let plugin_path = plugin_dir.path().join(super::plugin_workflow_runner_binary_name());

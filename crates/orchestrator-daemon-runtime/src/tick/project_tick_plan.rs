@@ -18,7 +18,7 @@ impl ProjectTickPlan {
         requested_ready_dispatch_limit: usize,
     ) -> Self {
         let within_active_hours = ScheduleDispatch::allows_proactive_dispatch(active_hours, now);
-        let should_process_due_schedules = within_active_hours;
+        let should_process_due_schedules = within_active_hours && !pool_draining;
         let should_prepare_ready_tasks = !pool_draining && options.auto_run_ready;
         let ready_dispatch_limit = if should_prepare_ready_tasks { requested_ready_dispatch_limit } else { 0 };
 
@@ -64,7 +64,7 @@ mod tests {
     }
 
     #[test]
-    fn disables_ready_task_preparation_while_pool_is_draining() {
+    fn disables_all_dispatch_while_pool_is_draining() {
         let plan = ProjectTickPlan::build(
             &DaemonRuntimeOptions::default(),
             None,
@@ -74,7 +74,7 @@ mod tests {
         );
 
         assert!(plan.within_active_hours);
-        assert!(plan.should_process_due_schedules);
+        assert!(!plan.should_process_due_schedules, "paused/draining daemon must not dispatch schedules or triggers");
         assert!(!plan.should_prepare_ready_tasks);
         assert_eq!(plan.ready_dispatch_limit, 0);
     }
