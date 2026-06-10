@@ -458,6 +458,7 @@ fn make_task(task_type: TaskType, priority: Priority) -> OrchestratorTask {
             updated_by: "test".to_string(),
             started_at: None,
             completed_at: None,
+            status_changed_at: None,
             version: 1,
         },
         deadline: None,

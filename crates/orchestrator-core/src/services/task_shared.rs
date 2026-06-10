@@ -58,6 +58,9 @@ pub(super) fn validate_task_status_transition(current: TaskStatus, target: TaskS
 
 pub(super) fn apply_task_status(task: &mut OrchestratorTask, status: TaskStatus) {
     let is_blocked_status = status.is_blocked();
+    if task.status != status {
+        task.metadata.status_changed_at = Some(Utc::now());
+    }
     task.status = status;
     task.paused = is_blocked_status;
     task.cancelled = matches!(status, TaskStatus::Cancelled);
@@ -500,6 +503,7 @@ pub(super) fn create_task_in_state(
             updated_by: created_by,
             started_at: None,
             completed_at: None,
+            status_changed_at: None,
             version: 1,
         },
         deadline: None,

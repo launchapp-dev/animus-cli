@@ -52,7 +52,13 @@ pub trait DefaultProjectTickServices {
         Ok(0)
     }
 
-    async fn reconcile_stale_in_progress_tasks(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<usize> {
+    async fn reconcile_stale_in_progress_tasks(
+        &mut self,
+        _hub: Arc<dyn ServiceHub>,
+        _root: &str,
+        _active_subject_ids: &std::collections::HashSet<String>,
+        _stale_threshold_hours: u64,
+    ) -> Result<usize> {
         Ok(0)
     }
 
@@ -294,9 +300,10 @@ where
         self.services.reconcile_manual_timeouts(hub, root).await
     }
 
-    async fn reconcile_stale_in_progress_tasks(&mut self, root: &str) -> Result<usize> {
+    async fn reconcile_stale_in_progress_tasks(&mut self, root: &str, stale_threshold_hours: u64) -> Result<usize> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
-        self.services.reconcile_stale_in_progress_tasks(hub, root).await
+        let active_subject_ids = self.process_manager.active_subject_ids();
+        self.services.reconcile_stale_in_progress_tasks(hub, root, &active_subject_ids, stale_threshold_hours).await
     }
 
     async fn cleanup_stale_workflows(&mut self, root: &str, max_age_hours: u64) -> Result<usize> {
