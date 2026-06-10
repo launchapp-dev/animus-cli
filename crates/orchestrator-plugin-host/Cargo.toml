@@ -19,6 +19,7 @@ animus-session-backend = { workspace = true }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6.0"
+fs2 = "0.4"
 orchestrator-logging = { workspace = true }
 semver = "1"
 sha2 = "0.10"

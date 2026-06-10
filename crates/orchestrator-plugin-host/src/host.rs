@@ -1104,6 +1104,16 @@ impl PluginHost {
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
 
+        // Re-check liveness AFTER the insert. The reader task flips alive to
+        // false and THEN drains the pending map; an insert that raced past
+        // that drain would otherwise park on a sender nobody will answer.
+        // The pending mutex orders the two sides: if the drain missed this
+        // entry, this load is guaranteed to observe alive == false.
+        if !self.inner.alive.load(Ordering::Acquire) {
+            self.inner.pending.lock().await.remove(&id);
+            return Err(HostError::ConnectionLost);
+        }
+
         // One deadline covers BOTH the stdin write and the response wait so a
         // plugin that stopped reading its stdin can't pin the caller past the
         // requested timeout while it holds the transport_write mutex.
@@ -1172,6 +1182,16 @@ async fn request_raw_inner(
     let id = inner.next_id.fetch_add(1, Ordering::Relaxed);
     let (tx, rx) = oneshot::channel();
     inner.pending.lock().await.insert(id, tx);
+
+    // Re-check liveness AFTER the insert. The reader task flips alive to
+    // false and THEN drains the pending map; an insert that raced past that
+    // drain would otherwise park forever on the untimed path. The pending
+    // mutex orders the two sides: if the drain missed this entry, this load
+    // is guaranteed to observe alive == false.
+    if !inner.alive.load(Ordering::Acquire) {
+        inner.pending.lock().await.remove(&id);
+        return Err(HostError::ConnectionLost);
+    }
 
     if let Err(_error) = write_frame_inner(inner, &RpcRequest::new(id, method, params)).await {
         inner.pending.lock().await.remove(&id);
@@ -1589,6 +1609,34 @@ mod tests {
             .expect_err("request against a dead host must fail");
         assert!(matches!(err, HostError::ConnectionLost), "expected ConnectionLost, got: {err:?}");
         assert!(started.elapsed() < Duration::from_secs(5), "alive check must short-circuit, not burn the timeout");
+    }
+
+    /// An untimed request racing the reader teardown (alive observed true,
+    /// reader flips alive + drains pending, THEN the request inserts its
+    /// awaiter) must not park forever: the post-insert alive re-check
+    /// converts the race into `ConnectionLost`. Looped to give the race a
+    /// real chance to interleave; without the re-check this test hangs into
+    /// the outer timeout.
+    #[tokio::test]
+    async fn untimed_request_racing_reader_teardown_returns_connection_lost() {
+        for _ in 0..50 {
+            let (host_reader, plugin_writer) = duplex(8192);
+            let (_plugin_reader, host_writer) = duplex(64 * 1024);
+            let host = PluginHost::from_streams("test", host_reader, host_writer);
+
+            let racing_host = host.clone();
+            let request = tokio::spawn(async move { racing_host.request_typed("$/ping", None).await });
+            // Close the plugin's stdout concurrently with the request: the
+            // reader task sees EOF, flips alive off, and drains pending.
+            drop(plugin_writer);
+
+            let outcome = tokio::time::timeout(Duration::from_secs(5), request)
+                .await
+                .expect("untimed request must not hang after reader teardown")
+                .expect("request task must not panic");
+            let err = outcome.expect_err("no response was ever sent");
+            assert!(matches!(err, HostError::ConnectionLost), "expected ConnectionLost, got: {err:?}");
+        }
     }
 
     /// A plugin that stops draining its stdin must not pin a timed request

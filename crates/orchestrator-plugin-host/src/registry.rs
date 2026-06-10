@@ -120,8 +120,23 @@ impl PluginRegistry {
         Ok(())
     }
 
+    #[cfg(test)]
+    fn empty_for_tests() -> Self {
+        Self {
+            discovered: HashMap::new(),
+            running: HashMap::new(),
+            mcp_tools: HashMap::new(),
+            stderr_sink: None,
+            project_root: PathBuf::from("."),
+        }
+    }
+
     fn register_mcp_tools(&mut self, owner: &str, tools: Vec<McpTool>) -> Result<()> {
-        for tool in tools {
+        // Validate the full batch BEFORE inserting anything so a mid-batch
+        // cross-plugin duplicate cannot leave the registry advertising tools
+        // from a plugin whose registration failed (and whose host was shut
+        // down by the caller).
+        for tool in &tools {
             if let Some((existing_owner, _)) = self.mcp_tools.get(&tool.name) {
                 if existing_owner != owner {
                     return Err(anyhow!(
@@ -132,8 +147,53 @@ impl PluginRegistry {
                     ));
                 }
             }
+        }
+        for tool in tools {
             self.mcp_tools.insert(tool.name.clone(), (owner.to_string(), tool));
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tool(name: &str) -> McpTool {
+        McpTool { name: name.to_string(), description: None, input_schema: None }
+    }
+
+    /// A cross-plugin duplicate anywhere in the batch must leave the
+    /// registry untouched: no tool from the failed plugin may stay
+    /// advertised (the caller shuts the plugin's host down on error, so a
+    /// leftover entry would silently respawn it on the next tool call).
+    #[test]
+    fn duplicate_tool_registration_leaves_no_orphan_tools() {
+        let mut registry = PluginRegistry::empty_for_tests();
+        registry.register_mcp_tools("plugin-a", vec![tool("alpha")]).expect("first registration succeeds");
+
+        let err = registry
+            .register_mcp_tools("plugin-b", vec![tool("beta"), tool("alpha")])
+            .expect_err("cross-plugin duplicate must be rejected");
+        assert!(format!("{err}").contains("duplicate MCP tool 'alpha'"), "unexpected error: {err}");
+
+        assert_eq!(registry.mcp_tool_owner("alpha"), Some("plugin-a"), "original owner must be preserved");
+        assert_eq!(
+            registry.mcp_tool_owner("beta"),
+            None,
+            "no tool from the failed plugin's batch may remain registered"
+        );
+        assert_eq!(registry.mcp_tools().count(), 1);
+    }
+
+    /// Re-registering the same owner's tools (e.g. after a respawn) stays
+    /// allowed — only cross-plugin collisions are duplicates.
+    #[test]
+    fn same_owner_reregistration_is_allowed() {
+        let mut registry = PluginRegistry::empty_for_tests();
+        registry.register_mcp_tools("plugin-a", vec![tool("alpha")]).expect("first registration");
+        registry.register_mcp_tools("plugin-a", vec![tool("alpha"), tool("gamma")]).expect("same-owner re-register");
+        assert_eq!(registry.mcp_tool_owner("alpha"), Some("plugin-a"));
+        assert_eq!(registry.mcp_tool_owner("gamma"), Some("plugin-a"));
     }
 }
