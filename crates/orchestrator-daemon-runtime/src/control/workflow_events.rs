@@ -13,7 +13,9 @@
 //! control-socket connection that opened them. The daemon does not persist
 //! subscriptions across restarts. A subscription that pinned its filter to
 //! a single `workflow_id` is auto-closed when `workflow_completed` or
-//! `workflow_failed` arrives for that workflow.
+//! `workflow_failed` arrives for that workflow — even when a `kinds`
+//! filter excludes the terminal event itself, so a `phase_completed`-only
+//! subscriber doesn't linger after its workflow ends.
 
 use std::sync::Arc;
 
@@ -65,7 +67,9 @@ fn subscriber_buffer_from_quotas() -> usize {
 /// Workflow kinds whose arrival implicitly closes any subscription
 /// filtered to that specific workflow id. The terminal `subscription/closed`
 /// notification fires *after* the matching event is delivered so clients
-/// see the final event and then a clean stream end.
+/// see the final event and then a clean stream end. The close also fires
+/// when the subscription's `kinds` filter excludes the terminal event —
+/// the event is withheld but the subscription still ends.
 const TERMINAL_WORKFLOW_KINDS: &[&str] = &["workflow_completed", "workflow_failed"];
 
 /// Opaque identifier for a single subscription. Returned by
@@ -239,7 +243,12 @@ impl WorkflowEventBroadcaster {
         {
             let guard = self.subscribers.lock().expect("workflow event subscribers mutex poisoned");
             for slot in guard.iter() {
+                let pinned_terminal =
+                    is_terminal && slot.filter.workflow_id.as_deref() == Some(event.workflow_id.as_str());
                 if !slot.filter.matches(&event) {
+                    if pinned_terminal {
+                        terminal_ids.push(slot.id);
+                    }
                     continue;
                 }
                 // Reserve one slot in the underlying channel for the
@@ -268,7 +277,7 @@ impl WorkflowEventBroadcaster {
                         // them to *this* workflow. Open-ended subscribers
                         // (no workflow_id filter) keep streaming across
                         // workflow boundaries.
-                        if is_terminal && slot.filter.workflow_id.as_deref() == Some(event.workflow_id.as_str()) {
+                        if pinned_terminal {
                             terminal_ids.push(slot.id);
                         }
                     }
@@ -469,6 +478,32 @@ mod tests {
         assert!(matches!(open_first, SubscriberItem::Event(_)));
         // Open-ended subscriber must still be live (no auto-close).
         assert_eq!(bus.subscriber_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn terminal_workflow_kind_auto_closes_targeted_subscriber_even_when_kinds_filter_excludes_it() {
+        let bus = WorkflowEventBroadcaster::new();
+        let (_id, mut rx) = bus.subscribe(WorkflowEventFilter {
+            workflow_id: Some("wf-1".into()),
+            kinds: Some(vec!["phase_completed".into()]),
+        });
+        assert_eq!(bus.subscriber_count(), 1);
+
+        bus.emit(evt("wf-1", "phase_completed"));
+        bus.emit(evt("wf-1", "workflow_completed"));
+
+        assert_eq!(bus.subscriber_count(), 0, "pinned subscriber must auto-close on terminal event");
+        let first = unwrap_event(rx.recv().await.expect("phase event must arrive"));
+        assert_eq!(first.kind, "phase_completed");
+        match rx.recv().await.expect("close must follow") {
+            SubscriberItem::Closed { reason } => {
+                assert!(reason.contains("wf-1"), "reason should mention workflow id, got {reason}");
+            }
+            SubscriberItem::Event(e) => {
+                panic!("terminal event must be withheld by kinds filter, got Event({})", e.kind)
+            }
+        }
+        assert!(rx.recv().await.is_none(), "channel ends after terminal close");
     }
 
     #[tokio::test]

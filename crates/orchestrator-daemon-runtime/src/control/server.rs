@@ -42,6 +42,16 @@ use orchestrator_plugin_host::PluginStatusRegistry;
 /// ever ships.
 pub const CONTROL_SERVER_DISABLE_ENV: &str = "ANIMUS_DAEMON_DISABLE_CONTROL_SERVER";
 
+/// How long the accept loop waits for in-flight connection tasks to
+/// finish after the shutdown signal before aborting the stragglers.
+#[cfg(unix)]
+const CONNECTION_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Outer bound [`ControlServerHandle::shutdown`] places on the accept
+/// task as a whole. Strictly larger than [`CONNECTION_DRAIN_TIMEOUT`]
+/// so the in-loop drain gets to run before the safety-net abort.
+const ACCEPT_LOOP_SHUTDOWN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Returns `true` when [`CONTROL_SERVER_DISABLE_ENV`] is set to a truthy
 /// value.
 ///
@@ -133,12 +143,18 @@ impl ControlServerHandle {
     }
 
     /// Signal the accept loop to stop, wait for in-flight connections to
-    /// finish, then remove the socket file.
+    /// finish (the accept loop drains them with a bounded timeout,
+    /// aborting stragglers), then remove the socket file.
     pub async fn shutdown(mut self) -> Result<(), ControlError> {
         let _ = self.shutdown_tx.send(());
-        if let Some(handle) = self.accept_task.take() {
-            handle.abort();
-            let _ = handle.await;
+        if let Some(mut handle) = self.accept_task.take() {
+            // The accept loop's own drain is bounded by
+            // CONNECTION_DRAIN_TIMEOUT; this outer timeout is a safety
+            // net in case the loop itself wedges.
+            if tokio::time::timeout(ACCEPT_LOOP_SHUTDOWN_TIMEOUT, &mut handle).await.is_err() {
+                handle.abort();
+                let _ = handle.await;
+            }
         }
         if self.socket_path.exists() {
             std::fs::remove_file(&self.socket_path)
@@ -314,6 +330,7 @@ impl ControlServer {
         let accept_task = tokio::spawn(accept_loop(
             listener,
             surface,
+            shutdown_tx.clone(),
             shutdown_tx.subscribe(),
             socket_path.clone(),
             broadcaster,
@@ -376,23 +393,29 @@ impl ControlServer {
     }
 }
 
-/// Background task: accept connections until the shutdown signal fires.
+/// Background task: accept connections until the shutdown signal fires,
+/// then drain in-flight connection tasks with a bounded timeout.
 ///
-/// Each accepted connection is moved into a fresh [`tokio::spawn`] task
-/// running [`ControlConnection::serve`]. The accept loop never blocks
+/// Each accepted connection runs [`ControlConnection::serve`] inside a
+/// [`tokio::task::JoinSet`] so shutdown can wait for active clients to
+/// finish (each connection also receives the shutdown broadcast and
+/// exits at its next frame boundary). The accept loop never blocks
 /// on a single connection; connection-handler errors are logged via
 /// `tracing` (not yet wired through the daemon's structured event hook —
 /// that's part of the C5 ↔ daemon hook plumbing).
 #[cfg(unix)]
+#[allow(clippy::too_many_arguments)]
 async fn accept_loop(
     listener: UnixListener,
     surface: Arc<dyn ControlSurface>,
+    shutdown_tx: broadcast::Sender<()>,
     mut shutdown_rx: broadcast::Receiver<()>,
     socket_path: PathBuf,
     broadcaster: Option<Arc<WorkflowEventBroadcaster>>,
     policy: PolicyState,
     status_registry: Option<Arc<PluginStatusRegistry>>,
 ) {
+    let mut connections = tokio::task::JoinSet::new();
     loop {
         tokio::select! {
             _ = shutdown_rx.recv() => {
@@ -401,8 +424,9 @@ async fn accept_loop(
                     path = %socket_path.display(),
                     "control server shutdown signal received; stopping accept loop"
                 );
-                return;
+                break;
             }
+            Some(_) = connections.join_next(), if !connections.is_empty() => {}
             accept = listener.accept() => {
                 match accept {
                     Ok((stream, _peer)) => {
@@ -415,10 +439,12 @@ async fn accept_loop(
                             None => Arc::new(ConnectionPrincipal::anonymous()),
                         };
                         let status_registry_clone = status_registry.clone();
-                        tokio::spawn(async move {
+                        let conn_shutdown_rx = shutdown_tx.subscribe();
+                        connections.spawn(async move {
                             let mut connection = ControlConnection::new(stream, surface)
                                 .with_policy(policy_clone)
-                                .with_principal(principal);
+                                .with_principal(principal)
+                                .with_shutdown(conn_shutdown_rx);
                             if let Some(b) = broadcaster_clone {
                                 connection = connection.with_workflow_event_broadcaster(b);
                             }
@@ -444,6 +470,17 @@ async fn accept_loop(
                 }
             }
         }
+    }
+    drop(listener);
+    let drain = async { while connections.join_next().await.is_some() {} };
+    if tokio::time::timeout(CONNECTION_DRAIN_TIMEOUT, drain).await.is_err() {
+        tracing::warn!(
+            target: "animus.control.server",
+            path = %socket_path.display(),
+            remaining = connections.len(),
+            "control connections did not drain within timeout; aborting stragglers"
+        );
+        connections.shutdown().await;
     }
 }
 
