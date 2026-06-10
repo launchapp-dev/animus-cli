@@ -177,6 +177,19 @@ fn render_markdown(meta: &ConversationMeta, messages: &[ChatMessage]) -> String 
         if !tools.is_empty() {
             let _ = writeln!(out, "_Tools: {}_\n", tools.join(", "));
         }
+        // Per-turn token usage + cost footer, when the provider reported it.
+        let mut footer: Vec<String> = Vec::new();
+        if let Some(usage) = &m.usage {
+            footer.push(format!("{} in · {} out tokens", usage.input, usage.output));
+        }
+        if let Some(cost) = m.cost_usd {
+            if cost > 0.0 {
+                footer.push(format!("${cost:.4}"));
+            }
+        }
+        if !footer.is_empty() {
+            let _ = writeln!(out, "_{}_\n", footer.join(" · "));
+        }
     }
     out
 }
@@ -426,6 +439,27 @@ mod export_tests {
         meta.title = None;
         let md = render_markdown(&meta, &[]);
         assert!(md.contains("# conv-x"), "{md}");
+    }
+
+    #[test]
+    fn markdown_includes_usage_and_cost_footer() {
+        let mut with_usage = msg(ChatRole::Assistant, "done", vec![]);
+        with_usage.usage = Some(protocol::TokenUsage {
+            input: 1200,
+            output: 340,
+            reasoning: None,
+            cache_read: None,
+            cache_write: None,
+        });
+        with_usage.cost_usd = Some(0.0123);
+        let md = render_markdown(&sample_meta(), &[with_usage]);
+        assert!(md.contains("_1200 in · 340 out tokens · $0.0123_"), "{md}");
+
+        // No usage/cost → no footer line at all.
+        let plain = msg(ChatRole::Assistant, "done", vec![]);
+        let md2 = render_markdown(&sample_meta(), &[plain]);
+        assert!(!md2.contains("tokens"), "{md2}");
+        assert!(!md2.contains('$'), "{md2}");
     }
 
     #[test]
