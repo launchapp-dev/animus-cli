@@ -48,7 +48,16 @@ pub trait ProjectTickHooks {
         Ok(0)
     }
 
-    async fn dispatch_ready_tasks(&mut self, root: &str, _limit: usize) -> Result<DispatchWorkflowStartSummary>;
+    /// Dispatch work into free pool headroom. `limit` caps auto-dispatched
+    /// Ready tasks (0 when `auto_run_ready` is off); `queue_drain_limit`
+    /// caps explicitly enqueued dispatch-queue entries, which drain even
+    /// when ready-task auto-dispatch is disabled.
+    async fn dispatch_ready_tasks(
+        &mut self,
+        root: &str,
+        _limit: usize,
+        _queue_drain_limit: usize,
+    ) -> Result<DispatchWorkflowStartSummary>;
 
     async fn collect_health(&mut self, root: &str) -> Result<Value>;
 

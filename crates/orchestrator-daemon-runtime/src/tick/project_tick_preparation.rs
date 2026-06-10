@@ -6,6 +6,7 @@ use crate::{DaemonRuntimeOptions, ProjectTickPlan};
 pub struct ProjectTickPreparation {
     pub schedule_plan: ProjectTickPlan,
     pub ready_dispatch_limit: usize,
+    pub queue_drain_limit: usize,
 }
 
 impl ProjectTickPreparation {
@@ -26,7 +27,11 @@ impl ProjectTickPreparation {
             daemon_pool_size,
             active_process_count,
         );
-        Self { schedule_plan, ready_dispatch_limit: tick_plan.ready_dispatch_limit }
+        Self {
+            schedule_plan,
+            ready_dispatch_limit: tick_plan.ready_dispatch_limit,
+            queue_drain_limit: tick_plan.queue_drain_limit,
+        }
     }
 }
 
