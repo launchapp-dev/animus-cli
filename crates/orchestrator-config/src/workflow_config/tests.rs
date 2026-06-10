@@ -3163,6 +3163,117 @@ daemon:
 }
 
 #[test]
+fn yaml_parse_error_message_redacts_keychain_resolved_env_value() {
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
+    // A plain `${VAR}` resolved from the keychain fallback into an int-typed
+    // position makes serde_yaml quote the offending scalar. The surfaced
+    // error must redact the keychain-resolved value just like declared
+    // secrets.
+    let _v = EnvVarGuard::unset("ANIMUS_TEST_KEYCHAIN_REDACT");
+    struct StubResolver;
+    impl super::env_interp::WorkflowSecretResolver for StubResolver {
+        fn resolve(&self, key: &str) -> Option<String> {
+            (key == "ANIMUS_TEST_KEYCHAIN_REDACT").then(|| "zzz-keychain-leak-zzz".to_string())
+        }
+    }
+    super::env_interp::install_workflow_secret_resolver_for_test(std::sync::Arc::new(StubResolver));
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
+    let yaml = r#"
+daemon:
+  pool_size: ${ANIMUS_TEST_KEYCHAIN_REDACT}
+"#;
+    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
+
+    let result = compile_yaml_workflow_files(temp.path());
+    super::env_interp::clear_workflow_secret_resolver_for_test();
+    let err = result.expect_err("compile should fail");
+    let display = format!("{:#}", err);
+    assert!(!display.contains("zzz-keychain-leak-zzz"), "keychain value leaked into diagnostics: {display}");
+    assert!(
+        display.contains("[redacted:ANIMUS_TEST_KEYCHAIN_REDACT]"),
+        "redaction marker should name the env var: {display}"
+    );
+}
+
+#[test]
+fn upsert_generated_workflow_phase_drops_legacy_compiled_blocks() {
+    // Pre-fix releases dumped the entire COMPILED config (resolved `${VAR}` /
+    // `${secret.X}` values included) into generated-workflow.yaml. A post-fix
+    // upsert keeps the authored blocks (phases, phase_catalog, workflows) but
+    // drops the rest so leaked values stop being re-serialized.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let workflows_dir = temp.path().join(".animus").join("workflows");
+    fs::create_dir_all(&workflows_dir).expect("mkdir");
+    let legacy_dump = r#"
+default_workflow_ref: flow
+mcp_servers:
+  linear:
+    transport: stdio
+    command: linear-mcp
+    env:
+      LINEAR_API_TOKEN: "zzz-legacy-leak-zzz"
+phases:
+  old-phase:
+    mode: agent
+    agent: swe
+    directive: "Old ${KEEP_UNRESOLVED}."
+workflows:
+- id: flow
+  phases: [old-phase]
+"#;
+    fs::write(workflows_dir.join("generated-workflow.yaml"), legacy_dump).expect("write legacy dump");
+
+    let definition: PhaseExecutionDefinition = serde_json::from_value(serde_json::json!({
+        "mode": "agent",
+        "agent_id": "swe",
+        "directive": "New phase."
+    }))
+    .expect("definition should parse");
+    super::yaml_compiler::upsert_generated_workflow_phase(temp.path(), "new-phase", &definition, None)
+        .expect("upsert should succeed");
+
+    let content = fs::read_to_string(workflows_dir.join("generated-workflow.yaml")).expect("read overlay");
+    assert!(content.contains("new-phase"), "upserted phase missing: {content}");
+    assert!(content.contains("old-phase"), "previously authored phase should survive: {content}");
+    assert!(content.contains("${KEEP_UNRESOLVED}"), "unresolved references must round-trip verbatim: {content}");
+    assert!(!content.contains("zzz-legacy-leak-zzz"), "legacy leaked value should be dropped: {content}");
+    assert!(!content.contains("mcp_servers"), "non-authored blocks should be dropped: {content}");
+}
+
+#[test]
+fn yaml_compiles_when_comment_references_unset_env_var() {
+    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
+    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
+    let _v = EnvVarGuard::unset("ANIMUS_TEST_COMMENTED_OUT_VAR");
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
+    let yaml = r#"
+# setup: export ${ANIMUS_TEST_COMMENTED_OUT_VAR} before running
+# see ${docs-url} for details
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build." # trailing note about ${ANIMUS_TEST_COMMENTED_OUT_VAR}
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "Be a SWE."
+workflows:
+- id: flow
+  phases: [build]
+"#;
+    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
+
+    let compiled = compile_yaml_workflow_files(temp.path()).expect("compile").expect("Some");
+    assert!(compiled.phase_definitions.contains_key("build"));
+}
+
+#[test]
 fn yaml_merge_field_merges_daemon_blocks_across_overlays() {
     let base_yaml = r#"
 daemon:

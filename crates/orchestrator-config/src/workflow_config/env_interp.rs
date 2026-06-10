@@ -15,6 +15,10 @@
 //!
 //! Errors include the YAML file path and 1-based line number of the offending
 //! reference for fast diagnosis.
+//!
+//! References inside YAML comments are left untouched: a `#` that begins a
+//! comment (preceded by start-of-line or whitespace, outside quoted scalars
+//! and block scalar content) suppresses interpolation through end of line.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -80,10 +84,25 @@ fn lookup_env(key: &str) -> Option<String> {
 /// [`WorkflowSecretResolver`] (typically a keychain-backed store). The
 /// chain is pure when no resolver is installed.
 fn lookup_env_then_secret_store(key: &str) -> Option<String> {
+    lookup_env_then_secret_store_tagged(key).map(|resolved| resolved.value)
+}
+
+/// A resolved `${VAR}` value tagged with whether it came from the installed
+/// secret store (keychain) rather than the process environment. The combined
+/// interpolation pass uses the tag to collect keychain-resolved values into
+/// the diagnostic redaction map.
+pub(crate) struct ResolvedEnvValue {
+    pub(crate) value: String,
+    pub(crate) from_secret_store: bool,
+}
+
+fn lookup_env_then_secret_store_tagged(key: &str) -> Option<ResolvedEnvValue> {
     if let Some(value) = lookup_env(key) {
-        return Some(value);
+        return Some(ResolvedEnvValue { value, from_secret_store: false });
     }
-    current_workflow_secret_resolver().and_then(|store| store.resolve(key))
+    current_workflow_secret_resolver()
+        .and_then(|store| store.resolve(key))
+        .map(|value| ResolvedEnvValue { value, from_secret_store: true })
 }
 
 /// `${secret.<name>}` references are reserved for the dedicated secrets
@@ -135,12 +154,13 @@ where
     // preserved intact. `$` is always ASCII (0x24), so it cannot appear inside
     // a multi-byte UTF-8 sequence — splitting on `$` boundaries is safe.
     let bytes = content.as_bytes();
+    let mut comments = CommentSpans::new(content);
     let mut out = String::with_capacity(content.len());
     let mut i = 0usize;
     let mut copy_from = 0usize;
 
     while i < bytes.len() {
-        if bytes[i] != b'$' {
+        if bytes[i] != b'$' || comments.contains(i) {
             i += 1;
             continue;
         }
@@ -203,6 +223,132 @@ where
     Ok(out)
 }
 
+/// Byte ranges of YAML comments in `content`, in ascending order.
+///
+/// A `#` begins a comment when it is preceded by start-of-line or whitespace,
+/// is not inside a single- or double-quoted scalar, and is not inside block
+/// scalar (`|` / `>`) content. Quote state carries across lines so multi-line
+/// quoted scalars containing `#` are not misread as comments. The scanner is
+/// deliberately conservative: when context is ambiguous it reports no comment,
+/// which preserves the historical interpolate-everything behavior.
+fn yaml_comment_spans(content: &str) -> Vec<(usize, usize)> {
+    fn quote_can_open(bytes: &[u8], idx: usize) -> bool {
+        if idx == 0 {
+            return true;
+        }
+        matches!(bytes[idx - 1], b' ' | b'\t' | b':' | b'-' | b'[' | b'{' | b',')
+    }
+
+    fn is_block_scalar_header(effective: &str) -> bool {
+        let trimmed = effective.trim_end();
+        let Some(token) = trimmed.rsplit([' ', '\t']).next() else {
+            return false;
+        };
+        let mut chars = token.chars();
+        if !matches!(chars.next(), Some('|') | Some('>')) {
+            return false;
+        }
+        if !chars.all(|c| matches!(c, '+' | '-' | '0'..='9')) {
+            return false;
+        }
+        let prefix = trimmed[..trimmed.len() - token.len()].trim_end();
+        prefix.is_empty() || prefix.ends_with(':') || prefix.ends_with('-')
+    }
+
+    let mut spans = Vec::new();
+    let mut in_single = false;
+    let mut in_double = false;
+    let mut block_scalar_indent: Option<usize> = None;
+    let mut line_start = 0usize;
+
+    for line in content.split_inclusive('\n') {
+        let line_end = line_start + line.len();
+        let stripped = line.strip_suffix('\n').unwrap_or(line);
+        let bytes = stripped.as_bytes();
+        let indent = bytes.iter().take_while(|b| **b == b' ' || **b == b'\t').count();
+        let blank = indent == bytes.len();
+
+        if let Some(parent_indent) = block_scalar_indent {
+            if blank || indent > parent_indent {
+                line_start = line_end;
+                continue;
+            }
+            block_scalar_indent = None;
+        }
+
+        let mut comment_start: Option<usize> = None;
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let b = bytes[i];
+            if in_double {
+                if b == b'\\' {
+                    i += 2;
+                    continue;
+                }
+                if b == b'"' {
+                    in_double = false;
+                }
+                i += 1;
+                continue;
+            }
+            if in_single {
+                if b == b'\'' {
+                    if i + 1 < bytes.len() && bytes[i + 1] == b'\'' {
+                        i += 2;
+                        continue;
+                    }
+                    in_single = false;
+                }
+                i += 1;
+                continue;
+            }
+            match b {
+                b'"' if quote_can_open(bytes, i) => in_double = true,
+                b'\'' if quote_can_open(bytes, i) => in_single = true,
+                b'#' if i == 0 || bytes[i - 1] == b' ' || bytes[i - 1] == b'\t' => {
+                    comment_start = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        if let Some(start) = comment_start {
+            spans.push((line_start + start, line_end));
+        }
+        if !in_single && !in_double {
+            let effective = &stripped[..comment_start.unwrap_or(bytes.len())];
+            if is_block_scalar_header(effective) {
+                block_scalar_indent = Some(indent);
+            }
+        }
+        line_start = line_end;
+    }
+
+    spans
+}
+
+/// Cursor over [`yaml_comment_spans`] output for the monotonically increasing
+/// offsets the interpolators walk.
+struct CommentSpans {
+    spans: Vec<(usize, usize)>,
+    next: usize,
+}
+
+impl CommentSpans {
+    fn new(content: &str) -> Self {
+        Self { spans: yaml_comment_spans(content), next: 0 }
+    }
+
+    fn contains(&mut self, offset: usize) -> bool {
+        while self.next < self.spans.len() && self.spans[self.next].1 <= offset {
+            self.next += 1;
+        }
+        self.next < self.spans.len() && self.spans[self.next].0 <= offset
+    }
+}
+
 /// Scan `bytes` for the first unmatched `}`. Tracks brace depth so nested
 /// `${VAR:-${OTHER}}` would still be parsed coherently if we choose to support
 /// nesting later. For now we don't recurse — but balancing keeps us honest.
@@ -226,6 +372,34 @@ where
     F: Fn(&str) -> Option<String>,
     L: Fn() -> usize,
 {
+    resolve_reference_tagged(
+        body,
+        source_label,
+        &|key: &str| resolver(key).map(|value| ResolvedEnvValue { value, from_secret_store: false }),
+        line_of,
+    )
+    .map(|(value, _)| value)
+}
+
+/// Resolve a non-secret `${...}` reference. Returns the substituted value
+/// plus `Some(<env var name>)` when the value came from the installed secret
+/// store (so the caller can add it to the diagnostic redaction map); values
+/// from the process environment or `:-` defaults return `None`.
+fn resolve_reference_tagged<F, L>(
+    body: &str,
+    source_label: &str,
+    resolver: &F,
+    line_of: L,
+) -> Result<(String, Option<String>)>
+where
+    F: Fn(&str) -> Option<ResolvedEnvValue>,
+    L: Fn() -> usize,
+{
+    fn tag(name: &str, resolved: ResolvedEnvValue) -> (String, Option<String>) {
+        let key = resolved.from_secret_store.then(|| name.to_string());
+        (resolved.value, key)
+    }
+
     // Split on whichever of ':-' / ':?' occurs first, so a modifier payload
     // containing the other token (e.g. `${KEY:?missing :-(}`) is not
     // misparsed as the wrong shape.
@@ -235,14 +409,17 @@ where
         let name = body[..idx].trim();
         validate_name(name, source_label, &line_of)?;
         let default = &body[idx + 2..];
-        return Ok(resolver(name).unwrap_or_else(|| default.to_string()));
+        return Ok(match resolver(name) {
+            Some(resolved) => tag(name, resolved),
+            None => (default.to_string(), None),
+        });
     }
     if let Some(idx) = required_idx {
         let name = body[..idx].trim();
         validate_name(name, source_label, &line_of)?;
         let message = body[idx + 2..].trim();
         return match resolver(name) {
-            Some(value) => Ok(value),
+            Some(resolved) => Ok(tag(name, resolved)),
             None => Err(anyhow!(
                 "workflow YAML at {} line {} requires env var {}: {}",
                 source_label,
@@ -256,7 +433,7 @@ where
     let name = body.trim();
     validate_name(name, source_label, &line_of)?;
     match resolver(name) {
-        Some(value) => Ok(value),
+        Some(resolved) => Ok(tag(name, resolved)),
         None => Err(anyhow!("workflow YAML at {} line {} references unset env var {}.", source_label, line_of(), name)),
     }
 }
@@ -311,12 +488,13 @@ where
     F: Fn(&str) -> Option<String>,
 {
     let bytes = content.as_bytes();
+    let mut comments = CommentSpans::new(content);
     let mut out = String::with_capacity(content.len());
     let mut i = 0usize;
     let mut copy_from = 0usize;
 
     while i < bytes.len() {
-        if bytes[i] != b'$' {
+        if bytes[i] != b'$' || comments.contains(i) {
             i += 1;
             continue;
         }
@@ -438,17 +616,22 @@ pub fn interpolate_env_and_secrets(
     interpolate_env_and_secrets_with(content, source_label, secrets, lookup_env_then_secret_store)
 }
 
-/// Like [`interpolate_env_and_secrets`], but also returns the map of secret
-/// name → resolved value for every `${secret.<name>}` reference that was
-/// substituted (ordinary `${VAR}` env interpolations are not collected).
-/// Callers use the map to redact resolved secret values from any
-/// user-visible diagnostics built from the substituted content.
+/// Like [`interpolate_env_and_secrets`], but also returns the map of
+/// resolved value → redaction label for every substitution whose value came
+/// from a secret source: `${secret.<name>}` references (labeled by secret
+/// name) and plain `${VAR}` references resolved from the installed secret
+/// store / keychain (labeled by env var name). Plain `${VAR}` references
+/// resolved from the process environment are not collected. The map is
+/// keyed by the resolved VALUE so a secret and a keychain env var sharing a
+/// name can never shadow each other's entry; callers use it to redact
+/// resolved secret values from any user-visible diagnostics built from the
+/// substituted content.
 pub(crate) fn interpolate_env_and_secrets_collecting(
     content: &str,
     source_label: &str,
     secrets: &BTreeMap<String, SecretRef>,
 ) -> Result<(String, BTreeMap<String, String>)> {
-    interpolate_env_and_secrets_with_resolutions(content, source_label, secrets, lookup_env_then_secret_store)
+    interpolate_env_and_secrets_with_resolutions(content, source_label, secrets, lookup_env_then_secret_store_tagged)
 }
 
 pub(crate) fn interpolate_env_and_secrets_with<F>(
@@ -460,7 +643,10 @@ pub(crate) fn interpolate_env_and_secrets_with<F>(
 where
     F: Fn(&str) -> Option<String>,
 {
-    interpolate_env_and_secrets_with_resolutions(content, source_label, secrets, resolver).map(|(out, _)| out)
+    interpolate_env_and_secrets_with_resolutions(content, source_label, secrets, |key| {
+        resolver(key).map(|value| ResolvedEnvValue { value, from_secret_store: false })
+    })
+    .map(|(out, _)| out)
 }
 
 fn interpolate_env_and_secrets_with_resolutions<F>(
@@ -470,16 +656,18 @@ fn interpolate_env_and_secrets_with_resolutions<F>(
     resolver: F,
 ) -> Result<(String, BTreeMap<String, String>)>
 where
-    F: Fn(&str) -> Option<String>,
+    F: Fn(&str) -> Option<ResolvedEnvValue>,
 {
+    let untagged_resolver = |key: &str| resolver(key).map(|resolved| resolved.value);
     let mut resolutions: BTreeMap<String, String> = BTreeMap::new();
     let bytes = content.as_bytes();
+    let mut comments = CommentSpans::new(content);
     let mut out = String::with_capacity(content.len());
     let mut i = 0usize;
     let mut copy_from = 0usize;
 
     while i < bytes.len() {
-        if bytes[i] != b'$' {
+        if bytes[i] != b'$' || comments.contains(i) {
             i += 1;
             continue;
         }
@@ -508,14 +696,19 @@ where
             };
             let body = &content[body_start..body_start + close_off];
             let resolved = if is_secret_reference(body) {
-                let value = resolve_secret_reference(body, source_label, secrets, &resolver, || {
+                let value = resolve_secret_reference(body, source_label, secrets, &untagged_resolver, || {
                     line_number_for_offset(content, start)
                 })?;
                 let key = body.trim().strip_prefix(SECRET_PREFIX).unwrap_or("").trim();
-                resolutions.insert(key.to_string(), value.clone());
+                resolutions.insert(value.clone(), key.to_string());
                 value
             } else {
-                resolve_reference(body, source_label, &resolver, || line_number_for_offset(content, start))?
+                let (value, secret_store_key) =
+                    resolve_reference_tagged(body, source_label, &resolver, || line_number_for_offset(content, start))?;
+                if let Some(key) = secret_store_key {
+                    resolutions.insert(value.clone(), key);
+                }
+                value
             };
             out.push_str(&resolved);
             i = body_start + close_off + 1;
@@ -540,12 +733,17 @@ where
 /// YAML may have legitimate uses.
 pub fn lint_sensitive_interpolations(content: &str, source_label: &str) -> Vec<String> {
     let mut warnings = Vec::new();
+    let mut comments = CommentSpans::new(content);
+    let mut line_offset = 0usize;
     let mut in_secrets_block = false;
     let mut in_env_block = false;
     let mut env_block_indent: Option<usize> = None;
     let mut secrets_indent: Option<usize> = None;
 
-    for (line_idx, line) in content.lines().enumerate() {
+    for (line_idx, raw_line) in content.split_inclusive('\n').enumerate() {
+        let line_start = line_offset;
+        line_offset += raw_line.len();
+        let line = raw_line.trim_end_matches(['\n', '\r']);
         let trimmed = line.trim_start();
         let indent = line.len() - trimmed.len();
 
@@ -588,7 +786,7 @@ pub fn lint_sensitive_interpolations(content: &str, source_label: &str) -> Vec<S
         let line_bytes = line.as_bytes();
         let mut i = 0usize;
         while i + 1 < line_bytes.len() {
-            if line_bytes[i] == b'$' && line_bytes[i + 1] == b'{' {
+            if line_bytes[i] == b'$' && line_bytes[i + 1] == b'{' && !comments.contains(line_start + i) {
                 let body_start = i + 2;
                 let body_rel = &line_bytes[body_start..];
                 let Some(close_off) = find_matching_close(body_rel) else {
@@ -867,6 +1065,133 @@ mod tests {
         let out =
             interpolate_env_and_secrets_with("prompt: $${secret.api}\n", "test.yaml", &secrets, resolver).unwrap();
         assert_eq!(out, "prompt: ${secret.api}\n");
+    }
+
+    #[test]
+    fn comment_only_line_with_unset_var_is_left_untouched() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::unset(KEY);
+        let src = format!("# export ${{{}}}\nkey: value\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn comment_with_invalid_var_name_is_left_untouched() {
+        let _g = env_lock().lock().unwrap();
+        let src = "# see ${docs-url}\nkey: value\n";
+        let out = interpolate_env(src, "test.yaml").unwrap();
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn trailing_comment_after_value_is_left_untouched() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::set(KEY, "expanded");
+        let src = format!("key: ${{{KEY}}} # docs: ${{UNSET_IN_COMMENT}}\n");
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, "key: expanded # docs: ${UNSET_IN_COMMENT}\n");
+    }
+
+    #[test]
+    fn hash_inside_quoted_scalar_still_interpolates() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::set(KEY, "expanded");
+        let out = interpolate_env(&format!("key: \"#not-a-comment ${{{}}}\"\n", KEY), "test.yaml").unwrap();
+        assert_eq!(out, "key: \"#not-a-comment expanded\"\n");
+    }
+
+    #[test]
+    fn hash_heading_inside_block_scalar_still_interpolates() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::set(KEY, "expanded");
+        let src = format!("prompt: |\n  # Heading ${{{}}}\n  body\nkey: value\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, "prompt: |\n  # Heading expanded\n  body\nkey: value\n");
+    }
+
+    #[test]
+    fn comment_after_block_scalar_content_is_left_untouched() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::unset(KEY);
+        let src = format!("prompt: |\n  body text\n# note ${{{}}}\nkey: value\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn apostrophe_in_plain_scalar_does_not_suppress_later_comment() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::unset(KEY);
+        let src = format!("note: it's fine\n# export ${{{}}}\n", KEY);
+        let out = interpolate_env(&src, "test.yaml").unwrap();
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn combined_pass_leaves_comment_references_untouched() {
+        let src = "# setup: ${UNSET_VAR} and ${secret.undeclared}\nkey: value\n";
+        let out = interpolate_env_and_secrets_with(src, "test.yaml", &BTreeMap::new(), |_| None).unwrap();
+        assert_eq!(out, src);
+    }
+
+    #[test]
+    fn lint_skips_sensitive_looking_references_in_comments() {
+        let src = "# export ${LINEAR_TOKEN}\nurl: ${TEAM_URL:-https://example.com}\n";
+        let warnings = lint_sensitive_interpolations(src, "test.yaml");
+        assert!(warnings.is_empty(), "comment-only reference should not warn: {warnings:?}");
+    }
+
+    #[test]
+    fn collecting_pass_collects_keychain_resolved_env_values() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::unset(KEYCHAIN_FALLBACK_KEY);
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(KEYCHAIN_FALLBACK_KEY.to_string(), "keychain-token-value".to_string());
+        install_workflow_secret_resolver_for_test(Arc::new(StubResolver(map)));
+
+        let src = format!("token: ${{{}}}\n", KEYCHAIN_FALLBACK_KEY);
+        let (out, resolutions) = interpolate_env_and_secrets_collecting(&src, "test.yaml", &BTreeMap::new()).unwrap();
+        assert_eq!(out, "token: keychain-token-value\n");
+        assert_eq!(resolutions.get("keychain-token-value").map(|s| s.as_str()), Some(KEYCHAIN_FALLBACK_KEY));
+
+        clear_workflow_secret_resolver_for_test();
+    }
+
+    #[test]
+    fn collecting_pass_keeps_both_values_when_secret_and_keychain_names_collide() {
+        let resolver = |key: &str| match key {
+            "SECRET_ENV" => Some(ResolvedEnvValue { value: "first-secret-value".to_string(), from_secret_store: true }),
+            "TOKEN" => Some(ResolvedEnvValue { value: "second-keychain-value".to_string(), from_secret_store: true }),
+            _ => None,
+        };
+        let secrets = secret_map("TOKEN", "SECRET_ENV");
+        let (out, resolutions) = interpolate_env_and_secrets_with_resolutions(
+            "a: ${secret.TOKEN}\nb: ${TOKEN}\n",
+            "test.yaml",
+            &secrets,
+            resolver,
+        )
+        .unwrap();
+        assert_eq!(out, "a: first-secret-value\nb: second-keychain-value\n");
+        assert_eq!(resolutions.get("first-secret-value").map(|s| s.as_str()), Some("TOKEN"));
+        assert_eq!(resolutions.get("second-keychain-value").map(|s| s.as_str()), Some("TOKEN"));
+    }
+
+    #[test]
+    fn collecting_pass_does_not_collect_process_env_values() {
+        let _g = env_lock().lock().unwrap();
+        let _v = EnvVarGuard::set(KEYCHAIN_FALLBACK_KEY, "from-env");
+        let mut map = std::collections::BTreeMap::new();
+        map.insert(KEYCHAIN_FALLBACK_KEY.to_string(), "from-keychain".to_string());
+        install_workflow_secret_resolver_for_test(Arc::new(StubResolver(map)));
+
+        let src = format!("token: ${{{}}}\n", KEYCHAIN_FALLBACK_KEY);
+        let (out, resolutions) = interpolate_env_and_secrets_collecting(&src, "test.yaml", &BTreeMap::new()).unwrap();
+        assert_eq!(out, "token: from-env\n");
+        assert!(resolutions.is_empty(), "process-env resolutions must not be collected: {resolutions:?}");
+
+        clear_workflow_secret_resolver_for_test();
     }
 
     #[test]

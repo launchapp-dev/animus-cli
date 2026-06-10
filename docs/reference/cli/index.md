@@ -97,8 +97,8 @@ animus
 │   ├── phases
 │   │   ├── list             List configured workflow phases
 │   │   ├── get              Get a workflow phase by id
-│   │   ├── upsert           Create or replace a workflow phase definition
-│   │   └── remove           Remove a workflow phase definition (confirmation required)
+│   │   ├── upsert           Create or replace a phase definition in the generated overlay
+│   │   └── remove           Remove a generated-overlay phase definition (confirmation required)
 │   ├── definitions
 │   │   ├── list             List configured workflow definitions
 │   │   └── upsert           Create or replace a workflow definition

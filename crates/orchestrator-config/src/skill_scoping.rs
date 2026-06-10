@@ -1,3 +1,15 @@
+//! Skill discovery and scoping across trust tiers.
+//!
+//! Within a single YAML skill directory, resolution is deterministic:
+//! files are visited in lexicographic path order, manifest (`skills:` map)
+//! entries are applied first, and standalone `<name>.yaml` / `<name>.yml`
+//! definitions are applied last so they take precedence over manifest
+//! entries with the same name. When two files of the same kind define the
+//! same name, the lexicographically later path wins. Markdown `SKILL.md`
+//! skills are likewise loaded in lexicographic order and are shadowed by
+//! YAML definitions of the same name within the same scope (see
+//! [`merge_skill_scope_sources`]).
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -349,6 +361,12 @@ pub fn load_installed_skill_entries(project_root: &Path) -> Result<Vec<Installed
     Ok(state.installed)
 }
 
+/// Load every YAML skill definition under `dir`.
+///
+/// Deterministic resolution order (see module doc): files are read in
+/// lexicographic path order, manifest entries are merged first, then
+/// standalone `<name>.yaml` definitions so a standalone file always wins
+/// over a manifest entry with the same name.
 pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDefinition>> {
     let mut skills = BTreeMap::new();
 
@@ -356,18 +374,15 @@ pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDe
         Ok(entries) => entries,
         Err(_) => return Ok(skills),
     };
+    let mut paths: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| matches!(path.extension().and_then(|ext| ext.to_str()), Some("yaml") | Some("yml")))
+        .collect();
+    paths.sort();
 
-    for entry in entries {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let path = entry.path();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if ext != "yaml" && ext != "yml" {
-            continue;
-        }
-
+    let mut standalone: Vec<(String, SkillDefinition)> = Vec::new();
+    for path in paths {
         let content = match fs::read_to_string(&path) {
             Ok(c) => c,
             Err(e) => {
@@ -386,12 +401,16 @@ pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDe
         match serde_yaml::from_str::<SkillDefinition>(&content) {
             Ok(def) => {
                 let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown").to_string();
-                skills.insert(name, def);
+                standalone.push((name, def));
             }
             Err(e) => {
                 eprintln!("warning: could not parse skill file {}: {}", path.display(), e);
             }
         }
+    }
+
+    for (name, def) in standalone {
+        skills.insert(name, def);
     }
 
     Ok(skills)
@@ -404,18 +423,17 @@ fn load_markdown_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, Sk
         Ok(entries) => entries,
         Err(_) => return Ok(skills),
     };
-
-    for entry in entries {
-        let entry = match entry {
-            Ok(entry) => entry,
-            Err(_) => continue,
-        };
+    let mut candidates: Vec<PathBuf> = entries
+        .filter_map(|entry| entry.ok())
         // Skip dotfiles (e.g. `.migrated-from-ao` marker). They would
         // otherwise be parsed as anonymous SKILL.md candidates.
-        if entry.file_name().to_string_lossy().starts_with('.') {
-            continue;
-        }
-        let path = markdown_skill_file_for_path(&entry.path());
+        .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+        .map(|entry| entry.path())
+        .collect();
+    candidates.sort();
+
+    for candidate in candidates {
+        let path = markdown_skill_file_for_path(&candidate);
         if !path.is_file() {
             continue;
         }
@@ -555,14 +573,72 @@ pub enum SkillWriteOutcome {
     Updated,
 }
 
+/// Locate where `name` currently resolves within the project skill tier:
+/// the standalone YAML path, a manifest YAML declaring it under `skills:`,
+/// or a markdown skill under `.animus/skills/` whose resolved name matches.
+/// Returns the defining file path, or `None` when the name is unclaimed.
+fn find_project_skill_definition_path(project_root: &Path, name: &str) -> Option<PathBuf> {
+    let yaml_dir = project_skills_dir(project_root);
+    for ext in ["yaml", "yml"] {
+        let candidate = yaml_dir.join(format!("{name}.{ext}"));
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+    }
+
+    if let Ok(entries) = fs::read_dir(&yaml_dir) {
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| matches!(path.extension().and_then(|ext| ext.to_str()), Some("yaml") | Some("yml")))
+            .collect();
+        paths.sort();
+        for path in paths {
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if let Ok(manifest) = parse_skill_manifest(&content) {
+                if manifest.skills.contains_key(name) {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    let markdown_dir = project_markdown_skills_dir(project_root);
+    if let Ok(entries) = fs::read_dir(&markdown_dir) {
+        let mut candidates: Vec<PathBuf> = entries
+            .filter_map(|entry| entry.ok())
+            .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+            .map(|entry| entry.path())
+            .collect();
+        candidates.sort();
+        for candidate in candidates {
+            let path = markdown_skill_file_for_path(&candidate);
+            if !path.is_file() {
+                continue;
+            }
+            if let Ok(skill) = load_markdown_skill_file(&path) {
+                if skill.name == name {
+                    return Some(path);
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Serialize a [`SkillDefinition`] to YAML and write it as a project-scoped
 /// skill at `.animus/config/skill_definitions/<name>.yaml`.
 ///
 /// The definition is validated (slug name + structural rules) before writing,
 /// and the serialized YAML is re-parsed to guarantee it round-trips through the
 /// skill parser — a malformed skill is never left on disk. When `overwrite` is
-/// `false` and a skill file already exists at the target path, this fails
-/// without touching the file.
+/// `false` and the name already resolves to ANY project-tier skill (standalone
+/// YAML, manifest entry, or `.animus/skills/<name>/SKILL.md`), this fails
+/// without touching the file so a new YAML cannot silently shadow an existing
+/// definition.
 ///
 /// This is the single serialization path for authored project skills; callers
 /// (CLI and MCP) must not hand-roll YAML.
@@ -576,8 +652,20 @@ pub fn write_project_skill_yaml(
 
     let path = project_skill_yaml_path(project_root, &name);
     let existed = path.exists();
-    if existed && !overwrite {
-        anyhow::bail!("skill '{name}' already exists at {} (pass overwrite=true to replace it)", path.display());
+    if !overwrite {
+        if let Some(existing) = find_project_skill_definition_path(project_root, &name) {
+            if existing == path {
+                anyhow::bail!(
+                    "skill '{name}' already exists at {} (pass overwrite=true to replace it)",
+                    existing.display()
+                );
+            }
+            anyhow::bail!(
+                "skill '{name}' is already defined at {} (writing {} would shadow it; pass overwrite=true to shadow that definition)",
+                existing.display(),
+                path.display(),
+            );
+        }
     }
 
     let yaml = serde_yaml::to_string(definition)
@@ -1916,5 +2004,75 @@ Body.
         let definition: SkillDefinition = serde_yaml::from_str("name: \"../escape\"\ndescription: x\n").unwrap();
         assert!(write_project_skill_yaml(tmp.path(), &definition, true).is_err());
         assert!(!tmp.path().join("escape.yaml").exists());
+    }
+
+    #[test]
+    fn write_project_skill_yaml_guard_blocks_markdown_shadowing() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = project_markdown_skills_dir(tmp.path()).join("guarded");
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: guarded\ndescription: markdown original\n---\nBody.\n")
+            .unwrap();
+
+        let definition: SkillDefinition = serde_yaml::from_str("name: guarded\ndescription: yaml shadow\n").unwrap();
+        let err = write_project_skill_yaml(tmp.path(), &definition, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("SKILL.md"), "error should point at the existing definition: {msg}");
+        assert!(!project_skill_yaml_path(tmp.path(), "guarded").exists(), "guard must not write the file");
+
+        let (_, outcome) = write_project_skill_yaml(tmp.path(), &definition, true).unwrap();
+        assert_eq!(outcome, SkillWriteOutcome::Created);
+    }
+
+    #[test]
+    fn write_project_skill_yaml_guard_blocks_manifest_shadowing() {
+        let tmp = TempDir::new().unwrap();
+        let yaml_dir = project_skills_dir(tmp.path());
+        write_manifest_yaml(
+            &yaml_dir,
+            "bundle.yaml",
+            "schema: \"animus.skills.v1\"\nskills:\n  guarded:\n    name: guarded\n    description: manifest original\n",
+        );
+
+        let definition: SkillDefinition = serde_yaml::from_str("name: guarded\ndescription: yaml shadow\n").unwrap();
+        let err = write_project_skill_yaml(tmp.path(), &definition, false).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("bundle.yaml"), "error should point at the manifest: {msg}");
+        assert!(!project_skill_yaml_path(tmp.path(), "guarded").exists(), "guard must not write the file");
+    }
+
+    #[test]
+    fn load_skills_from_directory_prefers_standalone_over_manifest_deterministically() {
+        let tmp = TempDir::new().unwrap();
+        // `zz-manifest.yaml` sorts after `dup.yaml`; the standalone file must
+        // still win because standalone definitions take precedence over
+        // manifest entries regardless of path order.
+        write_manifest_yaml(
+            tmp.path(),
+            "zz-manifest.yaml",
+            "schema: \"animus.skills.v1\"\nskills:\n  dup:\n    name: dup\n    description: from manifest\n",
+        );
+        fs::write(tmp.path().join("dup.yaml"), "name: dup\ndescription: from standalone\n").unwrap();
+
+        let skills = load_skills_from_directory(tmp.path()).unwrap();
+        assert_eq!(skills.get("dup").map(|s| s.description.as_str()), Some("from standalone"));
+    }
+
+    #[test]
+    fn load_skills_from_directory_same_name_manifests_later_path_wins() {
+        let tmp = TempDir::new().unwrap();
+        write_manifest_yaml(
+            tmp.path(),
+            "aa.yaml",
+            "schema: \"animus.skills.v1\"\nskills:\n  dup:\n    name: dup\n    description: from aa\n",
+        );
+        write_manifest_yaml(
+            tmp.path(),
+            "bb.yaml",
+            "schema: \"animus.skills.v1\"\nskills:\n  dup:\n    name: dup\n    description: from bb\n",
+        );
+
+        let skills = load_skills_from_directory(tmp.path()).unwrap();
+        assert_eq!(skills.get("dup").map(|s| s.description.as_str()), Some("from bb"));
     }
 }

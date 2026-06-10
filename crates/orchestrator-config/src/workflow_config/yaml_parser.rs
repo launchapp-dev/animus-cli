@@ -864,18 +864,20 @@ fn rebuild_excerpt_from_original(
     diag.with_excerpt_from(original, line, col, 0)
 }
 
-/// Replace each resolved `${secret.<name>}` VALUE occurring in `message`
-/// with `[redacted:<name>]`. Values shorter than 4 characters are skipped:
-/// they are too likely to occur incidentally in unrelated diagnostic text
-/// (line numbers, short words), which would mangle the message without
-/// meaningfully protecting the secret.
+/// Replace each resolved secret VALUE occurring in `message` with
+/// `[redacted:<name>]`. `resolved_secrets` maps resolved value → redaction
+/// label (secret name or keychain env-var name), so colliding labels can
+/// never drop a value from the map. Values shorter than 4 characters are
+/// skipped: they are too likely to occur incidentally in unrelated
+/// diagnostic text (line numbers, short words), which would mangle the
+/// message without meaningfully protecting the secret.
 fn redact_resolved_secret_values(message: &str, resolved_secrets: &BTreeMap<String, String>) -> String {
     let mut redacted = message.to_string();
     // Longest value first so an overlapping shorter secret cannot split a
     // longer one and leave its tail in the diagnostic.
-    let mut entries: Vec<(&String, &String)> = resolved_secrets.iter().filter(|(_, value)| value.len() >= 4).collect();
-    entries.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
-    for (name, value) in entries {
+    let mut entries: Vec<(&String, &String)> = resolved_secrets.iter().filter(|(value, _)| value.len() >= 4).collect();
+    entries.sort_by_key(|(value, _)| std::cmp::Reverse(value.len()));
+    for (value, name) in entries {
         let marker = format!("[redacted:{}]", name);
         redacted = redacted.replace(value.as_str(), &marker);
         // serde quotes offending scalars with Rust `{:?}` escaping

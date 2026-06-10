@@ -64,6 +64,16 @@ mcp_servers:
 - The compiled `workflow-config.v2.json` contains the *resolved string*
   — plugins consume the same scalar shape they always did. There is no
   runtime secret-store indirection.
+- Parse diagnostics redact resolved values: when a substituted
+  `${secret.<name>}` value (or a plain `${VAR}` value that came from the
+  keychain fallback) would be echoed in a YAML error message, it is
+  replaced with `[redacted:<name>]`. Plain `${VAR}` values resolved from
+  the explicit process environment are not redacted.
+- `animus workflow phases upsert` / `definitions upsert` never serialize
+  resolved secret values back into the project tree: the generated
+  overlay at `.animus/workflows/generated-workflow.yaml` carries only the
+  upserted phase/pipeline entries (with any `${...}` references preserved
+  unresolved), not a dump of the compiled config.
 
 ### Sensitive-interpolation lint
 
@@ -166,6 +176,13 @@ blocks, phase env overrides, and any other string field all use the same syntax:
 | `${VAR:-default}` | Optional. Falls back to literal `default`. |
 | `${VAR:?message}` | Required with custom error message. |
 | `$$` | Literal `$`. |
+
+References inside YAML comments are **not** interpolated: a `#` that begins a
+comment (preceded by start-of-line or whitespace, outside quoted scalars and
+block scalar content) suppresses substitution through end of line, so a
+comment like `# export ${LINEAR_TOKEN}` never fails the compile when the
+variable is unset. `#` inside quoted strings (`key: "#tag ${X}"`) and inside
+block scalar bodies (`|` / `>` prompts) still interpolates normally.
 
 ```yaml
 mcp_servers:

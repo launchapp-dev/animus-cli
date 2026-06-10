@@ -110,9 +110,9 @@ pub(crate) enum WorkflowPhasesCommand {
     List,
     /// Get a workflow phase by id.
     Get(WorkflowPhaseGetArgs),
-    /// Create or replace a workflow phase definition.
+    /// Create or replace a phase definition in the generated overlay.
     Upsert(WorkflowPhaseUpsertArgs),
-    /// Remove a workflow phase definition (confirmation required).
+    /// Remove a generated-overlay phase definition (confirmation required).
     Remove(WorkflowPhaseRemoveArgs),
 }
 
