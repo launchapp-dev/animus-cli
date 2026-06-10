@@ -194,8 +194,9 @@ rejection remains a CLI-only action.
 ## Skills (5 tools)
 
 Discover and inspect skill definitions across every source the project can see: installed packs,
-registry-tracked installs, user-scoped (`~/.animus/skills/`), project-scoped (`.animus/skills/`),
-and agent-host probes (`~/.claude/skills/`, `~/.codex/skills/`, etc.).
+registry-tracked installs, user-scoped (`~/.animus/skills/`, `~/.animus/config/skill_definitions/`),
+project-scoped (`.animus/skills/`, `.animus/config/skill_definitions/`), and agent-host probes
+(`~/.claude/skills/`, `~/.codex/skills/`, etc.).
 
 Each result carries a `source` tag (`"installed"`, `"user"`, `"project"`, `"agent_host"`) plus
 a `source_detail` object with provenance. For `installed` sources,
@@ -211,8 +212,8 @@ skills, so only prompt text and prompt directives are trusted.
 | `animus.skill.list` | Enumerate skills across all sources with optional `source` filter | `project_root`, `source` (`installed` \| `user` \| `project` \| `agent_host` \| host id like `claude-code`; `builtin` is still accepted as a backward-compatible filter but current builds do not emit builtin rows) |
 | `animus.skill.get` | Resolve a skill by name and return its full `SkillDefinition` plus provenance. Resolution priority: project > user > installed/pack > agent-host. Agent-host responses include a `notice` field explaining the structural-field strip | `project_root`, `name` |
 | `animus.skill.search` | Case-insensitive substring match over skill `name`, `description`, and `tags`. Returns the same row shape as `animus.skill.list` plus a `truncated` flag when matches exceed `limit` | `project_root`, `query`, `source`, `limit` (default 50) |
-| `animus.skill.create` | Author a project-scoped skill, written to `.animus/skills/<name>.yaml` and validated by round-tripping through the loader. Refuses to shadow an existing project skill unless `overwrite` is set | `project_root`, `name` (slug), `description`, `prompt`, `tags`, `tool_policy`, `model`, `mcp_servers`, `category`, `activation`, `capabilities`, `overwrite` |
-| `animus.skill.update` | Patch an existing project-scoped skill; only the supplied fields change, the rest are preserved. Rejects unknown or non-project skills | `project_root`, `name`, plus any of the `animus.skill.create` fields to patch |
+| `animus.skill.create` | Author a project-scoped skill, written to `.animus/config/skill_definitions/<name>.yaml` and validated by round-tripping through the loader. Refuses to shadow an existing project skill unless `overwrite` is set | `project_root`, `name` (slug), `description`, `prompt`, `tags`, `tool_policy`, `model`, `mcp_servers`, `category`, `activation`, `capabilities`, `overwrite` |
+| `animus.skill.update` | Patch an existing project-scoped skill at `.animus/config/skill_definitions/<name>.yaml`; only the supplied fields change, the rest are preserved. Rejects unknown or non-project skills | `project_root`, `name`, plus any of the `animus.skill.create` fields to patch |
 
 ---
 

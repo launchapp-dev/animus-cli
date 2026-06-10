@@ -9,6 +9,9 @@ These files live in the repository:
 ```text
 .animus/
 ├── config.json
+├── config/
+│   └── skill_definitions/
+│       └── <skill-name>.yaml # optional project-scoped YAML skills
 ├── workflows.yaml              # optional single-file workflow source
 ├── workflows/
 │   ├── custom.yaml
@@ -26,8 +29,8 @@ These files live in the repository:
 Key points:
 
 - `.animus/workflows.yaml` and `.animus/workflows/*.yaml` are the authored workflow sources
-- `.animus/skills/<name>/SKILL.md` is the project-scoped skill source (highest priority in
-  the skill resolution chain)
+- `.animus/skills/<name>/SKILL.md` and `.animus/config/skill_definitions/<name>.yaml` are
+  project-scoped skill sources at the highest skill-resolution priority
 - `.animus/plugins/` is also scanned as the project-local plugin discovery directory
 - `.animus/plugins/<pack-id>/` is the project override root for pack content during workflow
   resolution
@@ -190,6 +193,7 @@ Use Animus commands or Animus MCP tools instead.
 | `.animus/workflows/*.yaml` | Multi-file project workflow sources |
 | `.animus/plugins.lock` | Project-local plugin integrity lockfile |
 | `.animus/skills/<name>/SKILL.md` | Project-scoped Markdown skill (highest skill priority) |
+| `.animus/config/skill_definitions/<name>.yaml` | Project-scoped YAML skill definition (highest skill priority) |
 | `.animus/plugins/` | Project-local plugin discovery/install directory |
 | `.animus/plugins/<pack-id>/` | Project-local pack override root |
 | `~/.animus/<repo-scope>/workflow.db` | Persisted workflows, tasks, requirements, checkpoints |
@@ -203,6 +207,7 @@ Use Animus commands or Animus MCP tools instead.
 | `~/.animus/<repo-scope>/state/pack-selection.v1.json` | Repo-scoped pack selection state |
 | `~/.animus/packs/<pack-id>/<version>/` | Machine-installed pack root |
 | `~/.animus/skills/<name>/SKILL.md` | User-scoped Markdown skill |
+| `~/.animus/config/skill_definitions/<name>.yaml` | User-scoped YAML skill definition |
 | `~/.animus/plugins/<name>` | Installed STDIO plugin binary (`animus plugin install`) |
 | `~/.animus/template-registries/<registry-id>/` | Cached project-template registry (pinned by `.commit`) |
 | `~/.claude/skills/<name>/SKILL.md` | Agent-host (Claude Code) skill probe — prompt-text-only trust |
