@@ -151,7 +151,7 @@ pub(crate) fn parse_workflow_status_opt(value: Option<&str>) -> Result<Option<Wo
         "completed" => WorkflowStatus::Completed,
         "failed" => WorkflowStatus::Failed,
         "escalated" => WorkflowStatus::Escalated,
-        "cancelled" => WorkflowStatus::Cancelled,
+        "cancelled" | "canceled" => WorkflowStatus::Cancelled,
         _ => return Err(invalid_value_error("workflow status", value, WORKFLOW_STATUS_EXPECTED)),
     };
 
@@ -237,6 +237,12 @@ mod tests {
     fn parse_workflow_filters_accept_aliases() {
         assert_eq!(parse_workflow_status_opt(Some("running")).unwrap(), Some(WorkflowStatus::Running));
         assert_eq!(parse_workflow_query_sort_opt(Some("workflow_ref")).unwrap(), Some(WorkflowQuerySort::WorkflowRef));
+    }
+
+    #[test]
+    fn parse_workflow_status_accepts_both_cancelled_spellings() {
+        assert_eq!(parse_workflow_status_opt(Some("cancelled")).unwrap(), Some(WorkflowStatus::Cancelled));
+        assert_eq!(parse_workflow_status_opt(Some("canceled")).unwrap(), Some(WorkflowStatus::Cancelled));
     }
 
     #[test]

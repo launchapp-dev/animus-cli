@@ -105,16 +105,24 @@ fn ensure_safe_id_segment(label: &str, value: &str) -> Result<()> {
     Ok(())
 }
 
-fn artifact_dir(project_root: &str, execution_id: &str) -> PathBuf {
-    Path::new(project_root).join(".animus").join("artifacts").join(execution_id)
+fn artifact_dir_candidates(project_root: &str, execution_id: &str) -> Vec<PathBuf> {
+    let scoped_root =
+        protocol::scoped_state_root(Path::new(project_root)).unwrap_or_else(|| Path::new(project_root).join(".animus"));
+    vec![
+        scoped_root.join("artifacts").join(execution_id),
+        Path::new(project_root).join(".animus").join("artifacts").join(execution_id),
+    ]
+}
+
+fn resolve_artifact_dir(project_root: &str, execution_id: &str) -> Option<PathBuf> {
+    artifact_dir_candidates(project_root, execution_id).into_iter().find(|path| path.exists())
 }
 
 fn list_artifact_infos(project_root: &str, execution_id: &str) -> Result<Vec<ArtifactInfoCli>> {
     ensure_safe_id_segment("execution id", execution_id)?;
-    let artifacts_dir = artifact_dir(project_root, execution_id);
-    if !artifacts_dir.exists() {
+    let Some(artifacts_dir) = resolve_artifact_dir(project_root, execution_id) else {
         return Ok(Vec::new());
-    }
+    };
     let mut artifacts = Vec::new();
     for entry in fs::read_dir(&artifacts_dir)? {
         let entry = entry?;
@@ -206,7 +214,8 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
         OutputCommand::Download(args) => {
             ensure_safe_id_segment("execution id", &args.execution_id)?;
             ensure_safe_id_segment("artifact id", &args.artifact_id)?;
-            let artifacts_dir = artifact_dir(project_root, &args.execution_id);
+            let artifacts_dir = resolve_artifact_dir(project_root, &args.execution_id)
+                .unwrap_or_else(|| artifact_dir_candidates(project_root, &args.execution_id).remove(0));
             let path = artifacts_dir.join(&args.artifact_id);
             if !path.starts_with(&artifacts_dir) {
                 anyhow::bail!("artifact path escapes the artifact directory");
@@ -490,6 +499,56 @@ mod tests {
     fn get_run_jsonl_entries_rejects_unsafe_run_ids() {
         let err = get_run_jsonl_entries("/tmp/project", "../escape").expect_err("unsafe run id should be rejected");
         assert!(err.to_string().contains("invalid run_id"));
+    }
+
+    #[test]
+    fn artifact_dir_candidates_prioritize_scoped_root_over_project_local() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let execution_id = "exec-artifact-candidates";
+
+        let candidates = artifact_dir_candidates(project_root.to_string_lossy().as_ref(), execution_id);
+        assert_eq!(candidates.len(), 2);
+        let scoped_root = protocol::scoped_state_root(&project_root).expect("scoped state root");
+        assert_eq!(candidates[0], scoped_root.join("artifacts").join(execution_id));
+        assert_eq!(candidates[1], project_root.join(".animus").join("artifacts").join(execution_id));
+
+        for candidate in &candidates {
+            std::fs::create_dir_all(candidate).expect("candidate artifact dir should be created");
+        }
+        let resolved = resolve_artifact_dir(project_root.to_string_lossy().as_ref(), execution_id)
+            .expect("an artifact dir should be selected");
+        assert_eq!(resolved, candidates[0]);
+    }
+
+    #[test]
+    fn list_artifact_infos_reads_scoped_root_then_falls_back_to_project_local() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let execution_id = "exec-artifact-scoped";
+        let candidates = artifact_dir_candidates(project_root.to_string_lossy().as_ref(), execution_id);
+
+        std::fs::create_dir_all(&candidates[0]).expect("scoped artifact dir should be created");
+        std::fs::write(candidates[0].join("report.json"), "{}").expect("scoped artifact should be written");
+        let scoped = list_artifact_infos(project_root.to_string_lossy().as_ref(), execution_id)
+            .expect("scoped artifacts should list");
+        assert_eq!(scoped.len(), 1);
+        assert_eq!(scoped[0].artifact_id, "report.json");
+        assert!(scoped[0].file_path.as_deref().expect("file path").starts_with(candidates[0].to_str().unwrap()));
+
+        std::fs::remove_dir_all(&candidates[0]).expect("scoped artifact dir should be removed");
+        std::fs::create_dir_all(&candidates[1]).expect("legacy artifact dir should be created");
+        std::fs::write(candidates[1].join("legacy.txt"), "legacy").expect("legacy artifact should be written");
+        let legacy = list_artifact_infos(project_root.to_string_lossy().as_ref(), execution_id)
+            .expect("legacy artifacts should list");
+        assert_eq!(legacy.len(), 1);
+        assert_eq!(legacy[0].artifact_id, "legacy.txt");
     }
 
     #[test]

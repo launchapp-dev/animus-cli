@@ -137,12 +137,20 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         hub: Arc<dyn ServiceHub>,
         root: &str,
         limit: usize,
+        queue_drain_limit: usize,
         process_manager: Option<&mut ProcessManager>,
     ) -> Result<DispatchWorkflowStartSummary> {
         let Some(process_manager) = process_manager else {
             return Ok(DispatchWorkflowStartSummary::default());
         };
-        let mut summary = dispatch_queued_entries_via_runner(root, process_manager, limit).await?;
+        // Explicitly enqueued dispatch-queue entries drain on their own
+        // limit so `daemon.auto_run_ready: false` (limit == 0) cannot
+        // starve operator-issued `animus queue enqueue` work.
+        let mut summary = if queue_drain_limit > 0 {
+            dispatch_queued_entries_via_runner(root, process_manager, queue_drain_limit).await?
+        } else {
+            DispatchWorkflowStartSummary::default()
+        };
 
         let remaining = limit.saturating_sub(summary.started);
         if remaining > 0 {

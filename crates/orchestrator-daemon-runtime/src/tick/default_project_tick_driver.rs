@@ -70,6 +70,7 @@ pub trait DefaultProjectTickServices {
         hub: Arc<dyn ServiceHub>,
         root: &str,
         limit: usize,
+        queue_drain_limit: usize,
         process_manager: Option<&mut ProcessManager>,
     ) -> Result<DispatchWorkflowStartSummary>;
 
@@ -304,9 +305,14 @@ where
         self.services.cleanup_stale_workflows(hub, root, max_age_hours).await
     }
 
-    async fn dispatch_ready_tasks(&mut self, root: &str, limit: usize) -> Result<DispatchWorkflowStartSummary> {
+    async fn dispatch_ready_tasks(
+        &mut self,
+        root: &str,
+        limit: usize,
+        queue_drain_limit: usize,
+    ) -> Result<DispatchWorkflowStartSummary> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
-        self.services.dispatch_ready_tasks(hub, root, limit, Some(self.process_manager)).await
+        self.services.dispatch_ready_tasks(hub, root, limit, queue_drain_limit, Some(self.process_manager)).await
     }
 
     async fn collect_health(&mut self, root: &str) -> Result<Value> {

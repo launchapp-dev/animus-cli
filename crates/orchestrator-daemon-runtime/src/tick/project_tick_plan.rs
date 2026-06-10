@@ -7,6 +7,12 @@ pub struct ProjectTickPlan {
     pub should_process_due_schedules: bool,
     pub should_prepare_ready_tasks: bool,
     pub ready_dispatch_limit: usize,
+    /// Capacity for draining explicitly enqueued dispatch-queue entries.
+    /// Unlike `ready_dispatch_limit` this is NOT gated on `auto_run_ready`:
+    /// `auto_run_ready: false` only disables auto-dispatch of Ready tasks,
+    /// while `animus queue enqueue` is an operator command whose entries
+    /// must still drain. Only a draining pool zeroes this limit.
+    pub queue_drain_limit: usize,
 }
 
 impl ProjectTickPlan {
@@ -21,8 +27,15 @@ impl ProjectTickPlan {
         let should_process_due_schedules = within_active_hours && !pool_draining;
         let should_prepare_ready_tasks = !pool_draining && options.auto_run_ready;
         let ready_dispatch_limit = if should_prepare_ready_tasks { requested_ready_dispatch_limit } else { 0 };
+        let queue_drain_limit = if pool_draining { 0 } else { requested_ready_dispatch_limit };
 
-        Self { within_active_hours, should_process_due_schedules, should_prepare_ready_tasks, ready_dispatch_limit }
+        Self {
+            within_active_hours,
+            should_process_due_schedules,
+            should_prepare_ready_tasks,
+            ready_dispatch_limit,
+            queue_drain_limit,
+        }
     }
 
     pub fn for_slim_tick(
@@ -61,6 +74,7 @@ mod tests {
         assert!(!plan.should_process_due_schedules);
         assert!(plan.should_prepare_ready_tasks);
         assert_eq!(plan.ready_dispatch_limit, 2);
+        assert_eq!(plan.queue_drain_limit, 2);
     }
 
     #[test]
@@ -77,6 +91,7 @@ mod tests {
         assert!(!plan.should_process_due_schedules, "paused/draining daemon must not dispatch schedules or triggers");
         assert!(!plan.should_prepare_ready_tasks);
         assert_eq!(plan.ready_dispatch_limit, 0);
+        assert_eq!(plan.queue_drain_limit, 0, "draining pool must not drain the dispatch queue either");
     }
 
     #[test]
@@ -93,6 +108,10 @@ mod tests {
         assert!(plan.should_process_due_schedules);
         assert!(!plan.should_prepare_ready_tasks);
         assert_eq!(plan.ready_dispatch_limit, 0);
+        assert_eq!(
+            plan.queue_drain_limit, 4,
+            "explicitly enqueued entries must still drain when auto_run_ready is off"
+        );
     }
 
     #[test]

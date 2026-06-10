@@ -64,23 +64,150 @@ where
         failed_workflow_phases,
         ..Default::default()
     };
-    // Recompute the ready dispatch limit after all reconciliation hooks have run.
+    // Recompute the dispatch limits after all reconciliation hooks have run.
     // Completed-process and zombie-workflow reconciliation may free pool capacity
     // that was not yet reflected in the pre-reconciliation active count used by
     // `preparation`.  Requerying here ensures we can dispatch into that headroom.
     let post_reconcile_active_count = hooks.active_process_count();
-    let ready_dispatch_limit = if post_reconcile_active_count != updated_active_count {
-        mode.build_preparation(&context, args, now, pool_draining, &snapshot, post_reconcile_active_count)
-            .ready_dispatch_limit
+    let (ready_dispatch_limit, queue_drain_limit) = if post_reconcile_active_count != updated_active_count {
+        let recomputed =
+            mode.build_preparation(&context, args, now, pool_draining, &snapshot, post_reconcile_active_count);
+        (recomputed.ready_dispatch_limit, recomputed.queue_drain_limit)
     } else {
-        preparation.ready_dispatch_limit
+        (preparation.ready_dispatch_limit, preparation.queue_drain_limit)
     };
-    if ready_dispatch_limit > 0 {
-        execution_outcome.ready_workflow_starts = hooks.dispatch_ready_tasks(root, ready_dispatch_limit).await?;
+    if ready_dispatch_limit > 0 || queue_drain_limit > 0 {
+        execution_outcome.ready_workflow_starts =
+            hooks.dispatch_ready_tasks(root, ready_dispatch_limit, queue_drain_limit).await?;
     }
 
     let health = hooks.collect_health(root).await?;
     let summary_input =
         snapshot.into_summary_input(root.to_string(), health, execution_outcome, mode.include_phase_execution_events());
     hooks.build_summary(args, summary_input).await
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use chrono::{DateTime, Utc};
+    use serde_json::Value;
+
+    use crate::{
+        run_project_tick, DaemonRuntimeOptions, DispatchWorkflowStartSummary, ProjectTickHooks, ProjectTickRunMode,
+        ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
+    };
+
+    #[derive(Default)]
+    struct RecordingHooks {
+        dispatch_calls: Vec<(usize, usize)>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl ProjectTickHooks for RecordingHooks {
+        fn process_due_schedules(&mut self, _root: &str, _now: DateTime<Utc>, _budget: &mut TickBudget) {}
+
+        async fn capture_snapshot(&mut self, _root: &str) -> Result<ProjectTickSnapshot> {
+            Ok(ProjectTickSnapshot {
+                requirements_before: Vec::new(),
+                tasks_before: Vec::new(),
+                started_daemon: false,
+                daemon_health: None,
+            })
+        }
+
+        async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<(usize, usize)> {
+            Ok((0, 0))
+        }
+
+        async fn dispatch_ready_tasks(
+            &mut self,
+            _root: &str,
+            limit: usize,
+            queue_drain_limit: usize,
+        ) -> Result<DispatchWorkflowStartSummary> {
+            self.dispatch_calls.push((limit, queue_drain_limit));
+            Ok(DispatchWorkflowStartSummary::default())
+        }
+
+        async fn collect_health(&mut self, _root: &str) -> Result<Value> {
+            Ok(Value::Null)
+        }
+
+        async fn build_summary(
+            &mut self,
+            _args: &DaemonRuntimeOptions,
+            input: ProjectTickSummaryInput,
+        ) -> Result<ProjectTickSummary> {
+            Ok(ProjectTickSummary {
+                project_root: input.project_root,
+                started_daemon: input.started_daemon,
+                health: input.health,
+                tasks_total: 0,
+                tasks_ready: 0,
+                tasks_in_progress: 0,
+                tasks_blocked: 0,
+                tasks_done: 0,
+                stale_in_progress_count: 0,
+                stale_in_progress_threshold_hours: 0,
+                stale_in_progress_task_ids: Vec::new(),
+                workflows_running: 0,
+                workflows_completed: 0,
+                workflows_failed: 0,
+                resumed_workflows: 0,
+                cleaned_stale_workflows: 0,
+                reconciled_workflows: 0,
+                started_ready_workflows: 0,
+                executed_workflow_phases: 0,
+                failed_workflow_phases: 0,
+                task_state_changes: Vec::new(),
+                phase_execution_events: Vec::new(),
+            })
+        }
+    }
+
+    fn tick_dispatch_calls(options: &DaemonRuntimeOptions, pool_draining: bool) -> Vec<(usize, usize)> {
+        let _env_lock = crate::dispatch::test_env::lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let project = tempfile::tempdir().expect("project tempdir");
+
+        let mut hooks = RecordingHooks::default();
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("test runtime");
+        runtime
+            .block_on(run_project_tick(
+                project.path().to_string_lossy().as_ref(),
+                options,
+                ProjectTickRunMode { active_process_count: 0 },
+                pool_draining,
+                &mut hooks,
+            ))
+            .expect("tick should succeed");
+        hooks.dispatch_calls
+    }
+
+    #[test]
+    fn tick_drains_dispatch_queue_when_auto_run_ready_is_off() {
+        let options = DaemonRuntimeOptions { auto_run_ready: false, ..DaemonRuntimeOptions::default() };
+        let calls = tick_dispatch_calls(&options, false);
+        assert_eq!(
+            calls,
+            vec![(0, options.max_tasks_per_tick)],
+            "queue drain must run with zero ready-task limit when auto_run_ready is off"
+        );
+    }
+
+    #[test]
+    fn tick_skips_all_dispatch_while_pool_is_draining() {
+        let options = DaemonRuntimeOptions { auto_run_ready: false, ..DaemonRuntimeOptions::default() };
+        let calls = tick_dispatch_calls(&options, true);
+        assert!(calls.is_empty(), "draining pool must not dispatch queue entries or ready tasks");
+    }
+
+    #[test]
+    fn tick_dispatches_both_limits_when_auto_run_ready_is_on() {
+        let options = DaemonRuntimeOptions::default();
+        let calls = tick_dispatch_calls(&options, false);
+        assert_eq!(calls, vec![(options.max_tasks_per_tick, options.max_tasks_per_tick)]);
+    }
 }

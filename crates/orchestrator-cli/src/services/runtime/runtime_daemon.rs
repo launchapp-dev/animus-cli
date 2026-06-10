@@ -891,14 +891,15 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
 
     let logs_dir = Logger::logs_dir(Path::new(project_root));
 
-    // Snapshot follow offsets BEFORE the initial read so events appended
+    // Snapshot follow cursors BEFORE the initial read so events appended
     // while the initial tail is being assembled are picked up by the
     // follow loop instead of silently skipped.
-    let mut file_positions: std::collections::HashMap<std::path::PathBuf, u64> = std::collections::HashMap::new();
+    let mut file_positions: std::collections::HashMap<std::path::PathBuf, daemon_events::FollowCursor> =
+        std::collections::HashMap::new();
     if !args.no_follow {
         for path in discover_log_files(&logs_dir) {
             let offset = offset_after_last_complete_line(&path);
-            file_positions.insert(path, offset);
+            file_positions.insert(path.clone(), daemon_events::FollowCursor::at_end_of(&path, offset));
         }
     }
 
@@ -925,38 +926,19 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
         for path in discover_log_files(&logs_dir) {
-            let current_size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-            let last_pos = file_positions.get(&path).copied().unwrap_or(0);
-
-            if current_size <= last_pos {
-                if current_size < last_pos {
-                    file_positions.insert(path, 0);
-                }
+            let cursor = file_positions.entry(path.clone()).or_default();
+            // Rotation-aware tail: drains the `.jsonl.1` remainder before
+            // continuing from the start of the fresh file, so records
+            // appended between polls and rotation are not lost.
+            let Ok(lines) = daemon_events::read_new_complete_lines(&path, cursor) else {
                 continue;
-            }
-
-            if let Ok(mut file) = std::fs::File::open(&path) {
-                if file.seek(SeekFrom::Start(last_pos)).is_err() {
-                    continue;
-                }
-                let mut buffer = Vec::new();
-                if file.read_to_end(&mut buffer).is_err() {
-                    continue;
-                }
-                // Only consume up to the last complete newline-terminated
-                // line; a partial tail is re-read once the writer finishes.
-                let Some(newline_idx) = buffer.iter().rposition(|&b| b == b'\n') else {
-                    continue;
-                };
-                let consumed = &buffer[..=newline_idx];
-                for line in String::from_utf8_lossy(consumed).lines() {
-                    if let Ok(entry) = serde_json::from_str::<orchestrator_logging::LogEntry>(line) {
-                        if stream_entry_matches(&entry, &args, level) {
-                            print_entry(&entry);
-                        }
+            };
+            for line in lines {
+                if let Ok(entry) = serde_json::from_str::<orchestrator_logging::LogEntry>(&line) {
+                    if stream_entry_matches(&entry, &args, level) {
+                        print_entry(&entry);
                     }
                 }
-                file_positions.insert(path, last_pos + consumed.len() as u64);
             }
         }
     }
