@@ -189,6 +189,117 @@ async fn daemon_start_with_preflight_failure_does_not_leave_running_state() {
     );
 }
 
+struct RecordingHooks {
+    counts: LifecycleCounts,
+    events: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait(?Send)]
+impl DaemonRunHooks for RecordingHooks {
+    fn handle_event(&mut self, event: DaemonRunEvent) -> Result<()> {
+        let rendered = format!("{event:?}");
+        let name = rendered.split([' ', '{']).next().unwrap_or_default().to_string();
+        self.events.lock().unwrap().push(name);
+        Ok(())
+    }
+
+    async fn daemon_status(&mut self, _project_root: &str) -> Result<DaemonStatus> {
+        Ok(self.counts.status())
+    }
+
+    async fn start_daemon(&mut self, _project_root: &str) -> Result<()> {
+        *self.counts.start_daemon_calls.lock().unwrap() += 1;
+        *self.counts.current_status.lock().unwrap() = DaemonStatus::Running;
+        Ok(())
+    }
+
+    async fn stop_daemon(&mut self, _project_root: &str) -> Result<()> {
+        *self.counts.stop_daemon_calls.lock().unwrap() += 1;
+        *self.counts.current_status.lock().unwrap() = DaemonStatus::Stopped;
+        Ok(())
+    }
+
+    async fn recover_startup_orphans(&mut self, _project_root: &str) -> Result<usize> {
+        Ok(0)
+    }
+
+    fn plugin_preflight_spec(&self) -> PluginPreflightSpec {
+        PluginPreflightSpec { required_roles: Vec::new(), auto_install: false, auto_install_defaults: Vec::new() }
+    }
+}
+
+/// Regression guard for the orphan gap-replay ordering bug: orphan agent
+/// reattach (and the decision-log gap replay it performs) must run AFTER
+/// the control server is started. Gap replay permanently advances the
+/// spawn record's `last_consumed_offset`, so replaying before the
+/// `workflow/events` subscription surface exists fans the events out to
+/// zero possible subscribers and marks them consumed forever.
+///
+/// Unix-gated: the orphan scan and the control-server socket are both
+/// unavailable on non-Unix targets, where reattach is intentionally
+/// skipped.
+#[cfg(unix)]
+#[tokio::test]
+async fn control_server_resolves_before_orphan_agent_reattach() {
+    let _env = HOME_ENV_LOCK.lock().await;
+    let _home = pin_test_home();
+    // The reattach pass is (correctly) skipped when the control server is
+    // disabled — make sure an ambient disable env cannot turn this test
+    // into a false failure.
+    let _control_env = protocol::test_utils::EnvVarGuard::set("ANIMUS_DAEMON_DISABLE_CONTROL_SERVER", None);
+    let project = TempDir::new().expect("tempdir project");
+    let project_root = project.path().to_string_lossy().to_string();
+
+    // Plant a live-orphan spawn record: our own PID is alive, and an empty
+    // command_line skips the process-identity check, so the startup scan
+    // reports it as detected and the reattach pass runs.
+    let scope = protocol::scoped_state_root(project.path()).expect("scoped state root");
+    let agents_dir = scope.join("runs").join("_pending").join("agents");
+    std::fs::create_dir_all(&agents_dir).expect("agents dir");
+    let record = serde_json::json!({
+        "agent_session_id": "agent-ordering",
+        "pid": std::process::id(),
+        "started_at": "2026-06-10T00:00:00Z",
+        "subject_id": "TASK-ORDER",
+        "subject_kind": "task",
+        "workflow_ref": "standard",
+        "task_id": "TASK-ORDER",
+        "command_line": [],
+        "stdio_socket_path": null,
+    });
+    std::fs::write(agents_dir.join("agent-ordering.json"), serde_json::to_vec_pretty(&record).expect("serialize"))
+        .expect("write spawn record");
+
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut hooks = RecordingHooks { counts: LifecycleCounts::new(), events: events.clone() };
+    let mut driver = StubDriver;
+    let mut options = DaemonRuntimeOptions {
+        once: true,
+        startup_cleanup: true,
+        skip_plugin_preflight: true,
+        ..DaemonRuntimeOptions::default()
+    };
+
+    let result = run_daemon(&project_root, &mut options, &mut driver, &mut hooks, |_| 0).await;
+    assert!(result.is_ok(), "daemon must run one tick and exit cleanly, got: {result:?}");
+
+    let events = events.lock().unwrap();
+    let control_idx = events
+        .iter()
+        .position(|name| name == "ControlServerResolved")
+        .unwrap_or_else(|| panic!("ControlServerResolved must be emitted during startup, got: {events:?}"));
+    let reattach_idx = events
+        .iter()
+        .position(|name| name.starts_with("OrphanAgentReattach") || name.starts_with("OrphanAgentGapReplay"))
+        .unwrap_or_else(|| panic!("orphan reattach must be attempted for the planted record, got: {events:?}"));
+    assert!(
+        control_idx < reattach_idx,
+        "orphan reattach/gap-replay (index {reattach_idx}) ran before the control server start \
+         (index {control_idx}); replayed events would broadcast to zero subscribers and the consumed \
+         offset would still advance permanently. events: {events:?}"
+    );
+}
+
 struct PauseProbeDriver {
     project_root: String,
     ticks: Arc<Mutex<usize>>,
