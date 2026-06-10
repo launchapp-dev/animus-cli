@@ -70,7 +70,6 @@ impl DaemonEventLog {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        rotate_if_needed(&path);
         append_line(&path, &serde_json::to_string(record)?)
     }
 }
@@ -155,25 +154,49 @@ fn daemon_event_record_to_log_entry(record: &DaemonEventRecord) -> Result<Value>
 }
 
 const MAX_LOG_SIZE_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
-
-fn rotate_if_needed(path: &Path) {
-    let size = match std::fs::metadata(path) {
-        Ok(meta) => meta.len(),
-        Err(_) => return,
-    };
-    if size >= MAX_LOG_SIZE_BYTES {
-        let rotated = path.with_extension("jsonl.1");
-        let _ = std::fs::rename(path, rotated);
-    }
-}
+const APPEND_ROTATION_RETRIES: usize = 5;
 
 fn append_line(path: &Path, line: &str) -> Result<()> {
+    for _ in 0..APPEND_ROTATION_RETRIES {
+        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        file.lock_exclusive()?;
+        if !locked_file_still_at_path(&file, path) {
+            let _ = file.unlock();
+            continue;
+        }
+        if file.metadata()?.len() >= MAX_LOG_SIZE_BYTES {
+            let rotated = path.with_extension("jsonl.1");
+            if std::fs::rename(path, rotated).is_ok() {
+                let _ = file.unlock();
+                continue;
+            }
+        }
+        file.write_all(line.as_bytes())?;
+        file.write_all(b"\n")?;
+        file.unlock()?;
+        return Ok(());
+    }
+
     let mut file = OpenOptions::new().create(true).append(true).open(path)?;
     file.lock_exclusive()?;
     file.write_all(line.as_bytes())?;
     file.write_all(b"\n")?;
     file.unlock()?;
     Ok(())
+}
+
+#[cfg(unix)]
+fn locked_file_still_at_path(file: &std::fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), std::fs::metadata(path)) {
+        (Ok(held), Ok(current)) => held.ino() == current.ino() && held.dev() == current.dev(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn locked_file_still_at_path(_file: &std::fs::File, _path: &Path) -> bool {
+    true
 }
 
 fn read_all_nonempty_lines(path: &Path) -> Result<Vec<String>> {

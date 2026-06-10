@@ -750,8 +750,10 @@ pub(crate) async fn handle_daemon(
             Ok(())
         }
         DaemonCommand::Pause => {
-            let _ = set_runtime_paused(project_root, true);
             let result = daemon.pause().await;
+            if result.is_ok() {
+                let _ = set_runtime_paused(project_root, true);
+            }
             result.map(|_| print_ok("daemon paused", json))
         }
         DaemonCommand::Resume => {
@@ -889,6 +891,17 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
 
     let logs_dir = Logger::logs_dir(Path::new(project_root));
 
+    // Snapshot follow offsets BEFORE the initial read so events appended
+    // while the initial tail is being assembled are picked up by the
+    // follow loop instead of silently skipped.
+    let mut file_positions: std::collections::HashMap<std::path::PathBuf, u64> = std::collections::HashMap::new();
+    if !args.no_follow {
+        for path in discover_log_files(&logs_dir) {
+            let offset = offset_after_last_complete_line(&path);
+            file_positions.insert(path, offset);
+        }
+    }
+
     // Read from all log files for initial tail
     let mut all_entries: Vec<orchestrator_logging::LogEntry> = Vec::new();
     for path in discover_log_files(&logs_dir) {
@@ -908,13 +921,6 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
         return Ok(());
     }
 
-    let mut file_positions: std::collections::HashMap<std::path::PathBuf, u64> = std::collections::HashMap::new();
-
-    for path in discover_log_files(&logs_dir) {
-        let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-        file_positions.insert(path, size);
-    }
-
     loop {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -929,21 +935,59 @@ async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Res
                 continue;
             }
 
-            if let Ok(file) = std::fs::File::open(&path) {
-                use std::io::{BufRead, Seek, SeekFrom};
-                let mut reader = std::io::BufReader::new(file);
-                let _ = reader.seek(SeekFrom::Start(last_pos));
-                for line in reader.lines().map_while(Result::ok) {
-                    if let Ok(entry) = serde_json::from_str::<orchestrator_logging::LogEntry>(&line) {
+            if let Ok(mut file) = std::fs::File::open(&path) {
+                if file.seek(SeekFrom::Start(last_pos)).is_err() {
+                    continue;
+                }
+                let mut buffer = Vec::new();
+                if file.read_to_end(&mut buffer).is_err() {
+                    continue;
+                }
+                // Only consume up to the last complete newline-terminated
+                // line; a partial tail is re-read once the writer finishes.
+                let Some(newline_idx) = buffer.iter().rposition(|&b| b == b'\n') else {
+                    continue;
+                };
+                let consumed = &buffer[..=newline_idx];
+                for line in String::from_utf8_lossy(consumed).lines() {
+                    if let Ok(entry) = serde_json::from_str::<orchestrator_logging::LogEntry>(line) {
                         if stream_entry_matches(&entry, &args, level) {
                             print_entry(&entry);
                         }
                     }
                 }
+                file_positions.insert(path, last_pos + consumed.len() as u64);
             }
-            file_positions.insert(path, current_size);
         }
     }
+}
+
+/// Byte offset just past the last newline in `path`, scanning backwards in
+/// chunks. A trailing partial line stays ahead of the returned offset so a
+/// follow reader picks it up once the writer terminates it. Errors fall
+/// back to 0 (re-read from the start; duplicates over loss).
+fn offset_after_last_complete_line(path: &Path) -> u64 {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return 0;
+    };
+    let Ok(len) = file.metadata().map(|m| m.len()) else {
+        return 0;
+    };
+    let mut chunk = [0u8; 8192];
+    let mut end = len;
+    while end > 0 {
+        let read_len = chunk.len().min(end as usize);
+        let start = end - read_len as u64;
+        let slice = &mut chunk[..read_len];
+        if file.seek(SeekFrom::Start(start)).is_err() || file.read_exact(slice).is_err() {
+            return 0;
+        }
+        if let Some(idx) = slice.iter().rposition(|&b| b == b'\n') {
+            return start + idx as u64 + 1;
+        }
+        end = start;
+    }
+    0
 }
 
 fn format_log_entry_pretty(entry: &orchestrator_logging::LogEntry, full: bool) -> String {
@@ -1094,10 +1138,9 @@ fn compact_json_value(value: &serde_json::Value, max_chars: usize) -> String {
 }
 
 fn short_id(id: &str) -> &str {
-    if id.len() > 8 {
-        &id[..8]
-    } else {
-        id
+    match id.char_indices().nth(8) {
+        Some((idx, _)) => &id[..idx],
+        None => id,
     }
 }
 
@@ -1181,6 +1224,7 @@ async fn handle_daemon_stop(
 ) -> Result<()> {
     let daemon = hub.daemon();
     let existing_pid = get_daemon_pid(project_root)?;
+    let mut forced = false;
 
     if let Some(pid) = existing_pid {
         if is_process_alive(pid) {
@@ -1194,6 +1238,7 @@ async fn handle_daemon_stop(
                 }
                 if tokio::time::Instant::now() >= deadline {
                     let _ = terminate_process(pid);
+                    forced = true;
                     break;
                 }
                 tokio::time::sleep(Duration::from_millis(250)).await;
@@ -1213,7 +1258,7 @@ async fn handle_daemon_stop(
     }
     result?;
 
-    let graceful = existing_pid.map(|pid| !is_process_alive(pid)).unwrap_or(true);
+    let graceful = existing_pid.map(|pid| !forced && !is_process_alive(pid)).unwrap_or(true);
 
     print_value(
         serde_json::json!({
@@ -1455,5 +1500,14 @@ mod tests {
 
         assert!(stream_workflow_matches(&entry, Some("work-planner")));
         assert!(!stream_workflow_matches(&entry, Some("planner")));
+    }
+
+    #[test]
+    fn short_id_truncates_on_char_boundaries() {
+        assert_eq!(short_id("abcdefghij"), "abcdefgh");
+        assert_eq!(short_id("abc"), "abc");
+        assert_eq!(short_id("abcdefgh"), "abcdefgh");
+        assert_eq!(short_id("wörkflöw-ïd-ünïcödé"), "wörkflöw");
+        assert_eq!(short_id("日本語のID値です拡張"), "日本語のID値で");
     }
 }

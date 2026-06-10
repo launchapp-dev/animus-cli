@@ -20,6 +20,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use fs2::FileExt;
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -226,28 +227,51 @@ impl Audit {
                 fs::create_dir_all(parent)?;
             }
         }
-        self.rotate_if_needed()?;
-        let mut handle = OpenOptions::new().create(true).append(true).open(&self.path)?;
         let mut line = serde_json::to_string(event).map_err(std::io::Error::other)?;
         line.push('\n');
-        handle.write_all(line.as_bytes())?;
-        handle.flush()?;
-        Ok(())
-    }
-
-    fn rotate_if_needed(&self) -> std::io::Result<()> {
-        let meta = match fs::metadata(&self.path) {
-            Ok(meta) => meta,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Err(err) => return Err(err),
-        };
-        if meta.len() < self.max_bytes {
+        for _ in 0..AUDIT_ROTATION_RETRIES {
+            let mut handle = OpenOptions::new().create(true).append(true).open(&self.path)?;
+            handle.lock_exclusive()?;
+            if !locked_file_still_at_path(&handle, &self.path) {
+                let _ = handle.unlock();
+                continue;
+            }
+            if handle.metadata()?.len() >= self.max_bytes {
+                let rotated = next_rotation_path(&self.path);
+                if fs::rename(&self.path, rotated).is_ok() {
+                    let _ = handle.unlock();
+                    continue;
+                }
+            }
+            handle.write_all(line.as_bytes())?;
+            handle.flush()?;
+            let _ = handle.unlock();
             return Ok(());
         }
-        let rotated = next_rotation_path(&self.path);
-        fs::rename(&self.path, rotated)?;
+
+        let mut handle = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        handle.lock_exclusive()?;
+        handle.write_all(line.as_bytes())?;
+        handle.flush()?;
+        let _ = handle.unlock();
         Ok(())
     }
+}
+
+const AUDIT_ROTATION_RETRIES: usize = 5;
+
+#[cfg(unix)]
+fn locked_file_still_at_path(file: &fs::File, path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    match (file.metadata(), fs::metadata(path)) {
+        (Ok(held), Ok(current)) => held.ino() == current.ino() && held.dev() == current.dev(),
+        _ => false,
+    }
+}
+
+#[cfg(not(unix))]
+fn locked_file_still_at_path(_file: &fs::File, _path: &Path) -> bool {
+    true
 }
 
 /// Pick the next free `audit.<N>.jsonl` rotation slot next to `path`.

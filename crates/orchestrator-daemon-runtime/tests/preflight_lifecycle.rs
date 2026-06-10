@@ -12,11 +12,13 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use orchestrator_core::{DaemonStatus, PluginPreflightSpec, PreflightResult, RequiredRole};
 use orchestrator_daemon_runtime::{
-    run_daemon, DaemonRunEvent, DaemonRunHooks, DaemonRuntimeOptions, DispatchWorkflowStartSummary, PreflightOutcome,
-    ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
+    run_daemon, DaemonRunEvent, DaemonRunHooks, DaemonRuntimeOptions, DaemonRuntimeState, DispatchWorkflowStartSummary,
+    PreflightOutcome, ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
 };
 use serde_json::Value;
 use tempfile::TempDir;
+
+static HOME_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[derive(Default, Clone)]
 struct LifecycleCounts {
@@ -150,6 +152,7 @@ fn pin_test_home() -> TempDir {
 
 #[tokio::test]
 async fn daemon_start_with_preflight_failure_does_not_leave_running_state() {
+    let _env = HOME_ENV_LOCK.lock().await;
     let _home = pin_test_home();
     let project = TempDir::new().expect("tempdir project");
     let project_root = project.path().to_string_lossy().to_string();
@@ -183,6 +186,124 @@ async fn daemon_start_with_preflight_failure_does_not_leave_running_state() {
     assert!(
         matches!(counts.status(), DaemonStatus::Stopped),
         "persisted daemon status must remain stopped after a preflight abort"
+    );
+}
+
+struct PauseProbeDriver {
+    project_root: String,
+    ticks: Arc<Mutex<usize>>,
+}
+
+#[async_trait(?Send)]
+impl ProjectTickHooks for PauseProbeDriver {
+    fn process_due_schedules(&mut self, _root: &str, _now: DateTime<Utc>, _budget: &mut TickBudget) {}
+
+    async fn capture_snapshot(&mut self, _root: &str) -> Result<ProjectTickSnapshot> {
+        Ok(ProjectTickSnapshot {
+            requirements_before: Vec::new(),
+            tasks_before: Vec::new(),
+            started_daemon: false,
+            daemon_health: None,
+        })
+    }
+
+    async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<(usize, usize)> {
+        Ok((0, 0))
+    }
+
+    async fn dispatch_ready_tasks(&mut self, _root: &str, _limit: usize) -> Result<DispatchWorkflowStartSummary> {
+        Ok(DispatchWorkflowStartSummary::default())
+    }
+
+    async fn collect_health(&mut self, _root: &str) -> Result<Value> {
+        Ok(Value::Null)
+    }
+
+    async fn build_summary(
+        &mut self,
+        _args: &DaemonRuntimeOptions,
+        input: ProjectTickSummaryInput,
+    ) -> Result<ProjectTickSummary> {
+        let tick = {
+            let mut guard = self.ticks.lock().unwrap();
+            *guard += 1;
+            *guard
+        };
+        if tick == 1 {
+            DaemonRuntimeState::set_runtime_paused(&self.project_root, true)?;
+        }
+        if tick >= 3 {
+            DaemonRuntimeState::set_shutdown_requested(&self.project_root, true, None)?;
+        }
+        Ok(ProjectTickSummary {
+            project_root: input.project_root,
+            started_daemon: input.started_daemon,
+            health: input.health,
+            tasks_total: 0,
+            tasks_ready: 0,
+            tasks_in_progress: 0,
+            tasks_blocked: 0,
+            tasks_done: 0,
+            stale_in_progress_count: 0,
+            stale_in_progress_threshold_hours: 0,
+            stale_in_progress_task_ids: Vec::new(),
+            workflows_running: 0,
+            workflows_completed: 0,
+            workflows_failed: 0,
+            resumed_workflows: 0,
+            cleaned_stale_workflows: 0,
+            reconciled_workflows: 0,
+            started_ready_workflows: 0,
+            executed_workflow_phases: 0,
+            failed_workflow_phases: 0,
+            task_state_changes: Vec::new(),
+            phase_execution_events: Vec::new(),
+        })
+    }
+}
+
+/// Regression guard for the pause-terminates-the-daemon bug: an external
+/// `animus daemon pause` (runtime_paused=true) must NOT exit the main
+/// loop. The daemon keeps ticking in a paused/draining state until a
+/// shutdown is actually requested, so a later `animus daemon resume` can
+/// revive dispatch without restarting the process.
+#[tokio::test]
+async fn external_pause_does_not_terminate_daemon_loop() {
+    let _env = HOME_ENV_LOCK.lock().await;
+    let _home = pin_test_home();
+    let project = TempDir::new().expect("tempdir project");
+    let project_root = project.path().to_string_lossy().to_string();
+
+    let counts = LifecycleCounts::new();
+    let mut hooks = StubHooks {
+        counts: counts.clone(),
+        spec: PluginPreflightSpec {
+            required_roles: Vec::new(),
+            auto_install: false,
+            auto_install_defaults: Vec::new(),
+        },
+    };
+    let ticks = Arc::new(Mutex::new(0usize));
+    let mut driver = PauseProbeDriver { project_root: project_root.clone(), ticks: ticks.clone() };
+    let mut options = DaemonRuntimeOptions {
+        interval_secs: 1,
+        startup_cleanup: false,
+        skip_plugin_preflight: true,
+        ..DaemonRuntimeOptions::default()
+    };
+
+    let result = run_daemon(&project_root, &mut options, &mut driver, &mut hooks, |_| 0).await;
+    assert!(result.is_ok(), "daemon must exit cleanly via shutdown_requested, got: {result:?}");
+
+    let total_ticks = *ticks.lock().unwrap();
+    assert_eq!(
+        total_ticks, 3,
+        "daemon must keep ticking through an external pause (tick 1 pauses, tick 3 requests shutdown); \
+         exiting earlier means pause terminated the loop"
+    );
+    assert!(
+        DaemonRuntimeState::is_runtime_paused(&project_root).unwrap_or(false),
+        "the externally-set pause flag must survive daemon exit (only `daemon resume` / a fresh start clears it)"
     );
 }
 

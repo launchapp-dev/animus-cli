@@ -17,14 +17,6 @@ impl DaemonRunGuard {
     pub fn acquire(project_root: &str) -> Result<Self> {
         let canonical_project_root = canonicalize_lossy(project_root);
         let current_pid = std::process::id();
-        if let Some(existing_pid) = DaemonRuntimeState::get_daemon_pid(&canonical_project_root)? {
-            if existing_pid != current_pid && protocol::is_process_alive(existing_pid) {
-                anyhow::bail!("daemon already running for project {} (pid {})", canonical_project_root, existing_pid);
-            }
-            if existing_pid != current_pid {
-                let _ = DaemonRuntimeState::set_daemon_pid(&canonical_project_root, None);
-            }
-        }
 
         let lock_path = daemon_lock_path(&canonical_project_root);
         if let Some(parent) = lock_path.parent() {
@@ -39,14 +31,20 @@ impl DaemonRunGuard {
                 lock_file.sync_all()?;
             }
             Err(_) => {
-                if let Some(lock_pid) = read_daemon_lock_pid(&lock_path) {
-                    if lock_pid != current_pid && protocol::is_process_alive(lock_pid) {
-                        anyhow::bail!(
-                            "failed to acquire daemon lock for project {} (held by pid {})",
-                            canonical_project_root,
-                            lock_pid
-                        );
-                    }
+                let holder_pid = read_daemon_lock_pid(&lock_path)
+                    .filter(|pid| *pid != current_pid && protocol::is_process_alive(*pid))
+                    .or_else(|| {
+                        DaemonRuntimeState::get_daemon_pid(&canonical_project_root)
+                            .ok()
+                            .flatten()
+                            .filter(|pid| *pid != current_pid && protocol::is_process_alive(*pid))
+                    });
+                if let Some(holder_pid) = holder_pid {
+                    anyhow::bail!(
+                        "failed to acquire daemon lock for project {} (held by pid {})",
+                        canonical_project_root,
+                        holder_pid
+                    );
                 }
                 anyhow::bail!("failed to acquire daemon lock for project {} (lock busy)", canonical_project_root);
             }
@@ -61,7 +59,6 @@ impl DaemonRunGuard {
 
 impl Drop for DaemonRunGuard {
     fn drop(&mut self) {
-        let _ = DaemonRuntimeState::set_runtime_paused(&self.project_root, true);
         if let Ok(Some(existing_pid)) = DaemonRuntimeState::get_daemon_pid(&self.project_root) {
             if existing_pid == self.pid {
                 let _ = DaemonRuntimeState::set_daemon_pid(&self.project_root, None);

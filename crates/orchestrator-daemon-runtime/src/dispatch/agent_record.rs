@@ -332,6 +332,13 @@ mod tests {
     use super::*;
     use protocol::SubjectDispatchExt;
 
+    // Pins PATH (under the shared env lock) so concurrent tests that clobber
+    // PATH cannot break the `ps`/`sleep`/`true` spawns these tests rely on.
+    #[cfg(unix)]
+    fn pin_path_for_process_spawns() -> protocol::test_utils::EnvVarGuard {
+        protocol::test_utils::EnvVarGuard::set("PATH", Some("/bin:/usr/bin"))
+    }
+
     fn write_record_into(dir: &std::path::Path, record: &AgentSpawnRecord) -> std::io::Result<std::path::PathBuf> {
         std::fs::create_dir_all(dir)?;
         let path = dir.join(format!("{}.json", record.agent_session_id));
@@ -473,6 +480,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn scan_orphans_alive_pid_is_detected_and_record_preserved() {
+        let _path = pin_path_for_process_spawns();
         let temp = tempfile::tempdir().unwrap();
 
         let mut child = std::process::Command::new("sleep").arg("60").spawn().expect("spawn sleep");
@@ -510,6 +518,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn scan_orphans_dead_pid_is_cleaned_and_record_deleted() {
+        let _path = pin_path_for_process_spawns();
         let temp = tempfile::tempdir().unwrap();
 
         let mut child = std::process::Command::new("true").spawn().expect("spawn true");
@@ -558,6 +567,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn scan_orphans_alive_pid_with_mismatched_command_is_cleaned_as_recycled() {
+        let _path = pin_path_for_process_spawns();
         let temp = tempfile::tempdir().unwrap();
 
         let mut child = std::process::Command::new("sleep").arg("60").spawn().expect("spawn sleep");
@@ -586,6 +596,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn scan_orphans_is_idempotent_for_alive_pid() {
+        let _path = pin_path_for_process_spawns();
         let temp = tempfile::tempdir().unwrap();
         let mut child = std::process::Command::new("sleep").arg("60").spawn().expect("spawn sleep");
         let alive_pid = child.id();
