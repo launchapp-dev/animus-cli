@@ -374,8 +374,22 @@ mod daemon_logs_dispatch_tests {
         );
         DaemonEventLog::append(&record).expect("append ok");
 
-        // Give the spawned dispatch task a moment to flush.
-        tokio::time::sleep(std::time::Duration::from_millis(75)).await;
+        // Wait for the spawned dispatch task to flush. Poll instead of a
+        // fixed sleep: under workspace-parallel test load the task may not
+        // get scheduled for hundreds of milliseconds.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let arrived = recorded
+                .lock()
+                .await
+                .iter()
+                .any(|(method, _)| method == animus_log_storage_protocol::METHOD_LOG_STORAGE_STORE);
+            if arrived {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "log_storage/store request did not arrive within 5s");
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
 
         // Plugin received a `log_storage/store` request with the
         // projected LogEntry shape.

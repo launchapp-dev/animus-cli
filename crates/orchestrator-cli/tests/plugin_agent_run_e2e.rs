@@ -50,6 +50,44 @@ fn ensure_mock_provider() {
     );
 }
 
+/// Scoped env mutation for discovery tests. Pins HOME and the plugin install
+/// dir to fresh tempdirs and points `ANIMUS_PLUGIN_PATH` at `plugin_path`, so
+/// only the supplied directory feeds discovery. Restores everything on drop.
+///
+/// The resolver must also be given a tempdir project root rather than
+/// `CARGO_MANIFEST_DIR`: this repo ships `flavors/default.toml`, and flavor
+/// auto-detection walks up parent directories — a project root inside the
+/// kernel repo flips discovery into flavor-only scope, which filters out the
+/// mock provider.
+struct EnvScope {
+    prior_home: Option<std::ffi::OsString>,
+    _home: tempfile::TempDir,
+    _empty_plugin_dir: tempfile::TempDir,
+}
+
+impl EnvScope {
+    fn isolated(plugin_path: &Path) -> Self {
+        let home = tempfile::tempdir().expect("home tempdir");
+        let empty = tempfile::tempdir().expect("plugin dir tempdir");
+        let prior_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("ANIMUS_PLUGIN_DIR", empty.path());
+        std::env::set_var("ANIMUS_PLUGIN_PATH", plugin_path);
+        Self { prior_home, _home: home, _empty_plugin_dir: empty }
+    }
+}
+
+impl Drop for EnvScope {
+    fn drop(&mut self) {
+        std::env::remove_var("ANIMUS_PLUGIN_PATH");
+        std::env::remove_var("ANIMUS_PLUGIN_DIR");
+        match self.prior_home.take() {
+            Some(value) => std::env::set_var("HOME", value),
+            None => std::env::remove_var("HOME"),
+        }
+    }
+}
+
 fn build_request() -> SessionRequest {
     SessionRequest {
         tool: "mock".to_string(),
@@ -67,10 +105,11 @@ fn build_request() -> SessionRequest {
 
 #[tokio::test]
 async fn resolver_routes_mock_tool_through_plugin() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_mock_provider();
-    std::env::set_var("ANIMUS_PLUGIN_PATH", workspace_target_debug());
-    let resolver = SessionBackendResolver::with_plugin_discovery(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let _env = EnvScope::isolated(&workspace_target_debug());
+    let project = tempfile::tempdir().expect("project root");
+    let resolver = SessionBackendResolver::with_plugin_discovery(project.path());
 
     let request = build_request();
     let backend = resolver.resolve(&request).expect("mock plugin should resolve");
@@ -85,10 +124,11 @@ async fn resolver_routes_mock_tool_through_plugin() {
 
 #[tokio::test]
 async fn agent_run_streams_notifications_in_order_through_plugin() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     ensure_mock_provider();
-    std::env::set_var("ANIMUS_PLUGIN_PATH", workspace_target_debug());
-    let resolver = SessionBackendResolver::with_plugin_discovery(Path::new(env!("CARGO_MANIFEST_DIR")));
+    let _env = EnvScope::isolated(&workspace_target_debug());
+    let project = tempfile::tempdir().expect("project root");
+    let resolver = SessionBackendResolver::with_plugin_discovery(project.path());
 
     let request = build_request();
     let mut run = timeout(Duration::from_secs(10), resolver.start_session(request))
@@ -164,13 +204,9 @@ async fn agent_run_streams_notifications_in_order_through_plugin() {
 /// As of v0.4.12 there is no in-tree provider fallback.
 #[tokio::test]
 async fn agent_run_errors_when_provider_plugin_missing() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let empty = tempfile::tempdir().expect("tempdir");
-    let isolated_home = tempfile::tempdir().expect("isolated home tempdir");
-    let prior_home = std::env::var_os("HOME");
-    std::env::set_var("HOME", isolated_home.path());
-    std::env::set_var("ANIMUS_PLUGIN_PATH", empty.path());
-    std::env::set_var("ANIMUS_PLUGIN_DIR", empty.path());
+    let _env = EnvScope::isolated(empty.path());
 
     let resolver = SessionBackendResolver::with_plugin_discovery(empty.path());
     let request = SessionRequest {
@@ -193,11 +229,4 @@ async fn agent_run_errors_when_provider_plugin_missing() {
     let msg = err.to_string();
     assert!(msg.contains("Provider plugin 'claude' not installed"), "actual: {msg}");
     assert!(msg.contains("animus plugin install launchapp-dev/animus-provider-claude"), "actual: {msg}");
-
-    std::env::remove_var("ANIMUS_PLUGIN_PATH");
-    std::env::remove_var("ANIMUS_PLUGIN_DIR");
-    match prior_home {
-        Some(value) => std::env::set_var("HOME", value),
-        None => std::env::remove_var("HOME"),
-    }
 }
