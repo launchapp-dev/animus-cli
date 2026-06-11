@@ -20,6 +20,10 @@ pub(super) struct AdditionalMcpServer {
     pub(super) env: HashMap<String, String>,
     /// HTTP endpoint URL. When set, this server uses HTTP transport.
     pub(super) url: Option<String>,
+    /// HTTP request headers for remote transports (e.g. a resolved
+    /// `Authorization: Bearer <token>` injected by the contract assembler).
+    /// Ordered so generated CLI config is deterministic.
+    pub(super) headers: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -170,6 +174,16 @@ pub(super) fn resolve_mcp_tool_enforcement(runtime_contract: Option<&serde_json:
                         .map(str::trim)
                         .filter(|u| !u.is_empty())
                         .map(ToString::to_string),
+                    headers: entry
+                        .get("headers")
+                        .and_then(serde_json::Value::as_object)
+                        .map(|headers| {
+                            headers
+                                .iter()
+                                .filter_map(|(k, v)| v.as_str().map(|val| (k.clone(), val.to_string())))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 })
                 .filter(|s| !s.command.is_empty() || s.url.is_some())
                 .collect()
@@ -291,9 +305,50 @@ fn write_temp_json_file(run_id: &RunId, prefix: &str, value: &serde_json::Value)
         std::process::id()
     ));
     let payload = serde_json::to_vec(value).context("Failed to serialize strict MCP config JSON")?;
-    std::fs::write(&path, payload)
-        .with_context(|| format!("Failed to write strict MCP config file {}", path.display()))?;
+    // MCP configs can carry resolved credentials (HTTP auth headers, env
+    // tokens); create the file user-only from the start so the secret is
+    // never readable by other users, not even briefly.
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file =
+        options.open(&path).with_context(|| format!("Failed to create strict MCP config file {}", path.display()))?;
+    use std::io::Write;
+    file.write_all(&payload).with_context(|| format!("Failed to write strict MCP config file {}", path.display()))?;
     Ok(path)
+}
+
+/// Whether any additional server carries HTTP headers (a resolved
+/// credential). Header-bearing configs must never ride argv inline.
+fn any_server_has_headers(additional_servers: &[AdditionalMcpServer]) -> bool {
+    additional_servers.iter().any(|server| !server.headers.is_empty())
+}
+
+fn claude_mcp_server_config(server: &AdditionalMcpServer) -> serde_json::Value {
+    if let Some(url) = &server.url {
+        let mut config = serde_json::Map::new();
+        config.insert("type".to_string(), serde_json::Value::String("http".to_string()));
+        config.insert("url".to_string(), serde_json::Value::String(url.clone()));
+        if !server.headers.is_empty() {
+            config.insert(
+                "headers".to_string(),
+                serde_json::to_value(&server.headers).expect("server headers should serialize"),
+            );
+        }
+        serde_json::Value::Object(config)
+    } else {
+        let mut config = serde_json::Map::new();
+        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
+        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
+        if !server.env.is_empty() {
+            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
+        }
+        serde_json::Value::Object(config)
+    }
 }
 
 fn apply_claude_native_mcp_lockdown(
@@ -301,7 +356,9 @@ fn apply_claude_native_mcp_lockdown(
     transport: McpServerTransport<'_>,
     agent_id: &str,
     additional_servers: &[AdditionalMcpServer],
-) {
+    run_id: &RunId,
+    temp_cleanup: &mut TempPathCleanup,
+) -> Result<()> {
     let primary = match transport {
         McpServerTransport::Http(endpoint) => serde_json::json!({
             "type": "http",
@@ -315,29 +372,93 @@ fn apply_claude_native_mcp_lockdown(
     let mut mcp_servers = serde_json::Map::new();
     mcp_servers.insert(agent_id.to_string(), primary);
     for server in additional_servers {
-        let config = if let Some(url) = &server.url {
-            serde_json::json!({ "type": "http", "url": url })
-        } else {
-            let mut config = serde_json::Map::new();
-            config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
-            config
-                .insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
-            if !server.env.is_empty() {
-                config
-                    .insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
-            }
-            serde_json::Value::Object(config)
-        };
-        mcp_servers.insert(server.name.clone(), config);
+        mcp_servers.insert(server.name.clone(), claude_mcp_server_config(server));
     }
-    let config = serde_json::json!({ "mcpServers": mcp_servers }).to_string();
+    let config = serde_json::json!({ "mcpServers": mcp_servers });
+    // A header-bearing config carries a resolved credential: pass it via a
+    // user-only temp file (`--mcp-config <path>`) so the secret never rides
+    // argv or arg logging. Headerless configs keep the inline-JSON form.
+    let config_arg = if any_server_has_headers(additional_servers) {
+        let path = write_temp_json_file(run_id, "claude-mcp", &config)?;
+        let arg = path.to_string_lossy().to_string();
+        temp_cleanup.track(path);
+        arg
+    } else {
+        config.to_string()
+    };
     ensure_flag(args, "--strict-mcp-config", 0);
-    ensure_flag_value(args, "--mcp-config", &config, 0);
+    ensure_flag_value(args, "--mcp-config", &config_arg, 0);
     ensure_flag_value(args, "--permission-mode", "bypassPermissions", 0);
+    Ok(())
+}
+
+/// Deterministic environment-variable name that carries one HTTP header
+/// value for a Codex MCP server. Header values travel through the child
+/// environment (`env_http_headers`) instead of argv, so a resolved bearer
+/// token never shows up in process listings. An FNV-1a suffix over the raw
+/// (server, header) pair keeps sanitized-name collisions apart — mirrors
+/// the upstream `animus-session-backend` scheme.
+fn codex_header_env_var_name(server: &str, header: &str) -> String {
+    let sanitize = |raw: &str| -> String {
+        raw.chars().map(|ch| if ch.is_ascii_alphanumeric() { ch.to_ascii_uppercase() } else { '_' }).collect()
+    };
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in server.bytes().chain(std::iter::once(0u8)).chain(header.bytes()) {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("ANIMUS_MCP_{}_HDR_{}_{:08X}", sanitize(server), sanitize(header), hash as u32)
+}
+
+/// TOML key segment for an MCP server name: bare when it only contains
+/// bare-key characters, quoted otherwise (names like `animus.requirements/ao`
+/// must not be parsed as nested/invalid keys).
+fn toml_key(name: &str) -> String {
+    let bare = !name.is_empty() && name.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_');
+    if bare {
+        name.to_string()
+    } else {
+        toml_string(name)
+    }
+}
+
+/// Emit the `-c mcp_servers.<name>.*` overrides for one additional server,
+/// routing header values through `env` via `env_http_headers`.
+fn apply_codex_additional_server(
+    args: &mut Vec<String>,
+    env: &mut HashMap<String, String>,
+    server: &AdditionalMcpServer,
+) {
+    let sbase = format!("mcp_servers.{}", toml_key(&server.name));
+    if let Some(url) = &server.url {
+        ensure_codex_config_override(args, &format!("{sbase}.url"), &toml_string(url));
+        if !server.headers.is_empty() {
+            let mut mappings = Vec::new();
+            for (header, value) in &server.headers {
+                let env_name = codex_header_env_var_name(&server.name, header);
+                mappings.push(format!("{} = {}", toml_string(header), toml_string(&env_name)));
+                env.insert(env_name, value.clone());
+            }
+            ensure_codex_config_override(
+                args,
+                &format!("{sbase}.env_http_headers"),
+                &format!("{{{}}}", mappings.join(", ")),
+            );
+        }
+    } else {
+        ensure_codex_config_override(args, &format!("{sbase}.command"), &toml_string(&server.command));
+        let toml_args = format!("[{}]", server.args.iter().map(|arg| toml_string(arg)).collect::<Vec<_>>().join(", "));
+        ensure_codex_config_override(args, &format!("{sbase}.args"), &toml_args);
+        for (key, value) in &server.env {
+            ensure_codex_config_override(args, &format!("{sbase}.env.{}", toml_key(key)), &toml_string(value));
+        }
+    }
+    ensure_codex_config_override(args, &format!("{sbase}.enabled"), "true");
 }
 
 fn apply_codex_native_mcp_lockdown(
     args: &mut Vec<String>,
+    env: &mut HashMap<String, String>,
     transport: McpServerTransport<'_>,
     agent_id: &str,
     configured_servers: &[String],
@@ -369,19 +490,31 @@ fn apply_codex_native_mcp_lockdown(
     ensure_codex_config_override(args, &format!("{base}.enabled"), "true");
 
     for server in additional_servers {
-        let sbase = format!("mcp_servers.{}", server.name);
-        if let Some(url) = &server.url {
-            ensure_codex_config_override(args, &format!("{sbase}.url"), &toml_string(url));
-        } else {
-            ensure_codex_config_override(args, &format!("{sbase}.command"), &toml_string(&server.command));
-            let toml_args =
-                format!("[{}]", server.args.iter().map(|arg| toml_string(arg)).collect::<Vec<_>>().join(", "));
-            ensure_codex_config_override(args, &format!("{sbase}.args"), &toml_args);
-            for (key, value) in &server.env {
-                ensure_codex_config_override(args, &format!("{sbase}.env.{key}"), &toml_string(value));
-            }
+        apply_codex_additional_server(args, env, server);
+    }
+}
+
+fn gemini_mcp_server_config(server: &AdditionalMcpServer) -> serde_json::Value {
+    if let Some(url) = &server.url {
+        let mut config = serde_json::Map::new();
+        config.insert("type".to_string(), serde_json::Value::String("http".to_string()));
+        config.insert("url".to_string(), serde_json::Value::String(url.clone()));
+        if !server.headers.is_empty() {
+            config.insert(
+                "headers".to_string(),
+                serde_json::to_value(&server.headers).expect("server headers should serialize"),
+            );
         }
-        ensure_codex_config_override(args, &format!("{sbase}.enabled"), "true");
+        serde_json::Value::Object(config)
+    } else {
+        let mut config = serde_json::Map::new();
+        config.insert("type".to_string(), serde_json::Value::String("stdio".to_string()));
+        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
+        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
+        if !server.env.is_empty() {
+            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
+        }
+        serde_json::Value::Object(config)
     }
 }
 
@@ -417,21 +550,7 @@ fn apply_gemini_native_mcp_lockdown(
     let mut mcp_servers = serde_json::Map::new();
     mcp_servers.insert(agent_id.to_string(), primary);
     for server in additional_servers {
-        let config = if let Some(url) = &server.url {
-            serde_json::json!({ "type": "http", "url": url })
-        } else {
-            let mut config = serde_json::Map::new();
-            config.insert("type".to_string(), serde_json::Value::String("stdio".to_string()));
-            config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
-            config
-                .insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
-            if !server.env.is_empty() {
-                config
-                    .insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
-            }
-            serde_json::Value::Object(config)
-        };
-        mcp_servers.insert(server.name.clone(), config);
+        mcp_servers.insert(server.name.clone(), gemini_mcp_server_config(server));
     }
     let settings = serde_json::json!({
         "tools": {
@@ -475,40 +594,101 @@ fn apply_opencode_native_mcp_lockdown(
     let mut mcp_entries = serde_json::Map::new();
     mcp_entries.insert(agent_id.to_string(), primary);
     for server in additional_servers {
-        let config = if let Some(url) = &server.url {
-            serde_json::json!({ "type": "remote", "url": url, "enabled": true })
-        } else {
-            let mut command_with_args = Vec::with_capacity(server.args.len() + 1);
-            command_with_args.push(server.command.clone());
-            command_with_args.extend(server.args.iter().cloned());
-            let mut config = serde_json::Map::new();
-            config.insert("type".to_string(), serde_json::Value::String("local".to_string()));
-            config.insert(
-                "command".to_string(),
-                serde_json::to_value(command_with_args).expect("server command should serialize"),
-            );
-            config.insert("enabled".to_string(), serde_json::Value::Bool(true));
-            if !server.env.is_empty() {
-                config
-                    .insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
-            }
-            serde_json::Value::Object(config)
-        };
-        mcp_entries.insert(server.name.clone(), config);
+        mcp_entries.insert(server.name.clone(), opencode_mcp_server_config(server));
     }
     let config = serde_json::json!({ "mcp": mcp_entries });
     env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config.to_string());
 }
 
-fn apply_oai_runner_native_mcp_lockdown(args: &mut Vec<String>, transport: McpServerTransport<'_>) {
-    let config = match transport {
+fn opencode_mcp_server_config(server: &AdditionalMcpServer) -> serde_json::Value {
+    if let Some(url) = &server.url {
+        let mut config = serde_json::Map::new();
+        config.insert("type".to_string(), serde_json::Value::String("remote".to_string()));
+        config.insert("url".to_string(), serde_json::Value::String(url.clone()));
+        config.insert("enabled".to_string(), serde_json::Value::Bool(true));
+        if !server.headers.is_empty() {
+            config.insert(
+                "headers".to_string(),
+                serde_json::to_value(&server.headers).expect("server headers should serialize"),
+            );
+        }
+        serde_json::Value::Object(config)
+    } else {
+        let mut command_with_args = Vec::with_capacity(server.args.len() + 1);
+        command_with_args.push(server.command.clone());
+        command_with_args.extend(server.args.iter().cloned());
+        let mut config = serde_json::Map::new();
+        config.insert("type".to_string(), serde_json::Value::String("local".to_string()));
+        config.insert(
+            "command".to_string(),
+            serde_json::to_value(command_with_args).expect("server command should serialize"),
+        );
+        config.insert("enabled".to_string(), serde_json::Value::Bool(true));
+        if !server.env.is_empty() {
+            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
+        }
+        serde_json::Value::Object(config)
+    }
+}
+
+/// `oai-runner`'s `McpServerConfig` supports no HTTP headers; callers must
+/// filter header-bearing servers out first (see
+/// [`oai_runner_supported_servers`]) so a resolved credential is neither
+/// dropped silently nor leaked through the inline argv JSON.
+fn oai_runner_mcp_server_config(server: &AdditionalMcpServer) -> serde_json::Value {
+    if let Some(url) = &server.url {
+        let mut config = serde_json::Map::new();
+        config.insert("url".to_string(), serde_json::Value::String(url.clone()));
+        config.insert("transport".to_string(), serde_json::Value::String("http".to_string()));
+        serde_json::Value::Object(config)
+    } else {
+        let mut config = serde_json::Map::new();
+        config.insert("command".to_string(), serde_json::Value::String(server.command.clone()));
+        config.insert("args".to_string(), serde_json::to_value(&server.args).expect("server args should serialize"));
+        if !server.env.is_empty() {
+            config.insert("env".to_string(), serde_json::to_value(&server.env).expect("server env should serialize"));
+        }
+        serde_json::Value::Object(config)
+    }
+}
+
+/// Filter to the additional servers `oai-runner` can actually serve: it has
+/// no HTTP-header support, so header-bearing servers are skipped (with a
+/// warning) rather than forwarded unauthenticated or leaked via argv.
+fn oai_runner_supported_servers<'a>(
+    additional_servers: &'a [AdditionalMcpServer],
+    run_id: &RunId,
+) -> Vec<&'a AdditionalMcpServer> {
+    let (supported, skipped): (Vec<_>, Vec<_>) =
+        additional_servers.iter().partition(|server| server.headers.is_empty());
+    if !skipped.is_empty() {
+        warn!(
+            run_id = %run_id.0.as_str(),
+            skipped_servers = ?skipped.iter().map(|server| server.name.as_str()).collect::<Vec<_>>(),
+            "Skipping header-bearing MCP servers: oai-runner has no HTTP-header support"
+        );
+    }
+    supported
+}
+
+fn apply_oai_runner_native_mcp_lockdown(
+    args: &mut Vec<String>,
+    transport: McpServerTransport<'_>,
+    additional_servers: &[AdditionalMcpServer],
+    run_id: &RunId,
+) {
+    let mut entries = vec![match transport {
         McpServerTransport::Stdio { command, args: stdio_args } => {
-            serde_json::json!([{ "command": command, "args": stdio_args }])
+            serde_json::json!({ "command": command, "args": stdio_args })
         }
         McpServerTransport::Http(endpoint) => {
-            serde_json::json!([{ "url": endpoint, "transport": "http" }])
+            serde_json::json!({ "url": endpoint, "transport": "http" })
         }
-    };
+    }];
+    for server in oai_runner_supported_servers(additional_servers, run_id) {
+        entries.push(oai_runner_mcp_server_config(server));
+    }
+    let config = serde_json::Value::Array(entries);
     let insert_at = args.iter().position(|entry| entry == "run").map(|index| index + 1).unwrap_or(0);
     ensure_flag_value(args, "--mcp-config", &config.to_string(), insert_at);
 }
@@ -520,17 +700,7 @@ pub(super) fn apply_native_mcp_policy(
     run_id: &RunId,
     temp_cleanup: &mut TempPathCleanup,
 ) -> Result<()> {
-    if !enforcement.enabled {
-        debug!(
-            command = %invocation.command,
-            "Native MCP policy disabled for CLI invocation"
-        );
-        return Ok(());
-    }
-
-    let transport = resolve_mcp_server_transport(enforcement)?;
     let agent_id = enforcement.agent_id.trim();
-    let cli = canonical_cli_name(&invocation.command);
     let skipped_additional_server_names = enforcement
         .additional_servers
         .iter()
@@ -551,6 +721,24 @@ pub(super) fn apply_native_mcp_policy(
         .filter(|server| !server.name.eq_ignore_ascii_case(agent_id))
         .cloned()
         .collect::<Vec<_>>();
+
+    if !enforcement.enabled {
+        if additional.is_empty() {
+            debug!(
+                command = %invocation.command,
+                "Native MCP policy disabled for CLI invocation"
+            );
+            return Ok(());
+        }
+        // Enforcement is off, but the phase still resolved additional MCP
+        // servers. Inject them ADDITIVELY: no animus primary server, no
+        // strict/allowlist lockdown, and no error when the animus MCP
+        // transport is absent — only an enforced policy requires one.
+        return apply_additional_mcp_servers_without_enforcement(invocation, &additional, env, run_id, temp_cleanup);
+    }
+
+    let transport = resolve_mcp_server_transport(enforcement)?;
+    let cli = canonical_cli_name(&invocation.command);
     let additional_server_names = additional.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
     let (transport_kind, transport_endpoint, transport_command, transport_args) = summarize_mcp_transport(transport);
 
@@ -571,13 +759,21 @@ pub(super) fn apply_native_mcp_policy(
 
     match cli.as_str() {
         "claude" => {
-            apply_claude_native_mcp_lockdown(&mut invocation.args, transport, agent_id, &additional);
+            apply_claude_native_mcp_lockdown(
+                &mut invocation.args,
+                transport,
+                agent_id,
+                &additional,
+                run_id,
+                temp_cleanup,
+            )?;
             info!(run_id = %run_id.0.as_str(), cli = "claude", "Applied Claude native MCP policy");
         }
         "codex" => {
             let configured_servers = discover_codex_mcp_server_names();
             apply_codex_native_mcp_lockdown(
                 &mut invocation.args,
+                env,
                 transport,
                 agent_id,
                 &configured_servers,
@@ -607,13 +803,118 @@ pub(super) fn apply_native_mcp_policy(
             info!(run_id = %run_id.0.as_str(), cli = "opencode", "Applied OpenCode native MCP policy");
         }
         "animus-oai-runner" => {
-            apply_oai_runner_native_mcp_lockdown(&mut invocation.args, transport);
+            apply_oai_runner_native_mcp_lockdown(&mut invocation.args, transport, &additional, run_id);
             info!(run_id = %run_id.0.as_str(), cli = "animus-oai-runner", "Applied Animus OAI runner native MCP policy");
         }
         _ => {
             bail!(
                 "MCP-only policy enabled, but no native enforcement adapter exists for CLI command '{}'",
                 invocation.command
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Inject additional MCP servers into the CLI invocation WITHOUT the
+/// animus-MCP lockdown. Used when enforcement is disabled but the phase
+/// still carries `/mcp/additional_servers`: each server is made available
+/// to the spawned CLI additively — no `--strict-mcp-config`, no allowlist,
+/// no permission-mode override, and no primary animus entry. An unknown
+/// CLI logs and skips instead of failing the run; only an ENFORCED policy
+/// without a transport is an error.
+fn apply_additional_mcp_servers_without_enforcement(
+    invocation: &mut LaunchInvocation,
+    additional: &[AdditionalMcpServer],
+    env: &mut HashMap<String, String>,
+    run_id: &RunId,
+    temp_cleanup: &mut TempPathCleanup,
+) -> Result<()> {
+    let cli = canonical_cli_name(&invocation.command);
+    let additional_server_names = additional.iter().map(|server| server.name.as_str()).collect::<Vec<_>>();
+    info!(
+        run_id = %run_id.0.as_str(),
+        cli,
+        command = %invocation.command,
+        additional_servers = ?additional_server_names,
+        "Applying additional MCP servers without animus-MCP enforcement"
+    );
+
+    match cli.as_str() {
+        "claude" => {
+            // A caller-supplied --mcp-config (e.g. from extra launch args)
+            // wins; injecting over it would clobber user configuration.
+            if invocation.args.iter().any(|arg| arg == "--mcp-config") {
+                return Ok(());
+            }
+            let mut mcp_servers = serde_json::Map::new();
+            for server in additional {
+                mcp_servers.insert(server.name.clone(), claude_mcp_server_config(server));
+            }
+            let config = serde_json::json!({ "mcpServers": mcp_servers });
+            // Same secret-hygiene rule as the lockdown path: header-bearing
+            // configs go through a user-only temp file, never inline argv.
+            let config_arg = if any_server_has_headers(additional) {
+                let path = write_temp_json_file(run_id, "claude-mcp", &config)?;
+                let arg = path.to_string_lossy().to_string();
+                temp_cleanup.track(path);
+                arg
+            } else {
+                config.to_string()
+            };
+            ensure_flag_value(&mut invocation.args, "--mcp-config", &config_arg, 0);
+        }
+        "codex" => {
+            for server in additional {
+                apply_codex_additional_server(&mut invocation.args, env, server);
+            }
+        }
+        "gemini" => {
+            if env.contains_key("GEMINI_CLI_SYSTEM_SETTINGS_PATH") {
+                return Ok(());
+            }
+            let mut mcp_servers = serde_json::Map::new();
+            for server in additional {
+                mcp_servers.insert(server.name.clone(), gemini_mcp_server_config(server));
+            }
+            let settings = serde_json::json!({ "mcpServers": mcp_servers });
+            let settings_path = write_temp_json_file(run_id, "gemini-mcp", &settings)?;
+            env.insert("GEMINI_CLI_SYSTEM_SETTINGS_PATH".to_string(), settings_path.to_string_lossy().to_string());
+            temp_cleanup.track(settings_path);
+        }
+        "opencode" => {
+            if env.contains_key("OPENCODE_CONFIG_CONTENT") {
+                return Ok(());
+            }
+            let mut mcp_entries = serde_json::Map::new();
+            for server in additional {
+                mcp_entries.insert(server.name.clone(), opencode_mcp_server_config(server));
+            }
+            let config = serde_json::json!({ "mcp": mcp_entries });
+            env.insert("OPENCODE_CONFIG_CONTENT".to_string(), config.to_string());
+        }
+        "animus-oai-runner" => {
+            if invocation.args.iter().any(|arg| arg == "--mcp-config") {
+                return Ok(());
+            }
+            let entries = oai_runner_supported_servers(additional, run_id)
+                .into_iter()
+                .map(oai_runner_mcp_server_config)
+                .collect::<Vec<serde_json::Value>>();
+            if entries.is_empty() {
+                return Ok(());
+            }
+            let config = serde_json::Value::Array(entries);
+            let insert_at = invocation.args.iter().position(|entry| entry == "run").map(|index| index + 1).unwrap_or(0);
+            ensure_flag_value(&mut invocation.args, "--mcp-config", &config.to_string(), insert_at);
+        }
+        _ => {
+            warn!(
+                run_id = %run_id.0.as_str(),
+                command = %invocation.command,
+                additional_servers = ?additional_server_names,
+                "No MCP injection adapter for this CLI; skipping additional MCP servers (enforcement is off)"
             );
         }
     }

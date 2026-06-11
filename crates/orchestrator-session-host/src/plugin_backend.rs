@@ -76,6 +76,16 @@ pub(crate) struct SessionHandle {
 /// we never hold this lock across `.await`.
 pub(crate) type SessionMap = Arc<StdMutex<HashMap<String, SessionHandle>>>;
 
+/// Host-generated MCP credential carriers (`ANIMUS_MCP_*`, e.g. the
+/// `env_http_headers` indirection the agent-runner emits for Codex remote
+/// servers). These names are derived per (server, header) pair at dispatch
+/// time, so a plugin manifest cannot predeclare them; they exist solely to
+/// hand the spawned CLI its MCP auth header and must survive the manifest
+/// env gate or authenticated MCP servers break in the plugin path.
+fn is_host_mcp_credential_env(name: &str) -> bool {
+    name.starts_with("ANIMUS_MCP_")
+}
+
 /// Wraps a discovered Animus STDIO plugin so the resolver can route `agent/run`
 /// through it as if it were any other in-tree backend.
 #[derive(Clone)]
@@ -222,7 +232,11 @@ impl PluginSessionBackend {
     /// in `docs/guides/plugin-author-guide.md` § 9.
     fn filter_request_env_vars(&self, request_env_vars: &[(String, String)]) -> Vec<(String, String)> {
         let allowed = self.allowed_env_keys();
-        request_env_vars.iter().filter(|(name, _)| allowed.contains(name.as_str())).cloned().collect()
+        request_env_vars
+            .iter()
+            .filter(|(name, _)| allowed.contains(name.as_str()) || is_host_mcp_credential_env(name))
+            .cloned()
+            .collect()
     }
 
     fn spawn_options(&self, request_env_vars: &[(String, String)]) -> PluginSpawnOptions {
@@ -293,6 +307,14 @@ impl PluginSessionBackend {
         for key in ["system_prompt", "claude_profile", "mcp_servers", "tools", "response_schema", "runtime_contract"] {
             if let Some(value) = extras.get(key) {
                 params[key] = value.clone();
+            }
+        }
+        // The typed `SessionRequest.mcp_servers` field also reaches the
+        // provider RPC; a caller-supplied `extras.mcp_servers` wins so
+        // pre-existing dispatch paths keep their exact payloads.
+        if params.get("mcp_servers").is_none() {
+            if let Some(servers) = &request.mcp_servers {
+                params["mcp_servers"] = servers.clone();
             }
         }
         params
@@ -874,6 +896,9 @@ fn session_request_from_agent_run_request(
         }
     }
 
+    let mcp_servers =
+        context.get("mcp_servers").filter(|value| value.as_object().is_some_and(|map| !map.is_empty())).cloned();
+
     Ok(SessionRequest {
         tool,
         model,
@@ -881,6 +906,7 @@ fn session_request_from_agent_run_request(
         cwd,
         project_root,
         mcp_endpoint: None,
+        mcp_servers,
         permission_mode: None,
         timeout_secs,
         env_vars: Vec::new(),
@@ -1556,6 +1582,28 @@ mod tests {
     /// surface. Pre-fix, `dispatch` forwarded every key the runner had in
     /// its sanitized launch env, bypassing the manifest gate the plugin
     /// author guide documents as the contract.
+    /// Host-derived `ANIMUS_MCP_*` credential carriers (Codex
+    /// `env_http_headers` indirection) cannot be predeclared in a plugin
+    /// manifest; the gate must pass them through or authenticated MCP
+    /// servers break in the plugin path.
+    #[test]
+    fn filter_request_env_vars_passes_host_mcp_credential_names() {
+        let backend = PluginSessionBackend::new("codex-plugin", PathBuf::from("/nonexistent/codex"), "codex");
+        let runner_env = vec![
+            ("ANIMUS_MCP_TRADING_HDR_AUTHORIZATION_1A2B3C4D".to_string(), "Bearer tok".to_string()),
+            ("OPENAI_API_KEY".to_string(), "sk-leak".to_string()),
+        ];
+        let filtered = backend.filter_request_env_vars(&runner_env);
+        assert!(
+            filtered.iter().any(|(name, _)| name == "ANIMUS_MCP_TRADING_HDR_AUTHORIZATION_1A2B3C4D"),
+            "ANIMUS_MCP_* names must survive the manifest gate"
+        );
+        assert!(
+            !filtered.iter().any(|(name, _)| name == "OPENAI_API_KEY"),
+            "non-manifest secrets must still be dropped"
+        );
+    }
+
     #[test]
     fn filter_request_env_vars_drops_keys_not_in_manifest_or_base() {
         let backend = PluginSessionBackend::new("silent-plugin", PathBuf::from("/nonexistent/silent"), "silent");
@@ -1624,6 +1672,7 @@ mod tests {
             cwd: PathBuf::from("/tmp"),
             project_root: None,
             mcp_endpoint: None,
+            mcp_servers: None,
             permission_mode: None,
             timeout_secs: None,
             env_vars: filtered,
@@ -1728,6 +1777,61 @@ mod tests {
             wrong_shape,
             json!({ "runtime_contract": "not an object" }),
             "wrong-shape runtime_contract must leave extras unchanged"
+        );
+    }
+
+    #[test]
+    fn build_run_params_forwards_typed_mcp_servers_field() {
+        let backend = PluginSessionBackend::new("claude-plugin", PathBuf::from("/nonexistent/claude"), "claude");
+        let servers = json!({
+            "trading": { "type": "http", "url": "https://api.example.com/mcp", "headers": { "Authorization": "Bearer tok" } }
+        });
+        let req = SessionRequest {
+            tool: "claude".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            prompt: "hi".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers: Some(servers.clone()),
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: Value::Object(Default::default()),
+        };
+        let params = backend.build_run_params(&req, None);
+        assert_eq!(
+            params.get("mcp_servers"),
+            Some(&servers),
+            "the typed SessionRequest.mcp_servers field must reach the provider RPC params"
+        );
+    }
+
+    #[test]
+    fn build_run_params_extras_mcp_servers_win_over_typed_field() {
+        let backend = PluginSessionBackend::new("claude-plugin", PathBuf::from("/nonexistent/claude"), "claude");
+        let extras_servers = json!({ "from-extras": { "command": "x" } });
+        let typed_servers = json!({ "from-field": { "command": "y" } });
+        let mut extras = serde_json::Map::new();
+        extras.insert("mcp_servers".to_string(), extras_servers.clone());
+        let req = SessionRequest {
+            tool: "claude".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            prompt: "hi".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers: Some(typed_servers),
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: Value::Object(extras),
+        };
+        let params = backend.build_run_params(&req, None);
+        assert_eq!(
+            params.get("mcp_servers"),
+            Some(&extras_servers),
+            "a caller-supplied extras.mcp_servers keeps precedence for back-compat"
         );
     }
 }

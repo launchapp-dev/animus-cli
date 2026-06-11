@@ -104,6 +104,7 @@ fn make_request(cwd: PathBuf) -> SessionRequest {
         cwd,
         project_root: None,
         mcp_endpoint: None,
+        mcp_servers: None,
         permission_mode: None,
         timeout_secs: Some(10),
         env_vars: vec![],

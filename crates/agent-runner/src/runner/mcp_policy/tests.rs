@@ -191,6 +191,7 @@ fn native_mcp_policy_preserves_primary_server_when_additional_server_name_collid
             args: vec!["mcp".to_string(), "serve".to_string()],
             env: HashMap::new(),
             url: None,
+            headers: Default::default(),
         }],
     };
     let mut env = HashMap::new();
@@ -238,10 +239,12 @@ fn parse_codex_mcp_server_names_extracts_safe_names() {
 #[test]
 fn codex_native_lockdown_disables_non_target_servers() {
     let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
+    let mut env = HashMap::new();
     let configured_servers = vec!["shortcut".to_string(), "animus".to_string()];
 
     apply_codex_native_mcp_lockdown(
         &mut args,
+        &mut env,
         McpServerTransport::Http("http://127.0.0.1:3101/mcp/animus"),
         "animus",
         &configured_servers,
@@ -257,9 +260,11 @@ fn codex_native_lockdown_disables_non_target_servers() {
 #[test]
 fn codex_native_lockdown_sets_stdio_transport_when_configured() {
     let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
+    let mut env = HashMap::new();
 
     apply_codex_native_mcp_lockdown(
         &mut args,
+        &mut env,
         McpServerTransport::Stdio {
             command: "/path/to/animus/target/debug/animus",
             args: &[
@@ -574,13 +579,18 @@ fn claude_lockdown_includes_additional_servers() {
         args: vec!["--port".to_string(), "5432".to_string()],
         env: HashMap::from([("DB_HOST".to_string(), "localhost".to_string())]),
         url: None,
+        headers: Default::default(),
     }];
+    let mut cleanup = TempPathCleanup::default();
     apply_claude_native_mcp_lockdown(
         &mut args,
         McpServerTransport::Stdio { command: "/usr/local/bin/animus", args: &["mcp".to_string(), "serve".to_string()] },
         "animus",
         &additional,
-    );
+        &RunId("run-claude-additional".to_string()),
+        &mut cleanup,
+    )
+    .expect("claude lockdown should apply");
     let joined = args.join(" ");
     assert!(joined.contains("mcpServers"));
     let mcp_config_idx = args.iter().position(|a| a == "--mcp-config").unwrap();
@@ -594,5 +604,242 @@ fn claude_lockdown_includes_additional_servers() {
     assert_eq!(
         config_json.pointer("/mcpServers/my-db/env/DB_HOST").and_then(serde_json::Value::as_str),
         Some("localhost")
+    );
+}
+
+#[test]
+fn resolve_enforcement_parses_remote_server_headers() {
+    let contract = serde_json::json!({
+        "cli": {
+            "name": "claude",
+            "capabilities": { "supports_mcp": true },
+            "launch": { "args": ["--print", "hello"] }
+        },
+        "mcp": {
+            "endpoint": "http://127.0.0.1:3101/mcp/animus",
+            "agent_id": "animus",
+            "additional_servers": {
+                "trading": {
+                    "command": "",
+                    "args": [],
+                    "env": {},
+                    "transport": "http",
+                    "url": "https://api.example.com/mcp",
+                    "headers": {
+                        "Authorization": "Bearer tok-123",
+                        "X-Team": "alpha"
+                    }
+                }
+            }
+        }
+    });
+    let enforcement = resolve_mcp_tool_enforcement(Some(&contract));
+    assert_eq!(enforcement.additional_servers.len(), 1);
+    let server = &enforcement.additional_servers[0];
+    assert_eq!(server.url.as_deref(), Some("https://api.example.com/mcp"));
+    assert_eq!(server.headers.get("Authorization").map(String::as_str), Some("Bearer tok-123"));
+    assert_eq!(server.headers.get("X-Team").map(String::as_str), Some("alpha"));
+}
+
+#[test]
+fn claude_lockdown_carries_http_server_headers() {
+    let mut args = vec!["--print".to_string(), "hello".to_string()];
+    let additional = vec![AdditionalMcpServer {
+        name: "trading".to_string(),
+        command: String::new(),
+        args: Vec::new(),
+        env: HashMap::new(),
+        url: Some("https://api.example.com/mcp".to_string()),
+        headers: std::collections::BTreeMap::from([("Authorization".to_string(), "Bearer tok-123".to_string())]),
+    }];
+    let mut cleanup = TempPathCleanup::default();
+    apply_claude_native_mcp_lockdown(
+        &mut args,
+        McpServerTransport::Stdio { command: "/usr/local/bin/animus", args: &["mcp".to_string(), "serve".to_string()] },
+        "animus",
+        &additional,
+        &RunId("run-claude-headers".to_string()),
+        &mut cleanup,
+    )
+    .expect("claude lockdown should apply");
+    let mcp_config_idx = args.iter().position(|a| a == "--mcp-config").unwrap();
+    let config_arg = &args[mcp_config_idx + 1];
+    assert!(!config_arg.contains("tok-123"), "a header-bearing config must never ride argv inline; got {config_arg}");
+    let config_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config_arg).expect("config file must exist")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(config_arg).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "the secret-bearing config file must be user-only");
+    }
+    assert_eq!(config_json.pointer("/mcpServers/trading/type").and_then(serde_json::Value::as_str), Some("http"));
+    assert_eq!(
+        config_json.pointer("/mcpServers/trading/url").and_then(serde_json::Value::as_str),
+        Some("https://api.example.com/mcp")
+    );
+    assert_eq!(
+        config_json.pointer("/mcpServers/trading/headers/Authorization").and_then(serde_json::Value::as_str),
+        Some("Bearer tok-123"),
+        "the resolved bearer header must reach the spawned CLI's MCP config"
+    );
+}
+
+#[test]
+fn codex_lockdown_routes_http_headers_through_env() {
+    let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
+    let mut env = HashMap::new();
+    let additional = vec![AdditionalMcpServer {
+        name: "trading".to_string(),
+        command: String::new(),
+        args: Vec::new(),
+        env: HashMap::new(),
+        url: Some("https://api.example.com/mcp".to_string()),
+        headers: std::collections::BTreeMap::from([("Authorization".to_string(), "Bearer tok-123".to_string())]),
+    }];
+    apply_codex_native_mcp_lockdown(
+        &mut args,
+        &mut env,
+        McpServerTransport::Http("http://127.0.0.1:3101/mcp/animus"),
+        "animus",
+        &[],
+        &additional,
+    );
+    let joined = args.join(" ");
+    assert!(joined.contains("mcp_servers.trading.url=\"https://api.example.com/mcp\""), "args: {joined}");
+    let (env_name, env_value) = env.iter().next().expect("one header env var must be present");
+    assert!(
+        env_name.starts_with("ANIMUS_MCP_TRADING_HDR_AUTHORIZATION_"),
+        "deterministic env-var naming; got {env_name}"
+    );
+    assert_eq!(env_value, "Bearer tok-123", "the bearer value travels through the child environment");
+    assert!(
+        joined.contains(&format!("mcp_servers.trading.env_http_headers={{\"Authorization\" = \"{env_name}\"}}")),
+        "header value must be routed by env-var NAME, not literal value; args: {joined}"
+    );
+    assert!(!joined.contains("tok-123"), "the bearer value must never appear on argv; args: {joined}");
+}
+
+#[test]
+fn additional_servers_apply_without_enforcement_for_claude() {
+    let mut invocation = LaunchInvocation {
+        command: "claude".to_string(),
+        args: vec!["--print".to_string(), "hello".to_string()],
+        env: Default::default(),
+        prompt_via_stdin: false,
+    };
+    let enforcement = McpToolEnforcement {
+        enabled: false,
+        endpoint: None,
+        stdio: None,
+        agent_id: "animus".to_string(),
+        allowed_prefixes: Vec::new(),
+        tool_policy_allow: Vec::new(),
+        tool_policy_deny: Vec::new(),
+        additional_servers: vec![AdditionalMcpServer {
+            name: "trading".to_string(),
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            url: Some("https://api.example.com/mcp".to_string()),
+            headers: std::collections::BTreeMap::from([("Authorization".to_string(), "Bearer tok-123".to_string())]),
+        }],
+    };
+    let mut env = HashMap::new();
+    let mut cleanup = TempPathCleanup::default();
+    let run_id = RunId("run-no-enforce".to_string());
+
+    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+        .expect("additional servers without enforcement must apply, not error");
+
+    let mcp_config_idx = invocation
+        .args
+        .iter()
+        .position(|a| a == "--mcp-config")
+        .expect("additional servers must be injected even when enforcement is off");
+    let config_arg = &invocation.args[mcp_config_idx + 1];
+    assert!(!config_arg.contains("tok-123"), "a header-bearing config must never ride argv inline; got {config_arg}");
+    let config_json: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(config_arg).expect("config file must exist")).unwrap();
+    assert_eq!(
+        config_json.pointer("/mcpServers/trading/headers/Authorization").and_then(serde_json::Value::as_str),
+        Some("Bearer tok-123")
+    );
+    assert!(
+        config_json.pointer("/mcpServers/animus").is_none(),
+        "no primary animus entry is injected when enforcement is off"
+    );
+    assert!(
+        !invocation.args.iter().any(|a| a == "--strict-mcp-config"),
+        "non-enforcing injection must stay additive (no strict lockdown)"
+    );
+    assert!(
+        !invocation.args.iter().any(|a| a == "--permission-mode"),
+        "non-enforcing injection must not override the permission mode"
+    );
+}
+
+#[test]
+fn additional_servers_without_enforcement_skip_unknown_cli() {
+    let mut invocation = LaunchInvocation {
+        command: "unknown-cli".to_string(),
+        args: vec!["hello".to_string()],
+        env: Default::default(),
+        prompt_via_stdin: false,
+    };
+    let enforcement = McpToolEnforcement {
+        enabled: false,
+        endpoint: None,
+        stdio: None,
+        agent_id: "animus".to_string(),
+        allowed_prefixes: Vec::new(),
+        tool_policy_allow: Vec::new(),
+        tool_policy_deny: Vec::new(),
+        additional_servers: vec![AdditionalMcpServer {
+            name: "trading".to_string(),
+            command: "trading-mcp".to_string(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            url: None,
+            headers: Default::default(),
+        }],
+    };
+    let mut env = HashMap::new();
+    let mut cleanup = TempPathCleanup::default();
+    let run_id = RunId("run-no-enforce-unknown".to_string());
+
+    apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, &run_id, &mut cleanup)
+        .expect("an unknown CLI without enforcement must not fail the run");
+    assert_eq!(invocation.args, vec!["hello".to_string()], "argv must be untouched");
+}
+
+#[test]
+fn codex_additional_server_names_with_punctuation_are_toml_quoted() {
+    let mut args = vec!["exec".to_string(), "--json".to_string(), "hello".to_string()];
+    let mut env = HashMap::new();
+    let additional = vec![AdditionalMcpServer {
+        name: "animus.requirements/ao".to_string(),
+        command: "req-mcp".to_string(),
+        args: Vec::new(),
+        env: HashMap::new(),
+        url: None,
+        headers: Default::default(),
+    }];
+    apply_codex_native_mcp_lockdown(
+        &mut args,
+        &mut env,
+        McpServerTransport::Http("http://127.0.0.1:3101/mcp/animus"),
+        "animus",
+        &[],
+        &additional,
+    );
+    let joined = args.join(" ");
+    assert!(
+        joined.contains("mcp_servers.\"animus.requirements/ao\".command="),
+        "punctuated server names must be quoted as a single TOML key segment; args: {joined}"
+    );
+    assert!(
+        !joined.contains("mcp_servers.animus.requirements/ao.command"),
+        "the unquoted form would parse as a nested key; args: {joined}"
     );
 }

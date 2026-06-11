@@ -74,7 +74,7 @@ version = "0.1.13"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
 dependencies = [
  "animus-log-storage-protocol",
- "animus-plugin-protocol 0.1.13",
+ "animus-plugin-protocol 0.1.13 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13)",
  "animus-subject-protocol 0.1.13",
  "animus-trigger-protocol",
  "anyhow",
@@ -92,7 +92,7 @@ name = "animus-log-storage-protocol"
 version = "0.1.13"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
 dependencies = [
- "animus-plugin-protocol 0.1.13",
+ "animus-plugin-protocol 0.1.13 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13)",
  "anyhow",
  "async-trait",
  "chrono",
@@ -122,6 +122,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "animus-plugin-protocol"
+version = "0.1.13"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.4#05fccfe18022d3f1795e02ff059dfbb0c563a39d"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "animus-plugin-runtime"
 version = "0.1.0"
 dependencies = [
@@ -138,9 +147,9 @@ dependencies = [
 [[package]]
 name = "animus-session-backend"
 version = "0.1.13"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.4#05fccfe18022d3f1795e02ff059dfbb0c563a39d"
 dependencies = [
- "animus-plugin-protocol 0.1.13",
+ "animus-plugin-protocol 0.1.13 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.4)",
  "anyhow",
  "async-trait",
  "serde",
@@ -172,7 +181,7 @@ name = "animus-subject-protocol"
 version = "0.1.13"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
 dependencies = [
- "animus-plugin-protocol 0.1.13",
+ "animus-plugin-protocol 0.1.13 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13)",
  "anyhow",
  "async-trait",
  "chrono",
@@ -187,7 +196,7 @@ name = "animus-trigger-protocol"
 version = "0.1.13"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
 dependencies = [
- "animus-plugin-protocol 0.1.13",
+ "animus-plugin-protocol 0.1.13 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13)",
  "anyhow",
  "async-trait",
  "chrono",

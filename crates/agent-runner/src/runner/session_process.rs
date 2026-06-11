@@ -79,6 +79,7 @@ pub(super) async fn spawn_session_process(
     model: &str,
     prompt: &str,
     runtime_contract: Option<&Value>,
+    mcp_servers: Option<&Value>,
     cwd: &str,
     project_root: Option<&str>,
     env: HashMap<String, String>,
@@ -113,8 +114,18 @@ pub(super) async fn spawn_session_process(
         mcp_config_preview = ?mcp_config_preview,
         "Prepared native session invocation after MCP policy"
     );
-    let session_request =
-        build_session_request(tool, model, prompt, runtime_contract, cwd, project_root, env, timeout_secs, invocation)?;
+    let session_request = build_session_request(
+        tool,
+        model,
+        prompt,
+        runtime_contract,
+        mcp_servers,
+        cwd,
+        project_root,
+        env,
+        timeout_secs,
+        invocation,
+    )?;
     let idle_timeout_secs = resolve_idle_timeout_secs(tool, timeout_secs, runtime_contract);
     // Project-local provider plugins live under `<project_root>/.animus/plugins`.
     // When the runner executes inside a managed worktree, `cwd` points at the
@@ -261,6 +272,7 @@ fn build_session_request(
     model: &str,
     prompt: &str,
     runtime_contract: Option<&Value>,
+    mcp_servers: Option<&Value>,
     cwd: &str,
     project_root: Option<&str>,
     env: HashMap<String, String>,
@@ -300,6 +312,13 @@ fn build_session_request(
         "Built native session request runtime contract launch"
     );
 
+    // Forward the host's resolved per-phase MCP server map (canonical
+    // name-keyed `.mcp.json`-style entries) onto the typed
+    // `SessionRequest.mcp_servers` channel so BOTH the native subprocess
+    // backends and the provider-plugin RPC see the same servers the
+    // runtime contract carries. Empty maps are normalized to `None`.
+    let mcp_servers = mcp_servers.filter(|value| value.as_object().is_some_and(|map| !map.is_empty())).cloned();
+
     Ok(SessionRequest {
         tool: tool.to_string(),
         model: model.to_string(),
@@ -307,6 +326,7 @@ fn build_session_request(
         cwd: std::path::PathBuf::from(cwd),
         project_root: project_root.map(std::path::PathBuf::from),
         mcp_endpoint: merged_contract.pointer("/mcp/endpoint").and_then(Value::as_str).map(ToString::to_string),
+        mcp_servers,
         permission_mode: None,
         timeout_secs,
         env_vars: merged_env.into_iter().collect(),
@@ -576,6 +596,7 @@ mod tests {
             "claude-sonnet-4-6",
             "",
             Some(&runtime_contract),
+            None,
             ".",
             None,
             HashMap::new(),
@@ -666,6 +687,7 @@ mod tests {
             "claude-sonnet-4-6",
             "",
             Some(&runtime_contract),
+            None,
             ".",
             None,
             env,
@@ -736,6 +758,7 @@ mod tests {
                 "test-model",
                 "",
                 Some(&runtime_contract),
+                None,
                 ".",
                 None,
                 HashMap::new(),
@@ -793,6 +816,7 @@ mod tests {
             "test-model",
             "",
             Some(&runtime_contract),
+            None,
             ".",
             None,
             HashMap::new(),
@@ -867,6 +891,7 @@ mod tests {
             "gemini-2.5-pro",
             "",
             Some(&runtime_contract),
+            None,
             ".",
             None,
             env,
@@ -952,6 +977,7 @@ mod tests {
             "minimax/MiniMax-M2.5",
             "",
             Some(&runtime_contract),
+            None,
             ".",
             None,
             env,
@@ -1007,6 +1033,7 @@ mod tests {
             "test-model",
             "",
             Some(&runtime_contract),
+            None,
             ".",
             None,
             HashMap::new(),
@@ -1048,6 +1075,7 @@ mod tests {
             "claude-sonnet-4-6",
             "hi",
             None,
+            None,
             "/tmp/some-worktree",
             Some("/tmp/some-real-project-root"),
             HashMap::new(),
@@ -1066,6 +1094,7 @@ mod tests {
             "claude-sonnet-4-6",
             "hi",
             None,
+            None,
             "/tmp/some-cwd",
             None,
             HashMap::new(),
@@ -1074,6 +1103,51 @@ mod tests {
         )
         .expect("session request should build");
         assert!(req.project_root.is_none());
+    }
+
+    #[test]
+    fn build_session_request_forwards_mcp_servers_map() {
+        let servers = serde_json::json!({
+            "trading": { "type": "http", "url": "https://api.example.com/mcp", "headers": { "Authorization": "Bearer tok" } },
+            "docs": { "command": "docs-mcp", "args": ["--serve"] }
+        });
+        let req = build_session_request(
+            "claude",
+            "claude-sonnet-4-6",
+            "hi",
+            None,
+            Some(&servers),
+            "/tmp/some-cwd",
+            None,
+            HashMap::new(),
+            None,
+            empty_invocation(),
+        )
+        .expect("session request should build");
+        assert_eq!(
+            req.mcp_servers,
+            Some(servers),
+            "the host's resolved mcp_servers map must ride the typed SessionRequest field"
+        );
+    }
+
+    #[test]
+    fn build_session_request_normalizes_empty_mcp_servers_to_none() {
+        let empty = serde_json::json!({});
+        let req = build_session_request(
+            "claude",
+            "claude-sonnet-4-6",
+            "hi",
+            None,
+            Some(&empty),
+            "/tmp/some-cwd",
+            None,
+            HashMap::new(),
+            None,
+            empty_invocation(),
+        )
+        .expect("session request should build");
+        assert!(req.mcp_servers.is_none(), "an empty map must not be forwarded");
     }
 
     /// Exercises the bug fix: when a task runs in a managed worktree (`cwd`
@@ -1137,6 +1211,7 @@ mod tests {
             cwd: worktree.clone(),
             project_root: Some(project_root.clone()),
             mcp_endpoint: None,
+            mcp_servers: None,
             permission_mode: None,
             timeout_secs: None,
             env_vars: Vec::new(),

@@ -45,6 +45,16 @@ impl Supervisor {
         let timeout_secs = req.timeout_secs.or_else(|| context.get("timeout_secs").and_then(|v| v.as_u64()));
         let model = req.model.0.as_str();
         let runtime_contract = context.get("runtime_contract");
+        // The typed `mcp_servers` wire map is built HOST-side (the workflow
+        // runner's `runtime_contract_wire_mcp_servers`), where resolved
+        // secrets are stripped or rewritten to the local `animus-mcp-proxy`
+        // before anything reaches this process. Deliberately NOT derived
+        // from `runtime_contract.mcp.additional_servers` here: those raw
+        // entries can carry resolved credentials, and the launch-invocation
+        // path (`apply_native_mcp_policy`) already serves them to the CLI
+        // with the appropriate secret routing. Hosts that don't populate
+        // `context.mcp_servers` keep the launch-override behavior.
+        let mcp_servers = context.get("mcp_servers");
         let resume_session_id = context.get("resume_session_id").and_then(|v| v.as_str());
 
         info!(
@@ -55,6 +65,7 @@ impl Supervisor {
             hard_timeout_secs = ?timeout_secs,
             request_timeout_secs = ?request_timeout_secs,
             has_runtime_contract = runtime_contract.is_some(),
+            has_mcp_servers = mcp_servers.is_some(),
             has_project_root = project_root.is_some(),
             "Supervisor accepted agent run"
         );
@@ -156,6 +167,7 @@ impl Supervisor {
                 model,
                 prompt,
                 runtime_contract,
+                mcp_servers,
                 cwd,
                 project_root,
                 env,

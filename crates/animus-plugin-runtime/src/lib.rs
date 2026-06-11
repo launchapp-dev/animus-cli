@@ -484,9 +484,6 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
     if let Some(profile) = params.claude_profile {
         extras.insert("claude_profile".to_string(), Value::String(profile));
     }
-    if let Some(mcp) = params.mcp_servers {
-        extras.insert("mcp_servers".to_string(), mcp);
-    }
     if let Some(tools) = params.tools {
         extras.insert("tools".to_string(), tools);
     }
@@ -507,6 +504,7 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
         cwd: params.cwd,
         project_root: params.project_root,
         mcp_endpoint: None,
+        mcp_servers: params.mcp_servers,
         permission_mode: params.permission_mode,
         timeout_secs: params.timeout_secs,
         env_vars: params.env.into_iter().collect(),
