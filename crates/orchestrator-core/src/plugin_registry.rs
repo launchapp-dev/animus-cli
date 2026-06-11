@@ -19,8 +19,8 @@
 pub const DEFAULT_PROVIDER_PLUGINS: &[(&str, &str)] = &[
     ("launchapp-dev/animus-provider-claude", "v0.2.2"),
     ("launchapp-dev/animus-provider-codex", "v0.2.3"),
-    ("launchapp-dev/animus-provider-gemini", "v0.2.3"),
-    ("launchapp-dev/animus-provider-opencode", "v0.2.3"),
+    ("launchapp-dev/animus-provider-gemini", "v0.2.6"),
+    ("launchapp-dev/animus-provider-opencode", "v0.2.6"),
     ("launchapp-dev/animus-provider-oai", "v0.2.2"),
 ];
 
