@@ -21,14 +21,6 @@ pub(super) struct DaemonStartInput {
     #[serde(default)]
     pub(super) auto_run_ready: Option<bool>,
     #[serde(default)]
-    pub(super) auto_merge: Option<bool>,
-    #[serde(default)]
-    pub(super) auto_pr: Option<bool>,
-    #[serde(default)]
-    pub(super) auto_commit_before_merge: Option<bool>,
-    #[serde(default)]
-    pub(super) auto_prune_worktrees_after_merge: Option<bool>,
-    #[serde(default)]
     pub(super) startup_cleanup: Option<bool>,
     #[serde(default)]
     pub(super) resume_interrupted: Option<bool>,
@@ -66,15 +58,6 @@ pub(super) struct DaemonConfigInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub(super) struct DaemonConfigSetInput {
-    // Existing automation flags
-    #[serde(default)]
-    pub(super) auto_merge: Option<bool>,
-    #[serde(default)]
-    pub(super) auto_pr: Option<bool>,
-    #[serde(default)]
-    pub(super) auto_commit_before_merge: Option<bool>,
-    #[serde(default)]
-    pub(super) auto_prune_worktrees_after_merge: Option<bool>,
     #[serde(default)]
     pub(super) auto_run_ready: Option<bool>,
     // Runtime-reconfigurable settings (hot-reloaded by daemon without restart)

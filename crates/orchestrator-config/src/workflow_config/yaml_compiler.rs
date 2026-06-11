@@ -277,18 +277,6 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
             if overlay.retry_cooldown_secs.is_some() {
                 base.retry_cooldown_secs = overlay.retry_cooldown_secs;
             }
-            if overlay.auto_merge.is_some() {
-                base.auto_merge = overlay.auto_merge;
-            }
-            if overlay.auto_pr.is_some() {
-                base.auto_pr = overlay.auto_pr;
-            }
-            if overlay.auto_commit_before_merge.is_some() {
-                base.auto_commit_before_merge = overlay.auto_commit_before_merge;
-            }
-            if overlay.auto_prune_worktrees.is_some() {
-                base.auto_prune_worktrees = overlay.auto_prune_worktrees;
-            }
             if overlay.phase_routing.is_some() {
                 base.phase_routing = overlay.phase_routing;
             }

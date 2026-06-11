@@ -49,14 +49,13 @@ fn init_plan_reports_selected_template_and_required_changes() -> Result<()> {
             )
         })
     }));
-    assert!(payload.pointer("/data/required_changes/daemon_config").and_then(Value::as_array).is_some_and(|fields| {
-        fields.iter().any(|field| {
-            matches!(
-                (field.get("field").and_then(Value::as_str), field.get("after").and_then(Value::as_bool)),
-                (Some("auto_merge_enabled"), Some(true))
-            )
-        })
-    }));
+    // The daemon git/merge policy knobs were removed in v0.5.x; templates
+    // that still declare them load fine, but init no longer plans daemon
+    // field changes.
+    assert_eq!(
+        payload.pointer("/data/required_changes/daemon_config").and_then(Value::as_array).map(Vec::len),
+        Some(0)
+    );
 
     Ok(())
 }
@@ -89,9 +88,10 @@ fn init_apply_writes_template_files_and_daemon_defaults() -> Result<()> {
 
     let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
     let pm_config: Value = serde_json::from_str(&fs::read_to_string(pm_config_path)?)?;
-    assert_eq!(pm_config.get("auto_merge_enabled").and_then(Value::as_bool), Some(false));
-    assert_eq!(pm_config.get("auto_pr_enabled").and_then(Value::as_bool), Some(true));
-    assert_eq!(pm_config.get("auto_commit_before_merge").and_then(Value::as_bool), Some(false));
+    // Removed v0.5.x daemon git/merge policy keys are no longer written.
+    assert!(pm_config.get("auto_merge_enabled").is_none());
+    assert!(pm_config.get("auto_pr_enabled").is_none());
+    assert!(pm_config.get("auto_commit_before_merge").is_none());
 
     let compile = harness.run_json_ok_with_env(
         &["workflow", "config", "compile"],
@@ -463,9 +463,10 @@ auto_commit_before_merge = true
 
     let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
     let pm_config: Value = serde_json::from_str(&fs::read_to_string(pm_config_path)?)?;
-    assert_eq!(pm_config.get("auto_merge_enabled").and_then(Value::as_bool), Some(true));
-    assert_eq!(pm_config.get("auto_pr_enabled").and_then(Value::as_bool), Some(false));
-    assert_eq!(pm_config.get("auto_commit_before_merge").and_then(Value::as_bool), Some(true));
+    // The template's legacy [daemon] auto_* keys are tolerated but ignored.
+    assert!(pm_config.get("auto_merge_enabled").is_none());
+    assert!(pm_config.get("auto_pr_enabled").is_none());
+    assert!(pm_config.get("auto_commit_before_merge").is_none());
 
     Ok(())
 }

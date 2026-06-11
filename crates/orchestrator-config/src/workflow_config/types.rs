@@ -833,14 +833,6 @@ pub struct DaemonConfig {
     pub max_task_retries: Option<u32>,
     #[serde(default)]
     pub retry_cooldown_secs: Option<u64>,
-    #[serde(default)]
-    pub auto_merge: Option<bool>,
-    #[serde(default)]
-    pub auto_pr: Option<bool>,
-    #[serde(default)]
-    pub auto_commit_before_merge: Option<bool>,
-    #[serde(default)]
-    pub auto_prune_worktrees: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_routing: Option<protocol::PhaseRoutingConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -689,31 +689,6 @@ fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &s
     let mut config = load_daemon_project_config(project_path).unwrap_or_default();
     let mut changed = false;
 
-    if let Some(value) = args.scheduler.auto_merge {
-        if config.auto_merge_enabled != value {
-            config.auto_merge_enabled = value;
-            changed = true;
-        }
-    }
-    if let Some(value) = args.scheduler.auto_pr {
-        if config.auto_pr_enabled != value {
-            config.auto_pr_enabled = value;
-            changed = true;
-        }
-    }
-    if let Some(value) = args.scheduler.auto_commit_before_merge {
-        if config.auto_commit_before_merge != value {
-            config.auto_commit_before_merge = value;
-            changed = true;
-        }
-    }
-    if let Some(value) = args.scheduler.auto_prune_worktrees_after_merge {
-        if config.auto_prune_worktrees_after_merge != value {
-            config.auto_prune_worktrees_after_merge = value;
-            changed = true;
-        }
-    }
-
     // Persist runtime-reconfigurable settings from CLI overrides so they survive
     // daemon restart and are available for hot-reload.
     if let Some(value) = args.scheduler.pool_size {
@@ -832,10 +807,6 @@ mod tests {
                 interval_secs: Some(1),
 
                 auto_run_ready: Some(false),
-                auto_merge: None,
-                auto_pr: None,
-                auto_commit_before_merge: None,
-                auto_prune_worktrees_after_merge: None,
                 startup_cleanup: true,
                 resume_interrupted: false,
                 reconcile_stale: false,
@@ -942,10 +913,6 @@ mod tests {
                 interval_secs: Some(1),
 
                 auto_run_ready: Some(false),
-                auto_merge: None,
-                auto_pr: None,
-                auto_commit_before_merge: None,
-                auto_prune_worktrees_after_merge: None,
                 startup_cleanup: false,
                 resume_interrupted: false,
                 reconcile_stale: true,
@@ -1041,10 +1008,6 @@ mod tests {
                 interval_secs: Some(1),
 
                 auto_run_ready: Some(true),
-                auto_merge: None,
-                auto_pr: None,
-                auto_commit_before_merge: None,
-                auto_prune_worktrees_after_merge: None,
                 startup_cleanup: false,
                 resume_interrupted: false,
                 reconcile_stale: false,
@@ -1146,10 +1109,6 @@ mod tests {
                 interval_secs: Some(1),
 
                 auto_run_ready: Some(false),
-                auto_merge: None,
-                auto_pr: None,
-                auto_commit_before_merge: None,
-                auto_prune_worktrees_after_merge: None,
                 startup_cleanup: true,
                 resume_interrupted: false,
                 reconcile_stale: false,
@@ -1208,10 +1167,6 @@ mod tests {
                 pool_size: None,
                 interval_secs: None,
                 auto_run_ready: None,
-                auto_merge: None,
-                auto_pr: None,
-                auto_commit_before_merge: None,
-                auto_prune_worktrees_after_merge: None,
                 startup_cleanup: true,
                 resume_interrupted: true,
                 reconcile_stale: true,

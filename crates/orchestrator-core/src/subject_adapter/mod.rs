@@ -133,7 +133,6 @@ pub trait PlanningAdapterApi: Send + Sync {
 
 pub mod adapter;
 pub mod builtin;
-pub mod git;
 pub mod plugins {
     pub use animus_plugin_protocol as protocol;
     pub use orchestrator_plugin_host::{
@@ -148,4 +147,3 @@ pub use adapter::{
     SubjectAdapterRegistry,
 };
 pub use builtin::{BuiltinRequirementsPlanningService, BuiltinRequirementsProvider, BuiltinTaskProvider};
-pub use git::{BuiltinGitProvider, CreatePrInput, GitProvider, MergeResult, PullRequestInfo, WorktreeInfo};

@@ -12,7 +12,6 @@ use fs2::FileExt;
 use tokio::sync::RwLock;
 use uuid::Uuid;
 
-use crate::subject_adapter::{BuiltinGitProvider, GitProvider};
 use crate::subject_adapter::{
     BuiltinProjectAdapter, BuiltinRequirementsPlanningService, BuiltinRequirementsProvider, BuiltinSubjectResolver,
     BuiltinTaskProvider, ProjectAdapter, RequirementsPlanningService, RequirementsProvider, SubjectResolver,
@@ -275,10 +274,6 @@ pub struct FileServiceHub {
 }
 
 impl FileServiceHub {
-    pub fn git_provider(&self) -> Arc<dyn GitProvider> {
-        Arc::new(BuiltinGitProvider::new(self.project_root.clone()))
-    }
-
     pub fn new(project_root: impl AsRef<Path>) -> Result<Self> {
         let project_root = project_root.as_ref().to_path_buf();
         Self::bootstrap_project_base_configs(&project_root)?;

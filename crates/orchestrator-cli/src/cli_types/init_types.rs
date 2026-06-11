@@ -1,4 +1,4 @@
-use clap::{ArgAction, Args};
+use clap::Args;
 
 #[derive(Debug, Args)]
 pub(crate) struct InitArgs {
@@ -22,12 +22,6 @@ pub(crate) struct InitArgs {
     pub(crate) plan: bool,
     #[arg(long, help = "Overwrite existing project files targeted by the template.")]
     pub(crate) force: bool,
-    #[arg(long, action = ArgAction::Set, help = "Override the template default for automatic merge.")]
-    pub(crate) auto_merge: Option<bool>,
-    #[arg(long, action = ArgAction::Set, help = "Override the template default for automatic pull request creation.")]
-    pub(crate) auto_pr: Option<bool>,
-    #[arg(long, action = ArgAction::Set, help = "Override the template default for automatic commit before merge.")]
-    pub(crate) auto_commit_before_merge: Option<bool>,
     #[arg(
         long = "update-registry",
         help = "Fetch the latest commit from the template registry and re-pin the local cache before loading the template."
