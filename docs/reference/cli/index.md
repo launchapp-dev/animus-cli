@@ -100,9 +100,9 @@ animus
 │   ├── list                 List queued dispatches
 │   ├── stats                Show queue statistics
 │   ├── enqueue              Enqueue a subject dispatch for a task, requirement, or custom title
-│   ├── hold                 Hold a queued subject
-│   ├── release              Release a held queued subject
-│   ├── drop                 Drop (remove) a queued subject dispatch regardless of status
+│   ├── hold                 Hold one or more queued subjects (ids or --all)
+│   ├── release              Release one or more held queued subjects (ids or --all)
+│   ├── drop                 Drop (remove) one or more queued subject dispatches regardless of status (ids or --all)
 │   └── reorder              Reorder queued subjects by subject id
 │
 ├── workflow                 Run and control workflow execution
@@ -553,6 +553,35 @@ animus agent interactions answer <ID> --deny --message "too risky"  # approval
 Answering emits an `interaction_answered` record to the daemon event log
 (creation and expiry emit `interaction_created` / `interaction_expired`), so
 `animus daemon events` surfaces the round-trip without polling the store.
+
+### `animus queue hold` / `release` / `drop` (bulk subject operations)
+
+`hold`, `release`, and `drop` accept one or more subject ids as positional
+arguments. Each id is processed independently: per-item failures do not stop
+the batch, results are summarized at the end, and the exit code is non-zero
+if any item failed. The legacy `--subject-id <ID>` flag form still works and
+may be combined with positional ids.
+
+```bash
+animus queue hold TASK-001 TASK-002 TASK-003
+animus queue drop --all --yes
+animus queue release --subject-id TASK-001   # legacy flag form
+```
+
+| Flag | Description |
+|---|---|
+| `--all` | Target every queue entry eligible for the verb (`hold`: pending, `release`: held, `drop`: pending/held/assigned). Mutually exclusive with explicit subject ids. |
+| `--yes` | Skip the confirmation prompt required by `--all`. Required in non-interactive contexts (scripts, CI, `--json` pipelines). Only valid together with `--all`. |
+
+With `--json`, the `animus.cli.v1` envelope carries per-item results:
+`{"op", "all", "requested", "succeeded", "failed", "items": [{"subject_id",
+"ok", "dropped_entries"?, "error"?}], "via": "plugin_host"}`. When some items
+fail, the command emits an error envelope whose `error.details` field carries
+the same per-item payload.
+
+The MCP tools `animus.queue.hold` / `release` / `drop` accept either a single
+`subject_id` or a `subject_ids[]` array and route through the same CLI bulk
+path.
 
 ### `animus workflow prune` / `animus workflow delete`
 

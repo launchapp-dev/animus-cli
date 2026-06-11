@@ -9,7 +9,7 @@ use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub, w
 use protocol::{SubjectDispatch, SubjectDispatchExt};
 
 use super::ops_workflow::resolve_requirement_workflow_ref;
-use crate::{print_ok, print_value, QueueCommand};
+use crate::{invalid_input_error, print_ok, print_value, CliError, CliErrorKind, QueueCommand, QueueSubjectArgs};
 
 #[allow(clippy::too_many_arguments)]
 async fn resolve_enqueue_dispatch(
@@ -128,56 +128,9 @@ pub(crate) async fn handle_queue(
             }
             print_value(translated, true)
         }
-        QueueCommand::Hold(args) => {
-            let result = try_queue_hold_via_plugin(project_root, &args.subject_id)
-                .await?
-                .ok_or_else(|| queue_plugin_required("hold"))?;
-            let held = result.changed;
-            if !json {
-                if held {
-                    print_ok("queue subject held (via queue plugin)", false);
-                    return Ok(());
-                }
-                return Err(anyhow!("queue subject not found or not pending"));
-            }
-            print_value(serde_json::json!({ "held": held, "subject_id": args.subject_id, "via": "plugin_host" }), true)
-        }
-        QueueCommand::Release(args) => {
-            let result = try_queue_release_via_plugin(project_root, &args.subject_id)
-                .await?
-                .ok_or_else(|| queue_plugin_required("release"))?;
-            let released = result.changed;
-            if !json {
-                if released {
-                    print_ok("queue subject released (via queue plugin)", false);
-                    return Ok(());
-                }
-                return Err(anyhow!("queue subject not found or not held"));
-            }
-            print_value(
-                serde_json::json!({ "released": released, "subject_id": args.subject_id, "via": "plugin_host" }),
-                true,
-            )
-        }
-        QueueCommand::Drop(args) => {
-            let removed = try_queue_drop_via_plugin(project_root, &args.subject_id)
-                .await?
-                .ok_or_else(|| queue_plugin_required("drop"))?;
-            if !json {
-                if removed > 0 {
-                    print_ok(
-                        &format!("dropped {removed} queue entry/entries for {} (via queue plugin)", args.subject_id),
-                        false,
-                    );
-                    return Ok(());
-                }
-                return Err(anyhow!("queue subject not found"));
-            }
-            print_value(
-                serde_json::json!({ "dropped": removed, "subject_id": args.subject_id, "via": "plugin_host" }),
-                true,
-            )
-        }
+        QueueCommand::Hold(args) => handle_queue_bulk(BulkVerb::Hold, args, project_root, json).await,
+        QueueCommand::Release(args) => handle_queue_bulk(BulkVerb::Release, args, project_root, json).await,
+        QueueCommand::Drop(args) => handle_queue_bulk(BulkVerb::Drop, args, project_root, json).await,
         QueueCommand::Reorder(args) => {
             let reordered_count = try_queue_reorder_via_plugin(project_root, &args.subject_ids)
                 .await?
@@ -202,6 +155,207 @@ pub(crate) async fn handle_queue(
             )
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BulkVerb {
+    Hold,
+    Release,
+    Drop,
+}
+
+impl BulkVerb {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Hold => "hold",
+            Self::Release => "release",
+            Self::Drop => "drop",
+        }
+    }
+
+    const fn past_tense(self) -> &'static str {
+        match self {
+            Self::Hold => "held",
+            Self::Release => "released",
+            Self::Drop => "dropped",
+        }
+    }
+
+    /// Queue entry statuses this verb can act on (mirrors the single-item
+    /// `try_queue_*_via_plugin` status sets).
+    const fn statuses(self) -> &'static [&'static str] {
+        match self {
+            Self::Hold => &[animus_queue_protocol::status::PENDING],
+            Self::Release => &[animus_queue_protocol::status::HELD],
+            Self::Drop => &[
+                animus_queue_protocol::status::PENDING,
+                animus_queue_protocol::status::HELD,
+                animus_queue_protocol::status::ASSIGNED,
+            ],
+        }
+    }
+
+    const fn state_error(self) -> &'static str {
+        match self {
+            Self::Hold => "queue subject not found or not pending",
+            Self::Release => "queue subject not found or not held",
+            Self::Drop => "queue subject not found",
+        }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct BulkItemResult {
+    subject_id: String,
+    ok: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dropped_entries: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+fn merge_subject_ids(flag: Option<String>, positional: Vec<String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    flag.into_iter().chain(positional).filter(|id| seen.insert(id.clone())).collect()
+}
+
+fn distinct_in_order(ids: impl IntoIterator<Item = String>) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    ids.into_iter().filter(|id| seen.insert(id.clone())).collect()
+}
+
+fn bulk_failure_kind(items: &[BulkItemResult]) -> CliErrorKind {
+    let all_not_found =
+        items.iter().filter(|item| !item.ok).all(|item| item.error.as_deref().is_some_and(|e| e.contains("not found")));
+    if all_not_found {
+        CliErrorKind::NotFound
+    } else {
+        CliErrorKind::Internal
+    }
+}
+
+fn bulk_payload(verb: BulkVerb, all: bool, items: &[BulkItemResult]) -> Result<serde_json::Value> {
+    let succeeded = items.iter().filter(|item| item.ok).count();
+    Ok(serde_json::json!({
+        "op": verb.name(),
+        "all": all,
+        "requested": items.len(),
+        "succeeded": succeeded,
+        "failed": items.len() - succeeded,
+        "items": serde_json::to_value(items)?,
+        "via": "plugin_host",
+    }))
+}
+
+fn confirm_bulk_all(verb: BulkVerb, count: usize) -> Result<bool> {
+    use std::io::{BufRead, IsTerminal, Write};
+    if !std::io::stdin().is_terminal() {
+        return Err(invalid_input_error(format!(
+            "--all requires --yes in non-interactive mode (would {} {count} queue subject(s))",
+            verb.name()
+        )));
+    }
+    eprint!("{} {count} queue subject(s)? [y/N] ", verb.name());
+    std::io::stderr().flush().ok();
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line).context("failed to read confirmation")?;
+    let answer = line.trim().to_ascii_lowercase();
+    Ok(answer == "y" || answer == "yes")
+}
+
+async fn resolve_all_subject_ids(verb: BulkVerb, project_root: &str) -> Result<Vec<String>> {
+    let req = animus_queue_protocol::QueueListRequest {
+        status: verb.statuses().iter().map(|s| (*s).to_string()).collect(),
+        limit: None,
+        offset: None,
+    };
+    let response = crate::services::plugin_clients::call_queue_list(std::path::Path::new(project_root), &req)
+        .await?
+        .ok_or_else(|| queue_plugin_required(verb.name()))?;
+    Ok(distinct_in_order(response.entries.into_iter().map(|entry| entry.subject_id)))
+}
+
+async fn apply_bulk_verb(verb: BulkVerb, project_root: &str, subject_id: &str) -> Result<BulkItemResult> {
+    let mut item = BulkItemResult { subject_id: subject_id.to_string(), ok: false, dropped_entries: None, error: None };
+    match verb {
+        BulkVerb::Hold | BulkVerb::Release => {
+            let result = match verb {
+                BulkVerb::Hold => try_queue_hold_via_plugin(project_root, subject_id).await,
+                _ => try_queue_release_via_plugin(project_root, subject_id).await,
+            };
+            match result {
+                Ok(Some(resp)) if resp.changed => item.ok = true,
+                Ok(Some(_)) => item.error = Some(verb.state_error().to_string()),
+                Ok(None) => return Err(queue_plugin_required(verb.name())),
+                Err(err) => item.error = Some(format!("{err:#}")),
+            }
+        }
+        BulkVerb::Drop => match try_queue_drop_via_plugin(project_root, subject_id).await {
+            Ok(Some(removed)) if removed > 0 => {
+                item.ok = true;
+                item.dropped_entries = Some(removed);
+            }
+            Ok(Some(_)) => item.error = Some(verb.state_error().to_string()),
+            Ok(None) => return Err(queue_plugin_required(verb.name())),
+            Err(err) => item.error = Some(format!("{err:#}")),
+        },
+    }
+    Ok(item)
+}
+
+async fn handle_queue_bulk(verb: BulkVerb, args: QueueSubjectArgs, project_root: &str, json: bool) -> Result<()> {
+    if args.yes && !args.all {
+        return Err(invalid_input_error("--yes is only valid together with --all"));
+    }
+    let subject_ids = if args.all {
+        let ids = resolve_all_subject_ids(verb, project_root).await?;
+        if ids.is_empty() {
+            if json {
+                return print_value(bulk_payload(verb, true, &[])?, true);
+            }
+            print_ok(&format!("no queue subjects eligible for {} (via queue plugin)", verb.name()), false);
+            return Ok(());
+        }
+        if !args.yes && !confirm_bulk_all(verb, ids.len())? {
+            print_ok(&format!("aborted: no queue subjects {}", verb.past_tense()), json);
+            return Ok(());
+        }
+        ids
+    } else {
+        merge_subject_ids(args.subject_id, args.subject_ids)
+    };
+
+    let mut items = Vec::with_capacity(subject_ids.len());
+    for subject_id in &subject_ids {
+        items.push(apply_bulk_verb(verb, project_root, subject_id).await?);
+    }
+
+    let failed: Vec<&BulkItemResult> = items.iter().filter(|item| !item.ok).collect();
+    if !json {
+        for item in &items {
+            match &item.error {
+                None => match item.dropped_entries {
+                    Some(removed) => {
+                        println!("dropped {removed} queue entry/entries for {} (via queue plugin)", item.subject_id)
+                    }
+                    None => println!("{} {} (via queue plugin)", verb.past_tense(), item.subject_id),
+                },
+                Some(error) => println!("failed {}: {error}", item.subject_id),
+            }
+        }
+    }
+    if failed.is_empty() {
+        if json {
+            return print_value(bulk_payload(verb, args.all, &items)?, true);
+        }
+        if items.len() > 1 {
+            print_ok(&format!("{} {} queue subject(s) (via queue plugin)", verb.past_tense(), items.len()), false);
+        }
+        return Ok(());
+    }
+    let kind = bulk_failure_kind(&items);
+    let message = format!("queue {}: {} of {} subject(s) failed", verb.name(), failed.len(), items.len());
+    Err(CliError::new(kind, message).with_details(bulk_payload(verb, args.all, &items)?).into())
 }
 
 async fn lookup_plugin_entries_by_subject(
@@ -407,5 +561,117 @@ mod tests {
 
         let msg = err.to_string();
         assert!(msg.contains("mutually exclusive"), "error should mention mutual exclusivity");
+    }
+
+    #[tokio::test]
+    async fn handle_queue_bulk_rejects_yes_without_all() {
+        let args =
+            QueueSubjectArgs { subject_ids: vec!["TASK-1".to_string()], subject_id: None, all: false, yes: true };
+        let err = handle_queue_bulk(BulkVerb::Hold, args, "/nonexistent", false)
+            .await
+            .expect_err("--yes without --all should be rejected");
+        assert!(err.to_string().contains("--all"), "error should mention --all: {err}");
+        assert_eq!(crate::classify_cli_error_kind(&err), CliErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn merge_subject_ids_combines_flag_and_positional_and_dedups() {
+        let merged = merge_subject_ids(
+            Some("TASK-1".to_string()),
+            vec!["TASK-2".to_string(), "TASK-1".to_string(), "TASK-3".to_string(), "TASK-2".to_string()],
+        );
+        assert_eq!(merged, vec!["TASK-1", "TASK-2", "TASK-3"]);
+    }
+
+    #[test]
+    fn merge_subject_ids_works_without_flag() {
+        let merged = merge_subject_ids(None, vec!["TASK-9".to_string()]);
+        assert_eq!(merged, vec!["TASK-9"]);
+    }
+
+    #[test]
+    fn distinct_in_order_preserves_first_occurrence_order() {
+        let ids = distinct_in_order(vec![
+            "b".to_string(),
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "a".to_string(),
+        ]);
+        assert_eq!(ids, vec!["b", "a", "c"]);
+    }
+
+    #[test]
+    fn bulk_failure_kind_is_not_found_when_all_failures_are_not_found() {
+        let items = vec![
+            BulkItemResult { subject_id: "a".to_string(), ok: true, dropped_entries: None, error: None },
+            BulkItemResult {
+                subject_id: "b".to_string(),
+                ok: false,
+                dropped_entries: None,
+                error: Some("queue subject not found or not pending".to_string()),
+            },
+        ];
+        assert_eq!(bulk_failure_kind(&items), CliErrorKind::NotFound);
+    }
+
+    #[test]
+    fn bulk_failure_kind_is_internal_for_mixed_failures() {
+        let items = vec![
+            BulkItemResult {
+                subject_id: "a".to_string(),
+                ok: false,
+                dropped_entries: None,
+                error: Some("queue subject not found".to_string()),
+            },
+            BulkItemResult {
+                subject_id: "b".to_string(),
+                ok: false,
+                dropped_entries: None,
+                error: Some("plugin rpc timed out".to_string()),
+            },
+        ];
+        assert_eq!(bulk_failure_kind(&items), CliErrorKind::Internal);
+    }
+
+    #[test]
+    fn bulk_payload_carries_per_item_results_and_counts() {
+        let items = vec![
+            BulkItemResult { subject_id: "a".to_string(), ok: true, dropped_entries: Some(2), error: None },
+            BulkItemResult {
+                subject_id: "b".to_string(),
+                ok: false,
+                dropped_entries: None,
+                error: Some("queue subject not found".to_string()),
+            },
+        ];
+        let payload = bulk_payload(BulkVerb::Drop, true, &items).expect("payload should serialize");
+        assert_eq!(payload["op"], "drop");
+        assert_eq!(payload["all"], true);
+        assert_eq!(payload["requested"], 2);
+        assert_eq!(payload["succeeded"], 1);
+        assert_eq!(payload["failed"], 1);
+        let items_value = payload["items"].as_array().expect("items array");
+        assert_eq!(items_value.len(), 2);
+        assert_eq!(items_value[0]["subject_id"], "a");
+        assert_eq!(items_value[0]["ok"], true);
+        assert_eq!(items_value[0]["dropped_entries"], 2);
+        assert_eq!(items_value[1]["ok"], false);
+        assert_eq!(items_value[1]["error"], "queue subject not found");
+        assert!(items_value[0].get("error").is_none(), "successful items should omit error");
+    }
+
+    #[test]
+    fn bulk_verb_status_sets_mirror_single_item_paths() {
+        assert_eq!(BulkVerb::Hold.statuses(), &[animus_queue_protocol::status::PENDING]);
+        assert_eq!(BulkVerb::Release.statuses(), &[animus_queue_protocol::status::HELD]);
+        assert_eq!(
+            BulkVerb::Drop.statuses(),
+            &[
+                animus_queue_protocol::status::PENDING,
+                animus_queue_protocol::status::HELD,
+                animus_queue_protocol::status::ASSIGNED
+            ]
+        );
     }
 }

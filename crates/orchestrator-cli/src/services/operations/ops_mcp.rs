@@ -126,7 +126,7 @@ use list_guard::{list_limit, list_max_tokens};
 use list_types::*;
 use output::build_output_tail_result;
 use output_inputs::*;
-use queue_command_args::{build_queue_enqueue_args, build_queue_reorder_args};
+use queue_command_args::{build_queue_enqueue_args, build_queue_reorder_args, build_queue_subject_args};
 use queue_inputs::*;
 use subject_command_args::{
     build_subject_create_args, build_subject_get_args, build_subject_list_args, build_subject_next_args,

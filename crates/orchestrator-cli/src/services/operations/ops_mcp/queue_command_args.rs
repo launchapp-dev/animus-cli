@@ -1,4 +1,4 @@
-use super::{push_opt, QueueEnqueueInput, QueueReorderInput};
+use super::{push_opt, QueueEnqueueInput, QueueReorderInput, QueueSubjectInput};
 
 pub(super) fn build_queue_enqueue_args(input: &QueueEnqueueInput) -> Vec<String> {
     let mut args = vec!["queue".to_string(), "enqueue".to_string()];
@@ -8,6 +8,15 @@ pub(super) fn build_queue_enqueue_args(input: &QueueEnqueueInput) -> Vec<String>
     push_opt(&mut args, "--description", input.description.clone());
     push_opt(&mut args, "--workflow-ref", input.workflow_ref.clone());
     push_opt(&mut args, "--input-json", input.input_json.clone());
+    args
+}
+
+pub(super) fn build_queue_subject_args(verb: &str, input: &QueueSubjectInput) -> Vec<String> {
+    let mut args = vec!["queue".to_string(), verb.to_string()];
+    push_opt(&mut args, "--subject-id", input.subject_id.clone());
+    for subject_id in &input.subject_ids {
+        args.push(subject_id.clone());
+    }
     args
 }
 

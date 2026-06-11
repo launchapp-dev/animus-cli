@@ -681,6 +681,25 @@ fn build_queue_reorder_args_repeats_subject_flags() {
 }
 
 #[test]
+fn build_queue_subject_args_supports_single_flag_and_multi_positional_ids() {
+    let single = QueueSubjectInput { subject_id: Some("TASK-1".to_string()), subject_ids: vec![], project_root: None };
+    assert_eq!(
+        build_queue_subject_args("hold", &single),
+        vec!["queue".to_string(), "hold".to_string(), "--subject-id".to_string(), "TASK-1".to_string()]
+    );
+
+    let multi = QueueSubjectInput {
+        subject_id: None,
+        subject_ids: vec!["TASK-1".to_string(), "TASK-2".to_string()],
+        project_root: None,
+    };
+    assert_eq!(
+        build_queue_subject_args("drop", &multi),
+        vec!["queue".to_string(), "drop".to_string(), "TASK-1".to_string(), "TASK-2".to_string()]
+    );
+}
+
+#[test]
 fn build_agent_run_args_defaults_detach_and_stream() {
     let input = AgentRunInput {
         tool: "codex".to_string(),

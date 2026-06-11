@@ -143,6 +143,7 @@ dispatch control.
 { "limit": 50 }                              // animus.daemon.events
 { "project_root": "/repo" }                  // animus.queue.list / stats
 { "subject_id": "task:TASK-001" }            // animus.queue.hold / release / drop
+{ "subject_ids": ["task:TASK-001", "task:TASK-002"] } // animus.queue.hold / release / drop (bulk)
 { "subject_ids": ["task:TASK-003", "task:TASK-001"] } // animus.queue.reorder
 ```
 

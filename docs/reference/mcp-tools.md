@@ -208,9 +208,9 @@ rejection remains a CLI-only action.
 | `animus.queue.stats` | Get aggregate queue depth and status counts | `project_root` |
 | `animus.queue.enqueue` | Add a subject dispatch to the queue | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json`, `project_root` |
 | `animus.queue.reorder` | Set preferred dispatch order | `subject_ids[]`, `project_root` |
-| `animus.queue.hold` | Hold a pending subject from dispatch | `subject_id`, `project_root` |
-| `animus.queue.release` | Release a held subject for dispatch | `subject_id`, `project_root` |
-| `animus.queue.drop` | Remove a queued subject dispatch permanently | `subject_id`, `project_root` |
+| `animus.queue.hold` | Hold one or more pending subjects from dispatch | `subject_id`, `subject_ids[]`, `project_root` |
+| `animus.queue.release` | Release one or more held subjects for dispatch | `subject_id`, `subject_ids[]`, `project_root` |
+| `animus.queue.drop` | Remove one or more queued subject dispatches permanently | `subject_id`, `subject_ids[]`, `project_root` |
 
 ---
 

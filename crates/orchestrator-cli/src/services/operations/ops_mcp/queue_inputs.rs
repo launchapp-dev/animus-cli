@@ -20,7 +20,10 @@ pub(super) struct QueueEnqueueInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct QueueSubjectInput {
-    pub(super) subject_id: String,
+    #[serde(default)]
+    pub(super) subject_id: Option<String>,
+    #[serde(default)]
+    pub(super) subject_ids: Vec<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }

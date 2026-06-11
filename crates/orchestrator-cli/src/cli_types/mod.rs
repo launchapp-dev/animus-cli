@@ -243,6 +243,65 @@ mod tests {
     }
 
     #[test]
+    fn queue_hold_accepts_multiple_positional_subject_ids() {
+        let cli = Cli::try_parse_from(["animus", "queue", "hold", "TASK-1", "TASK-2"])
+            .expect("multiple positional subject ids should parse");
+        match cli.command {
+            Command::Queue { command: QueueCommand::Hold(args) } => {
+                assert_eq!(args.subject_ids, vec!["TASK-1", "TASK-2"]);
+                assert!(args.subject_id.is_none());
+                assert!(!args.all);
+                assert!(!args.yes);
+            }
+            other => panic!("expected queue hold, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn queue_drop_keeps_subject_id_flag_back_compat() {
+        let cli = Cli::try_parse_from(["animus", "queue", "drop", "--subject-id", "TASK-1"])
+            .expect("--subject-id flag form should still parse");
+        match cli.command {
+            Command::Queue { command: QueueCommand::Drop(args) } => {
+                assert_eq!(args.subject_id.as_deref(), Some("TASK-1"));
+                assert!(args.subject_ids.is_empty());
+            }
+            other => panic!("expected queue drop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn queue_release_all_parses_with_yes() {
+        let cli =
+            Cli::try_parse_from(["animus", "queue", "release", "--all", "--yes"]).expect("--all --yes should parse");
+        match cli.command {
+            Command::Queue { command: QueueCommand::Release(args) } => {
+                assert!(args.all);
+                assert!(args.yes);
+                assert!(args.subject_ids.is_empty());
+            }
+            other => panic!("expected queue release, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn queue_drop_all_conflicts_with_explicit_subject_ids() {
+        let error = Cli::try_parse_from(["animus", "queue", "drop", "TASK-1", "--all"])
+            .expect_err("--all with explicit ids should fail");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict);
+
+        let flag_error = Cli::try_parse_from(["animus", "queue", "drop", "--subject-id", "TASK-1", "--all"])
+            .expect_err("--all with --subject-id should fail");
+        assert_eq!(flag_error.kind(), ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn queue_hold_requires_subject_ids_or_all() {
+        let error = Cli::try_parse_from(["animus", "queue", "hold"]).expect_err("missing subject selector should fail");
+        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
+    }
+
+    #[test]
     fn parses_top_level_status_command() {
         let cli = Cli::try_parse_from(["animus", "status"]).expect("status command should parse");
         assert!(matches!(cli.command, Command::Status));
