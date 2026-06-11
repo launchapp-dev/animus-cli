@@ -575,6 +575,109 @@ fn file_hub_daemon_mutation_interleaves_with_task_create_without_lost_updates() 
     assert_core_state_json_is_valid(temp.path());
 }
 
+#[test]
+fn persist_dirty_to_sqlite_rolls_back_all_entities_on_partial_failure() {
+    ensure_test_config_env();
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    let now = chrono::Utc::now();
+    let task = OrchestratorTask {
+        id: "TASK-atomic".to_string(),
+        title: "Atomic task".to_string(),
+        description: String::new(),
+        task_type: TaskType::Feature,
+        status: TaskStatus::Ready,
+        blocked_reason: None,
+        blocked_at: None,
+        blocked_phase: None,
+        blocked_by: None,
+        priority: Priority::Medium,
+        risk: RiskLevel::default(),
+        scope: Scope::default(),
+        complexity: Complexity::default(),
+        impact_area: Vec::new(),
+        assignee: Assignee::default(),
+        estimated_effort: None,
+        linked_requirements: Vec::new(),
+        linked_architecture_entities: Vec::new(),
+        dependencies: Vec::new(),
+        checklist: Vec::new(),
+        tags: Vec::new(),
+        workflow_metadata: WorkflowMetadata::default(),
+        worktree_path: None,
+        branch_name: None,
+        metadata: TaskMetadata {
+            created_at: now,
+            updated_at: now,
+            created_by: "test".to_string(),
+            updated_by: "test".to_string(),
+            started_at: None,
+            completed_at: None,
+            status_changed_at: None,
+            version: 1,
+        },
+        deadline: None,
+        paused: false,
+        cancelled: false,
+        resolution: None,
+        resource_requirements: crate::types::ResourceRequirements::default(),
+        consecutive_dispatch_failures: None,
+        last_dispatch_failure_at: None,
+        dispatch_history: Vec::new(),
+    };
+    let requirement = RequirementItem {
+        id: "REQ-atomic".to_string(),
+        title: "Atomic requirement".to_string(),
+        description: String::new(),
+        body: None,
+        legacy_id: None,
+        category: None,
+        requirement_type: None,
+        acceptance_criteria: Vec::new(),
+        priority: RequirementPriority::Should,
+        status: RequirementStatus::Draft,
+        source: "manual".to_string(),
+        tags: Vec::new(),
+        links: crate::types::RequirementLinks::default(),
+        comments: Vec::new(),
+        relative_path: None,
+        linked_task_ids: Vec::new(),
+        created_at: now,
+        updated_at: now,
+    };
+    let mut state = CoreState::default();
+    state.tasks.insert(task.id.clone(), task);
+    state.requirements.insert(requirement.id.clone(), requirement);
+    let task_ids = vec!["TASK-atomic".to_string()];
+    let req_ids = vec!["REQ-atomic".to_string()];
+
+    let conn = crate::workflow::open_project_db(temp.path()).expect("open db");
+    conn.execute_batch(
+        "CREATE TRIGGER fail_requirement_insert BEFORE INSERT ON requirements
+         BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+    )
+    .expect("create failure trigger");
+    drop(conn);
+
+    let error = FileServiceHub::persist_dirty_to_sqlite(temp.path(), &state, &task_ids, &req_ids)
+        .expect_err("requirement persistence failure should fail the whole set");
+    assert!(format!("{error:#}").contains("REQ-atomic"));
+    assert!(
+        crate::workflow::load_all_tasks(temp.path()).expect("load tasks").is_empty(),
+        "task upsert must roll back when requirement persistence fails"
+    );
+    assert!(crate::workflow::load_all_requirements(temp.path()).expect("load requirements").is_empty());
+
+    let conn = crate::workflow::open_project_db(temp.path()).expect("reopen db");
+    conn.execute_batch("DROP TRIGGER fail_requirement_insert;").expect("drop failure trigger");
+    drop(conn);
+
+    FileServiceHub::persist_dirty_to_sqlite(temp.path(), &state, &task_ids, &req_ids)
+        .expect("retry should persist the full set");
+    assert_eq!(crate::workflow::load_all_tasks(temp.path()).expect("load tasks").len(), 1);
+    assert_eq!(crate::workflow::load_all_requirements(temp.path()).expect("load requirements").len(), 1);
+}
+
 #[tokio::test]
 async fn file_hub_yaml_only_repo_executes_workflow_without_json_config() {
     let temp = tempfile::tempdir().expect("tempdir");

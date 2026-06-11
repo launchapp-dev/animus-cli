@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use rusqlite::{params, params_from_iter, types::Value, Connection};
+use rusqlite::{params, params_from_iter, types::Value, Connection, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 
 use crate::types::{
@@ -117,6 +117,10 @@ impl WorkflowStateManager {
 
     pub fn save(&self, workflow: &OrchestratorWorkflow) -> Result<()> {
         let conn = self.open_db()?;
+        self.save_with_conn(&conn, workflow)
+    }
+
+    fn save_with_conn(&self, conn: &Connection, workflow: &OrchestratorWorkflow) -> Result<()> {
         let data = compress_json(&serde_json::to_string(workflow)?);
         let summary = workflow_summary_fields(workflow);
         conn.execute(
@@ -246,21 +250,29 @@ impl WorkflowStateManager {
         let cutoff = Utc::now() - Duration::hours(max_age_hours as i64);
         let cutoff_str = cutoff.to_rfc3339();
 
-        let conn = self.open_db()?;
-        let deleted = conn.execute(
-            "DELETE FROM workflows WHERE status NOT IN ('running', 'paused') AND COALESCE(completed_at, started_at) < ?1",
+        let mut conn = self.open_db()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let deleted = tx.execute(
+            "DELETE FROM workflows
+             WHERE status NOT IN ('running', 'paused')
+               AND (COALESCE(completed_at, started_at) < ?1
+                    OR (status IN ('completed', 'failed', 'escalated', 'cancelled')
+                        AND COALESCE(completed_at, started_at) IS NULL))",
             params![cutoff_str],
         )?;
 
-        conn.execute("DELETE FROM checkpoints WHERE workflow_id NOT IN (SELECT id FROM workflows)", [])?;
+        tx.execute("DELETE FROM checkpoints WHERE workflow_id NOT IN (SELECT id FROM workflows)", [])?;
+        tx.commit()?;
 
         Ok(CleanupResult { deleted })
     }
 
     pub fn delete(&self, workflow_id: &str) -> Result<()> {
-        let conn = self.open_db()?;
-        conn.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
-        conn.execute("DELETE FROM checkpoints WHERE workflow_id = ?1", params![workflow_id])?;
+        let mut conn = self.open_db()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+        tx.execute("DELETE FROM checkpoints WHERE workflow_id = ?1", params![workflow_id])?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -270,7 +282,16 @@ impl WorkflowStateManager {
         reason: CheckpointReason,
     ) -> Result<OrchestratorWorkflow> {
         let mut workflow = workflow.clone();
-        workflow.checkpoint_metadata.checkpoint_count += 1;
+
+        let mut conn = self.open_db()?;
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let max_persisted_number: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(number), 0) FROM checkpoints WHERE workflow_id = ?1",
+            params![workflow.id],
+            |row| row.get(0),
+        )?;
+        workflow.checkpoint_metadata.checkpoint_count =
+            workflow.checkpoint_metadata.checkpoint_count.max(max_persisted_number.max(0) as usize) + 1;
 
         let checkpoint = WorkflowCheckpoint {
             number: workflow.checkpoint_metadata.checkpoint_count,
@@ -282,9 +303,8 @@ impl WorkflowStateManager {
         };
         workflow.checkpoint_metadata.checkpoints.push(checkpoint.clone());
 
-        let conn = self.open_db()?;
         let snapshot_data = compress_json(&serde_json::to_string(&workflow)?);
-        conn.execute(
+        tx.execute(
             "INSERT OR REPLACE INTO checkpoints (workflow_id, number, timestamp, reason, phase_id, machine_state, status, snapshot_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 workflow.id,
@@ -297,9 +317,8 @@ impl WorkflowStateManager {
                 snapshot_data,
             ],
         )?;
-        drop(conn);
-
-        self.save(&workflow)?;
+        self.save_with_conn(&tx, &workflow)?;
+        tx.commit()?;
 
         if workflow.checkpoint_metadata.checkpoint_count.is_multiple_of(5) {
             let _ = self.prune_checkpoints(&workflow.id, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, None, false);
@@ -403,15 +422,17 @@ impl WorkflowStateManager {
 
         if !dry_run {
             workflow.checkpoint_metadata.checkpoints = retained_checkpoints;
-            self.save(&workflow)?;
 
-            let conn = self.open_db()?;
+            let mut conn = self.open_db()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            self.save_with_conn(&tx, &workflow)?;
             for checkpoint_num in &pruned_checkpoint_numbers {
-                conn.execute(
+                tx.execute(
                     "DELETE FROM checkpoints WHERE workflow_id = ?1 AND number = ?2",
                     params![workflow_id, *checkpoint_num as i64],
                 )?;
             }
+            tx.commit()?;
         }
 
         Ok(WorkflowCheckpointPruneResult {
@@ -1185,6 +1206,10 @@ fn parse_optional_rfc3339(value: Option<String>, field_name: &str) -> Result<Opt
 
 pub fn save_task(project_root: &std::path::Path, task: &crate::types::OrchestratorTask) -> Result<()> {
     let conn = open_project_db(project_root)?;
+    save_task_with_conn(&conn, task)
+}
+
+pub(crate) fn save_task_with_conn(conn: &Connection, task: &crate::types::OrchestratorTask) -> Result<()> {
     let data = compress_json(&serde_json::to_string(task)?);
     let updated_at = task.metadata.updated_at.to_rfc3339();
     let completed_at = task.metadata.completed_at.as_ref().map(chrono::DateTime::to_rfc3339);
@@ -1592,12 +1617,20 @@ fn query_priority_distribution(conn: &Connection, sql: &str) -> Result<TaskPrior
 
 pub fn delete_task(project_root: &std::path::Path, task_id: &str) -> Result<()> {
     let conn = open_project_db(project_root)?;
+    delete_task_with_conn(&conn, task_id)
+}
+
+pub(crate) fn delete_task_with_conn(conn: &Connection, task_id: &str) -> Result<()> {
     conn.execute("DELETE FROM tasks WHERE id = ?1", params![task_id])?;
     Ok(())
 }
 
 pub fn save_requirement(project_root: &std::path::Path, req: &crate::types::RequirementItem) -> Result<()> {
     let conn = open_project_db(project_root)?;
+    save_requirement_with_conn(&conn, req)
+}
+
+pub(crate) fn save_requirement_with_conn(conn: &Connection, req: &crate::types::RequirementItem) -> Result<()> {
     let data = compress_json(&serde_json::to_string(req)?);
     conn.execute(
         "INSERT OR REPLACE INTO requirements (id, status, priority, category, requirement_type, updated_at, json)
@@ -1716,6 +1749,10 @@ pub fn query_requirement_ids(project_root: &std::path::Path, query: &Requirement
 
 pub fn delete_requirement(project_root: &std::path::Path, req_id: &str) -> Result<()> {
     let conn = open_project_db(project_root)?;
+    delete_requirement_with_conn(&conn, req_id)
+}
+
+pub(crate) fn delete_requirement_with_conn(conn: &Connection, req_id: &str) -> Result<()> {
     conn.execute("DELETE FROM requirements WHERE id = ?1", params![req_id])?;
     Ok(())
 }

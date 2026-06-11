@@ -389,12 +389,19 @@ impl FileServiceHub {
         task_ids: &[String],
         req_ids: &[String],
     ) -> Result<()> {
+        if task_ids.is_empty() && req_ids.is_empty() {
+            return Ok(());
+        }
+        let mut conn = crate::workflow::open_project_db(project_root)?;
+        let tx = conn
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)
+            .context("failed to begin SQLite transaction for dirty state")?;
         let mut errors = Vec::new();
         for id in task_ids {
             let result = if let Some(task) = state.tasks.get(id) {
-                crate::workflow::save_task(project_root, task)
+                crate::workflow::save_task_with_conn(&tx, task)
             } else {
-                crate::workflow::delete_task(project_root, id)
+                crate::workflow::delete_task_with_conn(&tx, id)
             };
             if let Err(error) = result {
                 errors.push(format!("task {id}: {error:#}"));
@@ -402,15 +409,16 @@ impl FileServiceHub {
         }
         for id in req_ids {
             let result = if let Some(req) = state.requirements.get(id) {
-                crate::workflow::save_requirement(project_root, req)
+                crate::workflow::save_requirement_with_conn(&tx, req)
             } else {
-                crate::workflow::delete_requirement(project_root, id)
+                crate::workflow::delete_requirement_with_conn(&tx, id)
             };
             if let Err(error) = result {
                 errors.push(format!("requirement {id}: {error:#}"));
             }
         }
         if errors.is_empty() {
+            tx.commit().context("failed to commit dirty state to SQLite")?;
             Ok(())
         } else {
             Err(anyhow!("failed to persist dirty state to SQLite: {}", errors.join("; ")))
