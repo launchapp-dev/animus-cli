@@ -168,7 +168,7 @@ Visible top-level command groups currently include:
 
 - `daemon` (with `start`, `run`, `stop`, `status`, `preflight`, ...)
 - `agent`, `project`, `queue`, `workflow`, `subject`
-- `history`, `git`, `skill`, `model`, `runner`
+- `history`, `git`, `skill`
 - `status`, `output`, `mcp`, `web`, `init`, `doctor`
 - `pack`, `plugin` (with `install`, `install-defaults`, `list`, `info`, ...), `trigger`, `logs`, `flavor`
 
@@ -201,6 +201,16 @@ all subject ops route through the `SubjectRouter` to installed
 `kind=task` and `kind=requirement` surfaces routable. Use
 `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` to skip subject discovery
 entirely.
+
+Removed in v0.5.x: the `animus model` group (use `animus doctor --check
+cli_tools` / `--check api_keys` and the agent-runtime config files) and
+the `animus runner` group (`runner health` was absorbed into
+`animus plugin status` as the `providers` array +
+`provider_plugins_healthy` aggregate; `runner orphans {detect,cleanup}`
+became the doctor's `orphan_cli_processes` check — `animus doctor --fix`
+prunes stale cli-tracker entries, live PIDs get a manual `kill`
+suggestion). The matching `animus.runner.*` MCP tools were dropped with
+no aliases.
 
 Also removed in v0.4.4: `animus cloud`, `animus setup`, `animus now`,
 and `animus errors`. Use `animus init` (onboarding), `animus status`

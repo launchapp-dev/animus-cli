@@ -98,9 +98,10 @@ This clears `paused`, `blocked_at`, `blocked_reason`, and `blocked_by`. Never ha
 
 **Steps**:
 
-1. Check runner health:
+1. Check provider plugin health:
    ```bash
-   animus runner health
+   animus plugin status
+   animus daemon health
    ```
 
    If every provider shows `installed: false`, verify the plugin binaries still
@@ -108,19 +109,20 @@ This clears `paused`, `blocked_at`, `blocked_reason`, and `blocked_by`. Never ha
    but non-executable `animus-provider-*` binary is treated as unhealthy on
    purpose.
 
-2. Detect orphaned runner processes:
+2. Detect orphaned CLI processes:
    ```bash
-   animus runner orphans detect
+   animus doctor --check orphan_cli_processes
    ```
 
-3. Clean up orphans if found:
+3. Clean up stale tracker entries if found (live PIDs get a manual
+   `kill` suggestion instead of being terminated automatically):
    ```bash
-   animus runner orphans cleanup
+   animus doctor --fix
    ```
 
 4. Verify API keys are set:
    ```bash
-   animus model status
+   animus doctor --check api_keys
    ```
 
 ## Build Cache Stale
@@ -238,7 +240,7 @@ daemon so the new process environment is available to the notifier plugin.
 **Check**:
 
 ```bash
-animus model status
+animus doctor --check api_keys
 ```
 
 Required keys by tool:

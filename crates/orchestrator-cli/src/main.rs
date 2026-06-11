@@ -283,14 +283,8 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Skill { command } => {
                     services::operations::handle_skill(command, &project_root, cli.json).await
                 }
-                Command::Model { command } => {
-                    services::operations::handle_model(command, hub.clone(), &project_root, cli.json).await
-                }
                 Command::Pack { .. } => unreachable!("handled before hub creation"),
                 Command::Plugin { .. } => unreachable!("handled before hub creation"),
-                Command::Runner { command } => {
-                    services::operations::handle_runner(command, hub.clone(), &project_root, cli.json).await
-                }
                 Command::Output { command } => {
                     services::operations::handle_output(command, &project_root, cli.json).await
                 }
@@ -383,10 +377,8 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::History { .. } => CommandGroup::History,
         Command::Git { .. } => CommandGroup::Git,
         Command::Skill { .. } => CommandGroup::Skill,
-        Command::Model { .. } => CommandGroup::Model,
         Command::Pack { .. } => CommandGroup::Pack,
         Command::Plugin { .. } => CommandGroup::Plugin,
-        Command::Runner { .. } => CommandGroup::Runner,
         Command::Status => CommandGroup::Status,
         Command::Output { .. } => CommandGroup::Output,
         Command::Mcp { .. } => CommandGroup::Mcp,

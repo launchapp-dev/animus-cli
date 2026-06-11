@@ -362,7 +362,7 @@ fn extract_token_usage(metadata: &Value) -> Option<TokenUsage> {
 }
 
 /// Snapshot every installed provider plugin (one entry per discovered
-/// binary). Used by `animus runner health` and the daemon health
+/// binary). Used by `animus plugin status` and the daemon health
 /// endpoint to report provider availability without spawning the plugin.
 ///
 /// `installed` reports `true` only when the binary both exists AND is

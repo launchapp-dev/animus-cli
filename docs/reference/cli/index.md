@@ -14,7 +14,7 @@ Complete reference of every `animus` command, subcommand, and key flag. This tre
 ### `--json` envelope coverage
 
 The root `--json` flag is global: every non-streaming verb in every command
-family — including `pack`, `skill`, `runner`, `trigger`, `logs`, `history`,
+family — including `pack`, `skill`, `trigger`, `logs`, `history`,
 and `git` — answers it with the standard `animus.cli.v1` envelope
 (`{"schema":"animus.cli.v1","ok":true,"data":...}` on stdout for success,
 `{"schema":"animus.cli.v1","ok":false,"error":{...}}` on stderr for failure).
@@ -242,17 +242,6 @@ animus
 │       ├── remove           Remove a registered registry source
 │       └── list             List all registered registry sources
 │
-├── model                    Inspect model availability, validation, and evaluations
-│   ├── availability         Check model availability for one or more model ids
-│   ├── status               Show configured model and API-key status
-│   ├── validate             Validate model selection for a task or explicit list
-│   ├── roster
-│   │   ├── refresh          Refresh model roster from providers
-│   │   └── get              Get current model roster snapshot
-│   └── eval
-│       ├── run              Run model evaluation
-│       └── report           Show latest model evaluation report
-│
 ├── pack                     Install, inspect, pin, and uninstall workflow packs
 │   ├── install              Install a pack from a local path or marketplace registry
 │   ├── list                 List discovered packs and indicate which ones are active for this project
@@ -291,12 +280,6 @@ animus
 │       ├── set              Write `.animus/plugin-scope.yaml` with the supplied mode + allow/extras/require sets
 │       └── reset            Delete `.animus/plugin-scope.yaml` and fall back to the default scope
 │
-├── runner                   Inspect provider-plugin health and orphaned CLI processes
-│   ├── health               Show provider plugin health (one row per discovered provider) and daemon health
-│   └── orphans
-│       ├── detect           Detect orphaned CLI processes tracked under the cli-tracker
-│       └── cleanup          Clean orphaned CLI processes
-│
 ├── status                   Show a unified project status dashboard
 ├── output                   Inspect run output and artifacts
 │   ├── read                 Read run event payloads (alias: `run`)
@@ -321,7 +304,7 @@ animus
 ├── init                     Initialize an Animus project from a template
 │   (no subcommands)         Supports registry-backed or local copy templates, plan mode, and daemon defaults
 │
-├── doctor                   Run environment and configuration diagnostics. `--fix` applies safe remediations (stale daemon pid cleanup, zombie phase-session normalization, lock-file removal, chmod plugin binaries); `--fix --yes` additionally removes orphan worktrees via `git worktree remove --force`. `--check <id|category>` narrows to a single check; `--filter <substr>` keeps the legacy substring match.
+├── doctor                   Run environment and configuration diagnostics. `--fix` applies safe remediations (stale daemon pid cleanup, zombie phase-session normalization, lock-file removal, chmod plugin binaries); `--fix` also prunes stale cli-tracker entries for exited CLI processes (absorbed from the removed `animus runner orphans` verbs; live tracked PIDs get a manual `kill` suggestion instead because the tracker is global across projects); `--fix --yes` additionally removes orphan worktrees via `git worktree remove --force`. `--check <id|category>` narrows to a single check; `--filter <substr>` keeps the legacy substring match.
 │
 ├── trigger                  Inspect and manage event triggers
 │   ├── list                 List all configured event triggers for this project
@@ -487,6 +470,10 @@ plugin, so operators no longer have to read state files or logs to tell
 - `animus plugin status [--json]` carries the same supervisor state per
   plugin via the additive `disabled_by_supervisor` and `cooldown_until`
   fields (older daemons omit them; they default to `false` / absent).
+  The list view also reports aggregate provider health (absorbed from the
+  removed `animus runner health` verb): a `providers` array with one entry
+  per discovered provider binary (`installed` is true only when the binary
+  is executable) plus a rolled-up `provider_plugins_healthy` boolean.
 
 All new fields are additive with serde defaults — pre-v0.5.10 payloads
 still parse, and old consumers ignore the new keys.

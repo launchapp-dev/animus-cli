@@ -163,32 +163,37 @@ animus daemon stream --pretty
 The stream contains structured events like `daemon_startup`, `daemon_shutdown`,
 workflow dispatches, and phase completions.
 
-### Runner Health
+### Provider Plugin Health
 
-The runner is a separate process from the daemon. It spawns CLI tools (claude, codex, gemini). Check its health:
+Provider plugins spawn the CLI tools (claude, codex, gemini). Check their health:
 
 ```bash
-animus runner health
+animus plugin status
 ```
 
-This reports one row per discovered provider plugin plus a summary
-`provider_plugins_healthy` flag. A provider only counts as installed when its
-binary exists and is executable, so a lost execute bit shows up here before the
-next agent run fails at spawn time.
+This reports per-plugin runtime state plus a `providers` array (one row per
+discovered provider plugin) and a summary `provider_plugins_healthy` flag. A
+provider only counts as installed when its binary exists and is executable, so
+a lost execute bit shows up here before the next agent run fails at spawn time.
 
 ### Orphan Detection
 
-Detect orphaned runner processes that lost their parent:
+Detect orphaned CLI processes that lost their parent:
 
 ```bash
-animus runner orphans detect
+animus doctor --check orphan_cli_processes
 ```
 
 Clean them up:
 
 ```bash
-animus runner orphans cleanup
+animus doctor --fix
 ```
+
+`--fix` prunes tracker entries whose process already exited. Live tracked
+PIDs are never killed automatically — the cli-tracker is global across
+projects, so the check prints a manual `kill <pid>` suggestion and leaves
+the decision to you.
 
 ## Common Patterns
 
@@ -213,7 +218,7 @@ animus daemon resume
 ```bash
 animus daemon status           # Check daemon state
 animus daemon logs             # Look for errors
-animus runner health           # Check runner process
+animus plugin status           # Check plugin + provider health
 animus workflow list            # Find the stuck workflow
 animus workflow get --id WF-001 # Inspect workflow state
 ```

@@ -24,7 +24,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.agent.run",
-        description = "Run an agent to execute work. Purpose: Launch an AI agent to perform tasks. Prerequisites: Runner must be healthy (check animus.runner.health). Example: {\"tool\": \"claude\", \"model\": \"claude-3-opus\", \"prompt\": \"Fix the bug\"}. Sequencing: Use animus.agent.status to monitor, animus.agent.control to pause/resume/terminate.",
+        description = "Run an agent to execute work. Purpose: Launch an AI agent to perform tasks. Prerequisites: A provider plugin for the requested tool must be installed (check animus.plugin.list). Example: {\"tool\": \"claude\", \"model\": \"claude-3-opus\", \"prompt\": \"Fix the bug\"}. Sequencing: Use animus.agent.status to monitor, animus.agent.control to pause/resume/terminate.",
         input_schema = ao_schema_for_type::<AgentRunInput>()
     )]
     async fn ao_agent_run(&self, params: Parameters<AgentRunInput>) -> Result<CallToolResult, McpError> {

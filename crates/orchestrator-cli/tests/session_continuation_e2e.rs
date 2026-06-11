@@ -5,7 +5,7 @@ use animus_session_backend::parser::{extract_text_from_line, NormalizedTextEvent
 /// and the second invocation has context from the first (proving session resume works).
 ///
 /// Prerequisites:
-///   - Agent runner must be running (`animus runner start`) or will auto-start
+///   - Provider plugins must be installed (`animus plugin install-defaults`)
 ///   - CLI tools must be installed (claude, codex, gemini)
 ///   - API credentials must be configured for each tool
 ///   - Set `ANIMUS_E2E_SESSION_CONTINUATION=1` to enable (skipped by default)

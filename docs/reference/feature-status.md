@@ -56,7 +56,6 @@ This page clarifies which Animus features are **shipped and stable**, **in-fligh
 | Git Integration (`animus git`) | **Shipped** | Worktree creation, branch management, push/pull, confirmation requests |
 | MCP Integration (`animus mcp serve`) | **Shipped** | Expose Animus state and operations as MCP tools for use by AI agents |
 | Skill Management (`animus skill`) | **Shipped** | Search, install, update, and publish versioned skills |
-| Model Management (`animus model`) | **Shipped** | Check model availability, validate model selection, view model roster |
 | History Inspection | **Shipped** | Inspect execution history through `animus history ...` |
 | Template-Driven Project Init | **Shipped** | `animus init` supports registry-backed templates, local template directories, non-interactive mode, plan mode, and the onboarding walkthrough flags |
 

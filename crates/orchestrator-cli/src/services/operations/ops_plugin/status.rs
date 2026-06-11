@@ -15,6 +15,7 @@ use orchestrator_plugin_host::{
 };
 
 use crate::cli_types::PluginStatusArgs;
+use crate::services::runtime::runtime_agent::provider_client;
 use crate::shared::print_value;
 
 pub(crate) async fn handle_plugin_status(args: PluginStatusArgs, project_root: &str) -> Result<()> {
@@ -26,16 +27,36 @@ pub(crate) async fn handle_plugin_status(args: PluginStatusArgs, project_root: &
 
     match args.name.as_deref() {
         Some(name) => render_named(&response, name, args.json),
-        None => render_list(&response, args.json),
+        None => {
+            // Aggregate provider health (absorbed from the deleted
+            // `animus runner health` verb): one entry per discovered
+            // provider binary, `installed` true only when the binary is
+            // executable, plus the rolled-up bool the daemon health
+            // endpoint also reports.
+            let providers = provider_client::health_snapshot(project_root_path);
+            let provider_plugins_healthy = providers.iter().any(|p| p.installed);
+            render_list(&response, &providers, provider_plugins_healthy, args.json)
+        }
     }
 }
 
-fn render_list(response: &PluginStatusResponse, json: bool) -> Result<()> {
+fn render_list(
+    response: &PluginStatusResponse,
+    providers: &[provider_client::ProviderHealthSnapshot],
+    provider_plugins_healthy: bool,
+    json: bool,
+) -> Result<()> {
     if json {
-        return print_value(response, true);
+        let mut envelope = serde_json::to_value(response)?;
+        if let Some(map) = envelope.as_object_mut() {
+            map.insert("providers".into(), serde_json::to_value(providers)?);
+            map.insert("provider_plugins_healthy".into(), serde_json::Value::Bool(provider_plugins_healthy));
+        }
+        return print_value(envelope, true);
     }
     if response.plugins.is_empty() {
         println!("no plugins discovered");
+        println!("provider plugins healthy: {provider_plugins_healthy}");
         return Ok(());
     }
     let header_name = "NAME";
@@ -81,6 +102,11 @@ fn render_list(response: &PluginStatusResponse, json: bool) -> Result<()> {
             trailing = trailing,
         );
     }
+    println!(
+        "\nprovider plugins healthy: {provider_plugins_healthy} ({}/{} installed)",
+        providers.iter().filter(|p| p.installed).count(),
+        providers.len(),
+    );
     Ok(())
 }
 
@@ -220,18 +246,27 @@ mod tests {
         }
     }
 
+    fn sample_providers() -> Vec<provider_client::ProviderHealthSnapshot> {
+        vec![provider_client::ProviderHealthSnapshot {
+            plugin_name: "animus-provider-claude".into(),
+            provider_tool: "claude".into(),
+            binary_path: "/bin/animus-provider-claude".into(),
+            installed: true,
+        }]
+    }
+
     #[test]
     fn render_list_succeeds_and_prints_protocol_envelope_in_json_mode() {
         let response = sample_response();
         // Render in JSON mode — function returns Ok and the rendered envelope
-        // includes protocol_version + plugins[].
-        render_list(&response, true).expect("json render succeeds");
+        // includes protocol_version + plugins[] + provider health aggregate.
+        render_list(&response, &sample_providers(), true, true).expect("json render succeeds");
     }
 
     #[test]
     fn render_list_succeeds_for_pretty_mode() {
         let response = sample_response();
-        render_list(&response, false).expect("pretty render succeeds");
+        render_list(&response, &sample_providers(), true, false).expect("pretty render succeeds");
     }
 
     #[test]

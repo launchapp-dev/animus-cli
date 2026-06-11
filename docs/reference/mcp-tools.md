@@ -1,7 +1,7 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 82 built-in tools across daemon, queue, agent, output, runner,
+registers 79 built-in tools across daemon, queue, agent, output,
 workflow, plugin, skill, subject, logs, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
@@ -224,16 +224,6 @@ rejection remains a CLI-only action.
 | `animus.output.jsonl` | Get structured JSONL event log | `run_id`, `entries`, `project_root` |
 | `animus.output.artifacts` | Get files generated during execution | `execution_id`, `project_root` |
 | `animus.output.phase-outputs` | Get persisted workflow phase outputs | `workflow_id`, `phase_id`, `project_root` |
-
----
-
-## Runner (3 tools)
-
-| Tool | Description | Key Parameters |
-|---|---|---|
-| `animus.runner.health` | Check runner process health and capacity | `project_root` |
-| `animus.runner.orphans-detect` | Find orphaned runner processes | `project_root` |
-| `animus.runner.orphans-cleanup` | Clean up orphaned runner processes by run ID | `run_id[]`, `project_root` |
 
 ---
 
