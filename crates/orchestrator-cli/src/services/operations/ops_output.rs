@@ -365,11 +365,10 @@ mod tests {
     }
 
     #[test]
-    fn get_run_jsonl_entries_keep_lookup_repo_scoped_under_global_runner_scope() {
+    fn get_run_jsonl_entries_keep_lookup_repo_scoped_despite_config_dir_override() {
         let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let temp = tempfile::tempdir().expect("tempdir should be created");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
-        let _scope = EnvVarGuard::set("ANIMUS_RUNNER_SCOPE", Some("global"));
         let override_dir = temp.path().join("override-config");
         let _ao_config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(override_dir.to_string_lossy().as_ref()));
         let project_root = temp.path().join("project");

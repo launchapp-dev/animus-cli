@@ -21,8 +21,6 @@ pub(super) struct AgentRunInput {
     #[serde(default)]
     pub(super) run_id: Option<String>,
     #[serde(default)]
-    pub(super) runner_scope: Option<String>,
-    #[serde(default)]
     pub(super) project_root: Option<String>,
 }
 
@@ -31,16 +29,12 @@ pub(super) struct AgentControlInput {
     pub(super) run_id: String,
     pub(super) action: String,
     #[serde(default)]
-    pub(super) runner_scope: Option<String>,
-    #[serde(default)]
     pub(super) project_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct AgentStatusInput {
     pub(super) run_id: String,
-    #[serde(default)]
-    pub(super) runner_scope: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }

@@ -244,7 +244,6 @@ mod tests {
             save_jsonl: false,
             jsonl_dir: None,
             start_runner: false,
-            runner_scope: None,
             agent: None,
             skill: None,
             mcp_server: Vec::new(),
@@ -276,9 +275,8 @@ mod tests {
     }
 
     #[test]
-    fn run_dir_stays_repo_scoped_when_runner_scope_is_global() {
+    fn run_dir_includes_run_id_segment() {
         let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let _scope = EnvVarGuard::set("ANIMUS_RUNNER_SCOPE", Some("global"));
         let project_root = "/tmp/project-root";
         let run_id = RunId("run-1234".to_string());
         let dir = run_dir(project_root, &run_id, None);

@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
-use super::{parse_positive_u64, ReasoningEffortArg, RunnerScopeArg};
+use super::{parse_positive_u64, ReasoningEffortArg};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentCommand {
@@ -219,8 +219,6 @@ pub(crate) struct AgentRunArgs {
         help = "Start the runner automatically when required."
     )]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum, value_name = "SCOPE", help = "Runner config scope: project or global.")]
-    pub(crate) runner_scope: Option<RunnerScopeArg>,
     #[arg(
         long,
         value_name = "AGENT_ID",
@@ -251,8 +249,6 @@ pub(crate) struct AgentControlArgs {
     pub(crate) action: AgentControlActionArg,
     #[arg(long, default_value_t = false, help = "Start the runner automatically when required.")]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum, value_name = "SCOPE", help = "Runner config scope: project or global.")]
-    pub(crate) runner_scope: Option<RunnerScopeArg>,
 }
 
 #[derive(Clone, Debug, ValueEnum)]
@@ -270,6 +266,4 @@ pub(crate) struct AgentStatusArgs {
     pub(crate) jsonl_dir: Option<String>,
     #[arg(long, default_value_t = false, help = "Start the runner automatically when required.")]
     pub(crate) start_runner: bool,
-    #[arg(long, value_enum, value_name = "SCOPE", help = "Runner config scope: project or global.")]
-    pub(crate) runner_scope: Option<RunnerScopeArg>,
 }

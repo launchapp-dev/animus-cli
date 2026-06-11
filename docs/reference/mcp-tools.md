@@ -59,9 +59,9 @@ pre-v0.4 resource names can still enumerate and read the same data.
 |---|---|---|
 | `animus.agent.list` | List configured project agent profiles | `project_root` |
 | `animus.agent.get` | Get a configured agent profile | `id`, `project_root` |
-| `animus.agent.run` | Launch an AI agent to execute work | `tool`, `model`, `prompt`, `cwd`, `timeout_secs`, `context_json`, `runtime_contract_json`, `detach`, `run_id`, `runner_scope`, `project_root` |
-| `animus.agent.control` | Control a running agent (pause/resume/terminate) | `run_id`, `action` (`pause`, `resume`, `terminate`), `runner_scope` |
-| `animus.agent.status` | Get status of an agent run | `run_id`, `runner_scope` |
+| `animus.agent.run` | Launch an AI agent to execute work | `tool`, `model`, `prompt`, `cwd`, `timeout_secs`, `context_json`, `runtime_contract_json`, `detach`, `run_id`, `project_root` |
+| `animus.agent.control` | Control a running agent (pause/resume/terminate) | `run_id`, `action` (`pause`, `resume`, `terminate`) |
+| `animus.agent.status` | Get status of an agent run | `run_id` |
 | `animus.agent.memory.get` | Read project-scoped agent memory | `agent`, `project_root` |
 | `animus.agent.memory.append` | Append project-scoped agent memory | `agent`, `text`, `source`, `project_root` |
 | `animus.agent.memory.clear` | Clear project-scoped agent memory | `agent`, `project_root` |
@@ -119,7 +119,7 @@ approval gate stays human-only.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `auto_run_ready`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `skip_runner`, `autonomous`, `auto_install`, `skip_preflight`, `runner_scope`, `project_root` |
+| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `auto_run_ready`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `skip_runner`, `autonomous`, `auto_install`, `skip_preflight`, `project_root` |
 | `animus.daemon.stop` | Stop the daemon gracefully | `project_root` |
 | `animus.daemon.status` | Check if daemon is running and view basic state | `project_root` |
 | `animus.daemon.health` | Get detailed health metrics (active agents, queue, capacity) | `project_root` |
