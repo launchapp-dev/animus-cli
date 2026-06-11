@@ -1504,6 +1504,33 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                         &ctx.agent_runtime_config,
                     );
                     inject_cli_launch_overrides(&mut runtime_contract, &effective_tool_id, phase_runtime_settings);
+                    // Forward the resolved phase permission mode (phase
+                    // `runtime.permission_mode` > agent profile
+                    // `permission_mode`) on the contract's top-level
+                    // `permission_mode` key; the agent-runner's
+                    // `build_session_request` lifts it onto the typed
+                    // `SessionRequest.permission_mode` field.
+                    if let Some(mode) = phase_runtime_settings
+                        .and_then(|settings| settings.permission_mode.as_deref())
+                        .map(str::trim)
+                        .filter(|mode| !mode.is_empty())
+                    {
+                        runtime_contract
+                            .as_object_mut()
+                            .expect("json object")
+                            .insert("permission_mode".to_string(), serde_json::json!(mode));
+                    }
+                    // When the phase's agent profile carries an
+                    // `approval_policy`, flag the contract so the
+                    // agent-runner sets `extras.approvals = true` and the
+                    // v0.1.13.5 transports activate the claude
+                    // `--permission-prompt-tool` hook / approvals preamble.
+                    if ctx.agent_runtime_config.phase_has_approval_policy(phase_id) {
+                        runtime_contract
+                            .as_object_mut()
+                            .expect("json object")
+                            .insert("approvals".to_string(), Value::Bool(true));
+                    }
                     inject_default_stdio_mcp(&mut runtime_contract, project_root);
                     inject_agent_tool_policy(&mut runtime_contract, ctx, phase_id);
                     inject_project_mcp_servers(&mut runtime_contract, project_root, ctx, phase_id);
@@ -1944,6 +1971,7 @@ async fn run_workflow_phase_inner(params: &PhaseRunParams<'_>) -> Result<PhaseRu
                 fallback_models: merged_runtime.phase_fallback_models(phase_id),
                 fallback_tools: merged_runtime.phase_fallback_tools(phase_id),
                 reasoning_effort: merged_runtime.phase_reasoning_effort(phase_id).map(ToOwned::to_owned),
+                permission_mode: merged_runtime.phase_permission_mode(phase_id).map(ToOwned::to_owned),
                 web_search: merged_runtime.phase_web_search(phase_id),
                 network_access: merged_runtime.phase_network_access(phase_id),
                 timeout_secs: merged_runtime.phase_timeout_secs(phase_id),

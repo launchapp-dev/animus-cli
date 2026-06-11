@@ -124,7 +124,7 @@ dependencies = [
 [[package]]
 name = "animus-plugin-protocol"
 version = "0.1.13"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.4#05fccfe18022d3f1795e02ff059dfbb0c563a39d"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.5#5403f172b539525f3cce8a2306a60fa0f0c437bc"
 dependencies = [
  "serde",
  "serde_json",
@@ -147,9 +147,9 @@ dependencies = [
 [[package]]
 name = "animus-session-backend"
 version = "0.1.13"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.4#05fccfe18022d3f1795e02ff059dfbb0c563a39d"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.5#5403f172b539525f3cce8a2306a60fa0f0c437bc"
 dependencies = [
- "animus-plugin-protocol 0.1.13 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.4)",
+ "animus-plugin-protocol 0.1.13 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13.5)",
  "anyhow",
  "async-trait",
  "serde",

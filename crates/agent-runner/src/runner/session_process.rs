@@ -21,6 +21,116 @@ fn flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2).find_map(|pair| (pair[0] == flag).then_some(pair[1].as_str()))
 }
 
+/// Map a provider-agnostic permission mode onto gemini's `--approval-mode`
+/// values. Mirrors `gemini_approval_mode` in animus-session-backend
+/// v0.1.13.5: gemini-native values pass through, unrecognized values
+/// degrade to `default` (never to `yolo`, which would silently escalate a
+/// restrictive mode).
+fn gemini_approval_mode(permission_mode: &str) -> &'static str {
+    match permission_mode {
+        "plan" => "plan",
+        "acceptEdits" | "auto_edit" => "auto_edit",
+        "bypassPermissions" | "yolo" => "yolo",
+        _ => "default",
+    }
+}
+
+/// Replace (or insert) a codex `-c key=value` override in-place. Mirrors
+/// `ensure_codex_config_override` in animus-session-backend.
+fn ensure_codex_config_override(args: &mut Vec<String>, key: &str, value_expr: &str) {
+    let key_prefix = format!("{key}=");
+    let target = format!("{key}={value_expr}");
+    let mut index = 0usize;
+    while index + 1 < args.len() {
+        let flag = args[index].as_str();
+        if (flag == "-c" || flag == "--config") && args[index + 1].starts_with(&key_prefix) {
+            args[index + 1] = target;
+            return;
+        }
+        index += 1;
+    }
+    let insert_at = args.iter().position(|arg| arg == "exec").map(|idx| idx + 1).unwrap_or(0);
+    args.insert(insert_at, "-c".to_string());
+    args.insert(insert_at + 1, target);
+}
+
+/// Remove a `<flag> <value>` pair from argv, but only when the present
+/// value matches `value`. Leaves explicit different values untouched.
+fn remove_flag_with_value(args: &mut Vec<String>, flag: &str, value: &str) {
+    while let Some(index) = args.windows(2).position(|pair| pair[0] == flag && pair[1] == value) {
+        args.drain(index..index + 2);
+    }
+}
+
+/// Patch a runtime-contract launch invocation so the workflow runner's
+/// resolved `permission_mode` and `approvals` flags actually reach the
+/// spawned CLI.
+///
+/// The v0.1.13.5 transports honor `SessionRequest.permission_mode` and the
+/// approvals prompt preamble only on their DEFAULT-args path; a runtime
+/// contract that supplies `cli.launch` is executed as-is (with prebuilt
+/// `--dangerously-skip-permissions` / `--full-auto` / `--yolo` defaults and
+/// the original prompt baked into argv). Since the workflow path always
+/// sends a contract launch, the mapping has to happen here, where the final
+/// invocation is assembled — and it must run AFTER `apply_native_mcp_policy`,
+/// whose claude adapter blanket-sets `--permission-mode bypassPermissions`
+/// for headless MCP runs (an explicit workflow permission mode must win
+/// over that default, never the other way around):
+///
+/// - claude: set `--permission-mode <mode>` (overwriting the MCP policy's
+///   bypass) and drop `--dangerously-skip-permissions`. With approvals on
+///   and no explicit mode, strip a policy-injected `bypassPermissions` so
+///   the `--permission-prompt-tool` hook (wired by the claude transport on
+///   contract launches) is actually consulted.
+/// - codex: set `-c approval_policy="<mode>"` (codex's `-c` overrides win
+///   over the `--full-auto` preset).
+/// - gemini: set `--approval-mode <mapped>` and drop `--yolo`.
+/// - approvals on a non-claude tool with an argv-embedded prompt: rewrite
+///   the prompt argument to carry [`APPROVALS_PROMPT_PREAMBLE`].
+///   `prompt_via_stdin` launches are left alone — the transports prepend
+///   the preamble to `SessionRequest.prompt` themselves on that path.
+fn apply_contract_permission_overrides(
+    invocation: &mut LaunchInvocation,
+    tool: &str,
+    prompt: &str,
+    runtime_contract: Option<&Value>,
+) {
+    let Some(contract) = runtime_contract else {
+        return;
+    };
+    let permission_mode =
+        contract.get("permission_mode").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty());
+    let approvals = contract.get("approvals").and_then(Value::as_bool).unwrap_or(false);
+
+    if let Some(mode) = permission_mode {
+        let args = &mut invocation.args;
+        if tool.eq_ignore_ascii_case("claude") {
+            args.retain(|arg| arg != "--dangerously-skip-permissions");
+            super::launch::ensure_flag_value(args, "--permission-mode", mode, 0);
+        } else if tool.eq_ignore_ascii_case("codex") {
+            ensure_codex_config_override(args, "approval_policy", &format!("\"{mode}\""));
+        } else if tool.eq_ignore_ascii_case("gemini") {
+            args.retain(|arg| arg != "--yolo");
+            super::launch::ensure_flag_value(args, "--approval-mode", gemini_approval_mode(mode), 0);
+        }
+    } else if approvals && tool.eq_ignore_ascii_case("claude") {
+        // No explicit mode, but approvals are on: a blanket
+        // `--permission-mode bypassPermissions` (MCP policy default) would
+        // skip claude's permission checks entirely and the approval hook
+        // would never fire. An explicit non-bypass mode is preserved.
+        remove_flag_with_value(&mut invocation.args, "--permission-mode", "bypassPermissions");
+    }
+
+    if approvals && !tool.eq_ignore_ascii_case("claude") && !invocation.prompt_via_stdin && !prompt.is_empty() {
+        let preambled = format!("{}\n\n{prompt}", animus_session_backend::APPROVALS_PROMPT_PREAMBLE);
+        for arg in &mut invocation.args {
+            if arg == prompt {
+                *arg = preambled.clone();
+            }
+        }
+    }
+}
+
 fn truncate_for_log(text: &str, max_chars: usize) -> String {
     if text.chars().count() <= max_chars {
         return text.to_string();
@@ -104,6 +214,10 @@ pub(super) async fn spawn_session_process(
     let enforcement = resolve_mcp_tool_enforcement(runtime_contract);
     let mut temp_cleanup = TempPathCleanup::default();
     apply_native_mcp_policy(&mut invocation, &enforcement, &mut env, run_id, &mut temp_cleanup)?;
+    // Must run AFTER the MCP policy: its claude adapter blanket-sets
+    // `--permission-mode bypassPermissions`, and the workflow-resolved
+    // permission/approvals intent has to win over that headless default.
+    apply_contract_permission_overrides(&mut invocation, tool, prompt, runtime_contract);
     let mcp_config_preview = flag_value(&invocation.args, "--mcp-config").map(|value| truncate_for_log(value, 240));
     info!(
         run_id = %run_id.0.as_str(),
@@ -319,20 +433,49 @@ fn build_session_request(
     // runtime contract carries. Empty maps are normalized to `None`.
     let mcp_servers = mcp_servers.filter(|value| value.as_object().is_some_and(|map| !map.is_empty())).cloned();
 
+    // The workflow runner resolves the phase's permission mode (phase
+    // `runtime.permission_mode` > agent profile `permission_mode`) and
+    // forwards it on the runtime contract's top-level `permission_mode`
+    // key. Ride it onto the typed `SessionRequest.permission_mode` field
+    // verbatim — transports map it to their provider flag (claude
+    // `--permission-mode`, codex `-c approval_policy`, gemini approval
+    // mode).
+    let permission_mode = merged_contract
+        .get("permission_mode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string);
+
+    // Kernel-mediated approvals: a truthy top-level `approvals` key on the
+    // runtime contract (set by the workflow runner when the phase's agent
+    // profile carries an `approval_policy`) becomes `extras.approvals =
+    // true`. v0.1.13.5+ transports consume it (claude wires
+    // `--permission-prompt-tool mcp__animus__animus_agent_request_approval`
+    // and strips `--dangerously-skip-permissions`; others inject the
+    // approvals system-prompt preamble).
+    let approvals = merged_contract.get("approvals").and_then(Value::as_bool).unwrap_or(false);
+    let mcp_endpoint = merged_contract.pointer("/mcp/endpoint").and_then(Value::as_str).map(ToString::to_string);
+
+    let mut extras = json!({
+        "runtime_contract": merged_contract
+    });
+    if approvals {
+        extras["approvals"] = Value::Bool(true);
+    }
+
     Ok(SessionRequest {
         tool: tool.to_string(),
         model: model.to_string(),
         prompt: prompt.to_string(),
         cwd: std::path::PathBuf::from(cwd),
         project_root: project_root.map(std::path::PathBuf::from),
-        mcp_endpoint: merged_contract.pointer("/mcp/endpoint").and_then(Value::as_str).map(ToString::to_string),
+        mcp_endpoint,
         mcp_servers,
-        permission_mode: None,
+        permission_mode,
         timeout_secs,
         env_vars: merged_env.into_iter().collect(),
-        extras: json!({
-            "runtime_contract": merged_contract
-        }),
+        extras,
     })
 }
 
@@ -439,6 +582,43 @@ async fn forward_session_event(
             } else {
                 let _ = event_tx.send(AgentRunEvent::Error { run_id: run_id.clone(), error: message.clone() }).await;
             }
+            None
+        }
+        // Human-in-the-loop pass-through (animus-session-backend
+        // v0.1.13.5): `AgentRunEvent` has no interaction variant, so record
+        // the lifecycle on the run's output stream — it lands in phase
+        // output and run logs where operators (and the workflow runner's
+        // event recorder) can see the session is parked on a human.
+        SessionEvent::InteractionRequested { id, kind } => {
+            info!(
+                run_id = %run_id.0.as_str(),
+                interaction_id = %id,
+                kind = %kind,
+                "Session requested human interaction"
+            );
+            let _ = event_tx
+                .send(AgentRunEvent::OutputChunk {
+                    run_id: run_id.clone(),
+                    stream_type: OutputStreamType::Stdout,
+                    text: format!("[animus] interaction requested (id={id}, kind={kind})\n"),
+                })
+                .await;
+            None
+        }
+        SessionEvent::InteractionResolved { id, decision } => {
+            info!(
+                run_id = %run_id.0.as_str(),
+                interaction_id = %id,
+                decision = %decision,
+                "Session interaction resolved"
+            );
+            let _ = event_tx
+                .send(AgentRunEvent::OutputChunk {
+                    run_id: run_id.clone(),
+                    stream_type: OutputStreamType::Stdout,
+                    text: format!("[animus] interaction resolved (id={id}, decision={decision})\n"),
+                })
+                .await;
             None
         }
         SessionEvent::Finished { exit_code } => {
@@ -1068,6 +1248,164 @@ mod tests {
         }
     }
 
+    fn claude_contract_invocation(prompt: &str) -> LaunchInvocation {
+        LaunchInvocation {
+            command: "claude".to_string(),
+            args: vec![
+                "--print".to_string(),
+                "--verbose".to_string(),
+                "--dangerously-skip-permissions".to_string(),
+                prompt.to_string(),
+            ],
+            env: std::collections::BTreeMap::new(),
+            prompt_via_stdin: false,
+        }
+    }
+
+    #[test]
+    fn contract_permission_mode_replaces_claude_skip_permissions() {
+        let mut invocation = claude_contract_invocation("do the task");
+        let contract = serde_json::json!({ "permission_mode": "acceptEdits" });
+        apply_contract_permission_overrides(&mut invocation, "claude", "do the task", Some(&contract));
+        assert_eq!(
+            invocation.args,
+            vec!["--permission-mode", "acceptEdits", "--print", "--verbose", "do the task"],
+            "permission_mode must drop --dangerously-skip-permissions and set the explicit mode"
+        );
+    }
+
+    #[test]
+    fn contract_permission_mode_overrides_mcp_policy_bypass() {
+        // Mirrors the argv state right after `apply_native_mcp_policy` set
+        // `--permission-mode bypassPermissions` for a headless MCP run: the
+        // workflow-resolved mode must win over that blanket default.
+        let mut invocation = LaunchInvocation {
+            command: "claude".to_string(),
+            args: vec!["--permission-mode".to_string(), "bypassPermissions".to_string(), "do the task".to_string()],
+            env: std::collections::BTreeMap::new(),
+            prompt_via_stdin: false,
+        };
+        let contract = serde_json::json!({ "permission_mode": "acceptEdits" });
+        apply_contract_permission_overrides(&mut invocation, "claude", "do the task", Some(&contract));
+        assert_eq!(
+            invocation.args,
+            vec!["--permission-mode", "acceptEdits", "do the task"],
+            "the workflow-resolved permission mode must overwrite the MCP policy bypass"
+        );
+    }
+
+    #[test]
+    fn contract_approvals_strip_policy_bypass_permission_mode() {
+        let mut invocation = LaunchInvocation {
+            command: "claude".to_string(),
+            args: vec![
+                "--strict-mcp-config".to_string(),
+                "--permission-mode".to_string(),
+                "bypassPermissions".to_string(),
+                "do the task".to_string(),
+            ],
+            env: std::collections::BTreeMap::new(),
+            prompt_via_stdin: false,
+        };
+        let contract = serde_json::json!({ "approvals": true });
+        apply_contract_permission_overrides(&mut invocation, "claude", "do the task", Some(&contract));
+        assert_eq!(
+            invocation.args,
+            vec!["--strict-mcp-config", "do the task"],
+            "approvals without an explicit mode must strip the policy bypass so the approval hook fires"
+        );
+    }
+
+    #[test]
+    fn contract_approvals_preserve_explicit_non_bypass_mode() {
+        let mut invocation = LaunchInvocation {
+            command: "claude".to_string(),
+            args: vec!["--permission-mode".to_string(), "plan".to_string(), "do the task".to_string()],
+            env: std::collections::BTreeMap::new(),
+            prompt_via_stdin: false,
+        };
+        let contract = serde_json::json!({ "approvals": true });
+        apply_contract_permission_overrides(&mut invocation, "claude", "do the task", Some(&contract));
+        assert_eq!(
+            invocation.args,
+            vec!["--permission-mode", "plan", "do the task"],
+            "approvals must only strip the bypass value, never an explicit restrictive mode"
+        );
+    }
+
+    #[test]
+    fn contract_permission_mode_sets_codex_approval_policy() {
+        let mut invocation = LaunchInvocation {
+            command: "codex".to_string(),
+            args: vec!["exec".to_string(), "--json".to_string(), "--full-auto".to_string(), "do the task".to_string()],
+            env: std::collections::BTreeMap::new(),
+            prompt_via_stdin: false,
+        };
+        let contract = serde_json::json!({ "permission_mode": "on-request" });
+        apply_contract_permission_overrides(&mut invocation, "codex", "do the task", Some(&contract));
+        assert_eq!(
+            invocation.args,
+            vec!["exec", "-c", "approval_policy=\"on-request\"", "--json", "--full-auto", "do the task"],
+            "codex must receive the permission mode as a -c approval_policy override"
+        );
+    }
+
+    #[test]
+    fn contract_permission_mode_replaces_gemini_yolo() {
+        let mut invocation = LaunchInvocation {
+            command: "gemini".to_string(),
+            args: vec!["--yolo".to_string(), "do the task".to_string()],
+            env: std::collections::BTreeMap::new(),
+            prompt_via_stdin: false,
+        };
+        let contract = serde_json::json!({ "permission_mode": "acceptEdits" });
+        apply_contract_permission_overrides(&mut invocation, "gemini", "do the task", Some(&contract));
+        assert_eq!(
+            invocation.args,
+            vec!["--approval-mode", "auto_edit", "do the task"],
+            "gemini must map the permission mode onto --approval-mode and drop --yolo"
+        );
+    }
+
+    #[test]
+    fn contract_approvals_preambles_codex_argv_prompt() {
+        let prompt = "do the task";
+        let mut invocation = LaunchInvocation {
+            command: "codex".to_string(),
+            args: vec!["exec".to_string(), "--json".to_string(), prompt.to_string()],
+            env: std::collections::BTreeMap::new(),
+            prompt_via_stdin: false,
+        };
+        let contract = serde_json::json!({ "approvals": true });
+        apply_contract_permission_overrides(&mut invocation, "codex", prompt, Some(&contract));
+        let last = invocation.args.last().expect("prompt arg");
+        assert!(
+            last.starts_with(animus_session_backend::APPROVALS_PROMPT_PREAMBLE),
+            "the argv-embedded prompt must carry the approvals preamble; got: {last}"
+        );
+        assert!(last.ends_with(prompt), "the original prompt must survive after the preamble");
+    }
+
+    #[test]
+    fn contract_approvals_leaves_claude_and_stdin_prompts_alone() {
+        let prompt = "do the task";
+        // claude relies on the --permission-prompt-tool hook, not the preamble.
+        let mut claude_invocation = claude_contract_invocation(prompt);
+        let contract = serde_json::json!({ "approvals": true });
+        apply_contract_permission_overrides(&mut claude_invocation, "claude", prompt, Some(&contract));
+        assert_eq!(claude_invocation.args.last().map(String::as_str), Some(prompt));
+
+        // stdin-delivered prompts are preambled by the transport itself.
+        let mut stdin_invocation = LaunchInvocation {
+            command: "codex".to_string(),
+            args: vec!["exec".to_string()],
+            env: std::collections::BTreeMap::new(),
+            prompt_via_stdin: true,
+        };
+        apply_contract_permission_overrides(&mut stdin_invocation, "codex", prompt, Some(&contract));
+        assert_eq!(stdin_invocation.args, vec!["exec"], "stdin launches must not be rewritten");
+    }
+
     #[test]
     fn build_session_request_carries_project_root_when_supplied() {
         let req = build_session_request(
@@ -1148,6 +1486,99 @@ mod tests {
         )
         .expect("session request should build");
         assert!(req.mcp_servers.is_none(), "an empty map must not be forwarded");
+    }
+
+    #[test]
+    fn build_session_request_maps_contract_permission_mode_onto_typed_field() {
+        let contract = serde_json::json!({ "permission_mode": "acceptEdits" });
+        let req = build_session_request(
+            "claude",
+            "claude-sonnet-4-6",
+            "hi",
+            Some(&contract),
+            None,
+            "/tmp/some-cwd",
+            None,
+            HashMap::new(),
+            None,
+            empty_invocation(),
+        )
+        .expect("session request should build");
+        assert_eq!(
+            req.permission_mode.as_deref(),
+            Some("acceptEdits"),
+            "the workflow runner's resolved permission_mode must ride the typed SessionRequest field"
+        );
+        assert!(
+            req.extras.pointer("/approvals").is_none(),
+            "permission_mode alone must not flip extras.approvals; extras: {}",
+            req.extras
+        );
+    }
+
+    #[test]
+    fn build_session_request_normalizes_blank_permission_mode_to_none() {
+        let contract = serde_json::json!({ "permission_mode": "   " });
+        let req = build_session_request(
+            "claude",
+            "claude-sonnet-4-6",
+            "hi",
+            Some(&contract),
+            None,
+            "/tmp/some-cwd",
+            None,
+            HashMap::new(),
+            None,
+            empty_invocation(),
+        )
+        .expect("session request should build");
+        assert!(req.permission_mode.is_none(), "blank permission_mode must not be forwarded");
+    }
+
+    #[test]
+    fn build_session_request_sets_extras_approvals_from_contract_flag() {
+        let contract = serde_json::json!({ "approvals": true });
+        let req = build_session_request(
+            "claude",
+            "claude-sonnet-4-6",
+            "hi",
+            Some(&contract),
+            None,
+            "/tmp/some-cwd",
+            None,
+            HashMap::new(),
+            None,
+            empty_invocation(),
+        )
+        .expect("session request should build");
+        assert_eq!(
+            req.extras.pointer("/approvals").and_then(Value::as_bool),
+            Some(true),
+            "a truthy contract approvals flag must set extras.approvals for the transports"
+        );
+    }
+
+    #[test]
+    fn build_session_request_leaves_extras_approvals_absent_by_default() {
+        let req = build_session_request(
+            "claude",
+            "claude-sonnet-4-6",
+            "hi",
+            None,
+            None,
+            "/tmp/some-cwd",
+            None,
+            HashMap::new(),
+            None,
+            empty_invocation(),
+        )
+        .expect("session request should build");
+        assert!(req.permission_mode.is_none(), "no contract must mean no permission_mode");
+        assert!(
+            req.extras.pointer("/approvals").is_none(),
+            "no contract must leave extras.approvals absent; extras: {}",
+            req.extras
+        );
     }
 
     /// Exercises the bug fix: when a task runs in a managed worktree (`cwd`

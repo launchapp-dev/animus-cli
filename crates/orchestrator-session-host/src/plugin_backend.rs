@@ -304,7 +304,19 @@ impl PluginSessionBackend {
         } else if let Some(sid) = extras.get("session_id") {
             params["session_id"] = sid.clone();
         }
-        for key in ["system_prompt", "claude_profile", "mcp_servers", "tools", "response_schema", "runtime_contract"] {
+        // `approvals` rides along so plugin-backed providers see
+        // `extras.approvals == true` (the v0.1.13.5 plugin runtime flattens
+        // unknown params back into `SessionRequest.extras`) and activate the
+        // claude `--permission-prompt-tool` hook / approvals prompt preamble.
+        for key in [
+            "system_prompt",
+            "claude_profile",
+            "mcp_servers",
+            "tools",
+            "response_schema",
+            "runtime_contract",
+            "approvals",
+        ] {
             if let Some(value) = extras.get(key) {
                 params[key] = value.clone();
             }
@@ -1118,6 +1130,16 @@ async fn forward_plugin_notification(
             let recoverable = params.get("recoverable").and_then(Value::as_bool).unwrap_or(true);
             let _ = tx.send(SessionEvent::Error { message, recoverable }).await;
         }
+        // Human-in-the-loop surface (animus-protocol v0.1.13.5): provider
+        // plugins notify `agent/interactionRequested` when the session parks
+        // on a pending approval/question. Surface it as the typed
+        // `SessionEvent::InteractionRequested` so hosts see the lifecycle.
+        "agent/interactionRequested" => {
+            let params = notification.params.unwrap_or(Value::Null);
+            let id = params.get("interaction_id").and_then(Value::as_str).unwrap_or_default().to_string();
+            let kind = params.get("kind").and_then(Value::as_str).unwrap_or_default().to_string();
+            let _ = tx.send(SessionEvent::InteractionRequested { id, kind }).await;
+        }
         "$/progress" | "agent/progress" => {
             if let Some(params) = notification.params {
                 let _ = tx.send(SessionEvent::Metadata { metadata: params }).await;
@@ -1833,5 +1855,57 @@ mod tests {
             Some(&extras_servers),
             "a caller-supplied extras.mcp_servers keeps precedence for back-compat"
         );
+    }
+
+    #[test]
+    fn build_run_params_forwards_permission_mode_and_approvals() {
+        let backend = PluginSessionBackend::new("claude-plugin", PathBuf::from("/nonexistent/claude"), "claude");
+        let mut extras = serde_json::Map::new();
+        extras.insert("approvals".to_string(), json!(true));
+        let req = SessionRequest {
+            tool: "claude".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            prompt: "hi".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers: None,
+            permission_mode: Some("acceptEdits".to_string()),
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: Value::Object(extras),
+        };
+        let params = backend.build_run_params(&req, None);
+        assert_eq!(
+            params.get("permission_mode"),
+            Some(&json!("acceptEdits")),
+            "the typed permission_mode must reach the provider RPC params"
+        );
+        assert_eq!(
+            params.get("approvals"),
+            Some(&json!(true)),
+            "extras.approvals must reach the provider RPC params so the plugin runtime flattens it back into SessionRequest.extras"
+        );
+    }
+
+    #[test]
+    fn build_run_params_leaves_approvals_absent_when_unset() {
+        let backend = PluginSessionBackend::new("claude-plugin", PathBuf::from("/nonexistent/claude"), "claude");
+        let req = SessionRequest {
+            tool: "claude".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            prompt: "hi".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            project_root: None,
+            mcp_endpoint: None,
+            mcp_servers: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: Value::Object(Default::default()),
+        };
+        let params = backend.build_run_params(&req, None);
+        assert!(params.get("approvals").is_none(), "no approvals flag must mean no RPC param");
+        assert!(params.get("permission_mode").is_none(), "no permission_mode must mean no RPC param");
     }
 }

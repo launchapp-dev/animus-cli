@@ -123,6 +123,12 @@ struct AgentRunParams {
     response_schema: Option<Value>,
     #[serde(default)]
     runtime_contract: Option<Value>,
+    /// Forward-compat: unknown params survive into `SessionRequest.extras`
+    /// (mirrors the upstream animus-plugin-runtime as of v0.1.13.5). This is
+    /// how host-forwarded flags like `approvals` reach the session backend's
+    /// `extras.approvals` check without a lockstep protocol bump.
+    #[serde(flatten)]
+    extras: serde_json::Map<String, Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -426,6 +432,32 @@ async fn handle_agent_run<P: ProviderBackend>(
                     break;
                 }
             }
+            // Human-in-the-loop pass-through (animus-session-backend
+            // v0.1.13.5). Mirrors the upstream animus-plugin-runtime: the
+            // request surfaces as an `agent/interactionRequested`
+            // notification so the host can route it, and both lifecycle
+            // edges are recorded in run metadata.
+            SessionEvent::InteractionRequested { id, kind } => {
+                send_notification(
+                    &stdout,
+                    "agent/interactionRequested",
+                    json!({
+                        "interaction_id": id,
+                        "session_id": session_id,
+                        "kind": kind,
+                        "payload": {},
+                    }),
+                )
+                .await;
+                metadata.push(json!({
+                    "interaction_requested": { "id": id, "kind": kind },
+                }));
+            }
+            SessionEvent::InteractionResolved { id, decision } => {
+                metadata.push(json!({
+                    "interaction_resolved": { "id": id, "decision": decision },
+                }));
+            }
             SessionEvent::Finished { exit_code: code } => {
                 exit_code = code;
                 break;
@@ -477,7 +509,7 @@ async fn handle_agent_cancel<P: ProviderBackend>(
 }
 
 fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> SessionRequest {
-    let mut extras = serde_json::Map::new();
+    let mut extras = params.extras;
     if let Some(system_prompt) = params.system_prompt {
         extras.insert("system_prompt".to_string(), Value::String(system_prompt));
     }

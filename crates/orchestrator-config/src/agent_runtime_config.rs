@@ -209,6 +209,11 @@ pub struct AgentRuntimeOverrides {
     pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Provider permission/approval mode forwarded verbatim to the spawned
+    /// CLI (claude `--permission-mode`, codex `-c approval_policy`, gemini
+    /// approval mode). Values are provider-specific.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
     #[serde(default)]
     pub web_search: Option<bool>,
     #[serde(default)]
@@ -223,6 +228,33 @@ pub struct AgentRuntimeOverrides {
     pub codex_config_overrides: Vec<String>,
     #[serde(default)]
     pub max_continuations: Option<usize>,
+}
+
+/// Default decision applied when neither `auto_allow` nor `auto_deny`
+/// matches an approval request. Mirrors the kernel-side definition in
+/// animus-cli main — the runner only needs the shape to round-trip the
+/// compiled agent runtime config; policy EVALUATION happens kernel-side.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalPolicyDefault {
+    #[default]
+    Ask,
+    Allow,
+    Deny,
+}
+
+/// Per-agent policy for `animus.agent.request_approval` escalations.
+/// Deserialization-only mirror of the kernel-side struct: the workflow
+/// runner checks PRESENCE of a policy (to set `extras.approvals = true`
+/// on session requests); the kernel MCP server evaluates the patterns.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ApprovalPolicy {
+    #[serde(default)]
+    pub auto_allow: Vec<String>,
+    #[serde(default)]
+    pub auto_deny: Vec<String>,
+    #[serde(default)]
+    pub default: ApprovalPolicyDefault,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -393,6 +425,8 @@ pub struct AgentProfile {
     pub mcp_servers: Vec<String>,
     #[serde(default)]
     pub tool_policy: AgentToolPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<ApprovalPolicy>,
     #[serde(default)]
     pub skills: Vec<String>,
     #[serde(default)]
@@ -423,6 +457,11 @@ pub struct AgentProfile {
     pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Provider permission/approval mode forwarded verbatim to the spawned
+    /// CLI (claude `--permission-mode`, codex `-c approval_policy`, gemini
+    /// approval mode). Values are provider-specific.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
     #[serde(default)]
     pub web_search: Option<bool>,
     #[serde(default)]
@@ -768,6 +807,30 @@ impl AgentRuntimeConfig {
         })
     }
 
+    /// Resolved provider permission/approval mode for a phase. Phase
+    /// `runtime.permission_mode` wins over the phase agent profile's
+    /// `permission_mode` — the same cascade as the kernel-side accessor.
+    /// The workflow runner maps the resolved value onto
+    /// `SessionRequest.permission_mode`.
+    pub fn phase_permission_mode(&self, phase_id: &str) -> Option<&str> {
+        trim_nonempty(
+            self.phase_execution(phase_id)
+                .and_then(|definition| definition.runtime.as_ref())
+                .and_then(|runtime| runtime.permission_mode.as_deref()),
+        )
+        .or_else(|| {
+            trim_nonempty(self.phase_agent_profile(phase_id).and_then(|profile| profile.permission_mode.as_deref()))
+        })
+    }
+
+    /// True when the phase's agent profile carries an `approval_policy`.
+    /// The workflow runner uses this to set `extras.approvals = true` on
+    /// session requests so v0.1.13.5+ transports activate the claude
+    /// `--permission-prompt-tool` hook / approvals prompt preamble.
+    pub fn phase_has_approval_policy(&self, phase_id: &str) -> bool {
+        self.phase_agent_profile(phase_id).is_some_and(|profile| profile.approval_policy.is_some())
+    }
+
     pub fn phase_web_search(&self, phase_id: &str) -> Option<bool> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.runtime.as_ref())
@@ -960,6 +1023,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
+                    approval_policy: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -998,6 +1063,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
+                    approval_policy: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1057,6 +1124,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
+                    approval_policy: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1118,6 +1187,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
+                    approval_policy: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1156,6 +1227,8 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
+                    approval_policy: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1530,6 +1603,9 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     if !overlay.tool_policy.allow.is_empty() || !overlay.tool_policy.deny.is_empty() {
         base.tool_policy = overlay.tool_policy.clone();
     }
+    if overlay.approval_policy.is_some() {
+        base.approval_policy = overlay.approval_policy.clone();
+    }
     if !overlay.skills.is_empty() {
         base.skills = overlay.skills.clone();
     }
@@ -1565,6 +1641,9 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfile) {
     }
     if overlay.reasoning_effort.is_some() {
         base.reasoning_effort = overlay.reasoning_effort.clone();
+    }
+    if overlay.permission_mode.is_some() {
+        base.permission_mode = overlay.permission_mode.clone();
     }
     if overlay.web_search.is_some() {
         base.web_search = overlay.web_search;
@@ -2140,6 +2219,48 @@ cli_tools:
         // Verify builtin phases are present with expected agent IDs
         assert_eq!(config.phase_agent_id("requirements"), Some("po"));
         assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
+    }
+
+    #[test]
+    fn phase_permission_mode_phase_runtime_takes_precedence_over_agent_profile() {
+        let mut config = hardcoded_builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("swe").expect("swe profile");
+        profile.permission_mode = Some("plan".to_string());
+
+        assert_eq!(config.phase_permission_mode("implementation"), Some("plan"));
+
+        let phase = config.phases.get_mut("implementation").expect("implementation phase");
+        phase.runtime =
+            Some(AgentRuntimeOverrides { permission_mode: Some("acceptEdits".to_string()), ..Default::default() });
+        assert_eq!(config.phase_permission_mode("implementation"), Some("acceptEdits"));
+    }
+
+    #[test]
+    fn phase_has_approval_policy_reflects_agent_profile() {
+        let mut config = hardcoded_builtin_agent_runtime_config();
+        assert!(!config.phase_has_approval_policy("implementation"), "builtin profiles carry no approval policy");
+
+        let profile = config.agents.get_mut("swe").expect("swe profile");
+        profile.approval_policy = Some(ApprovalPolicy::default());
+        assert!(config.phase_has_approval_policy("implementation"));
+    }
+
+    // The compiled agent-runtime-config written by the animus kernel
+    // (v0.5.8+) carries `permission_mode` and `approval_policy`; this
+    // round-trip pins the additive deserialization so the workflow runner
+    // sees them.
+    #[test]
+    fn agent_profile_permission_fields_round_trip_from_compiled_config() {
+        let profile: AgentProfile = serde_json::from_value(serde_json::json!({
+            "permission_mode": "acceptEdits",
+            "approval_policy": { "auto_allow": ["git.*"], "auto_deny": ["rm *"], "default": "ask" }
+        }))
+        .expect("compiled profile should deserialize");
+        assert_eq!(profile.permission_mode.as_deref(), Some("acceptEdits"));
+        let policy = profile.approval_policy.expect("approval policy present");
+        assert_eq!(policy.auto_allow, vec!["git.*".to_string()]);
+        assert_eq!(policy.auto_deny, vec!["rm *".to_string()]);
+        assert_eq!(policy.default, ApprovalPolicyDefault::Ask);
     }
 
     #[test]

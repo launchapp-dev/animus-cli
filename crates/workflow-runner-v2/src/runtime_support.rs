@@ -18,6 +18,12 @@ pub struct WorkflowPhaseRuntimeSettings {
     pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Provider permission/approval mode forwarded verbatim to the spawned
+    /// CLI (claude `--permission-mode`, codex `-c approval_policy`, gemini
+    /// approval mode). Mirrors `AgentRuntimeOverrides::permission_mode` in
+    /// the compiled agent runtime config; mapped onto the session request.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
     #[serde(default)]
     pub web_search: Option<bool>,
     #[serde(default)]
