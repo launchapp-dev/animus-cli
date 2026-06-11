@@ -696,6 +696,9 @@ pub(crate) async fn handle_daemon(
             let result = daemon.pause().await;
             if result.is_ok() {
                 let _ = set_runtime_paused(project_root, true);
+                // Wake a parked daemon loop so it observes the pause now
+                // instead of on the next heartbeat. Fire-and-forget.
+                orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
             }
             result.map(|_| print_ok("daemon paused", json))
         }
@@ -703,6 +706,9 @@ pub(crate) async fn handle_daemon(
             let result = daemon.resume().await;
             if result.is_ok() {
                 let _ = set_runtime_paused(project_root, false);
+                // Wake a parked daemon loop so ready work dispatches now
+                // instead of on the next heartbeat. Fire-and-forget.
+                orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
             }
             result.map(|_| print_ok("daemon resumed", json))
         }
@@ -1301,6 +1307,11 @@ async fn stop_daemon(
     if let Some(pid) = existing_pid {
         if is_process_alive(pid) {
             let _ = set_shutdown_requested(project_root, true, Some(shutdown_timeout_secs));
+            // Wake a parked daemon loop so it re-checks shutdown_requested
+            // immediately — otherwise a long fallback heartbeat could make
+            // the wait below hit the timeout and force-kill instead of
+            // shutting down gracefully. Fire-and-forget.
+            orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
 
             let deadline = tokio::time::Instant::now() + Duration::from_secs(shutdown_timeout_secs);
 

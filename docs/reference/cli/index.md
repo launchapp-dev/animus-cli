@@ -367,6 +367,22 @@ daemon will fail at the first plugin RPC if the plugin really is missing.
 | `--auto-install` | When preflight finds a missing role, install the daemon's recommended default plugin (pinned `owner/repo@tag`) before continuing. Avoids surprise network fetches when omitted. |
 | `--skip-preflight` | Bypass preflight entirely. Escape hatch for dev iteration or intentionally degraded runs when required provider or subject plugins are not installed. |
 
+### `animus daemon start` / `animus daemon run` (`--interval-secs` = fallback heartbeat)
+
+As of the event-driven scheduler, `--interval-secs` is **not** the dispatch
+latency. The daemon main loop wakes on events — a `daemon/nudge` control
+message sent fire-and-forget by `animus subject create/update/status` and
+`animus queue enqueue/release` (and their MCP equivalents), workflow/phase
+completion events, and workflow-config hot-reloads — and on precise cron
+deadlines computed from compiled `schedules:`. `--interval-secs` is the
+fallback heartbeat: the maximum time the loop sleeps when no event arrives.
+It bounds how long out-of-band state mutations (processes editing subject
+state without the CLI) wait for pickup, and it paces the heavier
+housekeeping legs (zombie-workflow reconciliation, manual-timeout
+reconciliation, stale in-progress sweeps), which run at most once per
+heartbeat period even under a burst of event wakes. See
+[configuration.md#scheduler-wake-model](../configuration.md#scheduler-wake-model).
+
 ### `animus daemon restart`
 
 Stops the running daemon (graceful shutdown, same path as `animus daemon

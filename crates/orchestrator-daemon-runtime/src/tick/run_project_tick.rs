@@ -52,10 +52,16 @@ where
     // headroom accounts for any processes spawned by the schedule path.
     let updated_active_count = hooks.active_process_count();
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot, updated_active_count);
-    let reconciled_workflows = hooks.reconcile_manual_timeouts(root).await?;
+    // Completed-process reaping always runs: it frees pool headroom that the
+    // dispatch legs below depend on, so an event wake triggered by a workflow
+    // completion can immediately dispatch follow-on work. The heavier
+    // reconciliation legs (manual timeouts, zombie workflows, stale
+    // in-progress tasks) are housekeeping: the daemon loop runs them on
+    // heartbeat cadence only (`mode.housekeeping`), never per-nudge.
+    let reconciled_workflows = if mode.housekeeping { hooks.reconcile_manual_timeouts(root).await? } else { 0 };
     let completed_reconciliation = hooks.reconcile_completed_processes(root).await?;
-    let reconciled_zombie_workflows = hooks.reconcile_zombie_workflows(root).await?;
-    if args.reconcile_stale {
+    let reconciled_zombie_workflows = if mode.housekeeping { hooks.reconcile_zombie_workflows(root).await? } else { 0 };
+    if mode.housekeeping && args.reconcile_stale {
         hooks.reconcile_stale_in_progress_tasks(root, args.stale_threshold_hours).await?;
     }
     let mut execution_outcome = ProjectTickExecutionOutcome {
@@ -103,11 +109,37 @@ mod tests {
     #[derive(Default)]
     struct RecordingHooks {
         dispatch_calls: Vec<(usize, usize)>,
+        schedule_calls: usize,
+        completed_process_calls: usize,
+        manual_timeout_calls: usize,
+        zombie_calls: usize,
+        stale_calls: usize,
     }
 
     #[async_trait::async_trait(?Send)]
     impl ProjectTickHooks for RecordingHooks {
-        fn process_due_schedules(&mut self, _root: &str, _now: DateTime<Utc>, _budget: &mut TickBudget) {}
+        fn process_due_schedules(&mut self, _root: &str, _now: DateTime<Utc>, _budget: &mut TickBudget) {
+            self.schedule_calls += 1;
+        }
+
+        async fn reconcile_zombie_workflows(&mut self, _root: &str) -> Result<usize> {
+            self.zombie_calls += 1;
+            Ok(0)
+        }
+
+        async fn reconcile_manual_timeouts(&mut self, _root: &str) -> Result<usize> {
+            self.manual_timeout_calls += 1;
+            Ok(0)
+        }
+
+        async fn reconcile_stale_in_progress_tasks(
+            &mut self,
+            _root: &str,
+            _stale_threshold_hours: u64,
+        ) -> Result<usize> {
+            self.stale_calls += 1;
+            Ok(0)
+        }
 
         async fn capture_snapshot(&mut self, _root: &str) -> Result<ProjectTickSnapshot> {
             Ok(ProjectTickSnapshot {
@@ -119,6 +151,7 @@ mod tests {
         }
 
         async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<CompletedProcessReconciliation> {
+            self.completed_process_calls += 1;
             Ok(CompletedProcessReconciliation::default())
         }
 
@@ -169,7 +202,7 @@ mod tests {
         }
     }
 
-    fn tick_dispatch_calls(options: &DaemonRuntimeOptions, pool_draining: bool) -> Vec<(usize, usize)> {
+    fn run_recorded_tick(options: &DaemonRuntimeOptions, pool_draining: bool, housekeeping: bool) -> RecordingHooks {
         let _env_lock = crate::dispatch::test_env::lock().lock().unwrap_or_else(|p| p.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
         let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
@@ -181,12 +214,16 @@ mod tests {
             .block_on(run_project_tick(
                 project.path().to_string_lossy().as_ref(),
                 options,
-                ProjectTickRunMode { active_process_count: 0 },
+                ProjectTickRunMode { active_process_count: 0, housekeeping },
                 pool_draining,
                 &mut hooks,
             ))
             .expect("tick should succeed");
-        hooks.dispatch_calls
+        hooks
+    }
+
+    fn tick_dispatch_calls(options: &DaemonRuntimeOptions, pool_draining: bool) -> Vec<(usize, usize)> {
+        run_recorded_tick(options, pool_draining, true).dispatch_calls
     }
 
     #[test]
@@ -212,5 +249,29 @@ mod tests {
         let options = DaemonRuntimeOptions::default();
         let calls = tick_dispatch_calls(&options, false);
         assert_eq!(calls, vec![(options.max_tasks_per_tick, options.max_tasks_per_tick)]);
+    }
+
+    #[test]
+    fn housekeeping_tick_runs_full_reconciliation_sweep() {
+        let options = DaemonRuntimeOptions { reconcile_stale: true, ..DaemonRuntimeOptions::default() };
+        let hooks = run_recorded_tick(&options, false, true);
+        assert_eq!(hooks.manual_timeout_calls, 1);
+        assert_eq!(hooks.zombie_calls, 1);
+        assert_eq!(hooks.stale_calls, 1);
+        assert_eq!(hooks.completed_process_calls, 1);
+        assert_eq!(hooks.schedule_calls, 1);
+        assert_eq!(hooks.dispatch_calls.len(), 1);
+    }
+
+    #[test]
+    fn event_wake_tick_skips_housekeeping_but_keeps_dispatch_legs() {
+        let options = DaemonRuntimeOptions { reconcile_stale: true, ..DaemonRuntimeOptions::default() };
+        let hooks = run_recorded_tick(&options, false, false);
+        assert_eq!(hooks.manual_timeout_calls, 0, "event wakes must not run manual-timeout reconciliation");
+        assert_eq!(hooks.zombie_calls, 0, "event wakes must not run zombie-workflow reconciliation");
+        assert_eq!(hooks.stale_calls, 0, "event wakes must not run stale-in-progress reconciliation");
+        assert_eq!(hooks.completed_process_calls, 1, "completed-process reaping frees headroom; always runs");
+        assert_eq!(hooks.schedule_calls, 1, "schedules are a dispatch leg; they run on event wakes");
+        assert_eq!(hooks.dispatch_calls.len(), 1, "dispatch must run on event wakes");
     }
 }

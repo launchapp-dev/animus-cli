@@ -329,9 +329,15 @@ where
     } else {
         let queue = trigger_event_queue.clone();
         let sink: TriggerSupervisorSink = Arc::new(move |event| {
+            // Routed trigger events queue dispatchable work — wake the
+            // scheduler loop so it drains now instead of on the fallback
+            // heartbeat. Coalescing + no-op-before-install semantics live
+            // in `nudge_scheduler_local`; nudging on supervisor lifecycle
+            // events too is harmless (one cheap dispatch-leg pass).
             if let Ok(mut guard) = queue.lock() {
                 guard.push(event);
             }
+            super::nudge_scheduler_local();
         });
         match TriggerSupervisor::start(Path::new(project_root), sink).await {
             Ok(supervisor) => Some(supervisor),
@@ -406,6 +412,45 @@ where
     let mut interval = Duration::from_secs(options.interval_secs.max(1));
     let mut sigterm_stream = SigtermStream::new()?;
     let mut sigint_stream = SigintStream::new()?;
+
+    // Event-driven scheduler wake-ups. The loop below parks on a select
+    // whose arms are (a) shutdown signals, (b) this Notify (control-socket
+    // `daemon/nudge`, workflow-config hot-reload, and the completion
+    // forwarder), (c) the next cron deadline, and (d) the fallback
+    // heartbeat (`interval_secs`). Notify::notify_one stores at most one
+    // permit, so nudge bursts coalesce into at most one extra pass.
+    let scheduler_nudge = Arc::new(tokio::sync::Notify::new());
+    super::install_scheduler_nudge(scheduler_nudge.clone());
+
+    // Completion wake: workflow-runner subprocesses stream phase/workflow
+    // lifecycle events into the daemon's broadcaster via the per-run
+    // back-channel pipe. Forward completion-shaped events into the nudge so
+    // follow-on work dispatches immediately instead of on the next
+    // heartbeat. Crashed runners that emit nothing are still picked up by
+    // the heartbeat's completed-process reaping.
+    let (completion_sub_id, mut completion_rx) =
+        workflow_event_broadcaster.subscribe(crate::control::WorkflowEventFilter {
+            workflow_id: None,
+            kinds: Some(vec![
+                "phase_completed".to_string(),
+                "workflow_completed".to_string(),
+                "workflow_failed".to_string(),
+            ]),
+        });
+    let completion_nudge = scheduler_nudge.clone();
+    let completion_forwarder = tokio::spawn(async move {
+        while let Some(item) = completion_rx.recv().await {
+            match item {
+                crate::control::SubscriberItem::Event(_) => completion_nudge.notify_one(),
+                crate::control::SubscriberItem::Closed { .. } => break,
+            }
+        }
+    });
+
+    // Housekeeping debounce: heavy reconciliation legs run at most once
+    // per heartbeat period even when event wakes drive extra passes.
+    // `None` means "never ran" so the first pass always sweeps.
+    let mut last_housekeeping: Option<tokio::time::Instant> = None;
     loop {
         // Hot-reload runtime-reconfigurable settings from persisted project config
         // so that `animus.daemon config-set` changes take effect without restart.
@@ -419,15 +464,25 @@ where
             })?;
         }
 
+        let housekeeping_due = last_housekeeping.is_none_or(|at| at.elapsed() >= interval);
         let externally_paused = DaemonRuntimeState::is_runtime_paused(project_root).unwrap_or(false);
+        // Anchor for the cron-deadline arm below: captured BEFORE the tick
+        // so an occurrence that lands while the tick is running (after the
+        // tick's own schedule evaluation instant) still produces a past
+        // deadline → immediate catch-up pass, instead of being silently
+        // deferred to the next occurrence.
+        let tick_anchor = chrono::Utc::now();
         let tick_result = run_project_tick(
             &primary_root,
             options,
-            ProjectTickRunMode { active_process_count: active_process_count(driver) },
+            ProjectTickRunMode { active_process_count: active_process_count(driver), housekeeping: housekeeping_due },
             externally_paused,
             driver,
         )
         .await;
+        if housekeeping_due {
+            last_housekeeping = Some(tokio::time::Instant::now());
+        }
 
         match tick_result {
             Ok(summary) => hooks.handle_event(DaemonRunEvent::TickSummary { summary })?,
@@ -461,6 +516,41 @@ where
             break;
         }
 
+        // Cron deadline arm: sleep precisely until the earliest upcoming
+        // schedule occurrence so cron fires on time (±ms) instead of on
+        // the next heartbeat. Recomputed every pass, which also picks up
+        // workflow-config reloads (the hot-reload watcher additionally
+        // nudges the loop so a reload mid-sleep re-arms immediately).
+        //
+        // The computation is anchored at `tick_anchor` (just before the
+        // tick that just finished evaluated its schedules), NOT at
+        // wall-now: an occurrence crossed by a long-running tick lies
+        // strictly after the anchor, yields an already-elapsed deadline
+        // (clamped to ZERO), and triggers an immediate catch-up pass —
+        // otherwise a long heartbeat could outlive the 10-minute catch-up
+        // horizon and the fire would be lost. No busy loop results: the
+        // catch-up pass dispatches the occurrence (advancing `last_run`)
+        // and re-anchors at its own start time, after which the deadline
+        // is strictly in the future again. An occurrence the tick already
+        // dispatched (anchor races the tick's own evaluation instant by
+        // sub-millisecond) costs at most one extra no-op pass.
+        let cron_sleep = crate::ScheduleDispatch::next_schedule_deadline(project_root, tick_anchor)
+            .map(|deadline| (deadline - chrono::Utc::now()).to_std().unwrap_or(Duration::ZERO));
+
+        // Retry-sweep ceiling: a cron occurrence that woke the loop but
+        // could not dispatch (pool/budget full, transient spawn failure)
+        // is only retryable by the catch-up scan while it remains inside
+        // the 10-minute horizon. When any schedule is enabled, cap the
+        // sleep at half that horizon so at least one retry pass lands in
+        // time even when `interval_secs` is much longer. Housekeeping
+        // cadence is unaffected — `housekeeping_due` keys off the
+        // configured `interval`, not off which arm woke the loop.
+        let max_sleep =
+            if cron_sleep.is_some() { interval.min(crate::schedule::SCHEDULE_RETRY_SWEEP_MAX) } else { interval };
+
+        // Every arm either breaks the loop or falls through to the next
+        // pass, which re-arms a fresh sleep (heartbeat) and a fresh
+        // notified() future (nudge) — no arm can spin without sleeping.
         tokio::select! {
             _ = sigint_stream.recv() => {
                 hooks.handle_event(DaemonRunEvent::Draining {
@@ -476,9 +566,26 @@ where
                 })?;
                 break;
             }
-            _ = sleep(interval) => {}
+            // Event wake: subject/queue writes (via `daemon/nudge`),
+            // completion events, and config reloads land here.
+            _ = scheduler_nudge.notified() => {}
+            // Cron deadline wake; pending forever when nothing is scheduled.
+            _ = async {
+                match cron_sleep {
+                    Some(duration) => sleep(duration).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {}
+            // Fallback heartbeat: catches out-of-band state mutations made
+            // without the CLI/MCP surfaces and paces housekeeping. Clamped
+            // to the schedule retry-sweep ceiling when schedules exist.
+            _ = sleep(max_sleep) => {}
         }
     }
+
+    completion_forwarder.abort();
+    workflow_event_broadcaster.unsubscribe(completion_sub_id);
+    super::clear_scheduler_nudge();
 
     if let Some(supervisor) = trigger_supervisor {
         let _ = supervisor.shutdown().await;

@@ -201,6 +201,15 @@ async fn dispatch(kind: &str, verb: &'static str, params: Option<Value>, project
     let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
     let method = format!("{kind}/{verb}");
     let result = route_or_not_found(&resolution.selected, &method, params).await?;
+    // Write verbs may have made new work dispatchable (e.g. a task flipped
+    // to Ready) — wake a running daemon so it picks the change up now
+    // instead of on the next heartbeat. Fire-and-forget: silently no-ops
+    // when the daemon is down or predates `daemon/nudge`. MCP subject
+    // tools execute these CLI handlers in a subprocess, so this single
+    // choke point covers both surfaces.
+    if matches!(verb, "create" | "update" | "status") {
+        orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
+    }
     print_value(
         SubjectCallResponse {
             kind: kind.to_string(),

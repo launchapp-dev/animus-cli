@@ -586,6 +586,19 @@ async fn invoke_surface(
             Ok(Some(serialize_result(snapshot)))
         }
 
+        // ----- Scheduler nudge (in-tree only; event-driven scheduler) -------
+        // Best-effort "work may exist; wake and run a dispatch pass" hint
+        // from CLI/MCP write paths (subject create/update/status, queue
+        // enqueue/release). Not part of the upstream animus-control-protocol;
+        // shipped as a wire string so older daemons reply method_not_found
+        // and newer CLIs ignore the failure (fire-and-forget on the caller
+        // side). Coalescing and no-op semantics live in
+        // `crate::daemon::nudge_scheduler_local`.
+        "daemon/nudge" => {
+            crate::daemon::nudge_scheduler_local();
+            Ok(Some(serde_json::json!({ "nudged": true })))
+        }
+
         // ----- Plugin runtime status (in-tree only; v0.5.8 observability) ----
         // Not part of the upstream animus-control-protocol; added as a wire
         // string so the CLI can answer "why does it feel like the agent is

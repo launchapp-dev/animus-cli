@@ -368,6 +368,10 @@ pub fn spawn_workflow_config_watcher(
                         workflows = out.workflows,
                         "hot-reload succeeded"
                     );
+                    // Wake the daemon scheduler loop so it recomputes the
+                    // next cron deadline against the reloaded schedules
+                    // immediately instead of after the in-flight sleep.
+                    crate::daemon::nudge_scheduler_local();
                 }
                 Ok(out) => {
                     tracing::debug!(
