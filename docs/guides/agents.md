@@ -216,14 +216,14 @@ permission mode is configured. Two surfaces feed it:
 - Agent profile: set `permission_mode` on an `agents:` entry in workflow YAML
   (or a phase `runtime:` block, which wins over the profile). See
   [Workflow YAML](../reference/workflow-yaml.md#agents).
-- CLI flag: `--permission-mode <MODE>` on `animus agent run` and
+- CLI flag: `--permission-mode MODE` on `animus agent run` and
   `animus chat send` overrides any configured value.
 
 The value is forwarded verbatim to the provider; it is provider-specific:
 
 | Provider | Accepted modes | Mapped flag |
 |---|---|---|
-| claude | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `--permission-mode <mode>` |
+| claude | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `--permission-mode MODE` |
 | codex | `untrusted`, `on-failure`, `on-request`, `never` | `-c approval_policy="<mode>"` |
 | gemini | `default`, `auto_edit`, `yolo` | approval-mode mapping |
 
@@ -243,17 +243,17 @@ against the same injected `animus` server:
 ```
 
 Both tools write a pending interaction under
-`~/.animus/<repo-scope>/interactions/` and wait in one of two modes, selected
+`~/.animus/REPO_SCOPE/interactions/` and wait in one of two modes, selected
 by the optional `wait` parameter:
 
 - **`wait: "block"`** (default for ad-hoc `animus agent run` / `animus chat`)
   — the call polls until a human answers via
-  `animus agent interactions answer <id>` (or the `animus.interactions.answer`
+  `animus agent interactions answer ID` (or the `animus.interactions.answer`
   tool), or the timeout elapses (default 600s, max 3600s). `animus.agent.ask`
   times out with a structured error telling the agent to proceed with its best
   judgment; `animus.agent.request_approval` times out as a deny (fail closed).
 - **`wait: "suspend"`** (default when the serving MCP process is pinned to a
-  workflow via `animus mcp serve --workflow-id <ID>` or the
+  workflow via `animus mcp serve --workflow-id ID` or the
   `ANIMUS_MCP_WORKFLOW_ID` env var) — the tool records the pending
   interaction (bound to the pinned workflow id), pauses the workflow through
   the service API, stamps the interaction id into the phase session
@@ -271,10 +271,10 @@ detect a suspend-created record bound to a paused workflow (block-mode
 records never trigger a resume, even when their payload carried a
 `workflow_id`) and trigger the same detached-runner
 resume as `animus workflow resume`, with the decision threaded in as
-feedback ("Approval granted/denied for <action>: <message>. Continue." /
-"Answer to your question \"<question>\": <answer>. Continue."). A resume
+feedback ("Approval granted/denied for ACTION: MESSAGE. Continue." /
+"Answer to your question \"QUESTION\": ANSWER. Continue."). A resume
 spawn failure never fails the answer — the response carries a
-`workflow_resume.guidance` field with the exact `animus workflow resume <id>`
+`workflow_resume.guidance` field with the exact `animus workflow resume ID`
 command to run by hand. Paused workflows are exempt from the daemon's
 orphaned-workflow recovery, so a suspended run waits indefinitely for its
 answer (`animus status` surfaces it).
@@ -288,7 +288,7 @@ of `ask` (escalate), `allow`, or `deny`.
 
 Both blocking tools are bound to the server's own project scope (no
 `project_root` override). The agent identity can be pinned with
-`animus mcp serve --agent-id <ID>` (the ad-hoc `--agent` injection path
+`animus mcp serve --agent-id ID` (the ad-hoc `--agent` injection path
 appends it automatically) or the `ANIMUS_MCP_AGENT_ID` env var, so the
 payload `agent_id` cannot select a sibling profile with a looser policy.
 
@@ -298,8 +298,8 @@ server omits these tools so an agent cannot answer its own approvals):
 
 ```json
 { "all": false }                                  // animus.interactions.list
-{ "id": "<uuid>", "text": "use the copy table" }  // animus.interactions.answer (question)
-{ "id": "<uuid>", "decision": "deny", "message": "too risky" }  // animus.interactions.answer (approval)
+{ "id": "UUID", "text": "use the copy table" }  // animus.interactions.answer (question)
+{ "id": "UUID", "decision": "deny", "message": "too risky" }  // animus.interactions.answer (approval)
 ```
 
 Interaction lifecycle events (`interaction_created`, `interaction_answered`,
