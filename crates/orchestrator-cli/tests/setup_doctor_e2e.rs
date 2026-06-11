@@ -60,9 +60,9 @@ fn doctor_fix_skips_manual_ao_directory_repair() -> Result<()> {
     assert_eq!(fixed.pointer("/data/fix/applied").and_then(Value::as_bool), Some(false));
     let actions = fixed.pointer("/data/fix/actions").and_then(Value::as_array).expect("fix actions should be an array");
     // v0.4.13 D2: doctor emits more action ids now (chmod_plugin_binaries,
-    // remove_stale_locks, …) — assert the legacy three are still present
+    // remove_stale_locks, …) — assert the legacy actions are still present
     // without pinning the total count.
-    assert!(actions.len() >= 3, "fix actions should include legacy trio plus new safe fixes");
+    assert!(actions.len() >= 2, "fix actions should include legacy actions plus new safe fixes");
     assert!(actions.iter().any(|action| {
         matches!(
             (action.get("id").and_then(Value::as_str), action.get("status").and_then(Value::as_str)),
@@ -73,12 +73,6 @@ fn doctor_fix_skips_manual_ao_directory_repair() -> Result<()> {
         matches!(
             (action.get("id").and_then(Value::as_str), action.get("status").and_then(Value::as_str)),
             (Some("create_default_daemon_config"), Some("skipped"))
-        )
-    }));
-    assert!(actions.iter().any(|action| {
-        matches!(
-            (action.get("id").and_then(Value::as_str), action.get("status").and_then(Value::as_str)),
-            (Some("start_runner"), Some("skipped"))
         )
     }));
     assert!(harness.project_root().join(".animus").is_file());

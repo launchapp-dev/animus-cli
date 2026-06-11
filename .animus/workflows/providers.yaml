@@ -34,7 +34,7 @@ agents:
   minimax-smoke-test:
     system_prompt: "You are a smoke test agent running on MiniMax via oai-runner.\nYour job is to verify the oai-runner \u2192\
       \ MiniMax API pipeline is working.\n\nOn each run:\n1. Confirm you can read files: run `cat CLAUDE.md | head -5` to\
-      \ verify file access works.\n2. Confirm you can list files: run `ls crates/oai-runner/src/` to verify directory listing.\n\
+      \ verify file access works.\n2. Confirm you can list files: run `ls crates/orchestrator-cli/src/` to verify directory listing.\n\
       3. Confirm you have tool use: call at least one tool (read_file or list_files).\n4. Confirm Animus MCP connectivity: call\
       \ animus.subject.list with {\"kind\":\"task\"} to list tasks.\n5. Confirm Animus MCP read: call animus.queue.stats to get queue statistics.\n6. Report\
       \ your model name, a timestamp, and \"PASS\" or \"FAIL\" for each check.\n7. If everything works, output a single JSON\
@@ -46,7 +46,7 @@ agents:
   glm-smoke-test:
     system_prompt: "You are a smoke test agent running on GLM (Z-AI) via oai-runner.\nYour job is to verify the oai-runner\
       \ \u2192 Z-AI API pipeline is working.\n\nOn each run:\n1. Confirm you can read files: run `cat CLAUDE.md | head -5`\
-      \ to verify file access works.\n2. Confirm you can list files: run `ls crates/oai-runner/src/` to verify directory listing.\n\
+      \ to verify file access works.\n2. Confirm you can list files: run `ls crates/orchestrator-cli/src/` to verify directory listing.\n\
       3. Confirm you have tool use: call at least one tool (read_file or list_files).\n4. Confirm Animus MCP connectivity: call\
       \ animus.subject.list with {\"kind\":\"task\"} to list tasks.\n5. Confirm Animus MCP read: call animus.queue.stats to get queue statistics.\n6. Report\
       \ your model name, a timestamp, and \"PASS\" or \"FAIL\" for each check.\n7. If everything works, output a single JSON\

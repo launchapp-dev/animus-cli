@@ -53,12 +53,6 @@ out-of-tree to `launchapp-dev/animus-provider-oai-agent` v0.1.4 in the
 v0.5.2 surface-shrink. Install via
 `animus plugin install launchapp-dev/animus-provider-oai-agent`.
 
-Repo-local but not current workspace members:
-
-- `crates/agent-runner/`
-- `crates/oai-runner/`
-- `crates/orchestrator-web-server/`
-
 Runtime-critical binaries and supporting crates must stay healthy:
 
 - `orchestrator-cli`

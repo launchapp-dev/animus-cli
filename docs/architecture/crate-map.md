@@ -55,7 +55,6 @@ workspace file currently pins `animus-provider-protocol`,
 
 | Crate | Responsibility |
 |---|---|
-| `crates/orchestrator-web-server/` | Legacy in-repo web server directory retained outside the current Cargo workspace |
 
 ## Web
 

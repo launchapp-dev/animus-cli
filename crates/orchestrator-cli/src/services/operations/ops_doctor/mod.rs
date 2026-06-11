@@ -253,16 +253,6 @@ fn apply_safe_fixes(ctx: &CheckContext, checks: &[DiagnosticCheck], yes: bool) -
         out.push(skipped("create_default_daemon_config", "daemon config remediation not required"));
     }
 
-    // Back-compat: the legacy doctor surface always emitted a `start_runner`
-    // action. Existing scripts and the e2e harness still assert on it; keep
-    // it as a no-op skip so the action list shape stays stable.
-    if legacy_remediation_needed(&legacy_report, "start_runner") {
-        out.push(skipped(
-            "start_runner",
-            "agent-runner will be started automatically on next workflow/agent run; to start manually run `animus daemon start`",
-        ));
-    }
-
     // Remove stale lock files surfaced by the filesystem check.
     let stale_locks_present = checks.iter().any(|c| c.id == "stale_locks" && c.status != CheckStatus::Pass);
     if stale_locks_present {

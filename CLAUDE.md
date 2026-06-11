@@ -41,7 +41,7 @@ Do not reintroduce stale claims such as:
 - stale workspace-count summaries that do not match `Cargo.toml`'s current 12 members
 - "plugin extraction in flux" or "in progress" framing — extraction is complete as of v0.4.12
 - `PROJECT_ROOT` or "last-project-root registry" resolution rules
-- removed crates like `llm-mcp-server`, `llm-cli-wrapper`, `orchestrator-web-api`, `orchestrator-web-contracts`, or in-tree `animus-provider-{claude,codex,gemini,opencode,oai}`. `orchestrator-web-server` still exists in-repo but is not a current workspace member
+- removed crates like `llm-mcp-server`, `llm-cli-wrapper`, `orchestrator-web-api`, `orchestrator-web-contracts`, `orchestrator-web-server`, `agent-runner`, `oai-runner`, or in-tree `animus-provider-{claude,codex,gemini,opencode,oai}`
 - outdated CLI groups such as a top-level `planning` facade
 - in-tree `inproc_subject_backend.rs` or the `InTreeTaskSubjectBackend` / `InTreeRequirementsSubjectBackend` adapters — all subject ops route through the `SubjectRouter` to installed plugins
 - claims that `animus web serve` boots an in-process axum server — it now spawns installed transport + web_ui plugins
@@ -78,14 +78,11 @@ Plugin host + protocol:
 - `crates/animus-plugin-protocol`
 - `crates/animus-plugin-runtime`
 
-Repo-local fixtures / legacy dirs (not current workspace members):
-
-- `crates/orchestrator-web-server`
-
 Web surface ships out-of-tree as the `launchapp-dev/animus-web-ui` plugin together
 with `animus-transport-http` and `animus-transport-graphql`. Install with
-`animus plugin install-defaults --include-transports`. The repo still contains
-`crates/orchestrator-web-server/`, but it is not part of the current workspace.
+`animus plugin install-defaults --include-transports`. The legacy in-repo
+`crates/orchestrator-web-server/`, `crates/agent-runner/`, and
+`crates/oai-runner/` leftovers were deleted.
 
 ## Root Resolution And State
 
@@ -129,7 +126,7 @@ but write new features against the scoped runtime root.
 - Everything is `animus`. New MCP tools are named `animus.<group>.<verb>`, env vars are `ANIMUS_*`, state paths are `.animus/` or `~/.animus/<repo-scope>/`, pack ids are `animus.*`. The CLI is invoked via `animus`. The legacy `ao.*` surfaces were dropped in v0.4.0 (no aliases). See [docs/architecture/naming-contract.md](docs/architecture/naming-contract.md).
 - Workflow YAML supports `${VAR}` env-var interpolation for non-secret config (URLs, team IDs, feature flags), with `${VAR:-default}` and `${VAR:?error}` fallback shapes; substitution happens before YAML parsing, and unset required vars fail with file path + line number. API keys and other credentials belong in the OS keychain via `animus secret set <KEY>` (preferred, v0.5.8+) — failing that, the daemon's process environment (legacy). The `${VAR}` interpolator and the plugin-spawn path both check keychain entries for the current `repo-scope` when the env var is unset, with explicit parent-process env winning on collision. See `docs/reference/secrets.md` and `docs/reference/configuration.md#secrets-vs-non-secret-config`.
 - Workflow YAML also carries three daemon-affecting top-level blocks: `schedules:` (cron-driven workflow dispatch), `triggers:` (file watchers, webhooks, GitHub webhooks, trigger plugins), and `daemon:`. All three compile from `crates/orchestrator-config/src/workflow_config/types.rs` (`WorkflowSchedule`, `WorkflowTrigger`, `DaemonConfig`). The `daemon:` block today only consumes `auto_run_ready`, `active_hours`, `phase_routing`, and `mcp` from YAML; other `DaemonConfig` fields (`pool_size`, `interval_secs`, `auto_merge`, `auto_pr`, `auto_commit_before_merge`, `auto_prune_worktrees`) round-trip but are read from `~/.animus/<repo-scope>/daemon/pm-config.json` or CLI flags instead, and `max_task_retries`/`retry_cooldown_secs` are currently no-ops. Authoring reference: `docs/reference/workflow-yaml.md#schedules`, `#triggers`, `#daemon`.
-- Plugin kill-switches: `ANIMUS_DAEMON_DISABLE_TRIGGERS=1` skips the trigger plugin supervisor on daemon start (and interrupts in-progress restart backoff); `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` skips subject plugin discovery entirely. `ANIMUS_PROVIDER_DISABLE_PLUGIN` was removed in v0.4.12 — there is no in-tree provider fallback anymore; `SessionBackendResolver` now hard-errors with an actionable install command when a requested provider plugin is missing. The legacy `ANIMUS_DAEMON_DISABLE_BUILTIN_TASK_ADAPTER` and `ANIMUS_DAEMON_DISABLE_BUILTIN_REQUIREMENTS_ADAPTER` env vars are also no-ops as of v0.4.12 — the in-tree adapters were deleted. Both active kill-switches require a daemon restart to take effect. Documented in `docs/reference/configuration.md#plugin-kill-switches`.
+- Plugin kill-switches: `ANIMUS_DAEMON_DISABLE_TRIGGERS=1` skips the trigger plugin supervisor on daemon start (and interrupts in-progress restart backoff); `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` skips subject plugin discovery entirely. `ANIMUS_PROVIDER_DISABLE_PLUGIN` was removed in v0.4.12 — there is no in-tree provider fallback anymore; `SessionBackendResolver` now hard-errors with an actionable install command when a requested provider plugin is missing. Both active kill-switches require a daemon restart to take effect. Documented in `docs/reference/configuration.md#plugin-kill-switches`.
 - Plugin preflight: as of v0.4.12 the daemon refuses to start when required-role plugins are missing. As of the v0.5 P2 Wave C fold-in, `workflow_runner` and `queue` join the required-role set alongside `at_least_one_provider`, `subject_kind:task`, and `subject_kind:requirement`. The v0.5 reference impls are `launchapp-dev/animus-workflow-runner-default` (v0.4.0+) and `launchapp-dev/animus-queue-default` (v0.2.0+). Use `animus plugin install-defaults` ahead of time or pass `animus daemon start --auto-install` to install recommended defaults on the fly. `--skip-preflight` is the dev escape hatch (no in-tree fallback runs in production; the daemon will fail at the first plugin RPC if the plugin really is missing). Run `animus daemon preflight` for a standalone report. The in-tree workflow runner BINARY was deleted in the v0.5.1 round-4 fold-in and the `workflow-runner-v2` LIB CRATE was deleted in the v0.5.1 round-5 fold-in — its modules now live out-of-tree as `launchapp-dev/animus-runtime-shared` v0.1.0 (path-deped locally until that repo is published). The daemon scheduler resolves the workflow_runner binary via kind-based plugin discovery (`orchestrator_plugin_host::discover_by_kind("workflow_runner")`) with binary-name fallback for back-compat.
 - Prefer narrow verification over full-workspace rebuilds while iterating.
 
@@ -163,7 +160,7 @@ Plugin host + preflight:
 
 Web UI:
 
-- Out-of-tree at `launchapp-dev/animus-web-ui` (plus `animus-transport-http` / `animus-transport-graphql`). `crates/orchestrator-web-server/` still exists in-repo, but it is not a current workspace member.
+- Out-of-tree at `launchapp-dev/animus-web-ui` (plus `animus-transport-http` / `animus-transport-graphql`). The legacy `crates/orchestrator-web-server/` directory was deleted.
 
 ## CLI Reality Check
 
@@ -201,10 +198,7 @@ all subject ops route through the `SubjectRouter` to installed
 `launchapp-dev/animus-subject-default` (kind=task) and
 `launchapp-dev/animus-subject-requirements` (kind=requirement) via
 `animus plugin install-defaults --include-subjects` to keep the
-`kind=task` and `kind=requirement` surfaces routable. The
-`ANIMUS_DAEMON_DISABLE_BUILTIN_TASK_ADAPTER` and
-`ANIMUS_DAEMON_DISABLE_BUILTIN_REQUIREMENTS_ADAPTER` env vars are
-deprecated and now no-ops; use
+`kind=task` and `kind=requirement` surfaces routable. Use
 `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` to skip subject discovery
 entirely.
 
