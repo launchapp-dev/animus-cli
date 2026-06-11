@@ -6,6 +6,29 @@ pub struct CompletionReconciliationPlan {
     pub executed_workflow_phases: usize,
     pub failed_workflow_phases: usize,
     pub execution_facts: Vec<SubjectExecutionFact>,
+    pub workflow_failures: Vec<WorkflowFailureEvent>,
+}
+
+/// One terminal workflow failure observed during completed-process
+/// reconciliation. Each completed process is consumed from the
+/// `ProcessManager` exactly once, so a given run produces at most one
+/// failure event — notifier dispatch stays storm-free by construction.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WorkflowFailureEvent {
+    pub workflow_id: Option<String>,
+    pub workflow_ref: Option<String>,
+    pub subject_id: String,
+    pub task_id: Option<String>,
+    pub failure_reason: String,
+}
+
+/// Outcome of completed-process reconciliation surfaced back into the
+/// project tick summary.
+#[derive(Debug, Clone, Default)]
+pub struct CompletedProcessReconciliation {
+    pub executed_workflow_phases: usize,
+    pub failed_workflow_phases: usize,
+    pub workflow_failures: Vec<WorkflowFailureEvent>,
 }
 
 pub fn build_completion_reconciliation_plan(
@@ -34,7 +57,7 @@ pub fn build_completion_reconciliation_plan(
             }
         }
 
-        plan.execution_facts.push(SubjectExecutionFact {
+        let fact = SubjectExecutionFact {
             subject_id: completed.subject_id,
             subject_kind: completed.subject_kind,
             task_id: completed.task_id,
@@ -46,7 +69,24 @@ pub fn build_completion_reconciliation_plan(
             success: workflow_success,
             failure_reason,
             runner_events: completed.events,
-        });
+        };
+
+        let is_failure = matches!(fact.workflow_status, Some(WorkflowStatus::Failed | WorkflowStatus::Escalated))
+            || (fact.workflow_status.is_none() && !fact.success);
+        if is_failure {
+            plan.workflow_failures.push(WorkflowFailureEvent {
+                workflow_id: fact.workflow_id.clone(),
+                workflow_ref: fact.workflow_ref.clone(),
+                subject_id: fact.subject_id.clone(),
+                task_id: fact.task_id.clone(),
+                failure_reason: fact
+                    .failure_reason
+                    .clone()
+                    .unwrap_or_else(|| format!("workflow runner exited with status {:?}", fact.exit_code)),
+            });
+        }
+
+        plan.execution_facts.push(fact);
     }
 
     plan
@@ -116,6 +156,7 @@ mod tests {
         assert_eq!(plan.execution_facts[0].workflow_status, Some(WorkflowStatus::Completed));
         assert!(plan.execution_facts[0].schedule_id.is_none());
         assert!(plan.execution_facts[0].failure_reason.is_none());
+        assert!(plan.workflow_failures.is_empty(), "successful workflow must not produce a failure event");
     }
 
     #[test]
@@ -140,6 +181,34 @@ mod tests {
         assert_eq!(plan.execution_facts[0].workflow_ref.as_deref(), Some("ops"));
         assert_eq!(plan.execution_facts[0].schedule_id.as_deref(), Some("nightly"));
         assert_eq!(plan.execution_facts[0].completion_status(), "failed");
+        assert_eq!(plan.workflow_failures.len(), 1);
+        let failure = &plan.workflow_failures[0];
+        assert_eq!(failure.workflow_id.as_deref(), Some("WF-999"));
+        assert_eq!(failure.workflow_ref.as_deref(), Some("ops"));
+        assert_eq!(failure.subject_id, "schedule:nightly");
+        assert_eq!(failure.task_id.as_deref(), Some("TASK-999"));
+        assert_eq!(failure.failure_reason, "workflow runner failed: workflow runner exited with status Some(17)");
+    }
+
+    #[test]
+    fn runner_crash_without_workflow_status_produces_failure_event() {
+        let plan = build_completion_reconciliation_plan(vec![CompletedProcess {
+            subject_id: "TASK-606".to_string(),
+            subject_kind: Some(protocol::SUBJECT_KIND_TASK.to_string()),
+            task_id: Some("TASK-606".to_string()),
+            workflow_id: Some("WF-606".to_string()),
+            workflow_ref: Some("standard".to_string()),
+            workflow_status: None,
+            schedule_id: None,
+            exit_code: Some(101),
+            success: false,
+            failure_reason: None,
+            events: Vec::new(),
+        }]);
+
+        assert_eq!(plan.workflow_failures.len(), 1);
+        assert_eq!(plan.workflow_failures[0].workflow_id.as_deref(), Some("WF-606"));
+        assert!(plan.workflow_failures[0].failure_reason.contains("exited without workflow status"));
     }
 
     #[test]
@@ -209,6 +278,7 @@ mod tests {
             plan.execution_facts[0].failure_reason.as_deref(),
             Some("workflow runner cancelled: operator cancelled the workflow")
         );
+        assert!(plan.workflow_failures.is_empty(), "operator cancellation is not a workflow failure");
     }
 
     #[test]

@@ -4,6 +4,7 @@ use animus_queue_protocol::{self as queue_proto, QueueCompletionRequest, QueueLi
 use orchestrator_core::{project_execution_fact, project_schedule_execution_fact, services::ServiceHub};
 use orchestrator_daemon_runtime::{
     build_completion_reconciliation_plan, remove_terminal_dispatch_queue_entry_non_fatal, CompletedProcess,
+    CompletedProcessReconciliation,
 };
 use tracing::{debug, info, warn};
 
@@ -13,7 +14,7 @@ pub(crate) async fn reconcile_completed_processes(
     hub: Arc<dyn ServiceHub>,
     root: &str,
     completed_processes: Vec<CompletedProcess>,
-) -> (usize, usize) {
+) -> CompletedProcessReconciliation {
     let plan = build_completion_reconciliation_plan(completed_processes);
 
     for fact in plan.execution_facts {
@@ -54,7 +55,11 @@ pub(crate) async fn reconcile_completed_processes(
         project_schedule_execution_fact(root, &fact);
     }
 
-    (plan.executed_workflow_phases, plan.failed_workflow_phases)
+    CompletedProcessReconciliation {
+        executed_workflow_phases: plan.executed_workflow_phases,
+        failed_workflow_phases: plan.failed_workflow_phases,
+        workflow_failures: plan.workflow_failures,
+    }
 }
 
 async fn finalize_plugin_queue_entry(root: &str, fact: &protocol::SubjectExecutionFact) {

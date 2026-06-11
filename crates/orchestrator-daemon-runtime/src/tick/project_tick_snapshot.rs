@@ -39,6 +39,7 @@ impl ProjectTickSnapshot {
             } else {
                 Vec::new()
             },
+            workflow_failures: execution_outcome.workflow_failures,
         }
     }
 }

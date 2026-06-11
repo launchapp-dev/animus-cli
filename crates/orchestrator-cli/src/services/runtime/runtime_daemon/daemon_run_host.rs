@@ -485,6 +485,20 @@ impl DefaultDaemonRunHost {
             }),
         )?;
 
+        for failure in &summary.workflow_failures {
+            self.emit_daemon_event_with_notifications(
+                "workflow-failed",
+                Some(summary.project_root.clone()),
+                json!({
+                    "workflow_id": failure.workflow_id,
+                    "workflow_ref": failure.workflow_ref,
+                    "subject_id": failure.subject_id,
+                    "task_id": failure.task_id,
+                    "failure_reason": failure.failure_reason,
+                }),
+            )?;
+        }
+
         for task_change in &summary.task_state_changes {
             let mut data = json!({
                 "task_id": task_change.task_id,
@@ -495,7 +509,28 @@ impl DefaultDaemonRunHost {
             if let Some(selection_source) = task_change.selection_source {
                 data["selection_source"] = json!(selection_source.as_str());
             }
+            if let Some(blocked_reason) = task_change.blocked_reason.as_deref() {
+                data["blocked_reason"] = json!(blocked_reason);
+            }
             self.emit_daemon_event_with_notifications("task-state-change", Some(summary.project_root.clone()), data)?;
+
+            // Dedicated event type so notifier subscriptions can filter on
+            // "task-blocked" directly. Task state changes are diffed against
+            // the pre-tick snapshot, so a given blocked transition fires
+            // exactly once even though blocked-state reconciliation re-runs
+            // on every tick.
+            if task_change.to_status == orchestrator_core::TaskStatus::Blocked.to_string() {
+                self.emit_daemon_event_with_notifications(
+                    "task-blocked",
+                    Some(summary.project_root.clone()),
+                    json!({
+                        "task_id": task_change.task_id,
+                        "from_status": task_change.from_status,
+                        "blocked_reason": task_change.blocked_reason,
+                        "changed_at": task_change.changed_at,
+                    }),
+                )?;
+            }
         }
 
         for phase_event in &summary.phase_execution_events {

@@ -29,7 +29,10 @@ pub mod reattach;
 
 pub use build_runner_command_from_dispatch::{build_runner_command, build_runner_command_from_dispatch};
 pub use completed_process::CompletedProcess;
-pub use completion_reconciliation_plan::{build_completion_reconciliation_plan, CompletionReconciliationPlan};
+pub use completion_reconciliation_plan::{
+    build_completion_reconciliation_plan, CompletedProcessReconciliation, CompletionReconciliationPlan,
+    WorkflowFailureEvent,
+};
 pub use dispatch_execution::execute_dispatch_plan_via_runner;
 pub use dispatch_notice::{DispatchNotice, DispatchNoticeSink};
 pub use dispatch_selection_source::DispatchSelectionSource;

@@ -226,6 +226,32 @@ Operators integrating with an aggregator generally want both. The
 `events.jsonl` stream is structured first-class data; the tracing stream
 captures the diagnostic fan-out from running code.
 
+## Failure notifications
+
+Every daemon event the run loop emits is also dispatched to installed
+`notifier` plugins (no-op when none are installed). Two event types exist
+specifically so operators of an autonomous daemon learn when work is stuck:
+
+- **`workflow-failed`** — emitted once per workflow-runner process that
+  exits with a `failed` / `escalated` workflow status (or crashes without
+  reporting one). Payload: `workflow_id`, `workflow_ref`, `subject_id`,
+  `task_id`, `failure_reason`. Completed processes are reconciled exactly
+  once, so a given run produces at most one event.
+- **`task-blocked`** — emitted once when a task transitions into the
+  `blocked` status (for example after a failed workflow blocks its task).
+  Payload: `task_id`, `from_status`, `blocked_reason`, `changed_at`.
+  Transitions are diffed against the pre-tick snapshot, so re-evaluating an
+  already-blocked task on later ticks does not re-notify.
+
+The generic `task-state-change` event also carries a `blocked_reason` field
+when the target status is `blocked`.
+
+Subscribe a notifier connector to these via the persisted
+`notification_config` block's `subscriptions[].event_types` (for example
+`["workflow-failed", "task-blocked"]`, or `["*"]` for everything). See
+`docs/reference/configuration.md` for how `notification_config` is stored
+and which env vars are forwarded to notifier plugins.
+
 ## Quick recipes
 
 ### "Is the daemon healthy right now?"

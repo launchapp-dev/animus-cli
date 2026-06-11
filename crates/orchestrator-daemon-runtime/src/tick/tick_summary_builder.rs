@@ -37,6 +37,7 @@ impl TickSummaryBuilder {
             failed_workflow_phases: input.failed_workflow_phases,
             task_state_changes: Vec::new(),
             phase_execution_events: input.phase_execution_events,
+            workflow_failures: input.workflow_failures,
         })
     }
 }
