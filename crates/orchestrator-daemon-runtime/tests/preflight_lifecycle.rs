@@ -12,8 +12,9 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use orchestrator_core::{DaemonStatus, PluginPreflightSpec, PreflightResult, RequiredRole};
 use orchestrator_daemon_runtime::{
-    run_daemon, DaemonRunEvent, DaemonRunHooks, DaemonRuntimeOptions, DaemonRuntimeState, DispatchWorkflowStartSummary,
-    PreflightOutcome, ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
+    run_daemon, CompletedProcessReconciliation, DaemonRunEvent, DaemonRunHooks, DaemonRuntimeOptions,
+    DaemonRuntimeState, DispatchWorkflowStartSummary, PreflightOutcome, ProjectTickHooks, ProjectTickSnapshot,
+    ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
 };
 use serde_json::Value;
 use tempfile::TempDir;
@@ -100,8 +101,8 @@ impl ProjectTickHooks for StubDriver {
         })
     }
 
-    async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<(usize, usize)> {
-        Ok((0, 0))
+    async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<CompletedProcessReconciliation> {
+        Ok(CompletedProcessReconciliation::default())
     }
 
     async fn dispatch_ready_tasks(
@@ -145,6 +146,7 @@ impl ProjectTickHooks for StubDriver {
             failed_workflow_phases: 0,
             task_state_changes: Vec::new(),
             phase_execution_events: Vec::new(),
+            workflow_failures: Vec::new(),
         })
     }
 }
@@ -323,8 +325,8 @@ impl ProjectTickHooks for PauseProbeDriver {
         })
     }
 
-    async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<(usize, usize)> {
-        Ok((0, 0))
+    async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<CompletedProcessReconciliation> {
+        Ok(CompletedProcessReconciliation::default())
     }
 
     async fn dispatch_ready_tasks(
@@ -379,6 +381,7 @@ impl ProjectTickHooks for PauseProbeDriver {
             failed_workflow_phases: 0,
             task_state_changes: Vec::new(),
             phase_execution_events: Vec::new(),
+            workflow_failures: Vec::new(),
         })
     }
 }

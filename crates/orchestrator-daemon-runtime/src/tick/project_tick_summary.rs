@@ -2,7 +2,7 @@ use animus_runtime_shared::PhaseExecutionEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::DispatchSelectionSource;
+use crate::{DispatchSelectionSource, WorkflowFailureEvent};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskStateChangeEvent {
@@ -11,6 +11,8 @@ pub struct TaskStateChangeEvent {
     pub to_status: String,
     pub changed_at: String,
     pub selection_source: Option<DispatchSelectionSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blocked_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,4 +39,6 @@ pub struct ProjectTickSummary {
     pub failed_workflow_phases: usize,
     pub task_state_changes: Vec<TaskStateChangeEvent>,
     pub phase_execution_events: Vec<PhaseExecutionEvent>,
+    #[serde(default)]
+    pub workflow_failures: Vec<WorkflowFailureEvent>,
 }

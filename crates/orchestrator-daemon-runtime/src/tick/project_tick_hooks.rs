@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::{
-    DaemonRuntimeOptions, DispatchWorkflowStartSummary, ProjectTickSnapshot, ProjectTickSummary,
-    ProjectTickSummaryInput, TickBudget,
+    CompletedProcessReconciliation, DaemonRuntimeOptions, DispatchWorkflowStartSummary, ProjectTickSnapshot,
+    ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
 };
 
 #[async_trait::async_trait(?Send)]
@@ -30,7 +30,7 @@ pub trait ProjectTickHooks {
 
     async fn capture_snapshot(&mut self, root: &str) -> Result<ProjectTickSnapshot>;
 
-    async fn reconcile_completed_processes(&mut self, root: &str) -> Result<(usize, usize)>;
+    async fn reconcile_completed_processes(&mut self, root: &str) -> Result<CompletedProcessReconciliation>;
 
     async fn reconcile_zombie_workflows(&mut self, _root: &str) -> Result<usize> {
         Ok(0)

@@ -7,9 +7,9 @@ use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 use orchestrator_core::{TaskStatus, WorkflowStateManager, WorkflowStatus};
 use orchestrator_daemon_runtime::{
-    default_slim_project_tick_driver, CompletedProcess, DefaultProjectTickServices, DefaultSlimProjectTickDriver,
-    DispatchNotice, DispatchSelectionSource, DispatchWorkflowStart, DispatchWorkflowStartSummary, ProcessManager,
-    ProjectTickSnapshot,
+    default_slim_project_tick_driver, CompletedProcess, CompletedProcessReconciliation, DefaultProjectTickServices,
+    DefaultSlimProjectTickDriver, DispatchNotice, DispatchSelectionSource, DispatchWorkflowStart,
+    DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot,
 };
 use orchestrator_logging::Logger;
 use protocol::SubjectDispatchExt;
@@ -42,7 +42,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         hub: Arc<dyn ServiceHub>,
         root: &str,
         completed_processes: Vec<CompletedProcess>,
-    ) -> Result<(usize, usize)> {
+    ) -> Result<CompletedProcessReconciliation> {
         Ok(reconcile_completed_processes(hub, root, completed_processes).await)
     }
 

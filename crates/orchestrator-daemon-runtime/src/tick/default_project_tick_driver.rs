@@ -9,9 +9,9 @@ use orchestrator_core::{
 use serde_json::Value;
 
 use crate::{
-    CompletedProcess, DaemonRuntimeOptions, DispatchNotice, DispatchWorkflowStart, DispatchWorkflowStartSummary,
-    ProcessManager, ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput,
-    ScheduleDispatch, TaskStateChangeEvent, TickBudget, TickSummaryBuilder, TriggerDispatch,
+    CompletedProcess, CompletedProcessReconciliation, DaemonRuntimeOptions, DispatchNotice, DispatchWorkflowStart,
+    DispatchWorkflowStartSummary, ProcessManager, ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary,
+    ProjectTickSummaryInput, ScheduleDispatch, TaskStateChangeEvent, TickBudget, TickSummaryBuilder, TriggerDispatch,
 };
 
 #[async_trait::async_trait(?Send)]
@@ -37,7 +37,7 @@ pub trait DefaultProjectTickServices {
         hub: Arc<dyn ServiceHub>,
         root: &str,
         completed_processes: Vec<CompletedProcess>,
-    ) -> Result<(usize, usize)>;
+    ) -> Result<CompletedProcessReconciliation>;
 
     async fn reconcile_zombie_workflows(
         &mut self,
@@ -147,6 +147,11 @@ fn collect_task_state_changes(
                 to_status: task.status.to_string(),
                 changed_at: task.metadata.updated_at.to_rfc3339(),
                 selection_source: selection_by_task_id.get(task.id.as_str()).copied(),
+                blocked_reason: if task.status == orchestrator_core::TaskStatus::Blocked {
+                    task.blocked_reason.clone()
+                } else {
+                    None
+                },
             })
         })
         .collect()
@@ -284,7 +289,7 @@ where
         self.services.capture_snapshot(root).await
     }
 
-    async fn reconcile_completed_processes(&mut self, root: &str) -> Result<(usize, usize)> {
+    async fn reconcile_completed_processes(&mut self, root: &str) -> Result<CompletedProcessReconciliation> {
         let completed_processes = self.process_manager.check_running().await;
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         self.services.reconcile_completed_processes(hub, root, completed_processes).await
@@ -336,5 +341,100 @@ where
     ) -> Result<ProjectTickSummary> {
         let root = input.project_root.clone();
         self.services.build_summary(&root, args, input).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use orchestrator_core::{OrchestratorTask, Priority, TaskStatus, TaskType};
+
+    use super::collect_task_state_changes;
+
+    fn task(id: &str, status: TaskStatus, blocked_reason: Option<&str>) -> OrchestratorTask {
+        let now = Utc::now();
+        OrchestratorTask {
+            id: id.to_string(),
+            title: format!("Task {id}"),
+            description: String::new(),
+            task_type: TaskType::Feature,
+            status,
+            blocked_reason: blocked_reason.map(ToOwned::to_owned),
+            blocked_at: None,
+            blocked_phase: None,
+            blocked_by: None,
+            priority: Priority::Medium,
+            risk: orchestrator_core::RiskLevel::Medium,
+            scope: orchestrator_core::Scope::Medium,
+            complexity: orchestrator_core::Complexity::default(),
+            impact_area: Vec::new(),
+            assignee: orchestrator_core::Assignee::Unassigned,
+            estimated_effort: None,
+            linked_requirements: Vec::new(),
+            linked_architecture_entities: Vec::new(),
+            dependencies: Vec::new(),
+            checklist: Vec::new(),
+            tags: Vec::new(),
+            workflow_metadata: orchestrator_core::WorkflowMetadata::default(),
+            worktree_path: None,
+            branch_name: None,
+            metadata: orchestrator_core::TaskMetadata {
+                created_at: now,
+                updated_at: now,
+                created_by: "test".to_string(),
+                updated_by: "test".to_string(),
+                started_at: None,
+                completed_at: None,
+                status_changed_at: None,
+                version: 1,
+            },
+            deadline: None,
+            paused: false,
+            cancelled: false,
+            resolution: None,
+            resource_requirements: orchestrator_core::ResourceRequirements::default(),
+            consecutive_dispatch_failures: None,
+            last_dispatch_failure_at: None,
+            dispatch_history: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn blocked_transition_carries_blocked_reason() {
+        let before = vec![task("TASK-1", TaskStatus::InProgress, None)];
+        let after = vec![task("TASK-1", TaskStatus::Blocked, Some("workflow runner failed: phase impl exited 1"))];
+
+        let changes = collect_task_state_changes(&before, &after, &[]);
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].task_id, "TASK-1");
+        assert_eq!(changes[0].from_status, "in-progress");
+        assert_eq!(changes[0].to_status, "blocked");
+        assert_eq!(changes[0].blocked_reason.as_deref(), Some("workflow runner failed: phase impl exited 1"));
+    }
+
+    #[test]
+    fn non_blocked_transition_has_no_blocked_reason() {
+        // A stale blocked_reason left on the task record must not leak into
+        // transitions that do not land on Blocked.
+        let before = vec![task("TASK-2", TaskStatus::Blocked, Some("old reason"))];
+        let after = vec![task("TASK-2", TaskStatus::Ready, Some("old reason"))];
+
+        let changes = collect_task_state_changes(&before, &after, &[]);
+
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].to_status, "ready");
+        assert!(changes[0].blocked_reason.is_none());
+    }
+
+    #[test]
+    fn unchanged_status_emits_no_transition() {
+        // Blocked-state reconciliation re-runs every tick for completed
+        // workflows; an already-blocked task must not re-emit (and thus not
+        // re-notify) on subsequent ticks.
+        let before = vec![task("TASK-3", TaskStatus::Blocked, Some("reason"))];
+        let after = vec![task("TASK-3", TaskStatus::Blocked, Some("reason"))];
+
+        assert!(collect_task_state_changes(&before, &after, &[]).is_empty());
     }
 }

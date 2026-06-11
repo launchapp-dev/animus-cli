@@ -53,15 +53,16 @@ where
     let updated_active_count = hooks.active_process_count();
     let preparation = mode.build_preparation(&context, args, now, pool_draining, &snapshot, updated_active_count);
     let reconciled_workflows = hooks.reconcile_manual_timeouts(root).await?;
-    let (executed_workflow_phases, failed_workflow_phases) = hooks.reconcile_completed_processes(root).await?;
+    let completed_reconciliation = hooks.reconcile_completed_processes(root).await?;
     let reconciled_zombie_workflows = hooks.reconcile_zombie_workflows(root).await?;
     if args.reconcile_stale {
         hooks.reconcile_stale_in_progress_tasks(root, args.stale_threshold_hours).await?;
     }
     let mut execution_outcome = ProjectTickExecutionOutcome {
         reconciled_workflows: reconciled_workflows + reconciled_zombie_workflows,
-        executed_workflow_phases,
-        failed_workflow_phases,
+        executed_workflow_phases: completed_reconciliation.executed_workflow_phases,
+        failed_workflow_phases: completed_reconciliation.failed_workflow_phases,
+        workflow_failures: completed_reconciliation.workflow_failures,
         ..Default::default()
     };
     // Recompute the dispatch limits after all reconciliation hooks have run.
@@ -94,8 +95,9 @@ mod tests {
     use serde_json::Value;
 
     use crate::{
-        run_project_tick, DaemonRuntimeOptions, DispatchWorkflowStartSummary, ProjectTickHooks, ProjectTickRunMode,
-        ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
+        run_project_tick, CompletedProcessReconciliation, DaemonRuntimeOptions, DispatchWorkflowStartSummary,
+        ProjectTickHooks, ProjectTickRunMode, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput,
+        TickBudget,
     };
 
     #[derive(Default)]
@@ -116,8 +118,8 @@ mod tests {
             })
         }
 
-        async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<(usize, usize)> {
-            Ok((0, 0))
+        async fn reconcile_completed_processes(&mut self, _root: &str) -> Result<CompletedProcessReconciliation> {
+            Ok(CompletedProcessReconciliation::default())
         }
 
         async fn dispatch_ready_tasks(
@@ -162,6 +164,7 @@ mod tests {
                 failed_workflow_phases: 0,
                 task_state_changes: Vec::new(),
                 phase_execution_events: Vec::new(),
+                workflow_failures: Vec::new(),
             })
         }
     }
