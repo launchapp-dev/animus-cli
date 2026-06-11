@@ -616,7 +616,6 @@ fn build_daemon_config_set_args_wires_all_runtime_settings() {
         max_tasks_per_tick: Some(5),
         stale_threshold_hours: Some(48),
         phase_timeout_secs: Some(300),
-        idle_timeout_secs: Some(600),
         ..Default::default()
     };
     let args = build_daemon_config_set_args(&input);
@@ -632,8 +631,6 @@ fn build_daemon_config_set_args_wires_all_runtime_settings() {
     assert!(args.contains(&"48".to_string()));
     assert!(args.contains(&"--phase-timeout-secs".to_string()));
     assert!(args.contains(&"300".to_string()));
-    assert!(args.contains(&"--idle-timeout-secs".to_string()));
-    assert!(args.contains(&"600".to_string()));
 }
 
 #[test]

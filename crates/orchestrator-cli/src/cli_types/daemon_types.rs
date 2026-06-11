@@ -105,13 +105,6 @@ pub(crate) struct DaemonSchedulerArgs {
         help = "Override phase timeout in seconds."
     )]
     pub(crate) phase_timeout_secs: Option<u64>,
-    #[arg(
-        long,
-        value_name = "SECONDS",
-        value_parser = parse_positive_u64,
-        help = "Override workflow idle timeout in seconds."
-    )]
-    pub(crate) idle_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Args)]
@@ -154,7 +147,6 @@ impl DaemonStartArgs {
                 stale_threshold_hours: None,
                 max_tasks_per_tick: None,
                 phase_timeout_secs: None,
-                idle_timeout_secs: None,
             },
             skip_runner: false,
             runner_scope: None,
@@ -257,13 +249,6 @@ pub(crate) struct DaemonConfigArgs {
         help = "Set phase timeout override in seconds."
     )]
     pub(crate) phase_timeout_secs: Option<u64>,
-    #[arg(
-        long,
-        value_name = "SECONDS",
-        value_parser = parse_positive_u64,
-        help = "Set workflow idle timeout override in seconds."
-    )]
-    pub(crate) idle_timeout_secs: Option<u64>,
     #[arg(long, value_name = "JSON")]
     pub(crate) notification_config_json: Option<String>,
     #[arg(long, value_name = "PATH")]

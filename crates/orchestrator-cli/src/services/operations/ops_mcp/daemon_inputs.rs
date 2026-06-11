@@ -13,8 +13,6 @@ pub(super) struct DaemonStartInput {
     #[serde(default)]
     pub(super) phase_timeout_secs: Option<u64>,
     #[serde(default)]
-    pub(super) idle_timeout_secs: Option<u64>,
-    #[serde(default)]
     pub(super) skip_runner: Option<bool>,
     #[serde(default)]
     pub(super) autonomous: Option<bool>,
@@ -71,8 +69,6 @@ pub(super) struct DaemonConfigSetInput {
     pub(super) stale_threshold_hours: Option<u64>,
     #[serde(default)]
     pub(super) phase_timeout_secs: Option<u64>,
-    #[serde(default)]
-    pub(super) idle_timeout_secs: Option<u64>,
     #[serde(default)]
     pub(super) notification_config_json: Option<String>,
     #[serde(default)]

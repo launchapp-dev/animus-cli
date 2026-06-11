@@ -33,7 +33,6 @@ pub(super) fn runtime_options_from_cli(args: &DaemonRunArgs, project_root: &str)
         options.max_tasks_per_tick = v;
     }
     options.phase_timeout_secs = args.scheduler.phase_timeout_secs;
-    options.idle_timeout_secs = args.scheduler.idle_timeout_secs;
     options.once = args.once;
     options.auto_install_plugins = args.auto_install;
     options.skip_plugin_preflight = args.skip_preflight;
@@ -90,7 +89,6 @@ mod tests {
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(2),
                 phase_timeout_secs: None,
-                idle_timeout_secs: None,
             },
             skip_runner: true,
             runner_scope: None,
@@ -139,7 +137,6 @@ mod tests {
                 stale_threshold_hours: None,
                 max_tasks_per_tick: None,
                 phase_timeout_secs: None,
-                idle_timeout_secs: None,
             },
             skip_runner: true,
             runner_scope: None,

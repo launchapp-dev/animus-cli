@@ -55,9 +55,12 @@ defines `daemon:` replaces the previously-accumulated block wholesale, so keep
 
 When the daemon is running, edits to `.animus/workflows.yaml` and any file under
 `.animus/workflows/*.yaml` are picked up automatically by a filesystem watcher
-(the `notify` crate's recommended backend per platform). Workflow YAML is the
-only configuration surface that hot-reloads today; `.animus/pm-config.json` and
-`.animus/plugins.lock` still require a daemon restart.
+(the `notify` crate's recommended backend per platform). The daemon also re-reads
+the runtime-reconfigurable settings in
+`~/.animus/<repo-scope>/daemon/pm-config.json` once per scheduler tick (see
+[Daemon scheduler timing](#daemon-scheduler-timing)), so `animus daemon config`
+changes apply without a restart. `.animus/plugins.lock` and daemon transport
+settings still require a daemon restart.
 
 Behaviour:
 
@@ -142,6 +145,52 @@ Key files:
 - `resume-config.json`
 
 These files are Animus-managed state. Treat them as runtime data, not hand-authored config.
+
+### `daemon/pm-config.json`
+
+Persisted daemon runtime settings, written by `animus daemon config` (CLI) or
+`animus.daemon.config-set` (MCP) — never project-local `.animus/`. The
+runtime-reconfigurable keys are `pool_size`, `interval_secs`,
+`max_tasks_per_tick`, `auto_run_ready`, `stale_threshold_hours`, and
+`phase_timeout_secs`; the running daemon re-reads them once per scheduler tick,
+so changes apply without a restart. Exception: the daemon's `ProcessManager`
+captures `phase_timeout_secs` once at startup, so a changed phase timeout only
+takes effect for the live process manager after a daemon restart (the per-tick
+reload updates the scheduler options only). Unknown keys (including fields removed in
+earlier releases, such as the v0.5.x daemon git/merge policy keys and the no-op
+`idle_timeout_secs`) round-trip untouched so old files keep loading.
+
+## Daemon scheduler timing
+
+The daemon's scheduling model has two layers:
+
+- **Ticks are interval-driven.** The scheduler loop sleeps `interval_secs`
+  between ticks (default 5, clamped to a minimum of 1 second). Each tick
+  re-reads `daemon/pm-config.json`, runs housekeeping, evaluates schedules and
+  triggers, and dispatches ready work.
+- **Phases within a running workflow are reactive.** Once a workflow is
+  dispatched, phase completions are consumed as they arrive; the next phase
+  does not wait for the next tick.
+
+Cron schedules (`schedules:` in workflow YAML) fire on the first tick at or
+after their occurrence, so punctuality is bounded by `interval_secs`. A
+catch-up horizon (10 minutes) absorbs long ticks or `interval_secs` well above
+60 with at most one catch-up fire; occurrences missed for longer (daemon
+stopped, `active_hours` gate closed) are skipped, not replayed.
+
+Two distinct knobs bound dispatch:
+
+- **`pool_size`** — hard cap on concurrently active agents/workflow runners.
+  The effective cap is `min(pool_size, ANIMUS_WORKFLOW_CONCURRENCY_MAX)`
+  (quota default 10); when `pool_size` is unset, the quota alone applies.
+- **`max_tasks_per_tick`** — how many *new* workflows one tick may dispatch
+  (default 2). Per tick the dispatch budget is
+  `min(max_tasks_per_tick, pool capacity - active agents)`, and schedules and
+  triggers draw from that same shared budget.
+
+So `pool_size` limits steady-state concurrency while `max_tasks_per_tick`
+limits ramp-up rate: with `pool_size 8`, `max_tasks_per_tick 2`, and an empty
+pool, reaching 8 concurrent workflows takes at least 4 ticks.
 
 ## Global User Config
 
@@ -484,8 +533,9 @@ legacy aliases; the old names will not be read.
 | Variable | Description |
 |---|---|
 | `ANIMUS_CONFIG_DIR` | Override the global Animus config directory (default `~/.animus`) |
-| `ANIMUS_RUNNER_CONFIG_DIR` | Override the runner config directory. Without it, the CLI resolves runner config under `~/.animus/<repo-scope>/runner/` |
 | `ANIMUS_RUNNER_SCOPE` | Runner scope identifier. Defaults to the repo-scope derived from the project root |
+| `ANIMUS_DISABLE_CI_CACHE` | Truthy (`1`, `true`, `yes`, `on`) — disable the per-project CI status cache used by `animus status` (`~/.animus/<repo-scope>/cache/ci-status.json`), forcing a fresh `gh` lookup every call |
+| `ANIMUS_CI_CACHE_TTL_SECS` | TTL in seconds for the CI status cache (default 60). Honored on every read, so lowering it immediately invalidates older entries |
 | `ANIMUS_MCP_SCHEMA_DRAFT` | Select Draft-07 MCP tool input schemas |
 | `ANIMUS_MCP_ENDPOINT` | Override the MCP server endpoint for the CLI's embedded client |
 | `ANIMUS_USER_ID` | Override the recorded user id for authored actions |
@@ -515,6 +565,22 @@ legacy aliases; the old names will not be read.
 | `ANIMUS_WORKFLOW_RUNNER_BIN` | Override the workflow-runner binary path |
 | `ANIMUS_PHASE_RUN_ATTEMPTS` | Maximum attempts for a single phase run before giving up |
 | `ANIMUS_PHASE_MAX_CONTINUATIONS` | Cap on phase continuation rounds |
+| `ANIMUS_REPLAY_SESSION` | Path to a recorded decision log; when set (non-empty), the workflow runner replays provider decisions from that session instead of invoking the live provider |
+| `ANIMUS_RUNNER_SESSION_DIR` | Override the runner-sessions sidecar directory used to look up provider session ids for resume (default `~/.animus/runner-sessions/`) |
+| `ANIMUS_COST_STATE_ROOT` | Override the root directory for `cost-state.v1.json` and `decisions.jsonl`. Test seam — production callers leave it unset and the standard `~/.animus/<repo-scope>/` root is used |
+
+### Daemon runtime quotas
+
+Per-process caps the daemon resolves once at startup (`RuntimeQuotas::from_env`).
+Unset, empty, non-numeric, or `0` values fall back to the default, so an
+accidental empty override cannot disable a cap.
+
+| Variable | Default | Description |
+|---|---|---|
+| `ANIMUS_TRIGGER_BACKLOG_MAX` | 1000 | Max unprocessed webhook/trigger events retained per trigger; the oldest are dropped (with a warning) beyond this |
+| `ANIMUS_SUBSCRIBER_MEMORY_MAX_MB` | 10 | Approximate per-subscriber buffer cap (MB) for `workflow/events` subscriptions; a lagging subscriber is terminated with reason `buffer_full_lagged` |
+| `ANIMUS_PLUGIN_PROCESS_MAX` | 50 | Max concurrently-spawned plugin child processes; further spawns are refused with an error |
+| `ANIMUS_WORKFLOW_CONCURRENCY_MAX` | 10 | Max workflow runner subprocesses dispatched in parallel; excess requests queue until headroom appears. Also upper-bounds `pool_size` (see [Daemon scheduler timing](#daemon-scheduler-timing)) |
 
 ### Notifications
 

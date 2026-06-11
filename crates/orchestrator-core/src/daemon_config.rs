@@ -23,15 +23,14 @@ pub struct DaemonProjectConfig {
     pub stale_threshold_hours: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_timeout_secs: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idle_timeout_secs: Option<u64>,
     /// Unknown keys round-trip untouched. This also keeps pm-config.json
     /// files written before the v0.5.x removal of the daemon git/merge
     /// policy fields (`auto_merge_enabled`, `auto_pr_enabled`,
     /// `auto_commit_before_merge`, `auto_merge_target_branch`,
     /// `auto_merge_no_ff`, `auto_push_remote`,
     /// `auto_cleanup_worktree_enabled`,
-    /// `auto_prune_worktrees_after_merge`) loading without error.
+    /// `auto_prune_worktrees_after_merge`) and the removed no-op
+    /// `idle_timeout_secs` key loading without error.
     #[serde(flatten)]
     pub extra: BTreeMap<String, Value>,
 }
@@ -149,7 +148,6 @@ mod tests {
             auto_run_ready: Some(false),
             stale_threshold_hours: Some(48),
             phase_timeout_secs: Some(600),
-            idle_timeout_secs: Some(1200),
             ..Default::default()
         };
         write_daemon_project_config(temp.path(), &config).expect("write should succeed");
@@ -160,7 +158,36 @@ mod tests {
         assert_eq!(loaded.auto_run_ready, Some(false));
         assert_eq!(loaded.stale_threshold_hours, Some(48));
         assert_eq!(loaded.phase_timeout_secs, Some(600));
-        assert_eq!(loaded.idle_timeout_secs, Some(1200));
+    }
+
+    #[test]
+    fn daemon_project_config_loads_legacy_idle_timeout_field() {
+        // pm-config.json files written before the removal of the no-op
+        // `idle_timeout_secs` knob still carry the key. They must keep
+        // loading (the removed key lands in `extra` and round-trips).
+        crate::test_env::stable_test_home();
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let config_path = daemon_project_config_path(temp.path());
+        if let Some(parent) = config_path.parent() {
+            std::fs::create_dir_all(parent).expect("config dir should be created");
+        }
+        std::fs::write(
+            &config_path,
+            serde_json::to_string_pretty(&serde_json::json!({
+                "idle_timeout_secs": 1200,
+                "pool_size": 4
+            }))
+            .expect("json should serialize"),
+        )
+        .expect("seed config should be written");
+
+        let loaded = load_daemon_project_config(temp.path()).expect("legacy config should load");
+        assert_eq!(loaded.pool_size, Some(4));
+        assert_eq!(loaded.extra.get("idle_timeout_secs").and_then(Value::as_u64), Some(1200));
+
+        write_daemon_project_config(temp.path(), &loaded).expect("config should write");
+        let reloaded = load_daemon_project_config(temp.path()).expect("config should reload");
+        assert_eq!(reloaded, loaded);
     }
 
     #[test]
@@ -172,7 +199,6 @@ mod tests {
             auto_run_ready: None,
             stale_threshold_hours: None,
             phase_timeout_secs: None,
-            idle_timeout_secs: None,
             ..Default::default()
         };
         let json = serde_json::to_string(&config).expect("serialize should succeed");
