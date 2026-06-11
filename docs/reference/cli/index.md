@@ -11,6 +11,28 @@ Complete reference of every `animus` command, subcommand, and key flag. This tre
 | `--as <PRINCIPAL>` | Impersonate a declared principal for daemon-backed operations. Honor-system on local sockets, warned loudly, and ignored when the active RBAC policy is `single-user` |
 | `--no-cache` | (v0.5.9) Bypass hot-path read caches for this invocation. Mirrors `ANIMUS_DISABLE_CI_CACHE=1` and `ANIMUS_DISABLE_WORKFLOW_CACHE=1`. Caches remain best-effort and fall through to live source on any error |
 
+### `--json` envelope coverage
+
+The root `--json` flag is global: every non-streaming verb in every command
+family — including `pack`, `skill`, `runner`, `trigger`, `logs`, `history`,
+and `git` — answers it with the standard `animus.cli.v1` envelope
+(`{"schema":"animus.cli.v1","ok":true,"data":...}` on stdout for success,
+`{"schema":"animus.cli.v1","ok":false,"error":{...}}` on stderr for failure).
+The contract is pinned by `crates/orchestrator-cli/tests/cli_json_contract.rs`
+with at least one envelope-shape test per family.
+
+Exemptions — live streams are not wrapped in an envelope; they emit raw
+lines (JSONL passthrough where structured) until interrupted:
+
+- `animus daemon stream` (structured JSONL event stream)
+- `animus daemon events --follow` (event stream; the non-follow form honors `--json`)
+- `animus events tail` (workflow event stream; with `--json` each event is emitted as one JSONL line)
+- `animus chat send` (streams provider output as it arrives)
+
+`animus logs tail` is *not* exempt: it is a bounded, pull-style reader that
+returns one envelope and exits; its `--follow` flag is reserved and currently
+a no-op (see the `animus logs tail` section below).
+
 ---
 
 ## Top-Level Command Tree
