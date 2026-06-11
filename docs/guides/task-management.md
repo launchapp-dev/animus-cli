@@ -63,8 +63,9 @@ or branching model.
 
 ```bash
 animus queue list
-animus queue hold --subject-id task:TASK-001
-animus queue release --subject-id task:TASK-001
+animus queue hold task:TASK-001
+animus queue release task:TASK-001 task:TASK-002
+animus queue drop --all --yes
 animus daemon start --autonomous
 ```
 

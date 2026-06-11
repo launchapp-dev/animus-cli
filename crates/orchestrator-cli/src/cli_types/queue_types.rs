@@ -15,11 +15,11 @@ pub(crate) enum QueueCommand {
     ///   animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
     ///   animus queue enqueue --title "Investigate flaky test" --description "Suite fails intermittently on CI"
     Enqueue(QueueEnqueueArgs),
-    /// Hold a queued subject.
+    /// Hold one or more queued subjects.
     Hold(QueueSubjectArgs),
-    /// Release a held queued subject.
+    /// Release one or more held queued subjects.
     Release(QueueSubjectArgs),
-    /// Drop (remove) a queued subject dispatch regardless of status.
+    /// Drop (remove) one or more queued subject dispatches regardless of status.
     Drop(QueueSubjectArgs),
     /// Reorder queued subjects by subject id.
     Reorder(QueueReorderArgs),
@@ -58,8 +58,27 @@ pub(crate) struct QueueEnqueueArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct QueueSubjectArgs {
-    #[arg(long, value_name = "SUBJECT_ID", help = "Queued subject identifier.")]
-    pub(crate) subject_id: String,
+    #[arg(
+        value_name = "SUBJECT_ID",
+        required_unless_present_any = ["subject_id", "all"],
+        conflicts_with = "all",
+        help = "Queued subject identifiers (one or more)."
+    )]
+    pub(crate) subject_ids: Vec<String>,
+    #[arg(
+        long = "subject-id",
+        value_name = "SUBJECT_ID",
+        conflicts_with = "all",
+        help = "Queued subject identifier (flag form; may be combined with positional ids)."
+    )]
+    pub(crate) subject_id: Option<String>,
+    #[arg(
+        long,
+        help = "Target every queue entry matching this verb's eligible statuses. Mutually exclusive with explicit subject ids."
+    )]
+    pub(crate) all: bool,
+    #[arg(long, help = "Skip the confirmation prompt required by --all. Only valid together with --all.")]
+    pub(crate) yes: bool,
 }
 
 #[derive(Debug, Args)]

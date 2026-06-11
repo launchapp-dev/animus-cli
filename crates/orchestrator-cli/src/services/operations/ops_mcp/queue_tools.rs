@@ -33,47 +33,35 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.queue.hold",
-        description = "Hold a queued subject dispatch. Purpose: Prevent a pending subject from being selected for dispatch without removing it from the queue. Prerequisites: Subject must be queued and pending. Example: {\"subject_id\": \"TASK-001\"}. Sequencing: Use animus.queue.release to resume dispatch eligibility.",
+        description = "Hold one or more queued subject dispatches. Purpose: Prevent pending subjects from being selected for dispatch without removing them from the queue. Prerequisites: Subjects must be queued and pending. Example: {\"subject_id\": \"TASK-001\"} or {\"subject_ids\": [\"TASK-001\", \"TASK-002\"]}. Sequencing: Use animus.queue.release to resume dispatch eligibility.",
         input_schema = ao_schema_for_type::<QueueSubjectInput>()
     )]
     async fn ao_queue_hold(&self, params: Parameters<QueueSubjectInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        self.run_tool(
-            "animus.queue.hold",
-            vec!["queue".to_string(), "hold".to_string(), "--subject-id".to_string(), input.subject_id],
-            input.project_root,
-        )
-        .await
+        let args = build_queue_subject_args("hold", &input);
+        self.run_tool("animus.queue.hold", args, input.project_root).await
     }
 
     #[tool(
         name = "animus.queue.release",
-        description = "Release a held queued subject dispatch. Purpose: Make a previously held subject eligible for dispatch again. Prerequisites: Subject must be queued and held. Example: {\"subject_id\": \"TASK-001\"}. Sequencing: Use animus.queue.list to verify queue state after release.",
+        description = "Release one or more held queued subject dispatches. Purpose: Make previously held subjects eligible for dispatch again. Prerequisites: Subjects must be queued and held. Example: {\"subject_id\": \"TASK-001\"} or {\"subject_ids\": [\"TASK-001\", \"TASK-002\"]}. Sequencing: Use animus.queue.list to verify queue state after release.",
         input_schema = ao_schema_for_type::<QueueSubjectInput>()
     )]
     async fn ao_queue_release(&self, params: Parameters<QueueSubjectInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        self.run_tool(
-            "animus.queue.release",
-            vec!["queue".to_string(), "release".to_string(), "--subject-id".to_string(), input.subject_id],
-            input.project_root,
-        )
-        .await
+        let args = build_queue_subject_args("release", &input);
+        self.run_tool("animus.queue.release", args, input.project_root).await
     }
 
     #[tool(
         name = "animus.queue.drop",
-        description = "Drop (remove) a queued subject dispatch. Purpose: Remove a queue entry regardless of its current status (pending, assigned, or held). Use this to clean up stale or stuck queue entries. Prerequisites: Subject must be in the queue. Example: {\"subject_id\": \"TASK-001\"}. Sequencing: Use animus.queue.list to find subject IDs, then animus.queue.drop to remove stuck entries.",
+        description = "Drop (remove) one or more queued subject dispatches. Purpose: Remove queue entries regardless of their current status (pending, assigned, or held). Use this to clean up stale or stuck queue entries. Prerequisites: Subjects must be in the queue. Example: {\"subject_id\": \"TASK-001\"} or {\"subject_ids\": [\"TASK-001\", \"TASK-002\"]}. Sequencing: Use animus.queue.list to find subject IDs, then animus.queue.drop to remove stuck entries.",
         input_schema = ao_schema_for_type::<QueueSubjectInput>()
     )]
     async fn ao_queue_drop(&self, params: Parameters<QueueSubjectInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        self.run_tool(
-            "animus.queue.drop",
-            vec!["queue".to_string(), "drop".to_string(), "--subject-id".to_string(), input.subject_id],
-            input.project_root,
-        )
-        .await
+        let args = build_queue_subject_args("drop", &input);
+        self.run_tool("animus.queue.drop", args, input.project_root).await
     }
 
     #[tool(
