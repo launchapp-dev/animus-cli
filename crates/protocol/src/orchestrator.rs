@@ -800,6 +800,17 @@ pub struct DaemonHealth {
     /// installed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flavor: Option<String>,
+    /// v0.5.10: `true` when `animus daemon pause` has paused the scheduling
+    /// runtime (the daemon process stays alive but stops dispatching work).
+    /// Sourced from the scoped `daemon/daemon-state.json` record so
+    /// operators can tell "paused" apart from "stuck" without reading
+    /// state files.
+    #[serde(default)]
+    pub runtime_paused: bool,
+    /// v0.5.10: RFC3339 timestamp of when the runtime was paused; `None`
+    /// when not paused (or when the pause predates this field).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paused_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1967,5 +1978,34 @@ mod tests {
         assert_eq!(dispatch.subject_kind(), SUBJECT_KIND_REQUIREMENT);
         assert_eq!(dispatch.subject_id(), "REQ-39");
         assert_eq!(dispatch.subject_key(), "REQ-39");
+    }
+
+    #[test]
+    fn daemon_health_deserializes_payloads_without_pause_fields() {
+        // Wire back-compat: v0.5.9-and-earlier payloads carry no
+        // runtime_paused / paused_at; they must default cleanly.
+        let health: DaemonHealth = serde_json::from_value(serde_json::json!({
+            "healthy": true,
+            "status": "running",
+            "active_agents": 0
+        }))
+        .expect("old payload should deserialize");
+        assert!(!health.runtime_paused);
+        assert!(health.paused_at.is_none());
+    }
+
+    #[test]
+    fn daemon_health_serializes_pause_fields_when_paused() {
+        let mut health: DaemonHealth = serde_json::from_value(serde_json::json!({
+            "healthy": true,
+            "status": "paused",
+            "active_agents": 0
+        }))
+        .expect("payload should deserialize");
+        health.runtime_paused = true;
+        health.paused_at = Some("2026-06-11T00:00:00+00:00".to_string());
+        let value = serde_json::to_value(&health).expect("serialize");
+        assert_eq!(value["runtime_paused"], serde_json::json!(true));
+        assert_eq!(value["paused_at"], serde_json::json!("2026-06-11T00:00:00+00:00"));
     }
 }

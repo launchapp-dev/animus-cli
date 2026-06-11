@@ -222,6 +222,8 @@ mod tests {
             total_agents_completed: Some(0),
             total_agents_failed: Some(0),
             flavor: None,
+            runtime_paused: false,
+            paused_at: None,
         };
 
         assert_eq!(ready_dispatch_limit(10, &health), 2);

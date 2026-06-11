@@ -68,6 +68,35 @@ fn daemon_pid_for_status(project_root: &Path) -> Option<u32> {
     std::fs::read_to_string(daemon_dir.join("daemon.pid")).ok()?.trim().parse::<u32>().ok()
 }
 
+/// Read `(runtime_paused, paused_at)` from the scoped
+/// `daemon/daemon-state.json` record. The writer is
+/// `orchestrator-daemon-runtime`'s `DaemonRuntimeStateRecord`
+/// (`set_runtime_paused`); this crate sits below daemon-runtime in the
+/// dependency graph, so the record is read loosely by key name here —
+/// keep the key names in sync with the writer.
+fn runtime_pause_state_for(project_root: &Path) -> (bool, Option<String>) {
+    let path = protocol::scoped_state_root(project_root)
+        .unwrap_or_else(|| project_root.join(".animus"))
+        .join("daemon")
+        .join("daemon-state.json");
+    let Ok(content) = std::fs::read_to_string(&path) else {
+        return (false, None);
+    };
+    parse_runtime_pause_state(&content)
+}
+
+fn parse_runtime_pause_state(content: &str) -> (bool, Option<String>) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(content) else {
+        return (false, None);
+    };
+    let paused = value.get("runtime_paused").and_then(serde_json::Value::as_bool).unwrap_or(false);
+    if !paused {
+        return (false, None);
+    }
+    let paused_at = value.get("paused_at").and_then(serde_json::Value::as_str).map(ToOwned::to_owned);
+    (true, paused_at)
+}
+
 fn daemon_process_alive_for_status(pid: u32) -> bool {
     #[cfg(test)]
     if let Some(alive) = test_daemon_process_alive_override() {
@@ -166,6 +195,14 @@ async fn load_daemon_health_snapshot_uncached(project_root: &Path) -> Result<Dae
         .unwrap_or(0);
 
     let provider_plugins_healthy = provider_plugins_healthy_for(project_root);
+    // `animus daemon stop` also writes runtime_paused=true (as a
+    // scheduling guard), so only a live daemon reports as paused —
+    // otherwise every stopped daemon would look operator-paused.
+    let (runtime_paused, paused_at) = if matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
+        runtime_pause_state_for(project_root)
+    } else {
+        (false, None)
+    };
 
     Ok(DaemonHealth {
         healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
@@ -184,6 +221,8 @@ async fn load_daemon_health_snapshot_uncached(project_root: &Path) -> Result<Dae
         total_agents_completed: None,
         total_agents_failed: None,
         flavor: active_flavor_for_project(project_root),
+        runtime_paused,
+        paused_at,
     })
 }
 
@@ -323,6 +362,8 @@ impl DaemonServiceApi for InMemoryServiceHub {
             total_agents_completed: None,
             total_agents_failed: None,
             flavor: crate::flavor::load_flavor(crate::flavor::DEFAULT_FLAVOR_ID).ok().flatten().map(|m| m.id),
+            runtime_paused: matches!(lock.daemon_status, DaemonStatus::Paused),
+            paused_at: None,
         })
     }
 
@@ -513,6 +554,13 @@ impl DaemonServiceApi for FileServiceHub {
             .map(|count| count as u32)
             .unwrap_or(0);
         let provider_plugins_healthy = provider_plugins_healthy_for(&self.project_root);
+        // See load_daemon_health_snapshot_uncached: stop also sets the
+        // runtime_paused guard, so only a live daemon reports paused.
+        let (runtime_paused, paused_at) = if matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
+            runtime_pause_state_for(&self.project_root)
+        } else {
+            (false, None)
+        };
 
         let value = DaemonHealth {
             healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
@@ -531,6 +579,8 @@ impl DaemonServiceApi for FileServiceHub {
             total_agents_completed: None,
             total_agents_failed: None,
             flavor: active_flavor_for_project(&self.project_root),
+            runtime_paused,
+            paused_at,
         };
         write_daemon_health_cache(&self.project_root, &value);
         Ok(value)
@@ -686,7 +736,27 @@ mod tests {
             total_agents_completed: None,
             total_agents_failed: None,
             flavor: None,
+            runtime_paused: false,
+            paused_at: None,
         }
+    }
+
+    #[test]
+    fn parse_runtime_pause_state_reads_paused_record() {
+        let (paused, at) =
+            parse_runtime_pause_state(r#"{"runtime_paused":true,"paused_at":"2026-06-11T00:00:00+00:00"}"#);
+        assert!(paused);
+        assert_eq!(at.as_deref(), Some("2026-06-11T00:00:00+00:00"));
+    }
+
+    #[test]
+    fn parse_runtime_pause_state_defaults_when_unpaused_or_invalid() {
+        assert_eq!(parse_runtime_pause_state(r#"{"runtime_paused":false}"#), (false, None));
+        // paused_at is ignored unless runtime_paused is true.
+        assert_eq!(parse_runtime_pause_state(r#"{"paused_at":"2026-01-01T00:00:00Z"}"#), (false, None));
+        assert_eq!(parse_runtime_pause_state(r#"{"runtime_paused":true}"#), (true, None));
+        assert_eq!(parse_runtime_pause_state("not-json"), (false, None));
+        assert_eq!(parse_runtime_pause_state("{}"), (false, None));
     }
 
     #[test]

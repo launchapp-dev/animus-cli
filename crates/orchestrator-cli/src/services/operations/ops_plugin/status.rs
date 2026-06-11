@@ -64,7 +64,12 @@ fn render_list(response: &PluginStatusResponse, json: bool) -> Result<()> {
         let pid = plugin.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into());
         let state = format_state(plugin.state);
         let restarts = plugin.restart_count.to_string();
-        let trailing = plugin.last_error.as_ref().map(|err| format!("  (last err: {})", err.code)).unwrap_or_default();
+        let mut trailing =
+            plugin.last_error.as_ref().map(|err| format!("  (last err: {})", err.code)).unwrap_or_default();
+        if plugin.disabled_by_supervisor {
+            let until = plugin.cooldown_until.map(|t| format!(" until {}", t.to_rfc3339())).unwrap_or_default();
+            trailing.push_str(&format!("  [disabled by supervisor{until}]"));
+        }
         println!(
             "{name:<name_w$}  {kind:<kind_w$}  {state:<10}  {pid:<6}  {rpc:<13}  {restarts}{trailing}",
             name = plugin.name,
@@ -94,6 +99,12 @@ fn render_named(response: &PluginStatusResponse, name: &str, json: bool) -> Resu
     println!("pid:            {}", plugin.pid.map(|p| p.to_string()).unwrap_or_else(|| "-".into()));
     println!("last_rpc_at:    {}", format_last_rpc(plugin.last_rpc_at));
     println!("restart_count:  {}", plugin.restart_count);
+    if plugin.disabled_by_supervisor {
+        println!(
+            "supervisor:     disabled (cooldown until {})",
+            plugin.cooldown_until.map(|t| t.to_rfc3339()).unwrap_or_else(|| "-".into())
+        );
+    }
     if let Some(err) = &plugin.last_error {
         println!("last_error:     {} ({})", err.code, err.at.to_rfc3339());
         println!("                {}", err.message);
@@ -159,6 +170,8 @@ fn discover_only_fallback(project_root: &Path) -> Result<PluginStatusResponse> {
             restart_count: 0,
             binary_path: Some(p.path.display().to_string()),
             manifest_name: Some(p.manifest.name),
+            disabled_by_supervisor: false,
+            cooldown_until: None,
         })
         .collect();
     Ok(PluginStatusResponse { protocol_version: PLUGIN_STATUS_PROTOCOL_VERSION, plugins })
@@ -183,6 +196,8 @@ mod tests {
                     restart_count: 0,
                     binary_path: Some("/bin/animus-provider-claude".into()),
                     manifest_name: Some("provider-claude".into()),
+                    disabled_by_supervisor: false,
+                    cooldown_until: None,
                 },
                 PluginRuntimeStatus {
                     name: "animus-queue-default".into(),
@@ -198,6 +213,8 @@ mod tests {
                     restart_count: 2,
                     binary_path: None,
                     manifest_name: None,
+                    disabled_by_supervisor: true,
+                    cooldown_until: Some(Utc::now() + chrono::Duration::seconds(120)),
                 },
             ],
         }

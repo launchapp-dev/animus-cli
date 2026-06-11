@@ -48,6 +48,9 @@ struct DaemonStatusSlice {
     available: bool,
     status: String,
     running: bool,
+    runtime_paused: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paused_at: Option<String>,
     runner_connected: bool,
     runner_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -307,6 +310,8 @@ fn build_daemon_slice(health: Option<&DaemonHealth>, error: Option<String>) -> D
             available: true,
             status: daemon_status_label(health.status).to_string(),
             running: daemon_running(health.status),
+            runtime_paused: health.runtime_paused,
+            paused_at: health.paused_at.clone(),
             runner_connected: health.runner_connected,
             runner_pid: health.runner_pid,
             error,
@@ -315,6 +320,8 @@ fn build_daemon_slice(health: Option<&DaemonHealth>, error: Option<String>) -> D
             available: false,
             status: "unknown".to_string(),
             running: false,
+            runtime_paused: false,
+            paused_at: None,
             runner_connected: false,
             runner_pid: None,
             error,
@@ -780,6 +787,10 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let _ = writeln!(&mut output, "Daemon");
     let _ = writeln!(&mut output, "  status: {}", dashboard.daemon.status);
     let _ = writeln!(&mut output, "  running: {}", dashboard.daemon.running);
+    let _ = writeln!(&mut output, "  runtime_paused: {}", dashboard.daemon.runtime_paused);
+    if let Some(paused_at) = dashboard.daemon.paused_at.as_deref() {
+        let _ = writeln!(&mut output, "  paused_at: {paused_at}");
+    }
     let _ = writeln!(&mut output, "  runner_connected: {}", dashboard.daemon.runner_connected);
     let _ = writeln!(
         &mut output,

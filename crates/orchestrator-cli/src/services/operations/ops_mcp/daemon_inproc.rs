@@ -5,7 +5,9 @@ use protocol::is_process_alive;
 use serde_json::{json, Value};
 use std::path::Path;
 
-use crate::services::runtime::{canonicalize_lossy, read_daemon_pid, remove_daemon_pid, set_daemon_pid};
+use crate::services::runtime::{
+    canonicalize_lossy, overlay_runtime_pause, read_daemon_pid, remove_daemon_pid, set_daemon_pid,
+};
 
 fn resolve_project_root(default_root: &str, override_value: Option<String>) -> String {
     let candidate = override_value
@@ -23,7 +25,13 @@ pub(super) async fn daemon_status_inproc(default_project_root: &str, project_roo
 
     if let Some(client) = ControlClient::try_connect(project_root_path).await? {
         match client.daemon_status().await {
-            Ok(response) => return Ok(serde_json::to_value(response)?),
+            Ok(response) => {
+                // Wire types are pinned out-of-tree; overlay the pause state
+                // so MCP consumers see it too (matches the CLI's JSON path).
+                let mut value = serde_json::to_value(response)?;
+                overlay_runtime_pause(&mut value, &project_root);
+                return Ok(value);
+            }
             Err(err) if orchestrator_daemon_runtime::control::is_method_unavailable(&err) => {
                 tracing::debug!(error = %err, "daemon/status wire unavailable; falling back to local");
             }
@@ -57,7 +65,11 @@ pub(super) async fn daemon_health_inproc(default_project_root: &str, project_roo
 
     if let Some(client) = ControlClient::try_connect(project_root_path).await? {
         match client.daemon_health().await {
-            Ok(response) => return Ok(serde_json::to_value(response)?),
+            Ok(response) => {
+                let mut value = serde_json::to_value(response)?;
+                overlay_runtime_pause(&mut value, &project_root);
+                return Ok(value);
+            }
             Err(err) if orchestrator_daemon_runtime::control::is_method_unavailable(&err) => {
                 tracing::debug!(error = %err, "daemon/health wire unavailable; falling back to local");
             }
@@ -74,12 +86,16 @@ pub(super) async fn daemon_health_inproc(default_project_root: &str, project_roo
         if !alive && matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
             health.status = DaemonStatus::Crashed;
             health.healthy = false;
+            health.runtime_paused = false;
+            health.paused_at = None;
             remove_daemon_pid(&project_root);
             let _ = set_daemon_pid(&project_root, None);
         }
     } else if matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
         health.status = DaemonStatus::Crashed;
         health.healthy = false;
+        health.runtime_paused = false;
+        health.paused_at = None;
     }
     Ok(serde_json::to_value(health)?)
 }

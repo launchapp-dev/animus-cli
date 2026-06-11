@@ -11,6 +11,12 @@ pub struct DaemonRuntimeState;
 struct DaemonRuntimeStateRecord {
     #[serde(default)]
     runtime_paused: bool,
+    /// RFC3339 timestamp of when `runtime_paused` last flipped to `true`;
+    /// cleared on resume. Read loosely (by key name) from
+    /// `orchestrator-core`'s daemon health snapshot builder, so renames here
+    /// must be coordinated with that reader.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    paused_at: Option<String>,
     #[serde(default)]
     daemon_pid: Option<u32>,
     #[serde(default)]
@@ -22,6 +28,13 @@ struct DaemonRuntimeStateRecord {
 impl DaemonRuntimeState {
     pub fn is_runtime_paused(project_root: &str) -> Result<bool> {
         Ok(load_daemon_runtime_state(project_root)?.runtime_paused)
+    }
+
+    /// Returns `(runtime_paused, paused_at)` in one read so health/status
+    /// surfaces can report both without racing two file loads.
+    pub fn runtime_pause_state(project_root: &str) -> Result<(bool, Option<String>)> {
+        let state = load_daemon_runtime_state(project_root)?;
+        Ok((state.runtime_paused, state.paused_at))
     }
 
     pub fn get_daemon_pid(project_root: &str) -> Result<Option<u32>> {
@@ -39,6 +52,11 @@ impl DaemonRuntimeState {
     pub fn set_runtime_paused(project_root: &str, paused: bool) -> Result<()> {
         with_daemon_state_lock(project_root, || {
             let mut state = load_daemon_runtime_state(project_root)?;
+            if paused && !state.runtime_paused {
+                state.paused_at = Some(chrono::Utc::now().to_rfc3339());
+            } else if !paused {
+                state.paused_at = None;
+            }
             state.runtime_paused = paused;
             save_daemon_runtime_state(project_root, &state)
         })

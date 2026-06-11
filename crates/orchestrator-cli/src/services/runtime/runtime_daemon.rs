@@ -82,6 +82,25 @@ pub(super) fn set_runtime_paused(project_root: &str, paused: bool) -> Result<()>
     DaemonRuntimeState::set_runtime_paused(project_root, paused)
 }
 
+/// Best-effort read of `(runtime_paused, paused_at)` from the scoped daemon
+/// state record. Used to overlay pause visibility onto wire responses whose
+/// types are pinned out-of-tree (`animus-control-protocol`) and cannot grow
+/// new fields in this repo.
+pub(crate) fn runtime_pause_state(project_root: &str) -> (bool, Option<String>) {
+    DaemonRuntimeState::runtime_pause_state(project_root).unwrap_or((false, None))
+}
+
+/// Merge `runtime_paused` / `paused_at` into a wire-response JSON object.
+pub(crate) fn overlay_runtime_pause(value: &mut serde_json::Value, project_root: &str) {
+    let (paused, paused_at) = runtime_pause_state(project_root);
+    if let Some(map) = value.as_object_mut() {
+        map.insert("runtime_paused".to_string(), serde_json::Value::Bool(paused));
+        if let Some(at) = paused_at {
+            map.insert("paused_at".to_string(), serde_json::Value::String(at));
+        }
+    }
+}
+
 pub(super) fn set_shutdown_requested(project_root: &str, requested: bool, timeout_secs: Option<u64>) -> Result<()> {
     DaemonRuntimeState::set_shutdown_requested(project_root, requested, timeout_secs)
 }
@@ -112,7 +131,14 @@ pub(crate) async fn handle_daemon_status_command(project_root: &str, json: bool)
             orchestrator_daemon_runtime::control::ControlClient::try_connect(project_root_path).await?
         {
             match client.daemon_status().await {
-                Ok(response) => return print_value(response, true),
+                Ok(response) => {
+                    // `DaemonStatusResponse` is pinned out-of-tree and only
+                    // carries `running`; overlay the pause state so JSON
+                    // consumers can tell a paused runtime from an active one.
+                    let mut value = serde_json::to_value(&response)?;
+                    overlay_runtime_pause(&mut value, project_root);
+                    return print_value(value, true);
+                }
                 Err(err) if orchestrator_daemon_runtime::control::is_method_unavailable(&err) => {
                     tracing::debug!(error = %err, "daemon/status wire unavailable; falling back to local");
                 }
@@ -138,6 +164,12 @@ pub(crate) async fn handle_daemon_status_command(project_root: &str, json: bool)
     } else if matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
         status = DaemonStatus::Crashed;
     }
+    // TODO(codex-p2): this offline fallback serializes a bare DaemonStatus
+    // string (`"paused"` when paused via the service-state path), so it
+    // carries no `runtime_paused`/`paused_at` keys like the wire path above.
+    // Migrating it to an object shape would let the pause overlay apply
+    // uniformly, but that is a breaking change to the documented `/data`
+    // string shape — defer to the next envelope rev.
     print_value(status, json)
 }
 
@@ -146,10 +178,13 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
     if let Some(client) = orchestrator_daemon_runtime::control::ControlClient::try_connect(project_root_path).await? {
         match client.daemon_health().await {
             Ok(response) => {
+                let pause = runtime_pause_state(project_root);
                 if json {
-                    return print_value(response, true);
+                    let mut value = serde_json::to_value(&response)?;
+                    overlay_runtime_pause(&mut value, project_root);
+                    return print_value(value, true);
                 }
-                return render_daemon_health_human(&response);
+                return render_daemon_health_human(&response, pause);
             }
             Err(err) if orchestrator_daemon_runtime::control::is_method_unavailable(&err) => {
                 tracing::debug!(error = %err, "daemon/health wire unavailable; falling back to local");
@@ -167,18 +202,33 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
         if !alive && matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
             health.status = DaemonStatus::Crashed;
             health.healthy = false;
+            health.runtime_paused = false;
+            health.paused_at = None;
             remove_daemon_pid(project_root);
             let _ = set_daemon_pid(project_root, None);
         }
     } else if matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
         health.status = DaemonStatus::Crashed;
         health.healthy = false;
+        health.runtime_paused = false;
+        health.paused_at = None;
     }
     print_value(health, json)
 }
 
-fn render_daemon_health_human(response: &animus_control_protocol::types::DaemonHealthResponse) -> Result<()> {
+fn render_daemon_health_human(
+    response: &animus_control_protocol::types::DaemonHealthResponse,
+    (runtime_paused, paused_at): (bool, Option<String>),
+) -> Result<()> {
     println!("daemon: {:?}", response.status);
+    if runtime_paused {
+        match paused_at {
+            Some(at) => println!("runtime: paused (since {at})"),
+            None => println!("runtime: paused"),
+        }
+    } else {
+        println!("runtime: active");
+    }
     if let Some(err) = response.last_error.as_ref() {
         println!("last_error: {err}");
     }
@@ -190,7 +240,15 @@ fn render_daemon_health_human(response: &animus_control_protocol::types::DaemonH
         let kind_w = response.plugins.iter().map(|p| p.kind.len()).max().unwrap_or(0).max(4);
         println!("  {:<name_w$}  {:<kind_w$}  status", "name", "kind", name_w = name_w, kind_w = kind_w);
         for p in &response.plugins {
-            println!("  {:<name_w$}  {:<kind_w$}  {:?}", p.name, p.kind, p.status, name_w = name_w, kind_w = kind_w);
+            let detail = p.last_error.as_deref().map(|err| format!("  ({err})")).unwrap_or_default();
+            println!(
+                "  {:<name_w$}  {:<kind_w$}  {:?}{detail}",
+                p.name,
+                p.kind,
+                p.status,
+                name_w = name_w,
+                kind_w = kind_w
+            );
         }
     }
     Ok(())
