@@ -155,12 +155,13 @@ animus
 │       ├── respond          Approve or reject a confirmation request
 │       └── outcome          Record operation outcome for a confirmation request
 │
-├── skill                    Search, install, update, and publish versioned skills
+├── skill                    Search, install, update, uninstall, and publish versioned skills
 │   ├── search               Search skills across built-in, user, project, and registry sources
 │   ├── install              Install a skill with deterministic resolution
 │   ├── list                 List all available skills (built-in, user, project, and installed)
 │   ├── show                 Show details of a resolved skill definition
 │   ├── update               Re-resolve one or all installed skills
+│   ├── uninstall            Remove an installed skill's materialized files and registry/lock entries (supports --source and --dry-run)
 │   ├── publish              Publish a new skill version into the registry catalog
 │   ├── migrate-from-ao      Move legacy .ao/skills/ into .animus/skills/ (v0.3 → v0.4)
 │   └── registry
@@ -179,11 +180,12 @@ animus
 │       ├── run              Run model evaluation
 │       └── report           Show latest model evaluation report
 │
-├── pack                     Install, inspect, and pin workflow packs
+├── pack                     Install, inspect, pin, and uninstall workflow packs
 │   ├── install              Install a pack from a local path or marketplace registry
 │   ├── list                 List discovered packs and indicate which ones are active for this project
 │   ├── inspect              Inspect a discovered pack or a local pack manifest
 │   ├── pin                  Pin a pack version/source or toggle enablement for this project
+│   ├── uninstall            Remove an installed pack (all versions or --version) plus its project selection entry; refuses while project workflow YAML references the pack unless --force (supports --dry-run)
 │   ├── search               Search packs across marketplace registries
 │   └── registry
 │       ├── add              Add a marketplace registry (git URL)
