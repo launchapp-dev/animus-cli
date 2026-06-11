@@ -5,10 +5,10 @@ use std::process::{Command, Stdio};
 
 use anyhow::Result;
 use orchestrator_config::{
-    list_project_templates_from_default_registry_with_options, load_pack_inventory, load_pack_selection_state,
-    load_project_template_from_default_registry_with_options, load_project_template_from_dir,
-    save_pack_selection_state, LoadedProjectTemplate, PackRegistrySource, PackSelectionEntry, PackSelectionSource,
-    ProjectTemplateSourceKind, ProjectTemplateSummary, RegistrySyncOptions,
+    list_project_templates_from_default_registry_with_options, load_pack_inventory, load_pack_manifest,
+    load_pack_selection_state, load_project_template_from_default_registry_with_options,
+    load_project_template_from_dir, save_pack_selection_state, LoadedProjectTemplate, PackRegistrySource,
+    PackSelectionEntry, PackSelectionSource, ProjectTemplateSourceKind, ProjectTemplateSummary, RegistrySyncOptions,
 };
 use orchestrator_core::{
     daemon_project_config_path, load_daemon_project_config, write_daemon_project_config, DoctorCheckStatus,
@@ -190,6 +190,9 @@ pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) 
                     "packs": pack_plan,
                 },
                 "blocked_items": blocked_items,
+                "planned_actions": {
+                    "install_recommended_packs": args.install_packs,
+                },
                 "apply": {
                     "applied": false,
                     "changed_domains": [],
@@ -205,6 +208,24 @@ pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) 
 
     let bootstrap_needed_before = remediation_needed(&doctor_before, "bootstrap_project_state");
     let daemon_config_exists_before = daemon_project_config_path(project_root_path).exists();
+
+    // Install the recommended packs BEFORE applying the template's pack
+    // selection: a template manifest may reference one of the recommended
+    // packs via `[[packs]]`, and `apply_template_packs` fails when the
+    // referenced pack is not yet available. (codex round-1 P2.)
+    let recommended_pack_step = if args.install_packs {
+        let step = install_recommended_packs(project_root_path);
+        if !json {
+            print_pack_install_summary(&step);
+        }
+        step
+    } else {
+        RecommendedPackStep::skipped()
+    };
+    // Recompute the template pack plan after the recommended installs so the
+    // apply envelope does not report packs as `missing` that init just
+    // installed. (codex round-5 P3.)
+    let pack_plan = if args.install_packs { build_pack_plan(project_root_path, &loaded_template)? } else { pack_plan };
 
     let written_files = write_template_files(project_root_path, &loaded_template)?;
     FileServiceHub::new(project_root_path)?;
@@ -234,10 +255,35 @@ pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) 
     } else {
         unchanged_domains.push("pack_selection");
     }
-    if pack_apply.installed_packs.is_empty() {
+    if pack_apply.installed_packs.is_empty()
+        && !recommended_pack_step.results.iter().any(|result| result.status == "installed")
+    {
         unchanged_domains.push("pack_installation");
     } else {
         changed_domains.push("pack_installation");
+    }
+
+    let mut next_steps: Vec<String> = loaded_template.manifest.next_steps.clone();
+    if recommended_pack_step.skipped {
+        next_steps.push(
+            "Install the recommended workflow packs when ready: animus init --walkthrough --no-template --no-install --install-packs".to_string(),
+        );
+    } else {
+        for result in &recommended_pack_step.results {
+            if result.status == "failed" {
+                next_steps.push(format!(
+                    "Pack install failed for {}: {}",
+                    result.pack_id,
+                    result.detail.as_deref().unwrap_or("unknown error")
+                ));
+            }
+        }
+        if task_pack_ready(&recommended_pack_step) {
+            next_steps.push(
+                "Run the standard task workflow: `animus subject create --kind task --title \"My first task\"` then `animus workflow run animus.task/standard --task-id TASK-001 --sync`."
+                    .to_string(),
+            );
+        }
     }
 
     print_value(
@@ -263,11 +309,12 @@ pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) 
                 "daemon_config_updated": daemon_config_updated,
                 "installed_packs": pack_apply.installed_packs,
                 "pack_selection_updated": pack_apply.pack_selection_updated,
+                "recommended_packs": recommended_pack_step,
             },
             "recommended_install": default_install_manifest(),
             "doctor_before": doctor_before,
             "doctor_after": doctor_after,
-            "next_steps": loaded_template.manifest.next_steps,
+            "next_steps": next_steps,
         }),
         json,
     )
@@ -456,6 +503,305 @@ fn default_install_manifest() -> serde_json::Value {
     serde_json::from_str(DEFAULT_INSTALL_MANIFEST_JSON).unwrap_or_else(|_| serde_json::json!({}))
 }
 
+/// One recommended pack pin from `config/default-install.json`.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct RecommendedPackPin {
+    id: String,
+    repo: String,
+    tag: String,
+}
+
+fn recommended_packs() -> Vec<RecommendedPackPin> {
+    #[derive(serde::Deserialize)]
+    struct Manifest {
+        #[serde(default)]
+        packs: Vec<RecommendedPackPin>,
+    }
+    serde_json::from_str::<Manifest>(DEFAULT_INSTALL_MANIFEST_JSON).map(|manifest| manifest.packs).unwrap_or_default()
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PackInstallResult {
+    pack_id: String,
+    repo: String,
+    tag: String,
+    /// "installed" | "already_installed" | "failed"
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RecommendedPackStep {
+    skipped: bool,
+    results: Vec<PackInstallResult>,
+}
+
+impl RecommendedPackStep {
+    fn skipped() -> Self {
+        Self { skipped: true, results: Vec::new() }
+    }
+}
+
+fn manual_pack_install_command(pack: &RecommendedPackPin) -> String {
+    let dir_name = pack.repo.rsplit('/').next().unwrap_or(pack.id.as_str());
+    format!(
+        "git clone --depth 1 --branch {tag} https://github.com/{repo}.git /tmp/{dir} && animus pack install --path /tmp/{dir} --activate",
+        tag = pack.tag,
+        repo = pack.repo,
+        dir = dir_name,
+    )
+}
+
+/// Resolve the local source directory for a recommended pack. By default
+/// this shallow-clones the pinned GitHub release tag; the
+/// `ANIMUS_INIT_PACK_SOURCE_DIR` env var overrides the source with
+/// `<dir>/<pack-id>` for offline installs and tests.
+fn resolve_recommended_pack_source(pack: &RecommendedPackPin, scratch: &Path) -> Result<PathBuf> {
+    if let Ok(source_dir) = std::env::var("ANIMUS_INIT_PACK_SOURCE_DIR") {
+        let candidate = PathBuf::from(source_dir).join(&pack.id);
+        if !candidate.is_dir() {
+            return Err(anyhow::anyhow!(
+                "ANIMUS_INIT_PACK_SOURCE_DIR is set but {} does not exist",
+                candidate.display()
+            ));
+        }
+        return Ok(candidate);
+    }
+
+    let clone_target = scratch.join(&pack.id);
+    let url = format!("https://github.com/{}.git", pack.repo);
+    let output = Command::new("git")
+        .args(["clone", "--depth", "1", "--branch", &pack.tag, &url])
+        .arg(&clone_target)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|err| anyhow::anyhow!("failed to run git clone for {url}: {err}"))?;
+    if !output.status.success() {
+        let stderr = tail_stderr(&output.stderr).unwrap_or_default();
+        return Err(anyhow::anyhow!("git clone of {url} at tag {} failed: {stderr}", pack.tag));
+    }
+    Ok(clone_target)
+}
+
+/// True when the `animus.task` pack ended up usable (freshly installed or
+/// already present), i.e. the `animus.task/standard` workflow hint is valid.
+fn task_pack_ready(step: &RecommendedPackStep) -> bool {
+    step.results.iter().any(|result| {
+        result.pack_id.eq_ignore_ascii_case("animus.task")
+            && matches!(result.status.as_str(), "installed" | "already_installed")
+    })
+}
+
+/// Re-enable the project pack selection for a pack version that is already
+/// discovered in the inventory, preserving the source it was found under.
+fn activate_existing_pack(project_root: &Path, pack_id: &str, version: &str, source: PackRegistrySource) -> Result<()> {
+    let mut state = load_pack_selection_state(project_root)?;
+    state.upsert(PackSelectionEntry {
+        pack_id: pack_id.to_string(),
+        version: Some(format!("={version}")),
+        source: Some(selection_source_for(source)),
+        enabled: true,
+    })?;
+    save_pack_selection_state(project_root, &state)?;
+    Ok(())
+}
+
+/// Install + activate every recommended pack from `default-install.json`.
+/// Failures are per-pack and never abort init: the result row carries the
+/// error plus the manual recovery command.
+fn install_recommended_packs(project_root: &Path) -> RecommendedPackStep {
+    let packs = recommended_packs();
+    // Skip the download only when the *pinned* version is already present;
+    // an older version of the same pack id must not mask the pinned release.
+    // Versions install side by side under ~/.animus/packs/<id>/<version>/,
+    // so installing the pin never clobbers existing versions.
+    // (codex round-1 P2.)
+    // Only machine-installed packs (~/.animus/packs/) count as the pinned
+    // install. A project override with the same id/version must not stop
+    // the pinned release from being installed. (codex round-4 P2.)
+    let installed_versions: std::collections::BTreeMap<(String, String), PackRegistrySource> =
+        load_pack_inventory(project_root)
+            .map(|inventory| {
+                inventory
+                    .entries
+                    .iter()
+                    .filter(|entry| entry.source == PackRegistrySource::Installed)
+                    .map(|entry| ((entry.pack_id.to_ascii_lowercase(), entry.version.clone()), entry.source))
+                    .collect()
+            })
+            .unwrap_or_default();
+    let scratch = tempfile::tempdir().ok();
+
+    let mut results = Vec::with_capacity(packs.len());
+    for pack in &packs {
+        let pinned_version = pack.tag.trim_start_matches('v').to_string();
+        if let Some(source) = installed_versions.get(&(pack.id.to_ascii_lowercase(), pinned_version.clone())).copied() {
+            // Even when the pinned version is already on disk, init promises
+            // install-AND-activate: re-enable the project selection so a
+            // previously disabled or re-pinned pack becomes usable again.
+            // (codex round-2 P2.)
+            match activate_existing_pack(project_root, &pack.id, &pinned_version, source) {
+                Ok(()) => results.push(PackInstallResult {
+                    pack_id: pack.id.clone(),
+                    repo: pack.repo.clone(),
+                    tag: pack.tag.clone(),
+                    status: "already_installed".to_string(),
+                    version: Some(pinned_version),
+                    detail: None,
+                }),
+                Err(err) => results.push(PackInstallResult {
+                    pack_id: pack.id.clone(),
+                    repo: pack.repo.clone(),
+                    tag: pack.tag.clone(),
+                    status: "failed".to_string(),
+                    version: Some(pinned_version),
+                    detail: Some(format!("pack is installed but could not be activated: {err:#}")),
+                }),
+            }
+            continue;
+        }
+        let install = scratch
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("failed to create scratch directory for pack downloads"))
+            .and_then(|scratch| resolve_recommended_pack_source(pack, scratch.path()))
+            .and_then(|source_root| {
+                // The pack manifest must match the pin: installing a
+                // mismatched manifest would activate a different pack while
+                // init reports the pinned id as installed. (codex round-3 P2.)
+                let loaded = load_pack_manifest(&source_root)?;
+                if !loaded.manifest.id.eq_ignore_ascii_case(&pack.id) {
+                    return Err(anyhow::anyhow!(
+                        "pack source declares id '{}' but the pin expects '{}'",
+                        loaded.manifest.id,
+                        pack.id
+                    ));
+                }
+                if loaded.manifest.version != pinned_version {
+                    return Err(anyhow::anyhow!(
+                        "pack source declares version '{}' but tag {} pins version '{}'",
+                        loaded.manifest.version,
+                        pack.tag,
+                        pinned_version
+                    ));
+                }
+                super::ops_pack::install_pack_from_source_root(project_root, &source_root, true, false)
+            });
+        match install {
+            Ok(output) => results.push(PackInstallResult {
+                pack_id: pack.id.clone(),
+                repo: pack.repo.clone(),
+                tag: pack.tag.clone(),
+                status: "installed".to_string(),
+                version: Some(output.version),
+                detail: None,
+            }),
+            Err(err) => results.push(PackInstallResult {
+                pack_id: pack.id.clone(),
+                repo: pack.repo.clone(),
+                tag: pack.tag.clone(),
+                status: "failed".to_string(),
+                version: None,
+                detail: Some(format!("{err:#}; install manually: {}", manual_pack_install_command(pack))),
+            }),
+        }
+    }
+    RecommendedPackStep { skipped: false, results }
+}
+
+fn print_pack_install_summary(step: &RecommendedPackStep) {
+    if step.skipped {
+        return;
+    }
+    println!("Recommended workflow packs:");
+    for result in &step.results {
+        match result.status.as_str() {
+            "installed" => {
+                println!("  - {} {} installed and activated", result.pack_id, result.version.as_deref().unwrap_or(""))
+            }
+            "already_installed" => println!("  - {} already installed", result.pack_id),
+            _ => println!("  - {} FAILED: {}", result.pack_id, result.detail.as_deref().unwrap_or("unknown error")),
+        }
+    }
+    println!();
+}
+
+// ---------------------------------------------------------------------------
+// Secrets migration advice (v0.5.8 keychain support)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+struct SecretsMigrationAdvice {
+    detected_env_keys: Vec<String>,
+    suggested_commands: Vec<String>,
+    docs: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct WalkthroughSecretStep {
+    offered: bool,
+    accepted: bool,
+    stored: Vec<String>,
+    failed: Vec<String>,
+}
+
+impl WalkthroughSecretStep {
+    fn not_run(offered: bool) -> Self {
+        Self { offered, accepted: false, stored: Vec::new(), failed: Vec::new() }
+    }
+}
+
+fn build_secrets_migration_advice(detections: &[CliDetection]) -> Option<SecretsMigrationAdvice> {
+    let mut detected_env_keys: Vec<String> = Vec::new();
+    for detection in detections {
+        if detection.api_key_via_env && !detected_env_keys.contains(&detection.api_key_env) {
+            detected_env_keys.push(detection.api_key_env.clone());
+        }
+    }
+    if detected_env_keys.is_empty() {
+        return None;
+    }
+    let mut suggested_commands: Vec<String> =
+        detected_env_keys.iter().map(|key| format!("animus secret set {key}")).collect();
+    suggested_commands.push("animus secret import-env  # bulk migrate from a .env file".to_string());
+    Some(SecretsMigrationAdvice {
+        detected_env_keys,
+        suggested_commands,
+        docs: "docs/reference/secrets.md".to_string(),
+    })
+}
+
+fn print_secrets_migration_advice(advice: &SecretsMigrationAdvice) {
+    println!("API keys detected in environment variables: {}", advice.detected_env_keys.join(", "));
+    println!("Animus can store these in the OS keychain instead (recommended):");
+    for command in &advice.suggested_commands {
+        println!("  {command}");
+    }
+    println!("See {} for details.", advice.docs);
+    println!();
+}
+
+/// Import the detected env-var API keys into the OS keychain. Only ever
+/// called after an explicit interactive confirmation (default no).
+fn import_detected_env_keys(project_root: &Path, keys: &[String]) -> WalkthroughSecretStep {
+    let mut step = WalkthroughSecretStep { offered: true, accepted: true, stored: Vec::new(), failed: Vec::new() };
+    for key in keys {
+        let value = std::env::var(key).unwrap_or_default();
+        match super::ops_secret::store_project_secret(project_root, key, &value) {
+            Ok(()) => step.stored.push(key.clone()),
+            Err(err) => {
+                eprintln!("warning: failed to store {key} in keychain: {err:#}");
+                step.failed.push(key.clone());
+            }
+        }
+    }
+    step
+}
+
 fn selection_source_for(source: PackRegistrySource) -> PackSelectionSource {
     match source {
         PackRegistrySource::Bundled => PackSelectionSource::Bundled,
@@ -543,8 +889,12 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
         matches!(mode, InitMode::Guided) && !json && io::stdin().is_terminal() && io::stdout().is_terminal();
 
     let detections = detect_clis_and_keys();
+    let secrets_advice = build_secrets_migration_advice(&detections);
     if interactive {
         print_walkthrough_intro(&detections);
+        if let Some(advice) = secrets_advice.as_ref() {
+            print_secrets_migration_advice(advice);
+        }
     }
 
     let default_provider = pick_default_provider(&detections);
@@ -555,6 +905,23 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
         prompt_yes_no("Install the default provider plugins (animus-provider-claude/codex/gemini/opencode)?", true)?
     } else {
         true
+    };
+
+    let recommended_pack_ids = recommended_packs().iter().map(|pack| pack.id.clone()).collect::<Vec<_>>().join(", ");
+    let install_packs = if args.install_packs {
+        true
+    } else if interactive && !args.non_interactive && !args.plan {
+        prompt_yes_no(&format!("Install the recommended workflow packs ({recommended_pack_ids})?"), true)?
+    } else {
+        false
+    };
+
+    // Importing keys into the OS keychain is opt-in and interactive-only:
+    // it must never happen silently (or at all) in scripted runs.
+    let import_secrets = if interactive && !args.non_interactive && !args.plan && secrets_advice.is_some() {
+        prompt_yes_no("Store the detected API keys in the OS keychain now (animus secret set)?", false)?
+    } else {
+        false
     };
 
     let copy_template = !args.no_template;
@@ -588,9 +955,11 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
                 },
                 "planned_actions": {
                     "install_plugins": install_plugins,
+                    "install_packs": install_packs,
                     "copy_template": copy_template,
                     "auto_start_daemon": auto_start_daemon,
                 },
+                "secrets": secrets_advice,
                 "next_steps": [
                     "Re-run without --plan to apply these actions.".to_string(),
                 ],
@@ -611,6 +980,23 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
         WalkthroughPluginStep { skipped: true, invoked: false, exit_code: None, stderr_tail: None }
     };
 
+    let pack_step =
+        if install_packs { install_recommended_packs(project_root) } else { RecommendedPackStep::skipped() };
+    if !json {
+        print_pack_install_summary(&pack_step);
+    }
+
+    let secret_step = if import_secrets {
+        let keys = secrets_advice.as_ref().map(|advice| advice.detected_env_keys.clone()).unwrap_or_default();
+        let step = import_detected_env_keys(project_root, &keys);
+        if !step.stored.is_empty() {
+            println!("Stored in OS keychain: {}", step.stored.join(", "));
+        }
+        step
+    } else {
+        WalkthroughSecretStep::not_run(secrets_advice.is_some())
+    };
+
     let template_step = if copy_template {
         copy_walkthrough_template(project_root, &args.walkthrough_template, args.force)?
     } else {
@@ -623,7 +1009,7 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
         WalkthroughDaemonStep { requested: false, invoked: false, exit_code: None, stderr_tail: None }
     };
 
-    let next_steps = build_next_steps(&template_plan, &plugin_step, &daemon_step);
+    let next_steps = build_next_steps(&template_plan, &plugin_step, &pack_step, secrets_advice.as_ref(), &daemon_step);
 
     print_value(
         serde_json::json!({
@@ -640,8 +1026,11 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
                 "requested": &args.walkthrough_template,
                 "plan": template_plan,
             },
+            "secrets": secrets_advice,
             "apply": {
                 "plugins": plugin_step,
+                "packs": pack_step,
+                "secrets": secret_step,
                 "template": template_step,
                 "daemon": daemon_step,
             },
@@ -870,6 +1259,8 @@ fn tail_stderr(bytes: &[u8]) -> Option<String> {
 fn build_next_steps(
     template_plan: &[WalkthroughTemplatePlan],
     plugin_step: &WalkthroughPluginStep,
+    pack_step: &RecommendedPackStep,
+    secrets_advice: Option<&SecretsMigrationAdvice>,
     daemon_step: &WalkthroughDaemonStep,
 ) -> Vec<String> {
     let mut steps = Vec::new();
@@ -889,12 +1280,41 @@ fn build_next_steps(
                 .to_string(),
         );
     }
+    if pack_step.skipped {
+        steps.push(
+            "Install the recommended workflow packs when ready: animus init --walkthrough --no-template --no-install --install-packs"
+                .to_string(),
+        );
+    } else {
+        for result in &pack_step.results {
+            if result.status == "failed" {
+                steps.push(format!(
+                    "Pack install failed for {}: {}",
+                    result.pack_id,
+                    result.detail.as_deref().unwrap_or("unknown error")
+                ));
+            }
+        }
+        if task_pack_ready(pack_step) {
+            steps.push(
+                "Run the standard task workflow: `animus subject create --kind task --title \"My first task\"` then `animus workflow run animus.task/standard --task-id TASK-001 --sync`."
+                    .to_string(),
+            );
+        }
+    }
     if template_plan.iter().any(|plan| plan.action == "create" || plan.action == "overwrite") {
         steps.push("Run `animus workflow run hello-world --sync` to verify your install.".to_string());
     } else {
         steps.push(
             "Hello-world template already present; run `animus workflow run hello-world --sync` to verify.".to_string(),
         );
+    }
+    if let Some(advice) = secrets_advice {
+        steps.push(format!(
+            "Move API keys ({}) from env vars into the OS keychain: `animus secret set <KEY>` (see {}).",
+            advice.detected_env_keys.join(", "),
+            advice.docs
+        ));
     }
     if !daemon_step.requested {
         steps.push("Start the daemon when ready: `animus daemon start --autonomous`".to_string());
@@ -1160,6 +1580,7 @@ mod tests {
             update_registry: false,
             walkthrough: true,
             no_install: false,
+            install_packs: false,
             no_template: false,
             auto_start: false,
             walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),
@@ -1185,9 +1606,145 @@ mod tests {
         }];
         let plugins = WalkthroughPluginStep { skipped: false, invoked: true, exit_code: Some(0), stderr_tail: None };
         let daemon = WalkthroughDaemonStep { requested: false, invoked: false, exit_code: None, stderr_tail: None };
-        let steps = build_next_steps(&template_plan, &plugins, &daemon);
+        let steps = build_next_steps(&template_plan, &plugins, &RecommendedPackStep::skipped(), None, &daemon);
         assert!(steps.iter().any(|s| s.contains("animus workflow run hello-world")));
         assert!(steps.iter().any(|s| s.contains("animus daemon start")));
+        assert!(steps.iter().any(|s| s.contains("--install-packs")), "skipped pack step should leave an install hint");
+    }
+
+    #[test]
+    fn recommended_packs_parse_from_embedded_manifest() {
+        let packs = recommended_packs();
+        assert!(!packs.is_empty(), "default-install.json must declare recommended packs");
+        let ids: Vec<&str> = packs.iter().map(|pack| pack.id.as_str()).collect();
+        assert!(ids.contains(&"animus.task"), "recommended packs should include animus.task, got {ids:?}");
+        for pack in &packs {
+            assert!(pack.repo.contains('/'), "pack repo should be an owner/repo slug, got {:?}", pack.repo);
+            assert!(!pack.tag.is_empty(), "pack {} must carry a pinned release tag", pack.id);
+        }
+    }
+
+    #[test]
+    fn manual_pack_install_command_names_clone_and_pack_install() {
+        let pack = RecommendedPackPin {
+            id: "animus.task".to_string(),
+            repo: "launchapp-dev/animus-pack-task".to_string(),
+            tag: "v0.1.1".to_string(),
+        };
+        let command = manual_pack_install_command(&pack);
+        assert!(command.contains("git clone --depth 1 --branch v0.1.1"));
+        assert!(command.contains("https://github.com/launchapp-dev/animus-pack-task.git"));
+        assert!(command.contains("animus pack install --path"));
+        assert!(command.contains("--activate"));
+    }
+
+    #[test]
+    fn build_next_steps_surfaces_failed_pack_install_with_manual_command() {
+        let template_plan: Vec<WalkthroughTemplatePlan> = Vec::new();
+        let plugins = WalkthroughPluginStep { skipped: true, invoked: false, exit_code: None, stderr_tail: None };
+        let daemon = WalkthroughDaemonStep { requested: false, invoked: false, exit_code: None, stderr_tail: None };
+        let pack_step = RecommendedPackStep {
+            skipped: false,
+            results: vec![
+                PackInstallResult {
+                    pack_id: "animus.task".to_string(),
+                    repo: "launchapp-dev/animus-pack-task".to_string(),
+                    tag: "v0.1.1".to_string(),
+                    status: "failed".to_string(),
+                    version: None,
+                    detail: Some("network down; install manually: git clone ...".to_string()),
+                },
+                PackInstallResult {
+                    pack_id: "animus.review".to_string(),
+                    repo: "launchapp-dev/animus-pack-review".to_string(),
+                    tag: "v0.1.0".to_string(),
+                    status: "installed".to_string(),
+                    version: Some("0.1.0".to_string()),
+                    detail: None,
+                },
+            ],
+        };
+        let steps = build_next_steps(&template_plan, &plugins, &pack_step, None, &daemon);
+        assert!(
+            steps.iter().any(|s| s.contains("Pack install failed for animus.task") && s.contains("install manually")),
+            "failed pack should surface the manual command, got {steps:?}"
+        );
+        assert!(
+            !steps.iter().any(|s| s.contains("animus workflow run animus.task/standard")),
+            "the task workflow hint must not appear when animus.task failed to install, got {steps:?}"
+        );
+
+        // Once animus.task itself lands, the hint should appear.
+        let mut task_ok = pack_step.clone();
+        task_ok.results[0].status = "installed".to_string();
+        let steps = build_next_steps(&template_plan, &plugins, &task_ok, None, &daemon);
+        assert!(
+            steps.iter().any(|s| s.contains("animus workflow run animus.task/standard")),
+            "an installed task pack should surface the first-workflow command, got {steps:?}"
+        );
+    }
+
+    #[test]
+    fn build_next_steps_includes_secrets_migration_hint() {
+        let template_plan: Vec<WalkthroughTemplatePlan> = Vec::new();
+        let plugins = WalkthroughPluginStep { skipped: true, invoked: false, exit_code: None, stderr_tail: None };
+        let daemon = WalkthroughDaemonStep { requested: false, invoked: false, exit_code: None, stderr_tail: None };
+        let advice = SecretsMigrationAdvice {
+            detected_env_keys: vec!["ANTHROPIC_API_KEY".to_string()],
+            suggested_commands: vec!["animus secret set ANTHROPIC_API_KEY".to_string()],
+            docs: "docs/reference/secrets.md".to_string(),
+        };
+        let steps = build_next_steps(&template_plan, &plugins, &RecommendedPackStep::skipped(), Some(&advice), &daemon);
+        assert!(
+            steps.iter().any(|s| s.contains("animus secret set") && s.contains("docs/reference/secrets.md")),
+            "secrets advice should surface the keychain migration hint, got {steps:?}"
+        );
+    }
+
+    #[test]
+    fn secrets_migration_advice_only_lists_env_detected_keys() {
+        let detections = vec![
+            CliDetection {
+                name: "claude".into(),
+                binary: "claude".into(),
+                installed: true,
+                binary_path: None,
+                api_key_env: "ANTHROPIC_API_KEY".into(),
+                api_key_via_env: true,
+                api_key_via_config: false,
+                config_path: None,
+            },
+            CliDetection {
+                name: "codex".into(),
+                binary: "codex".into(),
+                installed: true,
+                binary_path: None,
+                api_key_env: "OPENAI_API_KEY".into(),
+                api_key_via_env: false,
+                api_key_via_config: true,
+                config_path: None,
+            },
+        ];
+        let advice = build_secrets_migration_advice(&detections).expect("env key detected -> advice present");
+        assert_eq!(advice.detected_env_keys, vec!["ANTHROPIC_API_KEY".to_string()]);
+        assert!(advice.suggested_commands.iter().any(|c| c == "animus secret set ANTHROPIC_API_KEY"));
+        assert!(advice.suggested_commands.iter().any(|c| c.starts_with("animus secret import-env")));
+        assert_eq!(advice.docs, "docs/reference/secrets.md");
+    }
+
+    #[test]
+    fn secrets_migration_advice_absent_without_env_keys() {
+        let detections = vec![CliDetection {
+            name: "claude".into(),
+            binary: "claude".into(),
+            installed: true,
+            binary_path: None,
+            api_key_env: "ANTHROPIC_API_KEY".into(),
+            api_key_via_env: false,
+            api_key_via_config: true,
+            config_path: None,
+        }];
+        assert!(build_secrets_migration_advice(&detections).is_none());
     }
 
     /// Audit Fix 5 regression: `init --walkthrough --json` must NOT prompt
@@ -1213,6 +1770,7 @@ mod tests {
             update_registry: false,
             walkthrough: true,
             no_install: false,
+            install_packs: false,
             no_template: false,
             auto_start: false,
             walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),

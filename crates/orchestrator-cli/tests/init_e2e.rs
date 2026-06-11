@@ -470,3 +470,273 @@ auto_commit_before_merge = true
 
     Ok(())
 }
+
+// ---------------------------------------------------------------------------
+// Recommended pack install (--install-packs) + secrets migration surfacing
+// ---------------------------------------------------------------------------
+
+const PACK_SOURCE_DIR_ENV: &str = "ANIMUS_INIT_PACK_SOURCE_DIR";
+const DEFAULT_INSTALL_MANIFEST_JSON: &str = include_str!("../config/default-install.json");
+const RECOMMENDED_PACK_IDS: &[&str] = &["animus.core-skills", "animus.task", "animus.requirement", "animus.review"];
+
+/// `(id, pinned version)` pairs read from the bundled `default-install.json`
+/// so the fixture versions stay in lockstep with the real pins.
+fn recommended_pack_pins() -> Result<Vec<(String, String)>> {
+    let manifest: Value = serde_json::from_str(DEFAULT_INSTALL_MANIFEST_JSON)?;
+    let packs = manifest
+        .get("packs")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow::anyhow!("default-install.json should declare packs"))?;
+    packs
+        .iter()
+        .map(|pack| {
+            let id = pack.get("id").and_then(Value::as_str).map(str::to_string);
+            let version = pack.get("tag").and_then(Value::as_str).map(|tag| tag.trim_start_matches('v').to_string());
+            match (id, version) {
+                (Some(id), Some(version)) => Ok((id, version)),
+                other => Err(anyhow::anyhow!("pack entry missing id or tag: {other:?}")),
+            }
+        })
+        .collect()
+}
+
+/// Build a local source directory that mirrors the recommended pack layout so
+/// `--install-packs` can run offline (no git clone, no network).
+fn create_recommended_pack_fixture_dir() -> Result<tempfile::TempDir> {
+    let source = tempfile::tempdir()?;
+    for (pack_id, version) in recommended_pack_pins()? {
+        let pack_root = source.path().join(&pack_id);
+        fs::create_dir_all(pack_root.join("workflows"))?;
+        fs::write(
+            pack_root.join("workflows").join("standard.yaml"),
+            "workflows:\n  - id: standard\n    name: Fixture Workflow\n    phases:\n      - implementation\n",
+        )?;
+        fs::write(
+            pack_root.join("pack.toml"),
+            format!(
+                r#"schema = "animus.pack.v1"
+id = "{pack_id}"
+version = "{version}"
+kind = "domain-pack"
+title = "{pack_id} fixture"
+description = "init e2e fixture pack"
+
+[ownership]
+mode = "bundled"
+
+[workflows]
+root = "workflows"
+exports = ["{pack_id}/standard"]
+"#
+            ),
+        )?;
+    }
+    Ok(source)
+}
+
+#[test]
+fn init_walkthrough_install_packs_installs_recommended_packs() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let source = create_recommended_pack_fixture_dir()?;
+    let source_dir = source.path().to_string_lossy().into_owned();
+
+    let payload = harness.run_json_ok_with_env(
+        &["init", "--walkthrough", "--non-interactive", "--no-install", "--no-template", "--install-packs"],
+        &[(PACK_SOURCE_DIR_ENV, source_dir.as_str())],
+    )?;
+
+    assert_eq!(payload.pointer("/data/apply/packs/skipped").and_then(Value::as_bool), Some(false));
+    let results = payload
+        .pointer("/data/apply/packs/results")
+        .and_then(Value::as_array)
+        .expect("walkthrough envelope should include apply.packs.results");
+    assert_eq!(results.len(), RECOMMENDED_PACK_IDS.len());
+    for result in results {
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("installed"),
+            "every recommended pack should install from the fixture source, got: {result}"
+        );
+    }
+
+    for (pack_id, version) in recommended_pack_pins()? {
+        let installed_root = harness.config_root().join(".animus").join("packs").join(&pack_id).join(&version);
+        assert!(installed_root.is_dir(), "pack {pack_id} should be installed at {}", installed_root.display());
+    }
+
+    let next_steps = payload.pointer("/data/next_steps").and_then(Value::as_array).expect("next_steps");
+    assert!(
+        next_steps
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|step| step.contains("animus workflow run animus.task/standard")),
+        "next steps should point at the first runnable workflow, got: {next_steps:?}"
+    );
+
+    // The packs must also be activated for this project.
+    let pack_list = harness.run_json_ok(&["pack", "list"])?;
+    let rows = pack_list.pointer("/data").and_then(Value::as_array).expect("pack list rows");
+    for pack_id in RECOMMENDED_PACK_IDS {
+        assert!(
+            rows.iter().any(|row| row.get("pack_id").and_then(Value::as_str) == Some(*pack_id)
+                && row.get("active").and_then(Value::as_bool) == Some(true)),
+            "pack {pack_id} should be listed active after init, got: {rows:?}"
+        );
+    }
+
+    // Disable one pack to verify the re-run re-activates packs that are
+    // already installed but turned off for the project.
+    harness.run_json_ok(&["pack", "pin", "--pack-id", "animus.task", "--disable"])?;
+
+    // Re-running init with the same pins must be idempotent: every pack is
+    // reported as already_installed and nothing is re-cloned.
+    let second = harness.run_json_ok_with_env(
+        &["init", "--walkthrough", "--non-interactive", "--no-install", "--no-template", "--install-packs"],
+        &[(PACK_SOURCE_DIR_ENV, source_dir.as_str())],
+    )?;
+    let second_results = second
+        .pointer("/data/apply/packs/results")
+        .and_then(Value::as_array)
+        .expect("second walkthrough run should include apply.packs.results");
+    for result in second_results {
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("already_installed"),
+            "pinned packs already present should be skipped, got: {result}"
+        );
+    }
+
+    // The disabled pack must be active again after the re-run.
+    let pack_list_after = harness.run_json_ok(&["pack", "list"])?;
+    let rows_after = pack_list_after.pointer("/data").and_then(Value::as_array).expect("pack list rows");
+    assert!(
+        rows_after.iter().any(|row| row.get("pack_id").and_then(Value::as_str) == Some("animus.task")
+            && row.get("active").and_then(Value::as_bool) == Some(true)),
+        "already-installed pack should be re-activated by init, got: {rows_after:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn init_walkthrough_install_packs_failure_keeps_init_successful() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let empty_source = tempfile::tempdir()?;
+    let source_dir = empty_source.path().to_string_lossy().into_owned();
+
+    let payload = harness.run_json_ok_with_env(
+        &["init", "--walkthrough", "--non-interactive", "--no-install", "--no-template", "--install-packs"],
+        &[(PACK_SOURCE_DIR_ENV, source_dir.as_str())],
+    )?;
+
+    let results = payload
+        .pointer("/data/apply/packs/results")
+        .and_then(Value::as_array)
+        .expect("walkthrough envelope should include apply.packs.results");
+    assert!(!results.is_empty());
+    for result in results {
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("failed"));
+        let detail = result.get("detail").and_then(Value::as_str).unwrap_or_default();
+        assert!(
+            detail.contains("animus pack install --path"),
+            "failed result should carry the manual install command, got: {detail}"
+        );
+    }
+
+    let next_steps = payload.pointer("/data/next_steps").and_then(Value::as_array).expect("next_steps");
+    assert!(
+        next_steps.iter().filter_map(Value::as_str).any(|step| step.contains("Pack install failed for")),
+        "next steps should surface the failed installs, got: {next_steps:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn init_walkthrough_without_install_packs_flag_keeps_previous_behavior() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload =
+        harness.run_json_ok(&["init", "--walkthrough", "--non-interactive", "--no-install", "--no-template"])?;
+
+    assert_eq!(payload.pointer("/data/apply/packs/skipped").and_then(Value::as_bool), Some(true));
+    let packs_root = harness.config_root().join(".animus").join("packs");
+    assert!(
+        !packs_root.join("animus.task").exists(),
+        "non-interactive init without --install-packs must not install packs"
+    );
+
+    let next_steps = payload.pointer("/data/next_steps").and_then(Value::as_array).expect("next_steps");
+    assert!(
+        next_steps.iter().filter_map(Value::as_str).any(|step| step.contains("--install-packs")),
+        "next steps should mention the --install-packs opt-in, got: {next_steps:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn init_walkthrough_surfaces_secrets_migration_for_env_keys() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok_with_env(
+        &["init", "--walkthrough", "--non-interactive", "--no-install", "--no-template"],
+        &[("ANTHROPIC_API_KEY", "test-key-do-not-store")],
+    )?;
+
+    let detected = payload
+        .pointer("/data/secrets/detected_env_keys")
+        .and_then(Value::as_array)
+        .expect("walkthrough envelope should include secrets.detected_env_keys");
+    assert!(
+        detected.iter().filter_map(Value::as_str).any(|key| key == "ANTHROPIC_API_KEY"),
+        "ANTHROPIC_API_KEY should be detected, got: {detected:?}"
+    );
+    let commands = payload
+        .pointer("/data/secrets/suggested_commands")
+        .and_then(Value::as_array)
+        .expect("secrets.suggested_commands");
+    assert!(commands.iter().filter_map(Value::as_str).any(|c| c == "animus secret set ANTHROPIC_API_KEY"));
+    assert_eq!(payload.pointer("/data/secrets/docs").and_then(Value::as_str), Some("docs/reference/secrets.md"));
+
+    // Non-interactive runs must never import into the OS keychain.
+    assert_eq!(payload.pointer("/data/apply/secrets/accepted").and_then(Value::as_bool), Some(false));
+    assert_eq!(payload.pointer("/data/apply/secrets/stored").and_then(Value::as_array).map(Vec::len), Some(0));
+
+    let next_steps = payload.pointer("/data/next_steps").and_then(Value::as_array).expect("next_steps");
+    assert!(
+        next_steps.iter().filter_map(Value::as_str).any(|step| step.contains("animus secret set")),
+        "next steps should include the keychain migration hint, got: {next_steps:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn init_template_flow_supports_install_packs_flag() -> Result<()> {
+    let harness = CliHarness::new()?;
+    let registry = create_template_registry_repo()?;
+    let registry_url = registry.path().to_string_lossy().into_owned();
+    let source = create_recommended_pack_fixture_dir()?;
+    let source_dir = source.path().to_string_lossy().into_owned();
+
+    let payload = harness.run_json_ok_with_env(
+        &["init", "--template", "task-queue", "--non-interactive", "--install-packs"],
+        &[(TEMPLATE_REGISTRY_URL_ENV, registry_url.as_str()), (PACK_SOURCE_DIR_ENV, source_dir.as_str())],
+    )?;
+
+    let results = payload
+        .pointer("/data/apply/recommended_packs/results")
+        .and_then(Value::as_array)
+        .expect("apply.recommended_packs.results");
+    assert_eq!(results.len(), RECOMMENDED_PACK_IDS.len());
+    for result in results {
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("installed"));
+    }
+    assert!(payload
+        .pointer("/data/apply/changed_domains")
+        .and_then(Value::as_array)
+        .is_some_and(|domains| domains.iter().any(|value| value.as_str() == Some("pack_installation"))));
+
+    Ok(())
+}

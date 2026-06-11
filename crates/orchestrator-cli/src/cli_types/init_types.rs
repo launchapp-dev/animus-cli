@@ -45,6 +45,11 @@ pub(crate) struct InitArgs {
     )]
     pub(crate) no_install: bool,
     #[arg(
+        long = "install-packs",
+        help = "Install and activate the recommended workflow packs (animus.core-skills, animus.task, animus.requirement, animus.review) from their pinned GitHub releases. In the interactive walkthrough this is offered automatically (default yes); pass the flag to opt in from non-interactive runs."
+    )]
+    pub(crate) install_packs: bool,
+    #[arg(
         long = "no-template",
         help = "Walkthrough only: skip copying the hello-world workflow template into .animus/workflows/."
     )]
