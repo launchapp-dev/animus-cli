@@ -202,7 +202,7 @@ animus
 │   ├── search               Search history records
 │   └── cleanup              Remove old history records
 │
-├── git                      Manage Git repositories, worktrees, and confirmation requests
+├── git                      Manage Git repositories and worktrees
 │   ├── repo
 │   │   ├── list             List registered repositories
 │   │   ├── get              Get details for one repository
@@ -213,20 +213,21 @@ animus
 │   ├── commit               Commit staged/untracked changes
 │   ├── push                 Push branch updates
 │   ├── pull                 Pull branch updates
-│   ├── worktree
-│   │   ├── create           Create a repository worktree
-│   │   ├── list             List repository worktrees
-│   │   ├── get              Get one worktree by name
-│   │   ├── remove           Remove a worktree (confirmation required)
-│   │   ├── prune            Prune managed task worktrees for done/cancelled tasks
-│   │   ├── pull             Pull updates in a worktree
-│   │   ├── push             Push updates from a worktree
-│   │   ├── sync             Pull then push a worktree
-│   │   └── sync-status      Show synchronization status for a worktree
-│   └── confirm
-│       ├── request          Request a confirmation record for a destructive git operation
-│       ├── respond          Approve or reject a confirmation request
-│       └── outcome          Record operation outcome for a confirmation request
+│   └── worktree
+│       ├── create           Create a repository worktree
+│       ├── list             List repository worktrees
+│       ├── get              Get one worktree by name
+│       ├── remove           Remove a worktree (approval required)
+│       ├── prune            Prune managed task worktrees for done/cancelled tasks
+│       ├── pull             Pull updates in a worktree
+│       ├── push             Push updates from a worktree
+│       ├── sync             Pull then push a worktree
+│       └── sync-status      Show synchronization status for a worktree
+│
+├── approval                 Manage approval records gating destructive operations (formerly `git confirm`)
+│   ├── request              Request an approval record for a destructive operation
+│   ├── respond              Approve or reject an approval request
+│   └── outcome              Record operation outcome for an approval request
 │
 ├── skill                    Search, install, update, uninstall, and publish versioned skills
 │   ├── search               Search skills across built-in, user, project, and registry sources
@@ -604,6 +605,40 @@ animus agent interactions answer <ID> --deny --message "too risky"  # approval
 Answering emits an `interaction_answered` record to the daemon event log
 (creation and expiry emit `interaction_created` / `interaction_expired`), so
 `animus daemon events` surfaces the round-trip without polling the store.
+
+### `animus approval` (formerly `git confirm`)
+
+Manages the approval records that gate destructive git operations
+(`force_push`, `remove_worktree`, `prune_worktrees`, `remove_repo`,
+`hard_reset`, `clean_untracked`). Commands like `animus git push --force` and
+`animus git worktree remove` refuse to run until an approved record exists and
+its id is passed back via `--confirmation-id`.
+
+```bash
+animus approval request --operation-type force_push --repo-name demo
+animus approval respond --request-id <ID> --approved [--comment <TEXT>]
+animus approval outcome --request-id <ID> --success --message "pushed"
+```
+
+| Flag | Description |
+|---|---|
+| `--operation-type <TYPE>` | (`request`) Operation type, for example `force_push` or `remove_worktree` |
+| `--repo-name <REPO>` | (`request`) Repository the approval applies to |
+| `--context-json <JSON>` | (`request`) Optional JSON context payload stored on the record |
+| `--request-id <ID>` | (`respond` / `outcome`) Approval request identifier |
+| `--approved` | (`respond`) Approve the request; omit to reject |
+| `--comment <TEXT>` / `--user-id <USER>` | (`respond`) Optional reviewer comment and id |
+| `--success` | (`outcome`) Mark the recorded operation as successful; omit for failure |
+| `--message <TEXT>` / `--metadata-json <JSON>` | (`outcome`) Outcome message and optional metadata |
+
+All subcommands support `--json` with the standard `animus.cli.v1` envelope.
+Records live in the project-local git-confirmations store — this is a
+different store from the agent human-in-the-loop inbox: approvals that agents
+raise mid-run via `animus.agent.request_approval` are answered with
+`animus agent interactions answer <ID> --allow|--deny`, not here.
+
+`animus git confirm {request, respond, outcome}` remains as a hidden alias
+for backwards compatibility and dispatches to the same handlers.
 
 ### `animus queue hold` / `release` / `drop` (bulk subject operations)
 

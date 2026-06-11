@@ -1,4 +1,5 @@
 mod agent_types;
+mod approval_types;
 mod auth_types;
 mod chat_types;
 mod cost_types;
@@ -31,6 +32,7 @@ mod web_types;
 mod workflow_types;
 
 pub(crate) use agent_types::*;
+pub(crate) use approval_types::*;
 pub(crate) use auth_types::*;
 pub(crate) use chat_types::*;
 pub(crate) use cost_types::*;
@@ -812,6 +814,130 @@ mod tests {
         assert!(parse_duration_secs_default_days("").is_err());
         assert!(parse_duration_secs_default_days("abc").is_err());
         assert!(parse_duration_secs_default_days("5y").is_err());
+    }
+
+    #[test]
+    fn approval_group_parses_request_respond_outcome() {
+        let request = Cli::try_parse_from([
+            "animus",
+            "approval",
+            "request",
+            "--operation-type",
+            "force_push",
+            "--repo-name",
+            "repo-a",
+        ])
+        .expect("approval request should parse");
+        match request.command {
+            Command::Approval { command: ApprovalCommand::Request(args) } => {
+                assert_eq!(args.operation_type, "force_push");
+                assert_eq!(args.repo_name, "repo-a");
+                assert!(args.context_json.is_none());
+            }
+            other => panic!("expected approval request, got {other:?}"),
+        }
+
+        let respond = Cli::try_parse_from(["animus", "approval", "respond", "--request-id", "confirm-1", "--approved"])
+            .expect("approval respond should parse");
+        match respond.command {
+            Command::Approval { command: ApprovalCommand::Respond(args) } => {
+                assert_eq!(args.request_id, "confirm-1");
+                assert!(args.approved);
+            }
+            other => panic!("expected approval respond, got {other:?}"),
+        }
+
+        let outcome = Cli::try_parse_from([
+            "animus",
+            "approval",
+            "outcome",
+            "--request-id",
+            "confirm-1",
+            "--success",
+            "--message",
+            "pushed",
+        ])
+        .expect("approval outcome should parse");
+        match outcome.command {
+            Command::Approval { command: ApprovalCommand::Outcome(args) } => {
+                assert_eq!(args.request_id, "confirm-1");
+                assert!(args.success);
+                assert_eq!(args.message, "pushed");
+            }
+            other => panic!("expected approval outcome, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn git_confirm_alias_round_trips_to_the_same_approval_commands() {
+        let request = Cli::try_parse_from([
+            "animus",
+            "git",
+            "confirm",
+            "request",
+            "--operation-type",
+            "force_push",
+            "--repo-name",
+            "repo-a",
+        ])
+        .expect("git confirm request alias should still parse");
+        match request.command {
+            Command::Git { command: GitCommand::Confirm { command: ApprovalCommand::Request(args) } } => {
+                assert_eq!(args.operation_type, "force_push");
+                assert_eq!(args.repo_name, "repo-a");
+            }
+            other => panic!("expected git confirm request alias, got {other:?}"),
+        }
+
+        let respond = Cli::try_parse_from(["animus", "git", "confirm", "respond", "--request-id", "confirm-1"])
+            .expect("git confirm respond alias should still parse");
+        match respond.command {
+            Command::Git { command: GitCommand::Confirm { command: ApprovalCommand::Respond(args) } } => {
+                assert_eq!(args.request_id, "confirm-1");
+                assert!(!args.approved);
+            }
+            other => panic!("expected git confirm respond alias, got {other:?}"),
+        }
+
+        let outcome = Cli::try_parse_from([
+            "animus",
+            "git",
+            "confirm",
+            "outcome",
+            "--request-id",
+            "confirm-1",
+            "--message",
+            "aborted",
+        ])
+        .expect("git confirm outcome alias should still parse");
+        match outcome.command {
+            Command::Git { command: GitCommand::Confirm { command: ApprovalCommand::Outcome(args) } } => {
+                assert_eq!(args.request_id, "confirm-1");
+                assert!(!args.success);
+                assert_eq!(args.message, "aborted");
+            }
+            other => panic!("expected git confirm outcome alias, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn approval_group_renders_in_top_level_help_and_git_confirm_stays_hidden() {
+        let top_level = Cli::try_parse_from(["animus", "--help"]).expect_err("help short-circuits parsing");
+        assert_eq!(top_level.kind(), ErrorKind::DisplayHelp);
+        let top_level_help = top_level.to_string();
+        assert!(top_level_help.contains("approval"), "top-level help should list the approval group");
+
+        let git_help = Cli::try_parse_from(["animus", "git", "--help"]).expect_err("help short-circuits parsing");
+        assert_eq!(git_help.kind(), ErrorKind::DisplayHelp);
+        let git_help_text = git_help.to_string();
+        assert!(
+            !git_help_text.lines().any(|line| line.split_whitespace().next() == Some("confirm")),
+            "git help must not advertise the hidden confirm alias"
+        );
+
+        let confirm_help =
+            Cli::try_parse_from(["animus", "git", "confirm", "--help"]).expect_err("help short-circuits parsing");
+        assert_eq!(confirm_help.kind(), ErrorKind::DisplayHelp, "hidden alias must still answer --help");
     }
 
     #[test]

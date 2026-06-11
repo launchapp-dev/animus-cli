@@ -1,5 +1,7 @@
 use clap::{Args, Subcommand};
 
+use super::approval_types::ApprovalCommand;
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitCommand {
     /// Manage repo registry entries.
@@ -22,10 +24,11 @@ pub(crate) enum GitCommand {
         #[command(subcommand)]
         command: GitWorktreeCommand,
     },
-    /// Manage confirmation requests/outcomes for destructive git operations.
+    /// Hidden alias for `animus approval` (the former `git confirm` path).
+    #[command(hide = true)]
     Confirm {
         #[command(subcommand)]
-        command: GitConfirmCommand,
+        command: ApprovalCommand,
     },
 }
 
@@ -214,48 +217,4 @@ pub(crate) struct GitWorktreeSyncArgs {
     pub(crate) worktree_name: String,
     #[arg(long, value_name = "REMOTE", default_value = "origin", help = "Git remote name.")]
     pub(crate) remote: String,
-}
-
-#[derive(Debug, Subcommand)]
-pub(crate) enum GitConfirmCommand {
-    /// Request a confirmation record for a destructive git operation.
-    Request(GitConfirmRequestArgs),
-    /// Approve or reject a confirmation request.
-    Respond(GitConfirmRespondArgs),
-    /// Record operation outcome for a confirmation request.
-    Outcome(GitConfirmOutcomeArgs),
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct GitConfirmRequestArgs {
-    #[arg(long, value_name = "TYPE", help = "Operation type, for example force_push or remove_worktree.")]
-    pub(crate) operation_type: String,
-    #[arg(long, value_name = "REPO", help = "Repository name.")]
-    pub(crate) repo_name: String,
-    #[arg(long, value_name = "JSON", help = "Optional JSON context payload.")]
-    pub(crate) context_json: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct GitConfirmRespondArgs {
-    #[arg(long, value_name = "ID", help = "Confirmation request identifier.")]
-    pub(crate) request_id: String,
-    #[arg(long, help = "Set to true to approve, false to reject.")]
-    pub(crate) approved: bool,
-    #[arg(long, value_name = "TEXT", help = "Optional reviewer comment.")]
-    pub(crate) comment: Option<String>,
-    #[arg(long, value_name = "USER", help = "Reviewer user id.")]
-    pub(crate) user_id: Option<String>,
-}
-
-#[derive(Debug, Args)]
-pub(crate) struct GitConfirmOutcomeArgs {
-    #[arg(long, value_name = "ID", help = "Confirmation request identifier.")]
-    pub(crate) request_id: String,
-    #[arg(long, help = "Whether the operation succeeded.")]
-    pub(crate) success: bool,
-    #[arg(long, value_name = "TEXT", help = "Outcome message.")]
-    pub(crate) message: String,
-    #[arg(long, value_name = "JSON", help = "Optional JSON metadata payload.")]
-    pub(crate) metadata_json: Option<String>,
 }

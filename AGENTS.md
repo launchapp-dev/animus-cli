@@ -139,6 +139,7 @@ Visible top-level commands:
 - `workflow`
 - `history`
 - `git`
+- `approval`
 - `skill`
 - `pack`
 - `plugin`

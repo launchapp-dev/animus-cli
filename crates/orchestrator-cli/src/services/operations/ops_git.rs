@@ -1,6 +1,6 @@
 use super::*;
 use crate::cli_types::{
-    GitCommand, GitCommitArgs, GitConfirmCommand, GitPullArgs, GitPushArgs, GitRepoArgs, GitRepoCommand,
+    ApprovalCommand, GitCommand, GitCommitArgs, GitPullArgs, GitPushArgs, GitRepoArgs, GitRepoCommand,
     GitWorktreeCommand,
 };
 use crate::print_value;
@@ -19,6 +19,8 @@ mod repo;
 mod store;
 mod worktree;
 
+pub(crate) use confirm::handle_approval;
+
 pub(crate) async fn handle_git(command: GitCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         GitCommand::Repo { command } => repo::handle_git_repo(command, project_root, json),
@@ -28,6 +30,6 @@ pub(crate) async fn handle_git(command: GitCommand, project_root: &str, json: bo
         GitCommand::Push(args) => repo::handle_git_push(args, project_root, json),
         GitCommand::Pull(args) => repo::handle_git_pull(args, project_root, json),
         GitCommand::Worktree { command } => worktree::handle_git_worktree(command, project_root, json).await,
-        GitCommand::Confirm { command } => confirm::handle_git_confirm(command, project_root, json),
+        GitCommand::Confirm { command } => confirm::handle_approval(command, project_root, json),
     }
 }

@@ -75,10 +75,15 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: HistoryCommand,
     },
-    /// Manage Git repositories, worktrees, and confirmation requests.
+    /// Manage Git repositories and worktrees.
     Git {
         #[command(subcommand)]
         command: GitCommand,
+    },
+    /// Manage approval records gating destructive operations (formerly `git confirm`).
+    Approval {
+        #[command(subcommand)]
+        command: ApprovalCommand,
     },
     /// Search, install, update, and publish versioned skills.
     Skill {

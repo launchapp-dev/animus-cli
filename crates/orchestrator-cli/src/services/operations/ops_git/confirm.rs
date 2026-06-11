@@ -5,9 +5,9 @@ use anyhow::Result;
 use super::model::{GitConfirmationOutcomeCli, GitConfirmationRecordCli};
 use super::store::{load_git_confirmations, save_git_confirmations};
 
-pub(super) fn handle_git_confirm(command: GitConfirmCommand, project_root: &str, json: bool) -> Result<()> {
+pub(crate) fn handle_approval(command: ApprovalCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
-        GitConfirmCommand::Request(args) => {
+        ApprovalCommand::Request(args) => {
             let context = args
                 .context_json
                 .as_deref()
@@ -45,7 +45,7 @@ pub(super) fn handle_git_confirm(command: GitConfirmCommand, project_root: &str,
             save_git_confirmations(project_root, &store)?;
             print_value(record, json)
         }
-        GitConfirmCommand::Respond(args) => {
+        ApprovalCommand::Respond(args) => {
             let mut store = load_git_confirmations(project_root)?;
             let request = store
                 .requests
@@ -66,7 +66,7 @@ pub(super) fn handle_git_confirm(command: GitConfirmCommand, project_root: &str,
                 json,
             )
         }
-        GitConfirmCommand::Outcome(args) => {
+        ApprovalCommand::Outcome(args) => {
             let mut store = load_git_confirmations(project_root)?;
             let request = store
                 .requests
