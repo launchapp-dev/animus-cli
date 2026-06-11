@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use animus_plugin_protocol::error_codes;
 use anyhow::{anyhow, Result};
 use orchestrator_daemon_runtime::{resolve_subject_dispatch, SubjectPluginDispatch};
 use protocol::Config;
@@ -7,8 +8,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::{
-    print_value, SubjectCommand, SubjectCreateArgs, SubjectDeleteArgs, SubjectGetArgs, SubjectListArgs,
-    SubjectNextArgs, SubjectStatusArgs, SubjectUpdateArgs,
+    invalid_input_error, not_found_error, print_value, unavailable_error, SubjectCommand, SubjectCreateArgs,
+    SubjectDeleteArgs, SubjectGetArgs, SubjectListArgs, SubjectNextArgs, SubjectStatusArgs, SubjectUpdateArgs,
 };
 
 #[derive(Debug, Serialize)]
@@ -50,7 +51,7 @@ async fn handle_subject_get(args: SubjectGetArgs, project_root: &str, json: bool
     let kind = resolve_kind(args.kind.as_deref(), project_root)?;
     let id = args.id.trim();
     if id.is_empty() {
-        return Err(anyhow!("--id must not be empty"));
+        return Err(invalid_input_error("--id must not be empty"));
     }
     let params = Some(json!({ "id": id }));
     dispatch(&kind, "get", params, project_root, json).await
@@ -60,7 +61,7 @@ async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json
     let kind = resolve_kind(args.kind.as_deref(), project_root)?;
     let title = args.title.trim();
     if title.is_empty() {
-        return Err(anyhow!("--title must not be empty"));
+        return Err(invalid_input_error("--title must not be empty"));
     }
     let mut payload = serde_json::Map::new();
     payload.insert("title".to_string(), json!(title));
@@ -84,7 +85,7 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
     let kind = resolve_kind(args.kind.as_deref(), project_root)?;
     let id = args.id.trim();
     if id.is_empty() {
-        return Err(anyhow!("--id must not be empty"));
+        return Err(invalid_input_error("--id must not be empty"));
     }
     let mut patch = serde_json::Map::new();
     if let Some(status) = args.status.as_deref() {
@@ -97,7 +98,7 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
         patch.insert("labels".to_string(), json!(args.labels));
     }
     if patch.is_empty() {
-        return Err(anyhow!("subject update requires at least one of --status / --priority / --labels"));
+        return Err(invalid_input_error("subject update requires at least one of --status / --priority / --labels"));
     }
     let params = Some(json!({ "id": id, "patch": Value::Object(patch) }));
     dispatch(&kind, "update", params, project_root, json).await
@@ -112,11 +113,11 @@ async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json
     let kind = resolve_kind(args.kind.as_deref(), project_root)?;
     let id = args.id.trim();
     if id.is_empty() {
-        return Err(anyhow!("--id must not be empty"));
+        return Err(invalid_input_error("--id must not be empty"));
     }
     let status = args.status.trim();
     if status.is_empty() {
-        return Err(anyhow!("--status must not be empty"));
+        return Err(invalid_input_error("--status must not be empty"));
     }
     let params = Some(json!({ "id": id, "status": status }));
     dispatch(&kind, "status", params, project_root, json).await
@@ -126,7 +127,7 @@ async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json
     let kind = resolve_kind(args.kind.as_deref(), project_root)?;
     let id = args.id.trim();
     if id.is_empty() {
-        return Err(anyhow!("--id must not be empty"));
+        return Err(invalid_input_error("--id must not be empty"));
     }
     if !args.yes {
         let preview = json!({
@@ -168,9 +169,9 @@ fn resolve_kind(raw: Option<&str>, project_root: &str) -> Result<String> {
         }
     }) {
         Some(default) => validate_kind(default).map(|s| s.to_string()),
-        None => Err(anyhow!(
+        None => Err(invalid_input_error(
             "no subject kind supplied. Pass `--kind <kind>` or set `default_subject_kind` in .animus/config.json. \
-             Run `animus plugin list` to see installed subject_backend kinds."
+             Run `animus plugin list` to see installed subject_backend kinds.",
         )),
     }
 }
@@ -178,10 +179,10 @@ fn resolve_kind(raw: Option<&str>, project_root: &str) -> Result<String> {
 fn validate_kind(raw: &str) -> Result<&str> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("--kind must not be empty"));
+        return Err(invalid_input_error("--kind must not be empty"));
     }
     if trimmed.contains('/') {
-        return Err(anyhow!("--kind must not contain '/'"));
+        return Err(invalid_input_error("--kind must not contain '/'"));
     }
     Ok(trimmed)
 }
@@ -216,8 +217,38 @@ async fn dispatch(kind: &str, verb: &'static str, params: Option<Value>, project
 async fn route_or_not_found(dispatch: &SubjectPluginDispatch, method: &str, params: Option<Value>) -> Result<Value> {
     match dispatch.route_call(method, params).await {
         Ok(value) => Ok(value),
-        Err(rpc_error) => Err(anyhow!("subject call '{method}' failed ({}): {}", rpc_error.code, rpc_error.message)),
+        Err(rpc_error) => Err(classify_subject_rpc_error(method, &rpc_error)),
     }
+}
+
+/// Map a subject backend [`animus_plugin_protocol::RpcError`] onto the CLI's
+/// typed exit-code families so scripts can distinguish "you typed the wrong
+/// id" (2/3) from "no plugin is mounted" (5) from genuine internal faults (1).
+fn classify_subject_rpc_error(method: &str, rpc_error: &animus_plugin_protocol::RpcError) -> anyhow::Error {
+    let message = format!("subject call '{method}' failed ({}): {}", rpc_error.code, rpc_error.message);
+    let lower = rpc_error.message.to_ascii_lowercase();
+    // The dispatch/router layers emit deterministic "no subject backend
+    // mounted/registered for kind '<kind>'" messages when no plugin can
+    // serve the kind — that's a missing/unreachable plugin, not a missing
+    // subject.
+    if lower.contains("no subject backend") {
+        return unavailable_error(format!(
+            "{message}; install one with `animus plugin install-defaults --include-subjects`"
+        ));
+    }
+    if rpc_error.code == error_codes::INVALID_PARAMS {
+        return invalid_input_error(message);
+    }
+    if matches!(
+        rpc_error.code,
+        error_codes::TIMEOUT | error_codes::REQUEST_CANCELLED | error_codes::PLUGIN_NOT_INITIALIZED
+    ) {
+        return unavailable_error(message);
+    }
+    if lower.contains("not found") || lower.contains("does not exist") || lower.contains("no such") {
+        return not_found_error(message);
+    }
+    anyhow!(message)
 }
 
 #[cfg(test)]
@@ -269,14 +300,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn route_or_not_found_returns_not_found_for_empty_dispatch() {
+    async fn route_or_not_found_returns_unavailable_for_empty_dispatch() {
         let dispatch = SubjectPluginDispatch::empty();
-        let err = route_or_not_found(&dispatch, "task/list", None).await.expect_err("expect NotFound");
+        let err = route_or_not_found(&dispatch, "task/list", None).await.expect_err("expect Unavailable");
         let message = err.to_string();
         assert!(message.contains("task"), "error message names kind: {message}");
         assert!(
             message.contains("subject call") || message.contains("no subject backend"),
             "error includes routing context: {message}"
         );
+        assert!(message.contains("install-defaults --include-subjects"), "error carries install hint: {message}");
+        assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn classify_subject_rpc_error_maps_rpc_codes_to_typed_kinds() {
+        use animus_plugin_protocol::RpcError;
+        let cases = [
+            (
+                RpcError { code: error_codes::INVALID_PARAMS, message: "bad patch shape".into(), data: None },
+                crate::CliErrorKind::InvalidInput,
+            ),
+            (
+                RpcError { code: error_codes::TIMEOUT, message: "request timed out".into(), data: None },
+                crate::CliErrorKind::Unavailable,
+            ),
+            (
+                RpcError {
+                    code: error_codes::INTERNAL_ERROR,
+                    message: "subject 'task:TASK-9' not found".into(),
+                    data: None,
+                },
+                crate::CliErrorKind::NotFound,
+            ),
+            (
+                RpcError { code: error_codes::INTERNAL_ERROR, message: "store corrupted".into(), data: None },
+                crate::CliErrorKind::Internal,
+            ),
+        ];
+        for (rpc_error, expected) in cases {
+            let err = classify_subject_rpc_error("task/get", &rpc_error);
+            assert_eq!(crate::classify_cli_error_kind(&err), expected, "rpc message: {}", rpc_error.message);
+        }
+    }
+
+    #[test]
+    fn validation_errors_classify_as_invalid_input() {
+        for err in [
+            validate_kind("").expect_err("empty kind"),
+            validate_kind("task/list").expect_err("slash kind"),
+            resolve_kind(Some(""), "/tmp/does-not-matter").expect_err("empty explicit kind"),
+        ] {
+            assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::InvalidInput, "{err}");
+        }
     }
 }

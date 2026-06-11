@@ -811,6 +811,14 @@ fn selection_source_for(source: PackRegistrySource) -> PackSelectionSource {
 }
 
 fn prompt_template_selection(templates: &[ProjectTemplateSummary]) -> Result<ProjectTemplateSummary> {
+    // Defense-in-depth alongside the guided-mode TTY guard at the call
+    // site: a non-TTY stdin (CI, piped input) must error cleanly instead
+    // of blocking forever on `read_line`.
+    if !io::stdin().is_terminal() {
+        return Err(invalid_input_error(
+            "template selection requires an interactive terminal; rerun with --template <TEMPLATE_ID> or --path <PATH>",
+        ));
+    }
     let mut stdout = io::stdout();
     let mut input = String::new();
 
@@ -823,7 +831,13 @@ fn prompt_template_selection(templates: &[ProjectTemplateSummary]) -> Result<Pro
         stdout.flush()?;
 
         input.clear();
-        io::stdin().read_line(&mut input)?;
+        let bytes_read = io::stdin().read_line(&mut input)?;
+        if bytes_read == 0 {
+            // EOF (e.g. Ctrl-D): bail instead of looping forever.
+            return Err(invalid_input_error(
+                "no template selected (stdin closed); rerun with --template <TEMPLATE_ID> or --path <PATH>",
+            ));
+        }
         let trimmed = input.trim();
         if let Ok(index) = trimmed.parse::<usize>() {
             if let Some(template) = templates.get(index.saturating_sub(1)) {

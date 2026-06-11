@@ -9,11 +9,12 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 use crate::cli_types::{EventsCommand, EventsTailArgs};
 use crate::shared::print_value;
+use crate::{invalid_input_error, unavailable_error};
 
 pub(crate) async fn handle_events(command: EventsCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
@@ -31,7 +32,7 @@ async fn handle_events_tail(args: EventsTailArgs, project_root: &str) -> Result<
     let client = match ControlClient::try_connect(project_root_path).await? {
         Some(client) => client,
         None => {
-            return Err(anyhow!(
+            return Err(unavailable_error(
                 "animus events tail requires a running daemon (control socket not found). Start one with: animus daemon start"
             ));
         }
@@ -99,24 +100,27 @@ pub(crate) fn format_event_line(event: &animus_control_protocol::types::Workflow
 pub(crate) fn parse_duration_arg(value: &str) -> Result<chrono::Duration> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("--since must be non-empty"));
+        return Err(invalid_input_error("--since must be non-empty"));
     }
     let (digits, suffix) = trimmed.split_at(trimmed.find(|c: char| !c.is_ascii_digit()).unwrap_or(trimmed.len()));
     if digits.is_empty() {
-        return Err(anyhow!("--since '{value}' must start with a number (e.g. 5m, 2h)"));
+        return Err(invalid_input_error(format!("--since '{value}' must start with a number (e.g. 5m, 2h)")));
     }
-    let amount: i64 = digits.parse().with_context(|| format!("--since '{value}' is not a valid number"))?;
+    let amount: i64 =
+        digits.parse().map_err(|_| invalid_input_error(format!("--since '{value}' is not a valid number")))?;
     let std_duration = match suffix {
         "" | "s" => Duration::from_secs(amount as u64),
         "m" => Duration::from_secs((amount as u64).saturating_mul(60)),
         "h" => Duration::from_secs((amount as u64).saturating_mul(3_600)),
         "d" => Duration::from_secs((amount as u64).saturating_mul(86_400)),
         other => {
-            return Err(anyhow!("--since '{value}' has unknown unit '{other}'; supported: s, m, h, d"));
+            return Err(invalid_input_error(format!(
+                "--since '{value}' has unknown unit '{other}'; supported: s, m, h, d"
+            )));
         }
     };
     chrono::Duration::from_std(std_duration)
-        .with_context(|| format!("--since '{value}' exceeds the representable duration range"))
+        .map_err(|_| invalid_input_error(format!("--since '{value}' exceeds the representable duration range")))
 }
 
 #[cfg(test)]

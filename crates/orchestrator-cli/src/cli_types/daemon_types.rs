@@ -81,14 +81,14 @@ pub(crate) struct DaemonSchedulerArgs {
         long,
         action = ArgAction::Set,
         default_value_t = true,
-        help = "Reconcile stale task/workflow runtime state."
+        help = "On startup, recover tasks stuck in-progress and workflow runs left behind by an interrupted daemon."
     )]
     pub(crate) reconcile_stale: bool,
     #[arg(
         long,
         value_name = "HOURS",
         value_parser = parse_positive_u64,
-        help = "Flag in-progress tasks as stale when updated_at age is at least this many hours. When omitted, the daemon uses persisted config or built-in defaults."
+        help = "Treat a task as stuck when it has been in-progress without updates for at least this many hours. When omitted, the daemon uses persisted config or built-in defaults."
     )]
     pub(crate) stale_threshold_hours: Option<u64>,
     #[arg(

@@ -37,10 +37,10 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    invalid_input_error, not_found_error, print_value, PluginCallArgs, PluginCommand, PluginDoctorArgs, PluginInfoArgs,
-    PluginInstallArgs, PluginInstallDefaultsArgs, PluginListArgs, PluginLockCommand, PluginLockListArgs,
-    PluginLockVerifyArgs, PluginPingArgs, PluginRenameArgs, PluginScaffoldCommand, PluginScopeCommand,
-    PluginUninstallArgs,
+    invalid_input_error, not_found_error, print_value, unavailable_error, PluginCallArgs, PluginCommand,
+    PluginDoctorArgs, PluginInfoArgs, PluginInstallArgs, PluginInstallDefaultsArgs, PluginListArgs, PluginLockCommand,
+    PluginLockListArgs, PluginLockVerifyArgs, PluginPingArgs, PluginRenameArgs, PluginScaffoldCommand,
+    PluginScopeCommand, PluginUninstallArgs,
 };
 
 #[derive(Debug, Serialize)]
@@ -2341,10 +2341,11 @@ async fn fetch_url_to_temp(url: &str, expected_sha256: &str) -> Result<(PathBuf,
     }
     let response = reqwest::get(url)
         .await
-        .with_context(|| format!("failed to download {url}"))?
+        .map_err(|err| unavailable_error(format!("failed to download {url}: {err}")))?
         .error_for_status()
-        .with_context(|| format!("download from {url} returned non-success status"))?;
-    let bytes = response.bytes().await.with_context(|| format!("failed to read body from {url}"))?;
+        .map_err(|err| unavailable_error(format!("download from {url} returned non-success status: {err}")))?;
+    let bytes =
+        response.bytes().await.map_err(|err| unavailable_error(format!("failed to read body from {url}: {err}")))?;
 
     let mut hasher = Sha256::new();
     hasher.update(&bytes);
@@ -2505,14 +2506,16 @@ async fn fetch_github_release(owner: &str, repo: &str, tag: Option<&str>) -> Res
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .with_context(|| format!("failed to GET {url}"))?;
+        .map_err(|err| unavailable_error(format!("failed to GET {url}: {err}")))?;
     let status = response.status();
     if status == reqwest::StatusCode::NOT_FOUND {
         return Err(not_found_error(format!(
             "no release found at {url} (check the repo slug, tag, or whether a release has been published yet)"
         )));
     }
-    let response = response.error_for_status().with_context(|| format!("GET {url} returned non-success status"))?;
+    let response = response
+        .error_for_status()
+        .map_err(|err| unavailable_error(format!("GET {url} returned non-success status: {err}")))?;
     let release: GithubRelease =
         response.json().await.with_context(|| format!("failed to parse GitHub release JSON from {url}"))?;
     Ok(release)
@@ -2553,10 +2556,11 @@ async fn download_to_path(url: &str, dest: &Path) -> Result<()> {
         .get(url)
         .send()
         .await
-        .with_context(|| format!("failed to download {url}"))?
+        .map_err(|err| unavailable_error(format!("failed to download {url}: {err}")))?
         .error_for_status()
-        .with_context(|| format!("download from {url} returned non-success status"))?;
-    let bytes = response.bytes().await.with_context(|| format!("failed to read body from {url}"))?;
+        .map_err(|err| unavailable_error(format!("download from {url} returned non-success status: {err}")))?;
+    let bytes =
+        response.bytes().await.map_err(|err| unavailable_error(format!("failed to read body from {url}: {err}")))?;
     if let Some(parent) = dest.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create download dir {}", parent.display()))?;
@@ -2572,10 +2576,10 @@ async fn download_text(url: &str) -> Result<String> {
         .get(url)
         .send()
         .await
-        .with_context(|| format!("failed to download {url}"))?
+        .map_err(|err| unavailable_error(format!("failed to download {url}: {err}")))?
         .error_for_status()
-        .with_context(|| format!("download from {url} returned non-success status"))?;
-    response.text().await.with_context(|| format!("failed to read body from {url}"))
+        .map_err(|err| unavailable_error(format!("download from {url} returned non-success status: {err}")))?;
+    response.text().await.map_err(|err| unavailable_error(format!("failed to read body from {url}: {err}")))
 }
 
 /// Extract a `.tar.gz` archive into `dest_dir` and pick the plugin binary
@@ -2619,7 +2623,7 @@ fn extract_tarball(archive: &Path, dest_dir: &Path, expected_name: &str) -> Resu
     let mut files = Vec::new();
     collect_files(dest_dir, &mut files)?;
     if files.is_empty() {
-        return Err(anyhow!("tarball {} contained no regular files", archive.display()));
+        return Err(invalid_input_error(format!("tarball {} contained no regular files", archive.display())));
     }
 
     // 1. Exact basename match (with or without `.exe`).
@@ -2644,12 +2648,12 @@ fn extract_tarball(archive: &Path, dest_dir: &Path, expected_name: &str) -> Resu
         .iter()
         .filter_map(|p| p.strip_prefix(dest_dir).ok().and_then(|rel| rel.to_str()).map(str::to_string))
         .collect();
-    Err(anyhow!(
+    Err(invalid_input_error(format!(
         "could not determine which file is the plugin binary in {}; expected one named '{}'. Extracted files: [{}]",
         archive.display(),
         expected_name,
         names.join(", ")
-    ))
+    )))
 }
 
 #[cfg(unix)]
@@ -2891,10 +2895,10 @@ pub(crate) fn parse_plugin_toml_binaries(toml_text: &str) -> Result<Vec<BinaryDe
     for b in binaries {
         let name = b.name.trim().to_string();
         if name.is_empty() {
-            return Err(anyhow!("plugin.toml [[binaries]] entry has empty `name`"));
+            return Err(invalid_input_error("plugin.toml [[binaries]] entry has empty `name`"));
         }
         if !seen.insert(name.clone()) {
-            return Err(anyhow!("plugin.toml [[binaries]] entry '{name}' appears more than once"));
+            return Err(invalid_input_error(format!("plugin.toml [[binaries]] entry '{name}' appears more than once")));
         }
         if b.primary {
             primary_count += 1;
@@ -2912,7 +2916,7 @@ pub(crate) fn parse_plugin_toml_binaries(toml_text: &str) -> Result<Vec<BinaryDe
     if primary_count == 0 {
         out[0].primary = true;
     } else if primary_count > 1 {
-        return Err(anyhow!("plugin.toml declares more than one `primary = true` binary"));
+        return Err(invalid_input_error("plugin.toml declares more than one `primary = true` binary"));
     }
     Ok(out)
 }
@@ -2921,12 +2925,16 @@ async fn fetch_plugin_toml_for_release(owner: &str, repo: &str, tag: &str) -> Re
     let url = format!("https://raw.githubusercontent.com/{owner}/{repo}/{tag}/plugin.toml");
     let client =
         reqwest::Client::builder().user_agent(release_user_agent()).build().context("failed to build HTTP client")?;
-    let response = client.get(&url).send().await.with_context(|| format!("failed to GET {url}"))?;
+    let response =
+        client.get(&url).send().await.map_err(|err| unavailable_error(format!("failed to GET {url}: {err}")))?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
-    let response = response.error_for_status().with_context(|| format!("GET {url} returned non-success status"))?;
-    let body = response.text().await.with_context(|| format!("failed to read body from {url}"))?;
+    let response = response
+        .error_for_status()
+        .map_err(|err| unavailable_error(format!("GET {url} returned non-success status: {err}")))?;
+    let body =
+        response.text().await.map_err(|err| unavailable_error(format!("failed to read body from {url}: {err}")))?;
     Ok(Some(body))
 }
 
@@ -3248,14 +3256,15 @@ fn probe_manifest(binary_path: &Path) -> Result<PluginManifest> {
         .output()
         .with_context(|| format!("failed to run {} --manifest", binary_path.display()))?;
     if !output.status.success() {
-        return Err(anyhow!(
+        return Err(invalid_input_error(format!(
             "binary failed --manifest probe (exit={:?}): {}",
             output.status.code(),
             String::from_utf8_lossy(&output.stderr)
-        ));
+        )));
     }
-    serde_json::from_slice::<PluginManifest>(&output.stdout)
-        .with_context(|| format!("plugin {} returned malformed --manifest JSON", binary_path.display()))
+    serde_json::from_slice::<PluginManifest>(&output.stdout).map_err(|err| {
+        invalid_input_error(format!("plugin {} returned malformed --manifest JSON: {err}", binary_path.display()))
+    })
 }
 
 /// Refuse provider plugins whose manifest name (or `animus-provider-*` suffix)
