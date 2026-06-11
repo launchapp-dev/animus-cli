@@ -21,6 +21,9 @@ pub use state_manager::{
     WorkflowFailureSummary, WorkflowHistorySummary, WorkflowStateManager,
     DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE,
 };
+pub(crate) use state_manager::{
+    delete_requirement_with_conn, delete_task_with_conn, save_requirement_with_conn, save_task_with_conn,
+};
 
 #[cfg(test)]
 mod tests;

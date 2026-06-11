@@ -1332,6 +1332,97 @@ fn state_manager_cleanup_deletes_old_terminal_workflows() {
 }
 
 #[test]
+fn state_manager_cleanup_deletes_terminal_workflows_with_null_timestamps() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut legacy = make_workflow(WorkflowStatus::Completed);
+    legacy.id = "WF-legacy-null".to_string();
+    legacy.machine_state = WorkflowMachineState::Completed;
+    manager.save(&legacy).expect("save legacy workflow");
+
+    let mut pending = make_workflow(WorkflowStatus::Pending);
+    pending.id = "WF-pending-null".to_string();
+    manager.save(&pending).expect("save pending workflow");
+
+    let conn = crate::workflow::open_project_db(temp.path()).expect("open db");
+    conn.execute("UPDATE workflows SET started_at = NULL, completed_at = NULL", []).expect("null out timestamps");
+    drop(conn);
+
+    let result = manager.cleanup_terminal_workflows(24).expect("cleanup terminal workflows");
+    assert_eq!(result.deleted, 1, "terminal rows with NULL timestamps should be treated as old");
+    let remaining: Vec<String> =
+        manager.list_all().expect("list all workflows").into_iter().map(|workflow| workflow.id).collect();
+    assert_eq!(remaining, vec!["WF-pending-null".to_string()], "pending rows with NULL timestamps must survive");
+}
+
+#[test]
+fn save_checkpoint_skips_numbers_of_orphan_checkpoint_rows() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let workflow = make_workflow(WorkflowStatus::Running);
+    manager.save(&workflow).expect("save workflow");
+
+    let conn = crate::workflow::open_project_db(temp.path()).expect("open db");
+    conn.execute(
+        "INSERT INTO checkpoints (workflow_id, number, timestamp, reason, phase_id, machine_state, status, snapshot_json)
+         VALUES (?1, 3, ?2, 'orphan', 'requirements', 'idle', 'running', 'orphan-snapshot')",
+        rusqlite::params![workflow.id, Utc::now().to_rfc3339()],
+    )
+    .expect("insert orphan checkpoint row");
+    drop(conn);
+
+    let updated = manager.save_checkpoint(&workflow, CheckpointReason::Start).expect("save checkpoint");
+    assert_eq!(updated.checkpoint_metadata.checkpoint_count, 4, "number allocation must skip persisted rows");
+    assert_eq!(manager.list_checkpoints(&workflow.id).expect("list checkpoints"), vec![3, 4]);
+
+    let conn = crate::workflow::open_project_db(temp.path()).expect("reopen db");
+    let orphan_reason: String = conn
+        .query_row(
+            "SELECT reason FROM checkpoints WHERE workflow_id = ?1 AND number = 3",
+            rusqlite::params![workflow.id],
+            |row| row.get(0),
+        )
+        .expect("orphan checkpoint row");
+    assert_eq!(orphan_reason, "orphan", "orphan snapshot must not be overwritten");
+}
+
+#[test]
+fn save_checkpoint_rolls_back_checkpoint_row_when_workflow_save_fails() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let workflow = make_workflow(WorkflowStatus::Running);
+    manager.save(&workflow).expect("save workflow");
+
+    let conn = crate::workflow::open_project_db(temp.path()).expect("open db");
+    conn.execute_batch(
+        "CREATE TRIGGER fail_workflow_save BEFORE INSERT ON workflows
+         BEGIN SELECT RAISE(ABORT, 'injected failure'); END;",
+    )
+    .expect("create failure trigger");
+    drop(conn);
+
+    manager.save_checkpoint(&workflow, CheckpointReason::Start).expect_err("workflow save failure should propagate");
+    assert!(
+        manager.list_checkpoints(&workflow.id).expect("list checkpoints").is_empty(),
+        "checkpoint row must roll back when the workflow save fails"
+    );
+
+    let conn = crate::workflow::open_project_db(temp.path()).expect("reopen db");
+    conn.execute_batch("DROP TRIGGER fail_workflow_save;").expect("drop failure trigger");
+    drop(conn);
+
+    let updated = manager.save_checkpoint(&workflow, CheckpointReason::Start).expect("save checkpoint after retry");
+    assert_eq!(updated.checkpoint_metadata.checkpoint_count, 1);
+    assert_eq!(manager.list_checkpoints(&workflow.id).expect("list checkpoints"), vec![1]);
+}
+
+#[test]
 fn lifecycle_double_pause_is_noop() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
     let mut workflow = executor.bootstrap(
