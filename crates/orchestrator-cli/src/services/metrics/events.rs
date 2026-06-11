@@ -86,6 +86,7 @@ pub(crate) enum CommandGroup {
     Workflow,
     History,
     Git,
+    Approval,
     Skill,
     Pack,
     Plugin,

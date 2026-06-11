@@ -245,6 +245,7 @@ async fn run(cli: Cli) -> Result<()> {
             services::runtime::handle_daemon_health_command(&project_root, cli.json).await
         }
         Command::History { command } => services::operations::handle_history(command, &project_root, cli.json).await,
+        Command::Approval { command } => services::operations::handle_approval(command, &project_root, cli.json),
         Command::Trigger { command } => services::operations::handle_trigger(command, &project_root, cli.json).await,
         Command::Logs { command } => services::operations::handle_logs(command, &project_root, cli.json).await,
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
@@ -296,6 +297,7 @@ async fn run(cli: Cli) -> Result<()> {
                     unreachable!("command handled before runtime initialization")
                 }
                 Command::Init(_)
+                | Command::Approval { .. }
                 | Command::Doctor(_)
                 | Command::Trigger { .. }
                 | Command::Logs { .. }
@@ -376,6 +378,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Workflow { .. } => CommandGroup::Workflow,
         Command::History { .. } => CommandGroup::History,
         Command::Git { .. } => CommandGroup::Git,
+        Command::Approval { .. } => CommandGroup::Approval,
         Command::Skill { .. } => CommandGroup::Skill,
         Command::Pack { .. } => CommandGroup::Pack,
         Command::Plugin { .. } => CommandGroup::Plugin,

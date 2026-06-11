@@ -169,11 +169,13 @@ Visible top-level command groups currently include:
 
 - `daemon` (with `start`, `run`, `stop`, `status`, `preflight`, ...)
 - `agent`, `project`, `queue`, `workflow`, `subject`
-- `history`, `git`, `skill`
+- `history`, `git`, `approval`, `skill`
 - `status`, `output`, `mcp`, `web`, `init`, `doctor`
 - `pack`, `plugin` (with `install`, `install-defaults`, `list`, `info`, ...), `trigger`, `logs`, `flavor`
 
-Hidden but implemented: none currently.
+Hidden but implemented: `animus git confirm {request, respond, outcome}` — a
+hidden back-compat alias for the top-level `animus approval` group (same
+handlers, same project-local git-confirmations store).
 
 `animus web serve` does not boot an in-process HTTP server as of v0.4.12.
 It discovers installed `transport_backend` + `web_ui` plugins, spawns
