@@ -71,6 +71,12 @@ pub(crate) struct ChatSendArgs {
     /// Reasoning/thinking effort for the provider: low, medium, or high.
     #[arg(long, value_enum, value_name = "LEVEL")]
     pub(crate) reasoning_effort: Option<ReasoningEffortArg>,
+    /// Provider permission/approval mode, forwarded verbatim (claude:
+    /// default|acceptEdits|bypassPermissions|plan; codex:
+    /// untrusted|on-failure|on-request|never; gemini:
+    /// default|auto_edit|yolo). Overrides any configured agent-profile value.
+    #[arg(long, value_name = "MODE")]
+    pub(crate) permission_mode: Option<String>,
     /// Title for the conversation. Names a freshly-created conversation, or
     /// renames the target one. An empty string clears the title.
     #[arg(long)]

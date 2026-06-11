@@ -209,6 +209,12 @@ pub struct AgentRuntimeOverrides {
     pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Provider permission/approval mode forwarded verbatim to the spawned
+    /// CLI (claude `--permission-mode`, codex `-c approval_policy`, gemini
+    /// approval mode). Values are provider-specific; see
+    /// [`KNOWN_PERMISSION_MODES`].
+    #[serde(default)]
+    pub permission_mode: Option<String>,
     #[serde(default)]
     pub web_search: Option<bool>,
     #[serde(default)]
@@ -425,6 +431,12 @@ pub struct AgentProfile {
     pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Provider permission/approval mode forwarded verbatim to the spawned
+    /// CLI (claude `--permission-mode`, codex `-c approval_policy`, gemini
+    /// approval mode). Values are provider-specific; see
+    /// [`KNOWN_PERMISSION_MODES`].
+    #[serde(default)]
+    pub permission_mode: Option<String>,
     #[serde(default)]
     pub web_search: Option<bool>,
     #[serde(default)]
@@ -500,6 +512,8 @@ pub struct AgentProfileOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission_mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_search: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network_access: Option<bool>,
@@ -562,6 +576,7 @@ impl AgentProfileOverlay {
             fallback_models,
             fallback_tools,
             reasoning_effort,
+            permission_mode,
             web_search,
             network_access,
             timeout_secs,
@@ -598,6 +613,7 @@ impl From<AgentProfile> for AgentProfileOverlay {
             fallback_models: Some(profile.fallback_models),
             fallback_tools: Some(profile.fallback_tools),
             reasoning_effort: profile.reasoning_effort,
+            permission_mode: profile.permission_mode,
             web_search: profile.web_search,
             network_access: profile.network_access,
             timeout_secs: profile.timeout_secs,
@@ -1030,6 +1046,24 @@ impl AgentRuntimeConfig {
         })
     }
 
+    pub fn phase_permission_mode(&self, phase_id: &str) -> Option<&str> {
+        trim_nonempty(
+            self.phase_execution(phase_id)
+                .and_then(|definition| definition.runtime.as_ref())
+                .and_then(|runtime| runtime.permission_mode.as_deref()),
+        )
+        .or_else(|| {
+            trim_nonempty(self.phase_agent_profile(phase_id).and_then(|profile| profile.permission_mode.as_deref()))
+        })
+        // TODO(codex-p2): the workflow-runner-side read lives out-of-tree
+        // (launchapp-dev/animus-workflow-runner-default). The field already
+        // serializes through the compiled agent runtime config and the
+        // generated workflow YAML overlay, but workflow phase execution will
+        // not honour it until the runner consumes this accessor (and
+        // `animus-runtime-shared::WorkflowPhaseRuntimeSettings` grows a
+        // matching `permission_mode` field) when building session requests.
+    }
+
     pub fn phase_web_search(&self, phase_id: &str) -> Option<bool> {
         self.phase_execution(phase_id)
             .and_then(|definition| definition.runtime.as_ref())
@@ -1227,6 +1261,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1266,6 +1301,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1326,6 +1362,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1388,6 +1425,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1427,6 +1465,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     models: vec![],
                     fallback_tools: vec![],
                     reasoning_effort: None,
+                    permission_mode: None,
                     web_search: None,
                     network_access: None,
                     timeout_secs: None,
@@ -1860,6 +1899,9 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfileOverlay) {
     if overlay.reasoning_effort.is_some() {
         base.reasoning_effort = overlay.reasoning_effort.clone();
     }
+    if overlay.permission_mode.is_some() {
+        base.permission_mode = overlay.permission_mode.clone();
+    }
     if overlay.web_search.is_some() {
         base.web_search = overlay.web_search;
     }
@@ -2166,6 +2208,10 @@ fn validate_phase_definition(
                 runtime.reasoning_effort.as_deref().unwrap_or_default()
             ));
         }
+
+        if runtime.permission_mode.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(anyhow!("phases['{}'].runtime.permission_mode must not be empty when set", phase_id));
+        }
     }
 
     if let Some(evals) = definition.evals.as_ref() {
@@ -2316,6 +2362,36 @@ fn is_valid_reasoning_effort(value: &str) -> bool {
     REASONING_EFFORT_LEVELS.contains(&normalized.as_str())
 }
 
+/// Union of the permission/approval modes the known provider CLIs accept.
+/// The value is forwarded to the provider VERBATIM — this list exists only
+/// to warn on likely typos, never to block:
+///
+/// - claude `--permission-mode`: `default`, `acceptEdits`,
+///   `bypassPermissions`, `plan`
+/// - codex `-c approval_policy`: `untrusted`, `on-failure`, `on-request`,
+///   `never`
+/// - gemini `--approval-mode`: `default`, `auto_edit`, `yolo`
+pub const KNOWN_PERMISSION_MODES: &[&str] = &[
+    "default",
+    "acceptEdits",
+    "bypassPermissions",
+    "plan",
+    "untrusted",
+    "on-failure",
+    "on-request",
+    "never",
+    "auto_edit",
+    "yolo",
+];
+
+/// Whether `value` is in the union of permission modes any known provider
+/// accepts. Matching is case-insensitive so a casing slip does not trip the
+/// typo warning; the original casing still rides the wire untouched.
+pub fn is_known_permission_mode(value: &str) -> bool {
+    let trimmed = value.trim();
+    KNOWN_PERMISSION_MODES.iter().any(|known| known.eq_ignore_ascii_case(trimmed))
+}
+
 fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
     fn is_valid_codex_config_override(value: &str) -> bool {
         let Some((key, expr)) = value.split_once('=') else {
@@ -2394,6 +2470,10 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
                 agent_id,
                 profile.reasoning_effort.as_deref().unwrap_or_default()
             ));
+        }
+
+        if profile.permission_mode.as_deref().is_some_and(|value| value.trim().is_empty()) {
+            return Err(anyhow!("agents['{}'].permission_mode must not be empty when set", agent_id));
         }
 
         if profile.role.as_deref().is_some_and(|value| value.trim().is_empty()) {
@@ -4409,6 +4489,91 @@ phases:
         let err = validate_agent_runtime_config(&config).expect_err("invalid phase effort must fail");
         let msg = format!("{:#}", err);
         assert!(msg.contains("runtime.reasoning_effort must be one of"), "got: {msg}");
+    }
+
+    #[test]
+    fn permission_mode_roundtrips_from_workflow_yaml_into_compiled_config() {
+        let yaml = r#"
+agents:
+  cautious:
+    description: "Cautious agent"
+    permission_mode: plan
+"#;
+        let config = crate::workflow_config::parse_yaml_workflow_config(yaml).expect("parse YAML");
+        let overlay = config.agent_profiles.get("cautious").expect("cautious profile parsed");
+        assert_eq!(overlay.permission_mode.as_deref(), Some("plan"));
+
+        let mut runtime = builtin_agent_runtime_config();
+        merge_workflow_runtime_overlay(&mut runtime, &config);
+        let profile = runtime.agent_profile("cautious").expect("cautious profile compiled");
+        assert_eq!(profile.permission_mode.as_deref(), Some("plan"));
+
+        // Serializing back through the overlay shape preserves the field.
+        let overlay = AgentProfileOverlay::from(profile.clone());
+        let json = serde_json::to_string(&overlay).expect("serialize overlay");
+        let restored: AgentProfileOverlay = serde_json::from_str(&json).expect("deserialize overlay");
+        assert_eq!(restored.permission_mode.as_deref(), Some("plan"));
+    }
+
+    #[test]
+    fn merge_agent_profile_overlay_permission_mode_wins_and_absent_inherits() {
+        let mut base: AgentProfile = serde_json::from_value(serde_json::json!({
+            "system_prompt": "base prompt",
+            "permission_mode": "plan"
+        }))
+        .expect("base profile");
+
+        let absent: AgentProfileOverlay = serde_json::from_value(serde_json::json!({})).expect("empty overlay");
+        merge_agent_profile(&mut base, &absent);
+        assert_eq!(base.permission_mode.as_deref(), Some("plan"), "absent overlay field must inherit the base");
+
+        let declared: AgentProfileOverlay = serde_json::from_value(serde_json::json!({
+            "permission_mode": "acceptEdits"
+        }))
+        .expect("overlay profile");
+        merge_agent_profile(&mut base, &declared);
+        assert_eq!(base.permission_mode.as_deref(), Some("acceptEdits"), "declared overlay field must win");
+    }
+
+    #[test]
+    fn phase_permission_mode_phase_runtime_takes_precedence_over_agent_profile() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("swe").expect("swe profile");
+        profile.permission_mode = Some("plan".to_string());
+
+        assert_eq!(config.phase_permission_mode("implementation"), Some("plan"));
+
+        let phase = config.phases.get_mut("implementation").expect("implementation phase");
+        phase.runtime =
+            Some(AgentRuntimeOverrides { permission_mode: Some("acceptEdits".to_string()), ..Default::default() });
+        assert_eq!(config.phase_permission_mode("implementation"), Some("acceptEdits"));
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_rejects_empty_permission_mode() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("default").expect("profile exists");
+        profile.permission_mode = Some("   ".to_string());
+        let err = validate_agent_runtime_config(&config).expect_err("empty permission_mode must fail");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("permission_mode must not be empty"), "got: {msg}");
+    }
+
+    #[test]
+    fn validate_agent_runtime_config_accepts_unknown_permission_mode() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("default").expect("profile exists");
+        profile.permission_mode = Some("totally-custom".to_string());
+        validate_agent_runtime_config(&config).expect("unknown permission_mode must pass through, not block");
+    }
+
+    #[test]
+    fn known_permission_modes_match_case_insensitively() {
+        assert!(is_known_permission_mode("acceptEdits"));
+        assert!(is_known_permission_mode("acceptedits"));
+        assert!(is_known_permission_mode("on-failure"));
+        assert!(is_known_permission_mode(" yolo "));
+        assert!(!is_known_permission_mode("totally-custom"));
     }
 
     #[test]

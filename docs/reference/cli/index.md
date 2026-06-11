@@ -380,6 +380,30 @@ A caller-supplied override always wins: if a runtime contract already carries
 codex's `model_reasoning_effort` config key or claude's `--effort` flag, the
 transport leaves it untouched.
 
+### `animus agent run` / `animus chat send` (permission mode)
+
+Both surfaces accept a `--permission-mode` flag that controls the spawned
+provider CLI's permission/approval posture for the run or turn.
+
+| Flag | Description |
+|---|---|
+| `--permission-mode <MODE>` | Provider permission/approval mode, set on the typed `SessionRequest.permission_mode` field and forwarded verbatim; each provider transport maps it to its own flag (claude `--permission-mode <mode>`, codex `-c approval_policy="<mode>"`, gemini its approval-mode mapping). Omit to leave the provider on its own default. |
+
+Values are provider-specific:
+
+| Provider | Accepted modes |
+|---|---|
+| claude | `default`, `acceptEdits`, `bypassPermissions`, `plan` |
+| codex | `untrusted`, `on-failure`, `on-request`, `never` |
+| gemini | `default`, `auto_edit`, `yolo` |
+
+Resolution precedence: the explicit `--permission-mode` flag wins over a
+`permission_mode` key in `--context-json` (`animus agent run` only), which
+wins over the selected `--agent` profile's `permission_mode` field; when none
+is set the field stays unset and the provider uses its own default. A value
+outside the union of known provider modes prints a warning on stderr but is
+still passed through verbatim — Animus never blocks on it.
+
 ### `animus agent run` / `animus chat send` (per-agent MCP servers)
 
 Ad-hoc agents now receive the MCP servers their selected profile / skill
