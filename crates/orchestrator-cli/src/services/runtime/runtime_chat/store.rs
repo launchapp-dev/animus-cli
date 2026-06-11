@@ -187,10 +187,36 @@ impl From<&ConversationMeta> for ConversationSummary {
     }
 }
 
+/// Guard for a per-conversation cross-process lock. The lock is released when
+/// the guard drops.
+pub(crate) struct ConversationLock {
+    file: Option<std::fs::File>,
+}
+
+impl Drop for ConversationLock {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            let _ = fs2::FileExt::unlock(&file);
+        }
+    }
+}
+
 /// Abstract conversation persistence. Production uses
 /// [`FileConversationStore`]; tests use an in-memory mock so the turn loop
 /// can be exercised without touching the filesystem.
 pub(crate) trait ConversationStore: Send + Sync {
+    /// Try to acquire an exclusive cross-process lock for one conversation,
+    /// returning `None` when another holder has it. The turn loop holds it
+    /// across the whole read-meta → append → run → save-meta critical section
+    /// (which can run minutes), so two simultaneous sends to the SAME
+    /// conversation serialize instead of racing seq assignment and
+    /// last-writer-winning on meta. Different conversations use different
+    /// locks and never contend. Non-blocking so an async caller can sleep and
+    /// retry instead of parking a runtime worker. Default is a no-op for
+    /// stores without cross-process state.
+    fn try_lock_conversation(&self, _id: &str) -> Result<Option<ConversationLock>> {
+        Ok(Some(ConversationLock { file: None }))
+    }
     /// Create a fresh conversation and return its meta. The store assigns
     /// the id when `id` is `None`.
     fn create(&self, id: Option<String>) -> Result<ConversationMeta>;
@@ -250,6 +276,29 @@ impl FileConversationStore {
 }
 
 impl ConversationStore for FileConversationStore {
+    // Cross-process advisory lock serializing whole turns on one conversation.
+    // Same `.lock` sidecar + exclusive-flock pattern as
+    // `animus_runtime_shared::agent_state::with_state_file_lock`, except
+    // non-blocking: created on demand, never deleted. Lives at
+    // `<root>/<id>.lock` (beside the conversation dir, not inside it) so
+    // `delete` cannot unlink a held lock.
+    fn try_lock_conversation(&self, id: &str) -> Result<Option<ConversationLock>> {
+        ensure_safe_id(id)?;
+        std::fs::create_dir_all(&self.root).with_context(|| format!("creating chat root {}", self.root.display()))?;
+        let path = self.root.join(format!("{id}.lock"));
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("opening conversation lock {}", path.display()))?;
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => Ok(Some(ConversationLock { file: Some(file) })),
+            Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+            Err(err) => Err(err).with_context(|| format!("acquiring conversation lock {}", path.display())),
+        }
+    }
+
     fn create(&self, id: Option<String>) -> Result<ConversationMeta> {
         let id = id.unwrap_or_else(generate_conversation_id);
         ensure_safe_id(&id)?;
@@ -333,8 +382,14 @@ impl ConversationStore for FileConversationStore {
             let Some(id) = entry.file_name().to_str().map(ToOwned::to_owned) else {
                 continue;
             };
-            if let Some(meta) = self.load_meta(&id)? {
-                summaries.push(ConversationSummary::from(&meta));
+            // A stray directory (unsafe name, missing/corrupt meta.json) must
+            // not abort the whole listing — skip it and return the rest.
+            match self.load_meta(&id) {
+                Ok(Some(meta)) => summaries.push(ConversationSummary::from(&meta)),
+                Ok(None) => {}
+                Err(err) => {
+                    tracing::debug!(error = %err, id, "skipping unreadable chat directory");
+                }
             }
         }
         summaries.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
@@ -373,7 +428,15 @@ pub(crate) fn render_history_prompt(messages: &[ChatMessage], new_user_turn: &st
 }
 
 fn write_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
-    let tmp = path.with_extension("json.tmp");
+    // Unique per-process+write tmp name: a shared `meta.json.tmp` would let
+    // two concurrent writers cross-rename each other's half-written staging
+    // file into place.
+    static TMP_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let tmp = path.with_extension(format!(
+        "json.{}-{}.tmp",
+        std::process::id(),
+        TMP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
     std::fs::write(&tmp, bytes).with_context(|| format!("writing {}", tmp.display()))?;
     std::fs::rename(&tmp, path).with_context(|| format!("renaming into {}", path.display()))?;
     Ok(())
@@ -565,6 +628,7 @@ mod tests {
         let store = FileConversationStore { root: tmp.path().join("chat") };
         assert!(store.load_meta("../escape").is_err(), "load_meta must reject traversal ids");
         assert!(store.load_messages("../escape").is_err(), "load_messages must reject traversal ids");
+        assert!(store.try_lock_conversation("../escape").is_err(), "try_lock_conversation must reject traversal ids");
         assert!(
             store
                 .append_message(
@@ -584,6 +648,37 @@ mod tests {
                 .is_err(),
             "append_message must reject path-separator ids"
         );
+    }
+
+    #[test]
+    fn try_lock_conversation_contends_per_conversation_and_releases_on_drop() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FileConversationStore { root: tmp.path().join("chat") };
+        store.create(Some("c1".into())).unwrap();
+        let held = store.try_lock_conversation("c1").unwrap().expect("first acquire succeeds");
+        assert!(store.try_lock_conversation("c1").unwrap().is_none(), "a held lock must contend");
+        assert!(store.try_lock_conversation("other").unwrap().is_some(), "other conversations must not contend");
+        drop(held);
+        assert!(store.try_lock_conversation("c1").unwrap().is_some(), "dropping the guard releases the lock");
+    }
+
+    #[test]
+    fn list_skips_stray_directories_instead_of_failing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("chat");
+        let store = FileConversationStore { root: root.clone() };
+        store.create(Some("good".into())).unwrap();
+        // Unsafe directory name — fails id validation.
+        std::fs::create_dir_all(root.join("conv-x.bak")).unwrap();
+        // Safe name but corrupt meta.json — fails meta load.
+        std::fs::create_dir_all(root.join("corrupt")).unwrap();
+        std::fs::write(root.join("corrupt/meta.json"), "not json").unwrap();
+        // Safe name with no meta.json at all.
+        std::fs::create_dir_all(root.join("no-meta")).unwrap();
+
+        let list = store.list().unwrap();
+        assert_eq!(list.len(), 1, "stray directories must not abort the listing");
+        assert_eq!(list[0].id, "good");
     }
 
     #[test]
