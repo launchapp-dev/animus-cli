@@ -794,6 +794,44 @@ the table. To declare cost caps, see the `budget:` section in
 [`workflow-yaml.md`](workflow-yaml.md). To inspect spend, see
 [`cli/index.md`](cli/index.md#cost).
 
+## Scheduler wake model
+
+The daemon's main loop is event-driven; the legacy fixed-interval polling
+loop is gone. A dispatch pass runs when any of these fire:
+
+1. **Events (`daemon/nudge`)** — the CLI write paths `animus subject
+   create/update/status` and `animus queue enqueue/release` (and their MCP
+   equivalents, which execute the same CLI handlers) send a best-effort
+   `daemon/nudge` control message after a successful mutation. The same
+   wake fires in-process for control-socket writes (web UI), on
+   workflow/phase completion events from running workflow-runners, and
+   after a workflow-config hot-reload. Nudges are fire-and-forget: if the
+   daemon is not running, or predates the `daemon/nudge` method, the
+   sender silently ignores the failure and the next heartbeat picks the
+   work up. Bursts coalesce — N rapid nudges produce at most one extra
+   pass.
+2. **Cron deadlines** — the loop computes the earliest upcoming occurrence
+   across all compiled `schedules:` and sleeps until exactly that instant,
+   so cron fires on time instead of on the next polling tick. The deadline
+   is recomputed every pass (and a config reload nudges the loop awake),
+   so schedule edits take effect immediately. The catch-up scan (10-minute
+   lookback) remains the recovery path for occurrences missed while the
+   daemon was busy or down, and while any schedule is enabled the loop
+   additionally sweeps at least every 5 minutes (half the catch-up
+   horizon) so a fire blocked by a full pool is retried before it falls
+   out of the horizon, even when `interval_secs` is much longer.
+3. **Fallback heartbeat (`interval_secs`)** — the maximum sleep when no
+   event arrives. This is *not* the dispatch latency; it bounds pickup of
+   out-of-band state mutations made without the CLI/MCP surfaces, and it
+   paces housekeeping: the heavier reconciliation legs (manual-timeout,
+   zombie-workflow, stale in-progress sweeps) run at most once per
+   heartbeat period, while event wakes run only the dispatch legs
+   (schedules, queue drain, ready tasks, completed-process reaping).
+
+Pause/resume gating is unchanged: `animus daemon pause` still gates
+dispatch on event wakes, not just heartbeat ticks — a nudge while paused
+wakes the loop but dispatches nothing.
+
 ## Notes
 
 - Project YAML is the authored workflow surface.

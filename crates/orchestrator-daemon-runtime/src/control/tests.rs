@@ -430,6 +430,48 @@ async fn daemon_metrics_round_trip_emits_snapshot() {
     .expect("test timed out");
 }
 
+/// `daemon/nudge` is an in-tree wire-string method: it must reply
+/// `{"nudged": true}` and wake the process-global scheduler nudge handle
+/// when one is installed (i.e. a daemon loop is running in this process).
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn daemon_nudge_round_trip_wakes_installed_notify() {
+    tokio::time::timeout(TEST_TIMEOUT, async {
+        // Serialize against the in-crate unit tests that install/clear the
+        // process-global nudge slot.
+        let _slot_lock = crate::daemon::nudge_test_lock().lock().unwrap_or_else(|p| p.into_inner());
+
+        let notify = Arc::new(tokio::sync::Notify::new());
+        crate::daemon::install_scheduler_nudge(notify.clone());
+
+        let surface: Arc<dyn ControlSurface> = Arc::new(TestSurface::new());
+        let handle = ControlServer::start_with_socket(short_test_socket(), surface).await.unwrap();
+
+        let stream = UnixStream::connect(handle.socket_path()).await.unwrap();
+        let (read_half, mut write_half) = tokio::io::split(stream);
+        let mut reader = BufReader::new(read_half);
+
+        let request = RpcRequest::new(7, "daemon/nudge", None);
+        send_frame(&mut write_half, &request).await.unwrap();
+
+        let value = read_frame_value(&mut reader).await.unwrap();
+        let response: RpcResponse = serde_json::from_value(value).unwrap();
+        assert_eq!(response.id, Some(json!(7)));
+        assert!(response.error.is_none(), "expected ok, got {:?}", response.error);
+        assert_eq!(response.result, Some(json!({"nudged": true})));
+
+        // The nudge must have stored a permit on the installed handle.
+        tokio::time::timeout(Duration::from_secs(2), notify.notified())
+            .await
+            .expect("daemon/nudge must wake the installed scheduler notify");
+
+        crate::daemon::clear_scheduler_nudge();
+        handle.shutdown().await.unwrap();
+    })
+    .await
+    .expect("test timed out");
+}
+
 #[tokio::test]
 async fn subject_list_routes_to_surface() {
     tokio::time::timeout(TEST_TIMEOUT, async {

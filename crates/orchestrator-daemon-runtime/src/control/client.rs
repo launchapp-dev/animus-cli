@@ -278,6 +278,21 @@ impl ControlClient {
         self.call::<Value, _>("daemon/metrics", Value::Null).await
     }
 
+    /// Call `daemon/nudge` — in-tree wire-string RPC (not part of the
+    /// upstream control protocol). Best-effort scheduler wake: tells a
+    /// running daemon "work may exist; run a dispatch pass now" instead of
+    /// waiting for the fallback heartbeat. Older daemons reply
+    /// `method_not_found`; callers wanting fire-and-forget semantics
+    /// should use [`nudge_daemon_scheduler_best_effort`], which swallows
+    /// every failure.
+    pub async fn daemon_nudge(&self) -> Result<()> {
+        let response = self.call_raw("daemon/nudge", None).await?;
+        match response.error {
+            None => Ok(()),
+            Some(error) => Err(rpc_error_to_anyhow("daemon/nudge", &error)),
+        }
+    }
+
     /// Call `plugin/status` — in-tree wire-string RPC introduced in v0.5.8 to
     /// surface per-plugin runtime state (pid, last_rpc_at, restart_count,
     /// last_error) from the daemon's [`PluginStatusRegistry`]. The response
@@ -638,6 +653,27 @@ fn rpc_error_to_anyhow(method: &str, error: &animus_plugin_protocol::RpcError) -
         }
         _ => anyhow!("control server {method} failed (code {}): {}", error.code, error.message),
     }
+}
+
+/// Fire-and-forget scheduler nudge for CLI/MCP write paths.
+///
+/// Semantics: best-effort "work may exist; wake and run a dispatch pass".
+/// Never errors, never slows the caller beyond a small bounded timeout:
+///
+/// - daemon not running (no socket / stale socket): silent no-op
+/// - daemon predates `daemon/nudge` (method_not_found): ignored
+/// - any IO / RBAC / timeout failure: ignored
+///
+/// Callers invoke this AFTER a successful state mutation (subject
+/// create/update/status, queue enqueue/release) so a running daemon picks
+/// the work up immediately instead of on the next heartbeat tick.
+pub async fn nudge_daemon_scheduler_best_effort(project_root: &Path) {
+    let attempt = async {
+        if let Ok(Some(client)) = ControlClient::try_connect(project_root).await {
+            let _ = client.daemon_nudge().await;
+        }
+    };
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(250), attempt).await;
 }
 
 /// True when the underlying JSON-RPC error indicates the daemon doesn't

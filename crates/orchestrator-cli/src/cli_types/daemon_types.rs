@@ -54,7 +54,7 @@ pub(crate) struct DaemonSchedulerArgs {
         long,
         value_name = "SECONDS",
         value_parser = parse_positive_u64,
-        help = "Housekeeping timer interval in seconds (agent scheduling is reactive). When omitted, the daemon uses persisted config or built-in defaults."
+        help = "Fallback heartbeat sweep interval in seconds. Dispatch is event-driven (nudges, cron deadlines, completions); this only bounds how long out-of-band state edits wait and paces housekeeping. When omitted, the daemon uses persisted config or built-in defaults."
     )]
     pub(crate) interval_secs: Option<u64>,
     #[arg(
@@ -219,7 +219,7 @@ pub(crate) struct DaemonConfigArgs {
         long,
         value_name = "SECONDS",
         value_parser = parse_positive_u64,
-        help = "Set scheduler housekeeping interval in seconds. Hot-reloaded by running daemon."
+        help = "Set the fallback heartbeat sweep interval in seconds (dispatch is event-driven; this paces housekeeping). Hot-reloaded by running daemon."
     )]
     pub(crate) interval_secs: Option<u64>,
     #[arg(

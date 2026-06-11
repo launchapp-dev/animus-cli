@@ -44,6 +44,65 @@ impl ScheduleDispatch {
 
         outcomes
     }
+
+    /// Earliest upcoming cron occurrence (strictly after `now`) across all
+    /// enabled schedules compiled for `project_root`. Returns `None` when
+    /// no schedule is configured (pure heartbeat mode). The daemon loop
+    /// uses this as a `sleep_until` deadline so cron fires on time instead
+    /// of on the next heartbeat tick; the catch-up scan in
+    /// [`due_occurrence`] remains the recovery path for missed deadlines.
+    pub fn next_schedule_deadline(
+        project_root: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<chrono::DateTime<chrono::Utc>> {
+        let config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
+        next_deadline_for_schedules(&config.config.schedules, now)
+    }
+}
+
+/// Pure deadline computation across a schedule list: the minimum next
+/// occurrence strictly after `now` over all enabled schedules. Disabled
+/// schedules, empty cron expressions, and invalid cron expressions are
+/// skipped (invalid ones with a warning, mirroring [`evaluate_schedules`]).
+fn next_deadline_for_schedules(
+    schedules: &[orchestrator_core::workflow_config::WorkflowSchedule],
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    let parser = CronParser::builder().seconds(Seconds::Disallowed).year(Year::Disallowed).build();
+    let mut earliest: Option<chrono::DateTime<chrono::Utc>> = None;
+    for schedule in schedules {
+        if !schedule.enabled {
+            continue;
+        }
+        let expression = schedule.cron.trim();
+        if expression.is_empty() {
+            continue;
+        }
+        let cron = match parser.parse(expression) {
+            Ok(cron) => cron,
+            Err(error) => {
+                warn!(
+                    actor = protocol::ACTOR_DAEMON,
+                    schedule_id = %schedule.id,
+                    cron = %schedule.cron,
+                    error = %error,
+                    "schedule has invalid cron expression; excluded from deadline computation"
+                );
+                continue;
+            }
+        };
+        // `false` = exclusive of `now`: an occurrence exactly at `now` is
+        // handled by the tick currently running, so the next deadline must
+        // be strictly in the future (no busy-loop re-fires).
+        let Ok(next) = cron.find_next_occurrence(&now, false) else {
+            continue;
+        };
+        earliest = Some(match earliest {
+            Some(current) if current <= next => current,
+            _ => next,
+        });
+    }
+    earliest
 }
 
 fn dispatch_schedule<PipelineSpawner>(
@@ -126,6 +185,16 @@ fn evaluate_schedules(
 
     due
 }
+
+/// Maximum sleep between scheduler passes while at least one schedule is
+/// enabled: half the catch-up horizon. A cron occurrence that woke the loop
+/// but could not dispatch (pool/budget full) is retried by the catch-up
+/// scan on later passes — but only while it is still inside
+/// [`CATCH_UP_HORIZON_MINS`]. Capping the sleep at half the horizon
+/// guarantees at least one retry pass lands within the horizon even when
+/// the configured heartbeat (`interval_secs`) is much longer.
+pub(crate) const SCHEDULE_RETRY_SWEEP_MAX: std::time::Duration =
+    std::time::Duration::from_secs(CATCH_UP_HORIZON_MINS as u64 * 60 / 2);
 
 /// How far back the catch-up scan looks for a missed cron occurrence. Wide
 /// enough to absorb long ticks and `interval_secs` well above 60, but narrow
@@ -630,6 +699,120 @@ mod tests {
 
         let calls = pipeline_calls.lock().expect("pipeline lock");
         assert!(calls.is_empty());
+    }
+
+    fn deadline_schedule(id: &str, cron: &str, enabled: bool) -> orchestrator_core::WorkflowSchedule {
+        orchestrator_core::WorkflowSchedule {
+            id: id.to_string(),
+            cron: cron.to_string(),
+            workflow_ref: Some("standard-workflow".to_string()),
+            command: None,
+            input: None,
+            enabled,
+        }
+    }
+
+    #[test]
+    fn next_deadline_is_minimum_across_multiple_schedules() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:10Z".parse().expect("timestamp should parse");
+        let schedules = vec![
+            deadline_schedule("hourly", "0 * * * *", true),       // next: 13:00
+            deadline_schedule("quarterly", "*/15 * * * *", true), // next: 12:45
+            deadline_schedule("daily", "0 8 * * *", true),        // next: tomorrow 08:00
+        ];
+        let deadline = next_deadline_for_schedules(&schedules, now).expect("deadline should exist");
+        assert_eq!(deadline, "2026-03-04T12:45:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());
+    }
+
+    #[test]
+    fn next_deadline_is_strictly_after_now() {
+        // An occurrence exactly at `now` belongs to the tick that is
+        // currently running; the deadline must be the NEXT one, otherwise
+        // the loop would re-fire on the same minute (busy loop).
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:00:00Z".parse().expect("timestamp should parse");
+        let schedules = vec![deadline_schedule("hourly", "0 * * * *", true)];
+        let deadline = next_deadline_for_schedules(&schedules, now).expect("deadline should exist");
+        assert_eq!(deadline, "2026-03-04T13:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());
+    }
+
+    #[test]
+    fn next_deadline_is_none_without_schedules() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
+        assert!(next_deadline_for_schedules(&[], now).is_none(), "no schedules means pure heartbeat mode");
+    }
+
+    #[test]
+    fn next_deadline_skips_disabled_invalid_and_empty_cron() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:10Z".parse().expect("timestamp should parse");
+        let schedules = vec![
+            deadline_schedule("disabled", "*/5 * * * *", false),
+            deadline_schedule("broken", "*/0 * * * *", true),
+            deadline_schedule("blank", "   ", true),
+        ];
+        assert!(
+            next_deadline_for_schedules(&schedules, now).is_none(),
+            "disabled / invalid / empty cron entries must not contribute a deadline"
+        );
+
+        // A valid schedule alongside the broken ones still yields its own deadline.
+        let mut with_valid = schedules;
+        with_valid.push(deadline_schedule("hourly", "0 * * * *", true));
+        let deadline = next_deadline_for_schedules(&with_valid, now).expect("valid schedule should yield deadline");
+        assert_eq!(deadline, "2026-03-04T13:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());
+    }
+
+    #[test]
+    fn next_schedule_deadline_recomputes_from_reloaded_config() {
+        // The deadline is recomputed from the compiled config on every loop
+        // pass, so a workflow-config reload that adds/changes schedules is
+        // reflected on the next computation without daemon restart.
+        let temp = tempdir().expect("tempdir should be created");
+        let project_root = temp.path();
+        let root_str = project_root.to_string_lossy().to_string();
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:10Z".parse().expect("timestamp should parse");
+
+        let mut config = orchestrator_core::builtin_workflow_config();
+        config.default_workflow_ref = "standard-workflow".to_string();
+        config.workflows.push(orchestrator_core::WorkflowDefinition {
+            id: "standard-workflow".to_string(),
+            name: "Standard Workflow".to_string(),
+            description: "Test fixture pipeline.".to_string(),
+            phases: vec![
+                orchestrator_core::WorkflowPhaseEntry::Simple("requirements".into()),
+                orchestrator_core::WorkflowPhaseEntry::Simple("implementation".into()),
+            ],
+            post_success: None,
+            variables: Vec::new(),
+            worktree: None,
+            budget: None,
+        });
+        let workflow_ref = config.default_workflow_ref.clone();
+        config.schedules.push(orchestrator_core::WorkflowSchedule {
+            id: "hourly".to_string(),
+            cron: "0 * * * *".to_string(),
+            workflow_ref: Some(workflow_ref.clone()),
+            command: None,
+            input: None,
+            enabled: true,
+        });
+        orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
+
+        let first = ScheduleDispatch::next_schedule_deadline(&root_str, now).expect("deadline should exist");
+        assert_eq!(first, "2026-03-04T13:00:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());
+
+        // Reload: a tighter schedule lands in the compiled config.
+        config.schedules.push(orchestrator_core::WorkflowSchedule {
+            id: "quarterly".to_string(),
+            cron: "*/15 * * * *".to_string(),
+            workflow_ref: Some(workflow_ref),
+            command: None,
+            input: None,
+            enabled: true,
+        });
+        orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be rewritten");
+
+        let second = ScheduleDispatch::next_schedule_deadline(&root_str, now).expect("deadline should exist");
+        assert_eq!(second, "2026-03-04T12:45:00Z".parse::<chrono::DateTime<chrono::Utc>>().unwrap());
     }
 
     #[test]

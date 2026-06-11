@@ -369,6 +369,9 @@ impl ControlSurface for InProcessSurface {
                 ),
             )
             .await?;
+        // Control-socket writes land in the daemon process — wake the
+        // scheduler loop directly for an immediate dispatch pass.
+        crate::daemon::nudge_scheduler_local();
         serde_json::from_value(raw).map_err(|e| ControlError::Internal(format!("subject/create decode: {e}")))
     }
 
@@ -380,6 +383,7 @@ impl ControlSurface for InProcessSurface {
             })?
             .to_string();
         let raw = self.route_subject_call(&kind, "update", Some(json!({"id": id, "patch": request.patch}))).await?;
+        crate::daemon::nudge_scheduler_local();
         serde_json::from_value(raw).map_err(|e| ControlError::Internal(format!("subject/update decode: {e}")))
     }
 
@@ -413,6 +417,7 @@ impl ControlSurface for InProcessSurface {
             })?
             .to_string();
         let raw = self.route_subject_call(&kind, "status", Some(json!({"id": id, "status": request.status}))).await?;
+        crate::daemon::nudge_scheduler_local();
         serde_json::from_value(raw).map_err(|e| ControlError::Internal(format!("subject/status decode: {e}")))
     }
 
@@ -759,7 +764,13 @@ impl ControlSurface for InProcessSurface {
 
     async fn queue_enqueue(&self, request: QueueEnqueueRequest) -> Result<QueueEntry, ControlError> {
         match &self.queue_routing {
-            Some(routing) => routing.queue_enqueue(request).await,
+            Some(routing) => {
+                let entry = routing.queue_enqueue(request).await?;
+                // Control-socket enqueue lands in the daemon process —
+                // wake the scheduler loop so the entry drains immediately.
+                crate::daemon::nudge_scheduler_local();
+                Ok(entry)
+            }
             None => Err(ControlError::NotSupported("queue/enqueue routing not configured".to_string())),
         }
     }
@@ -780,7 +791,11 @@ impl ControlSurface for InProcessSurface {
 
     async fn queue_release(&self, request: QueueReleaseRequest) -> Result<Unit, ControlError> {
         match &self.queue_routing {
-            Some(routing) => routing.queue_release(request).await,
+            Some(routing) => {
+                let result = routing.queue_release(request).await?;
+                crate::daemon::nudge_scheduler_local();
+                Ok(result)
+            }
             None => Err(ControlError::NotSupported("queue/release routing not configured".to_string())),
         }
     }

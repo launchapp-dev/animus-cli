@@ -48,7 +48,7 @@ pub mod workflow_events;
 #[cfg(test)]
 mod tests;
 
-pub use client::{is_method_unavailable, ControlClient, ANIMUS_AS_PRINCIPAL_ENV};
+pub use client::{is_method_unavailable, nudge_daemon_scheduler_best_effort, ControlClient, ANIMUS_AS_PRINCIPAL_ENV};
 #[cfg(unix)]
 pub use connection::ControlConnection;
 pub use dispatch::{InProcessSurface, InProcessSurfaceBuilder};

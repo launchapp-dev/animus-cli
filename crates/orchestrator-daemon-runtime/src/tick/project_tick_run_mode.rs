@@ -5,6 +5,20 @@ use crate::{DaemonRuntimeOptions, ProjectTickContext, ProjectTickPreparation, Pr
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProjectTickRunMode {
     pub active_process_count: usize,
+    /// When `true` the tick runs the full reconciliation sweep
+    /// (manual-timeout, zombie-workflow, and stale-in-progress legs) in
+    /// addition to the dispatch legs. The daemon loop sets this on
+    /// heartbeat-cadence passes only; event wakes (nudge, cron deadline,
+    /// completion) run the cheaper dispatch-focused tick so a nudge storm
+    /// cannot multiply the heavy state scans. Completed-process reaping
+    /// always runs — it frees pool headroom the dispatch legs depend on.
+    pub housekeeping: bool,
+}
+
+impl Default for ProjectTickRunMode {
+    fn default() -> Self {
+        Self { active_process_count: 0, housekeeping: true }
+    }
 }
 
 impl ProjectTickRunMode {

@@ -112,6 +112,11 @@ pub(crate) async fn handle_queue(
                 crate::services::plugin_clients::call_queue_enqueue(project_root_path, &plugin_request)
                     .await?
                     .ok_or_else(|| queue_plugin_required("enqueue"))?;
+            // Wake a running daemon so the freshly enqueued entry drains
+            // now instead of on the next heartbeat. Fire-and-forget.
+            if plugin_response.enqueued {
+                orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(project_root_path).await;
+            }
             let translated = serde_json::json!({
                 "enqueued": plugin_response.enqueued,
                 "entry_id": plugin_response.entry_id,
@@ -328,6 +333,14 @@ async fn handle_queue_bulk(verb: BulkVerb, args: QueueSubjectArgs, project_root:
     let mut items = Vec::with_capacity(subject_ids.len());
     for subject_id in &subject_ids {
         items.push(apply_bulk_verb(verb, project_root, subject_id).await?);
+    }
+
+    // Released entries are immediately dispatchable — wake a running
+    // daemon so they drain now instead of on the next heartbeat. One
+    // nudge per bulk command, only when something actually changed.
+    if matches!(verb, BulkVerb::Release) && items.iter().any(|item| item.ok) {
+        orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(std::path::Path::new(project_root))
+            .await;
     }
 
     let failed: Vec<&BulkItemResult> = items.iter().filter(|item| !item.ok).collect();

@@ -7,6 +7,7 @@ mod daemon_runtime_options;
 mod daemon_runtime_state;
 mod plugin_preflight_wiring;
 mod run_daemon;
+mod scheduler_nudge;
 
 pub use daemon_event_log::DaemonEventLog;
 pub use daemon_events_poll_response::DaemonEventsPollResponse;
@@ -19,3 +20,7 @@ pub use plugin_preflight_wiring::{
     discover_installed_plugins, discover_installed_plugins_with_flavor_error, run_plugin_preflight, PreflightOutcome,
 };
 pub use run_daemon::{current_workflow_event_broadcaster, current_workflow_event_emitter, run_daemon};
+#[cfg(test)]
+pub(crate) use scheduler_nudge::nudge_test_lock;
+pub(crate) use scheduler_nudge::{clear_scheduler_nudge, install_scheduler_nudge};
+pub use scheduler_nudge::{current_scheduler_nudge, nudge_scheduler_local};
