@@ -7,11 +7,11 @@ For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.m
 
 ## Overview
 
-Animus currently exposes **78 built-in MCP tools** across these families:
+Animus currently exposes **82 built-in MCP tools** across these families:
 
 | Group | Tools | Purpose |
 |---|---:|---|
-| `animus.agent.*` | 10 | Agent profiles, runs, memory, and agent messaging |
+| `animus.agent.*` | 12 | Agent profiles, runs, memory, agent messaging, and blocking human-in-the-loop questions/approvals |
 | `animus.daemon.*` | 11 | Daemon lifecycle, health, events, and config |
 | `animus.subject.*` | 6 | Task, requirement, and external subject backends |
 | `animus.workflow.*` | 16 | Workflow execution, control, and definition inspection |
@@ -22,6 +22,7 @@ Animus currently exposes **78 built-in MCP tools** across these families:
 | `animus.memory.*` | 4 | Project-scoped durable agent memory |
 | `animus.plugin.*` | 9 | Installed-plugin inspection/mutation plus marketplace discovery/update |
 | `animus.logs.*` | 1 | Tail log entries from the active log backend |
+| `animus.interactions.*` | 2 | Non-blocking inbox over pending agent questions and approval requests (`animus mcp serve --management` only) |
 
 Most project-scoped tools accept an optional `project_root`. Marketplace tools
 may omit it because they operate on the public registry. Plugin mutation tools
@@ -206,6 +207,51 @@ Plugins:
 { "kind": "subject_backend" }                  // animus.plugin.browse
 { "name": "animus-provider-claude" }           // animus.plugin.update
 ```
+
+## Human-in-the-Loop Questions and Approvals
+
+Agents that hit an ambiguity or a sensitive action mid-run can park on a human
+answer without any protocol changes — the round-trip is a blocking MCP tool
+call against the same injected `animus` server:
+
+```json
+{ "agent_id": "swe", "question": "Migrate in place or copy table?", "options": ["in place", "copy"] }  // animus.agent.ask
+{ "agent_id": "swe", "action": "git push --force to main", "tool_name": "git.push" }                   // animus.agent.request_approval
+```
+
+Both tools write a pending interaction under
+`~/.animus/<repo-scope>/interactions/` and poll until a human answers via
+`animus agent interactions answer <id>` (or the `animus.interactions.answer`
+tool), or the timeout elapses (default 600s, max 3600s). `animus.agent.ask`
+times out with a structured error telling the agent to proceed with its best
+judgment; `animus.agent.request_approval` times out as a deny (fail closed).
+
+Before escalating, `animus.agent.request_approval` consults the agent
+profile's `approval_policy` (`auto_allow` / `auto_deny` / `default`, declared
+in the workflow YAML `agents:` block). Patterns match the request's
+`tool_name` when present, otherwise its `action`, with the same `*`-glob
+semantics as tool policies; `auto_deny` wins on overlap and `default` is one
+of `ask` (escalate), `allow`, or `deny`.
+
+Both blocking tools are bound to the server's own project scope (no
+`project_root` override). The agent identity can be pinned with
+`animus mcp serve --agent-id <ID>` (the ad-hoc `--agent` injection path
+appends it automatically) or the `ANIMUS_MCP_AGENT_ID` env var, so the
+payload `agent_id` cannot select a sibling profile with a looser policy.
+
+The non-blocking management surface for inbox UIs (registered only when the
+server runs as `animus mcp serve --management`; the default agent-injected
+server omits these tools so an agent cannot answer its own approvals):
+
+```json
+{ "all": false }                                  // animus.interactions.list
+{ "id": "<uuid>", "text": "use the copy table" }  // animus.interactions.answer (question)
+{ "id": "<uuid>", "decision": "deny", "message": "too risky" }  // animus.interactions.answer (approval)
+```
+
+Interaction lifecycle events (`interaction_created`, `interaction_answered`,
+`interaction_expired`) are appended to the daemon event log, so
+`animus daemon events` surfaces pending escalations without polling the store.
 
 ## Recommended Flow
 

@@ -169,6 +169,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
             &scope.tool_policy,
             scope_selected,
             args.no_animus_mcp,
+            args.agent.as_deref(),
         )? {
             // Provider CLIs that auto-discover a cwd-local `.mcp.json`
             // (claude-code) register MCP servers from that file rather than

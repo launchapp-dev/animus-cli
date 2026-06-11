@@ -1,7 +1,7 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 78 built-in tools across daemon, queue, agent, output, runner,
+registers 82 built-in tools across daemon, queue, agent, output, runner,
 workflow, plugin, skill, subject, logs, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
@@ -53,7 +53,7 @@ pre-v0.4 resource names can still enumerate and read the same data.
 
 ---
 
-## Agent Control (10 tools)
+## Agent Control (12 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -67,6 +67,38 @@ pre-v0.4 resource names can still enumerate and read the same data.
 | `animus.agent.memory.clear` | Clear project-scoped agent memory | `agent`, `project_root` |
 | `animus.agent.message.send` | Send a message on a configured agent channel | `channel`, `from`, `to`, `text`, `workflow_id`, `phase_id`, `project_root` |
 | `animus.agent.message.list` | List project-scoped agent messages | `channel`, `agent`, `limit`, `project_root` |
+| `animus.agent.ask` | Ask a human a question and block until answered or timed out (structured timeout error tells the agent to proceed with its best judgment) | `agent_id`, `question`, `options[]`, `timeout_secs` (default 600, max 3600), `workflow_id`, `task_id` |
+| `animus.agent.request_approval` | Request human approval for a sensitive action and block until decided; the agent profile's `approval_policy` can auto-allow/auto-deny without escalating, and a timeout denies (fail closed) | `agent_id`, `action`, `tool_name`, `arguments`, `timeout_secs` (default 600, max 3600), `workflow_id`, `task_id` |
+
+Unlike most tools on this server, the two blocking escalation tools accept no
+`project_root` override — they always operate on the server's own project
+scope so a payload cannot route an approval through another project's (more
+permissive) `approval_policy`. The agent identity can be pinned too: the
+`animus mcp serve --agent-id <ID>` flag (appended automatically by the
+ad-hoc `animus agent run --agent` / `animus chat send --agent` injection
+path) or the `ANIMUS_MCP_AGENT_ID` env var on the server process make the
+payload `agent_id` ignored, so an agent cannot claim a sibling profile with
+a looser policy. Without a pin, the payload `agent_id` selects the policy
+profile — pin the identity wherever the host knows it.
+
+---
+
+## Interactions (2 tools)
+
+Non-blocking management surface over the pending-interaction store under
+`~/.animus/<repo-scope>/interactions/` — the same store the blocking
+`animus.agent.ask` / `animus.agent.request_approval` calls park on. The CLI
+equivalent is `animus agent interactions {list, show, answer}`.
+
+These two tools are only registered when the server is started with
+`animus mcp serve --management`. The default (agent-injected) server omits
+them so an agent can never list or answer its own pending approvals — the
+approval gate stays human-only.
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `animus.interactions.list` | List pending interactions (set `all` to include answered/expired) | `all`, `agent_id`, `limit`, `project_root` |
+| `animus.interactions.answer` | Answer a question with `text`, or an approval with `decision` (`allow`/`deny`) plus optional `message`; unblocks the parked agent | `id`, `text`, `decision`, `message`, `answered_by`, `project_root` |
 
 ---
 

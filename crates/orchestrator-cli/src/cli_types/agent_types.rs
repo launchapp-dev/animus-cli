@@ -24,6 +24,51 @@ pub(crate) enum AgentCommand {
         #[command(subcommand)]
         command: AgentMessageCommand,
     },
+    /// Inspect and answer pending agent questions and approval requests.
+    Interactions {
+        #[command(subcommand)]
+        command: AgentInteractionsCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum AgentInteractionsCommand {
+    /// List pending interactions (use --all to include answered and expired).
+    List(AgentInteractionsListArgs),
+    /// Show a single interaction by id.
+    Show(AgentInteractionsShowArgs),
+    /// Answer a pending question or approval request.
+    Answer(AgentInteractionsAnswerArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentInteractionsListArgs {
+    #[arg(long, default_value_t = false, help = "Include answered and expired interactions.")]
+    pub(crate) all: bool,
+    #[arg(long, value_name = "AGENT_ID", help = "Filter interactions by requesting agent id.")]
+    pub(crate) agent: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentInteractionsShowArgs {
+    #[arg(value_name = "ID", help = "Interaction id.")]
+    pub(crate) id: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentInteractionsAnswerArgs {
+    #[arg(value_name = "ID", help = "Interaction id.")]
+    pub(crate) id: String,
+    #[arg(long, value_name = "TEXT", help = "Answer text for a question interaction.")]
+    pub(crate) text: Option<String>,
+    #[arg(long, default_value_t = false, conflicts_with_all = ["deny", "text"], help = "Approve an approval request.")]
+    pub(crate) allow: bool,
+    #[arg(long, default_value_t = false, conflicts_with = "text", help = "Deny an approval request.")]
+    pub(crate) deny: bool,
+    #[arg(long, value_name = "TEXT", help = "Optional message returned to the agent alongside the decision.")]
+    pub(crate) message: Option<String>,
+    #[arg(long = "by", value_name = "NAME", help = "Who answered. Defaults to 'human'.")]
+    pub(crate) answered_by: Option<String>,
 }
 
 #[derive(Debug, Args)]

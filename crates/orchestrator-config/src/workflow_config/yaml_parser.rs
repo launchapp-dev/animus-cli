@@ -1215,6 +1215,29 @@ workflows:
     }
 
     #[test]
+    fn yaml_agent_approval_policy_parses() {
+        let yaml = r#"
+agents:
+  swe:
+    system_prompt: Build the change.
+    approval_policy:
+      auto_allow: ["git.*", "cargo *"]
+      auto_deny: ["*force*"]
+      default: ask
+phases:
+  impl:
+    mode: agent
+    agent: swe
+"#;
+        let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
+        let swe = config.agent_profiles.get("swe").expect("swe agent");
+        let policy = swe.approval_policy.clone().expect("approval policy");
+        assert_eq!(policy.auto_allow, vec!["git.*".to_string(), "cargo *".to_string()]);
+        assert_eq!(policy.auto_deny, vec!["*force*".to_string()]);
+        assert_eq!(policy.default, crate::agent_runtime_config::ApprovalPolicyDefault::Ask);
+    }
+
+    #[test]
     fn yaml_fallback_tools_field_parses_in_agent_profile() {
         let yaml = r#"
 agents:

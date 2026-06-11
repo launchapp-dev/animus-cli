@@ -3,7 +3,7 @@ use clap::Subcommand;
 #[derive(Debug, Subcommand)]
 pub(crate) enum McpCommand {
     /// Start the MCP server in the current process.
-    Serve,
+    Serve(McpServeArgs),
     /// Start the memory context MCP server for workflow phases.
     Memory,
     /// Authenticate an OAuth-protected MCP server interactively
@@ -15,6 +15,23 @@ pub(crate) enum McpCommand {
     AuthStatus(McpAuthStatusArgs),
     /// Delete stored OAuth tokens for an MCP server.
     AuthLogout(McpAuthLogoutArgs),
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct McpServeArgs {
+    /// Also expose the human-side interaction management tools
+    /// (animus.interactions.list / animus.interactions.answer). Off by
+    /// default so agent-injected servers cannot answer their own
+    /// questions or approve their own approval requests.
+    #[arg(long, default_value_t = false)]
+    pub management: bool,
+    /// Pin the agent identity used by the blocking animus.agent.ask /
+    /// animus.agent.request_approval tools. When set, the payload
+    /// `agent_id` is ignored so a spawned agent cannot claim a sibling
+    /// profile whose approval_policy is more permissive. The host that
+    /// injects this server should pass the agent profile id here.
+    #[arg(long, value_name = "AGENT_ID")]
+    pub agent_id: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]

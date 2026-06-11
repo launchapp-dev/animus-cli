@@ -5,11 +5,13 @@ use orchestrator_core::services::ServiceHub;
 
 use crate::AgentCommand;
 
+pub(crate) mod interactions;
 mod profiles;
 pub(crate) mod provider_client;
 mod run;
 mod status;
 
+use interactions::{handle_agent_interactions_answer, handle_agent_interactions_list, handle_agent_interactions_show};
 use profiles::{
     handle_agent_get, handle_agent_list, handle_agent_memory_append, handle_agent_memory_clear,
     handle_agent_memory_get, handle_agent_message_list, handle_agent_message_send,
@@ -37,6 +39,11 @@ pub(crate) async fn handle_agent(
         AgentCommand::Message { command } => match command {
             crate::AgentMessageCommand::Send(args) => handle_agent_message_send(args, project_root, json),
             crate::AgentMessageCommand::List(args) => handle_agent_message_list(args, project_root, json),
+        },
+        AgentCommand::Interactions { command } => match command {
+            crate::AgentInteractionsCommand::List(args) => handle_agent_interactions_list(args, project_root, json),
+            crate::AgentInteractionsCommand::Show(args) => handle_agent_interactions_show(args, project_root, json),
+            crate::AgentInteractionsCommand::Answer(args) => handle_agent_interactions_answer(args, project_root, json),
         },
     }
 }

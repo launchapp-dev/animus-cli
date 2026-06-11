@@ -45,9 +45,13 @@ animus
 │   │   ├── get              Read memory for a configured agent
 │   │   ├── append           Append a memory entry for a configured agent
 │   │   └── clear            Clear memory for a configured agent
-│   └── message
-│       ├── send             Send a message on an agent channel
-│       └── list             List agent messages
+│   ├── message
+│   │   ├── send             Send a message on an agent channel
+│   │   └── list             List agent messages
+│   └── interactions
+│       ├── list             List pending agent questions and approval requests
+│       ├── show             Show a single interaction by id
+│       └── answer           Answer a pending question or approval request
 │
 ├── chat                     Hold multi-turn conversations with a provider tool (v0.5.10)
 │   ├── new                  Start a new (empty) conversation and print its id
@@ -229,7 +233,7 @@ animus
 │   └── cli                  Infer CLI provider details from run output
 │
 ├── mcp                      Run the Animus MCP service endpoint
-│   ├── serve                Start the MCP server in the current process
+│   ├── serve                Start the MCP server in the current process. --management also exposes the animus.interactions.* inbox tools (off by default so agent-injected servers cannot answer their own approvals); --agent-id <ID> pins the identity used by the blocking ask/request_approval tools
 │   ├── memory               Start the memory context MCP server for workflow phases
 │   ├── auth <server>        Authenticate an OAuth-protected MCP server (discovery + DCR + auth_code/PKCE + browser login); tokens stored in the OS keychain. Least-privilege: with no --scopes/config scopes, requests NONE (server default). Previews scopes + asks y/N before opening the browser. --url for servers not in config; --scopes to override; --yes to skip the prompt; --dry-run to resolve scopes without authorizing
 │   ├── auth-status          Show which OAuth-protected MCP servers are authenticated, with token expiry per principal. --server + --url to inspect a URL-bound token not in config
@@ -403,6 +407,38 @@ When no profile/skill names any server (plain `animus chat send` or a bare
 `animus agent run`), the baseline set is just the built-in `animus` server so
 the agent still has the Animus tools. A tool whose CLI cannot speak MCP
 (`cli/capabilities/supports_mcp` is false) receives no MCP wiring.
+
+### `animus agent interactions`
+
+The inbox for human-in-the-loop round-trips. Agents running with the injected
+`animus` MCP server can call the blocking `animus.agent.ask` /
+`animus.agent.request_approval` tools; each call parks the agent on a pending
+interaction stored under `~/.animus/<repo-scope>/interactions/` until a human
+answers here (or the call times out — questions return a structured
+best-judgment error, approvals deny fail-closed). All subcommands support
+`--json` with the standard `animus.cli.v1` envelope.
+
+```bash
+animus agent interactions list                # pending only
+animus agent interactions list --all          # include answered + expired
+animus agent interactions show <ID>
+animus agent interactions answer <ID> --text "use the copy table"   # question
+animus agent interactions answer <ID> --allow                       # approval
+animus agent interactions answer <ID> --deny --message "too risky"  # approval
+```
+
+| Flag | Description |
+|---|---|
+| `--all` | (`list`) Include answered and expired interactions; default lists pending only |
+| `--agent <AGENT_ID>` | (`list`) Filter by the requesting agent profile id |
+| `--text <TEXT>` | (`answer`) Answer text for a question interaction |
+| `--allow` / `--deny` | (`answer`) Decision for an approval interaction; exactly one is required |
+| `--message <TEXT>` | (`answer`) Optional message returned to the agent alongside the decision |
+| `--by <NAME>` | (`answer`) Who answered; defaults to `human` |
+
+Answering emits an `interaction_answered` record to the daemon event log
+(creation and expiry emit `interaction_created` / `interaction_expired`), so
+`animus daemon events` surfaces the round-trip without polling the store.
 
 ### `animus logs tail`
 
