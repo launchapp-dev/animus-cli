@@ -183,6 +183,22 @@ pub(crate) async fn run_turn(
     sink: &mut dyn ChatStreamSink,
     ctx: TurnContext<'_>,
 ) -> Result<u64> {
+    // Cross-process lock held for the WHOLE turn (read meta → append user →
+    // run provider → append assistant → save meta). Two simultaneous sends to
+    // one conversation would otherwise both read the same message_count,
+    // append same-seq user messages (which the replay filter then drops
+    // together), and last-writer-win on meta. Serializing the full turn is
+    // the correct semantic for a single conversation; other conversations use
+    // other lock files and proceed in parallel. Acquisition is a non-blocking
+    // try + async sleep so a contended lock never parks a runtime worker
+    // while the holder is itself awaiting provider events.
+    let _lock = loop {
+        if let Some(lock) = store.try_lock_conversation(ctx.conversation_id)? {
+            break lock;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    };
+
     let mut meta = store
         .load_meta(ctx.conversation_id)?
         .ok_or_else(|| anyhow!("conversation '{}' not found", ctx.conversation_id))?;
@@ -408,6 +424,7 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
     let mut stale_session = false;
     let mut fatal_error = None;
     let mut last_tool_name: Option<String> = None;
+    let mut finished = false;
 
     while let Some(event) = run.events.recv().await {
         match event {
@@ -514,6 +531,7 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
                 }
             }
             SessionEvent::Finished { exit_code } => {
+                finished = true;
                 if let Some(code) = exit_code {
                     if code != 0 && fatal_error.is_none() && !stale_session {
                         fatal_error = Some(format!("provider exited with code {code}"));
@@ -522,6 +540,15 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
                 break;
             }
         }
+    }
+
+    // The event channel closing WITHOUT a terminal `Finished`/`Error` means
+    // the provider died mid-turn (crash, kill, dropped sender). Treating that
+    // as success would persist a partial/empty assistant message and clear
+    // the session pointer as if the turn completed — fail it instead, leaving
+    // the stored session_id intact so the next turn can still resume.
+    if !finished && fatal_error.is_none() && !stale_session {
+        fatal_error = Some("provider stream ended without a terminal event".to_string());
     }
 
     Ok(TurnOutput { text, blocks, session_id, cost_usd, usage, stale_session, fatal_error })
@@ -992,6 +1019,85 @@ mod tests {
         let messages = store.load_messages("c1").unwrap();
         assert_eq!(messages.len(), 1, "no assistant turn should be persisted on failure");
         assert_eq!(messages[0].role, ChatRole::User);
+    }
+
+    #[test]
+    fn concurrent_sends_to_one_conversation_serialize() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("chat");
+        FileConversationStore::with_root_for_test(root.clone()).create(Some("c1".into())).unwrap();
+
+        // Each thread mimics a separate `animus chat send` process: its own
+        // store handle, producer, and runtime, racing the same conversation.
+        let handles: Vec<_> = (0..4)
+            .map(|index| {
+                let root = root.clone();
+                let dir = tmp.path().to_path_buf();
+                std::thread::spawn(move || {
+                    let store = FileConversationStore::with_root_for_test(root);
+                    let producer = MockProducer::new(vec![text_turn(&format!("a{index}"), &format!("sess-{index}"))]);
+                    let mut sink = CapturingSink::new();
+                    let message = format!("q{index}");
+                    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                    runtime
+                        .block_on(run_turn(
+                            &producer,
+                            &store,
+                            &mut sink,
+                            TurnContext {
+                                conversation_id: "c1",
+                                tool: "claude",
+                                model: "claude-sonnet-4-6",
+                                user_message: &message,
+                                cwd: dir.clone(),
+                                project_root: dir,
+                                reasoning_effort: None,
+                                mcp_contract: None,
+                            },
+                        ))
+                        .expect("concurrent send turn")
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("send thread");
+        }
+
+        let store = FileConversationStore::with_root_for_test(root);
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 8, "every user + assistant turn must persist");
+        let mut seqs: Vec<u64> = messages.iter().map(|m| m.seq).collect();
+        seqs.sort_unstable();
+        assert_eq!(seqs, (0..8).collect::<Vec<u64>>(), "seqs must be distinct and contiguous");
+        let meta = store.load_meta("c1").unwrap().unwrap();
+        assert_eq!(meta.message_count, 8, "meta count must reflect every persisted turn");
+    }
+
+    #[tokio::test]
+    async fn stream_end_without_terminal_event_fails_turn_and_keeps_session() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        // Turn 1 establishes a session. Turn 2's event stream dies mid-turn —
+        // the channel closes after a partial delta, with no Finished/Error.
+        let dead_stream = (vec![SessionEvent::TextDelta { text: "partial".into() }], None);
+        let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), dead_stream]);
+        let mut sink = CapturingSink::new();
+
+        run_turn(&producer, &store, &mut sink, ctx("c1", "claude", "q1", &tmp)).await.unwrap();
+        let mut sink2 = CapturingSink::new();
+        let err = run_turn(&producer, &store, &mut sink2, ctx("c1", "claude", "q2", &tmp))
+            .await
+            .expect_err("stream end without a terminal event must fail the turn");
+        assert!(err.to_string().contains("without a terminal event"), "{err}");
+
+        // The partial turn is NOT persisted as a successful assistant message.
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 3, "no assistant turn persisted for the dead stream");
+        assert_eq!(messages[2].role, ChatRole::User, "the user message itself must survive");
+        // The continuity pointer survives so the next turn can still resume.
+        let meta = store.load_meta("c1").unwrap().unwrap();
+        assert_eq!(meta.session_id.as_deref(), Some("sess-1"), "session pointer must survive a dead stream");
     }
 
     #[tokio::test]
