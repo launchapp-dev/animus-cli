@@ -165,6 +165,10 @@ pub(crate) struct TurnContext<'a> {
     /// to map (claude `--permission-mode`, codex `-c approval_policy`,
     /// gemini approval mode).
     pub permission_mode: Option<&'a str>,
+    /// Kernel-mediated approvals: when true, `extras.approvals = true` rides
+    /// every turn's session request so the transport routes permission
+    /// decisions through `animus.agent.request_approval`.
+    pub approvals: bool,
     /// Per-agent MCP runtime contract for this conversation, threaded into
     /// `extras.runtime_contract` so the provider wires the profile/skill-
     /// scoped MCP servers. `None` when the tool cannot speak MCP.
@@ -363,6 +367,15 @@ async fn drive_once(
     if let Some(level) = ctx.reasoning_effort {
         if let Value::Object(map) = &mut extras {
             map.insert("reasoning_effort".to_string(), Value::String(level.to_string()));
+        }
+    }
+
+    // Kernel-mediated approvals ride on extras for the transport to wire
+    // (claude `--permission-prompt-tool`; others system-prompt injection);
+    // applies to both the resume and replay paths.
+    if ctx.approvals {
+        if let Value::Object(map) = &mut extras {
+            map.insert("approvals".to_string(), Value::Bool(true));
         }
     }
 
@@ -726,6 +739,7 @@ mod tests {
             project_root: tmp.path().to_path_buf(),
             reasoning_effort: None,
             permission_mode: None,
+            approvals: false,
             mcp_contract: None,
         }
     }
@@ -785,6 +799,50 @@ mod tests {
             "absent --reasoning-effort must not inject the key; extras: {}",
             reqs[0].extras
         );
+    }
+
+    #[tokio::test]
+    async fn approvals_absent_leaves_extras_without_the_key() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let producer = MockProducer::new(vec![text_turn("hi", "sess-1")]);
+        let mut sink = CapturingSink::new();
+
+        run_turn(&producer, &store, &mut sink, ctx("c1", "claude", "hello", &tmp)).await.unwrap();
+
+        let reqs = producer.requests();
+        assert!(
+            reqs[0].extras.get("approvals").is_none(),
+            "approvals=false must not inject the key; extras: {}",
+            reqs[0].extras
+        );
+    }
+
+    #[tokio::test]
+    async fn approvals_threaded_into_extras_on_replay_and_resume() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), text_turn("a2", "sess-1")]);
+
+        let mut sink = CapturingSink::new();
+        let first = TurnContext { approvals: true, ..ctx("c1", "claude", "q1", &tmp) };
+        run_turn(&producer, &store, &mut sink, first).await.unwrap();
+        let mut sink2 = CapturingSink::new();
+        let second = TurnContext { approvals: true, ..ctx("c1", "claude", "q2", &tmp) };
+        run_turn(&producer, &store, &mut sink2, second).await.unwrap();
+
+        let reqs = producer.requests();
+        assert_eq!(reqs.len(), 2);
+        for (index, request) in reqs.iter().enumerate() {
+            assert_eq!(
+                request.extras.get("approvals").and_then(Value::as_bool),
+                Some(true),
+                "turn {index} must carry extras.approvals; extras: {}",
+                request.extras
+            );
+        }
     }
 
     #[tokio::test]
@@ -1110,6 +1168,7 @@ mod tests {
                                 project_root: dir,
                                 reasoning_effort: None,
                                 permission_mode: None,
+                                approvals: false,
                                 mcp_contract: None,
                             },
                         ))

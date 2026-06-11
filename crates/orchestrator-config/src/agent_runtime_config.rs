@@ -1112,13 +1112,12 @@ impl AgentRuntimeConfig {
         .or_else(|| {
             trim_nonempty(self.phase_agent_profile(phase_id).and_then(|profile| profile.permission_mode.as_deref()))
         })
-        // TODO(codex-p2): the workflow-runner-side read lives out-of-tree
-        // (launchapp-dev/animus-workflow-runner-default). The field already
-        // serializes through the compiled agent runtime config and the
-        // generated workflow YAML overlay, but workflow phase execution will
-        // not honour it until the runner consumes this accessor (and
-        // `animus-runtime-shared::WorkflowPhaseRuntimeSettings` grows a
-        // matching `permission_mode` field) when building session requests.
+        // The field serializes through the compiled agent runtime config and
+        // deserializes into
+        // `animus-runtime-shared::WorkflowPhaseRuntimeSettings::permission_mode`.
+        // The workflow-runner-side consumption lives out-of-tree
+        // (launchapp-dev/animus-workflow-runner-default) and maps it onto
+        // session requests starting with its next release.
     }
 
     pub fn phase_web_search(&self, phase_id: &str) -> Option<bool> {

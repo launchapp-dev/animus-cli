@@ -18,6 +18,13 @@ pub struct WorkflowPhaseRuntimeSettings {
     pub fallback_tools: Vec<String>,
     #[serde(default)]
     pub reasoning_effort: Option<String>,
+    /// Provider permission/approval mode forwarded verbatim to the spawned
+    /// CLI (claude `--permission-mode`, codex `-c approval_policy`, gemini
+    /// approval mode). Mirrors `AgentRuntimeOverrides::permission_mode` in
+    /// the compiled agent runtime config; the workflow_runner plugin maps it
+    /// onto the session request.
+    #[serde(default)]
+    pub permission_mode: Option<String>,
     #[serde(default)]
     pub web_search: Option<bool>,
     #[serde(default)]
@@ -354,4 +361,37 @@ pub fn inject_cli_launch_overrides(
     inject_claude_permission_mode(runtime_contract, tool_id);
     inject_codex_extra_config_overrides(runtime_contract, tool_id, phase_runtime_settings);
     inject_cli_extra_args(runtime_contract, tool_id, phase_runtime_settings);
+}
+
+#[cfg(test)]
+mod phase_runtime_settings_tests {
+    use super::*;
+
+    // The workflow_runner plugin deserializes `WorkflowPhaseRuntimeSettings`
+    // straight from the compiled agent runtime config's `phases.<id>.runtime`
+    // block, which the kernel serializes from
+    // `orchestrator_config::agent_runtime_config::AgentRuntimeOverrides`.
+    // This round-trip pins the additive `permission_mode` field so the
+    // kernel-populated value survives into the runner-side settings struct.
+    #[test]
+    fn permission_mode_round_trips_from_compiled_agent_runtime_overrides() {
+        let overrides = orchestrator_config::agent_runtime_config::AgentRuntimeOverrides {
+            permission_mode: Some("acceptEdits".to_string()),
+            reasoning_effort: Some("high".to_string()),
+            ..Default::default()
+        };
+        let compiled = serde_json::to_value(&overrides).expect("overrides serialize");
+        let settings: WorkflowPhaseRuntimeSettings =
+            serde_json::from_value(compiled).expect("settings deserialize from compiled runtime block");
+        assert_eq!(settings.permission_mode.as_deref(), Some("acceptEdits"));
+        assert_eq!(settings.reasoning_effort.as_deref(), Some("high"));
+    }
+
+    #[test]
+    fn permission_mode_defaults_to_none_for_legacy_runtime_blocks() {
+        let settings: WorkflowPhaseRuntimeSettings =
+            serde_json::from_value(serde_json::json!({ "model": "claude-sonnet-4-6" }))
+                .expect("legacy block deserializes");
+        assert!(settings.permission_mode.is_none());
+    }
 }

@@ -313,6 +313,15 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         crate::services::runtime::runtime_agent::provider_client::warn_unknown_permission_mode(mode);
     }
 
+    // Kernel-mediated approvals: the `--approvals` flag or an
+    // `approval_policy` on the selected `--agent` profile sets
+    // `extras.approvals = true` on every turn's session request.
+    let approvals = args.approvals
+        || crate::services::runtime::runtime_agent::provider_client::profile_has_approval_policy(
+            &project_root_path,
+            args.agent.as_deref(),
+        );
+
     let producer = ResolverTurnProducer::for_project(&project_root_path);
 
     // Resolve the per-agent MCP server set (profile ∪ skill ∪ --mcp-server
@@ -368,6 +377,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         project_root: project_root_path.clone(),
         reasoning_effort: args.reasoning_effort.map(|level| level.as_str()),
         permission_mode: permission_mode.as_deref(),
+        approvals,
         mcp_contract: mcp_contract.as_ref(),
     };
 

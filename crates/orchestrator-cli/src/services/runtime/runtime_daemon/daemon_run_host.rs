@@ -7,29 +7,57 @@ use orchestrator_logging::Logger;
 use serde_json::json;
 use tracing::info;
 
-use super::notifier_dispatcher::{NotifierLifecycleEvent, NotifierPluginDispatcher};
+use super::notifier_dispatcher::{InteractionEventWatcher, NotifierLifecycleEvent, NotifierPluginDispatcher};
 
 pub struct DefaultDaemonRunHost {
     seq: u64,
     json: bool,
     notifier_dispatcher: Option<NotifierPluginDispatcher>,
     startup_notification_error: Option<String>,
+    interaction_watcher: InteractionEventWatcher,
     pub logger: Arc<Logger>,
 }
 
 impl DefaultDaemonRunHost {
     pub fn new(project_root: &str, json: bool) -> Self {
         let logger = Arc::new(Logger::for_project(Path::new(project_root)));
-        match NotifierPluginDispatcher::discover(project_root) {
-            Ok(dispatcher) if dispatcher.has_notifiers() => {
-                Self { seq: 0, json, notifier_dispatcher: Some(dispatcher), startup_notification_error: None, logger }
+        // Prime the interaction watcher with pre-existing log history NOW so
+        // an interaction created between daemon start and the first
+        // flush_notifications tick is still treated as fresh and dispatched
+        // (codex round-1 P2: priming lazily on the first flush would swallow
+        // it as history).
+        let mut interaction_watcher = InteractionEventWatcher::default();
+        match DaemonEventLog::read_records(Some(1000), Some(project_root)) {
+            Ok(records) => {
+                let _ = interaction_watcher.unseen_interaction_events(records);
             }
-            Ok(_) => Self { seq: 0, json, notifier_dispatcher: None, startup_notification_error: None, logger },
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to prime interaction notification watcher");
+            }
+        }
+        match NotifierPluginDispatcher::discover(project_root) {
+            Ok(dispatcher) if dispatcher.has_notifiers() => Self {
+                seq: 0,
+                json,
+                notifier_dispatcher: Some(dispatcher),
+                startup_notification_error: None,
+                interaction_watcher,
+                logger,
+            },
+            Ok(_) => Self {
+                seq: 0,
+                json,
+                notifier_dispatcher: None,
+                startup_notification_error: None,
+                interaction_watcher,
+                logger,
+            },
             Err(error) => Self {
                 seq: 0,
                 json,
                 notifier_dispatcher: None,
                 startup_notification_error: Some(error.to_string()),
+                interaction_watcher,
                 logger,
             },
         }
@@ -847,10 +875,27 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
         }
     }
 
-    async fn flush_notifications(&mut self, _project_root: &str) -> Result<()> {
-        let Some(dispatcher) = self.notifier_dispatcher.as_ref() else {
+    async fn flush_notifications(&mut self, project_root: &str) -> Result<()> {
+        let Some(dispatcher) = self.notifier_dispatcher.clone() else {
             return Ok(());
         };
+        // Interaction lifecycle events (interaction_created / answered /
+        // expired) are appended to the daemon event log by the MCP serve and
+        // CLI answer processes, not by the daemon, so they never pass through
+        // emit_daemon_event_with_notifications. Tail the log each tick and
+        // fan fresh ones out to notifier plugins (best-effort: a read failure
+        // only skips this tick). The watcher's priming scan swallows history
+        // so daemon start does not replay old interactions.
+        match DaemonEventLog::read_records(Some(1000), Some(project_root)) {
+            Ok(records) => {
+                for record in self.interaction_watcher.unseen_interaction_events(records) {
+                    dispatcher.dispatch(record);
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "failed to read daemon event log for interaction notifications");
+            }
+        }
         let lifecycle = dispatcher.flush().await;
         if lifecycle.is_empty() {
             return Ok(());

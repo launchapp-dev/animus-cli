@@ -233,7 +233,7 @@ animus
 │   └── cli                  Infer CLI provider details from run output
 │
 ├── mcp                      Run the Animus MCP service endpoint
-│   ├── serve                Start the MCP server in the current process. --management also exposes the animus.interactions.* inbox tools (off by default so agent-injected servers cannot answer their own approvals); --agent-id <ID> pins the identity used by the blocking ask/request_approval tools
+│   ├── serve                Start the MCP server in the current process. --management also exposes the animus.interactions.* inbox tools (off by default so agent-injected servers cannot answer their own approvals); --agent-id <ID> pins the identity used by the blocking ask/request_approval tools; --workflow-id <ID> pins the workflow context and flips their default wait mode to suspend (env fallback: ANIMUS_MCP_WORKFLOW_ID)
 │   ├── memory               Start the memory context MCP server for workflow phases
 │   ├── auth <server>        Authenticate an OAuth-protected MCP server (discovery + DCR + auth_code/PKCE + browser login); tokens stored in the OS keychain. Least-privilege: with no --scopes/config scopes, requests NONE (server default). Previews scopes + asks y/N before opening the browser. --url for servers not in config; --scopes to override; --yes to skip the prompt; --dry-run to resolve scopes without authorizing
 │   ├── auth-status          Show which OAuth-protected MCP servers are authenticated, with token expiry per principal. --server + --url to inspect a URL-bound token not in config
@@ -408,6 +408,15 @@ is set the field stays unset and the provider uses its own default. A value
 outside the union of known provider modes prints a warning on stderr but is
 still passed through verbatim — Animus never blocks on it.
 
+### `animus agent run` / `animus chat send` (kernel-mediated approvals)
+
+Both surfaces accept an `--approvals` flag that enables kernel-mediated
+approvals for the run or turn.
+
+| Flag | Description |
+|---|---|
+| `--approvals` | Sets `extras.approvals = true` on the provider session request so transports route permission decisions through the `animus.agent.request_approval` MCP tool (claude wires `--permission-prompt-tool`; other providers receive a system-prompt instruction block). Implied when the selected `--agent` profile declares an `approval_policy`; absent otherwise. |
+
 ### `animus agent run` / `animus chat send` (per-agent MCP servers)
 
 Ad-hoc agents now receive the MCP servers their selected profile / skill
@@ -435,12 +444,21 @@ the agent still has the Animus tools. A tool whose CLI cannot speak MCP
 ### `animus agent interactions`
 
 The inbox for human-in-the-loop round-trips. Agents running with the injected
-`animus` MCP server can call the blocking `animus.agent.ask` /
-`animus.agent.request_approval` tools; each call parks the agent on a pending
-interaction stored under `~/.animus/<repo-scope>/interactions/` until a human
-answers here (or the call times out — questions return a structured
-best-judgment error, approvals deny fail-closed). All subcommands support
-`--json` with the standard `animus.cli.v1` envelope.
+`animus` MCP server can call the `animus.agent.ask` /
+`animus.agent.request_approval` tools; in block mode (the default for ad-hoc
+runs) each call parks the agent on a pending interaction stored under
+`~/.animus/<repo-scope>/interactions/` until a human answers here (or the
+call times out — questions return a structured best-judgment error,
+approvals deny fail-closed). When the serving MCP process is pinned to a
+workflow (`animus mcp serve --workflow-id <ID>` or `ANIMUS_MCP_WORKFLOW_ID`)
+the default wait mode is suspend instead: the tool returns immediately, the
+workflow is paused, and answering here resumes it with the decision as
+feedback via the detached-runner resume path (only suspend-created records
+ever trigger a resume — a block-mode payload `workflow_id` is observability
+metadata only). If the resume spawn fails the
+answer still succeeds and the output carries a `workflow_resume.guidance`
+field with the exact `animus workflow resume <id>` command to run. All
+subcommands support `--json` with the standard `animus.cli.v1` envelope.
 
 ```bash
 animus agent interactions list                # pending only

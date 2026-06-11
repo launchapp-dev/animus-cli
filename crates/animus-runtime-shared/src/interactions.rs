@@ -46,6 +46,12 @@ pub struct InteractionRecord {
     pub arguments: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeout_secs: Option<u64>,
+    /// True only for records created through the suspend wait mode (workflow
+    /// pinned on the serving MCP process). The answer paths only trigger a
+    /// workflow resume for suspended records, so an untrusted block-mode
+    /// payload `workflow_id` can never resume a sibling workflow.
+    #[serde(default)]
+    pub suspended: bool,
     pub status: InteractionStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
@@ -157,6 +163,7 @@ pub fn create_question_interaction(
         tool_name: None,
         arguments: None,
         timeout_secs,
+        suspended: false,
         status: InteractionStatus::Pending,
         answer: None,
         answer_message: None,
@@ -196,6 +203,7 @@ pub fn create_approval_interaction(
         tool_name: normalize_opt(tool_name),
         arguments,
         timeout_secs,
+        suspended: false,
         status: InteractionStatus::Pending,
         answer: None,
         answer_message: None,
@@ -282,6 +290,26 @@ pub fn answer_interaction(
         record.answered_at = Some(chrono::Utc::now().to_rfc3339());
         record.answered_by = Some(normalize_opt(answered_by).unwrap_or_else(|| "human".to_string()));
         write_interaction_atomic(&path, &record)?;
+        Ok(record)
+    })
+}
+
+/// Flag a freshly-created pending record as suspend-mode. Only suspended
+/// records trigger the workflow resume path when answered; the flag is set
+/// exclusively by the kernel's suspend wait mode (never from payloads).
+pub fn mark_interaction_suspended(project_root: &str, id: &str) -> Result<InteractionRecord> {
+    let id = id.trim();
+    anyhow::ensure!(!id.is_empty(), "interaction id must not be empty");
+    let path = interaction_path(project_root, id);
+    with_interaction_file_lock(&path, || {
+        if !path.exists() {
+            return Err(anyhow!("no interaction with id '{}'", id));
+        }
+        let mut record = read_interaction(&path)?;
+        if !record.suspended {
+            record.suspended = true;
+            write_interaction_atomic(&path, &record)?;
+        }
         Ok(record)
     })
 }

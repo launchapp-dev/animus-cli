@@ -133,6 +133,16 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         warn_unknown_permission_mode(mode);
     }
 
+    // Kernel-mediated approvals: the `--approvals` flag or an
+    // `approval_policy` on the selected `--agent` profile sets
+    // `extras.approvals = true`. Transports consume it (claude wires
+    // `--permission-prompt-tool mcp__animus__animus_agent_request_approval`;
+    // others inject a system-prompt instruction block) — the kernel only
+    // sets the flag.
+    if args.approvals || profile_has_approval_policy(&project_root_path, args.agent.as_deref()) {
+        extras.insert("approvals".to_string(), Value::Bool(true));
+    }
+
     // `--runtime-contract-json` wins over a `runtime_contract` key
     // forwarded through `--context-json` (matches the deleted
     // sidecar's precedence). Cache the parsed value so we can read the
@@ -237,6 +247,17 @@ pub(crate) fn profile_permission_mode(project_root: &Path, agent_id: Option<&str
         .map(str::trim)
         .filter(|mode| !mode.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Whether the agent profile declares an `approval_policy`. Reads the
+/// compiled agent runtime config, same as [`profile_permission_mode`].
+pub(crate) fn profile_has_approval_policy(project_root: &Path, agent_id: Option<&str>) -> bool {
+    let Some(agent_id) = agent_id else {
+        return false;
+    };
+    orchestrator_core::load_agent_runtime_config_or_default(project_root)
+        .agent_profile(agent_id)
+        .is_some_and(|profile| profile.approval_policy.is_some())
 }
 
 /// Warn on stderr when a permission mode is not in the union of values any
@@ -440,6 +461,7 @@ mod tests {
             prompt: Some("hi".to_string()),
             reasoning_effort: None,
             permission_mode: None,
+            approvals: false,
             cwd: Some(project_root.to_string()),
             timeout_secs: None,
             context_json: None,
@@ -716,6 +738,61 @@ agents:
         args.permission_mode = Some("totally-custom-mode".to_string());
         let request = session_request_from_args(&args, &root_str).expect("an unknown mode must not block the run");
         assert_eq!(request.permission_mode.as_deref(), Some("totally-custom-mode"));
+    }
+
+    #[test]
+    fn agent_run_without_approvals_leaves_extras_unset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let args = base_args(&root_str);
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert!(
+            request.extras.pointer("/approvals").is_none(),
+            "no flag and no profile policy must leave extras.approvals absent; extras: {}",
+            request.extras
+        );
+    }
+
+    #[test]
+    fn agent_run_approvals_flag_sets_extras_approvals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let mut args = base_args(&root_str);
+        args.approvals = true;
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert_eq!(request.extras.pointer("/approvals").and_then(Value::as_bool), Some(true));
+    }
+
+    #[test]
+    fn agent_run_profile_approval_policy_sets_extras_approvals() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+        std::fs::create_dir_all(root.join(".animus")).unwrap();
+        std::fs::write(
+            root.join(".animus").join("workflows.yaml"),
+            r#"
+agents:
+  gated:
+    description: "Gated agent"
+    approval_policy:
+      default: ask
+"#,
+        )
+        .unwrap();
+
+        let mut args = base_args(&root_str);
+        args.agent = Some("gated".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert_eq!(
+            request.extras.pointer("/approvals").and_then(Value::as_bool),
+            Some(true),
+            "an --agent profile with an approval_policy must set extras.approvals"
+        );
     }
 
     #[test]

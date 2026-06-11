@@ -234,6 +234,7 @@ mod tests {
             prompt: Some("test".to_string()),
             reasoning_effort: None,
             permission_mode: None,
+            approvals: false,
             cwd: None,
             context_json: None,
             timeout_secs: None,

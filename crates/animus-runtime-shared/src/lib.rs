@@ -47,8 +47,8 @@ pub use evals::{
 };
 pub use interactions::{
     answer_interaction, create_approval_interaction, create_question_interaction, expire_interaction,
-    list_interactions, load_interaction, InteractionKind, InteractionRecord, InteractionStatus,
-    INTERACTION_ANSWER_ALLOW, INTERACTION_ANSWER_DENY,
+    list_interactions, load_interaction, mark_interaction_suspended, InteractionKind, InteractionRecord,
+    InteractionStatus, INTERACTION_ANSWER_ALLOW, INTERACTION_ANSWER_DENY,
 };
 pub use ipc::*;
 pub use payload_traversal::{

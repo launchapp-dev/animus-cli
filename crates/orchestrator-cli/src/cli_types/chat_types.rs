@@ -77,6 +77,12 @@ pub(crate) struct ChatSendArgs {
     /// default|auto_edit|yolo). Overrides any configured agent-profile value.
     #[arg(long, value_name = "MODE")]
     pub(crate) permission_mode: Option<String>,
+    /// Enable kernel-mediated approvals: sets `extras.approvals` on the
+    /// session request so transports route permission decisions through
+    /// `animus.agent.request_approval`. Implied when the selected `--agent`
+    /// profile declares an `approval_policy`.
+    #[arg(long, default_value_t = false)]
+    pub(crate) approvals: bool,
     /// Title for the conversation. Names a freshly-created conversation, or
     /// renames the target one. An empty string clears the title.
     #[arg(long)]
