@@ -58,7 +58,7 @@
     "workflow_runners": [
       {
         "repo": "launchapp-dev/animus-workflow-runner-default",
-        "tag": "v0.4.2"
+        "tag": "v0.4.3"
       }
     ],
     "queues": [
