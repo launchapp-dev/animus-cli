@@ -37,6 +37,12 @@ pub(crate) enum PluginCommand {
     /// or `--name <NAME>` (exactly one required). `--check` previews the diff
     /// without writing; `--yes` skips the confirmation prompt.
     Update(PluginUpdateArgs),
+    /// Report version drift for every installed plugin: installed tag vs the
+    /// recommended pin in `default-install.json` vs the latest tag published
+    /// in the public plugin registry. Informational (exit 0) unless
+    /// `--exit-code` is passed. Works offline against pins alone — latest is
+    /// reported as unknown when the registry is unreachable.
+    Outdated(PluginOutdatedArgs),
     /// Install the standard set of provider plugins from public GitHub releases
     /// (claude, codex, gemini, opencode, oai). Skips plugins that are already
     /// installed. Optional flags pull in additional default plugins.
@@ -267,8 +273,12 @@ pub(crate) struct PluginSearchArgs {
     #[arg(long, value_name = "URL", default_value = DEFAULT_PLUGIN_REGISTRY_URL)]
     pub(crate) registry_url: String,
     /// Bypass the local registry cache and force a fresh fetch.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with = "offline")]
     pub(crate) no_cache: bool,
+    /// Skip the network entirely and serve the cached registry index
+    /// regardless of its age. Errors only when no cache exists yet.
+    #[arg(long, default_value_t = false)]
+    pub(crate) offline: bool,
 }
 
 #[derive(Debug, Args)]
@@ -289,8 +299,33 @@ pub(crate) struct PluginBrowseArgs {
     #[arg(long, value_name = "URL", default_value = DEFAULT_PLUGIN_REGISTRY_URL)]
     pub(crate) registry_url: String,
     /// Bypass the local registry cache and force a fresh fetch.
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = false, conflicts_with = "offline")]
     pub(crate) no_cache: bool,
+    /// Skip the network entirely and serve the cached registry index
+    /// regardless of its age. Errors only when no cache exists yet.
+    #[arg(long, default_value_t = false)]
+    pub(crate) offline: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginOutdatedArgs {
+    /// Emit results as JSON.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
+    /// Exit non-zero when at least one installed plugin is outdated
+    /// (for CI gates). Without this flag the command always exits 0.
+    #[arg(long = "exit-code", default_value_t = false)]
+    pub(crate) exit_code: bool,
+    /// Override the registry URL. Defaults to launchapp-dev/animus-plugin-registry main.
+    #[arg(long, value_name = "URL", default_value = DEFAULT_PLUGIN_REGISTRY_URL)]
+    pub(crate) registry_url: String,
+    /// Bypass the local registry cache and force a fresh fetch.
+    #[arg(long, default_value_t = false, conflicts_with = "offline")]
+    pub(crate) no_cache: bool,
+    /// Skip the network entirely. Latest tags come from the cached registry
+    /// index when one exists, otherwise they are reported as unknown.
+    #[arg(long, default_value_t = false)]
+    pub(crate) offline: bool,
 }
 
 #[derive(Debug, Args)]

@@ -237,6 +237,7 @@ impl PluginRouting for PluginRoutingImpl {
             stability: None,
             registry_url: String::new(),
             no_cache: false,
+            offline: false,
         };
         let output = run_plugin_search(req).await.map_err(internal)?;
         let entries: Vec<WireRegistryEntry> = output
@@ -263,6 +264,7 @@ impl PluginRouting for PluginRoutingImpl {
             available: request.available,
             registry_url: String::new(),
             no_cache: false,
+            offline: false,
         };
         let output = run_plugin_browse(req).await.map_err(internal)?;
         let mut entries: Vec<WireRegistryEntry> = Vec::new();

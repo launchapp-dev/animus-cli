@@ -23,7 +23,8 @@ use orchestrator_plugin_host::{legacy_plugins_registry_path, plugins_registry_pa
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    invalid_input_error, print_value, PluginBrowseArgs, PluginSearchArgs, PluginUpdateArgs, DEFAULT_PLUGIN_REGISTRY_URL,
+    invalid_input_error, print_value, PluginBrowseArgs, PluginOutdatedArgs, PluginSearchArgs, PluginUpdateArgs,
+    DEFAULT_PLUGIN_REGISTRY_URL,
 };
 
 use super::{run_plugin_install, PluginInstallOutput, PluginInstallRequest};
@@ -89,6 +90,7 @@ pub(crate) struct PluginSearchRequest {
     pub(crate) stability: Option<String>,
     pub(crate) registry_url: String,
     pub(crate) no_cache: bool,
+    pub(crate) offline: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -117,7 +119,7 @@ pub(crate) async fn run_plugin_search(req: PluginSearchRequest) -> Result<Plugin
     } else {
         req.registry_url.clone()
     };
-    let index = fetch_registry_index(&registry_url, req.no_cache).await?;
+    let index = fetch_registry_index(&registry_url, RegistryCachePolicy::from_flags(req.no_cache, req.offline)).await?;
     let total = index.plugins.len();
 
     let query_lower = req.query.as_deref().map(str::to_ascii_lowercase);
@@ -196,6 +198,7 @@ pub(crate) async fn handle_plugin_search(args: PluginSearchArgs) -> Result<()> {
         stability: args.stability,
         registry_url: args.registry_url,
         no_cache: args.no_cache,
+        offline: args.offline,
     })
     .await?;
 
@@ -235,6 +238,7 @@ pub(crate) struct PluginBrowseRequest {
     pub(crate) available: bool,
     pub(crate) registry_url: String,
     pub(crate) no_cache: bool,
+    pub(crate) offline: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -266,7 +270,7 @@ pub(crate) async fn run_plugin_browse(req: PluginBrowseRequest) -> Result<Plugin
     } else {
         req.registry_url.clone()
     };
-    let index = fetch_registry_index(&registry_url, req.no_cache).await?;
+    let index = fetch_registry_index(&registry_url, RegistryCachePolicy::from_flags(req.no_cache, req.offline)).await?;
     let total = index.plugins.len();
     let installed = read_installed_index().unwrap_or_default();
     let kind_lower = req.kind.as_deref().map(str::to_ascii_lowercase);
@@ -316,6 +320,7 @@ pub(crate) async fn handle_plugin_browse(args: PluginBrowseArgs) -> Result<()> {
         available: args.available,
         registry_url: args.registry_url,
         no_cache: args.no_cache,
+        offline: args.offline,
     })
     .await?;
     if json {
@@ -961,6 +966,199 @@ async fn restart_daemon_after_update(project_root: &str, update_failures: usize)
     }
 }
 
+// =================== Outdated ===================
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct PluginOutdatedRequest {
+    pub(crate) registry_url: String,
+    pub(crate) no_cache: bool,
+    pub(crate) offline: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PluginOutdatedRow {
+    pub(crate) name: String,
+    pub(crate) installed_tag: Option<String>,
+    pub(crate) recommended_tag: Option<String>,
+    /// Latest tag published in the plugin registry. `None` when the registry
+    /// was unreachable (offline / network failure) or has no matching entry.
+    pub(crate) latest_tag: Option<String>,
+    /// `current`, `outdated`, `ahead`, `unknown`, or `local`
+    /// (non-release-source plugins that drift tracking cannot apply to).
+    pub(crate) status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PluginOutdatedOutput {
+    pub(crate) registry_url: String,
+    /// False when latest tags could not be resolved (offline or fetch failed).
+    pub(crate) registry_reachable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) registry_error: Option<String>,
+    pub(crate) considered: usize,
+    pub(crate) outdated: usize,
+    pub(crate) rows: Vec<PluginOutdatedRow>,
+}
+
+/// True when `installed` lags behind `target`. Non-semver tags fall back to
+/// string inequality — any difference is reported as drift so the operator
+/// looks at it.
+fn tag_is_behind(installed: &str, target: &str) -> bool {
+    match compare_tags(installed, target) {
+        Some(std::cmp::Ordering::Less) => true,
+        Some(_) => false,
+        None => installed != target,
+    }
+}
+
+/// Decide a drift status from the installed tag and the known reference tags.
+fn outdated_status(
+    installed_tag: Option<&str>,
+    recommended_tag: Option<&str>,
+    latest_tag: Option<&str>,
+) -> (&'static str, Option<String>) {
+    let Some(installed) = installed_tag else {
+        return ("unknown", Some("installed release tag unknown".to_string()));
+    };
+    let targets: Vec<&str> = [recommended_tag, latest_tag].into_iter().flatten().collect();
+    if targets.is_empty() {
+        return ("unknown", Some("no recommended pin and no registry entry".to_string()));
+    }
+    if targets.iter().any(|t| tag_is_behind(installed, t)) {
+        return ("outdated", None);
+    }
+    let all_ahead = targets.iter().all(|t| matches!(compare_tags(installed, t), Some(std::cmp::Ordering::Greater)));
+    if all_ahead {
+        return ("ahead", Some("ahead of every known reference".to_string()));
+    }
+    ("current", None)
+}
+
+/// Pure drift computation: compare every installed plugin against the
+/// recommended pins and (when available) the registry's latest tags.
+fn build_outdated_rows(
+    installed: &BTreeMap<String, InstalledPlugin>,
+    pins: &RecommendedPins,
+    registry: Option<&PluginRegistryIndex>,
+) -> Vec<PluginOutdatedRow> {
+    let mut rows: Vec<PluginOutdatedRow> = Vec::with_capacity(installed.len());
+    for entry in installed.values() {
+        let source_kind = entry.source_kind.as_deref().unwrap_or("");
+        if source_kind != "release" {
+            let note = if source_kind.is_empty() {
+                "not from registry (no source_kind)".to_string()
+            } else {
+                format!("not from registry (source_kind={source_kind})")
+            };
+            rows.push(PluginOutdatedRow {
+                name: entry.name.clone(),
+                installed_tag: entry.release_tag.clone(),
+                recommended_tag: None,
+                latest_tag: None,
+                status: "local",
+                note: Some(note),
+            });
+            continue;
+        }
+        let slug = origin_to_repo_slug(entry.origin.as_deref());
+        let recommended_tag = slug.as_deref().and_then(|s| pins.lookup(s)).map(|(t, _)| t.clone());
+        let latest_tag = registry.and_then(|idx| {
+            idx.plugins
+                .iter()
+                .find(|p| slug.as_deref() == Some(p.repo.as_str()) || p.name == entry.name)
+                .and_then(|p| p.latest_tag.clone())
+        });
+        let (status, note) =
+            outdated_status(entry.release_tag.as_deref(), recommended_tag.as_deref(), latest_tag.as_deref());
+        rows.push(PluginOutdatedRow {
+            name: entry.name.clone(),
+            installed_tag: entry.release_tag.clone(),
+            recommended_tag,
+            latest_tag,
+            status,
+            note,
+        });
+    }
+    rows
+}
+
+pub(crate) async fn run_plugin_outdated(req: PluginOutdatedRequest) -> Result<PluginOutdatedOutput> {
+    let registry_url = if req.registry_url.trim().is_empty() {
+        DEFAULT_PLUGIN_REGISTRY_URL.to_string()
+    } else {
+        req.registry_url.clone()
+    };
+    let installed = read_installed_index().context("failed to read installed plugin registry")?;
+    let pins = load_recommended_pins()?;
+
+    // Registry fetch is best-effort: drift against the recommended pins is
+    // still meaningful when the network (or the cache, in --offline mode) is
+    // unavailable, so a fetch failure degrades to latest=unknown instead of
+    // failing the command.
+    let policy = RegistryCachePolicy::from_flags(req.no_cache, req.offline);
+    let (registry, registry_error) = match fetch_registry_index(&registry_url, policy).await {
+        Ok(index) => (Some(index), None),
+        Err(err) => (None, Some(format!("{err:#}"))),
+    };
+
+    let rows = build_outdated_rows(&installed, &pins, registry.as_ref());
+    let outdated = rows.iter().filter(|r| r.status == "outdated").count();
+    Ok(PluginOutdatedOutput {
+        registry_url,
+        registry_reachable: registry.is_some(),
+        registry_error,
+        considered: rows.len(),
+        outdated,
+        rows,
+    })
+}
+
+pub(crate) async fn handle_plugin_outdated(args: PluginOutdatedArgs, root_json: bool) -> Result<()> {
+    let json = args.json || root_json;
+    let output = run_plugin_outdated(PluginOutdatedRequest {
+        registry_url: args.registry_url,
+        no_cache: args.no_cache,
+        offline: args.offline,
+    })
+    .await?;
+
+    if json {
+        print_value(&output, true)?;
+    } else {
+        if output.rows.is_empty() {
+            println!("no installed plugins found");
+        } else {
+            println!("{:<34} {:<12} {:<12} {:<12} Status", "Plugin", "Installed", "Recommended", "Latest");
+            for row in &output.rows {
+                let installed = row.installed_tag.as_deref().unwrap_or("--");
+                let recommended = row.recommended_tag.as_deref().unwrap_or("--");
+                let latest = row.latest_tag.as_deref().unwrap_or("unknown");
+                let status: String = match row.note.as_deref() {
+                    Some(note) => format!("{} ({note})", row.status),
+                    None => row.status.to_string(),
+                };
+                println!("{:<34} {:<12} {:<12} {:<12} {}", row.name, installed, recommended, latest, status);
+            }
+            println!();
+            println!("{} of {} installed plugin(s) outdated", output.outdated, output.considered);
+        }
+        if !output.registry_reachable {
+            let detail = output.registry_error.as_deref().unwrap_or("registry unavailable");
+            eprintln!("warning: latest tags unknown — {detail}");
+        }
+        if output.outdated > 0 {
+            println!("run `animus plugin update --all --check` to preview the fix");
+        }
+    }
+
+    if args.exit_code && output.outdated > 0 {
+        return Err(anyhow!("{} installed plugin(s) are outdated", output.outdated));
+    }
+    Ok(())
+}
+
 // =================== Installed registry parsing ===================
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -1062,13 +1260,82 @@ fn cache_path() -> PathBuf {
     base.join("animus").join("plugin-registry.json")
 }
 
-/// Fetch the registry index from `url`, honoring the on-disk cache.
-pub(crate) async fn fetch_registry_index(url: &str, no_cache: bool) -> Result<PluginRegistryIndex> {
-    if !no_cache {
-        if let Some(idx) = load_from_cache(url) {
-            return Ok(idx);
+/// How `fetch_registry_index` balances the on-disk cache against the network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RegistryCachePolicy {
+    /// Fresh cache (within TTL) wins; otherwise fetch, falling back to a
+    /// stale cache with a loud warning when the network fails.
+    Default,
+    /// Skip the cache read and force a network fetch. Network failures are
+    /// hard errors — the caller explicitly asked for fresh data.
+    NoCache,
+    /// Never touch the network. Serve the cache regardless of age; error
+    /// only when no cache exists for this URL.
+    Offline,
+}
+
+impl RegistryCachePolicy {
+    pub(crate) fn from_flags(no_cache: bool, offline: bool) -> Self {
+        // clap marks the flags mutually exclusive; offline wins defensively.
+        if offline {
+            Self::Offline
+        } else if no_cache {
+            Self::NoCache
+        } else {
+            Self::Default
         }
     }
+}
+
+/// Fetch the registry index from `url`, honoring the on-disk cache per `policy`.
+pub(crate) async fn fetch_registry_index(url: &str, policy: RegistryCachePolicy) -> Result<PluginRegistryIndex> {
+    match policy {
+        RegistryCachePolicy::Offline => match load_cache_entry(url) {
+            Some((index, age)) => {
+                if age > REGISTRY_CACHE_TTL {
+                    eprintln!(
+                        "warning: --offline serving a cached registry index that is {} old ({})",
+                        format_age(age),
+                        cache_path().display()
+                    );
+                }
+                Ok(index)
+            }
+            None => Err(invalid_input_error(format!(
+                "--offline requested but no cached registry index exists for {url} at {}; \
+                 run once without --offline to populate the cache",
+                cache_path().display()
+            ))),
+        },
+        RegistryCachePolicy::NoCache => fetch_and_cache(url).await,
+        RegistryCachePolicy::Default => {
+            let cached = load_cache_entry(url);
+            if let Some((index, age)) = &cached {
+                if *age <= REGISTRY_CACHE_TTL {
+                    return Ok(index.clone());
+                }
+            }
+            match fetch_and_cache(url).await {
+                Ok(index) => Ok(index),
+                Err(fetch_err) => match cached {
+                    Some((index, age)) => {
+                        eprintln!(
+                            "warning: registry fetch failed ({fetch_err:#}); \
+                             falling back to a STALE cached index that is {} old ({}). \
+                             Results may be out of date.",
+                            format_age(age),
+                            cache_path().display()
+                        );
+                        Ok(index)
+                    }
+                    None => Err(fetch_err),
+                },
+            }
+        }
+    }
+}
+
+async fn fetch_and_cache(url: &str) -> Result<PluginRegistryIndex> {
     let body = http_get(url).await?;
     let index: PluginRegistryIndex =
         serde_json::from_str(&body).with_context(|| format!("failed to parse plugin registry JSON from {url}"))?;
@@ -1078,21 +1345,34 @@ pub(crate) async fn fetch_registry_index(url: &str, no_cache: bool) -> Result<Pl
     Ok(index)
 }
 
-fn load_from_cache(url: &str) -> Option<PluginRegistryIndex> {
+/// Load the cached index for `url` regardless of age, returning the cache age
+/// alongside it. Callers decide whether the entry is fresh enough.
+fn load_cache_entry(url: &str) -> Option<(PluginRegistryIndex, Duration)> {
     let path = cache_path();
     let meta = std::fs::metadata(&path).ok()?;
     let modified = meta.modified().ok()?;
-    let age = SystemTime::now().duration_since(modified).ok()?;
-    if age > REGISTRY_CACHE_TTL {
-        return None;
-    }
+    let age = SystemTime::now().duration_since(modified).unwrap_or(Duration::ZERO);
     let body = std::fs::read_to_string(&path).ok()?;
     let envelope: CachedRegistry = serde_json::from_str(&body).ok()?;
     if envelope.url != url {
         return None;
     }
     let index: PluginRegistryIndex = serde_json::from_str(&envelope.body).ok()?;
-    Some(index)
+    Some((index, age))
+}
+
+/// Render a cache age as a short human string ("3h", "2d", "45m").
+fn format_age(age: Duration) -> String {
+    let secs = age.as_secs();
+    if secs >= 86_400 {
+        format!("{}d", secs / 86_400)
+    } else if secs >= 3_600 {
+        format!("{}h", secs / 3_600)
+    } else if secs >= 60 {
+        format!("{}m", secs / 60)
+    } else {
+        format!("{secs}s")
+    }
 }
 
 fn write_cache(url: &str, body: &str) -> Result<()> {
@@ -1112,20 +1392,63 @@ struct CachedRegistry {
     body: String,
 }
 
+/// Total attempts for a registry GET: 1 initial + 2 retries.
+const HTTP_GET_ATTEMPTS: u32 = 3;
+/// Base backoff between attempts (doubled per retry: 250ms, 500ms).
+const HTTP_GET_BACKOFF: Duration = Duration::from_millis(250);
+
+/// Whether a failed HTTP status is worth retrying: transient server errors
+/// and rate limits; other 4xx are deterministic and fail immediately.
+fn is_retryable_status(status: u16) -> bool {
+    status == 429 || (500..=599).contains(&status)
+}
+
+/// Actionable error message for an HTTP 429 from the registry host.
+fn rate_limit_message(url: &str) -> String {
+    format!(
+        "GET {url} was rate-limited (HTTP 429). The registry host is throttling \
+         requests — wait a minute and retry, or pass --offline to serve the \
+         cached registry index without touching the network."
+    )
+}
+
 async fn http_get(url: &str) -> Result<String> {
     let agent = format!("animus-cli/{}", env!("CARGO_PKG_VERSION"));
-    let response = reqwest::Client::builder()
+    let client = reqwest::Client::builder()
         .user_agent(agent)
         .timeout(Duration::from_secs(20))
         .build()
-        .context("failed to build HTTP client")?
-        .get(url)
-        .send()
-        .await
-        .with_context(|| format!("failed to GET {url}"))?
-        .error_for_status()
-        .with_context(|| format!("GET {url} returned non-success status"))?;
-    response.text().await.with_context(|| format!("failed to read body from {url}"))
+        .context("failed to build HTTP client")?;
+
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=HTTP_GET_ATTEMPTS {
+        if attempt > 1 {
+            tokio::time::sleep(HTTP_GET_BACKOFF * 2u32.pow(attempt - 2)).await;
+        }
+        match client.get(url).send().await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    return response.text().await.with_context(|| format!("failed to read body from {url}"));
+                }
+                let err = if status.as_u16() == 429 {
+                    anyhow!(rate_limit_message(url))
+                } else {
+                    anyhow!("GET {url} returned non-success status {status}")
+                };
+                if !is_retryable_status(status.as_u16()) {
+                    return Err(err);
+                }
+                last_err = Some(err);
+            }
+            Err(send_err) => {
+                last_err = Some(anyhow::Error::new(send_err).context(format!("failed to GET {url}")));
+            }
+        }
+    }
+    Err(last_err
+        .unwrap_or_else(|| anyhow!("failed to GET {url}"))
+        .context(format!("registry fetch failed after {HTTP_GET_ATTEMPTS} attempts")))
 }
 
 // =================== Helpers exposed for sibling code ===================
@@ -1720,6 +2043,186 @@ mod tests {
         // Unknown values pass through (lowercased) so the build_update_plan
         // filter simply matches zero plugins and the surface stays predictable.
         assert_eq!(normalize_kind_selector("Bogus"), "bogus");
+    }
+
+    // =================== v0.5.x: outdated ===================
+
+    #[test]
+    fn outdated_status_classifies_drift() {
+        // Behind the recommended pin.
+        assert_eq!(outdated_status(Some("v0.1.0"), Some("v0.2.0"), None).0, "outdated");
+        // Behind the registry latest even when matching the pin.
+        assert_eq!(outdated_status(Some("v0.2.0"), Some("v0.2.0"), Some("v0.3.0")).0, "outdated");
+        // Current against both references.
+        assert_eq!(outdated_status(Some("v0.2.0"), Some("v0.2.0"), Some("v0.2.0")).0, "current");
+        // Ahead of every known reference.
+        assert_eq!(outdated_status(Some("v0.9.0"), Some("v0.2.0"), Some("v0.3.0")).0, "ahead");
+        // No references at all.
+        assert_eq!(outdated_status(Some("v0.1.0"), None, None).0, "unknown");
+        // Installed tag missing.
+        assert_eq!(outdated_status(None, Some("v0.2.0"), None).0, "unknown");
+        // Non-semver mismatch counts as drift.
+        assert_eq!(outdated_status(Some("nightly-1"), Some("nightly-2"), None).0, "outdated");
+    }
+
+    #[test]
+    fn outdated_rows_offline_compare_against_pins_alone() {
+        let installed = fixture_installed();
+        let pins = fixture_pins();
+        let rows = build_outdated_rows(&installed, &pins, None);
+        assert_eq!(rows.len(), installed.len());
+        let by_name = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
+
+        let claude = by_name("animus-provider-claude");
+        assert_eq!(claude.status, "outdated");
+        assert_eq!(claude.recommended_tag.as_deref(), Some("v0.2.2"));
+        assert_eq!(claude.latest_tag, None, "latest must be unknown offline");
+
+        assert_eq!(by_name("animus-provider-codex").status, "current");
+        assert_eq!(by_name("animus-subject-default").status, "ahead");
+        assert_eq!(by_name("animus-trigger-webhook").status, "unknown");
+        let local = by_name("my-local-plugin");
+        assert_eq!(local.status, "local");
+        assert!(local.note.as_deref().unwrap_or("").contains("not from registry"));
+    }
+
+    #[test]
+    fn outdated_rows_use_registry_latest_when_reachable() {
+        let mut installed = BTreeMap::new();
+        installed.insert(
+            "animus-provider-claude".to_string(),
+            release("animus-provider-claude", "launchapp-dev/animus-provider-claude", "v0.2.2"),
+        );
+        let pins = fixture_pins();
+        let registry = PluginRegistryIndex {
+            registry_version: None,
+            updated_at: None,
+            plugins: vec![RegistryPluginEntry {
+                name: "animus-provider-claude".to_string(),
+                kind: "provider".to_string(),
+                repo: "launchapp-dev/animus-provider-claude".to_string(),
+                latest_tag: Some("v0.5.0".to_string()),
+                description: String::new(),
+                homepage: None,
+                license: None,
+                stability: None,
+                platforms: vec![],
+                tags: vec![],
+                install_hint: None,
+            }],
+        };
+        let rows = build_outdated_rows(&installed, &pins, Some(&registry));
+        assert_eq!(rows.len(), 1);
+        // Matches the pin (v0.2.2) but the registry has v0.5.0 → outdated.
+        assert_eq!(rows[0].status, "outdated");
+        assert_eq!(rows[0].latest_tag.as_deref(), Some("v0.5.0"));
+        assert_eq!(rows[0].recommended_tag.as_deref(), Some("v0.2.2"));
+    }
+
+    // =================== v0.5.x: cache policy + retry ===================
+
+    #[test]
+    fn cache_policy_from_flags() {
+        assert_eq!(RegistryCachePolicy::from_flags(false, false), RegistryCachePolicy::Default);
+        assert_eq!(RegistryCachePolicy::from_flags(true, false), RegistryCachePolicy::NoCache);
+        assert_eq!(RegistryCachePolicy::from_flags(false, true), RegistryCachePolicy::Offline);
+    }
+
+    #[test]
+    fn retryable_status_covers_429_and_5xx_only() {
+        assert!(is_retryable_status(429));
+        assert!(is_retryable_status(500));
+        assert!(is_retryable_status(503));
+        assert!(!is_retryable_status(404));
+        assert!(!is_retryable_status(403));
+        assert!(!is_retryable_status(200));
+    }
+
+    #[test]
+    fn rate_limit_message_is_actionable() {
+        let msg = rate_limit_message("https://example.invalid/plugins.json");
+        assert!(msg.contains("429"), "must name the status: {msg}");
+        assert!(msg.contains("--offline"), "must point at the offline escape hatch: {msg}");
+    }
+
+    #[test]
+    fn format_age_renders_short_units() {
+        assert_eq!(format_age(Duration::from_secs(30)), "30s");
+        assert_eq!(format_age(Duration::from_mins(2)), "2m");
+        assert_eq!(format_age(Duration::from_hours(2)), "2h");
+        assert_eq!(format_age(Duration::from_hours(48)), "2d");
+    }
+
+    /// Unreachable-by-construction URL: connections to port 1 on localhost are
+    /// refused immediately, so retry backoff dominates test time (~750ms).
+    const UNREACHABLE_URL: &str = "http://127.0.0.1:1/plugins.json";
+
+    fn write_stale_cache(dir: &std::path::Path, url: &str) -> PathBuf {
+        let cache_file = dir.join("plugin-registry.json");
+        let index_body = serde_json::to_string(&fixture_index()).expect("serialize index");
+        let envelope = CachedRegistry { url: url.to_string(), body: index_body };
+        std::fs::write(&cache_file, serde_json::to_string(&envelope).unwrap()).expect("write cache");
+        // Backdate well past the 6h TTL.
+        let stale_mtime = SystemTime::now() - Duration::from_hours(48);
+        let file = std::fs::OpenOptions::new().write(true).open(&cache_file).expect("open cache");
+        file.set_times(std::fs::FileTimes::new().set_modified(stale_mtime)).expect("backdate cache mtime");
+        cache_file
+    }
+
+    fn block_on_fetch(url: &str, policy: RegistryCachePolicy) -> Result<PluginRegistryIndex> {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+        rt.block_on(fetch_registry_index(url, policy))
+    }
+
+    #[test]
+    fn fetch_falls_back_to_stale_cache_when_network_fails() {
+        use protocol::test_utils::EnvVarGuard;
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache_file = write_stale_cache(dir.path(), UNREACHABLE_URL);
+        let _cache = EnvVarGuard::set("ANIMUS_PLUGIN_REGISTRY_CACHE", Some(cache_file.to_str().unwrap()));
+
+        let index = block_on_fetch(UNREACHABLE_URL, RegistryCachePolicy::Default)
+            .expect("stale cache must serve when the network is down");
+        assert_eq!(index.plugins.len(), fixture_index().plugins.len());
+    }
+
+    #[test]
+    fn fetch_offline_serves_stale_cache_without_network() {
+        use protocol::test_utils::EnvVarGuard;
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache_file = write_stale_cache(dir.path(), UNREACHABLE_URL);
+        let _cache = EnvVarGuard::set("ANIMUS_PLUGIN_REGISTRY_CACHE", Some(cache_file.to_str().unwrap()));
+
+        let index = block_on_fetch(UNREACHABLE_URL, RegistryCachePolicy::Offline)
+            .expect("offline mode must serve the cache regardless of age");
+        assert_eq!(index.plugins.len(), fixture_index().plugins.len());
+    }
+
+    #[test]
+    fn fetch_offline_errors_when_no_cache_exists() {
+        use protocol::test_utils::EnvVarGuard;
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache_file = dir.path().join("missing-cache.json");
+        let _cache = EnvVarGuard::set("ANIMUS_PLUGIN_REGISTRY_CACHE", Some(cache_file.to_str().unwrap()));
+
+        let err =
+            block_on_fetch(UNREACHABLE_URL, RegistryCachePolicy::Offline).expect_err("offline with no cache must fail");
+        assert!(err.to_string().contains("--offline"), "err must explain the offline failure: {err}");
+    }
+
+    #[test]
+    fn fetch_no_cache_hard_fails_even_with_stale_cache_present() {
+        use protocol::test_utils::EnvVarGuard;
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let cache_file = write_stale_cache(dir.path(), UNREACHABLE_URL);
+        let _cache = EnvVarGuard::set("ANIMUS_PLUGIN_REGISTRY_CACHE", Some(cache_file.to_str().unwrap()));
+
+        let result = block_on_fetch(UNREACHABLE_URL, RegistryCachePolicy::NoCache);
+        assert!(result.is_err(), "--no-cache must not silently fall back to the cache");
     }
 
     #[test]
