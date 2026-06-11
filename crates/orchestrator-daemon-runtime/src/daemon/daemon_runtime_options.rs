@@ -11,7 +11,6 @@ pub struct DaemonRuntimeOptions {
     pub stale_threshold_hours: u64,
     pub max_tasks_per_tick: usize,
     pub phase_timeout_secs: Option<u64>,
-    pub idle_timeout_secs: Option<u64>,
     pub once: bool,
     pub auto_install_plugins: bool,
     pub skip_plugin_preflight: bool,
@@ -29,7 +28,6 @@ impl Default for DaemonRuntimeOptions {
             stale_threshold_hours: 24,
             max_tasks_per_tick: 2,
             phase_timeout_secs: Some(1800),
-            idle_timeout_secs: None,
             once: false,
             auto_install_plugins: false,
             skip_plugin_preflight: false,
@@ -68,9 +66,6 @@ impl DaemonRuntimeOptions {
         }
         if let Some(v) = config.phase_timeout_secs {
             self.phase_timeout_secs = Some(v);
-        }
-        if let Some(v) = config.idle_timeout_secs {
-            self.idle_timeout_secs = Some(v);
         }
     }
 }
@@ -149,22 +144,16 @@ mod tests {
     }
 
     #[test]
-    fn reload_from_project_config_applies_phase_and_idle_timeouts() {
+    fn reload_from_project_config_applies_phase_timeout() {
         stable_test_home();
         let temp = tempfile::tempdir().expect("tempdir");
-        let config = orchestrator_core::DaemonProjectConfig {
-            phase_timeout_secs: Some(600),
-            idle_timeout_secs: Some(1200),
-            ..Default::default()
-        };
+        let config = orchestrator_core::DaemonProjectConfig { phase_timeout_secs: Some(600), ..Default::default() };
         orchestrator_core::write_daemon_project_config(temp.path(), &config).expect("write config");
 
         let mut options = DaemonRuntimeOptions::default();
         assert_eq!(options.phase_timeout_secs, Some(1800));
-        assert_eq!(options.idle_timeout_secs, None);
         options.reload_from_project_config(temp.path());
         assert_eq!(options.phase_timeout_secs, Some(600));
-        assert_eq!(options.idle_timeout_secs, Some(1200));
     }
 
     #[test]

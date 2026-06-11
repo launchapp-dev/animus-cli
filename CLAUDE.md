@@ -102,8 +102,8 @@ State layout is split:
 
 Important current paths:
 
-- Project-local config: `.animus/config.json`
-- Project-local daemon settings: `.animus/pm-config.json`
+- Project-local config: `.animus/config.json` — deserializes `protocol::Config` (self-update `auto_update` block plus optional CLI settings like `default_subject_kind` and `mcp_servers`); it holds NO daemon runtime settings
+- Daemon runtime settings: `~/.animus/<repo-scope>/daemon/pm-config.json` (scoped, not project-local; written by `animus daemon config` and hot-reloaded by the running daemon each tick)
 - Workflow YAML overlays: `.animus/workflows.yaml`, `.animus/workflows/*.yaml`
 - Scoped runtime root: `~/.animus/<repo-scope>/`
 - Compiled workflow config: `~/.animus/<repo-scope>/config/workflow-config.v2.json`

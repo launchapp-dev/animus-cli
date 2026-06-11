@@ -14,7 +14,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_opt_num(&mut args, "--stale-threshold-hours", input.stale_threshold_hours);
     push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
     push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
-    push_opt_num(&mut args, "--idle-timeout-secs", input.idle_timeout_secs);
     push_bool_flag(&mut args, "--skip-runner", input.skip_runner);
     push_bool_flag(&mut args, "--autonomous", input.autonomous);
     push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
@@ -33,7 +32,6 @@ pub(super) fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<
     push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
     push_opt_num(&mut args, "--stale-threshold-hours", input.stale_threshold_hours);
     push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
-    push_opt_num(&mut args, "--idle-timeout-secs", input.idle_timeout_secs);
     push_opt(&mut args, "--notification-config-json", input.notification_config_json.clone());
     push_opt(&mut args, "--notification-config-file", input.notification_config_file.clone());
     if input.clear_notification_config {

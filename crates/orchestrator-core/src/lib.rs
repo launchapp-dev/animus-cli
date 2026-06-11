@@ -189,7 +189,6 @@ pub(crate) mod test_env {
             std::fs::create_dir_all(&home_dir).expect("create shared test home dir");
             std::env::set_var("ANIMUS_CONFIG_DIR", &config_dir);
             std::env::set_var("AGENT_ORCHESTRATOR_CONFIG_DIR", &config_dir);
-            std::env::set_var("ANIMUS_RUNNER_CONFIG_DIR", &config_dir);
             std::env::set_var("HOME", &home_dir);
             home_dir
         })

@@ -725,11 +725,6 @@ fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &s
         config.phase_timeout_secs = args.scheduler.phase_timeout_secs;
         changed = true;
     }
-    if args.scheduler.idle_timeout_secs.is_some() && config.idle_timeout_secs != args.scheduler.idle_timeout_secs {
-        config.idle_timeout_secs = args.scheduler.idle_timeout_secs;
-        changed = true;
-    }
-
     if changed {
         let _ = write_daemon_project_config(project_path, &config);
     }
@@ -813,7 +808,6 @@ mod tests {
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(1),
                 phase_timeout_secs: None,
-                idle_timeout_secs: None,
             },
             skip_runner: true,
             runner_scope: None,
@@ -919,7 +913,6 @@ mod tests {
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(1),
                 phase_timeout_secs: None,
-                idle_timeout_secs: None,
             },
             skip_runner: true,
             runner_scope: None,
@@ -1014,7 +1007,6 @@ mod tests {
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(1),
                 phase_timeout_secs: None,
-                idle_timeout_secs: None,
             },
             skip_runner: true,
             runner_scope: None,
@@ -1115,7 +1107,6 @@ mod tests {
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(1),
                 phase_timeout_secs: None,
-                idle_timeout_secs: None,
             },
             skip_runner: true,
             runner_scope: None,
@@ -1173,7 +1164,6 @@ mod tests {
                 stale_threshold_hours: None,
                 max_tasks_per_tick: None,
                 phase_timeout_secs: None,
-                idle_timeout_secs: None,
             },
             skip_runner: true,
             runner_scope: None,

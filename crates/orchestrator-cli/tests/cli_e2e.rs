@@ -331,8 +331,6 @@ fn e2e_daemon_config_multiple_runtime_settings_at_once() -> Result<()> {
         "48",
         "--phase-timeout-secs",
         "300",
-        "--idle-timeout-secs",
-        "600",
     ])?;
 
     assert_eq!(configured.pointer("/data/pool_size").and_then(Value::as_u64), Some(6));
@@ -340,7 +338,6 @@ fn e2e_daemon_config_multiple_runtime_settings_at_once() -> Result<()> {
     assert_eq!(configured.pointer("/data/max_tasks_per_tick").and_then(Value::as_u64), Some(8));
     assert_eq!(configured.pointer("/data/stale_threshold_hours").and_then(Value::as_u64), Some(48));
     assert_eq!(configured.pointer("/data/phase_timeout_secs").and_then(Value::as_u64), Some(300));
-    assert_eq!(configured.pointer("/data/idle_timeout_secs").and_then(Value::as_u64), Some(600));
 
     Ok(())
 }
