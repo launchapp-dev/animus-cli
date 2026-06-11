@@ -105,7 +105,7 @@ keeping a process parked.
    workflow resume path (the same detached-runner spawn used by
    `animus workflow resume`): the runner resumes the provider session
    (`agent/resume`, session_id from checkpoint context) with a resume prompt
-   carrying the decision: "Approval granted/denied for <action>: <message>.
+   carrying the decision: "Approval granted/denied for `action`: `message`.
    Continue." — mirroring chat's resume-with-history-XOR-session rule.
 5. Auto-resume is gated by the daemon being up; with no daemon, `animus agent
    interactions answer` prints the `animus workflow resume <id>` command to run.
