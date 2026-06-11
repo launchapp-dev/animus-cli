@@ -104,7 +104,22 @@ impl DaemonOpsRouting for DaemonOpsRoutingImpl {
                 DaemonStatus::Crashed => DaemonHealthStatus::Unhealthy,
             }
         };
-        Ok(DaemonHealthResponse { status: wire_status, plugins: Vec::<PluginHealth>::new(), last_error: None })
+        // This routing runs inside the daemon process, so the process-global
+        // plugin status registry reflects live supervisor state (restart
+        // counts, disabled-by-supervisor windows). Fold it into the wire
+        // response's per-plugin rows; a supervisor-disabled plugin also
+        // degrades the top-level verdict so `animus daemon health` flags it
+        // without the operator scanning the plugin table.
+        let rows = orchestrator_plugin_host::global_status_registry().map(|r| r.snapshot()).unwrap_or_default();
+        let disabled: Vec<&str> =
+            rows.iter().filter(|row| row.disabled_by_supervisor).map(|row| row.name.as_str()).collect();
+        let (status, last_error) = if wire_status == DaemonHealthStatus::Healthy && !disabled.is_empty() {
+            (DaemonHealthStatus::Degraded, Some(format!("plugins disabled by supervisor: {}", disabled.join(", "))))
+        } else {
+            (wire_status, None)
+        };
+        let plugins: Vec<PluginHealth> = rows.iter().map(plugin_health_from_runtime_status).collect();
+        Ok(DaemonHealthResponse { status, plugins, last_error })
     }
 
     async fn daemon_agents(&self) -> Result<DaemonAgentsResponse, ControlError> {
@@ -113,5 +128,98 @@ impl DaemonOpsRouting for DaemonOpsRoutingImpl {
         // CLI in-process path until the AgentPool exposes a queryable
         // snapshot.
         Ok(DaemonAgentsResponse { agents: Vec::new() })
+    }
+}
+
+/// Project a [`PluginRuntimeStatus`] registry row onto the wire's pinned
+/// [`PluginHealth`] shape. Supervisor state has no dedicated wire field
+/// (`animus-control-protocol` is pinned), so a disabled plugin surfaces as
+/// `Unhealthy` with a self-describing `last_error` carrying the restart
+/// count and cooldown deadline.
+fn plugin_health_from_runtime_status(row: &orchestrator_plugin_host::PluginRuntimeStatus) -> PluginHealth {
+    use orchestrator_plugin_host::PluginRuntimeState;
+
+    let (status, supervisor_error) = if row.disabled_by_supervisor {
+        let until = row.cooldown_until.map(|t| t.to_rfc3339()).unwrap_or_else(|| "unknown".to_string());
+        (
+            DaemonHealthStatus::Unhealthy,
+            Some(format!("disabled by supervisor after {} restart(s); cooldown until {until}", row.restart_count)),
+        )
+    } else {
+        let status = match row.state {
+            PluginRuntimeState::Missing => DaemonHealthStatus::Unhealthy,
+            PluginRuntimeState::Restarting | PluginRuntimeState::Stopped => DaemonHealthStatus::Degraded,
+            PluginRuntimeState::Discovered | PluginRuntimeState::Running => DaemonHealthStatus::Healthy,
+        };
+        (status, None)
+    };
+    PluginHealth {
+        name: row.name.clone(),
+        kind: row.kind.clone(),
+        status,
+        uptime_ms: None,
+        last_error: supervisor_error.or_else(|| row.last_error.as_ref().map(|err| err.message.clone())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orchestrator_plugin_host::{PluginRuntimeState, PluginRuntimeStatus};
+
+    fn row(state: PluginRuntimeState) -> PluginRuntimeStatus {
+        PluginRuntimeStatus {
+            name: "animus-subject-default".into(),
+            kind: "task".into(),
+            state,
+            pid: None,
+            last_rpc_at: None,
+            last_error: None,
+            restart_count: 0,
+            binary_path: None,
+            manifest_name: None,
+            disabled_by_supervisor: false,
+            cooldown_until: None,
+        }
+    }
+
+    #[test]
+    fn running_row_maps_to_healthy() {
+        let health = plugin_health_from_runtime_status(&row(PluginRuntimeState::Running));
+        assert_eq!(health.status, DaemonHealthStatus::Healthy);
+        assert!(health.last_error.is_none());
+    }
+
+    #[test]
+    fn restarting_and_stopped_rows_map_to_degraded() {
+        assert_eq!(
+            plugin_health_from_runtime_status(&row(PluginRuntimeState::Restarting)).status,
+            DaemonHealthStatus::Degraded
+        );
+        assert_eq!(
+            plugin_health_from_runtime_status(&row(PluginRuntimeState::Stopped)).status,
+            DaemonHealthStatus::Degraded
+        );
+    }
+
+    #[test]
+    fn missing_row_maps_to_unhealthy() {
+        assert_eq!(
+            plugin_health_from_runtime_status(&row(PluginRuntimeState::Missing)).status,
+            DaemonHealthStatus::Unhealthy
+        );
+    }
+
+    #[test]
+    fn supervisor_disabled_row_maps_to_unhealthy_with_cooldown_message() {
+        let mut disabled = row(PluginRuntimeState::Stopped);
+        disabled.disabled_by_supervisor = true;
+        disabled.restart_count = 4;
+        disabled.cooldown_until = Some(chrono::Utc::now() + chrono::Duration::seconds(240));
+        let health = plugin_health_from_runtime_status(&disabled);
+        assert_eq!(health.status, DaemonHealthStatus::Unhealthy);
+        let message = health.last_error.expect("supervisor message");
+        assert!(message.contains("disabled by supervisor after 4 restart(s)"), "got: {message}");
+        assert!(message.contains("cooldown until"), "got: {message}");
     }
 }

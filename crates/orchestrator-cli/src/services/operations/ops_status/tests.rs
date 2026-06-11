@@ -246,6 +246,8 @@ fn render_status_dashboard_uses_required_section_order() {
                 total_agents_completed: None,
                 total_agents_failed: None,
                 flavor: None,
+                runtime_paused: false,
+                paused_at: None,
             }),
             None,
         ),

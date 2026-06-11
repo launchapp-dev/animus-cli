@@ -388,6 +388,37 @@ run`) refuses with the same message. This matches the fail-closed posture of
 discovery and `animus plugin list`; see
 [plugin-scope.md](../plugin-scope.md#preflight-interaction).
 
+### `animus daemon status` / `animus daemon health` (pause + plugin supervisor visibility)
+
+v0.5.10: both commands surface whether the scheduling runtime is paused
+(`animus daemon pause`) and what the plugin supervisor knows about each
+plugin, so operators no longer have to read state files or logs to tell
+"paused" apart from "stuck":
+
+- `runtime_paused` (bool) and `paused_at` (RFC3339, present only while
+  paused) appear in `animus daemon health --json` (both the live
+  control-wire response and the offline fallback snapshot), in
+  `animus daemon status --json` while the daemon is reachable over the
+  control wire, in the `daemon` slice of `animus status`, and in the
+  matching MCP tools (`animus.daemon.status`, `animus.daemon.health`).
+  Exception: when the daemon is offline, `animus daemon status --json`
+  (and the MCP status fallback) still returns the bare `DaemonStatus`
+  string — which itself reads `"paused"` when the runtime was paused —
+  without the new keys. Human-readable `animus daemon health` prints a
+  `runtime: paused (since <ts>)` / `runtime: active` line.
+- While the daemon is running, `animus daemon health` lists one row per
+  plugin from the daemon's live status registry. A plugin disabled by the
+  restart supervisor (default budget: 3 restarts in 60s, then a 5-minute
+  cooldown) reports `Unhealthy` with a `disabled by supervisor after N
+  restart(s); cooldown until <ts>` detail, and the top-level verdict
+  degrades to `Degraded` with `last_error` naming the disabled plugins.
+- `animus plugin status [--json]` carries the same supervisor state per
+  plugin via the additive `disabled_by_supervisor` and `cooldown_until`
+  fields (older daemons omit them; they default to `false` / absent).
+
+All new fields are additive with serde defaults — pre-v0.5.10 payloads
+still parse, and old consumers ignore the new keys.
+
 ### `animus agent run` / `animus chat send` (reasoning effort)
 
 Both surfaces accept a `--reasoning-effort` flag that controls how much

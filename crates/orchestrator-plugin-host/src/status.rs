@@ -44,6 +44,17 @@ pub struct PluginRuntimeStatus {
     pub restart_count: u32,
     pub binary_path: Option<String>,
     pub manifest_name: Option<String>,
+    /// v0.5.10: `true` while the plugin supervisor has disabled this plugin
+    /// after exhausting its restart budget (3 restarts / 60s by default).
+    /// Auto-clears once `cooldown_until` passes, matching the supervisor's
+    /// own re-enable behavior. Additive serde-default field: payloads from
+    /// older daemons deserialize with `false`.
+    #[serde(default)]
+    pub disabled_by_supervisor: bool,
+    /// v0.5.10: when the supervisor cooldown elapses and the plugin becomes
+    /// eligible to spawn again. `None` unless `disabled_by_supervisor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cooldown_until: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -94,10 +105,16 @@ struct StatusEntry {
     restart_count: u32,
     binary_path: Option<String>,
     manifest_name: Option<String>,
+    cooldown_until: Option<DateTime<Utc>>,
 }
 
 impl StatusEntry {
     fn to_wire(&self) -> PluginRuntimeStatus {
+        // The supervisor silently re-enables a plugin once its cooldown
+        // elapses (PluginSupervisor::is_disabled), so the wire view derives
+        // "still disabled" from the deadline instead of trusting a stale
+        // boolean.
+        let disabled_by_supervisor = self.cooldown_until.is_some_and(|deadline| deadline > Utc::now());
         PluginRuntimeStatus {
             name: self.name.clone(),
             kind: self.kind.clone(),
@@ -108,6 +125,8 @@ impl StatusEntry {
             restart_count: self.restart_count,
             binary_path: self.binary_path.clone(),
             manifest_name: self.manifest_name.clone(),
+            disabled_by_supervisor,
+            cooldown_until: disabled_by_supervisor.then_some(self.cooldown_until).flatten(),
         }
     }
 }
@@ -147,6 +166,7 @@ impl PluginStatusRegistry {
             restart_count: 0,
             binary_path: binary_path.clone(),
             manifest_name: manifest_name.clone(),
+            cooldown_until: None,
         });
         entry.kind = kind.to_string();
         if entry.binary_path.is_none() {
@@ -172,6 +192,7 @@ impl PluginStatusRegistry {
             restart_count: 0,
             binary_path: None,
             manifest_name: manifest_name.clone(),
+            cooldown_until: None,
         });
         entry.kind = kind.to_string();
         entry.state = PluginRuntimeState::Missing;
@@ -195,9 +216,26 @@ impl PluginStatusRegistry {
             restart_count: 0,
             binary_path: None,
             manifest_name: None,
+            cooldown_until: None,
         });
         entry.pid = pid;
         entry.state = PluginRuntimeState::Running;
+        // A fresh spawn means the supervisor allowed the plugin to run
+        // again, so any previous disable window is over.
+        entry.cooldown_until = None;
+    }
+
+    /// Record that the supervisor disabled the plugin after exhausting its
+    /// restart budget. `cooldown` is how long the supervisor will refuse to
+    /// respawn it (`SupervisorConfig::disable_cooldown`).
+    pub fn record_supervisor_disabled(&self, name: &str, cooldown: Duration) {
+        let mut guard = self.inner.write().expect("plugin status registry poisoned");
+        if let Some(entry) = guard.get_mut(name) {
+            entry.state = PluginRuntimeState::Stopped;
+            entry.pid = None;
+            entry.cooldown_until =
+                Some(Utc::now() + chrono::Duration::from_std(cooldown).unwrap_or(chrono::Duration::zero()));
+        }
     }
 
     /// Record an exit / connection-lost event. Does NOT bump
@@ -220,6 +258,7 @@ impl PluginStatusRegistry {
             restart_count: 0,
             binary_path: None,
             manifest_name: None,
+            cooldown_until: None,
         });
         entry.state = PluginRuntimeState::Stopped;
         entry.pid = None;
@@ -394,6 +433,46 @@ mod tests {
         let row = reg.get("animus-trigger-webhook").expect("entry");
         assert_eq!(row.state, PluginRuntimeState::Missing);
         assert_eq!(row.manifest_name.as_deref(), Some("webhook"));
+    }
+
+    #[test]
+    fn supervisor_disable_sets_flag_and_cooldown_then_spawn_clears_it() {
+        let reg = PluginStatusRegistry::new();
+        reg.record_discovered("animus-subject-default", "task", None, None);
+        reg.record_spawn("animus-subject-default", Some(7));
+        reg.record_supervisor_disabled("animus-subject-default", Duration::from_mins(5));
+        let row = reg.get("animus-subject-default").expect("entry");
+        assert!(row.disabled_by_supervisor);
+        assert!(row.cooldown_until.is_some(), "cooldown_until must accompany disabled_by_supervisor");
+        assert_eq!(row.state, PluginRuntimeState::Stopped);
+        assert_eq!(row.pid, None);
+
+        reg.record_spawn("animus-subject-default", Some(8));
+        let row = reg.get("animus-subject-default").expect("entry");
+        assert!(!row.disabled_by_supervisor, "fresh spawn clears the disable window");
+        assert!(row.cooldown_until.is_none());
+    }
+
+    #[test]
+    fn supervisor_disable_auto_clears_after_cooldown_elapses() {
+        let reg = PluginStatusRegistry::new();
+        reg.record_discovered("flappy", "queue", None, None);
+        reg.record_supervisor_disabled("flappy", Duration::ZERO);
+        let row = reg.get("flappy").expect("entry");
+        assert!(!row.disabled_by_supervisor, "elapsed cooldown must read as re-enabled");
+        assert!(row.cooldown_until.is_none(), "cooldown_until is withheld once the window passed");
+    }
+
+    #[test]
+    fn plugin_runtime_status_deserializes_payloads_without_supervisor_fields() {
+        // Wire back-compat: rows emitted by pre-v0.5.10 daemons carry no
+        // supervisor fields and must default to "not disabled".
+        let row: PluginRuntimeStatus = serde_json::from_str(
+            r#"{"name":"p","kind":"task","state":"running","pid":null,"last_rpc_at":null,"last_error":null,"restart_count":1,"binary_path":null,"manifest_name":null}"#,
+        )
+        .expect("old payload deserializes");
+        assert!(!row.disabled_by_supervisor);
+        assert!(row.cooldown_until.is_none());
     }
 
     #[test]

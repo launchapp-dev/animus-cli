@@ -570,6 +570,12 @@ impl PluginSessionBackend {
                         match supervisor_for_task.record_restart() {
                             Ok(()) => {}
                             Err(SupervisorError::TooManyRestarts { plugin, count, window }) => {
+                                if let Some(registry) = crate::status::global_status_registry() {
+                                    registry.record_supervisor_disabled(
+                                        &plugin,
+                                        supervisor_for_task.config().disable_cooldown,
+                                    );
+                                }
                                 let message = format!(
                                     "plugin '{plugin}' exhausted restart budget ({count} restarts in {}s); marked disabled",
                                     window.as_secs()
@@ -589,6 +595,9 @@ impl PluginSessionBackend {
                                 return;
                             }
                             Err(SupervisorError::PluginDisabled { plugin, retry_after }) => {
+                                if let Some(registry) = crate::status::global_status_registry() {
+                                    registry.record_supervisor_disabled(&plugin, retry_after);
+                                }
                                 let message = format!(
                                     "plugin '{plugin}' disabled by supervisor (retry after {}s)",
                                     retry_after.as_secs()
