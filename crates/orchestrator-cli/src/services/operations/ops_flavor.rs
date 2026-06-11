@@ -67,7 +67,7 @@ pub(crate) async fn handle_flavor(command: FlavorCommand, project_root: &str, js
     match command {
         FlavorCommand::List => handle_flavor_list(project_root, json),
         FlavorCommand::Current(args) => handle_flavor_current(args, project_root, json),
-        FlavorCommand::Describe(args) => handle_flavor_describe(args, project_root, json),
+        FlavorCommand::Info(args) => handle_flavor_describe(args, project_root, json),
         FlavorCommand::Install(args) => handle_flavor_install(args, project_root, json).await,
     }
 }

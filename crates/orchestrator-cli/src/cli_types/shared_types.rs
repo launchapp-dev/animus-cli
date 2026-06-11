@@ -14,6 +14,39 @@ pub(crate) fn parse_positive_u64(value: &str) -> Result<u64, String> {
     Ok(parsed)
 }
 
+/// Parse a duration spec like `30d`, `12h`, `45m`, `90s` into whole seconds.
+/// A bare number (no unit suffix) is interpreted with `default_unit_secs`.
+/// Shared by `--since`-style flags (default seconds) and age flags like
+/// `workflow prune --older-than` (default days).
+pub(crate) fn parse_duration_secs(value: &str, default_unit_secs: u64) -> Result<u64, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("must be non-empty".to_string());
+    }
+    let split = trimmed.find(|c: char| !c.is_ascii_digit()).unwrap_or(trimmed.len());
+    let (digits, suffix) = trimmed.split_at(split);
+    if digits.is_empty() {
+        return Err("must start with a number (e.g. 30, 12h, 5m)".to_string());
+    }
+    let amount: u64 = digits.parse().map_err(|_| "is not a valid number".to_string())?;
+    let unit_secs = match suffix {
+        "" => default_unit_secs,
+        "s" => 1,
+        "m" => 60,
+        "h" => 3_600,
+        "d" => 86_400,
+        other => return Err(format!("has unknown unit '{other}'; supported: s, m, h, d")),
+    };
+    Ok(amount.saturating_mul(unit_secs))
+}
+
+/// clap value parser for age flags: bare numbers mean days (back-compat with
+/// the previous `--older-than <DAYS>` shape), unit suffixes s/m/h/d are
+/// accepted (e.g. `30`, `30d`, `12h`).
+pub(crate) fn parse_duration_secs_default_days(value: &str) -> Result<u64, String> {
+    parse_duration_secs(value, 86_400)
+}
+
 pub(crate) fn parse_positive_usize(value: &str) -> Result<usize, String> {
     let parsed = value.parse::<usize>().map_err(|_| "must be a whole number".to_string())?;
     if parsed == 0 {

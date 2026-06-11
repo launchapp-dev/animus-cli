@@ -94,28 +94,12 @@ pub(crate) fn format_event_line(event: &animus_control_protocol::types::Workflow
     format!("{timestamp} wf:{wf} {kind:<19}{phase}{attempt}{status}", wf = event.workflow_id, kind = event.kind)
 }
 
-/// Parse durations like `90s`, `5m`, `2h`, `1d`. Returns chrono Duration so
-/// the threshold subtraction stays UTC-safe.
+/// Parse durations like `90s`, `5m`, `2h`, `1d` (bare numbers mean seconds).
+/// Delegates to the shared `cli_types` duration parser and returns a chrono
+/// Duration so the threshold subtraction stays UTC-safe.
 pub(crate) fn parse_duration_arg(value: &str) -> Result<chrono::Duration> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return Err(anyhow!("--since must be non-empty"));
-    }
-    let (digits, suffix) = trimmed.split_at(trimmed.find(|c: char| !c.is_ascii_digit()).unwrap_or(trimmed.len()));
-    if digits.is_empty() {
-        return Err(anyhow!("--since '{value}' must start with a number (e.g. 5m, 2h)"));
-    }
-    let amount: i64 = digits.parse().with_context(|| format!("--since '{value}' is not a valid number"))?;
-    let std_duration = match suffix {
-        "" | "s" => Duration::from_secs(amount as u64),
-        "m" => Duration::from_secs((amount as u64).saturating_mul(60)),
-        "h" => Duration::from_secs((amount as u64).saturating_mul(3_600)),
-        "d" => Duration::from_secs((amount as u64).saturating_mul(86_400)),
-        other => {
-            return Err(anyhow!("--since '{value}' has unknown unit '{other}'; supported: s, m, h, d"));
-        }
-    };
-    chrono::Duration::from_std(std_duration)
+    let secs = crate::cli_types::parse_duration_secs(value, 1).map_err(|error| anyhow!("--since '{value}' {error}"))?;
+    chrono::Duration::from_std(Duration::from_secs(secs))
         .with_context(|| format!("--since '{value}' exceeds the representable duration range"))
 }
 

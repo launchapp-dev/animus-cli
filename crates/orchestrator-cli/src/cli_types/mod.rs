@@ -631,6 +631,193 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
     }
 
+    fn subcommand_help(path: &[&str]) -> String {
+        let mut argv = vec!["animus"];
+        argv.extend_from_slice(path);
+        argv.push("--help");
+        let error = Cli::try_parse_from(argv).expect_err("help output should short-circuit parsing");
+        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
+        error.to_string()
+    }
+
+    fn help_lists_subcommand(help: &str, name: &str) -> bool {
+        help.lines().any(|line| {
+            let trimmed = line.trim_start();
+            trimmed == name || trimmed.starts_with(&format!("{name} "))
+        })
+    }
+
+    #[test]
+    fn pack_info_is_primary_and_inspect_stays_a_hidden_alias() {
+        for verb in ["info", "inspect"] {
+            let cli = Cli::try_parse_from(["animus", "pack", verb, "--pack-id", "animus.task"])
+                .unwrap_or_else(|error| panic!("pack {verb} should parse: {error}"));
+            match cli.command {
+                Command::Pack { command: PackCommand::Info(args) } => {
+                    assert_eq!(args.pack_id.as_deref(), Some("animus.task"));
+                }
+                other => panic!("expected pack info, got {other:?}"),
+            }
+        }
+        let help = subcommand_help(&["pack"]);
+        assert!(help_lists_subcommand(&help, "info"), "pack help must list `info`:\n{help}");
+        assert!(!help_lists_subcommand(&help, "inspect"), "pack help must hide the `inspect` alias:\n{help}");
+    }
+
+    #[test]
+    fn skill_info_is_primary_and_show_stays_a_hidden_alias() {
+        for verb in ["info", "show"] {
+            let cli = Cli::try_parse_from(["animus", "skill", verb, "--name", "alpha"])
+                .unwrap_or_else(|error| panic!("skill {verb} should parse: {error}"));
+            match cli.command {
+                Command::Skill { command: SkillCommand::Info(args) } => assert_eq!(args.name, "alpha"),
+                other => panic!("expected skill info, got {other:?}"),
+            }
+        }
+        let help = subcommand_help(&["skill"]);
+        assert!(help_lists_subcommand(&help, "info"), "skill help must list `info`:\n{help}");
+        assert!(!help_lists_subcommand(&help, "show"), "skill help must hide the `show` alias:\n{help}");
+    }
+
+    #[test]
+    fn flavor_info_is_primary_and_describe_stays_a_hidden_alias() {
+        for verb in ["info", "describe"] {
+            let cli = Cli::try_parse_from(["animus", "flavor", verb, "--name", "default"])
+                .unwrap_or_else(|error| panic!("flavor {verb} should parse: {error}"));
+            match cli.command {
+                Command::Flavor { command: FlavorCommand::Info(args) } => assert_eq!(args.name, "default"),
+                other => panic!("expected flavor info, got {other:?}"),
+            }
+        }
+        let help = subcommand_help(&["flavor"]);
+        assert!(help_lists_subcommand(&help, "info"), "flavor help must list `info`:\n{help}");
+        assert!(!help_lists_subcommand(&help, "describe"), "flavor help must hide the `describe` alias:\n{help}");
+    }
+
+    #[test]
+    fn output_read_is_primary_and_run_stays_a_hidden_alias() {
+        for verb in ["read", "run"] {
+            let cli = Cli::try_parse_from(["animus", "output", verb, "--run-id", "RUN-1"])
+                .unwrap_or_else(|error| panic!("output {verb} should parse: {error}"));
+            match cli.command {
+                Command::Output { command: OutputCommand::Read(args) } => assert_eq!(args.run_id, "RUN-1"),
+                other => panic!("expected output read, got {other:?}"),
+            }
+        }
+        let help = subcommand_help(&["output"]);
+        assert!(help_lists_subcommand(&help, "read"), "output help must list `read`:\n{help}");
+        assert!(!help_lists_subcommand(&help, "run"), "output help must hide the `run` alias:\n{help}");
+    }
+
+    #[test]
+    fn project_set_active_is_primary_and_load_stays_a_hidden_alias() {
+        for verb in ["set-active", "load"] {
+            let cli = Cli::try_parse_from(["animus", "project", verb, "--id", "PRJ-1"])
+                .unwrap_or_else(|error| panic!("project {verb} should parse: {error}"));
+            match cli.command {
+                Command::Project { command: ProjectCommand::SetActive(args) } => assert_eq!(args.id, "PRJ-1"),
+                other => panic!("expected project set-active, got {other:?}"),
+            }
+        }
+        let help = subcommand_help(&["project"]);
+        assert!(help_lists_subcommand(&help, "set-active"), "project help must list `set-active`:\n{help}");
+        assert!(!help_lists_subcommand(&help, "load"), "project help must hide the `load` alias:\n{help}");
+    }
+
+    #[test]
+    fn workflow_id_commands_accept_workflow_id_flag_alias() {
+        let get = Cli::try_parse_from(["animus", "workflow", "get", "--workflow-id", "wf-1"])
+            .expect("workflow get --workflow-id should parse");
+        match get.command {
+            Command::Workflow { command: WorkflowCommand::Get(args) } => assert_eq!(args.id, "wf-1"),
+            other => panic!("expected workflow get, got {other:?}"),
+        }
+
+        let pause = Cli::try_parse_from(["animus", "workflow", "pause", "--workflow-id", "wf-1", "--confirm", "wf-1"])
+            .expect("workflow pause --workflow-id should parse");
+        match pause.command {
+            Command::Workflow { command: WorkflowCommand::Pause(args) } => {
+                assert_eq!(args.id, "wf-1");
+                assert_eq!(args.confirm.as_deref(), Some("wf-1"));
+            }
+            other => panic!("expected workflow pause, got {other:?}"),
+        }
+
+        let cancel = Cli::try_parse_from(["animus", "workflow", "cancel", "--workflow-id", "wf-2"])
+            .expect("workflow cancel --workflow-id should parse");
+        match cancel.command {
+            Command::Workflow { command: WorkflowCommand::Cancel(args) } => assert_eq!(args.id, "wf-2"),
+            other => panic!("expected workflow cancel, got {other:?}"),
+        }
+
+        let resume = Cli::try_parse_from(["animus", "workflow", "resume", "--workflow-id", "wf-3"])
+            .expect("workflow resume --workflow-id should parse");
+        match resume.command {
+            Command::Workflow { command: WorkflowCommand::Resume(args) } => assert_eq!(args.id, "wf-3"),
+            other => panic!("expected workflow resume, got {other:?}"),
+        }
+
+        let approve =
+            Cli::try_parse_from(["animus", "workflow", "phase", "approve", "--workflow-id", "wf-4", "--phase", "impl"])
+                .expect("workflow phase approve --workflow-id should parse");
+        match approve.command {
+            Command::Workflow { command: WorkflowCommand::Phase { command: WorkflowPhaseCommand::Approve(args) } } => {
+                assert_eq!(args.id, "wf-4");
+                assert_eq!(args.phase, "impl");
+            }
+            other => panic!("expected workflow phase approve, got {other:?}"),
+        }
+
+        let checkpoints = Cli::try_parse_from(["animus", "workflow", "checkpoints", "list", "--workflow-id", "wf-5"])
+            .expect("workflow checkpoints list --workflow-id should parse");
+        match checkpoints.command {
+            Command::Workflow {
+                command: WorkflowCommand::Checkpoints { command: WorkflowCheckpointCommand::List(args) },
+            } => assert_eq!(args.id, "wf-5"),
+            other => panic!("expected workflow checkpoints list, got {other:?}"),
+        }
+
+        // `--id` (and `-i` on resume) keep working as before.
+        let id_form = Cli::try_parse_from(["animus", "workflow", "get", "--id", "wf-6"])
+            .expect("workflow get --id should keep parsing");
+        match id_form.command {
+            Command::Workflow { command: WorkflowCommand::Get(args) } => assert_eq!(args.id, "wf-6"),
+            other => panic!("expected workflow get, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workflow_prune_older_than_accepts_bare_days_and_unit_suffixes() {
+        for (spec, expected_secs) in [("30", 30 * 86_400), ("30d", 30 * 86_400), ("12h", 12 * 3_600)] {
+            let cli = Cli::try_parse_from(["animus", "workflow", "prune", "--older-than", spec])
+                .unwrap_or_else(|error| panic!("workflow prune --older-than {spec} should parse: {error}"));
+            match cli.command {
+                Command::Workflow { command: WorkflowCommand::Prune(args) } => {
+                    assert_eq!(args.older_than, Some(expected_secs), "spec {spec}");
+                    assert!(!args.yes, "prune must stay dry-run by default");
+                }
+                other => panic!("expected workflow prune, got {other:?}"),
+            }
+        }
+
+        let error = Cli::try_parse_from(["animus", "workflow", "prune", "--older-than", "30w"])
+            .expect_err("unknown unit should fail validation");
+        assert_eq!(error.kind(), ErrorKind::ValueValidation);
+        assert!(error.to_string().contains("unknown unit"), "got: {error}");
+    }
+
+    #[test]
+    fn parse_duration_secs_default_days_handles_units_and_rejects_garbage() {
+        assert_eq!(parse_duration_secs_default_days("30"), Ok(30 * 86_400));
+        assert_eq!(parse_duration_secs_default_days("30d"), Ok(30 * 86_400));
+        assert_eq!(parse_duration_secs_default_days("12h"), Ok(12 * 3_600));
+        assert_eq!(parse_duration_secs_default_days("45m"), Ok(45 * 60));
+        assert_eq!(parse_duration_secs_default_days("90s"), Ok(90));
+        assert!(parse_duration_secs_default_days("").is_err());
+        assert!(parse_duration_secs_default_days("abc").is_err());
+        assert!(parse_duration_secs_default_days("5y").is_err());
+    }
+
     #[test]
     fn cli_reference_top_level_tree_matches_live_clap_commands() {
         let mut command = Cli::command();

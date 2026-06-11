@@ -222,7 +222,7 @@ daemon so the new process environment is available to the notifier plugin.
 
 4. View the agent output:
    ```bash
-   animus output run --run-id RUN-001
+   animus output read --run-id RUN-001
    ```
 
 5. If the workflow is stuck, you can cancel and retry:

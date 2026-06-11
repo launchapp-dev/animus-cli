@@ -183,7 +183,7 @@ Manage them with:
 
 ```bash
 animus pack list
-animus pack inspect --pack-id animus.task
+animus pack info --pack-id animus.task
 animus pack install --path /tmp/vendor.pack --activate
 animus pack pin --pack-id vendor.pack --version =1.2.3
 ```

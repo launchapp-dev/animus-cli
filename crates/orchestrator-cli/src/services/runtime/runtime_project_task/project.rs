@@ -25,7 +25,7 @@ pub(crate) async fn handle_project(command: ProjectCommand, hub: Arc<dyn Service
             })?;
             print_value(projects.create(input).await?, json)
         }
-        ProjectCommand::Load(args) => print_value(projects.load(&args.id).await?, json),
+        ProjectCommand::SetActive(args) => print_value(projects.load(&args.id).await?, json),
         ProjectCommand::Rename(args) => print_value(projects.rename(&args.id, &args.name).await?, json),
         ProjectCommand::Archive(args) => print_value(projects.archive(&args.id).await?, json),
         ProjectCommand::Remove(args) => {

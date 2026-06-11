@@ -74,8 +74,12 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
     assert!(workflow_prune_help.status.success(), "workflow prune help should succeed");
     let workflow_prune_stdout = String::from_utf8(workflow_prune_help.stdout)?;
     assert!(
-        workflow_prune_stdout.contains("--older-than <DAYS>"),
+        workflow_prune_stdout.contains("--older-than <AGE>"),
         "workflow prune help should explain age-based retention"
+    );
+    assert!(
+        workflow_prune_stdout.contains("30d, 12h"),
+        "workflow prune help should document duration unit suffixes"
     );
     assert!(
         workflow_prune_stdout.contains("--keep-last <COUNT>"),

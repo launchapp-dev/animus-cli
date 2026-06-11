@@ -35,6 +35,36 @@ a no-op (see the `animus logs tail` section below).
 
 ---
 
+## CLI Conventions
+
+The command surface converges on a small set of conventions:
+
+- **Verbs**: `list` / `get` / `info` / `create` / `update` / `delete`.
+  `info` is the detail-view verb across groups (`plugin info`, `pack info`,
+  `skill info`, `flavor info`). The pre-convergence verbs (`pack inspect`,
+  `skill show`, `flavor describe`, `output run`, `project load`) keep working
+  as hidden aliases — nothing breaks — but new docs and help only show the
+  primary names.
+- **Confirmation**: destructive verbs are dry-run by default and take `--yes`
+  to apply (`workflow prune --yes`, `subject delete --yes`, `queue drop --all
+  --yes`). `--force` is reserved for overriding a *safety check* (overwrite an
+  existing install, remove a dirty worktree, bypass a reference guard), not
+  for skipping confirmation. `workflow pause/cancel --confirm <id>` is a
+  deliberate repeat-the-id safety pattern for remote mutation and stays as-is.
+- **IDs**: domain-prefixed id flags (`--task-id`, `--run-id`,
+  `--workflow-id`) are accepted wherever the domain is unambiguous; workflow
+  commands take `--workflow-id` as an alias of `--id`. `subject --id` stays
+  kind-generic by design.
+- **Durations**: age/window flags accept unit suffixes `s`/`m`/`h`/`d`
+  (`--since 2h`, `workflow prune --older-than 12h`). Bare numbers keep their
+  historical default unit (`--older-than 30` still means 30 days).
+
+Note on overlapping observability surfaces: `daemon logs` reads the daemon's
+own process log and `daemon events` prints daemon event history, while
+`logs tail` reads the structured log storage backend and `events tail`
+streams workflow lifecycle events. They are distinct data sources, not
+aliases of each other.
+
 ## Top-Level Command Tree
 
 ```
@@ -91,7 +121,7 @@ animus
 │   ├── active               Show the active project
 │   ├── get                  Get a project by id
 │   ├── create               Create a new project entry
-│   ├── load                 Mark a project as active
+│   ├── set-active           Mark a project as active (alias: `load`)
 │   ├── rename               Rename a project
 │   ├── archive              Archive a project
 │   └── remove               Remove a project
@@ -184,7 +214,7 @@ animus
 │   ├── search               Search skills across built-in, user, project, and registry sources
 │   ├── install              Install a skill with deterministic resolution
 │   ├── list                 List all available skills (built-in, user, project, and installed)
-│   ├── show                 Show details of a resolved skill definition
+│   ├── info                 Show details of a resolved skill definition (alias: `show`)
 │   ├── update               Re-resolve one or all installed skills
 │   ├── uninstall            Remove an installed skill's materialized files and registry/lock entries (supports --source and --dry-run)
 │   ├── publish              Publish a new skill version into the registry catalog
@@ -208,7 +238,7 @@ animus
 ├── pack                     Install, inspect, pin, and uninstall workflow packs
 │   ├── install              Install a pack from a local path or marketplace registry
 │   ├── list                 List discovered packs and indicate which ones are active for this project
-│   ├── inspect              Inspect a discovered pack or a local pack manifest
+│   ├── info                 Show details of a discovered pack or a local pack manifest (alias: `inspect`)
 │   ├── pin                  Pin a pack version/source or toggle enablement for this project
 │   ├── uninstall            Remove an installed pack (all versions or --version) plus its project selection entry; refuses while project workflow YAML references the pack unless --force (supports --dry-run)
 │   ├── search               Search packs across marketplace registries
@@ -251,7 +281,7 @@ animus
 │
 ├── status                   Show a unified project status dashboard
 ├── output                   Inspect run output and artifacts
-│   ├── run                  Read run event payloads
+│   ├── read                 Read run event payloads (alias: `run`)
 │   ├── phase-outputs        Read persisted workflow phase outputs
 │   ├── artifacts            List artifacts for an execution id
 │   ├── download             Download an artifact payload
@@ -294,7 +324,7 @@ animus
 ├── flavor                   Inspect or install Animus flavor manifests (`flavors/<name>.toml`) — v0.5
 │   ├── list                 List available flavor manifests on disk
 │   ├── current              Show the active flavor and drift against the manifest
-│   ├── describe             Print a parsed flavor manifest (TOML by default, JSON via `--json`)
+│   ├── info                 Print a parsed flavor manifest (TOML by default, JSON via `--json`) (alias: `describe`)
 │   └── install              Install the named flavor (`default` only in v0.5); equivalent to `animus plugin install-defaults --include-subjects --include-transports` plus the default `workflow_runner` and `queue` plugins
 │
 ├── self                     Manage the `animus` binary itself — check for and install updates
@@ -602,15 +632,16 @@ to actually delete. With `--json`, output is an `animus.cli.v1` envelope whose
 
 | Flag | Description |
 | --- | --- |
-| `--older-than <DAYS>` | (prune) Only prune runs that completed (or started) more than DAYS days ago |
+| `--older-than <AGE>` | (prune) Only prune runs that completed (or started) more than AGE ago. Bare number = days; unit suffixes `s`/`m`/`h`/`d` accepted (`30`, `30d`, `12h`) |
 | `--keep-last <COUNT>` | (prune) Keep the COUNT most recent matching runs overall — not per workflow definition — and prune the rest |
 | `--status <STATUS>` | (prune) Only prune runs with this terminal status; default is all terminal statuses |
 | `--run-id <RUN_ID>` | (delete) Workflow run identifier to delete |
 | `--yes` / `--force` | Actually delete; without it the command is a dry-run preview |
 
 ```bash
-animus workflow prune --older-than 30              # preview
+animus workflow prune --older-than 30              # preview (30 days)
 animus workflow prune --older-than 30 --yes        # delete
+animus workflow prune --older-than 12h --yes       # unit suffix: hours
 animus workflow prune --keep-last 50 --status failed --yes
 animus workflow delete --run-id <RUN_ID> --yes
 ```
@@ -729,8 +760,8 @@ it.
 animus flavor list
 
 # Print the parsed manifest (TOML by default, JSON via --json).
-animus flavor describe --name default
-animus flavor describe --name default --json
+animus flavor info --name default
+animus flavor info --name default --json
 
 # Show drift: which required plugins are installed vs missing.
 animus flavor current

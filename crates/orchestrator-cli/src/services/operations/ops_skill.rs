@@ -1137,7 +1137,7 @@ pub(crate) async fn handle_skill(command: SkillCommand, project_root: &str, json
         SkillCommand::Search(args) => handle_search(args, project_root, json),
         SkillCommand::Install(args) => handle_install(args, project_root, json),
         SkillCommand::List(args) => handle_list(args, project_root, json),
-        SkillCommand::Show(args) => handle_show(args, project_root, json),
+        SkillCommand::Info(args) => handle_show(args, project_root, json),
         SkillCommand::Update(args) => handle_update(args, project_root, json),
         SkillCommand::Uninstall(args) => handle_uninstall(args, project_root, json),
         SkillCommand::Publish(args) => handle_publish(args, project_root, json),

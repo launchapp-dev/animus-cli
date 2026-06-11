@@ -1,15 +1,26 @@
 use clap::{Args, Subcommand};
 
-use super::{parse_positive_usize, IdArgs, INPUT_JSON_PRECEDENCE_HELP, WORKFLOW_SORT_HELP, WORKFLOW_STATUS_HELP};
+use super::{
+    parse_duration_secs_default_days, parse_positive_usize, INPUT_JSON_PRECEDENCE_HELP, WORKFLOW_SORT_HELP,
+    WORKFLOW_STATUS_HELP,
+};
+
+/// Workflow identifier args: `--id` is primary, `--workflow-id` is a hidden
+/// alias so domain-prefixed scripts keep working, `-i` is the short form.
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowIdArgs {
+    #[arg(short, long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    pub(crate) id: String,
+}
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowCommand {
     /// List workflows.
     List(WorkflowListArgs),
     /// Get workflow details.
-    Get(IdArgs),
+    Get(WorkflowIdArgs),
     /// Show workflow decisions.
-    Decisions(IdArgs),
+    Decisions(WorkflowIdArgs),
     /// List and inspect workflow checkpoints.
     Checkpoints {
         #[command(subcommand)]
@@ -20,7 +31,7 @@ pub(crate) enum WorkflowCommand {
     /// Resume a paused workflow and respawn its workflow_runner.
     Resume(WorkflowResumeArgs),
     /// Check whether a workflow can be resumed.
-    ResumeStatus(IdArgs),
+    ResumeStatus(WorkflowIdArgs),
     /// Pause an active workflow (confirmation required).
     Pause(WorkflowPauseArgs),
     /// Cancel a workflow (confirmation required).
@@ -172,7 +183,7 @@ pub(crate) enum WorkflowAgentRuntimeCommand {
 
 pub(crate) enum WorkflowCheckpointCommand {
     /// List checkpoints for a workflow.
-    List(IdArgs),
+    List(WorkflowIdArgs),
     /// Get a specific checkpoint for a workflow.
     Get(WorkflowCheckpointGetArgs),
     /// Prune checkpoints using count and/or age retention.
@@ -181,7 +192,7 @@ pub(crate) enum WorkflowCheckpointCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowCheckpointGetArgs {
-    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    #[arg(long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
     #[arg(long, value_name = "INDEX", help = "Checkpoint index (zero-based).")]
     pub(crate) checkpoint: usize,
@@ -189,7 +200,7 @@ pub(crate) struct WorkflowCheckpointGetArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowCheckpointPruneArgs {
-    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    #[arg(long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
     #[arg(
         long,
@@ -296,7 +307,7 @@ pub(crate) struct WorkflowPromptRenderArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowResumeArgs {
-    #[arg(short = 'i', long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    #[arg(short = 'i', long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
     #[arg(
         long,
@@ -308,9 +319,13 @@ pub(crate) struct WorkflowResumeArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPauseArgs {
-    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    #[arg(long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
-    #[arg(long, value_name = "WORKFLOW_ID", help = "Confirmation token; must match --id.")]
+    #[arg(
+        long,
+        value_name = "WORKFLOW_ID",
+        help = "Confirmation token; must match --id. Deliberate repeat-the-id safety pattern (not a --yes style skip flag)."
+    )]
     pub(crate) confirm: Option<String>,
     #[arg(long, default_value_t = false, help = "Preview pause payload without mutating workflow state.")]
     pub(crate) dry_run: bool,
@@ -318,9 +333,13 @@ pub(crate) struct WorkflowPauseArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowCancelArgs {
-    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    #[arg(long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
-    #[arg(long, value_name = "WORKFLOW_ID", help = "Confirmation token; must match --id.")]
+    #[arg(
+        long,
+        value_name = "WORKFLOW_ID",
+        help = "Confirmation token; must match --id. Deliberate repeat-the-id safety pattern (not a --yes style skip flag)."
+    )]
     pub(crate) confirm: Option<String>,
     #[arg(long, default_value_t = false, help = "Preview cancellation payload without mutating workflow state.")]
     pub(crate) dry_run: bool,
@@ -330,8 +349,9 @@ pub(crate) struct WorkflowCancelArgs {
 pub(crate) struct WorkflowPruneArgs {
     #[arg(
         long,
-        value_name = "DAYS",
-        help = "Only prune runs that completed (or started) more than this many days ago."
+        value_name = "AGE",
+        value_parser = parse_duration_secs_default_days,
+        help = "Only prune runs that completed (or started) more than this long ago. Accepts a bare number of days (e.g. 30) or a unit suffix: 30d, 12h, 45m, 90s."
     )]
     pub(crate) older_than: Option<u64>,
     #[arg(
@@ -370,7 +390,7 @@ pub(crate) struct WorkflowDeleteArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPhaseApproveArgs {
-    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    #[arg(long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
     #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
@@ -380,7 +400,7 @@ pub(crate) struct WorkflowPhaseApproveArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowPhaseRejectArgs {
-    #[arg(long, value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    #[arg(long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
     #[arg(long, value_name = "PHASE_ID", help = "Phase identifier.")]
     pub(crate) phase: String,
