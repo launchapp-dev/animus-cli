@@ -1101,3 +1101,186 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         Err(anyhow!(errors.join("; ")))
     }
 }
+
+// ---------------------------------------------------------------------------
+// Declared-but-unenforced config warnings
+// ---------------------------------------------------------------------------
+
+/// A structured warning for workflow YAML that parses, validates, and
+/// round-trips but is silently ignored (or only partially honoured) by the
+/// runtime. Warnings never fail a compile or validation — existing configs
+/// keep compiling.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct UnenforcedFieldWarning {
+    /// Dotted path of the offending declaration, e.g. `daemon.pool_size`.
+    pub field: String,
+    /// Source file the declaration came from.
+    pub source: String,
+    /// One-line explanation of what is/isn't enforced and where the real
+    /// knob lives.
+    pub message: String,
+}
+
+impl std::fmt::Display for UnenforcedFieldWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: `{}` is declared but not enforced — {}", self.source, self.field, self.message)
+    }
+}
+
+enum UnenforcedDetector {
+    /// A key under the top-level `daemon:` block. The slice lists the
+    /// canonical key first, followed by serde aliases.
+    DaemonKey(&'static [&'static str]),
+    /// Any `phases.<id>.evals:` block.
+    PhaseEvals,
+    /// Any workflow-level or rich-phase-entry `budget:` block.
+    Budgets,
+}
+
+struct UnenforcedRule {
+    detector: UnenforcedDetector,
+    explanation: &'static str,
+}
+
+/// THE single registry of declared-but-unenforced workflow YAML fields.
+///
+/// Every emission point (compile-path stderr warnings, `animus workflow
+/// config validate`, `animus workflow config compile`) reads this table.
+/// When enforcement for a field lands in the runtime, delete its entry here
+/// and update the matching section of `docs/reference/workflow-yaml.md`.
+const UNENFORCED_RULES: &[UnenforcedRule] = &[
+    UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["max_task_retries"]),
+        explanation: "this field is a no-op: the daemon never reads it, so task retry limits are not enforced anywhere yet",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["retry_cooldown_secs"]),
+        explanation: "this field is a no-op: the daemon never reads it, so retry cooldowns are not enforced anywhere yet",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["pool_size", "max_agents"]),
+        explanation: "the daemon ignores this YAML value; set pool size via `animus daemon config --pool-size <n>` (persisted, hot-reloaded) or `animus daemon run --pool-size <n>`",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["interval_secs"]),
+        explanation: "the daemon ignores this YAML value; set the tick interval via `animus daemon config --interval-secs <n>` (persisted, hot-reloaded) or `animus daemon run --interval-secs <n>`",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["auto_merge"]),
+        explanation: "the daemon ignores this YAML value; set it via `animus daemon config --auto-merge <bool>`",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["auto_pr"]),
+        explanation: "the daemon ignores this YAML value; set it via `animus daemon config --auto-pr <bool>`",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["auto_commit_before_merge"]),
+        explanation: "the daemon ignores this YAML value; set it via `animus daemon config --auto-commit-before-merge <bool>`",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["auto_prune_worktrees"]),
+        explanation: "the daemon ignores this YAML value; set it via `animus daemon config --auto-prune-worktrees-after-merge <bool>`",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::PhaseEvals,
+        explanation: "evals parse and validate but are not yet executed by the workflow runner — phases advance regardless of this gate (enforcement lands with a future animus-workflow-runner-default release)",
+    },
+    UnenforcedRule {
+        detector: UnenforcedDetector::Budgets,
+        explanation: "budget caps are only evaluated when `animus cost` is run manually; the daemon does not enforce max_tokens / max_cost_usd during workflow execution yet",
+    },
+];
+
+fn yaml_mapping_get<'a>(value: &'a serde_yaml::Value, key: &str) -> Option<&'a serde_yaml::Value> {
+    value.as_mapping().and_then(|map| map.get(serde_yaml::Value::String(key.to_string())))
+}
+
+fn detect_daemon_keys(doc: &serde_yaml::Value, keys: &[&str], explanation: &str, out: &mut Vec<(String, String)>) {
+    let Some(daemon) = yaml_mapping_get(doc, "daemon") else {
+        return;
+    };
+    for key in keys {
+        if yaml_mapping_get(daemon, key).is_some() {
+            out.push((format!("daemon.{key}"), explanation.to_string()));
+        }
+    }
+}
+
+fn detect_phase_evals(doc: &serde_yaml::Value, explanation: &str, out: &mut Vec<(String, String)>) {
+    let Some(phases) = yaml_mapping_get(doc, "phases").and_then(serde_yaml::Value::as_mapping) else {
+        return;
+    };
+    for (phase_id, definition) in phases {
+        let Some(phase_id) = phase_id.as_str() else {
+            continue;
+        };
+        if yaml_mapping_get(definition, "evals").is_some_and(|evals| !evals.is_null()) {
+            out.push((format!("phases.{phase_id}.evals"), explanation.to_string()));
+        }
+    }
+}
+
+fn detect_budgets(doc: &serde_yaml::Value, explanation: &str, out: &mut Vec<(String, String)>) {
+    let Some(workflows) = yaml_mapping_get(doc, "workflows").and_then(serde_yaml::Value::as_sequence) else {
+        return;
+    };
+    for (index, workflow) in workflows.iter().enumerate() {
+        let workflow_label = yaml_mapping_get(workflow, "id")
+            .and_then(serde_yaml::Value::as_str)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("[{index}]"));
+        if yaml_mapping_get(workflow, "budget").is_some_and(|budget| !budget.is_null()) {
+            out.push((format!("workflows.{workflow_label}.budget"), explanation.to_string()));
+        }
+        let Some(entries) = yaml_mapping_get(workflow, "phases").and_then(serde_yaml::Value::as_sequence) else {
+            continue;
+        };
+        for entry in entries {
+            // Rich phase entries are single-key maps `{ <phase_id>: { ... } }`.
+            let Some(map) = entry.as_mapping() else {
+                continue;
+            };
+            for (phase_id, config) in map {
+                let Some(phase_id) = phase_id.as_str() else {
+                    continue;
+                };
+                if yaml_mapping_get(config, "budget").is_some_and(|budget| !budget.is_null()) {
+                    out.push((format!("workflows.{workflow_label}.phases.{phase_id}.budget"), explanation.to_string()));
+                }
+            }
+        }
+    }
+}
+
+/// Scan one raw YAML source for declared-but-unenforced fields. Returns one
+/// warning per declaration. Unparseable YAML yields no warnings — the
+/// compile pipeline reports parse errors with proper diagnostics.
+pub fn unenforced_yaml_field_warnings(yaml: &str, source_label: &str) -> Vec<UnenforcedFieldWarning> {
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return Vec::new();
+    };
+    let mut hits: Vec<(String, String)> = Vec::new();
+    for rule in UNENFORCED_RULES {
+        match rule.detector {
+            UnenforcedDetector::DaemonKey(keys) => detect_daemon_keys(&doc, keys, rule.explanation, &mut hits),
+            UnenforcedDetector::PhaseEvals => detect_phase_evals(&doc, rule.explanation, &mut hits),
+            UnenforcedDetector::Budgets => detect_budgets(&doc, rule.explanation, &mut hits),
+        }
+    }
+    hits.into_iter()
+        .map(|(field, message)| UnenforcedFieldWarning { field, source: source_label.to_string(), message })
+        .collect()
+}
+
+/// Scan every workflow YAML source of a project for declared-but-unenforced
+/// fields. Read errors are ignored — the compile pipeline owns IO
+/// diagnostics.
+pub fn unenforced_project_yaml_warnings(project_root: &Path) -> Vec<UnenforcedFieldWarning> {
+    let Ok(sources) = super::yaml_compiler::collect_project_yaml_workflow_sources(project_root) else {
+        return Vec::new();
+    };
+    sources
+        .iter()
+        .flat_map(|(path, content)| unenforced_yaml_field_warnings(content, &path.display().to_string()))
+        .collect()
+}

@@ -4317,3 +4317,92 @@ workflows:
         assert!(!cache_path.exists(), "cache must not be written when YAML references ${{VAR}} env interpolation");
     }
 }
+
+mod unenforced_field_warnings {
+    use super::super::validation::{unenforced_project_yaml_warnings, unenforced_yaml_field_warnings};
+    use std::fs;
+
+    fn fields(yaml: &str) -> Vec<String> {
+        unenforced_yaml_field_warnings(yaml, "test.yaml").into_iter().map(|w| w.field).collect()
+    }
+
+    #[test]
+    fn daemon_unenforced_keys_are_flagged() {
+        let yaml = "daemon:\n  pool_size: 4\n  interval_secs: 10\n  max_task_retries: 3\n  retry_cooldown_secs: 60\n  auto_merge: true\n  auto_pr: false\n  auto_commit_before_merge: true\n  auto_prune_worktrees: true\n";
+        let fields = fields(yaml);
+        for expected in [
+            "daemon.pool_size",
+            "daemon.interval_secs",
+            "daemon.max_task_retries",
+            "daemon.retry_cooldown_secs",
+            "daemon.auto_merge",
+            "daemon.auto_pr",
+            "daemon.auto_commit_before_merge",
+            "daemon.auto_prune_worktrees",
+        ] {
+            assert!(fields.iter().any(|f| f == expected), "expected warning for {expected}, got {fields:?}");
+        }
+    }
+
+    #[test]
+    fn daemon_pool_size_alias_max_agents_is_flagged() {
+        let fields = fields("daemon:\n  max_agents: 4\n");
+        assert_eq!(fields, vec!["daemon.max_agents"]);
+    }
+
+    #[test]
+    fn enforced_daemon_keys_are_not_flagged() {
+        let yaml = "daemon:\n  auto_run_ready: true\n  active_hours: \"09:00-17:00\"\n  phase_routing: {}\n  mcp: {}\n";
+        assert!(fields(yaml).is_empty(), "enforced daemon fields must not warn: {:?}", fields(yaml));
+    }
+
+    #[test]
+    fn phase_evals_block_is_flagged() {
+        let yaml = "phases:\n  impl:\n    mode: agent\n    agent: dev\n    evals:\n      checks:\n        - id: tests\n          kind: command\n          command: cargo\n  review:\n    mode: agent\n    agent: reviewer\n";
+        assert_eq!(fields(yaml), vec!["phases.impl.evals"]);
+    }
+
+    #[test]
+    fn workflow_and_phase_budgets_are_flagged() {
+        let yaml = "workflows:\n  - id: flow\n    name: Flow\n    budget:\n      max_cost_usd: 5.0\n    phases:\n      - exploration:\n          budget:\n            max_tokens: 1000\n      - impl\n      - workflow_ref: sub-flow\n";
+        let fields = fields(yaml);
+        assert!(fields.iter().any(|f| f == "workflows.flow.budget"), "{fields:?}");
+        assert!(fields.iter().any(|f| f == "workflows.flow.phases.exploration.budget"), "{fields:?}");
+        assert_eq!(fields.len(), 2, "{fields:?}");
+    }
+
+    #[test]
+    fn clean_yaml_produces_no_warnings() {
+        let yaml = "phases:\n  impl:\n    mode: agent\n    agent: dev\nworkflows:\n  - id: flow\n    name: Flow\n    phases:\n      - impl\n";
+        assert!(fields(yaml).is_empty());
+    }
+
+    #[test]
+    fn unparseable_yaml_produces_no_warnings() {
+        assert!(fields(": not valid\n[]\n").is_empty());
+    }
+
+    #[test]
+    fn warning_message_includes_source_and_field() {
+        let warnings = unenforced_yaml_field_warnings("daemon:\n  pool_size: 4\n", "/tmp/workflows.yaml");
+        assert_eq!(warnings.len(), 1);
+        let rendered = warnings[0].to_string();
+        assert!(rendered.contains("/tmp/workflows.yaml"), "{rendered}");
+        assert!(rendered.contains("`daemon.pool_size`"), "{rendered}");
+        assert!(rendered.contains("--pool-size"), "{rendered}");
+    }
+
+    #[test]
+    fn project_scan_attributes_warnings_to_source_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let animus = temp.path().join(".animus");
+        fs::create_dir_all(animus.join("workflows")).unwrap();
+        fs::write(animus.join("workflows.yaml"), "daemon:\n  pool_size: 4\n").unwrap();
+        fs::write(animus.join("workflows").join("extra.yaml"), "daemon:\n  max_task_retries: 3\n").unwrap();
+
+        let warnings = unenforced_project_yaml_warnings(temp.path());
+        assert_eq!(warnings.len(), 2, "{warnings:?}");
+        assert!(warnings.iter().any(|w| w.field == "daemon.pool_size" && w.source.ends_with("workflows.yaml")));
+        assert!(warnings.iter().any(|w| w.field == "daemon.max_task_retries" && w.source.ends_with("extra.yaml")));
+    }
+}

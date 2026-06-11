@@ -108,8 +108,8 @@ animus
 │   │   └── upsert           Create or replace a workflow definition
 │   ├── config
 │   │   ├── get              Read resolved workflow config
-│   │   ├── validate         Validate workflow config shape and references
-│   │   ├── compile          Validate and resolve YAML workflow files
+│   │   ├── validate         Validate workflow config shape and references (also reports declared-but-unenforced fields in `warnings`)
+│   │   ├── compile          Validate and resolve YAML workflow files (also reports declared-but-unenforced fields in `warnings`)
 │   │   └── reload           Re-run YAML compile pipeline (hot-reload fallback)
 │   ├── state-machine
 │   │   ├── get              Read workflow state-machine config

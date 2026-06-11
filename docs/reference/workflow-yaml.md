@@ -453,7 +453,10 @@ out-of-tree workflow-runner plugin pin consumes the new field.
 > phase advance lives in `launchapp-dev/animus-workflow-runner-default`
 > and is pending its next release. **Until that lands, a phase advances
 > regardless of an `evals:` block** — author/test the gate now, but do
-> not yet rely on it for production trust.
+> not yet rely on it for production trust. Declaring an `evals:` block
+> therefore emits a declared-but-unenforced warning at compile time and
+> in `animus workflow config validate` so you are never silently
+> unprotected.
 
 `evals` declares a quality gate that runs **after** the phase emits an
 `advance` decision and **before** the workflow advances. Each check returns
@@ -617,6 +620,16 @@ variables:
 | `budget` | BudgetConfig | no | Cost ceiling for the whole workflow run (v0.5.5+) |
 
 ## budget
+
+> **Enforcement status:** budget caps are currently only evaluated when an
+> `animus cost` command (`summary`, `workflow`, `top`, `trends`) runs — the
+> daemon tick does **not** check `max_tokens` / `max_cost_usd` while a
+> workflow executes, so `on_exceed` actions fire late (or never, if you do
+> not run `animus cost`). Declaring a `budget:` block therefore emits a
+> declared-but-unenforced warning at compile time and in
+> `animus workflow config validate`. Daemon-side enforcement is planned in
+> the v0.5.5 follow-up that touches
+> `launchapp-dev/animus-workflow-runner-default`.
 
 The `budget:` block declares cost ceilings. It can live at three places:
 
@@ -1195,6 +1208,15 @@ round-trips), but it will not change daemon behaviour. Use
 [`animus daemon config`](cli/index.md) (which accepts flags directly — there is
 no `set` subcommand) or the equivalent CLI flags on
 `animus daemon run` / `animus daemon start` instead.
+
+Declaring any of these keys in workflow YAML emits a compile-time warning
+(stderr, on every path that compiles YAML — daemon start, workflow run,
+config reload) and a structured `warnings` entry in
+`animus workflow config validate` / `animus workflow config compile`
+(including `--json`). The warnings are advisory only: the config still
+compiles and validates. The warning registry lives in
+`crates/orchestrator-config/src/workflow_config/validation.rs`
+(`UNENFORCED_RULES`); entries are removed as enforcement lands.
 
 ### How `daemon:` blocks merge across files
 
