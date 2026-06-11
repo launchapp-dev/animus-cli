@@ -32,22 +32,46 @@
   ],
   "plugins": {
     "providers": [
-      { "repo": "launchapp-dev/animus-provider-claude", "tag": "v0.2.6" },
-      { "repo": "launchapp-dev/animus-provider-codex", "tag": "v0.2.7" },
-      { "repo": "launchapp-dev/animus-provider-oai-agent", "tag": "v0.1.4" }
+      {
+        "repo": "launchapp-dev/animus-provider-claude",
+        "tag": "v0.2.7"
+      },
+      {
+        "repo": "launchapp-dev/animus-provider-codex",
+        "tag": "v0.2.8"
+      },
+      {
+        "repo": "launchapp-dev/animus-provider-oai-agent",
+        "tag": "v0.1.4"
+      }
     ],
     "subjects": [
-      { "repo": "launchapp-dev/animus-subject-default", "tag": "v0.1.4" },
-      { "repo": "launchapp-dev/animus-subject-requirements", "tag": "v0.1.7" }
+      {
+        "repo": "launchapp-dev/animus-subject-default",
+        "tag": "v0.1.4"
+      },
+      {
+        "repo": "launchapp-dev/animus-subject-requirements",
+        "tag": "v0.1.7"
+      }
     ],
     "workflow_runners": [
-      { "repo": "launchapp-dev/animus-workflow-runner-default", "tag": "v0.4.2" }
+      {
+        "repo": "launchapp-dev/animus-workflow-runner-default",
+        "tag": "v0.4.2"
+      }
     ],
     "queues": [
-      { "repo": "launchapp-dev/animus-queue-default", "tag": "v0.3.0" }
+      {
+        "repo": "launchapp-dev/animus-queue-default",
+        "tag": "v0.3.0"
+      }
     ],
     "notifiers": [
-      { "repo": "launchapp-dev/animus-notifier-http", "tag": "v0.1.0" }
+      {
+        "repo": "launchapp-dev/animus-notifier-http",
+        "tag": "v0.1.0"
+      }
     ]
   }
 }
