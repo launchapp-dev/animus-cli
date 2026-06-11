@@ -111,6 +111,7 @@ impl AoMcpServer {
             stability,
             registry_url: registry_url.unwrap_or_else(|| DEFAULT_PLUGIN_REGISTRY_URL_MCP.to_string()),
             no_cache: no_cache.unwrap_or(false),
+            offline: false,
         })
         .await
         .map_err(anyhow_to_mcp_marketplace)?;
@@ -133,6 +134,7 @@ impl AoMcpServer {
             available: available.unwrap_or(false),
             registry_url: registry_url.unwrap_or_else(|| DEFAULT_PLUGIN_REGISTRY_URL_MCP.to_string()),
             no_cache: no_cache.unwrap_or(false),
+            offline: false,
         })
         .await
         .map_err(anyhow_to_mcp_marketplace)?;

@@ -755,7 +755,12 @@ and are shared with the daemon preflight, so bumping the registry rolls both
 surfaces at once. Plugins that fail to install are recorded in the summary's
 `failed` count, the per-repo failure is emitted in the JSON envelope, and the
 process exits non-zero so installer scripts can detect partial failure
-(codex round-6 P2).
+(codex round-6 P2). Exit semantics: 0 when every plugin installed or was
+skipped as already present; non-zero on any failure, with the per-plugin
+JSON summary (`results[].status` = `installed`/`skipped`/`failed` +
+`message`) still printed first so machine callers can attribute the failure.
+The root-level `animus --json` flag is honored in addition to the
+subcommand's `--json`.
 
 ### `animus plugin list` / `info` / `call` / `ping`
 
@@ -809,7 +814,7 @@ plugins are installed, inspect the target plugin with
 `animus plugin info --name <plugin-name>` and set any missing `env_required`
 entries first.
 
-### `animus plugin search` / `browse` / `update`
+### `animus plugin search` / `browse` / `update` / `outdated`
 
 Marketplace commands read the public plugin registry. Update is registry-free
 as of v0.5.8 — its source of truth is the bundled
@@ -818,9 +823,34 @@ as of v0.5.8 — its source of truth is the bundled
 
 | Command | Flags |
 |---|---|
-| `animus plugin search [QUERY]` | `--kind <KIND>`, `--tag <TAG>` (repeatable), `--org <ORG>`, `--stability <STABILITY>`, `--registry-url <URL>`, `--no-cache`, `--json` |
-| `animus plugin browse` | `--kind <KIND>`, `--installed`, `--available`, `--registry-url <URL>`, `--no-cache`, `--json` |
+| `animus plugin search [QUERY]` | `--kind <KIND>`, `--tag <TAG>` (repeatable), `--org <ORG>`, `--stability <STABILITY>`, `--registry-url <URL>`, `--no-cache`, `--offline`, `--json` |
+| `animus plugin browse` | `--kind <KIND>`, `--installed`, `--available`, `--registry-url <URL>`, `--no-cache`, `--offline`, `--json` |
 | `animus plugin update` | `--all` \| `--kind <KIND>` \| `--name <NAME>` (exactly one required), `--check`, `--yes`, `--tag <TAG>` (only with `--name`), `--force`, `--restart-daemon`, `--json` |
+| `animus plugin outdated` | `--exit-code`, `--registry-url <URL>`, `--no-cache`, `--offline`, `--json` |
+
+Registry fetch resilience: a registry GET retries twice with short backoff on
+transient failures (connection errors, 5xx, and HTTP 429 — the 429 error
+message names the rate limit explicitly and points at `--offline`). When the
+cached index (`~/.cache/animus/plugin-registry.json`, 6h TTL) has expired and
+the network fetch still fails, the command falls back to the **stale** cache
+with a loud age warning on stderr instead of hard-failing. `--offline` skips
+the network entirely and serves the cache regardless of age (erroring only
+when no cache exists yet); `--no-cache` forces a fresh fetch and never falls
+back. The two flags are mutually exclusive.
+
+`animus plugin outdated` reports version drift for every installed plugin:
+installed tag vs the recommended pin in `default-install.json` vs the latest
+tag published in the registry. Per-row `status` is `current`, `outdated`,
+`ahead`, `unknown` (no pin and no registry entry), or `local` (plugins
+installed from `--path`/`--url` sources that drift tracking cannot apply to).
+The registry fetch is best-effort: with `--offline`, latest tags come from
+the cached registry index when one exists (regardless of age); when the
+registry cannot be resolved at all (no cache in offline mode, or the network
+fetch and stale-cache fallback both fail), the command still compares against
+the pins alone and reports `latest` as unknown (`registry_reachable: false`
+plus `registry_error` in the JSON envelope). The command is informational and
+always exits 0 — pass `--exit-code` to exit non-zero when at least one plugin
+is outdated, for CI gates.
 
 `--check` (or the legacy `--dry-run` alias) prints the diff and exits without
 writing anything. `--yes` skips the confirmation prompt. `--force` reinstalls

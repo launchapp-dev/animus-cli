@@ -280,7 +280,11 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
         PluginCommand::Search(args) => marketplace::handle_plugin_search(args).await,
         PluginCommand::Browse(args) => marketplace::handle_plugin_browse(args).await,
         PluginCommand::Update(args) => marketplace::handle_plugin_update(args, project_root, json).await,
-        PluginCommand::InstallDefaults(args) => handle_plugin_install_defaults(args, project_root).await,
+        PluginCommand::Outdated(args) => marketplace::handle_plugin_outdated(args, json).await,
+        PluginCommand::InstallDefaults(mut args) => {
+            args.json = args.json || json;
+            handle_plugin_install_defaults(args, project_root).await
+        }
         PluginCommand::Lock(cmd) => handle_plugin_lock(cmd, project_root).await,
         PluginCommand::Doctor(args) => handle_plugin_doctor(args, project_root, json).await,
         PluginCommand::Rename(args) => handle_plugin_rename(args, project_root, json),
