@@ -95,4 +95,74 @@ impl RuntimeConfigContext {
     pub fn phase_command(&self, phase_id: &str) -> Option<&PhaseCommandDefinition> {
         self.phase_execution(phase_id).and_then(|def| def.command.as_ref())
     }
+
+    /// Resolved provider permission/approval mode for a phase, consulting
+    /// the workflow YAML overlay first: the YAML phase
+    /// `runtime.permission_mode` wins over the agent-runtime phase
+    /// `runtime.permission_mode`, which wins over the phase agent
+    /// profile's `permission_mode` (agent id resolved YAML-first, profile
+    /// looked up in the YAML `agents:` overlay first).
+    // TODO(codex-p2): workflow validation accepts case-insensitive phase
+    // references, but every accessor in this module (phase_execution,
+    // phase_agent_id, and this one) does exact-match `get(phase_id)`
+    // lookups, so a differently-cased reference falls through to the
+    // agent-runtime defaults. Fixing only this accessor would make the
+    // module's semantics inconsistent; normalize the lookup for ALL
+    // accessors in one pass in a follow-up.
+    pub fn phase_permission_mode(&self, phase_id: &str) -> Option<String> {
+        if let Some(value) = self
+            .workflow_config
+            .config
+            .phase_definitions
+            .get(phase_id)
+            .and_then(|def| def.runtime.as_ref())
+            .and_then(|runtime| runtime.permission_mode.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
+        }
+        if let Some(value) = self
+            .agent_runtime_config
+            .phase_execution(phase_id)
+            .and_then(|def| def.runtime.as_ref())
+            .and_then(|runtime| runtime.permission_mode.as_deref())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(value.to_string());
+        }
+        let agent_id = self.phase_agent_id(phase_id)?;
+        self.workflow_config
+            .config
+            .agent_profiles
+            .get(&agent_id)
+            .and_then(|profile| profile.permission_mode.as_deref())
+            .or_else(|| {
+                self.agent_runtime_config
+                    .agent_profile(&agent_id)
+                    .and_then(|profile| profile.permission_mode.as_deref())
+            })
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    }
+
+    /// True when the phase's agent profile (agent id resolved YAML-first,
+    /// profile looked up in the YAML `agents:` overlay first) carries an
+    /// `approval_policy`.
+    pub fn phase_has_approval_policy(&self, phase_id: &str) -> bool {
+        let Some(agent_id) = self.phase_agent_id(phase_id) else {
+            return false;
+        };
+        self.workflow_config
+            .config
+            .agent_profiles
+            .get(&agent_id)
+            .and_then(|profile| profile.approval_policy.as_ref())
+            .or_else(|| {
+                self.agent_runtime_config.agent_profile(&agent_id).and_then(|profile| profile.approval_policy.as_ref())
+            })
+            .is_some()
+    }
 }

@@ -1525,7 +1525,7 @@ async fn run_workflow_phase_with_agent(params: PhaseAgentParams<'_>) -> Result<A
                     // agent-runner sets `extras.approvals = true` and the
                     // v0.1.13.5 transports activate the claude
                     // `--permission-prompt-tool` hook / approvals preamble.
-                    if ctx.agent_runtime_config.phase_has_approval_policy(phase_id) {
+                    if ctx.phase_has_approval_policy(phase_id) {
                         runtime_contract
                             .as_object_mut()
                             .expect("json object")
@@ -1971,7 +1971,7 @@ async fn run_workflow_phase_inner(params: &PhaseRunParams<'_>) -> Result<PhaseRu
                 fallback_models: merged_runtime.phase_fallback_models(phase_id),
                 fallback_tools: merged_runtime.phase_fallback_tools(phase_id),
                 reasoning_effort: merged_runtime.phase_reasoning_effort(phase_id).map(ToOwned::to_owned),
-                permission_mode: merged_runtime.phase_permission_mode(phase_id).map(ToOwned::to_owned),
+                permission_mode: ctx.phase_permission_mode(phase_id),
                 web_search: merged_runtime.phase_web_search(phase_id),
                 network_access: merged_runtime.phase_network_access(phase_id),
                 timeout_secs: merged_runtime.phase_timeout_secs(phase_id),
