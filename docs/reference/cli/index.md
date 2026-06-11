@@ -33,6 +33,24 @@ lines (JSONL passthrough where structured) until interrupted:
 returns one envelope and exits; its `--follow` flag is reserved and currently
 a no-op (see the `animus logs tail` section below).
 
+### Destructive commands: dry-run by default, `--yes` to apply
+
+The convention for destructive verbs is dry-run by default: invoked without
+`--yes` they print a preview of what *would* be deleted and exit 0 without
+touching anything; pass `--yes` (alias `--force` where noted) to actually
+apply. `subject delete`, `workflow prune`, and `workflow delete` follow it
+today. Two families still differ: `queue drop --all` confirms interactively
+and requires `--yes` in non-TTY contexts (scripts, CI, `--json` pipelines),
+while `skill uninstall` / `pack uninstall` apply immediately and take
+`--dry-run` to preview instead. New destructive verbs should follow the
+dry-run-by-default + `--yes` convention.
+
+### Status values
+
+Status enums are kebab-case in canonical form (`ready`, `in-progress`,
+`blocked`, `done`); the snake_case spellings (e.g. `in_progress`) also parse
+as aliases. Examples in this reference use kebab-case throughout.
+
 ---
 
 ## Top-Level Command Tree
@@ -584,6 +602,10 @@ The MCP tools `animus.queue.hold` / `release` / `drop` accept either a single
 path.
 
 ### `animus workflow prune` / `animus workflow delete`
+
+Scope: `prune` is the batch verb — it sweeps all terminal runs matching its
+filters (`--older-than`, `--keep-last`, `--status`); `delete` removes exactly
+one run identified by `--run-id`.
 
 Reclaim disk from finished workflow runs. Both commands remove the run's row
 (and checkpoints) from `workflow.db` plus its `runs/<run-id>/`,

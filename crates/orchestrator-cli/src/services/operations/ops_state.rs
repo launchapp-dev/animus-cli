@@ -891,7 +891,9 @@ fn git_remote_origin(project_root: &Path) -> Option<String> {
 /// and don't want a crafted MANIFEST.json escaping `~/.animus`.
 fn validate_scope_name(scope: &str) -> Result<()> {
     if scope.is_empty() {
-        return Err(invalid_input_error("manifest repo_scope is empty".to_string()));
+        return Err(invalid_input_error(
+            "exported state manifest is invalid: repo_scope is required — check MANIFEST.json in the archive",
+        ));
     }
     for ch in scope.chars() {
         match ch {

@@ -35,7 +35,7 @@ pub(crate) struct InitArgs {
     // ---------------------------------------------------------------
     #[arg(
         long,
-        help = "Run the v0.4.13 onboarding walkthrough: detect CLIs, install default plugins, copy the hello-world workflow.",
+        help = "Run the onboarding walkthrough: detect CLIs, install default plugins, copy the hello-world workflow.",
         conflicts_with_all = ["template", "path"]
     )]
     pub(crate) walkthrough: bool,

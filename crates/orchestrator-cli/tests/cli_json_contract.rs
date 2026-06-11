@@ -133,6 +133,40 @@ fn json_error_envelope_maps_invalid_output_run_id() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn json_error_envelope_maps_subject_invalid_input() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    // Empty --id is user input validation, not an internal fault: exit 2.
+    let (payload, status) = harness.run_json_err_with_exit(&["subject", "get", "--kind", "task", "--id", "  "])?;
+    assert_eq!(status, 2, "empty subject --id should exit with code 2");
+    assert_error_envelope(&payload, "invalid_input", 2);
+    assert!(
+        payload.pointer("/error/message").and_then(Value::as_str).is_some_and(|message| message.contains("--id")),
+        "invalid subject id message should name the offending flag"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn json_error_envelope_maps_plugin_not_installed() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let (payload, status) = harness.run_json_err_with_exit(&["plugin", "info", "--name", "no-such-plugin"])?;
+    assert_eq!(status, 3, "missing plugin should exit with code 3");
+    assert_error_envelope(&payload, "not_found", 3);
+    assert!(
+        payload
+            .pointer("/error/message")
+            .and_then(Value::as_str)
+            .is_some_and(|message| message.contains("no-such-plugin")),
+        "missing plugin message should name the plugin"
+    );
+
+    Ok(())
+}
+
 /// Regression for the audit's Fix 3: clap argparse failures must not bypass
 /// `--json`. Before this fix, `animus --json nope` exited 2 with multi-line
 /// human-readable clap text on stderr, breaking every scripted consumer that

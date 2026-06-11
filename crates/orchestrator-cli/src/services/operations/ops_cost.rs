@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::Serialize;
 
@@ -17,12 +17,12 @@ use crate::cli_types::{
     CostCommand, CostConversationArgs, CostSummaryArgs, CostTopArgs, CostTopBy, CostTrendWindow, CostTrendsArgs,
     CostWorkflowArgs,
 };
-use crate::print_value;
 use crate::services::cost::{
     aggregator::COST_STATE_SCHEMA_ID, enforce_caps, load_cost_state, save_cost_state, scan_runs, CostState, PhaseCost,
     WorkflowCost,
 };
 use crate::services::runtime::runtime_chat::store::{ConversationStore, FileConversationStore};
+use crate::{invalid_input_error, not_found_error, print_value};
 
 const SUMMARY_SCHEMA: &str = "animus.cost.summary.v1";
 const WORKFLOW_SCHEMA: &str = "animus.cost.workflow.v1";
@@ -108,7 +108,7 @@ fn aggregate_conversation_cost(
 fn handle_conversation(project_path: &Path, args: CostConversationArgs, json: bool) -> Result<()> {
     let store = FileConversationStore::for_project(project_path)?;
     if store.load_meta(&args.conversation_id)?.is_none() {
-        return Err(anyhow!("conversation '{}' not found", args.conversation_id));
+        return Err(not_found_error(format!("conversation '{}' not found", args.conversation_id)));
     }
     let messages = store.load_messages(&args.conversation_id)?;
     let view = aggregate_conversation_cost(&args.conversation_id, &messages);
@@ -395,7 +395,7 @@ fn handle_workflow(project_path: &Path, args: CostWorkflowArgs, json: bool) -> R
             Ok(())
         };
     }
-    Err(anyhow!("workflow run '{}' not found in cost state or history", args.workflow_run_id))
+    Err(not_found_error(format!("workflow run '{}' not found in cost state or history", args.workflow_run_id)))
 }
 
 #[derive(Debug, Serialize)]
@@ -560,23 +560,24 @@ fn bucket_label(ts: DateTime<Utc>, window: CostTrendWindow) -> String {
 fn parse_duration(input: &str) -> Result<Duration> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
-        return Err(anyhow!("--since duration must not be empty"));
+        return Err(invalid_input_error("--since duration must not be empty"));
     }
-    let (num_part, unit_part) = trimmed.split_at(
-        trimmed
-            .find(|c: char| c.is_ascii_alphabetic())
-            .ok_or_else(|| anyhow!("--since duration '{trimmed}' must end with a unit (m/h/d/w)"))?,
-    );
-    let value: i64 = num_part.parse().map_err(|_| anyhow!("--since duration '{trimmed}' has invalid number"))?;
+    let (num_part, unit_part) =
+        trimmed.split_at(trimmed.find(|c: char| c.is_ascii_alphabetic()).ok_or_else(|| {
+            invalid_input_error(format!("--since duration '{trimmed}' must end with a unit (m/h/d/w)"))
+        })?);
+    let value: i64 = num_part
+        .parse()
+        .map_err(|_| invalid_input_error(format!("--since duration '{trimmed}' has invalid number")))?;
     if value <= 0 {
-        return Err(anyhow!("--since duration must be positive"));
+        return Err(invalid_input_error("--since duration must be positive"));
     }
     match unit_part {
         "m" => Ok(Duration::minutes(value)),
         "h" => Ok(Duration::hours(value)),
         "d" => Ok(Duration::days(value)),
         "w" => Ok(Duration::weeks(value)),
-        other => Err(anyhow!("--since duration unit '{other}' must be one of m/h/d/w")),
+        other => Err(invalid_input_error(format!("--since duration unit '{other}' must be one of m/h/d/w"))),
     }
 }
 
