@@ -309,3 +309,65 @@ fn summarize_with_lock_is_identity_when_lockfile_absent() {
     let summaries = summarize_discovered_plugins_with_lock(&plugins, None);
     assert_eq!(summaries[0].subject_kinds, vec!["task".to_string()]);
 }
+
+#[test]
+fn flavor_manifest_error_fails_preflight_even_with_no_missing_roles() {
+    let mut result = super::PreflightResult::default();
+    assert!(result.is_ok(), "empty result with no flavor error is healthy");
+
+    result.flavor_manifest_error =
+        Some("flavor manifest at /proj/flavors/default.toml failed to load: failed to parse flavor manifest".into());
+    assert!(!result.is_ok(), "a recorded flavor manifest error must fail preflight even with zero missing roles");
+}
+
+#[test]
+fn flavor_manifest_error_leads_rendered_message_and_suppresses_install_advice() {
+    let result = super::PreflightResult {
+        satisfied: Vec::new(),
+        missing: vec![super::MissingPlugin {
+            role: "at_least_one_provider".to_string(),
+            fix_command: "animus plugin install launchapp-dev/animus-provider-claude@v0.2.1".to_string(),
+        }],
+        auto_installed: Vec::new(),
+        flavor_manifest_error: Some(
+            "flavor manifest at /proj/flavors/default.toml failed to load: failed to parse flavor manifest".to_string(),
+        ),
+    };
+
+    let message = result.render_missing_message();
+    assert!(message.contains("/proj/flavors/default.toml"), "message must name the broken manifest. got: {message}");
+    assert!(message.contains("admits NO plugins"), "message must explain the fail-closed consequence. got: {message}");
+    assert!(
+        message.contains("role `at_least_one_provider`"),
+        "missing roles must still be listed as symptoms. got: {message}"
+    );
+    assert!(
+        !message.contains("Re-run with `--auto-install`"),
+        "install advice cannot fix a broken manifest and must be suppressed. got: {message}"
+    );
+    assert!(
+        !message.contains("animus plugin install"),
+        "per-role install commands cannot fix a broken manifest and must be suppressed. got: {message}"
+    );
+    assert!(
+        !message.contains("the daemon requires plugins that are not installed"),
+        "the missing-plugins template mislabels a broken-manifest failure. got: {message}"
+    );
+}
+
+#[test]
+fn missing_roles_without_flavor_error_keep_install_advice_template() {
+    let result = super::PreflightResult {
+        satisfied: Vec::new(),
+        missing: vec![super::MissingPlugin {
+            role: "queue".to_string(),
+            fix_command: "animus plugin install launchapp-dev/animus-queue-default@v0.2.0".to_string(),
+        }],
+        auto_installed: Vec::new(),
+        flavor_manifest_error: None,
+    };
+
+    let message = result.render_missing_message();
+    assert!(message.contains("the daemon requires plugins that are not installed"), "got: {message}");
+    assert!(message.contains("Re-run with `--auto-install`"), "got: {message}");
+}

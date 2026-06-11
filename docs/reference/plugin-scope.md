@@ -102,3 +102,24 @@ allowlist --allow animus-subject-default` or `animus plugin scope reset`.
 
 This distinguishes "you forgot to install the plugin" from "the plugin
 is installed but you opted out of it for this project."
+
+### Broken flavor manifests
+
+A `flavors/default.toml` that exists on disk but fails to load (TOML
+parse error, unknown schema) fails **closed** everywhere: the scope
+stays `flavor-only` with an empty admit set, so no plugin is admitted
+until the manifest is fixed or deleted. The failure is loud on every
+surface:
+
+- discovery and `animus plugin list` emit a warning naming the manifest
+  and the parse error,
+- `animus daemon preflight` reports `flavor_manifest_error` and exits 2
+  with a fix message that leads with the broken manifest instead of
+  `animus plugin install ...` advice (which cannot fix it),
+- `animus daemon start` / `animus daemon run` refuse to start with the
+  same message.
+
+An explicit `.animus/plugin-scope.yaml` whose `mode:` is `all` or
+`allowlist` overrides the flavor default, so a broken manifest does not
+gate discovery or preflight in that case (the discovery warning still
+surfaces for diagnostics).

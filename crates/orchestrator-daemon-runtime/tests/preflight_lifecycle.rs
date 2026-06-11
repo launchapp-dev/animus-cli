@@ -488,3 +488,90 @@ fn discovery_io_error_surfaces_specific_message_not_install_hint() {
     };
     assert!(!missing_outcome.should_abort_startup(), "an empty PreflightResult with no missing plugins is healthy");
 }
+
+/// Regression guard for the flavor-manifest fail-open gap: discovery and
+/// `animus plugin list` fail CLOSED on a broken `flavors/default.toml`
+/// (flavor-only scope, empty admit set), but the daemon preflight wiring
+/// used to fail OPEN — treating the parse error as "no flavor" and
+/// preflighting against the unrestricted plugin universe. The two sides
+/// then disagreed: preflight said healthy while dispatch found no
+/// plugins. Daemon startup must instead refuse with a message naming the
+/// broken manifest.
+#[tokio::test]
+async fn daemon_start_refuses_on_broken_flavor_manifest() {
+    let _env = HOME_ENV_LOCK.lock().await;
+    let _home = pin_test_home();
+    let project = TempDir::new().expect("tempdir project");
+    let project_root = project.path().to_string_lossy().to_string();
+
+    let flavors = project.path().join("flavors");
+    std::fs::create_dir_all(&flavors).expect("mkdir flavors");
+    std::fs::write(flavors.join("default.toml"), "this is [not valid TOML\n").expect("write broken flavor");
+
+    let counts = LifecycleCounts::new();
+    let mut hooks = StubHooks {
+        counts: counts.clone(),
+        spec: PluginPreflightSpec {
+            required_roles: vec![RequiredRole::AtLeastOneProvider],
+            auto_install: false,
+            auto_install_defaults: Vec::new(),
+        },
+    };
+    let mut driver = StubDriver;
+    let mut options = DaemonRuntimeOptions { once: true, ..DaemonRuntimeOptions::default() };
+
+    let result = run_daemon(&project_root, &mut options, &mut driver, &mut hooks, |_| 0).await;
+    assert!(result.is_err(), "broken flavor manifest must abort daemon startup");
+    let message = result.unwrap_err().to_string();
+    assert!(
+        message.contains("flavor manifest at") && message.contains("default.toml"),
+        "abort message must name the broken manifest. got: {message}"
+    );
+    assert!(
+        message.contains("admits NO plugins"),
+        "abort message must explain the fail-closed consequence. got: {message}"
+    );
+    assert!(
+        !message.contains("Re-run with `--auto-install`"),
+        "install advice cannot fix a broken manifest. got: {message}"
+    );
+    assert_eq!(counts.start_calls(), 0, "start_daemon must NOT be invoked when preflight aborts");
+    assert!(
+        matches!(counts.status(), DaemonStatus::Stopped),
+        "persisted daemon status must remain stopped after a flavor-manifest abort"
+    );
+}
+
+/// Inverse guards for the broken-manifest abort: an intact manifest and a
+/// missing manifest must preflight exactly as before (no flavor error in
+/// the result; an empty role spec passes).
+#[tokio::test]
+async fn daemon_preflight_unchanged_for_intact_and_absent_flavor_manifests() {
+    let _env = HOME_ENV_LOCK.lock().await;
+    let _home = pin_test_home();
+
+    // Intact manifest: flavor-only scope resolves the declared plugins,
+    // no flavor error, and a role-free spec passes preflight.
+    let with_flavor = TempDir::new().expect("tempdir project");
+    let flavors = with_flavor.path().join("flavors");
+    std::fs::create_dir_all(&flavors).expect("mkdir flavors");
+    std::fs::write(
+        flavors.join("default.toml"),
+        "schema = \"animus.flavor.v1\"\nid = \"default\"\nversion = \"0.5.0\"\ntitle = \"T\"\ndescription = \"T\"\n\n[providers]\nrequired = [\"launchapp-dev/animus-provider-claude\"]\n",
+    )
+    .expect("write flavor");
+    let (installed, flavor_error) = orchestrator_daemon_runtime::discover_installed_plugins_with_flavor_error(
+        &with_flavor.path().to_string_lossy(),
+    )
+    .expect("discovery must succeed");
+    assert!(flavor_error.is_none(), "an intact manifest must not report a flavor error");
+    assert!(installed.is_empty(), "no plugins installed under the pinned test HOME");
+
+    // No manifest at all: mode `all`, no flavor error.
+    let without_flavor = TempDir::new().expect("tempdir project");
+    let (_, flavor_error) = orchestrator_daemon_runtime::discover_installed_plugins_with_flavor_error(
+        &without_flavor.path().to_string_lossy(),
+    )
+    .expect("discovery must succeed");
+    assert!(flavor_error.is_none(), "a missing manifest must not report a flavor error");
+}

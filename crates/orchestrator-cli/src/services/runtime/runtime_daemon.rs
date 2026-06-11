@@ -468,7 +468,7 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
 
 async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, json: bool) -> Result<()> {
     use orchestrator_core::{PluginPreflightRunner, PluginPreflightSpec};
-    use orchestrator_daemon_runtime::discover_installed_plugins;
+    use orchestrator_daemon_runtime::discover_installed_plugins_with_flavor_error;
 
     let mut spec = PluginPreflightSpec::daemon_default();
     spec.auto_install = args.auto_install;
@@ -479,11 +479,22 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
     // the same as missing required roles (exit code 2). Using
     // `unwrap_or_default()` here would mask both as "no plugins
     // installed" and then exit 0/2 misleadingly.
-    let installed = discover_installed_plugins(project_root)
+    let (installed, flavor_error) = discover_installed_plugins_with_flavor_error(project_root)
         .map_err(|err| crate::internal_error(format!("plugin discovery failed: {err:#}")))?;
-    let installer = if args.auto_install { Some(daemon_run::CliPluginInstaller::new(project_root)) } else { None };
+    // A broken flavor manifest fails the flavor-only scope CLOSED, so
+    // discovery returned an empty plugin set and every role reads as
+    // missing. Withhold the installer (auto-install would mutate the
+    // plugin set even though installs cannot fix the manifest) and
+    // attach the error so the report (and the exit-2 fix message) names
+    // the manifest — matching the daemon startup preflight.
+    let installer = if args.auto_install && flavor_error.is_none() {
+        Some(daemon_run::CliPluginInstaller::new(project_root))
+    } else {
+        None
+    };
     let installer_ref = installer.as_ref().map(|i| i as &dyn orchestrator_core::PluginInstaller);
-    let result = PluginPreflightRunner::run(&spec, installed, installer_ref).await?;
+    let mut result = PluginPreflightRunner::run(&spec, installed, installer_ref).await?;
+    result.flavor_manifest_error = flavor_error;
 
     let payload = serde_json::json!({
         "schema": "animus.daemon.preflight.v1",
@@ -491,6 +502,7 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
         "satisfied": result.satisfied,
         "missing": result.missing,
         "auto_installed": result.auto_installed,
+        "flavor_manifest_error": result.flavor_manifest_error,
         "ok": result.is_ok(),
         "fix_message": if result.is_ok() { String::new() } else { result.render_missing_message() },
     });

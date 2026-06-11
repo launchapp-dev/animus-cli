@@ -143,18 +143,41 @@ pub struct PreflightResult {
     pub satisfied: Vec<String>,
     pub missing: Vec<MissingPlugin>,
     pub auto_installed: Vec<AutoInstalledPlugin>,
+    /// Set when the project's flavor manifest exists on disk but failed to
+    /// load while the plugin scope is in `flavor-only` mode. The scope then
+    /// fails closed (empty admit set), so every required role reports as
+    /// missing for a reason `animus plugin install` cannot fix. Callers
+    /// resolve and attach this after [`PluginPreflightRunner::run`]; the
+    /// runner itself never sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub flavor_manifest_error: Option<String>,
 }
 
 impl PreflightResult {
     pub fn is_ok(&self) -> bool {
-        self.missing.is_empty()
+        self.missing.is_empty() && self.flavor_manifest_error.is_none()
     }
 
     pub fn render_missing_message(&self) -> String {
-        if self.missing.is_empty() {
+        if self.is_ok() {
             return String::new();
         }
         let mut out = String::new();
+        if let Some(reason) = &self.flavor_manifest_error {
+            // List missing roles WITHOUT their install fix commands:
+            // rediscovery keeps filtering those plugins out until the
+            // manifest is fixed, so install advice cannot remediate.
+            out.push_str(&format!("plugin preflight failed: {reason}\n"));
+            out.push_str(
+                "The flavor-only plugin scope admits NO plugins until the manifest is fixed, so every \
+                 required role below reports as missing. Fix (or delete) the manifest instead of \
+                 installing plugins.\n",
+            );
+            for missing in &self.missing {
+                out.push_str(&format!("  - role `{}` unsatisfied\n", missing.role));
+            }
+            return out;
+        }
         out.push_str("plugin preflight failed: the daemon requires plugins that are not installed.\n");
         for missing in &self.missing {
             out.push_str(&format!("  - role `{}` unsatisfied; fix: `{}`\n", missing.role, missing.fix_command));

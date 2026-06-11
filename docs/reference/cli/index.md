@@ -347,7 +347,7 @@ prerequisites are in place.
 | `--auto-install` | Install missing required plugins from the daemon's recommended defaults instead of just reporting them. |
 
 JSON envelope: `animus.daemon.preflight.v1` with fields `satisfied`, `missing`,
-`auto_installed`, `ok`, `fix_message`.
+`auto_installed`, `flavor_manifest_error`, `ok`, `fix_message`.
 
 Exit code matrix:
 
@@ -356,6 +356,16 @@ Exit code matrix:
 | 0 | All required roles satisfied. |
 | 2 | At least one required role is missing. The error envelope's `message` carries the `animus plugin install ...` fix. CI scripts and `&&` chains can rely on this. |
 | 1 | Transient plugin discovery failure (broken install index, IO error, etc.). Distinct from "ran successfully and found gaps". |
+
+Broken flavor manifest: when `flavors/default.toml` exists on disk but fails
+to load (parse error, unknown schema) and the project's plugin scope is in
+`flavor-only` mode, preflight fails closed — the scope admits no plugins, so
+every required role reports missing, `flavor_manifest_error` names the broken
+manifest, and `fix_message` leads with "fix (or delete) the manifest" instead
+of install advice. Daemon startup (`animus daemon start` / `animus daemon
+run`) refuses with the same message. This matches the fail-closed posture of
+discovery and `animus plugin list`; see
+[plugin-scope.md](../plugin-scope.md#preflight-interaction).
 
 ### `animus agent run` / `animus chat send` (reasoning effort)
 

@@ -58,7 +58,7 @@ impl PluginPreflightRunner {
             });
         }
 
-        Ok(PreflightResult { satisfied, missing, auto_installed })
+        Ok(PreflightResult { satisfied, missing, auto_installed, flavor_manifest_error: None })
     }
 }
 
