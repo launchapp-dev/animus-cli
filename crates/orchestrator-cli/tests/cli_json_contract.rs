@@ -196,6 +196,112 @@ fn argparse_failure_keeps_human_text_when_json_not_requested() -> Result<()> {
     Ok(())
 }
 
+/// Per-family envelope coverage: every command family that scripts consume
+/// must answer the root `--json` flag with the `animus.cli.v1` envelope.
+/// One representative verb per family pins the contract so a regression in
+/// any family's `json` plumbing fails loudly here.
+#[test]
+fn pack_list_emits_success_envelope() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok(&["pack", "list"])?;
+    assert_success_envelope(&payload);
+    assert!(payload.get("data").is_some_and(Value::is_array), "pack list data should be an array: {payload}");
+
+    Ok(())
+}
+
+#[test]
+fn skill_list_emits_success_envelope() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok(&["skill", "list"])?;
+    assert_success_envelope(&payload);
+    assert!(payload.get("data").is_some_and(Value::is_array), "skill list data should be an array: {payload}");
+
+    Ok(())
+}
+
+#[test]
+fn runner_health_emits_success_envelope() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok(&["runner", "health"])?;
+    assert_success_envelope(&payload);
+    assert!(
+        payload.pointer("/data/provider_plugins_healthy").is_some_and(Value::is_boolean),
+        "runner health data should include provider_plugins_healthy: {payload}"
+    );
+    assert!(
+        payload.pointer("/data/providers").is_some_and(Value::is_array),
+        "runner health data should include providers array: {payload}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn trigger_list_emits_success_envelope() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok(&["trigger", "list"])?;
+    assert_success_envelope(&payload);
+    assert!(payload.get("data").is_some_and(Value::is_array), "trigger list data should be an array: {payload}");
+
+    Ok(())
+}
+
+#[test]
+fn logs_tail_emits_success_envelope() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok(&["logs", "tail"])?;
+    assert_success_envelope(&payload);
+    assert!(
+        payload.pointer("/data/entries").is_some_and(Value::is_array),
+        "logs tail data should include entries array: {payload}"
+    );
+    assert!(
+        payload.pointer("/data/backend").is_some_and(Value::is_string),
+        "logs tail data should include backend label: {payload}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn history_recent_emits_success_envelope() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok(&["history", "recent"])?;
+    assert_success_envelope(&payload);
+    assert!(payload.get("data").is_some_and(Value::is_array), "history recent data should be an array: {payload}");
+
+    Ok(())
+}
+
+#[test]
+fn history_get_missing_execution_maps_not_found_envelope() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let (payload, status) = harness.run_json_err_with_exit(&["history", "get", "--id", "no-such-execution"])?;
+    assert_eq!(status, 3, "missing history record should exit with code 3");
+    assert_error_envelope(&payload, "not_found", 3);
+
+    Ok(())
+}
+
+#[test]
+fn git_repo_list_emits_success_envelope() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let payload = harness.run_json_ok(&["git", "repo", "list"])?;
+    assert_success_envelope(&payload);
+    assert!(payload.get("data").is_some_and(Value::is_array), "git repo list data should be an array: {payload}");
+
+    Ok(())
+}
+
 /// `animus --json --help` is a *successful* display, not a parse failure.
 /// Pre-fix this path didn't exist (clap exited 0 directly); the post-fix
 /// argparse-envelope code path must not lie about success/failure here.
