@@ -226,16 +226,13 @@ fn e2e_daemon_start_without_preflight_refuses_when_no_plugins() -> Result<()> {
 }
 
 #[test]
-fn e2e_daemon_config_persists_auto_prune_worktrees_after_merge() -> Result<()> {
+fn e2e_daemon_config_rejects_removed_auto_prune_flag() -> Result<()> {
     let harness = CliHarness::new()?;
 
-    let configured = harness.run_json_ok(&["daemon", "config", "--auto-prune-worktrees-after-merge", "true"])?;
-    assert_eq!(configured.pointer("/data/auto_prune_worktrees_after_merge").and_then(Value::as_bool), Some(true));
-
-    let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
-    let pm_config_content = std::fs::read_to_string(pm_config_path).context("pm-config should be readable")?;
-    let pm_config: Value = serde_json::from_str(&pm_config_content).context("pm-config should parse as JSON")?;
-    assert_eq!(pm_config.get("auto_prune_worktrees_after_merge").and_then(Value::as_bool), Some(true));
+    // The daemon git/merge policy flags were removed in v0.5.x; the CLI
+    // should reject them as unknown arguments.
+    let output = harness.run_json_output(&["daemon", "config", "--auto-prune-worktrees-after-merge", "true"])?;
+    assert!(!output.status.success(), "removed daemon config flag should be rejected");
 
     Ok(())
 }

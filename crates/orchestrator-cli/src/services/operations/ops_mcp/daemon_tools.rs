@@ -133,7 +133,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.daemon.config",
-        description = "Read daemon configuration. Purpose: View current daemon automation settings (auto-merge, auto-PR, etc) and runtime-reconfigurable settings (pool_size, interval_secs, max_tasks_per_tick, etc). Prerequisites: None. Example: {}. Sequencing: Use animus.daemon.config-set to update values, or animus.daemon.status to check if daemon is running.",
+        description = "Read daemon configuration. Purpose: View runtime-reconfigurable daemon settings (pool_size, interval_secs, max_tasks_per_tick, auto_run_ready, etc). Prerequisites: None. Example: {}. Sequencing: Use animus.daemon.config-set to update values, or animus.daemon.status to check if daemon is running.",
         input_schema = ao_schema_for_type::<DaemonConfigInput>()
     )]
     async fn ao_daemon_config(&self, params: Parameters<DaemonConfigInput>) -> Result<CallToolResult, McpError> {

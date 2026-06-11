@@ -63,8 +63,6 @@ Key configuration options:
 
 | Setting | Description |
 |---------|-------------|
-| `auto_merge` | Automatically merge PRs after successful workflow completion |
-| `auto_pr` | Automatically create PRs for completed work |
 | `pool_size` | Maximum number of concurrent agents the daemon will run |
 | `active_hours` | Time window during which schedule-driven workflow dispatch is allowed |
 | `auto_run_ready` | Whether ready tasks are promoted during daemon ticks |
@@ -75,7 +73,6 @@ Update a specific setting:
 
 ```bash
 animus daemon config --pool-size 3
-animus daemon config --auto-merge true
 animus daemon config --auto-run-ready false
 ```
 

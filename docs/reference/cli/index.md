@@ -600,9 +600,6 @@ Initialize an Animus project from a template registry or a local template direct
 | `--no-template` | Walkthrough only: skip copying the hello-world workflow template into `.animus/workflows/` |
 | `--auto-start` | Walkthrough only: start the autonomous daemon after init completes |
 | `--walkthrough-template <NAME>` | Walkthrough only: choose the bundled workflow template. Current default is `hello-world` |
-| `--auto-merge <bool>` | Override the template default for automatic merge |
-| `--auto-pr <bool>` | Override the template default for automatic pull request creation |
-| `--auto-commit-before-merge <bool>` | Override the template default for automatic commit before merge |
 
 The template registry URL can be overridden globally via `ANIMUS_TEMPLATE_REGISTRY_URL`.
 In `--json` mode, `animus init` also returns `recommended_install`, sourced from

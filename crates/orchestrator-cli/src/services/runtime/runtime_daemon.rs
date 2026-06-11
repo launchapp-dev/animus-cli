@@ -428,22 +428,6 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     }
 
     let mut updated = false;
-    if let Some(enabled) = args.auto_merge {
-        config["auto_merge_enabled"] = serde_json::Value::Bool(enabled);
-        updated = true;
-    }
-    if let Some(enabled) = args.auto_pr {
-        config["auto_pr_enabled"] = serde_json::Value::Bool(enabled);
-        updated = true;
-    }
-    if let Some(enabled) = args.auto_commit_before_merge {
-        config["auto_commit_before_merge"] = serde_json::Value::Bool(enabled);
-        updated = true;
-    }
-    if let Some(enabled) = args.auto_prune_worktrees_after_merge {
-        config["auto_prune_worktrees_after_merge"] = serde_json::Value::Bool(enabled);
-        updated = true;
-    }
 
     // Runtime-reconfigurable settings (hot-reloaded by daemon)
     if let Some(v) = args.pool_size {
@@ -505,10 +489,6 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     print_value(
         serde_json::json!({
             "config_path": pm_config_path(project_root).display().to_string(),
-            "auto_merge_enabled": daemon_config_bool(&config, "auto_merge_enabled").unwrap_or(false),
-            "auto_pr_enabled": daemon_config_bool(&config, "auto_pr_enabled").unwrap_or(false),
-            "auto_commit_before_merge": daemon_config_bool(&config, "auto_commit_before_merge").unwrap_or(false),
-            "auto_prune_worktrees_after_merge": daemon_config_bool(&config, "auto_prune_worktrees_after_merge").unwrap_or(false),
             "auto_run_ready": daemon_config_bool(&config, "auto_run_ready").unwrap_or(true),
             "pool_size": config.get("pool_size").and_then(serde_json::Value::as_u64),
             "interval_secs": config.get("interval_secs").and_then(serde_json::Value::as_u64),
@@ -649,18 +629,6 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         command.arg("--max-tasks-per-tick").arg(max_tasks_per_tick.to_string());
     }
     command.stdout(Stdio::from(stdout_log)).stderr(Stdio::from(stderr_log)).stdin(Stdio::null());
-    if let Some(auto_merge) = args.scheduler.auto_merge {
-        command.arg("--auto-merge").arg(auto_merge.to_string());
-    }
-    if let Some(auto_pr) = args.scheduler.auto_pr {
-        command.arg("--auto-pr").arg(auto_pr.to_string());
-    }
-    if let Some(auto_commit_before_merge) = args.scheduler.auto_commit_before_merge {
-        command.arg("--auto-commit-before-merge").arg(auto_commit_before_merge.to_string());
-    }
-    if let Some(auto_prune_worktrees_after_merge) = args.scheduler.auto_prune_worktrees_after_merge {
-        command.arg("--auto-prune-worktrees-after-merge").arg(auto_prune_worktrees_after_merge.to_string());
-    }
     if let Some(phase_timeout_secs) = args.scheduler.phase_timeout_secs {
         command.arg("--phase-timeout-secs").arg(phase_timeout_secs.to_string());
     }

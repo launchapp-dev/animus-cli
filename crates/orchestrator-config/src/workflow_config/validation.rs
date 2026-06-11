@@ -1167,19 +1167,19 @@ const UNENFORCED_RULES: &[UnenforcedRule] = &[
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_merge"]),
-        explanation: "the daemon ignores this YAML value; set it via `animus daemon config --auto-merge <bool>`",
+        explanation: "this key was removed: the daemon has no merge/PR automation; configure merge behavior per workflow via `post_success.merge` (executed by the workflow runner plugin)",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_pr"]),
-        explanation: "the daemon ignores this YAML value; set it via `animus daemon config --auto-pr <bool>`",
+        explanation: "this key was removed: the daemon has no merge/PR automation; configure PR creation per workflow via `post_success.merge.create_pr` (executed by the workflow runner plugin)",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_commit_before_merge"]),
-        explanation: "the daemon ignores this YAML value; set it via `animus daemon config --auto-commit-before-merge <bool>`",
+        explanation: "this key was removed: the daemon has no merge/PR automation; merge behavior lives in `post_success.merge` on a workflow (executed by the workflow runner plugin)",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_prune_worktrees"]),
-        explanation: "the daemon ignores this YAML value; set it via `animus daemon config --auto-prune-worktrees-after-merge <bool>`",
+        explanation: "this key was removed: the daemon has no merge/PR automation; worktree cleanup lives in `post_success.merge.cleanup_worktree` on a workflow (executed by the workflow runner plugin)",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::PhaseEvals,

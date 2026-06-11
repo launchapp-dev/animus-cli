@@ -34,16 +34,13 @@ pub struct ProjectTemplatePack {
     pub activate: bool,
 }
 
+/// The template `[daemon]` block. The daemon git/merge policy keys
+/// (`auto_merge`, `auto_pr`, `auto_commit_before_merge`) were removed in
+/// v0.5.x — merge/PR behavior lives in workflow `post_success.merge`
+/// (executed by the workflow runner plugin). Unknown keys are accepted and
+/// ignored so older templates keep loading.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(deny_unknown_fields)]
-pub struct ProjectTemplateDaemon {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_merge: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_pr: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_commit_before_merge: Option<bool>,
-}
+pub struct ProjectTemplateDaemon {}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]

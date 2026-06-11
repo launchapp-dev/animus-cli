@@ -34,8 +34,8 @@ pub use agent_runtime_config::{
 };
 pub use config::RuntimeConfig;
 pub use daemon_config::{
-    daemon_project_config_path, load_daemon_project_config, update_daemon_project_config, write_daemon_project_config,
-    DaemonProjectConfig, DaemonProjectConfigPatch, DAEMON_PROJECT_CONFIG_FILE_NAME,
+    daemon_project_config_path, load_daemon_project_config, write_daemon_project_config, DaemonProjectConfig,
+    DAEMON_PROJECT_CONFIG_FILE_NAME,
 };
 pub use daemon_tick_metrics::DaemonTickMetrics;
 pub use doctor::{DoctorCheck, DoctorCheckResult, DoctorCheckStatus, DoctorRemediation, DoctorReport};

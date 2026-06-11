@@ -1196,17 +1196,22 @@ YAML. The persisted daemon config lives at
 |---|---|---|
 | `interval_secs` | integer | `animus daemon config --interval-secs <n>` (persisted, hot-reloaded) or `animus daemon run --interval-secs <n>` |
 | `pool_size` | integer | `animus daemon config --pool-size <n>` (persisted, hot-reloaded) or `animus daemon run --pool-size <n>`. Alias: `max_agents` |
-| `auto_merge` | boolean | `animus daemon config --auto-merge <bool>` |
-| `auto_pr` | boolean | `animus daemon config --auto-pr <bool>` |
-| `auto_commit_before_merge` | boolean | `animus daemon config --auto-commit-before-merge <bool>` |
-| `auto_prune_worktrees` | boolean | `animus daemon config --auto-prune-worktrees-after-merge <bool>` |
 | `max_task_retries` | integer | **No wired sink today.** The field exists on `DaemonConfig` but is not read from workflow YAML and is not a field on `DaemonProjectConfig`. Setting it has no runtime effect |
 | `retry_cooldown_secs` | integer | **No wired sink today.** Same as `max_task_retries` |
 
-Setting these keys under `daemon:` in workflow YAML is harmless (the config
-round-trips), but it will not change daemon behaviour. Use
-[`animus daemon config`](cli/index.md) (which accepts flags directly — there is
-no `set` subcommand) or the equivalent CLI flags on
+The daemon git/merge policy keys (`auto_merge`, `auto_pr`,
+`auto_commit_before_merge`, `auto_prune_worktrees`) were **removed in v0.5.x**
+along with their `animus daemon start` / `animus daemon run` /
+`animus daemon config` flags. Declaring them in YAML still compiles but emits a
+removed-key warning. Merge/PR behavior is configured per workflow via
+[`post_success.merge`](#post_success), which the workflow runner plugin
+executes after a successful run.
+
+Setting the table's keys (`interval_secs`, `pool_size`, `max_task_retries`,
+`retry_cooldown_secs`) under `daemon:` in workflow YAML is harmless (the config
+round-trips), but it will not change daemon behaviour. For `interval_secs` and
+`pool_size`, use [`animus daemon config`](cli/index.md) (which accepts flags
+directly — there is no `set` subcommand) or the equivalent CLI flags on
 `animus daemon run` / `animus daemon start` instead.
 
 Declaring any of these keys in workflow YAML emits a compile-time warning

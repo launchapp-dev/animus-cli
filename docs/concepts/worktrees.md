@@ -97,7 +97,7 @@ After all phases pass, the workflow can perform post-success actions defined in 
 
 | Action | Effect |
 |--------|--------|
-| `auto_pr: true` | Create a pull request from the task branch to the target branch. |
+| `create_pr: true` | Create a pull request from the task branch to the target branch. |
 | `auto_merge: true` | Merge the PR after creation (if CI passes). |
 | `cleanup_worktree: true` | Remove the worktree directory after merge. |
 

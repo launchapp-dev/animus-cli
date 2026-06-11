@@ -18,10 +18,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_bool_flag(&mut args, "--skip-runner", input.skip_runner);
     push_bool_flag(&mut args, "--autonomous", input.autonomous);
     push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
-    push_bool_set(&mut args, "--auto-merge", input.auto_merge);
-    push_bool_set(&mut args, "--auto-pr", input.auto_pr);
-    push_bool_set(&mut args, "--auto-commit-before-merge", input.auto_commit_before_merge);
-    push_bool_set(&mut args, "--auto-prune-worktrees-after-merge", input.auto_prune_worktrees_after_merge);
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
     push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
@@ -31,10 +27,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
 
 pub(super) fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<String> {
     let mut args = vec!["daemon".to_string(), "config".to_string()];
-    push_bool_set(&mut args, "--auto-merge", input.auto_merge);
-    push_bool_set(&mut args, "--auto-pr", input.auto_pr);
-    push_bool_set(&mut args, "--auto-commit-before-merge", input.auto_commit_before_merge);
-    push_bool_set(&mut args, "--auto-prune-worktrees-after-merge", input.auto_prune_worktrees_after_merge);
     push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
     push_opt_usize(&mut args, "--pool-size", input.pool_size);
     push_opt_num(&mut args, "--interval-secs", input.interval_secs);

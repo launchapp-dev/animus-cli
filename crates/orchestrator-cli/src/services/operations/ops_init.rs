@@ -11,8 +11,8 @@ use orchestrator_config::{
     ProjectTemplateSourceKind, ProjectTemplateSummary, RegistrySyncOptions,
 };
 use orchestrator_core::{
-    daemon_project_config_path, load_daemon_project_config, update_daemon_project_config, write_daemon_project_config,
-    DaemonProjectConfig, DaemonProjectConfigPatch, DoctorCheckStatus, DoctorReport, FileServiceHub,
+    daemon_project_config_path, load_daemon_project_config, write_daemon_project_config, DoctorCheckStatus,
+    DoctorReport, FileServiceHub,
 };
 use serde::Serialize;
 
@@ -125,25 +125,10 @@ struct InitPackApply {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct InitFieldPlan {
-    field: String,
-    before: bool,
-    after: bool,
-    changed: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
 struct InitBlockedItem {
     check_id: String,
     details: String,
     remediation: String,
-}
-
-#[derive(Debug, Clone)]
-struct DesiredDaemonConfig {
-    auto_merge_enabled: bool,
-    auto_pr_enabled: bool,
-    auto_commit_before_merge: bool,
 }
 
 pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) -> Result<()> {
@@ -161,9 +146,9 @@ pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) 
     let loaded_template = resolve_template(&args, mode)?;
     ensure_supported_template_source_mode(&loaded_template)?;
 
-    let current_config = load_daemon_project_config(project_root_path)?;
-    let desired_config = resolve_desired_config(&args, &loaded_template, &current_config);
-    let daemon_plan = daemon_field_plan(&current_config, &desired_config);
+    // The daemon git/merge policy knobs were removed in v0.5.x; init only
+    // ensures the daemon config file exists.
+    let daemon_plan: Vec<serde_json::Value> = Vec::new();
 
     let template_output = InitTemplateOutput {
         id: loaded_template.manifest.id.clone(),
@@ -224,8 +209,7 @@ pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) 
     let written_files = write_template_files(project_root_path, &loaded_template)?;
     FileServiceHub::new(project_root_path)?;
     let pack_apply = apply_template_packs(project_root_path, &loaded_template)?;
-    let daemon_config_updated =
-        persist_desired_daemon_config(project_root_path, &desired_config, daemon_config_exists_before)?;
+    let daemon_config_updated = ensure_daemon_project_config(project_root_path, daemon_config_exists_before)?;
     let doctor_after = DoctorReport::run_for_project(project_root_path);
 
     let mut changed_domains = Vec::new();
@@ -329,22 +313,6 @@ fn ensure_supported_template_source_mode(template: &LoadedProjectTemplate) -> Re
         unsupported => Err(invalid_input_error(format!(
             "template source mode '{unsupported:?}' is not supported yet; only copy mode is available"
         ))),
-    }
-}
-
-fn resolve_desired_config(
-    args: &InitArgs,
-    template: &LoadedProjectTemplate,
-    current: &DaemonProjectConfig,
-) -> DesiredDaemonConfig {
-    DesiredDaemonConfig {
-        auto_merge_enabled: args
-            .auto_merge
-            .unwrap_or(template.manifest.daemon.auto_merge.unwrap_or(current.auto_merge_enabled)),
-        auto_pr_enabled: args.auto_pr.unwrap_or(template.manifest.daemon.auto_pr.unwrap_or(current.auto_pr_enabled)),
-        auto_commit_before_merge: args
-            .auto_commit_before_merge
-            .unwrap_or(template.manifest.daemon.auto_commit_before_merge.unwrap_or(current.auto_commit_before_merge)),
     }
 }
 
@@ -525,39 +493,13 @@ fn prompt_template_selection(templates: &[ProjectTemplateSummary]) -> Result<Pro
     }
 }
 
-fn persist_desired_daemon_config(
-    project_root: &Path,
-    desired: &DesiredDaemonConfig,
-    daemon_config_exists_before: bool,
-) -> Result<bool> {
-    if !daemon_config_exists_before {
-        let mut config = load_daemon_project_config(project_root)?;
-        config.auto_merge_enabled = desired.auto_merge_enabled;
-        config.auto_pr_enabled = desired.auto_pr_enabled;
-        config.auto_commit_before_merge = desired.auto_commit_before_merge;
-        write_daemon_project_config(project_root, &config)?;
-        return Ok(true);
+fn ensure_daemon_project_config(project_root: &Path, daemon_config_exists_before: bool) -> Result<bool> {
+    if daemon_config_exists_before {
+        return Ok(false);
     }
-
-    let patch = DaemonProjectConfigPatch {
-        auto_merge_enabled: Some(desired.auto_merge_enabled),
-        auto_pr_enabled: Some(desired.auto_pr_enabled),
-        auto_commit_before_merge: Some(desired.auto_commit_before_merge),
-    };
-    let (_, updated) = update_daemon_project_config(project_root, &patch)?;
-    Ok(updated)
-}
-
-fn daemon_field_plan(current: &DaemonProjectConfig, desired: &DesiredDaemonConfig) -> Vec<InitFieldPlan> {
-    vec![
-        field_plan("auto_merge_enabled", current.auto_merge_enabled, desired.auto_merge_enabled),
-        field_plan("auto_pr_enabled", current.auto_pr_enabled, desired.auto_pr_enabled),
-        field_plan("auto_commit_before_merge", current.auto_commit_before_merge, desired.auto_commit_before_merge),
-    ]
-}
-
-fn field_plan(field: &str, before: bool, after: bool) -> InitFieldPlan {
-    InitFieldPlan { field: field.to_string(), before, after, changed: before != after }
+    let config = load_daemon_project_config(project_root)?;
+    write_daemon_project_config(project_root, &config)?;
+    Ok(true)
 }
 
 fn count_checks(report: &DoctorReport, status: DoctorCheckStatus) -> usize {
@@ -1039,47 +981,6 @@ mod tests {
         assert!(plan.iter().any(|file| file.action == "conflict"));
     }
 
-    #[test]
-    fn resolve_desired_config_prefers_explicit_overrides() {
-        let template = template_fixture(
-            "direct-workflow",
-            "direct-workflow",
-            ProjectTemplateDaemon {
-                auto_merge: Some(false),
-                auto_pr: Some(false),
-                auto_commit_before_merge: Some(false),
-            },
-            Vec::new(),
-        );
-        let current = DaemonProjectConfig {
-            auto_merge_enabled: true,
-            auto_pr_enabled: true,
-            auto_commit_before_merge: true,
-            ..DaemonProjectConfig::default()
-        };
-        let args = InitArgs {
-            template: Some("direct-workflow".to_string()),
-            path: None,
-            non_interactive: true,
-            plan: false,
-            force: false,
-            auto_merge: Some(true),
-            auto_pr: None,
-            auto_commit_before_merge: Some(false),
-            update_registry: false,
-            walkthrough: false,
-            no_install: false,
-            no_template: false,
-            auto_start: false,
-            walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),
-        };
-
-        let desired = resolve_desired_config(&args, &template, &current);
-        assert!(desired.auto_merge_enabled);
-        assert!(!desired.auto_pr_enabled);
-        assert!(!desired.auto_commit_before_merge);
-    }
-
     // ---- v0.4.13 walkthrough tests ---------------------------------------
 
     #[test]
@@ -1256,9 +1157,6 @@ mod tests {
             non_interactive: true,
             plan: true,
             force: false,
-            auto_merge: None,
-            auto_pr: None,
-            auto_commit_before_merge: None,
             update_registry: false,
             walkthrough: true,
             no_install: false,
@@ -1312,9 +1210,6 @@ mod tests {
             non_interactive: false, // Guided mode; would normally prompt in TTY.
             plan: true,             // Short-circuit so we don't mutate the filesystem.
             force: false,
-            auto_merge: None,
-            auto_pr: None,
-            auto_commit_before_merge: None,
             update_registry: false,
             walkthrough: true,
             no_install: false,

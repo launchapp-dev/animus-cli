@@ -610,8 +610,6 @@ fn build_daemon_config_set_args_wires_max_tasks_per_tick() {
 #[test]
 fn build_daemon_config_set_args_wires_all_runtime_settings() {
     let input = DaemonConfigSetInput {
-        auto_merge: Some(true),
-        auto_pr: Some(false),
         auto_run_ready: Some(false),
         pool_size: Some(4),
         interval_secs: Some(10),
@@ -636,9 +634,6 @@ fn build_daemon_config_set_args_wires_all_runtime_settings() {
     assert!(args.contains(&"300".to_string()));
     assert!(args.contains(&"--idle-timeout-secs".to_string()));
     assert!(args.contains(&"600".to_string()));
-    assert!(args.contains(&"--auto-merge".to_string()));
-    assert!(args.contains(&"true".to_string()));
-    assert!(args.contains(&"--auto-pr".to_string()));
 }
 
 #[test]
