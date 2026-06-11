@@ -1604,3 +1604,216 @@ fn phase_failure_while_paused_records_failure_and_resume_restarts() {
     assert!(workflow.phases[0].error_message.is_none());
     assert!(workflow.phases[0].completed_at.is_none());
 }
+
+fn prune_candidate(id: &str, status: WorkflowStatus, age_days: i64) -> crate::workflow::WorkflowRunPruneCandidate {
+    crate::workflow::WorkflowRunPruneCandidate {
+        workflow_id: id.to_string(),
+        status,
+        effective_at: Utc::now() - chrono::Duration::days(age_days),
+    }
+}
+
+#[test]
+fn select_workflow_prune_candidates_skips_non_terminal_runs() {
+    let runs = vec![
+        prune_candidate("WF-running", WorkflowStatus::Running, 100),
+        prune_candidate("WF-pending", WorkflowStatus::Pending, 100),
+        prune_candidate("WF-paused", WorkflowStatus::Paused, 100),
+        prune_candidate("WF-completed", WorkflowStatus::Completed, 100),
+    ];
+    let selected = crate::workflow::select_workflow_prune_candidates(
+        runs,
+        &crate::workflow::WorkflowRunPruneFilter::default(),
+        Utc::now(),
+    );
+    let ids: Vec<&str> = selected.iter().map(|run| run.workflow_id.as_str()).collect();
+    assert_eq!(ids, vec!["WF-completed"]);
+}
+
+#[test]
+fn select_workflow_prune_candidates_applies_status_keep_last_and_age() {
+    let runs = vec![
+        prune_candidate("WF-completed-new", WorkflowStatus::Completed, 1),
+        prune_candidate("WF-completed-mid", WorkflowStatus::Completed, 10),
+        prune_candidate("WF-completed-old", WorkflowStatus::Completed, 40),
+        prune_candidate("WF-failed-old", WorkflowStatus::Failed, 50),
+    ];
+
+    let by_status = crate::workflow::select_workflow_prune_candidates(
+        runs.clone(),
+        &crate::workflow::WorkflowRunPruneFilter { status: Some(WorkflowStatus::Failed), ..Default::default() },
+        Utc::now(),
+    );
+    assert_eq!(by_status.len(), 1);
+    assert_eq!(by_status[0].workflow_id, "WF-failed-old");
+
+    let keep_last = crate::workflow::select_workflow_prune_candidates(
+        runs.clone(),
+        &crate::workflow::WorkflowRunPruneFilter { keep_last: Some(2), ..Default::default() },
+        Utc::now(),
+    );
+    let ids: Vec<&str> = keep_last.iter().map(|run| run.workflow_id.as_str()).collect();
+    assert_eq!(ids, vec!["WF-completed-old", "WF-failed-old"]);
+
+    let by_age = crate::workflow::select_workflow_prune_candidates(
+        runs,
+        &crate::workflow::WorkflowRunPruneFilter { older_than_days: Some(30), ..Default::default() },
+        Utc::now(),
+    );
+    let ids: Vec<&str> = by_age.iter().map(|run| run.workflow_id.as_str()).collect();
+    assert_eq!(ids, vec!["WF-completed-old", "WF-failed-old"]);
+}
+
+fn seed_run_storage(
+    project_root: &std::path::Path,
+    workflow_id: &str,
+    payload: &[u8],
+) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+    let scoped_root = protocol::scoped_state_root(project_root).expect("scoped state root");
+    let run_dir = scoped_root.join("runs").join(workflow_id);
+    let artifacts_dir = scoped_root.join("artifacts").join(workflow_id);
+    let state_dir = scoped_root.join("state").join("workflows").join(workflow_id);
+    std::fs::create_dir_all(run_dir.join("phases")).expect("create run dir");
+    std::fs::write(run_dir.join("phases").join("impl.output.json"), payload).expect("write phase output");
+    std::fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
+    std::fs::write(artifacts_dir.join("report.md"), payload).expect("write artifact");
+    std::fs::create_dir_all(state_dir.join("phase-outputs")).expect("create phase-outputs dir");
+    std::fs::write(state_dir.join("phase-outputs").join("impl.1.json"), payload).expect("write persisted phase output");
+    (run_dir, artifacts_dir, state_dir)
+}
+
+#[test]
+fn state_manager_prune_runs_dry_run_previews_without_deleting() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut completed = make_workflow(WorkflowStatus::Completed);
+    completed.id = "WF-prune-dry".to_string();
+    completed.completed_at = Some(Utc::now() - chrono::Duration::days(10));
+    manager.save(&completed).expect("save completed workflow");
+    let (run_dir, artifacts_dir, state_dir) = seed_run_storage(temp.path(), &completed.id, b"0123456789");
+
+    let report = manager.prune_runs(&crate::workflow::WorkflowRunPruneFilter::default(), true).expect("dry-run prune");
+
+    assert!(report.dry_run);
+    assert_eq!(report.deleted.len(), 1);
+    assert_eq!(report.deleted[0].workflow_id, "WF-prune-dry");
+    assert_eq!(report.deleted[0].status, "completed");
+    assert_eq!(report.total_bytes_reclaimed, 30);
+    assert!(run_dir.exists(), "dry-run must not delete the run dir");
+    assert!(artifacts_dir.exists(), "dry-run must not delete artifacts");
+    assert!(state_dir.exists(), "dry-run must not delete persisted phase outputs");
+    assert!(manager.load("WF-prune-dry").is_ok(), "dry-run must not delete the DB row");
+}
+
+#[test]
+fn state_manager_prune_runs_deletes_terminal_runs_and_storage() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut old_completed = make_workflow(WorkflowStatus::Completed);
+    old_completed.id = "WF-prune-old".to_string();
+    old_completed.completed_at = Some(Utc::now() - chrono::Duration::days(45));
+    manager.save(&old_completed).expect("save old workflow");
+    manager.save_checkpoint(&old_completed, CheckpointReason::Start).expect("checkpoint old workflow");
+    let (old_run_dir, old_artifacts_dir, old_state_dir) = seed_run_storage(temp.path(), &old_completed.id, b"abcdef");
+
+    let mut recent_completed = make_workflow(WorkflowStatus::Completed);
+    recent_completed.id = "WF-prune-recent".to_string();
+    recent_completed.completed_at = Some(Utc::now());
+    manager.save(&recent_completed).expect("save recent workflow");
+
+    let mut running = make_workflow(WorkflowStatus::Running);
+    running.id = "WF-prune-running".to_string();
+    running.started_at = Utc::now() - chrono::Duration::days(45);
+    manager.save(&running).expect("save running workflow");
+    let (running_run_dir, _, _) = seed_run_storage(temp.path(), &running.id, b"abcdef");
+
+    let report = manager
+        .prune_runs(&crate::workflow::WorkflowRunPruneFilter { older_than_days: Some(30), ..Default::default() }, false)
+        .expect("prune runs");
+
+    assert!(!report.dry_run);
+    assert_eq!(report.deleted.len(), 1);
+    assert_eq!(report.deleted[0].workflow_id, "WF-prune-old");
+    assert_eq!(report.total_bytes_reclaimed, 18);
+    assert!(!old_run_dir.exists(), "pruned run dir must be removed");
+    assert!(!old_artifacts_dir.exists(), "pruned artifacts must be removed");
+    assert!(!old_state_dir.exists(), "pruned persisted phase outputs must be removed");
+    assert!(running_run_dir.exists(), "running run dir must survive");
+    assert!(manager.load("WF-prune-old").is_err());
+    assert!(manager.list_checkpoints("WF-prune-old").expect("list checkpoints").is_empty());
+    assert!(manager.load("WF-prune-recent").is_ok());
+    assert!(manager.load("WF-prune-running").is_ok());
+}
+
+#[test]
+fn state_manager_prune_runs_rejects_non_terminal_status_filter() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let err = manager
+        .prune_runs(
+            &crate::workflow::WorkflowRunPruneFilter { status: Some(WorkflowStatus::Running), ..Default::default() },
+            true,
+        )
+        .expect_err("non-terminal status filter must be rejected");
+    assert!(err.to_string().contains("non-terminal"));
+}
+
+#[test]
+fn state_manager_delete_run_removes_row_and_storage() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut cancelled = make_workflow(WorkflowStatus::Cancelled);
+    cancelled.id = "WF-delete-one".to_string();
+    cancelled.completed_at = Some(Utc::now());
+    manager.save(&cancelled).expect("save cancelled workflow");
+    let (run_dir, artifacts_dir, state_dir) = seed_run_storage(temp.path(), &cancelled.id, b"xyz");
+
+    let dry = manager.delete_run("WF-delete-one", true).expect("dry-run delete");
+    assert!(dry.dry_run);
+    assert_eq!(dry.total_bytes_reclaimed, 9);
+    assert!(run_dir.exists());
+    assert!(manager.load("WF-delete-one").is_ok());
+
+    let report = manager.delete_run("WF-delete-one", false).expect("delete run");
+    assert!(!report.dry_run);
+    assert_eq!(report.deleted.len(), 1);
+    assert_eq!(report.deleted[0].status, "cancelled");
+    assert!(!run_dir.exists());
+    assert!(!artifacts_dir.exists());
+    assert!(!state_dir.exists());
+    assert!(manager.load("WF-delete-one").is_err());
+}
+
+#[test]
+fn state_manager_delete_run_rejects_active_workflow() {
+    crate::test_env::stable_test_home();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let manager = WorkflowStateManager::new(temp.path());
+
+    let mut running = make_workflow(WorkflowStatus::Running);
+    running.id = "WF-delete-running".to_string();
+    manager.save(&running).expect("save running workflow");
+
+    let err = manager.delete_run("WF-delete-running", false).expect_err("active run must be protected");
+    assert!(err.to_string().contains("only terminal runs"));
+    assert!(manager.load("WF-delete-running").is_ok());
+}
+
+#[test]
+fn select_workflow_prune_candidates_saturates_oversized_age() {
+    let runs = vec![prune_candidate("WF-old", WorkflowStatus::Completed, 400)];
+    let selected = crate::workflow::select_workflow_prune_candidates(
+        runs,
+        &crate::workflow::WorkflowRunPruneFilter { older_than_days: Some(u64::MAX), ..Default::default() },
+        Utc::now(),
+    );
+    assert!(selected.is_empty(), "oversized --older-than must prune nothing, not everything");
+}

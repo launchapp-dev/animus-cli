@@ -619,6 +619,32 @@ pub(crate) async fn handle_workflow(
             let workflow = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;
             print_value(workflow, json)
         }
+        WorkflowCommand::Prune(args) => {
+            let filter = orchestrator_core::WorkflowRunPruneFilter {
+                older_than_days: args.older_than,
+                keep_last: args.keep_last,
+                status: parse_workflow_status_opt(args.status.as_deref())?,
+            };
+            let report = workflows.prune_runs(filter, !args.yes).await?;
+            if report.dry_run && !json {
+                eprintln!(
+                    "dry-run: {} run(s) would be deleted ({} bytes). Rerun with --yes to apply.",
+                    report.deleted.len(),
+                    report.total_bytes_reclaimed
+                );
+            }
+            print_value(report, json)
+        }
+        WorkflowCommand::Delete(args) => {
+            let report = workflows.delete_run(&args.run_id, !args.yes).await?;
+            if report.dry_run && !json {
+                eprintln!(
+                    "dry-run: run {} would be deleted ({} bytes). Rerun with --yes to apply.",
+                    args.run_id, report.total_bytes_reclaimed
+                );
+            }
+            print_value(report, json)
+        }
         WorkflowCommand::Phase { command } => match command {
             WorkflowPhaseCommand::Approve(args) => print_value(
                 phases::approve_manual_phase(hub.clone(), project_root, &args.id, &args.phase, &args.note).await?,

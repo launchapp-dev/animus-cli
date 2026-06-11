@@ -96,6 +96,8 @@ animus
 │   ├── resume-status        Check whether a workflow can be resumed
 │   ├── pause                Pause an active workflow (confirmation required)
 │   ├── cancel               Cancel a workflow (confirmation required)
+│   ├── prune                Prune terminal workflow runs from history and disk; dry-run by default, `--yes`/`--force` deletes
+│   ├── delete               Delete a single terminal workflow run from history and disk; dry-run by default, `--yes`/`--force` deletes
 │   ├── phase
 │   │   ├── approve          Approve a pending phase gate
 │   │   └── reject           Reject a pending phase gate
@@ -496,6 +498,38 @@ animus agent interactions answer <ID> --deny --message "too risky"  # approval
 Answering emits an `interaction_answered` record to the daemon event log
 (creation and expiry emit `interaction_created` / `interaction_expired`), so
 `animus daemon events` surfaces the round-trip without polling the store.
+
+### `animus workflow prune` / `animus workflow delete`
+
+Reclaim disk from finished workflow runs. Both commands remove the run's row
+(and checkpoints) from `workflow.db` plus its `runs/<run-id>/`,
+`artifacts/<run-id>/`, and `state/workflows/<run-id>/` (persisted phase
+outputs) directories under the scoped runtime root
+(`~/.animus/<repo-scope>/`). Legacy repo-local run paths are never touched.
+Only terminal runs (`completed`, `failed`, `escalated`, `cancelled`) are ever
+eligible — in-progress, queued, and paused runs are always skipped, and
+`animus workflow delete` refuses a non-terminal run.
+
+Both commands are dry-run by default: they print the runs that would be
+deleted and the bytes that would be reclaimed. Pass `--yes` (alias `--force`)
+to actually delete. With `--json`, output is an `animus.cli.v1` envelope whose
+`data` carries `dry_run`, the `deleted` list (`workflow_id`, `status`,
+`bytes_reclaimed`), and `total_bytes_reclaimed`.
+
+| Flag | Description |
+| --- | --- |
+| `--older-than <DAYS>` | (prune) Only prune runs that completed (or started) more than DAYS days ago |
+| `--keep-last <COUNT>` | (prune) Keep the COUNT most recent matching runs overall — not per workflow definition — and prune the rest |
+| `--status <STATUS>` | (prune) Only prune runs with this terminal status; default is all terminal statuses |
+| `--run-id <RUN_ID>` | (delete) Workflow run identifier to delete |
+| `--yes` / `--force` | Actually delete; without it the command is a dry-run preview |
+
+```bash
+animus workflow prune --older-than 30              # preview
+animus workflow prune --older-than 30 --yes        # delete
+animus workflow prune --keep-last 50 --status failed --yes
+animus workflow delete --run-id <RUN_ID> --yes
+```
 
 ### `animus logs tail`
 

@@ -30,7 +30,9 @@ use crate::types::{
     TaskQuery, TaskQuerySort, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
     WorkflowFilter, WorkflowMetadata, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
 };
-use crate::workflow::{ResumeConfig, WorkflowLifecycleExecutor, WorkflowStateManager};
+use crate::workflow::{
+    ResumeConfig, WorkflowLifecycleExecutor, WorkflowRunPruneFilter, WorkflowRunPruneReport, WorkflowStateManager,
+};
 
 mod daemon_impl;
 mod phase_execution;
@@ -189,6 +191,8 @@ pub trait WorkflowServiceApi: Send + Sync {
     async fn mark_merge_conflict(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn record_feedback(&self, id: &str, feedback: String) -> Result<()>;
+    async fn prune_runs(&self, filter: WorkflowRunPruneFilter, dry_run: bool) -> Result<WorkflowRunPruneReport>;
+    async fn delete_run(&self, id: &str, dry_run: bool) -> Result<WorkflowRunPruneReport>;
 }
 
 #[async_trait]

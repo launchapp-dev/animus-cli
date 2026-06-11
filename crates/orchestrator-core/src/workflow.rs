@@ -24,6 +24,10 @@ pub use state_manager::{
 pub(crate) use state_manager::{
     delete_requirement_with_conn, delete_task_with_conn, save_requirement_with_conn, save_task_with_conn,
 };
+pub use state_manager::{
+    is_terminal_workflow_run_status, select_workflow_prune_candidates, WorkflowRunDeletion, WorkflowRunPruneCandidate,
+    WorkflowRunPruneFilter, WorkflowRunPruneReport,
+};
 
 #[cfg(test)]
 mod tests;

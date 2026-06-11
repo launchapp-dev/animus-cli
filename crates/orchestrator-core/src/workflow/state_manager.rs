@@ -105,6 +105,92 @@ pub struct WorkflowCheckpointPruneResult {
     pub pruned_by_phase: BTreeMap<String, usize>,
 }
 
+pub fn is_terminal_workflow_run_status(status: WorkflowStatus) -> bool {
+    matches!(
+        status,
+        WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Escalated | WorkflowStatus::Cancelled
+    )
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkflowRunPruneFilter {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_than_days: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_last: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<WorkflowStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowRunDeletion {
+    pub workflow_id: String,
+    pub status: String,
+    pub bytes_reclaimed: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkflowRunPruneReport {
+    pub dry_run: bool,
+    pub deleted: Vec<WorkflowRunDeletion>,
+    pub total_bytes_reclaimed: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct WorkflowRunPruneCandidate {
+    pub workflow_id: String,
+    pub status: WorkflowStatus,
+    pub effective_at: DateTime<Utc>,
+}
+
+/// Pure candidate selection shared by the file-backed and in-memory hubs:
+/// newest-first ordering, `keep_last` retains the N most recent overall
+/// (not per workflow definition), then `older_than_days` restricts to runs
+/// whose completion (or start) time is older than the cutoff.
+pub fn select_workflow_prune_candidates(
+    mut runs: Vec<WorkflowRunPruneCandidate>,
+    filter: &WorkflowRunPruneFilter,
+    now: DateTime<Utc>,
+) -> Vec<WorkflowRunPruneCandidate> {
+    runs.retain(|run| is_terminal_workflow_run_status(run.status));
+    if let Some(status) = filter.status {
+        runs.retain(|run| run.status == status);
+    }
+    runs.sort_by(|a, b| b.effective_at.cmp(&a.effective_at).then_with(|| a.workflow_id.cmp(&b.workflow_id)));
+    let mut candidates: Vec<WorkflowRunPruneCandidate> = runs.into_iter().skip(filter.keep_last.unwrap_or(0)).collect();
+    if let Some(days) = filter.older_than_days {
+        // Saturate oversized --older-than values to "older than representable
+        // time" (prune nothing) instead of wrapping into a future cutoff.
+        let cutoff = i64::try_from(days)
+            .ok()
+            .and_then(Duration::try_days)
+            .and_then(|age| now.checked_sub_signed(age))
+            .unwrap_or(DateTime::<Utc>::MIN_UTC);
+        candidates.retain(|run| run.effective_at < cutoff);
+    }
+    candidates
+}
+
+fn sanitize_run_dir_id(value: &str) -> String {
+    value.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' }).collect()
+}
+
+fn dir_size_bytes(path: &std::path::Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(path) else {
+        return 0;
+    };
+    let mut total = 0u64;
+    for entry in entries.flatten() {
+        let Ok(file_type) = entry.file_type() else { continue };
+        if file_type.is_dir() {
+            total += dir_size_bytes(&entry.path());
+        } else if file_type.is_file() {
+            total += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+        }
+    }
+    total
+}
+
 #[derive(Clone)]
 pub struct WorkflowStateManager {
     project_root: PathBuf,
@@ -274,6 +360,150 @@ impl WorkflowStateManager {
         tx.execute("DELETE FROM checkpoints WHERE workflow_id = ?1", params![workflow_id])?;
         tx.commit()?;
         Ok(())
+    }
+
+    fn run_storage_dirs(&self, workflow_id: &str) -> Vec<PathBuf> {
+        let Some(scoped_root) = protocol::scoped_state_root(&self.project_root) else {
+            return Vec::new();
+        };
+        let sanitized = sanitize_run_dir_id(workflow_id);
+        // sanitize_run_dir_id keeps '.' (matching the runner-side writers), so
+        // reject ids that could escape the scoped storage roots outright.
+        if sanitized.is_empty() || sanitized == "." || sanitized == ".." {
+            return Vec::new();
+        }
+        vec![
+            scoped_root.join("runs").join(&sanitized),
+            scoped_root.join("artifacts").join(&sanitized),
+            scoped_root.join("state").join("workflows").join(&sanitized),
+        ]
+    }
+
+    fn list_run_prune_candidates(&self) -> Result<Vec<WorkflowRunPruneCandidate>> {
+        let conn = self.open_db()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, status, started_at, completed_at FROM workflows
+             WHERE status IN ('completed', 'failed', 'escalated', 'cancelled')",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?;
+        let mut candidates = Vec::new();
+        for row in rows {
+            let (id, status, started_at, completed_at) = row?;
+            let Some(status) = parse_status_str(&status) else { continue };
+            // Legacy rows can carry NULL/unparseable timestamps; treat them as
+            // arbitrarily old so age-based pruning still reaches them, matching
+            // cleanup_terminal_workflows.
+            let effective_at = completed_at
+                .or(started_at)
+                .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+                .map(|value| value.with_timezone(&Utc))
+                .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
+            candidates.push(WorkflowRunPruneCandidate { workflow_id: id, status, effective_at });
+        }
+        Ok(candidates)
+    }
+
+    fn delete_run_storage(
+        &self,
+        candidates: &[WorkflowRunPruneCandidate],
+        dry_run: bool,
+    ) -> Result<WorkflowRunPruneReport> {
+        let mut report = WorkflowRunPruneReport { dry_run, ..Default::default() };
+        if candidates.is_empty() {
+            return Ok(report);
+        }
+
+        // Run storage is removed before the DB row so an IO failure keeps the
+        // run addressable by id for a retried prune/delete instead of
+        // orphaning its directories.
+        let mut removable_ids = Vec::new();
+        for candidate in candidates {
+            let mut bytes = 0u64;
+            let mut storage_removed = true;
+            for dir in self.run_storage_dirs(&candidate.workflow_id) {
+                if !dir.is_dir() {
+                    continue;
+                }
+                let dir_bytes = dir_size_bytes(&dir);
+                if dry_run {
+                    bytes += dir_bytes;
+                    continue;
+                }
+                match std::fs::remove_dir_all(&dir) {
+                    Ok(()) => bytes += dir_bytes,
+                    Err(err) => {
+                        storage_removed = false;
+                        tracing::warn!(
+                            target: "orchestrator_core::workflow",
+                            workflow_id = %candidate.workflow_id,
+                            path = %dir.display(),
+                            error = %err,
+                            "failed to remove run storage directory during prune; keeping the workflow row so the run stays addressable"
+                        );
+                    }
+                }
+            }
+            if !storage_removed {
+                continue;
+            }
+            if !dry_run {
+                removable_ids.push(candidate.workflow_id.clone());
+            }
+            report.total_bytes_reclaimed += bytes;
+            report.deleted.push(WorkflowRunDeletion {
+                workflow_id: candidate.workflow_id.clone(),
+                status: status_str(candidate.status).to_string(),
+                bytes_reclaimed: bytes,
+            });
+        }
+
+        if !removable_ids.is_empty() {
+            let mut conn = self.open_db()?;
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            for workflow_id in &removable_ids {
+                tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+                tx.execute("DELETE FROM checkpoints WHERE workflow_id = ?1", params![workflow_id])?;
+            }
+            tx.commit()?;
+        }
+        Ok(report)
+    }
+
+    pub fn prune_runs(&self, filter: &WorkflowRunPruneFilter, dry_run: bool) -> Result<WorkflowRunPruneReport> {
+        if let Some(status) = filter.status {
+            if !is_terminal_workflow_run_status(status) {
+                return Err(crate::types::invalid_input(format!(
+                    "cannot prune runs with non-terminal status '{}'; allowed: completed, failed, escalated, cancelled",
+                    status_str(status)
+                )));
+            }
+        }
+        let candidates = select_workflow_prune_candidates(self.list_run_prune_candidates()?, filter, Utc::now());
+        self.delete_run_storage(&candidates, dry_run)
+    }
+
+    pub fn delete_run(&self, workflow_id: &str, dry_run: bool) -> Result<WorkflowRunPruneReport> {
+        let workflow = self.load(workflow_id)?;
+        if !is_terminal_workflow_run_status(workflow.status) {
+            return Err(crate::types::invalid_input(format!(
+                "workflow run {} has status '{}'; only terminal runs (completed, failed, escalated, cancelled) can be deleted",
+                workflow_id,
+                status_str(workflow.status)
+            )));
+        }
+        let candidate = WorkflowRunPruneCandidate {
+            workflow_id: workflow.id.clone(),
+            status: workflow.status,
+            effective_at: workflow.completed_at.unwrap_or(workflow.started_at),
+        };
+        self.delete_run_storage(std::slice::from_ref(&candidate), dry_run)
     }
 
     pub fn save_checkpoint(
@@ -1159,6 +1389,19 @@ fn workflow_summary_fields(workflow: &OrchestratorWorkflow) -> WorkflowSummaryFi
         failure_reason,
         started_at: workflow.started_at.to_rfc3339(),
         completed_at: workflow.completed_at.as_ref().map(chrono::DateTime::to_rfc3339),
+    }
+}
+
+fn parse_status_str(value: &str) -> Option<WorkflowStatus> {
+    match value {
+        "pending" => Some(WorkflowStatus::Pending),
+        "running" => Some(WorkflowStatus::Running),
+        "paused" => Some(WorkflowStatus::Paused),
+        "completed" => Some(WorkflowStatus::Completed),
+        "failed" => Some(WorkflowStatus::Failed),
+        "escalated" => Some(WorkflowStatus::Escalated),
+        "cancelled" => Some(WorkflowStatus::Cancelled),
+        _ => None,
     }
 }
 

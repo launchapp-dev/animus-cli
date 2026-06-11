@@ -292,6 +292,66 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         });
         Ok(())
     }
+
+    async fn prune_runs(&self, filter: WorkflowRunPruneFilter, dry_run: bool) -> Result<WorkflowRunPruneReport> {
+        use crate::workflow::{
+            is_terminal_workflow_run_status, select_workflow_prune_candidates, WorkflowRunDeletion,
+            WorkflowRunPruneCandidate,
+        };
+        if let Some(status) = filter.status {
+            if !is_terminal_workflow_run_status(status) {
+                return Err(crate::types::invalid_input(format!(
+                    "cannot prune runs with non-terminal status '{}'; allowed: completed, failed, escalated, cancelled",
+                    workflow_status_key(status)
+                )));
+            }
+        }
+        let mut lock = self.state.write().await;
+        let candidates: Vec<WorkflowRunPruneCandidate> = lock
+            .workflows
+            .values()
+            .map(|workflow| WorkflowRunPruneCandidate {
+                workflow_id: workflow.id.clone(),
+                status: workflow.status,
+                effective_at: workflow.completed_at.unwrap_or(workflow.started_at),
+            })
+            .collect();
+        let candidates = select_workflow_prune_candidates(candidates, &filter, chrono::Utc::now());
+        let mut report = WorkflowRunPruneReport { dry_run, ..Default::default() };
+        for candidate in candidates {
+            if !dry_run {
+                lock.workflows.remove(&candidate.workflow_id);
+            }
+            report.deleted.push(WorkflowRunDeletion {
+                workflow_id: candidate.workflow_id,
+                status: workflow_status_key(candidate.status).to_string(),
+                bytes_reclaimed: 0,
+            });
+        }
+        Ok(report)
+    }
+
+    async fn delete_run(&self, id: &str, dry_run: bool) -> Result<WorkflowRunPruneReport> {
+        use crate::workflow::{is_terminal_workflow_run_status, WorkflowRunDeletion};
+        let mut lock = self.state.write().await;
+        let workflow = lock.workflows.get(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        if !is_terminal_workflow_run_status(workflow.status) {
+            return Err(crate::types::invalid_input(format!(
+                "workflow run {} has status '{}'; only terminal runs (completed, failed, escalated, cancelled) can be deleted",
+                id,
+                workflow_status_key(workflow.status)
+            )));
+        }
+        let status = workflow_status_key(workflow.status).to_string();
+        if !dry_run {
+            lock.workflows.remove(id);
+        }
+        Ok(WorkflowRunPruneReport {
+            dry_run,
+            deleted: vec![WorkflowRunDeletion { workflow_id: id.to_string(), status, bytes_reclaimed: 0 }],
+            total_bytes_reclaimed: 0,
+        })
+    }
 }
 
 #[async_trait]
@@ -594,5 +654,24 @@ impl WorkflowServiceApi for FileServiceHub {
         manager.save(&workflow)?;
         self.state.write().await.workflows.insert(id.to_string(), workflow.clone());
         Ok(())
+    }
+
+    async fn prune_runs(&self, filter: WorkflowRunPruneFilter, dry_run: bool) -> Result<WorkflowRunPruneReport> {
+        let report = self.workflow_manager().prune_runs(&filter, dry_run)?;
+        if !dry_run && !report.deleted.is_empty() {
+            let mut lock = self.state.write().await;
+            for deletion in &report.deleted {
+                lock.workflows.remove(&deletion.workflow_id);
+            }
+        }
+        Ok(report)
+    }
+
+    async fn delete_run(&self, id: &str, dry_run: bool) -> Result<WorkflowRunPruneReport> {
+        let report = self.workflow_manager().delete_run(id, dry_run)?;
+        if !dry_run {
+            self.state.write().await.workflows.remove(id);
+        }
+        Ok(report)
     }
 }
