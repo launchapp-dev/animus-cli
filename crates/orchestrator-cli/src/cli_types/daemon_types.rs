@@ -10,6 +10,9 @@ pub(crate) enum DaemonCommand {
     Run(DaemonRunArgs),
     /// Stop the running daemon.
     Stop(DaemonStopArgs),
+    /// Stop the running daemon (graceful), then start it again with the
+    /// supplied start flags. Starts the daemon even when it is not running.
+    Restart(DaemonRestartArgs),
     /// Show daemon runtime status.
     Status,
     /// Show daemon health diagnostics.
@@ -157,6 +160,51 @@ pub(crate) struct DaemonStartArgs {
         help = "Skip the daemon's startup plugin preflight entirely. Escape hatch for dev iteration."
     )]
     pub(crate) skip_preflight: bool,
+}
+
+impl DaemonStartArgs {
+    /// Start flags used when the restart is initiated programmatically
+    /// (e.g. `animus plugin update --restart-daemon`): detached/background
+    /// mode with every scheduler override left to persisted config.
+    pub(crate) fn detached_defaults() -> Self {
+        Self {
+            scheduler: DaemonSchedulerArgs {
+                pool_size: None,
+                interval_secs: None,
+                auto_run_ready: None,
+                auto_merge: None,
+                auto_pr: None,
+                auto_commit_before_merge: None,
+                auto_prune_worktrees_after_merge: None,
+                startup_cleanup: true,
+                resume_interrupted: true,
+                reconcile_stale: true,
+                stale_threshold_hours: None,
+                max_tasks_per_tick: None,
+                phase_timeout_secs: None,
+                idle_timeout_secs: None,
+            },
+            skip_runner: false,
+            runner_scope: None,
+            autonomous: true,
+            auto_install: false,
+            skip_preflight: false,
+        }
+    }
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct DaemonRestartArgs {
+    #[command(flatten)]
+    pub(crate) start: DaemonStartArgs,
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        default_value_t = 60,
+        value_parser = parse_positive_u64,
+        help = "Maximum seconds to wait for in-flight agents to finish before force-stopping the old daemon."
+    )]
+    pub(crate) shutdown_timeout_secs: u64,
 }
 
 #[derive(Debug, Args)]
