@@ -1,6 +1,6 @@
 use crate::cli_types::{
     SkillCommand, SkillInstallArgs, SkillListArgs, SkillMigrateFromAoArgs, SkillPublishArgs, SkillRegistryAddArgs,
-    SkillRegistryCommand, SkillRegistryRemoveArgs, SkillSearchArgs, SkillShowArgs, SkillUpdateArgs,
+    SkillRegistryCommand, SkillRegistryRemoveArgs, SkillSearchArgs, SkillShowArgs, SkillUninstallArgs, SkillUpdateArgs,
 };
 use crate::{conflict_error, invalid_input_error, not_found_error, print_value, unavailable_error};
 use anyhow::{Context, Result};
@@ -463,6 +463,119 @@ fn handle_install(args: SkillInstallArgs, project_root: &str, json: bool) -> Res
     )
 }
 
+fn handle_uninstall(args: SkillUninstallArgs, project_root: &str, json: bool) -> Result<()> {
+    let name = sanitize_required(&args.name, "skill name")?;
+    if name.contains(['/', '\\']) || name == "." || name == ".." {
+        return Err(invalid_input_error(format!("invalid skill name '{}'", name)));
+    }
+    let source = args.source.as_deref().map(str::trim).filter(|value| !value.is_empty());
+
+    let mut registry_state = load_skill_registry_state(project_root)?;
+    let mut lock_state = load_skill_lock_state(project_root)?;
+
+    let matches_target =
+        |entry_name: &str, entry_source: &str| entry_name == name && source.is_none_or(|s| entry_source == s);
+    let removed_installed = registry_state
+        .installed
+        .iter()
+        .filter(|entry| matches_target(&entry.name, &entry.source))
+        .map(|entry| {
+            serde_json::json!({
+                "name": entry.name,
+                "version": entry.version,
+                "source": entry.source,
+                "registry": entry.registry,
+            })
+        })
+        .collect::<Vec<_>>();
+    let removed_lock_entries = lock_state
+        .entries
+        .iter()
+        .filter(|entry| matches_target(&entry.name, &entry.source))
+        .map(|entry| {
+            serde_json::json!({
+                "name": entry.name,
+                "version": entry.version,
+                "source": entry.source,
+                "registry": entry.registry,
+            })
+        })
+        .collect::<Vec<_>>();
+
+    registry_state.installed.retain(|entry| !matches_target(&entry.name, &entry.source));
+    lock_state.entries.retain(|entry| !matches_target(&entry.name, &entry.source));
+
+    // A --source filter that matched nothing must not cascade into deleting
+    // the shared materialized files or the per-name project default.
+    let source_satisfied = source.is_none() || !removed_installed.is_empty() || !removed_lock_entries.is_empty();
+    let remaining_installed = registry_state.installed.iter().any(|entry| entry.name == name);
+    let removed_project_default =
+        source_satisfied && !remaining_installed && registry_state.defaults.iter().any(|d| d.name == name);
+    if removed_project_default {
+        registry_state.defaults.retain(|d| d.name != name);
+    }
+
+    let skill_dir = skill_install_root(project_root).join(&name);
+
+    // The materialized SKILL.md is shared per-name and may hold the removed
+    // source's definition; rewrite it from a remaining source's snapshot, or
+    // drop it when no snapshot is left so the removed definition does not
+    // stay active (`skill update` re-materializes it).
+    let remaining_definition = (remaining_installed && !removed_installed.is_empty() && skill_dir.is_dir())
+        .then(|| {
+            registry_state
+                .installed
+                .iter()
+                .find(|entry| entry.name == name && entry.definition.is_some())
+                .and_then(|entry| entry.definition.clone())
+        })
+        .flatten();
+    let stale_without_snapshot =
+        remaining_installed && !removed_installed.is_empty() && skill_dir.is_dir() && remaining_definition.is_none();
+    let removed_skill_dir = (source_satisfied && !remaining_installed && skill_dir.is_dir()) || stale_without_snapshot;
+
+    if removed_installed.is_empty() && removed_lock_entries.is_empty() && !removed_project_default && !removed_skill_dir
+    {
+        return Err(not_found_error(match source {
+            Some(source) => format!("skill not installed from source '{}': {}", source, name),
+            None => format!("skill not installed: {}", name),
+        }));
+    }
+
+    let registry_modified = !removed_installed.is_empty() || removed_project_default;
+    let lock_modified = !removed_lock_entries.is_empty();
+    let mut rewrote_skill_file = false;
+    let (registry_changed, lock_changed) = if args.dry_run {
+        rewrote_skill_file = remaining_definition.is_some();
+        (false, false)
+    } else {
+        let registry_changed =
+            registry_modified && save_skill_registry_state_if_changed(project_root, &registry_state)?;
+        let lock_changed = lock_modified && save_skill_lock_state_if_changed(project_root, &lock_state)?;
+        if removed_skill_dir {
+            fs::remove_dir_all(&skill_dir).with_context(|| format!("failed to remove {}", skill_dir.display()))?;
+        } else if let Some(definition) = remaining_definition.as_ref() {
+            rewrote_skill_file = write_skill_definition_file(project_root, definition)?;
+        }
+        (registry_changed, lock_changed)
+    };
+
+    print_value(
+        serde_json::json!({
+            "name": name,
+            "dry_run": args.dry_run,
+            "removed_installed": removed_installed,
+            "removed_lock_entries": removed_lock_entries,
+            "removed_project_default": removed_project_default,
+            "removed_skill_dir": removed_skill_dir.then(|| skill_dir.display().to_string()),
+            "rewrote_skill_file": rewrote_skill_file,
+            "registry_changed": registry_changed,
+            "lock_changed": lock_changed,
+        }),
+        json,
+    )
+}
+
 fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()> {
     let source_filter = args.source.as_deref().map(|s| s.trim().to_ascii_lowercase());
     let mut items: Vec<serde_json::Value> = Vec::new();
@@ -826,6 +939,177 @@ fn handle_migrate_from_ao(args: SkillMigrateFromAoArgs, project_root: &str, json
     print_value(payload, json)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn seed_installed_skill(project_root: &str, name: &str) {
+        let mut registry = SkillRegistryStateV1::default();
+        registry.installed.push(ResolvedSkillEntry {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            source: "local".to_string(),
+            registry: "project".to_string(),
+            integrity: "sha256:abc".to_string(),
+            artifact: format!("{name}-1.0.0.tgz"),
+            definition: None,
+        });
+        registry.defaults.push(SkillProjectConstraint {
+            name: name.to_string(),
+            version: None,
+            source: Some("local".to_string()),
+            registry: None,
+            allow_prerelease: false,
+        });
+        save_skill_registry_state_if_changed(project_root, &registry).expect("save registry state");
+
+        let mut lock = SkillLockStateV1::default();
+        lock.entries.push(SkillLockEntry {
+            name: name.to_string(),
+            version: "1.0.0".to_string(),
+            source: "local".to_string(),
+            integrity: "sha256:abc".to_string(),
+            artifact: format!("{name}-1.0.0.tgz"),
+            registry: Some("project".to_string()),
+        });
+        save_skill_lock_state_if_changed(project_root, &lock).expect("save lock state");
+
+        let skill_dir = skill_install_root(project_root).join(name);
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "---\nname: \"alpha\"\n---\n\nbody\n").expect("write skill file");
+    }
+
+    #[test]
+    fn uninstall_removes_state_entries_and_materialized_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+        seed_installed_skill(root, "alpha");
+
+        let args = SkillUninstallArgs { name: "alpha".to_string(), source: None, dry_run: false };
+        handle_uninstall(args, root, true).expect("uninstall should succeed");
+
+        let registry = load_skill_registry_state(root).expect("load registry state");
+        assert!(registry.installed.is_empty(), "installed entry should be removed");
+        assert!(registry.defaults.is_empty(), "project default should be removed");
+        let lock = load_skill_lock_state(root).expect("load lock state");
+        assert!(lock.entries.is_empty(), "lock entry should be removed");
+        assert!(!skill_install_root(root).join("alpha").exists(), "skill dir should be removed");
+    }
+
+    #[test]
+    fn uninstall_dry_run_leaves_state_and_files_in_place() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+        seed_installed_skill(root, "alpha");
+
+        let args = SkillUninstallArgs { name: "alpha".to_string(), source: None, dry_run: true };
+        handle_uninstall(args, root, true).expect("dry-run uninstall should succeed");
+
+        let registry = load_skill_registry_state(root).expect("load registry state");
+        assert_eq!(registry.installed.len(), 1, "installed entry should remain");
+        assert_eq!(registry.defaults.len(), 1, "project default should remain");
+        let lock = load_skill_lock_state(root).expect("load lock state");
+        assert_eq!(lock.entries.len(), 1, "lock entry should remain");
+        assert!(skill_install_root(root).join("alpha").exists(), "skill dir should remain");
+    }
+
+    #[test]
+    fn uninstall_unknown_skill_is_an_error() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+
+        let args = SkillUninstallArgs { name: "missing".to_string(), source: None, dry_run: false };
+        let error = handle_uninstall(args, root, true).expect_err("uninstall should fail");
+        assert!(error.to_string().contains("skill not installed"));
+    }
+
+    #[test]
+    fn uninstall_with_source_filter_keeps_other_sources_and_drops_stale_files() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+        seed_installed_skill(root, "alpha");
+
+        let mut registry = load_skill_registry_state(root).expect("load registry state");
+        registry.installed.push(ResolvedSkillEntry {
+            name: "alpha".to_string(),
+            version: "1.1.0".to_string(),
+            source: "github".to_string(),
+            registry: "project".to_string(),
+            integrity: "sha256:def".to_string(),
+            artifact: "alpha-1.1.0.tgz".to_string(),
+            definition: None,
+        });
+        save_skill_registry_state_if_changed(root, &registry).expect("save registry state");
+
+        let args = SkillUninstallArgs { name: "alpha".to_string(), source: Some("local".to_string()), dry_run: false };
+        handle_uninstall(args, root, true).expect("uninstall should succeed");
+
+        let registry = load_skill_registry_state(root).expect("load registry state");
+        assert_eq!(registry.installed.len(), 1, "github entry should remain");
+        assert_eq!(registry.installed[0].source, "github");
+        assert_eq!(registry.defaults.len(), 1, "project default should remain while another source is installed");
+        assert!(
+            !skill_install_root(root).join("alpha").exists(),
+            "shared skill dir holds the removed definition and the remaining source has no snapshot, so it must go"
+        );
+    }
+
+    #[test]
+    fn uninstall_with_source_filter_rewrites_skill_file_from_remaining_snapshot() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+        seed_installed_skill(root, "alpha");
+
+        let definition: SkillDefinition =
+            serde_json::from_value(serde_json::json!({"name": "alpha", "description": "from github"}))
+                .expect("definition should deserialize");
+        let mut registry = load_skill_registry_state(root).expect("load registry state");
+        registry.installed.push(ResolvedSkillEntry {
+            name: "alpha".to_string(),
+            version: "1.1.0".to_string(),
+            source: "github".to_string(),
+            registry: "project".to_string(),
+            integrity: "sha256:def".to_string(),
+            artifact: "alpha-1.1.0.tgz".to_string(),
+            definition: Some(definition),
+        });
+        save_skill_registry_state_if_changed(root, &registry).expect("save registry state");
+
+        let args = SkillUninstallArgs { name: "alpha".to_string(), source: Some("local".to_string()), dry_run: false };
+        handle_uninstall(args, root, true).expect("uninstall should succeed");
+
+        let skill_file = skill_install_root(root).join("alpha").join("SKILL.md");
+        let content = fs::read_to_string(&skill_file).expect("skill file should remain");
+        assert!(content.contains("from github"), "skill file should be rewritten from the remaining snapshot");
+    }
+
+    #[test]
+    fn uninstall_with_unmatched_source_filter_keeps_files_and_default() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+        seed_installed_skill(root, "alpha");
+
+        let args = SkillUninstallArgs { name: "alpha".to_string(), source: Some("github".to_string()), dry_run: false };
+        let error = handle_uninstall(args, root, true).expect_err("uninstall should fail");
+        assert!(error.to_string().contains("skill not installed from source 'github'"));
+
+        let registry = load_skill_registry_state(root).expect("load registry state");
+        assert_eq!(registry.installed.len(), 1, "installed entry should remain");
+        assert_eq!(registry.defaults.len(), 1, "project default should remain");
+        assert!(skill_install_root(root).join("alpha").exists(), "skill dir should remain");
+    }
+
+    #[test]
+    fn uninstall_rejects_path_like_skill_names() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+
+        let args = SkillUninstallArgs { name: "../escape".to_string(), source: None, dry_run: false };
+        let error = handle_uninstall(args, root, true).expect_err("uninstall should fail");
+        assert!(error.to_string().contains("invalid skill name"));
+    }
+}
+
 pub(crate) async fn handle_skill(command: SkillCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         SkillCommand::Search(args) => handle_search(args, project_root, json),
@@ -833,6 +1117,7 @@ pub(crate) async fn handle_skill(command: SkillCommand, project_root: &str, json
         SkillCommand::List(args) => handle_list(args, project_root, json),
         SkillCommand::Show(args) => handle_show(args, project_root, json),
         SkillCommand::Update(args) => handle_update(args, project_root, json),
+        SkillCommand::Uninstall(args) => handle_uninstall(args, project_root, json),
         SkillCommand::Publish(args) => handle_publish(args, project_root, json),
         SkillCommand::Registry { command } => match command {
             SkillRegistryCommand::Add(args) => handle_registry_add(args, project_root, json),

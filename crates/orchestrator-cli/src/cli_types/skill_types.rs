@@ -13,6 +13,8 @@ pub(crate) enum SkillCommand {
     Show(SkillShowArgs),
     /// Re-resolve one or all installed skills.
     Update(SkillUpdateArgs),
+    /// Uninstall an installed skill: remove its materialized files and registry/lock entries.
+    Uninstall(SkillUninstallArgs),
     /// Publish a new skill version into the registry catalog.
     Publish(SkillPublishArgs),
     /// Manage registered skill registry sources.
@@ -94,6 +96,16 @@ pub(crate) struct SkillUpdateArgs {
     pub(crate) registry: Option<String>,
     #[arg(long, default_value_t = false, help = "Allow pre-release versions during resolution.")]
     pub(crate) allow_prerelease: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SkillUninstallArgs {
+    #[arg(value_name = "SKILL_ID", help = "Skill name to uninstall.")]
+    pub(crate) name: String,
+    #[arg(long, help = "Optional source constraint; omit to remove installed entries from all sources.")]
+    pub(crate) source: Option<String>,
+    #[arg(long, default_value_t = false, help = "Print what would be removed without modifying anything.")]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]

@@ -10,6 +10,8 @@ pub(crate) enum PackCommand {
     Inspect(PackInspectArgs),
     /// Pin a pack version/source or toggle enablement for this project.
     Pin(PackPinArgs),
+    /// Uninstall an installed pack: remove its materialized files and project selection entry.
+    Uninstall(PackUninstallArgs),
     /// Search packs across marketplace registries.
     Search(PackSearchArgs),
     /// Manage marketplace registries for remote pack discovery and installation.
@@ -93,6 +95,22 @@ pub(crate) struct PackInspectArgs {
     pub(crate) source: Option<String>,
     #[arg(long, value_name = "PATH", help = "Inspect a local pack directory instead of discovered inventory.")]
     pub(crate) path: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PackUninstallArgs {
+    #[arg(value_name = "PACK_ID", help = "Pack identifier to uninstall.")]
+    pub(crate) pack_id: String,
+    #[arg(long, help = "Optional exact version to uninstall; omit to remove all installed versions.")]
+    pub(crate) version: Option<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Uninstall even when project workflow YAML still references the pack."
+    )]
+    pub(crate) force: bool,
+    #[arg(long, default_value_t = false, help = "Print what would be removed without modifying anything.")]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]

@@ -371,6 +371,46 @@ mod tests {
     }
 
     #[test]
+    fn parses_pack_uninstall_command() {
+        let cli = Cli::try_parse_from([
+            "animus",
+            "pack",
+            "uninstall",
+            "animus.review",
+            "--version",
+            "0.2.0",
+            "--force",
+            "--dry-run",
+        ])
+        .expect("pack uninstall should parse");
+
+        match cli.command {
+            Command::Pack { command: PackCommand::Uninstall(args) } => {
+                assert_eq!(args.pack_id, "animus.review");
+                assert_eq!(args.version.as_deref(), Some("0.2.0"));
+                assert!(args.force);
+                assert!(args.dry_run);
+            }
+            _ => panic!("expected pack uninstall command"),
+        }
+    }
+
+    #[test]
+    fn parses_skill_uninstall_command() {
+        let cli = Cli::try_parse_from(["animus", "skill", "uninstall", "alpha", "--source", "local", "--dry-run"])
+            .expect("skill uninstall should parse");
+
+        match cli.command {
+            Command::Skill { command: SkillCommand::Uninstall(args) } => {
+                assert_eq!(args.name, "alpha");
+                assert_eq!(args.source.as_deref(), Some("local"));
+                assert!(args.dry_run);
+            }
+            _ => panic!("expected skill uninstall command"),
+        }
+    }
+
+    #[test]
     fn parses_queue_enqueue_command() {
         let cli = Cli::try_parse_from(["animus", "queue", "enqueue", "--task-id", "TASK-123", "--workflow-ref", "ops"])
             .expect("queue enqueue command should parse");
