@@ -25,7 +25,7 @@ fn read_notification_config_from_pm_config(pm_config: &serde_json::Value) -> ser
 
 use crate::{
     print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonMetricsArgs, DaemonPreflightArgs,
-    DaemonRestartArgs, DaemonRunArgs, DaemonStartArgs, DaemonStopArgs, DaemonStreamArgs, RunnerScopeArg,
+    DaemonRestartArgs, DaemonRunArgs, DaemonStartArgs, DaemonStopArgs, DaemonStreamArgs,
 };
 
 mod control_routing;
@@ -56,13 +56,6 @@ struct AutonomousDaemonSpawn {
     child: Child,
     log_path: PathBuf,
     startup_log_offset: u64,
-}
-
-fn runner_scope_value(scope: &RunnerScopeArg) -> &'static str {
-    match scope {
-        RunnerScopeArg::Project => "project",
-        RunnerScopeArg::Global => "global",
-    }
 }
 
 pub(crate) fn canonicalize_lossy(path: &str) -> String {
@@ -630,9 +623,6 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
     if args.skip_runner {
         command.arg("--skip-runner");
     }
-    if let Some(scope) = args.runner_scope.as_ref() {
-        command.arg("--runner-scope").arg(runner_scope_value(scope));
-    }
     if args.auto_install {
         command.arg("--auto-install");
     }
@@ -776,7 +766,6 @@ async fn handle_daemon_start(args: DaemonStartArgs, project_root: &str, json: bo
         DaemonRunArgs {
             scheduler: args.scheduler,
             skip_runner: args.skip_runner,
-            runner_scope: args.runner_scope,
             once: false,
             auto_install: args.auto_install,
             skip_preflight: args.skip_preflight,

@@ -20,7 +20,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
     push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
-    push_opt(&mut args, "--runner-scope", input.runner_scope.clone());
     args
 }
 

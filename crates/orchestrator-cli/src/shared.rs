@@ -40,7 +40,6 @@ mod tests {
             save_jsonl: false,
             jsonl_dir: None,
             start_runner: false,
-            runner_scope: None,
             agent: None,
             skill: None,
             mcp_server: Vec::new(),

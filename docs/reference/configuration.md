@@ -533,7 +533,6 @@ legacy aliases; the old names will not be read.
 | Variable | Description |
 |---|---|
 | `ANIMUS_CONFIG_DIR` | Override the global Animus config directory (default `~/.animus`) |
-| `ANIMUS_RUNNER_SCOPE` | Runner scope identifier. Defaults to the repo-scope derived from the project root |
 | `ANIMUS_DISABLE_CI_CACHE` | Truthy (`1`, `true`, `yes`, `on`) — disable the per-project CI status cache used by `animus status` (`~/.animus/<repo-scope>/cache/ci-status.json`), forcing a fresh `gh` lookup every call |
 | `ANIMUS_CI_CACHE_TTL_SECS` | TTL in seconds for the CI status cache (default 60). Honored on every read, so lowering it immediately invalidates older entries |
 | `ANIMUS_MCP_SCHEMA_DRAFT` | Select Draft-07 MCP tool input schemas |

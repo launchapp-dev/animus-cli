@@ -95,7 +95,6 @@ pub fn plan_task_priority_rebalance(
 pub struct DaemonStartConfig {
     pub pool_size: Option<usize>,
     pub skip_runner: bool,
-    pub runner_scope: Option<String>,
 }
 
 #[async_trait]

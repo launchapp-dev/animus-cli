@@ -543,7 +543,6 @@ fn build_daemon_start_args_with_flags() {
         pool_size: Some(4),
         skip_runner: Some(true),
         auto_run_ready: Some(true),
-        runner_scope: Some("project".to_string()),
         ..Default::default()
     };
     let args = build_daemon_start_args(&input);
@@ -557,8 +556,6 @@ fn build_daemon_start_args_with_flags() {
             "--skip-runner".to_string(),
             "--auto-run-ready".to_string(),
             "true".to_string(),
-            "--runner-scope".to_string(),
-            "project".to_string(),
         ]
     );
 }
@@ -708,7 +705,6 @@ fn build_agent_run_args_defaults_detach_and_stream() {
         runtime_contract_json: None,
         detach: true,
         run_id: None,
-        runner_scope: None,
         project_root: None,
     };
     let args = build_agent_run_args(&input);
@@ -740,7 +736,6 @@ fn build_agent_run_args_with_all_options() {
         runtime_contract_json: Some("{\"k\":1}".to_string()),
         detach: false,
         run_id: Some("run-1".to_string()),
-        runner_scope: Some("global".to_string()),
         project_root: None,
     };
     let args = build_agent_run_args(&input);
@@ -767,8 +762,6 @@ fn build_agent_run_args_with_all_options() {
             "{\"k\":1}".to_string(),
             "--run-id".to_string(),
             "run-1".to_string(),
-            "--runner-scope".to_string(),
-            "global".to_string(),
         ]
     );
 }

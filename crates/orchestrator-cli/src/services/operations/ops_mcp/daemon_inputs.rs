@@ -25,8 +25,6 @@ pub(super) struct DaemonStartInput {
     #[serde(default)]
     pub(super) reconcile_stale: Option<bool>,
     #[serde(default)]
-    pub(super) runner_scope: Option<String>,
-    #[serde(default)]
     pub(super) project_root: Option<String>,
 }
 

@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args, Subcommand};
 
-use super::{parse_positive_u64, parse_positive_usize, LogArgs, RunnerScopeArg};
+use super::{parse_positive_u64, parse_positive_usize, LogArgs};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum DaemonCommand {
@@ -113,8 +113,6 @@ pub(crate) struct DaemonStartArgs {
     pub(crate) scheduler: DaemonSchedulerArgs,
     #[arg(long, default_value_t = false, help = "Do not auto-start the runner process.")]
     pub(crate) skip_runner: bool,
-    #[arg(long, value_name = "SCOPE", help = "Runner config scope: project or global.")]
-    pub(crate) runner_scope: Option<RunnerScopeArg>,
     #[arg(long, default_value_t = false, help = "Run daemon in detached/background mode.")]
     pub(crate) autonomous: bool,
     #[arg(
@@ -149,7 +147,6 @@ impl DaemonStartArgs {
                 phase_timeout_secs: None,
             },
             skip_runner: false,
-            runner_scope: None,
             autonomous: true,
             auto_install: false,
             skip_preflight: false,
@@ -177,8 +174,6 @@ pub(crate) struct DaemonRunArgs {
     pub(crate) scheduler: DaemonSchedulerArgs,
     #[arg(long, hide = true, default_value_t = false)]
     pub(crate) skip_runner: bool,
-    #[arg(long, hide = true)]
-    pub(crate) runner_scope: Option<RunnerScopeArg>,
     #[arg(long, default_value_t = false, help = "Run one scheduler tick and exit.")]
     pub(crate) once: bool,
     #[arg(

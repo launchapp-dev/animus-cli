@@ -80,12 +80,6 @@ pub(crate) struct LogArgs {
     pub(crate) search: Option<String>,
 }
 
-#[derive(Clone, Debug, ValueEnum)]
-pub(crate) enum RunnerScopeArg {
-    Project,
-    Global,
-}
-
 /// Reasoning / thinking effort level passed through to a provider CLI.
 ///
 /// Threaded into the provider session request as `extras.reasoning_effort`;

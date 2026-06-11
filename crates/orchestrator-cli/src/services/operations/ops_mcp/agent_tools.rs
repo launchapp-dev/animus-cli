@@ -40,7 +40,7 @@ impl AoMcpServer {
     )]
     async fn ao_agent_control(&self, params: Parameters<AgentControlInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec![
+        let args = vec![
             "agent".to_string(),
             "control".to_string(),
             "--run-id".to_string(),
@@ -48,7 +48,6 @@ impl AoMcpServer {
             "--action".to_string(),
             input.action,
         ];
-        push_opt(&mut args, "--runner-scope", input.runner_scope);
         self.run_tool("animus.agent.control", args, input.project_root).await
     }
 
@@ -59,8 +58,7 @@ impl AoMcpServer {
     )]
     async fn ao_agent_status(&self, params: Parameters<AgentStatusInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let mut args = vec!["agent".to_string(), "status".to_string(), "--run-id".to_string(), input.run_id];
-        push_opt(&mut args, "--runner-scope", input.runner_scope);
+        let args = vec!["agent".to_string(), "status".to_string(), "--run-id".to_string(), input.run_id];
         self.run_tool("animus.agent.status", args, input.project_root).await
     }
 
