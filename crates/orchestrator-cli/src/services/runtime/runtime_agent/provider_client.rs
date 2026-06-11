@@ -175,6 +175,19 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
             // the runtime contract, so materialize the per-agent set there
             // too (additive merge that preserves user-authored entries).
             crate::services::runtime::agent_mcp::materialize_mcp_json(&cwd, &contract)?;
+            // Mirror the SAME resolved set onto the plugin-protocol
+            // `mcp_servers` channel so providers that consume
+            // `AgentRunRequest.mcp_servers` (rather than the runtime
+            // contract or `.mcp.json`) see the per-agent servers too. An
+            // explicit `mcp_servers` from `--context-json` wins (it was
+            // hoisted into `extras` above), and an empty resolved set
+            // populates nothing.
+            if !extras.contains_key("mcp_servers") {
+                let servers = crate::services::runtime::agent_mcp::contract_mcp_servers_for_wire(&contract);
+                if !servers.is_empty() {
+                    extras.insert("mcp_servers".to_string(), Value::Object(servers));
+                }
+            }
             extras.insert("runtime_contract".to_string(), contract);
         }
     }
@@ -439,6 +452,126 @@ mod tests {
         assert!(
             contract.pointer("/mcp/stdio/command").is_none(),
             "assembler must not touch a caller-supplied contract; contract: {contract}"
+        );
+    }
+
+    #[test]
+    fn agent_run_populates_mcp_servers_from_the_assembled_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let args = base_args(&root_str);
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+
+        // The resolved set (plain run → the animus stdio server) must ride
+        // extras.mcp_servers in the canonical wire shape, mirroring what
+        // materialize_mcp_json wrote for the same run.
+        let servers = request
+            .extras
+            .pointer("/mcp_servers")
+            .and_then(Value::as_object)
+            .expect("extras.mcp_servers must be populated from the assembled contract");
+        let animus = servers.get("animus").expect("the animus stdio server is in the resolved set");
+        assert!(
+            animus.get("command").and_then(Value::as_str).is_some(),
+            "stdio wire entry carries command; got {animus}"
+        );
+    }
+
+    #[test]
+    fn agent_run_context_json_mcp_servers_wins_over_the_resolved_set() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let mut args = base_args(&root_str);
+        args.context_json = Some(r#"{"mcp_servers":{"caller-owned":{"command":"my-server"}}}"#.to_string());
+
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        let servers = request
+            .extras
+            .pointer("/mcp_servers")
+            .and_then(Value::as_object)
+            .expect("the caller's mcp_servers must survive");
+        assert!(
+            servers.contains_key("caller-owned") && servers.len() == 1,
+            "an explicit --context-json mcp_servers must not be clobbered by the resolved set; got {servers:?}"
+        );
+    }
+
+    #[test]
+    fn agent_run_empty_resolved_set_populates_no_mcp_servers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let mut args = base_args(&root_str);
+        args.no_animus_mcp = true;
+
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert!(
+            request.extras.pointer("/mcp_servers").is_none(),
+            "an empty resolved set must not populate extras.mcp_servers; extras: {}",
+            request.extras
+        );
+    }
+
+    #[test]
+    fn agent_profile_secret_bearing_server_rides_the_wire_as_proxy_stdio() {
+        // End-to-end over the ad-hoc run path: an `--agent` profile whose
+        // workflow YAML `mcp_servers` scope names a manual_bearer server must
+        // produce a name-keyed `extras.mcp_servers` object where that server
+        // is the `animus-mcp-proxy` stdio entry — never the upstream URL with
+        // a resolved Authorization header. (`build_run_params` forwards
+        // `extras.mcp_servers` verbatim into the agent/run RPC params; see
+        // orchestrator-plugin-host's resume_request_forwards_checkpointed_
+        // mcp_servers.)
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+        let bearer_env = "ANIMUS_TEST_PROFILE_WIRE_BEARER";
+        std::env::set_var(bearer_env, "tok-profile-secret");
+        std::fs::create_dir_all(root.join(".animus")).unwrap();
+        std::fs::write(
+            root.join(".animus").join("workflows.yaml"),
+            format!(
+                r#"
+mcp_servers:
+  trading:
+    transport: http
+    url: "https://trading.example.com/mcp"
+    oauth:
+      flow: manual_bearer
+      bearer_env: {bearer_env}
+agents:
+  trader:
+    description: "Trading agent"
+    mcp_servers: [trading]
+"#
+            ),
+        )
+        .unwrap();
+
+        let mut args = base_args(&root_str);
+        args.agent = Some("trader".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        std::env::remove_var(bearer_env);
+
+        let servers = request
+            .extras
+            .pointer("/mcp_servers")
+            .and_then(Value::as_object)
+            .expect("the trader profile's resolved set must ride extras.mcp_servers");
+        let trading = servers.get("trading").expect("the profile-scoped server is in the wire map");
+        let command = trading.get("command").and_then(Value::as_str).expect("proxy stdio entry carries command");
+        assert!(command.contains("animus-mcp-proxy"), "expected the proxy binary; got {command}");
+        assert!(trading.get("url").is_none(), "proxy entry carries no upstream url; got {trading}");
+        assert!(trading.get("headers").is_none(), "no resolved header may ride the wire; got {trading}");
+        let serialized = serde_json::to_string(&request.extras).unwrap();
+        assert!(
+            !serialized.contains("tok-profile-secret"),
+            "the resolved bearer token must never appear in extras: {serialized}"
         );
     }
 

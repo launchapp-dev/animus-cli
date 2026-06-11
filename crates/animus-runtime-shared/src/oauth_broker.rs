@@ -336,6 +336,26 @@ pub fn resolve_token(
     env: &dyn EnvLookup,
     client: &dyn TokenClient,
 ) -> Result<ResolvedOauthToken> {
+    resolve_token_with_options(server_name, oauth, cache_dir, env, client, false)
+}
+
+/// [`resolve_token`] with a `force_refresh` knob for callers whose upstream
+/// just rejected a still-cached access token (the `animus-mcp-proxy` 401
+/// path). `force_refresh` bypasses ONLY the fresh-access-token cache hit:
+/// the cached (possibly rotated) refresh-token chain is still read under the
+/// cache lock and the newly minted token — including any rotated refresh
+/// token in the response — is still written back. Disabling the cache
+/// entirely here would retry the original env-var seed (often already
+/// invalidated by rotation) and discard the fresh rotation, killing the
+/// grant chain.
+pub fn resolve_token_with_options(
+    server_name: &str,
+    oauth: &OauthConfig,
+    cache_dir: &Path,
+    env: &dyn EnvLookup,
+    client: &dyn TokenClient,
+    force_refresh: bool,
+) -> Result<ResolvedOauthToken> {
     let cache_path = cache_dir.join(cache_filename_for_server(server_name));
     let fingerprint = oauth_config_fingerprint(oauth);
     let current_seed = current_refresh_seed_sha256(oauth, env);
@@ -362,13 +382,15 @@ pub fn resolve_token(
             // Re-read under the lock: another process may have refreshed
             // (and rotated the refresh token) while we waited.
             let cached = if oauth.cache { read_cache(&cache_path)? } else { None };
-            if let Some(fresh) =
-                cached.as_ref().filter(|c| c.is_fresh(Utc::now(), &fingerprint, current_seed.as_deref()))
-            {
-                return Ok(ResolvedOauthToken {
-                    access_token: fresh.access_token.clone(),
-                    header_name: "Authorization".to_string(),
-                });
+            if !force_refresh {
+                if let Some(fresh) =
+                    cached.as_ref().filter(|c| c.is_fresh(Utc::now(), &fingerprint, current_seed.as_deref()))
+                {
+                    return Ok(ResolvedOauthToken {
+                        access_token: fresh.access_token.clone(),
+                        header_name: "Authorization".to_string(),
+                    });
+                }
             }
 
             let mut token = if oauth.flow == OauthFlow::ClientCredentials {
@@ -752,10 +774,21 @@ pub fn resolve_token_for_project(
     oauth: &OauthConfig,
     project_root: &str,
 ) -> Result<ResolvedOauthToken> {
+    resolve_token_for_project_with_options(server_name, oauth, project_root, false)
+}
+
+/// [`resolve_token_for_project`] with the [`resolve_token_with_options`]
+/// `force_refresh` knob.
+pub fn resolve_token_for_project_with_options(
+    server_name: &str,
+    oauth: &OauthConfig,
+    project_root: &str,
+    force_refresh: bool,
+) -> Result<ResolvedOauthToken> {
     let cache_dir = cache_dir_for_project(project_root)
         .ok_or_else(|| anyhow!("OAuth resolution failed for `{}`: home directory not discoverable", server_name))?;
     let client = ReqwestTokenClient::new()?;
-    resolve_token(server_name, oauth, &cache_dir, &ProcessEnv, &client)
+    resolve_token_with_options(server_name, oauth, &cache_dir, &ProcessEnv, &client, force_refresh)
 }
 
 /// Build the per-server headers map that the runtime-contract injects
@@ -957,6 +990,71 @@ mod tests {
             last.form.iter().any(|(k, v)| k == "refresh_token" && v == "rt-rotated"),
             "second call should send the rotated refresh token, got form={:?}",
             last.form
+        );
+    }
+
+    #[test]
+    fn force_refresh_uses_cached_rotated_refresh_token_and_persists_the_new_rotation() {
+        // The proxy's 401 path force-refreshes while the cached access token
+        // still looks fresh. The forced refresh must POST the cached
+        // (rotated) refresh token — not the original env seed, which
+        // rotation already invalidated — and must write the newly rotated
+        // refresh token back so the chain survives.
+        let oauth = OauthConfig {
+            flow: OauthFlow::RefreshToken,
+            token_url: Some("https://auth.example.com/token".to_string()),
+            client_id_env: None,
+            client_secret_env: None,
+            refresh_token_env: Some("EXAMPLE_REFRESH".to_string()),
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+            client_id: None,
+        };
+        let env = StaticEnv(BTreeMap::from([("EXAMPLE_REFRESH".to_string(), "rt-original".to_string())]));
+        let client = MockClient::new(vec![
+            Ok(TokenFetchResponse {
+                access_token: "access-1".to_string(),
+                expires_in: Some(3600),
+                refresh_token: Some("rt-rotated-1".to_string()),
+            }),
+            Ok(TokenFetchResponse {
+                access_token: "access-2".to_string(),
+                expires_in: Some(3600),
+                refresh_token: Some("rt-rotated-2".to_string()),
+            }),
+            Ok(TokenFetchResponse {
+                access_token: "access-3".to_string(),
+                expires_in: Some(3600),
+                refresh_token: None,
+            }),
+        ]);
+        let temp = tempdir().expect("tempdir");
+
+        // Seed the cache: env seed → access-1 + rotated refresh token 1.
+        let first = resolve_token("svc", &oauth, temp.path(), &env, &client).expect("first ok");
+        assert_eq!(first.access_token, "access-1");
+
+        // access-1 is still fresh, but the upstream rejected it: the forced
+        // refresh must skip the cache hit and POST the rotated chain.
+        let forced = resolve_token_with_options("svc", &oauth, temp.path(), &env, &client, true).expect("forced ok");
+        assert_eq!(forced.access_token, "access-2");
+        assert!(
+            client.form_at(1).contains(&("refresh_token".to_string(), "rt-rotated-1".to_string())),
+            "forced refresh must use the cached rotated refresh token, got form={:?}",
+            client.form_at(1)
+        );
+
+        // The second rotation was persisted: a later natural refresh (cache
+        // miss path) continues the chain from rt-rotated-2.
+        let forced_again =
+            resolve_token_with_options("svc", &oauth, temp.path(), &env, &client, true).expect("third ok");
+        assert_eq!(forced_again.access_token, "access-3");
+        assert!(
+            client.form_at(2).contains(&("refresh_token".to_string(), "rt-rotated-2".to_string())),
+            "the rotation minted under force_refresh must be persisted, got form={:?}",
+            client.form_at(2)
         );
     }
 

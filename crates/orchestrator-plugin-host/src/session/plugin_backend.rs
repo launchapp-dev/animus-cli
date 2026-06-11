@@ -916,7 +916,9 @@ fn session_request_from_agent_run_request(
     let project_root = context.get("project_root").and_then(Value::as_str).map(PathBuf::from);
 
     let mut extras = serde_json::Map::new();
-    for key in ["runtime_contract", "agent_id", "phase_id", "workflow_id", "subject_id", "phase_capabilities"] {
+    for key in
+        ["runtime_contract", "mcp_servers", "agent_id", "phase_id", "workflow_id", "subject_id", "phase_capabilities"]
+    {
         if let Some(value) = context.get(key) {
             extras.insert(key.to_string(), value.clone());
         }
@@ -1506,6 +1508,39 @@ mod tests {
         let resume_params = backend.build_run_params(&request, Some("sess-provider"), &control_session_id);
         assert_eq!(resume_params.get("session_id").and_then(Value::as_str), Some("sess-provider"));
         assert_eq!(resume_params.get("control_session_id").and_then(Value::as_str), Some(control_session_id.as_str()));
+    }
+
+    /// The daemon-restart resume path rebuilds a `SessionRequest` from the
+    /// checkpointed `AgentRunRequest` JSON. A `context.mcp_servers` map (the
+    /// per-phase resolved server set the workflow runner populates alongside
+    /// `context.runtime_contract`) must survive into `extras` so
+    /// `build_run_params` forwards it to the provider on resume exactly as on
+    /// the original dispatch.
+    #[test]
+    fn resume_request_forwards_checkpointed_mcp_servers() {
+        let checkpoint = json!({
+            "model": "gpt-5-codex",
+            "context": {
+                "tool": "codex",
+                "prompt": "continue",
+                "cwd": "/tmp",
+                "runtime_contract": { "cli": { "name": "codex" } },
+                "mcp_servers": { "animus": { "command": "/usr/local/bin/animus", "args": ["mcp", "serve"] } },
+            },
+        });
+        let request = session_request_from_agent_run_request("codex", &checkpoint).expect("request builds");
+        assert_eq!(
+            request.extras.pointer("/mcp_servers/animus/command").and_then(Value::as_str),
+            Some("/usr/local/bin/animus"),
+            "context.mcp_servers must be copied into extras for resume; extras: {}",
+            request.extras
+        );
+        let backend = fresh_backend();
+        let params = backend.build_run_params(&request, Some("sess-1"), "ctrl-test");
+        assert!(
+            params.pointer("/mcp_servers/animus").is_some(),
+            "build_run_params must forward the resumed mcp_servers; params: {params}"
+        );
     }
 
     /// The plugin runtime serializes the provider's own session_id under the

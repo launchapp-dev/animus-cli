@@ -368,6 +368,14 @@ async fn drive_once(
     if let Some(contract) = ctx.mcp_contract {
         if let Value::Object(map) = &mut extras {
             map.insert("runtime_contract".to_string(), contract.clone());
+            // Mirror the SAME resolved per-agent set onto the
+            // plugin-protocol `mcp_servers` channel (forwarded verbatim to
+            // the provider as `AgentRunRequest.mcp_servers`); an empty
+            // resolved set populates nothing.
+            let servers = crate::services::runtime::agent_mcp::contract_mcp_servers_for_wire(contract);
+            if !servers.is_empty() {
+                map.insert("mcp_servers".to_string(), Value::Object(servers));
+            }
         }
     }
 

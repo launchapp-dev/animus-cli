@@ -8,17 +8,20 @@
 //! The proxy:
 //! - serves the agent as an rmcp MCP **server** over **stdio** (no auth);
 //! - connects to the upstream as an rmcp MCP **client** over
-//!   streamable-http, injecting the live keychain bearer token;
+//!   streamable-http, injecting the live bearer token — read from the OS
+//!   keychain (`authorization_code` flow) or from a caller-supplied
+//!   [`BearerTokenSource`] (the broker-backed `manual_bearer` /
+//!   `client_credentials` / `refresh_token` flows);
 //! - forwards `initialize` (returns the upstream's cached server info) and
 //!   every request/notification transparently;
-//! - on an upstream auth/transport failure, refreshes the token via rmcp's
-//!   `AuthorizationManager` (keychain-backed) and reconnects **once** before
-//!   surfacing the error;
+//! - on an upstream auth/transport failure, refreshes the token and
+//!   reconnects **once** before surfacing the error;
 //! - when there is no stored token (or refresh is rejected), returns a clear
 //!   MCP error instructing the user to run `animus mcp auth <server>`.
 //!
-//! No OAuth/PKCE/token-exchange is implemented here: token lifecycle is
-//! entirely rmcp's `AuthorizationManager`.
+//! No OAuth/PKCE/token-exchange is implemented here: keychain token
+//! lifecycle is entirely rmcp's `AuthorizationManager`, and broker token
+//! lifecycle is whatever the injected [`BearerTokenSource`] implements.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -45,12 +48,57 @@ struct Upstream {
     server_info: ServerInfo,
 }
 
+/// Bearer-token resolver for the machine-to-machine OAuth flows
+/// (`manual_bearer` / `client_credentials` / `refresh_token`). Implemented by
+/// the `animus-mcp-proxy` binary over `animus_runtime_shared::oauth_broker`
+/// so this crate stays free of the broker dependency. `force_refresh` is set
+/// after an upstream auth failure; implementations should bypass any token
+/// cache then. May block on network/disk I/O — the proxy always invokes it
+/// via `spawn_blocking`.
+pub trait BearerTokenSource: Send + Sync {
+    fn access_token(&self, force_refresh: bool) -> Result<String>;
+}
+
+/// Where the upstream bearer token comes from: the keychain-backed rmcp
+/// `AuthorizationManager` (`authorization_code`) or an injected
+/// [`BearerTokenSource`] (broker flows).
+enum TokenAuthority {
+    Keychain(Arc<Mutex<AuthorizationManager>>),
+    Bearer(Arc<dyn BearerTokenSource>),
+}
+
+impl TokenAuthority {
+    /// Resolve the current access token. With `force_refresh`, the keychain
+    /// manager forces a refresh-token exchange and a bearer source is asked
+    /// to bypass its cache.
+    async fn access_token(&self, server_name: &str, force_refresh: bool) -> Result<String> {
+        match self {
+            Self::Keychain(manager) => {
+                let guard = manager.lock().await;
+                if force_refresh {
+                    // Ignore an "already fresh" refresh error path:
+                    // get_access_token below still surfaces a real failure.
+                    let _ = guard.refresh_token().await;
+                }
+                guard.get_access_token().await.map_err(|err| auth_error_to_anyhow(err, server_name))
+            }
+            Self::Bearer(source) => {
+                let source = Arc::clone(source);
+                let server = server_name.to_string();
+                tokio::task::spawn_blocking(move || source.access_token(force_refresh))
+                    .await
+                    .map_err(|err| anyhow!("bearer token resolution for `{server}` panicked: {err}"))?
+            }
+        }
+    }
+}
+
 /// The proxy service. Holds the upstream connection behind a mutex so a
 /// refresh+reconnect can swap it out atomically while serializing requests.
 pub struct McpProxy {
     server_name: String,
     upstream_url: String,
-    auth_manager: Arc<Mutex<AuthorizationManager>>,
+    auth: TokenAuthority,
     upstream: Mutex<Upstream>,
 }
 
@@ -99,13 +147,34 @@ impl McpProxy {
             ));
         }
 
-        let auth_manager = Arc::new(Mutex::new(manager));
-        let upstream = Self::open_upstream(upstream_url, &auth_manager, server_name).await?;
+        let auth = TokenAuthority::Keychain(Arc::new(Mutex::new(manager)));
+        let upstream = Self::open_upstream(upstream_url, &auth, server_name, false).await?;
 
         Ok(Self {
             server_name: server_name.to_string(),
             upstream_url: upstream_url.to_string(),
-            auth_manager,
+            auth,
+            upstream: Mutex::new(upstream),
+        })
+    }
+
+    /// Connect with an injected [`BearerTokenSource`] instead of the keychain
+    /// `AuthorizationManager`. Used for the machine-to-machine flows
+    /// (`manual_bearer` / `client_credentials` / `refresh_token`), whose
+    /// tokens the `animus-mcp-proxy` binary resolves through the OAuth
+    /// broker at connect time.
+    pub async fn connect_with_bearer_source(
+        server_name: &str,
+        upstream_url: &str,
+        source: Arc<dyn BearerTokenSource>,
+    ) -> Result<Self> {
+        crate::ensure_crypto_provider();
+        let auth = TokenAuthority::Bearer(source);
+        let upstream = Self::open_upstream(upstream_url, &auth, server_name, false).await?;
+        Ok(Self {
+            server_name: server_name.to_string(),
+            upstream_url: upstream_url.to_string(),
+            auth,
             upstream: Mutex::new(upstream),
         })
     }
@@ -117,7 +186,7 @@ impl McpProxy {
     }
 
     /// Open an upstream MCP client connection with the current access token
-    /// (refreshing it if near expiry via the auth manager).
+    /// (refreshing it if near expiry / on `force_refresh`).
     ///
     /// The initial `serve_client`/`initialize` handshake can itself be
     /// rejected with a 401 when the stored access token is still within
@@ -126,37 +195,32 @@ impl McpProxy {
     /// using an otherwise-valid refresh token instead of failing immediately.
     async fn open_upstream(
         url: &str,
-        auth_manager: &Arc<Mutex<AuthorizationManager>>,
+        auth: &TokenAuthority,
         server_name: &str,
+        force_refresh: bool,
     ) -> Result<Upstream> {
-        match Self::try_open_upstream(url, auth_manager, server_name).await {
+        match Self::try_open_upstream(url, auth, server_name, force_refresh).await {
             Ok(upstream) => Ok(upstream),
-            Err(first_err) => {
+            Err(first_err) if !force_refresh => {
                 tracing::warn!(server = server_name, error = %first_err, "initial upstream connect failed; forcing token refresh and retrying once");
-                {
-                    let guard = auth_manager.lock().await;
-                    let _ = guard.refresh_token().await;
-                }
-                Self::try_open_upstream(url, auth_manager, server_name).await.map_err(|retry_err| {
+                Self::try_open_upstream(url, auth, server_name, true).await.map_err(|retry_err| {
                     anyhow!(
                         "failed to connect to upstream MCP server for `{server_name}` (after token refresh): {retry_err}"
                     )
                 })
             }
+            Err(err) => Err(err),
         }
     }
 
     /// Single attempt to open the upstream with the current access token.
     async fn try_open_upstream(
         url: &str,
-        auth_manager: &Arc<Mutex<AuthorizationManager>>,
+        auth: &TokenAuthority,
         server_name: &str,
+        force_refresh: bool,
     ) -> Result<Upstream> {
-        let access_token = {
-            let guard = auth_manager.lock().await;
-            guard.get_access_token().await
-        };
-        let access_token = access_token.map_err(|err| auth_error_to_anyhow(err, server_name))?;
+        let access_token = auth.access_token(server_name, force_refresh).await?;
 
         // `auth_header` takes the bearer token WITHOUT the `Bearer ` prefix.
         let config = StreamableHttpClientTransportConfig::with_uri(url.to_string()).auth_header(access_token);
@@ -241,17 +305,11 @@ impl McpProxy {
         }
     }
 
-    /// Refresh the token and replace the upstream connection.
+    /// Refresh the token and replace the upstream connection. The forced
+    /// open makes the token authority bypass freshness checks/caches, since
+    /// the current token was just rejected upstream.
     async fn refresh_and_reconnect(&self) -> Result<()> {
-        // Force a refresh via the manager. `get_access_token` refreshes when
-        // near expiry; calling `refresh_token` directly forces it on a 401.
-        {
-            let guard = self.auth_manager.lock().await;
-            // Ignore an "already fresh" refresh error path: get_access_token
-            // below will still surface a real failure.
-            let _ = guard.refresh_token().await;
-        }
-        let new_upstream = Self::open_upstream(&self.upstream_url, &self.auth_manager, &self.server_name).await?;
+        let new_upstream = Self::open_upstream(&self.upstream_url, &self.auth, &self.server_name, true).await?;
         let mut guard = self.upstream.lock().await;
         *guard = new_upstream;
         Ok(())
@@ -266,6 +324,22 @@ impl McpProxy {
 /// Drive the proxy: serve the agent over stdio until the connection closes.
 pub async fn run(project_root: &Path, server_name: &str, url_override: Option<&str>) -> Result<()> {
     let proxy = McpProxy::connect(project_root, server_name, url_override).await?;
+    serve_until_closed(proxy, server_name).await
+}
+
+/// Drive the proxy for a broker-flow server: tokens come from `source`
+/// (resolved by the caller, typically the `animus-mcp-proxy` binary over the
+/// OAuth broker) instead of the keychain.
+pub async fn run_with_bearer_source(
+    server_name: &str,
+    upstream_url: &str,
+    source: Arc<dyn BearerTokenSource>,
+) -> Result<()> {
+    let proxy = McpProxy::connect_with_bearer_source(server_name, upstream_url, source).await?;
+    serve_until_closed(proxy, server_name).await
+}
+
+async fn serve_until_closed(proxy: McpProxy, server_name: &str) -> Result<()> {
     let running =
         proxy.serve(stdio()).await.with_context(|| format!("failed to serve stdio MCP proxy for `{server_name}`"))?;
     running.waiting().await.context("mcp proxy stdio service ended unexpectedly")?;

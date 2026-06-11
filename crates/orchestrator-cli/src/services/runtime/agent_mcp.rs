@@ -18,9 +18,9 @@
 //! The injection itself REUSES the workflow runner's machinery — fed the
 //! filtered, per-agent name set rather than the whole project map — so a
 //! trading agent gets the trading servers and a marketing agent gets the
-//! marketing servers, never a blanket set. OAuth `authorization_code`
-//! servers are rewritten to the local `animus-mcp-proxy` by that same
-//! reused machinery.
+//! marketing servers, never a blanket set. OAuth-protected servers (every
+//! flow) are rewritten to the local `animus-mcp-proxy` by that same reused
+//! machinery, so no resolved secret rides the contract.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -82,7 +82,7 @@ fn animus_cli_command() -> Option<String> {
 /// * any other name → the project's `mcp_servers` definition (workflow YAML
 ///   `mcp_servers` first, then project `.animus` config), injected via the
 ///   reused [`inject_named_mcp_servers`] machinery (which rewrites OAuth
-///   `authorization_code` servers to the `animus-mcp-proxy` command).
+///   servers — any flow — to the `animus-mcp-proxy` command).
 /// * a name that is neither `animus` nor defined anywhere → a clear error.
 ///
 /// Returns `Ok(None)` when the tool cannot speak MCP
@@ -181,7 +181,7 @@ pub(crate) fn assemble_agent_mcp_contract(
 
         // Reuse the workflow runner's name-keyed injection on the FILTERED
         // per-agent set. It looks each name up in workflow YAML then project
-        // config and rewrites OAuth `authorization_code` servers to the
+        // config and rewrites OAuth servers (any flow) to the
         // `animus-mcp-proxy` stdio bridge.
         inject_named_mcp_servers(&mut runtime_contract, &project_root_str, &ctx, ADHOC_PHASE_LABEL, &named_servers)?;
     }
@@ -225,10 +225,11 @@ const ANIMUS_MANAGED_MARKER: &str = "_animusManagedServers";
 /// `command`/`args` entry; each `additional_servers` entry is copied
 /// through, EXCEPT that any resolved `Authorization`/auth header is dropped:
 /// `.mcp.json` lives in the run cwd (often inside the repo) and persisting a
-/// live bearer token to disk would leak the secret. OAuth
-/// `authorization_code` servers are unaffected — they are already rewritten
-/// to a headerless `animus-mcp-proxy` stdio entry that pulls the live token
-/// from the keychain at connect time.
+/// live bearer token to disk would leak the secret. OAuth servers (every
+/// flow — `authorization_code`, `manual_bearer`, `client_credentials`,
+/// `refresh_token`) are unaffected — the contract assembler already rewrote
+/// them to a headerless `animus-mcp-proxy` stdio entry that resolves the
+/// live token itself at connect time, so the strip here is defense in depth.
 fn contract_mcp_servers_for_mcp_json(runtime_contract: &Value) -> serde_json::Map<String, Value> {
     let mut servers = serde_json::Map::new();
 
@@ -271,6 +272,47 @@ fn contract_mcp_servers_for_mcp_json(runtime_contract: &Value) -> serde_json::Ma
     servers
 }
 
+/// The resolved per-agent MCP server map in the plugin-protocol wire shape
+/// the provider receives via `extras.mcp_servers` (forwarded verbatim by
+/// `PluginSessionBackend::build_run_params` as `AgentRunRequest.mcp_servers`).
+///
+/// This is the SAME map [`materialize_mcp_json`] writes — built from the
+/// same [`contract_mcp_servers_for_mcp_json`] resolution, including its
+/// defense-in-depth secret-stripping (OAuth servers arrive already rewritten
+/// to the `animus-mcp-proxy` stdio entry, so no resolved secret rides any
+/// channel; a non-OAuth server whose entry would need a literal secret is
+/// omitted here too) — so the two channels can never disagree about which
+/// servers an agent sees. The only difference is the canonical wire field
+/// for remote servers: the runtime contract carries `transport`, while the
+/// wire shape keys remote entries by `type` (`"http"` | `"sse"`); stdio
+/// entries are keyed by `command`/`args`/`env` with no transport marker.
+pub(crate) fn contract_mcp_servers_for_wire(runtime_contract: &Value) -> serde_json::Map<String, Value> {
+    let mut servers = contract_mcp_servers_for_mcp_json(runtime_contract);
+    for entry in servers.values_mut() {
+        canonicalize_wire_entry(entry);
+    }
+    servers
+}
+
+/// Convert one resolved server entry from the runtime-contract shape to the
+/// canonical wire shape: remote entries (`url` present) get `type` set from
+/// `transport` (defaulting to `"http"`); the `transport` key itself is
+/// dropped everywhere (stdio entries are identified by `command`).
+fn canonicalize_wire_entry(entry: &mut Value) {
+    let Some(obj) = entry.as_object_mut() else {
+        return;
+    };
+    let transport = obj.remove("transport").and_then(|value| value.as_str().map(ToOwned::to_owned));
+    let is_remote = obj.get("url").and_then(Value::as_str).is_some_and(|url| !url.trim().is_empty());
+    if is_remote {
+        let kind = match transport.as_deref() {
+            Some("sse") => "sse",
+            _ => "http",
+        };
+        obj.insert("type".to_string(), Value::String(kind.to_string()));
+    }
+}
+
 /// Drop a vacuous `command: ""` / `args: []` from an HTTP MCP entry. The
 /// runtime-contract additional-server shape always carries `command`/`args`
 /// (empty for HTTP servers), but a claude-style `.mcp.json` selects stdio
@@ -297,16 +339,16 @@ fn normalize_http_entry(mut entry: Value) -> Value {
 
 /// Strip resolved secret material from an MCP server entry before it is
 /// written to the cwd-local `.mcp.json`. That file lives in the run cwd
-/// (often inside — and committable to — the user's repo), so a resolved
-/// `Authorization: Bearer <token>` (from the OAuth broker for
-/// `manual_bearer` / `client_credentials` / `refresh_token` flows) is
-/// dropped, and `env` values are kept ONLY when they are still unresolved
-/// `${VAR}` placeholders (which the provider CLI expands itself at launch —
-/// no secret lands on disk). Any literal `env` value is dropped, since it
-/// may be a resolved credential. The `authorization_code` flow is
-/// unaffected: it is already rewritten to a headerless, env-free
-/// `animus-mcp-proxy` stdio entry that pulls the live token from the
-/// keychain at connect time.
+/// (often inside — and committable to — the user's repo), so any resolved
+/// `Authorization: Bearer <token>` is dropped, and `env` values are kept
+/// ONLY when they are still unresolved `${VAR}` placeholders (which the
+/// provider CLI expands itself at launch — no secret lands on disk). Any
+/// literal `env` value is dropped, since it may be a resolved credential.
+/// OAuth flows are unaffected: every flow (`authorization_code`,
+/// `manual_bearer`, `client_credentials`, `refresh_token`) is already
+/// rewritten at contract assembly to a headerless `animus-mcp-proxy` stdio
+/// entry that resolves the live token itself at connect time, so this strip
+/// is defense in depth against stray resolved secrets.
 ///
 /// Returns `(sanitized_entry, stripped_secret)`. `stripped_secret` is `true`
 /// when a literal `env` value or an `Authorization` header was removed — the
@@ -1107,10 +1149,11 @@ mod tests {
     }
 
     #[test]
-    fn materialize_mcp_json_strips_resolved_authorization_header() {
-        // A manual-bearer HTTP server resolves an Authorization header into
-        // the contract; that live token must NOT be persisted to the
-        // cwd-local .mcp.json (which may sit inside the repo).
+    fn materialize_mcp_json_proxies_manual_bearer_server_without_the_token() {
+        // A manual-bearer HTTP server is rewritten to the local
+        // animus-mcp-proxy stdio bridge: the server IS materialized to the
+        // cwd-local .mcp.json (which may sit inside the repo), but only as
+        // the proxy entry — the live token must never reach disk.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().to_path_buf();
         let bearer_env = "ANIMUS_TEST_ADHOC_BEARER";
@@ -1144,13 +1187,8 @@ mod tests {
         )
         .unwrap()
         .expect("claude supports MCP");
-        // The contract itself carries the bearer header (workflow-runner
-        // path needs it); the materialized file must NOT.
         materialize_mcp_json(&root, &contract).unwrap();
-        // The bearer server requires a secret we refuse to persist, so it is
-        // omitted entirely; if no file was written at all that already proves
-        // the token never reached disk.
-        let on_disk = std::fs::read_to_string(root.join(".mcp.json")).unwrap_or_default();
+        let on_disk = std::fs::read_to_string(root.join(".mcp.json")).unwrap();
         std::env::remove_var(bearer_env);
         assert!(
             !on_disk.contains("tok-secret-123"),
@@ -1160,15 +1198,21 @@ mod tests {
             !on_disk.to_ascii_lowercase().contains("authorization"),
             "the Authorization header must never be persisted to .mcp.json; file: {on_disk}"
         );
-        // The server is omitted (not written incomplete) because it needs a
-        // stripped secret to function.
-        if !on_disk.is_empty() {
-            let parsed: Value = serde_json::from_str(&on_disk).unwrap();
-            assert!(
-                parsed.pointer("/mcpServers/trading").is_none(),
-                "a bearer-auth server must be omitted from .mcp.json, not written unauthenticated; file: {on_disk}"
-            );
-        }
+        // The server is materialized as the proxy stdio entry, not omitted
+        // and not written with the upstream URL it cannot authenticate to.
+        let parsed: Value = serde_json::from_str(&on_disk).unwrap();
+        let command = parsed
+            .pointer("/mcpServers/trading/command")
+            .and_then(Value::as_str)
+            .expect("manual_bearer server must be materialized as the proxy entry");
+        assert!(command.contains("animus-mcp-proxy"), "expected the proxy binary; got {command}");
+        let args: Vec<&str> = parsed
+            .pointer("/mcpServers/trading/args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert!(args.contains(&"--server") && args.contains(&"trading"), "args: {args:?}");
+        assert!(parsed.pointer("/mcpServers/trading/url").is_none(), "proxy entry carries no upstream url");
     }
 
     #[test]
@@ -1628,5 +1672,226 @@ mod tests {
         assert!(entry.get("url").is_none(), "proxy entry must not carry the upstream url");
         let command = entry.pointer("/command").and_then(Value::as_str).expect("proxy command");
         assert!(command.contains("animus-mcp-proxy"), "expected the proxy binary; got {command}");
+        // The proxy entry rides the wire channel unchanged (stdio shape, no
+        // transport/type marker) — proxying the broker flows must not alter
+        // the authorization_code treatment.
+        let wire = contract_mcp_servers_for_wire(&contract);
+        let linear = wire.get("linear").expect("auth_code proxy entry rides the wire");
+        assert!(
+            linear.get("command").and_then(Value::as_str).is_some_and(|c| c.contains("animus-mcp-proxy")),
+            "entry: {linear}"
+        );
+        assert!(linear.get("transport").is_none() && linear.get("type").is_none(), "entry: {linear}");
+    }
+
+    #[test]
+    fn wire_map_carries_stdio_animus_entry_without_transport_marker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &[],
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            false,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        let servers = contract_mcp_servers_for_wire(&contract);
+        let animus = servers.get("animus").expect("plain chat resolves the animus stdio server");
+        assert!(animus.get("command").and_then(Value::as_str).is_some(), "stdio entry keeps command; got {animus}");
+        let args: Vec<&str> = animus
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert!(args.contains(&"mcp") && args.contains(&"serve"), "args: {args:?}");
+        assert!(animus.get("transport").is_none(), "wire shape carries no transport key; got {animus}");
+        assert!(animus.get("type").is_none(), "stdio entries are keyed by command, not type; got {animus}");
+    }
+
+    #[test]
+    fn wire_map_keys_remote_servers_by_type_not_transport() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = project_with_http_servers(&tmp, &["trading"]);
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        let servers = contract_mcp_servers_for_wire(&contract);
+        let trading = servers.get("trading").expect("trading server resolved");
+        assert_eq!(trading.get("type").and_then(Value::as_str), Some("http"), "entry: {trading}");
+        assert_eq!(trading.get("url").and_then(Value::as_str), Some("https://example.com/mcp/trading"));
+        assert!(trading.get("transport").is_none(), "the contract's transport key must not leak; got {trading}");
+        assert!(trading.get("command").is_none(), "a remote entry carries no command; got {trading}");
+    }
+
+    #[test]
+    fn wire_map_preserves_sse_transport_as_type() {
+        let mut entry = serde_json::json!({ "transport": "sse", "url": "https://example.com/mcp/events" });
+        canonicalize_wire_entry(&mut entry);
+        assert_eq!(entry.get("type").and_then(Value::as_str), Some("sse"), "entry: {entry}");
+        assert!(entry.get("transport").is_none());
+    }
+
+    #[test]
+    fn wire_map_matches_the_mcp_json_resolved_set() {
+        // The wire channel must carry the SAME server set materialize_mcp_json
+        // writes — including the proxy rewrite of secret-bearing entries — so
+        // the two channels can never disagree.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let bearer_env = "ANIMUS_TEST_WIRE_BEARER";
+        std::env::set_var(bearer_env, "tok-wire-secret");
+        let mut config = protocol::Config::load_or_default(&root.to_string_lossy()).unwrap();
+        config.mcp_servers.insert(
+            "trading".to_string(),
+            protocol::ProjectMcpServerEntry {
+                command: String::new(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                assign_to: Vec::new(),
+                transport: Some("http".to_string()),
+                url: Some("https://trading.example.com/mcp".to_string()),
+                oauth: Some(serde_json::json!({ "flow": "manual_bearer", "bearer_env": bearer_env })),
+            },
+        );
+        config.mcp_servers.insert(
+            "analytics".to_string(),
+            protocol::ProjectMcpServerEntry {
+                command: String::new(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                assign_to: Vec::new(),
+                transport: Some("http".to_string()),
+                url: Some("https://analytics.example.com/mcp".to_string()),
+                oauth: None,
+            },
+        );
+        config.save(&root.to_string_lossy()).unwrap();
+        let root = root.canonicalize().unwrap_or(root);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["trading", "analytics"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        std::env::remove_var(bearer_env);
+
+        let wire = contract_mcp_servers_for_wire(&contract);
+        let json_servers = contract_mcp_servers_for_mcp_json(&contract);
+        let json_set: Vec<&String> = json_servers.keys().collect();
+        let wire_set: Vec<&String> = wire.keys().collect();
+        assert_eq!(wire_set, json_set, "wire and .mcp.json channels must resolve the same server set");
+        assert!(wire.contains_key("analytics"), "the plain http server is carried; got {wire_set:?}");
+        // The manual_bearer server is carried as the proxy stdio entry —
+        // never omitted, never with the resolved token.
+        let trading = wire.get("trading").expect("a secret-bearing server rides the wire as the proxy entry");
+        let command = trading.get("command").and_then(Value::as_str).expect("proxy command");
+        assert!(command.contains("animus-mcp-proxy"), "expected the proxy binary; got {command}");
+        assert!(trading.get("url").is_none(), "proxy entry carries no upstream url; got {trading}");
+        assert!(trading.get("headers").is_none(), "proxy entry carries no headers; got {trading}");
+        let serialized = serde_json::to_string(&wire).unwrap();
+        assert!(!serialized.contains("tok-wire-secret"), "no resolved secret may ride the wire map: {serialized}");
+        let serialized_json = serde_json::to_string(&json_servers).unwrap();
+        assert!(
+            !serialized_json.contains("tok-wire-secret"),
+            "no resolved secret may reach .mcp.json: {serialized_json}"
+        );
+    }
+
+    #[test]
+    fn client_credentials_server_is_proxied_on_both_channels() {
+        // client_credentials needs a token-endpoint POST to resolve; the
+        // proxy rewrite means contract assembly performs NO resolution (this
+        // test would otherwise need a live token endpoint) and the client
+        // secret env value can never appear in either channel.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().to_path_buf();
+        let secret_env = "ANIMUS_TEST_WIRE_CC_SECRET";
+        std::env::set_var(secret_env, "cc-secret-789");
+        let mut config = protocol::Config::load_or_default(&root.to_string_lossy()).unwrap();
+        config.mcp_servers.insert(
+            "billing".to_string(),
+            protocol::ProjectMcpServerEntry {
+                command: String::new(),
+                args: Vec::new(),
+                env: std::collections::BTreeMap::new(),
+                assign_to: Vec::new(),
+                transport: Some("http".to_string()),
+                url: Some("https://billing.example.com/mcp".to_string()),
+                oauth: Some(serde_json::json!({
+                    "flow": "client_credentials",
+                    "token_url": "https://auth.example.com/token",
+                    "client_id_env": "ANIMUS_TEST_WIRE_CC_ID",
+                    "client_secret_env": secret_env,
+                })),
+            },
+        );
+        config.save(&root.to_string_lossy()).unwrap();
+        let root = root.canonicalize().unwrap_or(root);
+
+        let contract = assemble_agent_mcp_contract(
+            &root,
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["billing"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        std::env::remove_var(secret_env);
+
+        let wire = contract_mcp_servers_for_wire(&contract);
+        let billing = wire.get("billing").expect("client_credentials server rides the wire as the proxy entry");
+        let command = billing.get("command").and_then(Value::as_str).expect("proxy command");
+        assert!(command.contains("animus-mcp-proxy"), "expected the proxy binary; got {command}");
+        let args: Vec<&str> = billing
+            .get("args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert!(args.contains(&"--server") && args.contains(&"billing"), "args: {args:?}");
+
+        materialize_mcp_json(&root, &contract).unwrap();
+        let on_disk = std::fs::read_to_string(root.join(".mcp.json")).unwrap();
+        let parsed: Value = serde_json::from_str(&on_disk).unwrap();
+        assert!(
+            parsed
+                .pointer("/mcpServers/billing/command")
+                .and_then(Value::as_str)
+                .is_some_and(|c| c.contains("animus-mcp-proxy")),
+            "client_credentials server must be materialized as the proxy entry; file: {on_disk}"
+        );
+        for serialized in [serde_json::to_string(&wire).unwrap(), serde_json::to_string(&contract).unwrap(), on_disk] {
+            assert!(
+                !serialized.contains("cc-secret-789"),
+                "the client secret must never appear in any channel: {serialized}"
+            );
+        }
     }
 }
