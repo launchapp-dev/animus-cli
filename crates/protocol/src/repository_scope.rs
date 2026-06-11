@@ -7,6 +7,7 @@ pub fn scoped_state_root(project_root: &Path) -> Option<PathBuf> {
     let scope_dir = ao_root.join(repository_scope_for_path(project_root));
 
     if scope_dir.exists() {
+        reclaim_scope_marker_if_foreign(&scope_dir, project_root);
         return Some(scope_dir);
     }
 
@@ -26,6 +27,38 @@ pub fn scoped_state_root(project_root: &Path) -> Option<PathBuf> {
     }
 
     Some(scope_dir)
+}
+
+// The scope dir's NAME is the hash of the CURRENT caller's canonical path, so
+// the caller holds the stronger claim on it. If the `.project-root` marker
+// points at a different live path (a sibling clone reclaimed this scope while
+// our path was unreachable, e.g. its volume was unmounted), reclaim the marker
+// back and warn loudly. A marker ping-pong between two live clones is
+// detectable in logs; silently sharing workflow.db, runs, and worktrees across
+// clones is not.
+fn reclaim_scope_marker_if_foreign(scope_dir: &Path, project_root: &Path) {
+    let marker_path = scope_dir.join(".project-root");
+    let Ok(recorded_raw) = std::fs::read_to_string(&marker_path) else {
+        persist_project_root_marker(scope_dir, project_root);
+        return;
+    };
+    let canonical = project_root.canonicalize().unwrap_or_else(|_| project_root.to_path_buf());
+    let recorded = Path::new(recorded_raw.trim());
+    match recorded.canonicalize() {
+        Ok(recorded_canonical) if paths_refer_to_same_file(&recorded_canonical, &canonical) => {}
+        Ok(recorded_canonical) => {
+            tracing::warn!(
+                scope_dir = %scope_dir.display(),
+                recorded_root = %recorded_canonical.display(),
+                current_root = %canonical.display(),
+                "scope marker points at a different live clone; reclaiming the scope for the current project root"
+            );
+            persist_project_root_marker(scope_dir, project_root);
+        }
+        Err(_) => {
+            persist_project_root_marker(scope_dir, project_root);
+        }
+    }
 }
 
 fn persist_project_root_marker(scope_dir: &Path, project_root: &Path) {
@@ -75,9 +108,11 @@ fn find_existing_scope_by_origin(ao_root: &Path, project_root: &Path) -> Option<
         //
         // Adopting a same-origin scope is still allowed when:
         //   * no `.project-root` marker exists (legacy/unmigrated scope), or
-        //   * the recorded path no longer canonicalizes (the user moved the
-        //     repo on disk and we want the historical scope to remain
-        //     reachable from the new path).
+        //   * the recorded path no longer canonicalizes because the repo was
+        //     moved or deleted (the historical scope should remain reachable
+        //     from the new path) — but NOT when the recorded path merely sits
+        //     on an unmounted volume; see
+        //     `recorded_path_is_transiently_unavailable`.
         let project_root_file = scope_dir.join(".project-root");
         match std::fs::read_to_string(&project_root_file) {
             Ok(existing_root) => {
@@ -96,8 +131,16 @@ fn find_existing_scope_by_origin(ao_root: &Path, project_root: &Path) -> Option<
                         continue;
                     }
                     Err(_) => {
-                        // Recorded path no longer exists — assume the user
-                        // moved the repo and reclaim the scope.
+                        // Recorded path no longer canonicalizes. That happens
+                        // both when the repo was genuinely moved/deleted AND
+                        // when the recorded path sits on an unmounted volume.
+                        // Only adopt in the former case — adopting while a
+                        // sibling clone's volume is merely offline would steal
+                        // its scope and permanently cross-wire state between
+                        // the two clones.
+                        if recorded_path_is_transiently_unavailable(recorded) {
+                            continue;
+                        }
                         return Some(scope_dir);
                     }
                 }
@@ -109,6 +152,65 @@ fn find_existing_scope_by_origin(ao_root: &Path, project_root: &Path) -> Option<
         }
     }
     None
+}
+
+// A recorded path that fails to canonicalize is either gone for good (the
+// repo was moved or deleted — safe to adopt its scope) or only temporarily
+// unreachable (its volume is unmounted — adopting would corrupt the absent
+// clone's state). The filesystem cannot tell us which, so we use a mount-shape
+// heuristic:
+//
+//   * Walk up the recorded path's ancestors to the first one that exists. If
+//     that ancestor is `/` or `/Volumes`, the entire mount point is missing —
+//     treat the path as transiently unavailable and skip adoption. If a
+//     deeper ancestor exists (the parent chain is present but the leaf is
+//     gone), the volume is mounted and the repo itself disappeared — treat it
+//     as moved.
+//   * Independently, a recorded path under `/Volumes/<name>/` or `/mnt/<name>/`
+//     whose volume root does not exist is treated as transiently unavailable,
+//     covering Linux-style mounts where `/mnt` itself always exists.
+//   * If no ancestor exists at all — impossible on Unix where `/` always
+//     exists, but the case on Windows for an offline drive letter (`D:\repo`)
+//     or a disconnected UNC share — an absolute path is treated as
+//     transiently unavailable.
+//
+// The cost of guessing wrong is asymmetric: skipping adoption for a truly
+// moved repo just creates a fresh scope (recoverable; the old scope stays on
+// disk), while adopting an unmounted clone's scope silently shares workflow
+// state across clones with no way back.
+fn recorded_path_is_transiently_unavailable(recorded: &Path) -> bool {
+    if let Some(volume_root) = mount_volume_root(recorded) {
+        if !volume_root.exists() {
+            return true;
+        }
+    }
+
+    let mut ancestor = recorded.parent();
+    while let Some(current) = ancestor {
+        if current.exists() {
+            return current == Path::new("/") || current == Path::new("/Volumes");
+        }
+        ancestor = current.parent();
+    }
+    recorded.is_absolute()
+}
+
+fn mount_volume_root(path: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let mut components = path.components();
+    if components.next()? != Component::RootDir {
+        return None;
+    }
+    let Component::Normal(mount_parent) = components.next()? else {
+        return None;
+    };
+    if mount_parent != "Volumes" && mount_parent != "mnt" {
+        return None;
+    }
+    let Component::Normal(volume_name) = components.next()? else {
+        return None;
+    };
+    Some(Path::new("/").join(mount_parent).join(volume_name))
 }
 
 fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
@@ -398,6 +500,152 @@ mod tests {
         let marker = std::fs::read_to_string(legacy_scope.join(".project-root")).expect("marker");
         let canonical_new = new_clone.canonicalize().expect("canon");
         assert_eq!(marker.trim(), canonical_new.to_string_lossy());
+    }
+
+    #[test]
+    fn recorded_path_transience_distinguishes_missing_mount_from_missing_leaf() {
+        assert!(recorded_path_is_transiently_unavailable(Path::new("/Volumes/animus-no-such-volume-1f2e3d/repo")));
+        assert!(recorded_path_is_transiently_unavailable(Path::new("/mnt/animus-no-such-volume-1f2e3d/repo")));
+        // Repo mounted directly at the volume root.
+        assert!(recorded_path_is_transiently_unavailable(Path::new("/mnt/animus-no-such-volume-1f2e3d")));
+        assert!(recorded_path_is_transiently_unavailable(Path::new("/animus-no-such-root-1f2e3d/nested/repo")));
+
+        // Parent chain present, leaf gone → the repo was moved or deleted.
+        let temp = tempdir().expect("tempdir");
+        let leaf_gone = temp.path().join("removed-leaf");
+        assert!(!recorded_path_is_transiently_unavailable(&leaf_gone));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_state_root_skips_adoption_when_recorded_path_on_absent_mount() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let bin = temp.path().join("bin");
+        let new_clone = temp.path().join("home-clone");
+        std::fs::create_dir_all(home.join(".animus")).expect("ao root");
+        std::fs::create_dir_all(&new_clone).expect("new clone");
+        std::fs::create_dir_all(&bin).expect("bin dir");
+
+        let git_script = bin.join("git");
+        std::fs::write(&git_script, "#!/bin/sh\necho 'git@github.com:example/unmounted-repo.git'\n")
+            .expect("write fake git");
+        let mut perms = std::fs::metadata(&git_script).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&git_script, perms).expect("set perms");
+
+        // Pre-existing scope owned by a clone on a volume that is not mounted.
+        let unmounted_root = "/Volumes/animus-test-absent-volume-9a8b7c/repo";
+        let offline_scope = home.join(".animus").join("offline-scope-bbbbbbbbbbbb");
+        std::fs::create_dir_all(&offline_scope).expect("offline scope");
+        std::fs::write(offline_scope.join(".git-origin"), "git@github.com:example/unmounted-repo.git\n")
+            .expect("write origin");
+        std::fs::write(offline_scope.join(".project-root"), format!("{unmounted_root}\n")).expect("write project-root");
+
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
+        let _path_guard = EnvVarGuard::set("PATH", Some(bin.to_string_lossy().as_ref()));
+
+        let resolved = scoped_state_root(&new_clone).expect("scope");
+        let expected = home.join(".animus").join(repository_scope_for_path(&new_clone));
+        assert_eq!(resolved, expected, "clone must not adopt a scope whose owner is merely unmounted");
+        assert_ne!(resolved, offline_scope);
+
+        // The offline clone's marker must survive untouched for remount.
+        let marker = std::fs::read_to_string(offline_scope.join(".project-root")).expect("marker");
+        assert_eq!(marker.trim(), unmounted_root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_state_root_fast_path_reclaims_marker_pointing_at_other_live_clone() {
+        use std::io::Write;
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl Write for CaptureWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("capture lock").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+            type Writer = CaptureWriter;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let other_clone = temp.path().join("clones").join("external");
+        let our_clone = temp.path().join("clones").join("local");
+        std::fs::create_dir_all(home.join(".animus")).expect("ao root");
+        std::fs::create_dir_all(&other_clone).expect("other clone");
+        std::fs::create_dir_all(&our_clone).expect("our clone");
+
+        // Our hash-derived scope exists but its marker was rewritten by a
+        // sibling clone while our path was unreachable.
+        let scope_dir = home.join(".animus").join(repository_scope_for_path(&our_clone));
+        std::fs::create_dir_all(&scope_dir).expect("scope dir");
+        let canonical_other = other_clone.canonicalize().expect("canon other");
+        std::fs::write(scope_dir.join(".project-root"), format!("{}\n", canonical_other.display()))
+            .expect("write foreign marker");
+
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
+
+        let capture = CaptureWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(capture.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+
+        let resolved = tracing::subscriber::with_default(subscriber, || scoped_state_root(&our_clone).expect("scope"));
+        assert_eq!(resolved, scope_dir);
+
+        // The marker must be reclaimed for the caller whose path hashes to
+        // this scope dir's name.
+        let marker = std::fs::read_to_string(scope_dir.join(".project-root")).expect("marker");
+        let canonical_ours = our_clone.canonicalize().expect("canon ours");
+        assert_eq!(marker.trim(), canonical_ours.to_string_lossy());
+
+        let logs = String::from_utf8(capture.0.lock().expect("capture lock").clone()).expect("utf8 logs");
+        assert!(logs.contains("reclaiming the scope"), "expected a warn about reclaiming, got: {logs}");
+        assert!(logs.contains(canonical_other.to_string_lossy().as_ref()), "warn should name the recorded path");
+        assert!(logs.contains(canonical_ours.to_string_lossy().as_ref()), "warn should name the current path");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scoped_state_root_fast_path_keeps_matching_marker_untouched() {
+        let temp = tempdir().expect("tempdir");
+        let home = temp.path().join("home");
+        let repo = temp.path().join("repo");
+        std::fs::create_dir_all(home.join(".animus")).expect("ao root");
+        std::fs::create_dir_all(&repo).expect("repo");
+
+        let scope_dir = home.join(".animus").join(repository_scope_for_path(&repo));
+        std::fs::create_dir_all(&scope_dir).expect("scope dir");
+        let canonical = repo.canonicalize().expect("canon");
+        let marker_body = format!("{}\n", canonical.display());
+        std::fs::write(scope_dir.join(".project-root"), &marker_body).expect("write marker");
+
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
+
+        let resolved = scoped_state_root(&repo).expect("scope");
+        assert_eq!(resolved, scope_dir);
+        let marker = std::fs::read_to_string(scope_dir.join(".project-root")).expect("marker");
+        assert_eq!(marker, marker_body);
     }
 
     proptest! {
