@@ -49,11 +49,57 @@ struct PackInspectOutput {
 }
 
 #[derive(Debug, Serialize)]
-struct PackInstallOutput {
-    pack_id: String,
-    version: String,
-    installed_root: String,
-    activated: bool,
+pub(crate) struct PackInstallOutput {
+    pub(crate) pack_id: String,
+    pub(crate) version: String,
+    pub(crate) installed_root: String,
+    pub(crate) activated: bool,
+}
+
+/// Install a pack from a local source directory into
+/// `~/.animus/packs/<id>/<version>/`, optionally activating it for the
+/// project. This is the shared install path used by `animus pack install`
+/// and the `animus init` recommended-pack installer.
+pub(crate) fn install_pack_from_source_root(
+    project_root: &Path,
+    source_root: &Path,
+    activate: bool,
+    force: bool,
+) -> Result<PackInstallOutput> {
+    let loaded = load_pack_manifest(source_root)?;
+    let target_root = machine_installed_packs_dir().join(&loaded.manifest.id).join(&loaded.manifest.version);
+
+    if target_root.exists() {
+        if !force {
+            return Err(anyhow!(
+                "pack '{}' version '{}' already exists at {} (use --force to overwrite)",
+                loaded.manifest.id,
+                loaded.manifest.version,
+                target_root.display()
+            ));
+        }
+        fs::remove_dir_all(&target_root).with_context(|| format!("failed to remove {}", target_root.display()))?;
+    }
+
+    copy_dir_recursive(source_root, &target_root)?;
+
+    if activate {
+        let mut state = load_pack_selection_state(project_root)?;
+        state.upsert(PackSelectionEntry {
+            pack_id: loaded.manifest.id.clone(),
+            version: Some(format!("={}", loaded.manifest.version)),
+            source: Some(PackSelectionSource::Installed),
+            enabled: true,
+        })?;
+        save_pack_selection_state(project_root, &state)?;
+    }
+
+    Ok(PackInstallOutput {
+        pack_id: loaded.manifest.id,
+        version: loaded.manifest.version,
+        installed_root: target_root.display().to_string(),
+        activated: activate,
+    })
 }
 
 fn parse_source(raw: Option<&str>) -> Result<Option<PackRegistrySource>> {
@@ -228,41 +274,7 @@ pub(crate) async fn handle_pack(command: PackCommand, project_root: &str, json: 
             } else {
                 return Err(invalid_input_error("either --path or --name is required for pack install"));
             };
-            let loaded = load_pack_manifest(&source_root)?;
-            let target_root = machine_installed_packs_dir().join(&loaded.manifest.id).join(&loaded.manifest.version);
-
-            if target_root.exists() {
-                if !args.force {
-                    return Err(anyhow!(
-                        "pack '{}' version '{}' already exists at {} (use --force to overwrite)",
-                        loaded.manifest.id,
-                        loaded.manifest.version,
-                        target_root.display()
-                    ));
-                }
-                fs::remove_dir_all(&target_root)
-                    .with_context(|| format!("failed to remove {}", target_root.display()))?;
-            }
-
-            copy_dir_recursive(&source_root, &target_root)?;
-
-            if args.activate {
-                let mut state = load_pack_selection_state(project_root)?;
-                state.upsert(PackSelectionEntry {
-                    pack_id: loaded.manifest.id.clone(),
-                    version: Some(format!("={}", loaded.manifest.version)),
-                    source: Some(PackSelectionSource::Installed),
-                    enabled: true,
-                })?;
-                save_pack_selection_state(project_root, &state)?;
-            }
-
-            let output = PackInstallOutput {
-                pack_id: loaded.manifest.id,
-                version: loaded.manifest.version,
-                installed_root: target_root.display().to_string(),
-                activated: args.activate,
-            };
+            let output = install_pack_from_source_root(project_root, &source_root, args.activate, args.force)?;
             if json {
                 return print_value(output, true);
             }

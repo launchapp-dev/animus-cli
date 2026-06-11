@@ -648,6 +648,7 @@ Initialize an Animus project from a template registry or a local template direct
 | `--update-registry` | Fetch the latest commit from the template registry and re-pin the local cache before loading the template (v0.4.0 supply-chain hardening — by default the registry uses the pinned cache) |
 | `--walkthrough` | Run the onboarding walkthrough: detect CLIs, install default plugins, and copy the bundled hello-world workflow |
 | `--no-install` | Walkthrough only: skip `animus plugin install-defaults` |
+| `--install-packs` | Install and activate the recommended workflow packs (`animus.core-skills`, `animus.task`, `animus.requirement`, `animus.review`) from their pinned GitHub release tags in `default-install.json`. Works with both the walkthrough and the `--template`/`--path` flows. In the interactive walkthrough this is offered automatically (default yes); non-interactive runs must pass the flag explicitly |
 | `--no-template` | Walkthrough only: skip copying the hello-world workflow template into `.animus/workflows/` |
 | `--auto-start` | Walkthrough only: start the autonomous daemon after init completes |
 | `--walkthrough-template <NAME>` | Walkthrough only: choose the bundled workflow template. Current default is `hello-world` |
@@ -656,6 +657,21 @@ The template registry URL can be overridden globally via `ANIMUS_TEMPLATE_REGIST
 In `--json` mode, `animus init` also returns `recommended_install`, sourced from
 `crates/orchestrator-cli/config/default-install.json`, so automations can read the
 recommended pack and plugin set without scraping prose.
+
+Recommended pack installs are per-pack and never abort init: each pack reports
+`installed`, `already_installed`, or `failed` (with the manual
+`git clone ... && animus pack install --path ... --activate` recovery command).
+After a successful install, init prints the first runnable workflow command
+(`animus workflow run animus.task/standard --task-id ... --sync`). The
+`ANIMUS_INIT_PACK_SOURCE_DIR` env var overrides the GitHub clone with a local
+`<dir>/<pack-id>` source directory for offline installs and tests.
+
+The walkthrough also detects API keys held in environment variables
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...). When found, it suggests migrating
+them to the OS keychain (`animus secret set <KEY>`, or `animus secret
+import-env` for `.env` files — see `docs/reference/secrets.md`), and in
+interactive mode offers to store them now (default **no**; the keychain is
+never touched silently or in non-interactive runs).
 
 ### `animus plugin install`
 

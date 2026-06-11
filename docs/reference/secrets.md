@@ -76,6 +76,12 @@ animus secret import-env --file .env
 
 By default, KEYs that already have a value in the keychain are skipped; pass `--overwrite` to replace them. After importing, double-check with `animus secret list` and delete the source `.env` (or `.gitignore` it). The brief is: **the keychain is the source of truth; .env is migration shrapnel.**
 
+The `animus init` walkthrough also detects API keys held in environment
+variables (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...), prints the matching
+`animus secret set <KEY>` suggestion for each, and — in interactive mode only —
+offers to store them in the keychain right away (default no; the keychain is
+never written silently).
+
 ## Threat model
 
 What an attacker who reads your home directory CAN do:

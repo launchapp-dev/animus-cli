@@ -59,10 +59,11 @@ include:
 - `animus.requirement` for requirement planning and execution flows
 - `animus.review` for review, QA, and command-phase runtime overlays
 
-`animus init` does not materialize these packs automatically. It surfaces the
-recommended pack/plugin set from
-`crates/orchestrator-cli/config/default-install.json`, and the onboarding
-walkthrough installs default plugins separately via
+`animus init` can install these packs from their pinned GitHub release tags in
+`crates/orchestrator-cli/config/default-install.json`: the interactive
+walkthrough offers the install (default yes), and non-interactive runs opt in
+with `animus init ... --install-packs`. The onboarding walkthrough installs
+default plugins separately via
 `animus plugin install-defaults --include-subjects --include-transports`.
 
 These packs can contribute:

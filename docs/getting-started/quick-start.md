@@ -11,8 +11,20 @@ cd /path/to/your/project
 animus init --walkthrough
 ```
 
-The walkthrough can install default plugins, copy a starter workflow into
-`.animus/workflows/`, and optionally start the daemon.
+The walkthrough can install default plugins, install the recommended workflow
+packs (`animus.core-skills`, `animus.task`, `animus.requirement`,
+`animus.review` — offered with default yes, so the documented workflows are
+runnable right after init), copy a starter workflow into `.animus/workflows/`,
+and optionally start the daemon. If it detects API keys in environment
+variables, it suggests `animus secret set <KEY>` to move them into the OS
+keychain (see [secrets](../reference/secrets.md)) and offers to store them now
+(default no — the keychain is never touched silently).
+
+In scripted runs, opt in to the pack install explicitly:
+
+```bash
+animus init --walkthrough --non-interactive --install-packs
+```
 
 ## 1. Install Plugins
 
@@ -26,11 +38,14 @@ animus daemon preflight
 ```bash
 cd /path/to/your/project
 animus doctor
-animus init --template task-queue --non-interactive
+animus init --template task-queue --non-interactive --install-packs
 ```
 
 This bootstraps `.animus/` in the repo and repo-scoped runtime state under
-`~/.animus/<repo-scope>/`.
+`~/.animus/<repo-scope>/`. The `--install-packs` flag also installs and
+activates the recommended workflow packs so `animus workflow run
+animus.task/standard ...` works immediately; drop it if you manage packs
+yourself.
 
 ## 3. Create Your First Task
 

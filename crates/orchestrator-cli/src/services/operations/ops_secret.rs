@@ -46,6 +46,24 @@ pub(crate) async fn handle_secret(
     }
 }
 
+/// Store one project-scoped secret in the OS keychain, with the same
+/// validation and audit logging as `animus secret set`. Used by the
+/// `animus init` walkthrough to migrate detected env-var API keys after
+/// an explicit user confirmation (never silently).
+pub(crate) fn store_project_secret(project_root: &Path, key: &str, value: &str) -> Result<()> {
+    validate_secret_key(key)?;
+    if value.is_empty() {
+        return Err(anyhow!("secret value for KEY {key:?} is empty; refusing to store"));
+    }
+    let store = build_store(project_root)?;
+    store.set(key, value)?;
+    let scoped_root = scoped_state_root(project_root)
+        .ok_or_else(|| anyhow!("could not resolve scoped state root for project at {}", project_root.display()))?;
+    let actor = resolve_actor(None);
+    log_secret_event(&scoped_root, &actor, AuditEventKind::PolicyOverride, "secret_set", key, None);
+    Ok(())
+}
+
 fn build_store(project_root: &Path) -> Result<Box<dyn SecretStore>> {
     let scoped_root = scoped_state_root(project_root)
         .ok_or_else(|| anyhow!("could not resolve scoped state root for project at {}", project_root.display()))?;
