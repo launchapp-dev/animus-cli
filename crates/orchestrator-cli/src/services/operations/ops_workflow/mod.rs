@@ -621,7 +621,8 @@ pub(crate) async fn handle_workflow(
         }
         WorkflowCommand::Prune(args) => {
             let filter = orchestrator_core::WorkflowRunPruneFilter {
-                older_than_days: args.older_than,
+                older_than_days: None,
+                older_than_secs: args.older_than,
                 keep_last: args.keep_last,
                 status: parse_workflow_status_opt(args.status.as_deref())?,
             };

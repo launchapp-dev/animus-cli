@@ -190,7 +190,7 @@ pub(crate) fn get_phase_outputs(
 
 pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
-        OutputCommand::Run(args) => {
+        OutputCommand::Read(args) => {
             let run_dir = resolve_run_dir_for_lookup(project_root, &args.run_id)?
                 .ok_or_else(|| not_found_error(format!("run directory not found for {}", args.run_id)))?;
             let events_path = run_dir.join("events.jsonl");

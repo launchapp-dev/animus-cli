@@ -241,7 +241,7 @@ pub(crate) async fn handle_pack(command: PackCommand, project_root: &str, json: 
                 .collect::<Vec<_>>();
             print_value(rows, json)
         }
-        PackCommand::Inspect(args) => print_value(inspect_pack(project_root, args)?, json),
+        PackCommand::Info(args) => print_value(inspect_pack(project_root, args)?, json),
         PackCommand::Search(args) => {
             let results =
                 search_marketplace_packs(args.query.as_deref(), args.category.as_deref(), args.registry.as_deref())?;

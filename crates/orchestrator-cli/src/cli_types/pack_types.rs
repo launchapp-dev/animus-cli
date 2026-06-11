@@ -6,8 +6,9 @@ pub(crate) enum PackCommand {
     Install(PackInstallArgs),
     /// List discovered packs and indicate which ones are active for this project.
     List(PackListArgs),
-    /// Inspect a discovered pack or a local pack manifest.
-    Inspect(PackInspectArgs),
+    /// Show details of a discovered pack or a local pack manifest.
+    #[command(alias = "inspect")]
+    Info(PackInspectArgs),
     /// Pin a pack version/source or toggle enablement for this project.
     Pin(PackPinArgs),
     /// Uninstall an installed pack: remove its materialized files and project selection entry.

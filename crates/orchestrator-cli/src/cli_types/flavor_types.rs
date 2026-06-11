@@ -7,7 +7,8 @@ pub(crate) enum FlavorCommand {
     /// Show the currently active flavor + drift report against the manifest.
     Current(FlavorCurrentArgs),
     /// Print a parsed flavor manifest (TOML or JSON via --json).
-    Describe(FlavorDescribeArgs),
+    #[command(alias = "describe")]
+    Info(FlavorDescribeArgs),
     /// Install the named flavor (equivalent to `animus plugin install-defaults
     /// --include-subjects --include-transports`).
     Install(FlavorInstallArgs),

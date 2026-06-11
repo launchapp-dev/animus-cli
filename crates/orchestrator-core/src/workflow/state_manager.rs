@@ -116,6 +116,10 @@ pub fn is_terminal_workflow_run_status(status: WorkflowStatus) -> bool {
 pub struct WorkflowRunPruneFilter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub older_than_days: Option<u64>,
+    /// Finer-grained age cutoff in seconds. Takes precedence over
+    /// `older_than_days` when both are set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub older_than_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub keep_last: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -145,8 +149,9 @@ pub struct WorkflowRunPruneCandidate {
 
 /// Pure candidate selection shared by the file-backed and in-memory hubs:
 /// newest-first ordering, `keep_last` retains the N most recent overall
-/// (not per workflow definition), then `older_than_days` restricts to runs
-/// whose completion (or start) time is older than the cutoff.
+/// (not per workflow definition), then the age cutoff (`older_than_secs`,
+/// falling back to `older_than_days`) restricts to runs whose completion
+/// (or start) time is older than the cutoff.
 pub fn select_workflow_prune_candidates(
     mut runs: Vec<WorkflowRunPruneCandidate>,
     filter: &WorkflowRunPruneFilter,
@@ -158,12 +163,14 @@ pub fn select_workflow_prune_candidates(
     }
     runs.sort_by(|a, b| b.effective_at.cmp(&a.effective_at).then_with(|| a.workflow_id.cmp(&b.workflow_id)));
     let mut candidates: Vec<WorkflowRunPruneCandidate> = runs.into_iter().skip(filter.keep_last.unwrap_or(0)).collect();
-    if let Some(days) = filter.older_than_days {
+    let older_than_secs =
+        filter.older_than_secs.or_else(|| filter.older_than_days.map(|days| days.saturating_mul(86_400)));
+    if let Some(secs) = older_than_secs {
         // Saturate oversized --older-than values to "older than representable
         // time" (prune nothing) instead of wrapping into a future cutoff.
-        let cutoff = i64::try_from(days)
+        let cutoff = i64::try_from(secs)
             .ok()
-            .and_then(Duration::try_days)
+            .and_then(Duration::try_seconds)
             .and_then(|age| now.checked_sub_signed(age))
             .unwrap_or(DateTime::<Utc>::MIN_UTC);
         candidates.retain(|run| run.effective_at < cutoff);

@@ -13,7 +13,8 @@ pub(crate) enum ProjectCommand {
     /// Create a new project entry.
     Create(ProjectCreateArgs),
     /// Mark a project as active.
-    Load(IdArgs),
+    #[command(alias = "load")]
+    SetActive(IdArgs),
     /// Rename a project.
     Rename(ProjectRenameArgs),
     /// Archive a project.

@@ -81,7 +81,7 @@ Operators can inspect and control which packs are active for a project:
 
 ```bash
 animus pack list
-animus pack inspect --pack-id animus.task
+animus pack info --pack-id animus.task
 animus pack install --path /tmp/vendor.pack --activate
 animus pack pin --pack-id animus.task --version =0.1.0
 ```
