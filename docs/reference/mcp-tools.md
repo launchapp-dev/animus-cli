@@ -67,8 +67,8 @@ pre-v0.4 resource names can still enumerate and read the same data.
 | `animus.agent.memory.clear` | Clear project-scoped agent memory | `agent`, `project_root` |
 | `animus.agent.message.send` | Send a message on a configured agent channel | `channel`, `from`, `to`, `text`, `workflow_id`, `phase_id`, `project_root` |
 | `animus.agent.message.list` | List project-scoped agent messages | `channel`, `agent`, `limit`, `project_root` |
-| `animus.agent.ask` | Ask a human a question and block until answered or timed out (structured timeout error tells the agent to proceed with its best judgment) | `agent_id`, `question`, `options[]`, `timeout_secs` (default 600, max 3600), `workflow_id`, `task_id` |
-| `animus.agent.request_approval` | Request human approval for a sensitive action and block until decided; the agent profile's `approval_policy` can auto-allow/auto-deny without escalating, and a timeout denies (fail closed) | `agent_id`, `action`, `tool_name`, `arguments`, `timeout_secs` (default 600, max 3600), `workflow_id`, `task_id` |
+| `animus.agent.ask` | Ask a human a question and wait for the answer. Block mode parks until answered or timed out (structured timeout error tells the agent to proceed with its best judgment); suspend mode returns `{ status: "pending", interaction_id, instruction }` immediately and pauses the bound workflow | `agent_id`, `question`, `options[]`, `timeout_secs` (default 600, max 3600), `workflow_id`, `task_id`, `wait` (`block` \| `suspend`) |
+| `animus.agent.request_approval` | Request human approval for a sensitive action and wait for the decision; the agent profile's `approval_policy` can auto-allow/auto-deny without escalating, and a block-mode timeout denies (fail closed). Suspend mode returns the pending payload after the policy check and pauses the bound workflow | `agent_id`, `action`, `tool_name`, `arguments`, `timeout_secs` (default 600, max 3600), `workflow_id`, `task_id`, `wait` (`block` \| `suspend`) |
 
 Unlike most tools on this server, the two blocking escalation tools accept no
 `project_root` override — they always operate on the server's own project
@@ -80,6 +80,19 @@ path) or the `ANIMUS_MCP_AGENT_ID` env var on the server process make the
 payload `agent_id` ignored, so an agent cannot claim a sibling profile with
 a looser policy. Without a pin, the payload `agent_id` selects the policy
 profile — pin the identity wherever the host knows it.
+
+The workflow context can be pinned the same way: `animus mcp serve
+--workflow-id <ID>` (or `ANIMUS_MCP_WORKFLOW_ID` on the server process)
+binds escalations to that workflow and overrides the payload `workflow_id`.
+A workflow pin also flips the default `wait` mode from `block` to `suspend`:
+the tool records the pending interaction, pauses the workflow via the
+service API, stamps the interaction id into the phase session checkpoint,
+and returns immediately with an `instruction` telling the agent to summarize
+its in-progress state and end the turn. The payload may downgrade
+suspend→block; a block→suspend request on an unpinned server is ignored
+with a warning (there is no workflow to resume). Answering the interaction
+resumes the suspended workflow with the decision as feedback (see
+`animus.interactions.answer` below).
 
 ---
 
@@ -98,7 +111,7 @@ approval gate stays human-only.
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `animus.interactions.list` | List pending interactions (set `all` to include answered/expired) | `all`, `agent_id`, `limit`, `project_root` |
-| `animus.interactions.answer` | Answer a question with `text`, or an approval with `decision` (`allow`/`deny`) plus optional `message`; unblocks the parked agent | `id`, `text`, `decision`, `message`, `answered_by`, `project_root` |
+| `animus.interactions.answer` | Answer a question with `text`, or an approval with `decision` (`allow`/`deny`) plus optional `message`; unblocks the parked agent. When the record was created by a suspend-mode escalation (it carries the pinned `workflow_id`) and that workflow is suspended, the answer triggers the detached-runner resume with the decision as feedback; a resume failure never fails the answer and the response carries a `workflow_resume.guidance` command (`animus workflow resume <id>`) instead | `id`, `text`, `decision`, `message`, `answered_by`, `project_root` |
 
 ---
 

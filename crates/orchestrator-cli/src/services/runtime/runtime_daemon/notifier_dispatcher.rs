@@ -23,6 +23,40 @@ pub struct NotifierLifecycleEvent {
     pub data: Value,
 }
 
+/// Interaction lifecycle events the daemon fans out to notifier plugins.
+/// They are written into the daemon event log by the MCP serve / CLI answer
+/// processes (see `runtime_agent::interactions::emit_interaction_event`),
+/// not by the daemon itself, so a per-tick watcher tails the log for them.
+pub const INTERACTION_EVENT_TYPES: [&str; 3] = ["interaction_created", "interaction_answered", "interaction_expired"];
+
+/// Per-tick watcher that turns the daemon event log into a stream of fresh
+/// interaction events. The first scan primes the watcher with history and
+/// returns nothing — daemon start must not replay old interactions into
+/// notifiers; subsequent scans return only records not seen before. The
+/// daemon run host primes the watcher at construction so interactions
+/// created between daemon start and the first flush tick still dispatch.
+#[derive(Default)]
+pub struct InteractionEventWatcher {
+    seen: std::collections::HashSet<String>,
+    primed: bool,
+}
+
+impl InteractionEventWatcher {
+    pub fn unseen_interaction_events(&mut self, records: Vec<DaemonEventRecord>) -> Vec<DaemonEventRecord> {
+        let mut fresh = Vec::new();
+        for record in records {
+            if !INTERACTION_EVENT_TYPES.contains(&record.event_type.as_str()) {
+                continue;
+            }
+            if self.seen.insert(record.id.clone()) && self.primed {
+                fresh.push(record);
+            }
+        }
+        self.primed = true;
+        fresh
+    }
+}
+
 #[derive(Clone)]
 pub struct NotifierPluginDispatcher {
     project_root: PathBuf,
@@ -315,5 +349,51 @@ fn collect_env_refs(value: &Value, out: &mut std::collections::BTreeSet<String>)
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod interaction_event_watcher_tests {
+    use super::*;
+
+    fn record(id: &str, event_type: &str) -> DaemonEventRecord {
+        DaemonEventRecord {
+            schema: "animus.daemon.event.v1".to_string(),
+            id: id.to_string(),
+            seq: 1,
+            timestamp: "2026-06-11T00:00:00Z".to_string(),
+            event_type: event_type.to_string(),
+            project_root: Some("/tmp/project".to_string()),
+            data: json!({}),
+        }
+    }
+
+    #[test]
+    fn first_scan_primes_with_history_and_emits_nothing() {
+        let mut watcher = InteractionEventWatcher::default();
+        let fresh = watcher
+            .unseen_interaction_events(vec![record("a", "interaction_created"), record("b", "interaction_answered")]);
+        assert!(fresh.is_empty(), "priming scan must swallow history");
+    }
+
+    #[test]
+    fn later_scans_emit_only_new_interaction_events_exactly_once() {
+        let mut watcher = InteractionEventWatcher::default();
+        let _ = watcher.unseen_interaction_events(vec![record("a", "interaction_created")]);
+
+        let fresh = watcher.unseen_interaction_events(vec![
+            record("a", "interaction_created"),
+            record("b", "interaction_created"),
+            record("c", "interaction_answered"),
+            record("d", "interaction_expired"),
+            record("e", "health"),
+            record("f", "task-state-change"),
+        ]);
+        let ids: Vec<&str> = fresh.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["b", "c", "d"], "only fresh interaction_* events come back");
+
+        let again = watcher
+            .unseen_interaction_events(vec![record("b", "interaction_created"), record("c", "interaction_answered")]);
+        assert!(again.is_empty(), "already-dispatched events must not repeat");
     }
 }

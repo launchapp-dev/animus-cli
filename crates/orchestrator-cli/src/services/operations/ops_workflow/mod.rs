@@ -5,6 +5,7 @@ mod phases;
 mod prompt;
 
 pub(crate) use control_routing::build_workflow_routing;
+pub(crate) use phases::resume_workflow_with_runner;
 
 use std::path::Path;
 use std::sync::Arc;

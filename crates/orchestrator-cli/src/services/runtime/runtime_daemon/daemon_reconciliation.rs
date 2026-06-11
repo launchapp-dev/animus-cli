@@ -276,6 +276,52 @@ mod tests {
         let reloaded = hub.workflows().get(&workflow.id).await.expect("workflow should reload");
         assert_eq!(reloaded.status, WorkflowStatus::Cancelled);
     }
+
+    // Workflows suspended on a pending interaction sit in Paused with no
+    // live runner pid; the orphan reconciler must leave them alone (it only
+    // targets Running records) until the answer path resumes them.
+    #[tokio::test]
+    async fn paused_workflow_is_exempt_from_orphan_recovery() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        init_git_repo(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "suspended workflow".to_string(),
+                description: "paused exemption test".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task should be created");
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .await
+            .expect("workflow should start");
+        hub.workflows().pause(&workflow.id).await.expect("workflow should pause");
+
+        // Backdate started_at well past the orphan grace so only the Paused
+        // status shields it.
+        let manager = WorkflowStateManager::new(temp.path());
+        let mut stored = manager.load(&workflow.id).expect("workflow should load");
+        stored.started_at = chrono::Utc::now() - chrono::Duration::hours(2);
+        manager.save(&stored).expect("backdated workflow should save");
+
+        let recovered = recover_orphaned_running_workflows(hub.clone(), &project_root, &HashSet::new()).await;
+        assert_eq!(recovered, 0, "paused workflows must be exempt from orphan recovery");
+        let reloaded = hub.workflows().get(&workflow.id).await.expect("workflow should reload");
+        assert_eq!(reloaded.status, WorkflowStatus::Paused);
+    }
 }
 
 fn workflow_is_waiting_on_manual_phase(project_root: &str, workflow: &orchestrator_core::OrchestratorWorkflow) -> bool {

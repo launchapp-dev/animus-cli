@@ -43,7 +43,9 @@ pub(crate) async fn handle_agent(
         AgentCommand::Interactions { command } => match command {
             crate::AgentInteractionsCommand::List(args) => handle_agent_interactions_list(args, project_root, json),
             crate::AgentInteractionsCommand::Show(args) => handle_agent_interactions_show(args, project_root, json),
-            crate::AgentInteractionsCommand::Answer(args) => handle_agent_interactions_answer(args, project_root, json),
+            crate::AgentInteractionsCommand::Answer(args) => {
+                handle_agent_interactions_answer(args, project_root, json).await
+            }
         },
     }
 }

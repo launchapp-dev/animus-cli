@@ -1,5 +1,8 @@
 use super::*;
-use crate::services::runtime::runtime_agent::interactions::{answer_interaction_op, emit_interaction_event};
+use crate::services::runtime::runtime_agent::interactions::{
+    answer_interaction_op_with_resume, emit_interaction_event, pause_workflow_for_suspended_interaction,
+    resume_workflow_for_answered_interaction,
+};
 use animus_runtime_shared::{InteractionRecord, InteractionStatus};
 use orchestrator_config::agent_runtime_config::ApprovalPolicyDecision;
 use std::time::Duration;
@@ -13,6 +16,53 @@ const INTERACTION_POLL_INTERVAL: Duration = Duration::from_secs(1);
 /// payload `agent_id` is ignored so a spawned agent cannot claim a sibling
 /// profile whose `approval_policy` is more permissive.
 pub(crate) const ANIMUS_MCP_AGENT_ID_ENV: &str = "ANIMUS_MCP_AGENT_ID";
+
+/// When set on the MCP server process, pins the workflow context used by the
+/// blocking interaction tools (env fallback for `animus mcp serve
+/// --workflow-id`). A pinned workflow flips the default wait mode to
+/// "suspend" and overrides the payload `workflow_id`.
+pub(crate) const ANIMUS_MCP_WORKFLOW_ID_ENV: &str = "ANIMUS_MCP_WORKFLOW_ID";
+
+/// Returned with `status: "pending"` suspend responses so the agent knows how
+/// to end its turn; the session resumes with the answer via the workflow
+/// resume path.
+const SUSPEND_INSTRUCTION: &str = "This interaction is pending a human decision and the workflow has been \
+     suspended. Summarize your in-progress state (what you changed, what remains, any assumptions), then end \
+     your turn cleanly. The session resumes automatically once the interaction is answered.";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InteractionWaitMode {
+    Block,
+    Suspend,
+}
+
+// Wait-mode resolution: the default is "suspend" when the server is pinned
+// to a workflow (daemon phase runs) and "block" otherwise (ad-hoc
+// `animus agent run` / `animus chat`). The payload may downgrade
+// suspend -> block; block -> suspend is ignored with a warning because a
+// non-workflow run has nothing to resume.
+fn resolve_wait_mode(workflow_pinned: bool, requested: Option<&str>, tool_name: &str) -> InteractionWaitMode {
+    let default_mode = if workflow_pinned { InteractionWaitMode::Suspend } else { InteractionWaitMode::Block };
+    match requested.map(str::trim).filter(|value| !value.is_empty()) {
+        None => default_mode,
+        Some(value) if value.eq_ignore_ascii_case("block") => InteractionWaitMode::Block,
+        Some(value) if value.eq_ignore_ascii_case("suspend") => {
+            if workflow_pinned {
+                InteractionWaitMode::Suspend
+            } else {
+                tracing::warn!(
+                    tool = tool_name,
+                    "wait=\"suspend\" ignored: server is not pinned to a workflow (no --workflow-id / {ANIMUS_MCP_WORKFLOW_ID_ENV}); using block"
+                );
+                InteractionWaitMode::Block
+            }
+        }
+        Some(other) => {
+            tracing::warn!(tool = tool_name, wait = other, "unknown wait mode; using the default");
+            default_mode
+        }
+    }
+}
 
 // The blocking escalation inputs intentionally carry NO `project_root`
 // override: the policy lookup and the pending-interaction store are always
@@ -30,6 +80,8 @@ pub(super) struct AgentAskInput {
     pub(super) workflow_id: Option<String>,
     #[serde(default)]
     pub(super) task_id: Option<String>,
+    #[serde(default)]
+    pub(super) wait: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -46,6 +98,8 @@ pub(super) struct AgentRequestApprovalInput {
     pub(super) workflow_id: Option<String>,
     #[serde(default)]
     pub(super) task_id: Option<String>,
+    #[serde(default)]
+    pub(super) wait: Option<String>,
 }
 
 impl AoMcpServer {
@@ -64,6 +118,67 @@ impl AoMcpServer {
             })
             .unwrap_or_else(|| payload_agent_id.trim().to_string())
     }
+
+    // Workflow pin for the blocking interaction tools: the CLI pin
+    // (`animus mcp serve --workflow-id <id>`) wins, then the
+    // `ANIMUS_MCP_WORKFLOW_ID` env pin. `None` means the server is not bound
+    // to a workflow.
+    fn workflow_pin(&self) -> Option<String> {
+        self.pinned_workflow_id.clone().or_else(|| {
+            std::env::var(ANIMUS_MCP_WORKFLOW_ID_ENV)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+        })
+    }
+
+    // Workflow context precedence mirrors `bound_agent_id`: a pin overrides
+    // the untrusted payload so a spawned agent cannot suspend a sibling
+    // workflow; without a pin the payload value is kept on the record for
+    // observability (block mode only).
+    fn bound_workflow_id(&self, payload_workflow_id: Option<&str>) -> Option<String> {
+        self.workflow_pin().or_else(|| normalize_non_empty(payload_workflow_id.map(ToOwned::to_owned)))
+    }
+}
+
+// Suspend-mode return path shared by ask + request_approval: flag the record
+// as suspend-created (the answer path only resumes flagged records, so an
+// untrusted block-mode payload workflow_id can never trigger a resume),
+// pause the bound workflow (best-effort), and hand the agent a pending
+// payload telling it to end its turn.
+async fn suspend_pending_response(
+    tool_name: &str,
+    project_root: &str,
+    record: &InteractionRecord,
+) -> Result<CallToolResult, McpError> {
+    let record = match animus_runtime_shared::mark_interaction_suspended(project_root, &record.id) {
+        Ok(updated) => updated,
+        Err(err) => return structured_err(tool_name, err.to_string()),
+    };
+    let workflow_paused = pause_workflow_for_suspended_interaction(project_root, &record).await;
+    // Close the mark->pause race: an answer landing in that window saw the
+    // workflow still Running and skipped its resume, so the pause above
+    // would strand the workflow. Re-check the record and run the resume
+    // here if it was already answered (codex round-2 P2).
+    let mut late_resume = None;
+    if workflow_paused {
+        if let Ok(Some(current)) = animus_runtime_shared::load_interaction(project_root, &record.id) {
+            if current.status == InteractionStatus::Answered {
+                late_resume = resume_workflow_for_answered_interaction(project_root, &current).await;
+            }
+        }
+    }
+    let mut payload = json!({
+        "status": "pending",
+        "interaction_id": record.id,
+        "workflow_id": record.workflow_id,
+        "workflow_paused": workflow_paused,
+        "instruction": SUSPEND_INSTRUCTION,
+    });
+    if let (Value::Object(map), Some(resume)) = (&mut payload, late_resume) {
+        map.insert("workflow_resume".to_string(), resume);
+    }
+    structured_ok(tool_name, payload)
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -160,13 +275,16 @@ fn interaction_to_json(record: &InteractionRecord) -> Value {
 impl AoMcpServer {
     #[tool(
         name = "animus.agent.ask",
-        description = "Ask a human a question and BLOCK until it is answered or the timeout elapses. Purpose: Human-in-the-loop round-trip for agents that hit an ambiguity mid-run; the question lands in the `animus agent interactions` inbox. Always operates on the server's own project scope. Params: agent_id (ignored when the server pins ANIMUS_MCP_AGENT_ID), question, optional options (suggested answers), timeout_secs (default 600, max 3600), workflow_id, task_id. Returns: { id, answer, answered_by, answer_message? } once answered, or a structured timeout error instructing the agent to proceed with its best judgment. Example: {\"agent_id\": \"swe\", \"question\": \"Migrate in place or copy table?\", \"options\": [\"in place\", \"copy\"]}.",
+        description = "Ask a human a question and WAIT for the answer. Purpose: Human-in-the-loop round-trip for agents that hit an ambiguity mid-run; the question lands in the `animus agent interactions` inbox. Always operates on the server's own project scope. Wait modes: \"block\" parks the call until answered or timeout (default for ad-hoc runs); \"suspend\" returns { status: \"pending\", interaction_id, instruction } immediately, pauses the bound workflow, and the session resumes with the answer (default when the server pins a workflow via --workflow-id / ANIMUS_MCP_WORKFLOW_ID; suspend->block override allowed, block->suspend is ignored). Params: agent_id (ignored when the server pins ANIMUS_MCP_AGENT_ID), question, optional options (suggested answers), timeout_secs (default 600, max 3600), workflow_id (ignored when the server pins a workflow), task_id, wait. Returns: { id, answer, answered_by, answer_message? } once answered, the pending payload in suspend mode, or a structured timeout error instructing the agent to proceed with its best judgment. Example: {\"agent_id\": \"swe\", \"question\": \"Migrate in place or copy table?\", \"options\": [\"in place\", \"copy\"]}.",
         input_schema = ao_schema_for_type::<AgentAskInput>()
     )]
     async fn ao_agent_ask(&self, params: Parameters<AgentAskInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let project_root = self.default_project_root.clone();
         let agent_id = self.bound_agent_id(&input.agent_id);
+        let workflow_pinned = self.workflow_pin().is_some();
+        let workflow_id = self.bound_workflow_id(input.workflow_id.as_deref());
+        let wait_mode = resolve_wait_mode(workflow_pinned, input.wait.as_deref(), "animus.agent.ask");
         let timeout_secs = effective_timeout_secs(input.timeout_secs);
         let options = input.options.unwrap_or_default();
         let created = match animus_runtime_shared::create_question_interaction(
@@ -175,13 +293,17 @@ impl AoMcpServer {
             &input.question,
             &options,
             Some(timeout_secs),
-            input.workflow_id.as_deref(),
+            workflow_id.as_deref(),
             input.task_id.as_deref(),
         ) {
             Ok(record) => record,
             Err(err) => return structured_err("animus.agent.ask", err.to_string()),
         };
         emit_interaction_event("interaction_created", &project_root, &created);
+
+        if wait_mode == InteractionWaitMode::Suspend {
+            return suspend_pending_response("animus.agent.ask", &project_root, &created).await;
+        }
 
         match wait_for_answer(&project_root, &created.id, timeout_secs).await {
             InteractionWait::Answered(record) => structured_ok(
@@ -212,7 +334,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.agent.request_approval",
-        description = "Request human approval for a sensitive action and BLOCK until decided or the timeout elapses (timeout denies — fail closed). Purpose: Gate dangerous operations behind a human decision; the agent profile's approval_policy can auto-allow or auto-deny without escalating (auto_deny patterns win, matched against tool_name when present, else action, with `*` glob semantics). Always operates on the server's own project scope; the policy profile comes from agent_id, which is ignored when the server pins ANIMUS_MCP_AGENT_ID. Params: agent_id, action (human-readable description), optional tool_name, arguments, timeout_secs (default 600, max 3600), workflow_id, task_id. Returns: { decision: \"allow\"|\"deny\", message?, answered_by?, source: \"policy\"|\"human\"|\"timeout\" }. Example: {\"agent_id\": \"swe\", \"action\": \"git push --force to main\", \"tool_name\": \"git.push\"}.",
+        description = "Request human approval for a sensitive action and WAIT for the decision (block-mode timeout denies — fail closed). Purpose: Gate dangerous operations behind a human decision; the agent profile's approval_policy can auto-allow or auto-deny without escalating (auto_deny patterns win, matched against tool_name when present, else action, with `*` glob semantics). Always operates on the server's own project scope; the policy profile comes from agent_id, which is ignored when the server pins ANIMUS_MCP_AGENT_ID. Wait modes: \"block\" parks the call until decided or timeout (default for ad-hoc runs); \"suspend\" returns { status: \"pending\", interaction_id, instruction } immediately after the policy check, pauses the bound workflow, and the session resumes with the decision (default when the server pins a workflow via --workflow-id / ANIMUS_MCP_WORKFLOW_ID; suspend->block override allowed, block->suspend is ignored). Params: agent_id, action (human-readable description), optional tool_name, arguments, timeout_secs (default 600, max 3600), workflow_id (ignored when the server pins a workflow), task_id, wait. Returns: { decision: \"allow\"|\"deny\", message?, answered_by?, source: \"policy\"|\"human\"|\"timeout\" }, or the pending payload in suspend mode. Example: {\"agent_id\": \"swe\", \"action\": \"git push --force to main\", \"tool_name\": \"git.push\"}.",
         input_schema = ao_schema_for_type::<AgentRequestApprovalInput>()
     )]
     async fn ao_agent_request_approval(
@@ -259,6 +381,9 @@ impl AoMcpServer {
             }
         }
 
+        let workflow_pinned = self.workflow_pin().is_some();
+        let workflow_id = self.bound_workflow_id(input.workflow_id.as_deref());
+        let wait_mode = resolve_wait_mode(workflow_pinned, input.wait.as_deref(), "animus.agent.request_approval");
         let timeout_secs = effective_timeout_secs(input.timeout_secs);
         let created = match animus_runtime_shared::create_approval_interaction(
             &project_root,
@@ -267,13 +392,17 @@ impl AoMcpServer {
             tool_name.as_deref(),
             input.arguments,
             Some(timeout_secs),
-            input.workflow_id.as_deref(),
+            workflow_id.as_deref(),
             input.task_id.as_deref(),
         ) {
             Ok(record) => record,
             Err(err) => return structured_err("animus.agent.request_approval", err.to_string()),
         };
         emit_interaction_event("interaction_created", &project_root, &created);
+
+        if wait_mode == InteractionWaitMode::Suspend {
+            return suspend_pending_response("animus.agent.request_approval", &project_root, &created).await;
+        }
 
         match wait_for_answer(&project_root, &created.id, timeout_secs).await {
             InteractionWait::Answered(record) => structured_ok(
@@ -346,7 +475,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.interactions.answer",
-        description = "Answer a pending interaction (non-blocking; unblocks the agent parked on it). Purpose: Resolve a question with `text`, or an approval with `decision` (\"allow\" or \"deny\") plus optional `message`. Exactly one answered_by wins a race; later answers fail with a not-pending error. Params: id, text?, decision?, message?, answered_by? (default \"human\"), project_root. Returns: the updated interaction record. Example question: {\"id\": \"<uuid>\", \"text\": \"use the copy-table migration\"}. Example approval: {\"id\": \"<uuid>\", \"decision\": \"deny\", \"message\": \"too risky\"}.",
+        description = "Answer a pending interaction (non-blocking; unblocks the agent parked on it). Purpose: Resolve a question with `text`, or an approval with `decision` (\"allow\" or \"deny\") plus optional `message`. Exactly one answered_by wins a race; later answers fail with a not-pending error. When the record carries a workflow_id and that workflow is suspended, the answer triggers the detached-runner resume with the decision as feedback; a resume failure never fails the answer and surfaces a `workflow_resume.guidance` command instead. Params: id, text?, decision?, message?, answered_by? (default \"human\"), project_root. Returns: the updated interaction record (plus `workflow_resume` when a resume was attempted). Example question: {\"id\": \"<uuid>\", \"text\": \"use the copy-table migration\"}. Example approval: {\"id\": \"<uuid>\", \"decision\": \"deny\", \"message\": \"too risky\"}.",
         input_schema = ao_schema_for_type::<InteractionsAnswerInput>()
     )]
     async fn ao_interactions_answer(
@@ -367,7 +496,7 @@ impl AoMcpServer {
                 );
             }
         };
-        match answer_interaction_op(
+        match answer_interaction_op_with_resume(
             &project_root,
             &input.id,
             input.text.as_deref(),
@@ -375,8 +504,16 @@ impl AoMcpServer {
             deny,
             input.message.as_deref(),
             input.answered_by.as_deref(),
-        ) {
-            Ok(record) => structured_ok("animus.interactions.answer", interaction_to_json(&record)),
+        )
+        .await
+        {
+            Ok((record, workflow_resume)) => {
+                let mut payload = interaction_to_json(&record);
+                if let (Value::Object(map), Some(resume)) = (&mut payload, workflow_resume) {
+                    map.insert("workflow_resume".to_string(), resume);
+                }
+                structured_ok("animus.interactions.answer", payload)
+            }
             Err(err) => structured_err("animus.interactions.answer", err.to_string()),
         }
     }
@@ -397,6 +534,43 @@ mod interaction_tool_tests {
     fn data(result: &rmcp::model::CallToolResult) -> Value {
         let payload = structured(result);
         payload.get("result").cloned().expect("structured result should include `result`")
+    }
+
+    fn init_git_repo(path: &std::path::Path) {
+        let run = |args: &[&str]| {
+            let status = std::process::Command::new("git").args(args).current_dir(path).status().expect("git runs");
+            assert!(status.success(), "git {:?} should succeed", args);
+        };
+        run(&["init", "-b", "main"]);
+        run(&["config", "user.email", "ao-test@example.com"]);
+        run(&["config", "user.name", "Animus Test"]);
+        std::fs::write(path.join("README.md"), "# test\n").expect("readme written");
+        run(&["add", "README.md"]);
+        run(&["commit", "-m", "initial"]);
+    }
+
+    async fn bootstrap_running_workflow(project_root: &str) -> orchestrator_core::OrchestratorWorkflow {
+        use orchestrator_core::{services::ServiceHub, FileServiceHub, Priority, TaskCreateInput, TaskType};
+        let hub: std::sync::Arc<dyn ServiceHub> =
+            std::sync::Arc::new(FileServiceHub::new(project_root).expect("file service hub"));
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "suspend interaction".to_string(),
+                description: "suspend-mode pause test".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("task created");
+        hub.workflows()
+            .run(orchestrator_core::WorkflowRunInput::for_task(task.id, None))
+            .await
+            .expect("workflow started")
     }
 
     fn with_isolated_scope<F: std::future::Future<Output = ()>>(body: F) {
@@ -424,7 +598,7 @@ mod interaction_tool_tests {
             );
         }
 
-        let management = new_ao_mcp_server_with_options("/tmp/project", true, None);
+        let management = new_ao_mcp_server_with_options("/tmp/project", true, None, None);
         let names: Vec<String> =
             management.tool_router.list_all().into_iter().map(|tool| tool.name.to_string()).collect();
         for expected in [
@@ -472,6 +646,7 @@ mod interaction_tool_tests {
                     timeout_secs: Some(10),
                     workflow_id: None,
                     task_id: None,
+                    wait: None,
                 }))
                 .await
                 .expect("ask should not error");
@@ -499,6 +674,7 @@ mod interaction_tool_tests {
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
+                    wait: None,
                 }))
                 .await
                 .expect("ask should produce a structured result");
@@ -551,6 +727,7 @@ phases:
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
+                    wait: None,
                 }))
                 .await
                 .expect("approval should not error");
@@ -567,6 +744,7 @@ phases:
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
+                    wait: None,
                 }))
                 .await
                 .expect("approval should not error");
@@ -583,6 +761,7 @@ phases:
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
+                    wait: None,
                 }))
                 .await
                 .expect("approval should not error");
@@ -636,6 +815,7 @@ phases:
                         timeout_secs: Some(1),
                         workflow_id: None,
                         task_id: None,
+                        wait: None,
                     }))
                     .await
                     .expect("approval should not error");
@@ -680,7 +860,7 @@ phases:
 "#,
                 )
                 .expect("write workflows.yaml");
-                let server = new_ao_mcp_server_with_options(&project_root, false, Some("restricted".to_string()));
+                let server = new_ao_mcp_server_with_options(&project_root, false, Some("restricted".to_string()), None);
 
                 let result = server
                     .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
@@ -691,6 +871,7 @@ phases:
                         timeout_secs: Some(1),
                         workflow_id: None,
                         task_id: None,
+                        wait: None,
                     }))
                     .await
                     .expect("approval should not error");
@@ -721,6 +902,7 @@ phases:
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
+                    wait: None,
                 }))
                 .await
                 .expect("approval should not error");
@@ -772,6 +954,7 @@ phases:
                     timeout_secs: Some(10),
                     workflow_id: None,
                     task_id: None,
+                    wait: None,
                 }))
                 .await
                 .expect("approval should not error");
@@ -866,6 +1049,200 @@ phases:
                 .await
                 .expect("list should not error");
             assert_eq!(data(&all_after).pointer("/count").and_then(Value::as_u64), Some(1));
+        });
+    }
+
+    #[test]
+    fn wait_mode_defaults_and_overrides() {
+        use InteractionWaitMode::{Block, Suspend};
+        assert_eq!(resolve_wait_mode(false, None, "t"), Block, "unpinned default is block");
+        assert_eq!(resolve_wait_mode(true, None, "t"), Suspend, "workflow pin flips the default to suspend");
+        assert_eq!(resolve_wait_mode(true, Some("block"), "t"), Block, "suspend -> block override is honoured");
+        assert_eq!(resolve_wait_mode(true, Some("SUSPEND"), "t"), Suspend);
+        assert_eq!(resolve_wait_mode(false, Some("suspend"), "t"), Block, "block -> suspend must be ignored");
+        assert_eq!(resolve_wait_mode(false, Some("bogus"), "t"), Block, "unknown mode falls back to the default");
+        assert_eq!(resolve_wait_mode(true, Some("bogus"), "t"), Suspend);
+    }
+
+    #[test]
+    fn ask_suspend_mode_returns_pending_and_pauses_the_pinned_workflow() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            init_git_repo(project.path());
+            let project_root = project.path().to_string_lossy().to_string();
+            let workflow = bootstrap_running_workflow(&project_root).await;
+            assert_eq!(workflow.status, orchestrator_core::WorkflowStatus::Running);
+
+            let server = new_ao_mcp_server_with_options(&project_root, false, None, Some(workflow.id.clone()));
+            let result = server
+                .ao_agent_ask(Parameters(AgentAskInput {
+                    agent_id: "swe".to_string(),
+                    question: "Which approach?".to_string(),
+                    options: None,
+                    timeout_secs: Some(600),
+                    // Payload workflow_id must be overridden by the pin.
+                    workflow_id: Some("wf-other".to_string()),
+                    task_id: None,
+                    wait: None,
+                }))
+                .await
+                .expect("suspend ask should not error");
+            assert_ne!(result.is_error, Some(true), "suspend mode returns a structured success");
+            let payload = data(&result);
+            assert_eq!(payload.pointer("/status").and_then(Value::as_str), Some("pending"));
+            assert_eq!(payload.pointer("/workflow_id").and_then(Value::as_str), Some(workflow.id.as_str()));
+            assert_eq!(payload.pointer("/workflow_paused").and_then(Value::as_bool), Some(true));
+            assert!(payload
+                .pointer("/instruction")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("end") && text.contains("turn")));
+
+            let interaction_id =
+                payload.pointer("/interaction_id").and_then(Value::as_str).expect("interaction_id").to_string();
+            let record = animus_runtime_shared::load_interaction(&project_root, &interaction_id)
+                .expect("load")
+                .expect("record exists");
+            assert_eq!(record.status, InteractionStatus::Pending);
+            assert_eq!(record.workflow_id.as_deref(), Some(workflow.id.as_str()), "record carries the pinned id");
+
+            let hub: std::sync::Arc<dyn orchestrator_core::services::ServiceHub> =
+                std::sync::Arc::new(orchestrator_core::FileServiceHub::new(&project_root).expect("file service hub"));
+            let reloaded = hub.workflows().get(&workflow.id).await.expect("workflow reloads");
+            assert_eq!(reloaded.status, orchestrator_core::WorkflowStatus::Paused, "suspend must pause the workflow");
+        });
+    }
+
+    #[test]
+    fn request_approval_suspend_env_pin_returns_pending() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let _workflow = protocol::test_utils::EnvVarGuard::set(ANIMUS_MCP_WORKFLOW_ID_ENV, Some("wf-env-pin"));
+        tokio::runtime::Builder::new_current_thread().enable_all().build().expect("current-thread runtime").block_on(
+            async {
+                let project = tempdir().expect("tempdir");
+                let project_root = project.path().to_string_lossy().to_string();
+                let server = new_ao_mcp_server(&project_root);
+
+                let result = server
+                    .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                        agent_id: "swe".to_string(),
+                        action: "rotate the API keys".to_string(),
+                        tool_name: None,
+                        arguments: None,
+                        timeout_secs: Some(600),
+                        workflow_id: None,
+                        task_id: None,
+                        wait: None,
+                    }))
+                    .await
+                    .expect("approval should not error");
+                assert_ne!(result.is_error, Some(true));
+                let payload = data(&result);
+                assert_eq!(payload.pointer("/status").and_then(Value::as_str), Some("pending"));
+                // The workflow does not exist, so the pause is best-effort
+                // and reported as not applied.
+                assert_eq!(payload.pointer("/workflow_paused").and_then(Value::as_bool), Some(false));
+
+                let interaction_id =
+                    payload.pointer("/interaction_id").and_then(Value::as_str).expect("interaction_id").to_string();
+                let record = animus_runtime_shared::load_interaction(&project_root, &interaction_id)
+                    .expect("load")
+                    .expect("record exists");
+                assert_eq!(record.workflow_id.as_deref(), Some("wf-env-pin"));
+            },
+        );
+    }
+
+    #[test]
+    fn pinned_server_honours_suspend_to_block_override() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server_with_options(&project_root, false, None, Some("wf-pinned".to_string()));
+
+            let result = server
+                .ao_agent_ask(Parameters(AgentAskInput {
+                    agent_id: "swe".to_string(),
+                    question: "Anyone home?".to_string(),
+                    options: None,
+                    timeout_secs: Some(1),
+                    workflow_id: None,
+                    task_id: None,
+                    wait: Some("block".to_string()),
+                }))
+                .await
+                .expect("ask should produce a structured result");
+            assert_eq!(result.is_error, Some(true), "wait=block on a pinned server must park and time out");
+            let payload = structured(&result);
+            assert_eq!(payload.pointer("/timed_out").and_then(Value::as_bool), Some(true));
+        });
+    }
+
+    #[test]
+    fn unpinned_server_ignores_suspend_request_and_blocks() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+
+            let result = server
+                .ao_agent_ask(Parameters(AgentAskInput {
+                    agent_id: "swe".to_string(),
+                    question: "Anyone home?".to_string(),
+                    options: None,
+                    timeout_secs: Some(1),
+                    // Payload workflow_id alone does not enable suspend.
+                    workflow_id: Some("wf-unpinned".to_string()),
+                    task_id: None,
+                    wait: Some("suspend".to_string()),
+                }))
+                .await
+                .expect("ask should produce a structured result");
+            assert_eq!(result.is_error, Some(true), "block -> suspend must be ignored; the call parks and times out");
+            let payload = structured(&result);
+            assert_eq!(payload.pointer("/timed_out").and_then(Value::as_bool), Some(true));
+        });
+    }
+
+    // Mark->pause race (codex round-2 P2): an answer that lands before the
+    // suspend path finishes pausing skipped its own resume, so the suspend
+    // path must detect the answered record after pausing and run the resume
+    // itself (here it fails on the missing workflow_runner plugin and
+    // surfaces the manual-resume guidance instead of stranding silently).
+    #[test]
+    fn suspend_path_recovers_answer_that_raced_the_pause() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            init_git_repo(project.path());
+            let project_root = project.path().to_string_lossy().to_string();
+            let workflow = bootstrap_running_workflow(&project_root).await;
+
+            let created = animus_runtime_shared::create_question_interaction(
+                &project_root,
+                "swe",
+                "Quick one?",
+                &[],
+                None,
+                Some(&workflow.id),
+                None,
+            )
+            .expect("create question");
+            // Simulate the racing answer arriving before the suspend path
+            // marks + pauses.
+            animus_runtime_shared::answer_interaction(&project_root, &created.id, "yes", None, Some("sami"))
+                .expect("racing answer");
+
+            let result =
+                suspend_pending_response("animus.agent.ask", &project_root, &created).await.expect("suspend response");
+            let payload = data(&result);
+            assert_eq!(payload.pointer("/workflow_paused").and_then(Value::as_bool), Some(true));
+            let resume = payload.pointer("/workflow_resume").expect("late resume attempt reported");
+            assert_eq!(resume.pointer("/resumed").and_then(Value::as_bool), Some(false));
+            assert_eq!(
+                resume.pointer("/guidance").and_then(Value::as_str),
+                Some(format!("animus workflow resume {}", workflow.id).as_str())
+            );
         });
     }
 }

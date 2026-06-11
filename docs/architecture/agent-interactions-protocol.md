@@ -1,7 +1,8 @@
 # Agent Interactions Protocol (questions + approvals)
 
-Status: agreed design, v0.5.13 kernel work in flight, protocol surface targeted at
-animus-protocol v0.1.13.5.
+Status: kernel Layers 1 + 4 implemented (interactions store, block/suspend wait
+modes, workflow pause-on-suspend + resume-with-answer, notifier fan-out);
+Layer 2/3 protocol surface targeted at animus-protocol v0.1.13.5.
 
 Animus agents (spawned `claude` / `codex` / `gemini` / `opencode` CLI sessions) need
 two human-in-the-loop primitives:
@@ -135,7 +136,10 @@ emit `interaction_resolved`.
 2. animus-protocol **v0.1.13.4** (MCP pass-down) — in flight, unchanged; this
    feature does not fold into it.
 3. Kernel Layer 4 (suspend/resume + checkpoint integration + notifier dispatch) —
-   next kernel wave after Layer 1 lands.
+   **done**: `animus mcp serve --workflow-id` / `ANIMUS_MCP_WORKFLOW_ID` pin,
+   suspend wait mode, workflow pause + session-checkpoint stamp, answer-path
+   detached-runner resume with feedback, daemon-tick notifier fan-out of
+   `interaction_*` events.
 4. animus-protocol **v0.1.13.5**: Layer 2 transports + Layer 3 surface, one tag.
    Provider plugins release once against 13.4 + 13.5 together; the workflow-runner
    pin bump (which also carries the OAuth bearer-headers fix) rides the same wave.

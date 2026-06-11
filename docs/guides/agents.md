@@ -234,8 +234,8 @@ release.
 ## Human-in-the-Loop Questions and Approvals
 
 Agents that hit an ambiguity or a sensitive action mid-run can park on a human
-answer without any protocol changes — the round-trip is a blocking MCP tool
-call against the same injected `animus` server:
+answer without any protocol changes — the round-trip is an MCP tool call
+against the same injected `animus` server:
 
 ```json
 { "agent_id": "swe", "question": "Migrate in place or copy table?", "options": ["in place", "copy"] }  // animus.agent.ask
@@ -243,11 +243,41 @@ call against the same injected `animus` server:
 ```
 
 Both tools write a pending interaction under
-`~/.animus/<repo-scope>/interactions/` and poll until a human answers via
-`animus agent interactions answer <id>` (or the `animus.interactions.answer`
-tool), or the timeout elapses (default 600s, max 3600s). `animus.agent.ask`
-times out with a structured error telling the agent to proceed with its best
-judgment; `animus.agent.request_approval` times out as a deny (fail closed).
+`~/.animus/<repo-scope>/interactions/` and wait in one of two modes, selected
+by the optional `wait` parameter:
+
+- **`wait: "block"`** (default for ad-hoc `animus agent run` / `animus chat`)
+  — the call polls until a human answers via
+  `animus agent interactions answer <id>` (or the `animus.interactions.answer`
+  tool), or the timeout elapses (default 600s, max 3600s). `animus.agent.ask`
+  times out with a structured error telling the agent to proceed with its best
+  judgment; `animus.agent.request_approval` times out as a deny (fail closed).
+- **`wait: "suspend"`** (default when the serving MCP process is pinned to a
+  workflow via `animus mcp serve --workflow-id <ID>` or the
+  `ANIMUS_MCP_WORKFLOW_ID` env var) — the tool records the pending
+  interaction (bound to the pinned workflow id), pauses the workflow through
+  the service API, stamps the interaction id into the phase session
+  checkpoint, and returns immediately with
+  `{ status: "pending", interaction_id, instruction }`. The instruction tells
+  the agent to summarize its in-progress state and end the turn cleanly — no
+  pool slot or process stays parked.
+
+The payload may downgrade suspend→block; a block→suspend request on an
+unpinned server is ignored with a warning (there is no workflow to resume).
+
+Answering a suspended interaction resumes the workflow: the answer paths
+(CLI `animus agent interactions answer` and `animus.interactions.answer`)
+detect a suspend-created record bound to a paused workflow (block-mode
+records never trigger a resume, even when their payload carried a
+`workflow_id`) and trigger the same detached-runner
+resume as `animus workflow resume`, with the decision threaded in as
+feedback ("Approval granted/denied for <action>: <message>. Continue." /
+"Answer to your question \"<question>\": <answer>. Continue."). A resume
+spawn failure never fails the answer — the response carries a
+`workflow_resume.guidance` field with the exact `animus workflow resume <id>`
+command to run by hand. Paused workflows are exempt from the daemon's
+orphaned-workflow recovery, so a suspended run waits indefinitely for its
+answer (`animus status` surfaces it).
 
 Before escalating, `animus.agent.request_approval` consults the agent
 profile's `approval_policy` (`auto_allow` / `auto_deny` / `default`, declared
@@ -275,6 +305,10 @@ server omits these tools so an agent cannot answer its own approvals):
 Interaction lifecycle events (`interaction_created`, `interaction_answered`,
 `interaction_expired`) are appended to the daemon event log, so
 `animus daemon events` surfaces pending escalations without polling the store.
+Each event carries a one-line `summary` and a ready-to-run `answer_command`.
+When the daemon is running with notifier plugins installed, a per-tick
+watcher fans fresh interaction events out to them (Slack / Telegram / HTTP)
+best-effort — notifier failures never block or fail the interaction.
 
 ## Recommended Flow
 

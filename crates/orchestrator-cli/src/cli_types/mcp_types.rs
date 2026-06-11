@@ -32,6 +32,14 @@ pub(crate) struct McpServeArgs {
     /// injects this server should pass the agent profile id here.
     #[arg(long, value_name = "AGENT_ID")]
     pub agent_id: Option<String>,
+    /// Pin the workflow context for the blocking animus.agent.ask /
+    /// animus.agent.request_approval tools. When set, escalations default to
+    /// wait="suspend" (return immediately, pause the workflow, resume on
+    /// answer) and pending records carry this workflow id; the payload
+    /// `workflow_id` is ignored. The workflow runner that injects this
+    /// server should pass the running workflow id here.
+    #[arg(long, value_name = "WORKFLOW_ID")]
+    pub workflow_id: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
