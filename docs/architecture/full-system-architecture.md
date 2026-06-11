@@ -46,8 +46,6 @@ especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
 current runtime mixes legacy `v0.1.13` provider/session wire crates with newer
 `v0.5.x` queue/workflow/subject protocol crates.
 
-Repo-local but not current workspace members: `crates/agent-runner/`, `crates/oai-runner/`, `crates/orchestrator-web-server/`.
-
 The release/runtime binary set is:
 
 | Binary | Package | Role |

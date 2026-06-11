@@ -143,7 +143,7 @@ pub trait WorkflowRouting: Send + Sync {
 /// a dependency on `orchestrator-core`'s service hub.
 ///
 /// The wire-side [`QueueEntry`] schema is intentionally leaner than the
-/// queue plugin's [`animus_queue_protocol::QueueEntry`] — wire callers
+/// queue plugin's `animus_queue_protocol::QueueEntry` — wire callers
 /// get a stable id + subject_id + status + priority + enqueued_at, with
 /// the rich dispatch payload surfacing only on the CLI's local path.
 /// Adapters map the plugin's entry shape into the wire shape best-effort.

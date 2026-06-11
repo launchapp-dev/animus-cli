@@ -211,11 +211,6 @@ Common runtime overrides:
 | `ANIMUS_INSTALL_PLUGINS` | When set to `1`, the installer script runs `animus plugin install-defaults --include-subjects --include-transports` at the end | unset |
 | `ANIMUS_SKIP_PLUGIN_INSTALL` | When set to `1`, the installer script skips the post-install plugin step entirely | unset |
 
-The v0.4.11 env vars `ANIMUS_DAEMON_DISABLE_BUILTIN_TASK_ADAPTER` and
-`ANIMUS_DAEMON_DISABLE_BUILTIN_REQUIREMENTS_ADAPTER` are **no-ops** in v0.4.12
-— the in-tree adapters are gone. Install or uninstall the corresponding
-subject_backend plugin instead.
-
 State paths:
 
 - Project-local config: `.animus/config.json`

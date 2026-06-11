@@ -75,8 +75,6 @@ especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
 current runtime mixes legacy `v0.1.13` provider/session wire crates with newer
 `v0.5.x` queue/workflow/subject protocol crates.
 
-Repo-local but not current workspace members: `crates/agent-runner/`, `crates/oai-runner/`, `crates/orchestrator-web-server/`.
-
 1. Parse global flags and top-level command in `orchestrator-cli`.
 2. Resolve the project root with this precedence:
    - `--project-root`
@@ -138,12 +136,11 @@ discover installed `transport_backend` and `web_ui` plugins.
 1. A subject or queue entry selects work.
 2. The daemon starts a workflow run through an installed `workflow_runner` plugin.
 3. Shared `animus-runtime-shared` logic resolves phase configuration and runtime contracts inside that plugin.
-4. Agent phases call `agent-runner`.
-5. `agent-runner` delegates provider execution to `orchestrator-session-host`.
-6. `orchestrator-session-host` discovers and drives a provider plugin through
+4. Agent phases resolve a provider session through `SessionBackendResolver`,
+   which discovers and drives a provider plugin through
    `orchestrator-plugin-host`.
-7. Events flow back through the runner, workflow state, daemon output, and logs.
-8. Terminal state is persisted in scoped runtime state and surfaced through CLI,
+5. Events flow back through workflow state, daemon output, and logs.
+6. Terminal state is persisted in scoped runtime state and surfaced through CLI,
    MCP, web transports, and output commands.
 
 ## Daemon Responsibilities

@@ -24,7 +24,6 @@ Thumbs.db
 tmp/
 temp/
 *.tmp
-crates/orchestrator-web-server/web-ui/.smoke-artifacts/
 
 # Runtime
 *.pid
@@ -73,8 +72,7 @@ __pycache__/
 TEST_RESULTS*.md
 /crates/llm-cli-wrapper/TEST_RESULTS*.md
 
-# Generated GraphQL schema (rebuilt by web-server)
-/crates/orchestrator-web-server/embedded/schema.graphql
+# Generated GraphQL schema artifacts
 /crates/orchestrator-cli/schemas/
 
 # Local clone of external research repo, not part of this project

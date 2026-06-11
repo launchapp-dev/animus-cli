@@ -47,12 +47,6 @@ crates/
 └── protocol/
 ```
 
-Repo-local but not current workspace members:
-
-- `crates/agent-runner/`
-- `crates/oai-runner/`
-- `crates/orchestrator-web-server/`
-
 `default-members` in `Cargo.toml` include:
 
 - `orchestrator-cli`

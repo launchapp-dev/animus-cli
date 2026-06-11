@@ -13,7 +13,6 @@
 //! degrade gracefully or stop submitting wire requests.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use animus_session_backend::session::{SessionEvent, SessionRequest, SessionRun};
 use anyhow::{anyhow, Result};
@@ -408,44 +407,6 @@ fn is_executable(path: &Path) -> bool {
     // executable without parsing the binary header. Fall back to
     // existence; `Command::spawn` surfaces real failures shortly after.
     path.exists()
-}
-
-/// Convenience: are any provider plugins discovered and executable on disk?
-#[allow(dead_code)]
-pub(crate) fn provider_plugins_healthy(project_root: &Path) -> bool {
-    health_snapshot(project_root).iter().any(|snap| snap.installed)
-}
-
-/// Owned [`SessionBackendResolver`] handle for advanced callers.
-#[allow(dead_code)]
-pub(crate) struct ProviderClient {
-    resolver: Arc<SessionBackendResolver>,
-}
-
-#[allow(dead_code)]
-impl ProviderClient {
-    pub(crate) fn new(project_root: &Path) -> Self {
-        Self { resolver: Arc::new(SessionBackendResolver::with_plugin_discovery(project_root)) }
-    }
-
-    pub(crate) async fn run(&self, request: SessionRequest) -> Result<SessionRun> {
-        self.resolver.start_session(request).await.map_err(|err| anyhow!("provider session failed: {err}"))
-    }
-
-    /// Status RPC: provider plugins do not expose a persisted-run query
-    /// surface today. Callers should fall back to persisted JSONL logs.
-    pub(crate) fn status(&self, _run_id: &RunId) -> Result<()> {
-        Err(anyhow!(
-            "agent status query through provider plugins is not yet supported; reading persisted run logs instead"
-        ))
-    }
-
-    /// Cancel RPC: same as `status` — not yet exposed by provider plugins.
-    pub(crate) fn cancel(&self, _run_id: &RunId) -> Result<()> {
-        Err(anyhow!(
-            "agent cancel through provider plugins is not yet supported; in-flight cancel via process signal only"
-        ))
-    }
 }
 
 #[cfg(test)]
