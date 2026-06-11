@@ -4,6 +4,85 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.13] - 2026-06-11
+
+**Event-driven scheduler, truthful config, typed exit codes, and a much
+smaller kernel.** The daemon now wakes on events instead of polling, the CLI
+stops accepting knobs it ignores, scripts get meaningful exit codes, and two
+whole command groups plus every never-executed policy field are gone.
+
+### Added
+
+- Event-driven scheduler: `daemon/nudge` control message (sent fire-and-forget
+  by subject/queue write paths), cron-deadline wakes (schedules fire on time
+  instead of on the next tick), and completion wakes. `--interval-secs` is now
+  a fallback heartbeat, not the dispatch latency.
+- `animus daemon restart`; `animus plugin update --restart-daemon` is now real
+  (was a documented placeholder).
+- `workflow-failed` and `task-blocked` notifier events (once per transition).
+- Compile/validate warnings for declared-but-unenforced workflow YAML
+  (`UNENFORCED_RULES` registry), surfaced in `workflow config validate` JSON.
+- `daemon health`/`status` report `runtime_paused` (+ since-when) and
+  per-plugin supervisor state (restart counts, disabled-until).
+- `animus pack uninstall` and `animus skill uninstall` (`--dry-run`, `--json`,
+  reference guards).
+- `animus workflow prune` (dry-run by default, terminal-status only) and
+  `animus workflow delete --run-id` for run-history retention.
+- Bulk queue ops: `hold`/`release`/`drop` take multiple ids or `--all --yes`;
+  MCP queue tools gain `subject_ids[]`.
+- `animus plugin outdated` (installed vs recommended vs latest, `--offline`);
+  registry fetch falls back to stale cache with an age warning, retries with
+  backoff, and explains 429s.
+- `animus init` reaches a runnable state: installs the recommended packs
+  (interactive default-yes / `--install-packs`), suggests `animus secret`
+  migration for detected env-var API keys, and prints the next command.
+- `animus approval {request, respond, outcome}` group (formerly `git confirm`,
+  which remains a hidden alias).
+- `animus.cli.v1` envelope contract tests per command family and a documented
+  CLI conventions section.
+
+### Changed
+
+- Typed exit codes for `subject`, `cost`, `events`, and `plugin`: invalid
+  input exits 2, not-found 3, unavailable (missing plugin / network) 5 —
+  previously all exit 1. Scripts matching on exit 1 for these cases must
+  update.
+- Verb renames, aliases-first (old names still work, hidden): `pack info`,
+  `skill info`, `flavor info`, `output read`, `project set-active`. Workflow
+  commands accept `--workflow-id` aliases; `workflow prune --older-than`
+  accepts unit suffixes (`30d`, `12h`).
+- `animus plugin status` absorbs provider health (aggregate
+  `provider_plugins_healthy` + per-provider install state); `animus doctor`
+  absorbs orphaned-CLI-process detection (`--fix` prunes dead tracker entries
+  only; live PIDs get a manual suggestion).
+- gemini/opencode registry pins bumped to v0.2.6 (protocol v0.1.13.5).
+
+### Removed
+
+- `animus model` command group (zero call sites) and `animus runner` group +
+  the `animus.runner.*` MCP tools (absorbed as above).
+- The never-executed daemon git policy: `auto_merge`, `auto_pr`,
+  `auto_commit_before_merge`, `auto_prune_worktrees` config/flags/YAML keys,
+  and the zero-caller `GitProvider`/`BuiltinGitProvider`. Merge/PR behavior
+  lives in workflow `post_success.merge` (workflow-runner plugin). Old
+  pm-config.json files still load.
+- The no-op `idle_timeout_secs` knob, the dead `ANIMUS_RUNNER_CONFIG_DIR` and
+  `ANIMUS_RUNNER_SCOPE` env vars, and the dead `--runner-scope` flag.
+- Dead crate leftovers (`agent-runner`, `oai-runner`), the orphaned
+  `runner_helpers.rs`, stale agent-runner doctor checks, and ~15 unused
+  dependencies.
+
+### Fixed
+
+- `init` template prompt no longer hangs on non-TTY stdin (and detects EOF).
+- Stale help text (hardcoded version markers, internal jargon) and misleading
+  config docs: `.animus/config.json` is self-update config only; daemon
+  runtime settings live in the scoped `daemon/pm-config.json`. Scheduler
+  timing model and previously undocumented `ANIMUS_*` env vars documented.
+- Pack/skill uninstall tests pin HOME (no more real `~/.animus` pollution or
+  parallel flakes).
+
+
 ## [0.5.12] - 2026-06-09
 
 **Agents reach Animus + project MCP servers, author skills, and tune
