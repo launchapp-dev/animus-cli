@@ -205,6 +205,7 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
     let workflow_loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root));
     let runtime_loaded =
         orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root));
+    let warnings = unenforced_warnings_payload(project_root);
 
     match (workflow_loaded, runtime_loaded) {
         (Ok(workflow), Ok(runtime)) => {
@@ -216,6 +217,7 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
                 Ok(()) => serde_json::json!({
                     "valid": true,
                     "errors": [],
+                    "warnings": warnings,
                     "workflow_config_path": workflow.path.display().to_string(),
                     "agent_runtime_path": runtime.path.display().to_string(),
                     "workflow_config_hash": workflow.metadata.hash,
@@ -224,6 +226,7 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
                 Err(error) => serde_json::json!({
                     "valid": false,
                     "errors": [error.to_string()],
+                    "warnings": warnings,
                     "workflow_config_path": workflow.path.display().to_string(),
                     "agent_runtime_path": runtime.path.display().to_string(),
                 }),
@@ -232,16 +235,36 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
         (Err(workflow_error), Err(runtime_error)) => serde_json::json!({
             "valid": false,
             "errors": [workflow_error.to_string(), runtime_error.to_string()],
+            "warnings": warnings,
         }),
         (Err(workflow_error), _) => serde_json::json!({
             "valid": false,
             "errors": [workflow_error.to_string()],
+            "warnings": warnings,
         }),
         (_, Err(runtime_error)) => serde_json::json!({
             "valid": false,
             "errors": [runtime_error.to_string()],
+            "warnings": warnings,
         }),
     }
+}
+
+/// Structured `warnings` array for validate/compile payloads: one entry per
+/// declared-but-unenforced YAML field, with the source file, dotted field
+/// path, and a one-line explanation of where the real knob lives. Warnings
+/// never affect `valid` / `compiled` — existing configs keep compiling.
+fn unenforced_warnings_payload(project_root: &str) -> Vec<Value> {
+    orchestrator_core::unenforced_project_yaml_warnings(Path::new(project_root))
+        .into_iter()
+        .map(|warning| {
+            serde_json::json!({
+                "field": warning.field,
+                "source": warning.source,
+                "message": warning.to_string(),
+            })
+        })
+        .collect()
 }
 
 /// CLI surface for `animus workflow config reload`. Runs the same
@@ -340,6 +363,7 @@ pub(crate) fn compile_yaml_workflows_payload(project_root: &str) -> Result<Value
                 "phase_definitions": result.config.phase_definitions.len(),
                 "agent_profiles": result.config.agent_profiles.len(),
                 "hash": orchestrator_core::workflow_config_hash(&result.config),
+                "warnings": unenforced_warnings_payload(project_root),
             }))
         }
         None => Ok(serde_json::json!({
@@ -390,6 +414,31 @@ mod tests {
         assert_eq!(value["reloaded"], serde_json::json!(true), "valid overlay must reload");
         let phases = value["phase_definitions"].as_u64().expect("phase_definitions present");
         assert!(phases >= 1, "expected at least one phase");
+    }
+
+    #[test]
+    fn validate_payload_surfaces_unenforced_field_warnings() {
+        let dir = tempdir().unwrap();
+        write_minimal_overlay(dir.path());
+        let yaml_path = dir.path().join(".animus").join("workflows.yaml");
+        let mut yaml = fs::read_to_string(&yaml_path).unwrap();
+        yaml.push_str("daemon:\n  pool_size: 4\n");
+        fs::write(&yaml_path, yaml).unwrap();
+
+        let project_root = dir.path().to_string_lossy().to_string();
+        let value = validate_workflow_config_payload(&project_root);
+        assert_eq!(value["valid"], serde_json::json!(true), "warnings must never fail validation: {value}");
+        let warnings = value["warnings"].as_array().expect("warnings array");
+        assert!(
+            warnings.iter().any(|w| w["field"] == "daemon.pool_size"),
+            "expected daemon.pool_size warning, got {warnings:?}"
+        );
+        let compile = compile_yaml_workflows_payload(&project_root).expect("compile payload");
+        assert_eq!(compile["compiled"], serde_json::json!(true));
+        assert!(
+            compile["warnings"].as_array().is_some_and(|w| !w.is_empty()),
+            "compile payload must carry warnings: {compile}"
+        );
     }
 
     #[test]

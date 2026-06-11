@@ -99,6 +99,9 @@ fn compile_yaml_sources_with_base_inner(
         for warning in lint_sensitive_interpolations(content, &source_label) {
             eprintln!("warning: {}", warning);
         }
+        for warning in super::validation::unenforced_yaml_field_warnings(content, &source_label) {
+            eprintln!("warning: {}", warning);
+        }
         // The env-only pass exists solely to make the `secrets:` block
         // parseable (its `env:` mappings may themselves use `${VAR}`). The
         // final document is produced by a single combined pass over the
