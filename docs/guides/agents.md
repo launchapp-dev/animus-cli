@@ -7,7 +7,7 @@ For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.m
 
 ## Overview
 
-Animus currently exposes **82 built-in MCP tools** across these families:
+Animus currently exposes **79 built-in MCP tools** across these families:
 
 | Group | Tools | Purpose |
 |---|---:|---|
@@ -17,7 +17,6 @@ Animus currently exposes **82 built-in MCP tools** across these families:
 | `animus.workflow.*` | 16 | Workflow execution, control, and definition inspection |
 | `animus.queue.*` | 7 | Dispatch queue inspection and mutation |
 | `animus.output.*` | 6 | Run output, artifacts, JSONL, and live monitoring |
-| `animus.runner.*` | 3 | Runner health and orphan cleanup |
 | `animus.skill.*` | 5 | Skill discovery, inspection, and project-scoped authoring |
 | `animus.memory.*` | 4 | Project-scoped durable agent memory |
 | `animus.plugin.*` | 9 | Installed-plugin inspection/mutation plus marketplace discovery/update |
@@ -164,14 +163,6 @@ pull, not a live follow stream.
 { "run_id": "run-abc123", "limit": 25 }     // animus.output.tail
 { "run_id": "run-abc123", "phase_id": "implementation" } // output.monitor
 { "limit": 100, "level": "warn" }           // animus.logs.tail
-```
-
-Runner tools are operational checks:
-
-```json
-{}                             // animus.runner.health
-{}                             // animus.runner.orphans-detect
-{ "run_id": ["run-abc123"] }   // animus.runner.orphans-cleanup
 ```
 
 ## Agent, Memory, Skill, and Plugin Operations

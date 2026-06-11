@@ -240,7 +240,7 @@ fn active_flavor_for_project(project_root: &Path) -> Option<String> {
 /// sub-second even when many providers are configured. A path that
 /// exists but has lost its execute bit fails to spawn at run time, so
 /// surfacing it as healthy here would produce a false-green; match the
-/// `animus runner health` executability check exactly.
+/// `animus plugin status` executability semantics exactly.
 ///
 /// v0.5.9: previously delegated to `discover_provider_plugins`, which
 /// ran the full `discover_plugins` pipeline — including a `--manifest`

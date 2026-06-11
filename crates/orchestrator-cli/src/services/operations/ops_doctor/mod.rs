@@ -28,6 +28,7 @@ mod checks_crashes;
 mod checks_daemon;
 mod checks_disk;
 mod checks_filesystem;
+mod checks_orphan_cli;
 mod checks_plugins;
 mod checks_stale_pid;
 mod checks_worktrees;
@@ -122,6 +123,7 @@ async fn run_all_checks(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
     out.extend(checks_stale_pid::run(ctx));
     out.extend(checks_worktrees::run(ctx));
     out.extend(checks_zombie_phases::run(ctx));
+    out.extend(checks_orphan_cli::run(ctx));
     out.extend(checks_branches::run(ctx));
     out
 }
@@ -421,6 +423,30 @@ fn apply_safe_fixes(ctx: &CheckContext, checks: &[DiagnosticCheck], yes: bool) -
         }
     } else {
         out.push(skipped("remove_orphan_worktrees", "no orphan worktrees detected"));
+    }
+
+    // Stale cli-tracker entry pruning (absorbed from the deleted
+    // `animus runner orphans cleanup` verb). Only removes tracker entries
+    // whose process already exited — the tracker is global across projects,
+    // so killing live tracked PIDs stays a manual operator decision (the
+    // check surfaces a `kill <pid>` suggestion instead).
+    let orphan_clis_present = checks
+        .iter()
+        .any(|c| c.id == "orphan_cli_processes" && matches!(c.status, CheckStatus::Warn | CheckStatus::Fail));
+    if orphan_clis_present {
+        match checks_orphan_cli::prune_stale_entries_for_fix() {
+            Ok(pruned) if pruned.is_empty() => out.push(skipped(
+                "prune_stale_cli_tracker_entries",
+                "no stale cli-tracker entries to prune; live tracked CLI processes require a manual kill",
+            )),
+            Ok(pruned) => out.push(applied(
+                "prune_stale_cli_tracker_entries",
+                &format!("pruned {} stale cli-tracker entr(y/ies): {}", pruned.len(), summarize_paths(&pruned)),
+            )),
+            Err(error) => out.push(failed("prune_stale_cli_tracker_entries", error.to_string())),
+        }
+    } else {
+        out.push(skipped("prune_stale_cli_tracker_entries", "no orphaned CLI processes detected"));
     }
 
     out

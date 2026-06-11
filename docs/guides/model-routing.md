@@ -159,20 +159,19 @@ as write-capable:
 
 ## Environment Variables
 
-Model/tool validation is provider-specific. Check the effective environment with:
+Model/tool validation is provider-specific. Check the effective environment
+with the doctor's CLI-tool and API-key checks:
 
 ```bash
-animus model status
-animus model availability
-animus model roster refresh
-animus model roster get
+animus doctor --check cli_tools
+animus doctor --check api_keys
 ```
 
-Validate a specific model id:
-
-```bash
-animus model validate --model claude-sonnet-4-6
-```
+The effective model/tool assignments come from the config cascade described
+above: `phase.runtime.model` in workflow YAML, then the agent profile in
+`~/.animus/<repo-scope>/config/agent-runtime-config.v2.json`, then the
+compiled defaults in `protocol::model_routing`. Inspect or edit the agent
+runtime layer with `animus workflow agent-runtime get|validate|set` (below).
 
 ## Agent Runtime Commands
 

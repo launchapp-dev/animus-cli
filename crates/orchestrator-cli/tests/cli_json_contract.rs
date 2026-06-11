@@ -223,18 +223,22 @@ fn skill_list_emits_success_envelope() -> Result<()> {
 }
 
 #[test]
-fn runner_health_emits_success_envelope() -> Result<()> {
+fn plugin_status_emits_success_envelope_with_provider_health() -> Result<()> {
     let harness = CliHarness::new()?;
 
-    let payload = harness.run_json_ok(&["runner", "health"])?;
+    let payload = harness.run_json_ok(&["plugin", "status"])?;
     assert_success_envelope(&payload);
     assert!(
         payload.pointer("/data/provider_plugins_healthy").is_some_and(Value::is_boolean),
-        "runner health data should include provider_plugins_healthy: {payload}"
+        "plugin status data should include provider_plugins_healthy: {payload}"
     );
     assert!(
         payload.pointer("/data/providers").is_some_and(Value::is_array),
-        "runner health data should include providers array: {payload}"
+        "plugin status data should include providers array: {payload}"
+    );
+    assert!(
+        payload.pointer("/data/plugins").is_some_and(Value::is_array),
+        "plugin status data should include plugins array: {payload}"
     );
 
     Ok(())

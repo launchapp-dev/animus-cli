@@ -461,14 +461,12 @@ animus workflow      Run and manage multi-phase workflows
 animus daemon        Start/stop the autonomous scheduler (--autonomous, health, stream)
 animus queue         Inspect and manage the dispatch queue
 animus agent         Control agent runner processes
-animus runner        Inspect and restart the agent runner pool
 animus output        Stream and inspect agent output
 animus logs          Tail daemon events.jsonl or whichever log-storage plugin is active
 animus trigger       Manage event triggers (file_watcher, webhook, github_webhook, slack)
 animus pack          Install, list, and update workflow packs
 animus plugin        Install, list, inspect, and scaffold stdio plugins
 animus skill         Install and inspect Animus skills
-animus model         Inspect the model registry and routing
 animus project       Per-project config and scope helpers
 animus git           Worktree and branch helpers
 animus history       Inspect run history (includes phase + runtime error reports)

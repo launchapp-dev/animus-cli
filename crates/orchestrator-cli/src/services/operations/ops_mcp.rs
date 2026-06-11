@@ -84,8 +84,6 @@ mod queue_command_args;
 mod queue_inputs;
 #[path = "ops_mcp/queue_tools.rs"]
 mod queue_tools;
-#[path = "ops_mcp/runner_tools.rs"]
-mod runner_tools;
 #[path = "ops_mcp/skill_tools.rs"]
 mod skill_tools;
 #[path = "ops_mcp/subject_command_args.rs"]
@@ -285,7 +283,6 @@ fn new_ao_mcp_server_with_options(
         + AoMcpServer::queue_tool_router()
         + AoMcpServer::agent_tool_router()
         + AoMcpServer::output_tool_router()
-        + AoMcpServer::runner_tool_router()
         + AoMcpServer::workflow_runtime_tools()
         + AoMcpServer::workflow_definition_tools()
         + AoMcpServer::plugin_tool_router()

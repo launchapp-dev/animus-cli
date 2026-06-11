@@ -85,11 +85,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: SkillCommand,
     },
-    /// Inspect model availability, validation, and evaluations.
-    Model {
-        #[command(subcommand)]
-        command: ModelCommand,
-    },
     /// Install, inspect, and pin workflow packs.
     Pack {
         #[command(subcommand)]
@@ -99,11 +94,6 @@ pub(crate) enum Command {
     Plugin {
         #[command(subcommand)]
         command: PluginCommand,
-    },
-    /// Inspect runner health and orphaned runs.
-    Runner {
-        #[command(subcommand)]
-        command: RunnerCommand,
     },
     /// Show a unified project status dashboard.
     Status,
