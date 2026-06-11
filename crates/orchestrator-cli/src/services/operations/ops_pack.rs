@@ -743,6 +743,9 @@ exports = ["{export}"]
 
     #[test]
     fn uninstall_unknown_pack_is_an_error() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let project = tempfile::tempdir().expect("project tempdir");
         let args = PackUninstallArgs {
             pack_id: "animus.definitely-not-installed-xyz".to_string(),
@@ -756,6 +759,9 @@ exports = ["{export}"]
 
     #[test]
     fn uninstall_rejects_path_like_pack_ids() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let project = tempfile::tempdir().expect("project tempdir");
         let args = PackUninstallArgs { pack_id: "../escape".to_string(), version: None, force: false, dry_run: false };
         let error = handle_uninstall(project.path(), args, true).expect_err("uninstall should fail");

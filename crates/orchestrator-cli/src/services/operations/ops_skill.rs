@@ -942,6 +942,7 @@ fn handle_migrate_from_ao(args: SkillMigrateFromAoArgs, project_root: &str, json
 #[cfg(test)]
 mod tests {
     use super::*;
+    use protocol::test_utils::EnvVarGuard;
 
     fn seed_installed_skill(project_root: &str, name: &str) {
         let mut registry = SkillRegistryStateV1::default();
@@ -981,6 +982,9 @@ mod tests {
 
     #[test]
     fn uninstall_removes_state_entries_and_materialized_files() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().to_str().expect("utf8 path");
         seed_installed_skill(root, "alpha");
@@ -998,6 +1002,9 @@ mod tests {
 
     #[test]
     fn uninstall_dry_run_leaves_state_and_files_in_place() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().to_str().expect("utf8 path");
         seed_installed_skill(root, "alpha");
@@ -1015,6 +1022,9 @@ mod tests {
 
     #[test]
     fn uninstall_unknown_skill_is_an_error() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().to_str().expect("utf8 path");
 
@@ -1025,6 +1035,9 @@ mod tests {
 
     #[test]
     fn uninstall_with_source_filter_keeps_other_sources_and_drops_stale_files() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().to_str().expect("utf8 path");
         seed_installed_skill(root, "alpha");
@@ -1056,6 +1069,9 @@ mod tests {
 
     #[test]
     fn uninstall_with_source_filter_rewrites_skill_file_from_remaining_snapshot() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().to_str().expect("utf8 path");
         seed_installed_skill(root, "alpha");
@@ -1085,6 +1101,9 @@ mod tests {
 
     #[test]
     fn uninstall_with_unmatched_source_filter_keeps_files_and_default() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().to_str().expect("utf8 path");
         seed_installed_skill(root, "alpha");
@@ -1101,6 +1120,9 @@ mod tests {
 
     #[test]
     fn uninstall_rejects_path_like_skill_names() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
         let temp = tempfile::tempdir().expect("tempdir");
         let root = temp.path().to_str().expect("utf8 path");
 
