@@ -117,8 +117,11 @@ fn read_doc(relative_path: &str) -> String {
     std::fs::read_to_string(&path).unwrap_or_else(|error| panic!("failed to read {}: {error}", path.display()))
 }
 
+// Documented surface = the full built-in tool set, i.e. the management-mode
+// router. The default (agent-injected) server omits the two
+// `animus.interactions.*` management tools; the docs call that gating out.
 fn live_builtin_tool_names() -> BTreeSet<String> {
-    let server = new_ao_mcp_server("/tmp/project");
+    let server = new_ao_mcp_server_with_options("/tmp/project", true, None);
     server.tool_router.list_all().into_iter().map(|tool| tool.name.to_string()).collect()
 }
 

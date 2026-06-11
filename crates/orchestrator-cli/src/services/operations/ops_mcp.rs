@@ -50,6 +50,8 @@ mod exec;
 mod exec_errors;
 #[path = "ops_mcp/exec_types.rs"]
 mod exec_types;
+#[path = "ops_mcp/interaction_tools.rs"]
+mod interaction_tools;
 #[path = "ops_mcp/list_guard.rs"]
 mod list_guard;
 #[path = "ops_mcp/list_profiles.rs"]
@@ -170,6 +172,9 @@ struct AoMcpServer {
     default_project_root: String,
     tool_router: ToolRouter<Self>,
     plugin_registry: PluginRegistryCache,
+    // CLI-pinned agent identity (`animus mcp serve --agent-id <id>`) for the
+    // blocking interaction tools; overrides both the env pin and the payload.
+    pinned_agent_id: Option<String>,
 }
 
 impl std::fmt::Debug for AoMcpServer {
@@ -252,8 +257,23 @@ pub(super) fn new_memory_mcp_server(default_project_root: &str) -> MemoryMcpServ
     MemoryMcpServer { default_project_root: default_project_root.to_string(), tool_router }
 }
 
+#[cfg(test)]
 fn new_ao_mcp_server(default_project_root: &str) -> AoMcpServer {
-    let tool_router = AoMcpServer::daemon_tool_router()
+    new_ao_mcp_server_with_options(default_project_root, false, None)
+}
+
+// `management` gates the human-side `animus.interactions.*` tools. The default
+// (agent-injected) server only carries the blocking `animus.agent.ask` /
+// `animus.agent.request_approval` escalation tools, so an agent can never list
+// or answer its own pending approvals; inbox UIs opt in via
+// `animus mcp serve --management`. `pinned_agent_id` (from `--agent-id`) binds
+// the blocking tools' identity so the payload cannot select another profile.
+fn new_ao_mcp_server_with_options(
+    default_project_root: &str,
+    management: bool,
+    pinned_agent_id: Option<String>,
+) -> AoMcpServer {
+    let mut tool_router = AoMcpServer::daemon_tool_router()
         + AoMcpServer::queue_tool_router()
         + AoMcpServer::agent_tool_router()
         + AoMcpServer::output_tool_router()
@@ -265,12 +285,17 @@ fn new_ao_mcp_server(default_project_root: &str) -> AoMcpServer {
         + AoMcpServer::skill_tool_router()
         + AoMcpServer::subject_tool_router()
         + AoMcpServer::logs_tool_router()
-        + AoMcpServer::memory_tool_router_for_ao();
+        + AoMcpServer::memory_tool_router_for_ao()
+        + AoMcpServer::interaction_tool_router();
+    if management {
+        tool_router += AoMcpServer::interaction_management_tool_router();
+    }
 
     AoMcpServer {
         default_project_root: default_project_root.to_string(),
         tool_router,
         plugin_registry: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
+        pinned_agent_id: pinned_agent_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
     }
 }
 
@@ -418,8 +443,9 @@ fn read_file_with_mtime(path: &Path) -> Result<(String, Option<u64>), std::io::E
 
 pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str, cli_json: bool) -> Result<()> {
     match command {
-        McpCommand::Serve => {
-            let service = new_ao_mcp_server(project_root).serve(stdio()).await?;
+        McpCommand::Serve(args) => {
+            let service =
+                new_ao_mcp_server_with_options(project_root, args.management, args.agent_id).serve(stdio()).await?;
             service.waiting().await?;
             Ok(())
         }

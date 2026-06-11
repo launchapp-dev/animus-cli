@@ -16,6 +16,7 @@ pub mod agent_state;
 pub mod config_context;
 pub mod ensure_execution_cwd;
 pub mod evals;
+pub mod interactions;
 pub mod ipc;
 pub mod metrics_hook;
 pub mod notification_log;
@@ -43,6 +44,11 @@ pub use evals::llm_judge_runner::{JudgeError, JudgeRequest, JudgeResponse};
 pub use evals::{
     evaluate_outcome, run_evals, EvalCheckResult, EvalContext, EvalsDecision, EvalsOutcome, JudgeBackend,
     EVAL_RESULT_SCHEMA_ID,
+};
+pub use interactions::{
+    answer_interaction, create_approval_interaction, create_question_interaction, expire_interaction,
+    list_interactions, load_interaction, InteractionKind, InteractionRecord, InteractionStatus,
+    INTERACTION_ANSWER_ALLOW, INTERACTION_ANSWER_DENY,
 };
 pub use ipc::*;
 pub use payload_traversal::{

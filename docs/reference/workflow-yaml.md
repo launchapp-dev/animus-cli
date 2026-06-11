@@ -307,6 +307,10 @@ agents:
     tool_policy:                 # Optional. Tool access control.
       mode: "allowlist"
       allowed: ["tool.name"]
+    approval_policy:             # Optional. animus.agent.request_approval routing.
+      auto_allow: ["cargo *", "git.commit"]
+      auto_deny: ["git.push*"]
+      default: ask               # ask (escalate to a human) | allow | deny
 ```
 
 ### Fields
@@ -330,6 +334,7 @@ agents:
 | `skills` | string[] | no | Skill identifiers to attach. Skills resolve from built-ins, `.animus/config/skill_definitions/*.yml`, and Markdown skills such as `.animus/skills/<name>/SKILL.md` or `.animus/skills/<name>.md` |
 | `capabilities` | map\<string, bool\> | no | Capability flags |
 | `tool_policy` | object | no | Tool access control policy |
+| `approval_policy` | object | no | Routing for `animus.agent.request_approval` MCP calls. `auto_allow` / `auto_deny` are `*`-glob pattern lists matched against the request's `tool_name` when present, otherwise its `action`; `auto_deny` wins on overlap (fail closed). `default` is `ask` (escalate to a pending human interaction — the default), `allow`, or `deny` |
 
 Agent profiles defined in YAML are merged into the agent runtime config during compilation. Phase definitions reference agents by profile name.
 

@@ -337,6 +337,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         &scope.tool_policy,
         scope_selected,
         args.no_animus_mcp,
+        args.agent.as_deref(),
     )?;
 
     // Provider CLIs that auto-discover a cwd-local `.mcp.json` (claude-code)

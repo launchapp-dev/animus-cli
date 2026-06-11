@@ -331,6 +331,22 @@ pub fn inject_default_stdio_mcp_with_config(
     project_root: &str,
     mcp_config: &protocol::McpRuntimeConfig,
 ) {
+    inject_default_stdio_mcp_for_agent(runtime_contract, project_root, mcp_config, None);
+}
+
+/// Variant of [`inject_default_stdio_mcp_with_config`] that pins the spawned
+/// `animus mcp serve` to a known agent profile via `--agent-id`. The server
+/// then ignores the payload `agent_id` on the blocking
+/// `animus.agent.ask` / `animus.agent.request_approval` tools, so an agent
+/// cannot claim a sibling profile whose `approval_policy` is more permissive.
+/// The flag is only appended to the DEFAULT serve args — host-supplied
+/// `stdio_args_json` is passed through untouched.
+pub fn inject_default_stdio_mcp_for_agent(
+    runtime_contract: &mut Value,
+    project_root: &str,
+    mcp_config: &protocol::McpRuntimeConfig,
+    agent_profile_id: Option<&str>,
+) {
     if runtime_contract.pointer("/mcp/stdio/command").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty()) {
         return;
     }
@@ -364,10 +380,19 @@ pub fn inject_default_stdio_mcp_with_config(
         return;
     };
 
-    let args =
-        mcp_config.stdio_args_json.as_deref().and_then(|v| serde_json::from_str::<Vec<String>>(v).ok()).unwrap_or_else(
-            || vec!["--project-root".to_string(), project_root.to_string(), "mcp".to_string(), "serve".to_string()],
-        );
+    let args = mcp_config
+        .stdio_args_json
+        .as_deref()
+        .and_then(|v| serde_json::from_str::<Vec<String>>(v).ok())
+        .unwrap_or_else(|| {
+            let mut args =
+                vec!["--project-root".to_string(), project_root.to_string(), "mcp".to_string(), "serve".to_string()];
+            if let Some(agent_id) = agent_profile_id.map(str::trim).filter(|value| !value.is_empty()) {
+                args.push("--agent-id".to_string());
+                args.push(agent_id.to_string());
+            }
+            args
+        });
 
     if let Some(mcp) = runtime_contract.get_mut("mcp").and_then(Value::as_object_mut) {
         mcp.insert("stdio".to_string(), serde_json::json!({ "command": command, "args": args }));

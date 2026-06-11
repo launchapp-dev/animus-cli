@@ -21,7 +21,7 @@ Practical walkthroughs for day-to-day Animus operations.
 
 ## MCP & Agent Integration
 
-- **[Working with Animus via MCP Tools](agents.md)** -- Complete guide to all 78 built-in MCP tools: JSON examples, common workflows, sequencing tips, pagination, and batch operations.
+- **[Working with Animus via MCP Tools](agents.md)** -- Complete guide to all 82 built-in MCP tools: JSON examples, common workflows, sequencing tips, pagination, and batch operations.
 
 ## Extending Animus
 

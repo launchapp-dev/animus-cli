@@ -255,6 +255,57 @@ impl AgentToolPolicy {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalPolicyDefault {
+    #[default]
+    Ask,
+    Allow,
+    Deny,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalPolicyDecision {
+    Ask,
+    Allow,
+    Deny,
+}
+
+/// Per-agent policy for `animus.agent.request_approval` escalations.
+///
+/// Patterns in `auto_allow` / `auto_deny` are matched against the request's
+/// `tool_name` when present, otherwise against its `action` string, using the
+/// same `*`-wildcard glob semantics as [`AgentToolPolicy`] (a bare prefix like
+/// `git.` only matches with an explicit trailing `*`, e.g. `git.*`). `auto_deny`
+/// is checked first and wins on overlap (fail closed). When neither list
+/// matches, `default` applies: `ask` escalates to a pending human interaction,
+/// `allow` / `deny` short-circuit without one.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct ApprovalPolicy {
+    #[serde(default)]
+    pub auto_allow: Vec<String>,
+    #[serde(default)]
+    pub auto_deny: Vec<String>,
+    #[serde(default)]
+    pub default: ApprovalPolicyDefault,
+}
+
+impl ApprovalPolicy {
+    pub fn evaluate(&self, subject: &str) -> ApprovalPolicyDecision {
+        if self.auto_deny.iter().any(|pattern| glob_match(pattern, subject)) {
+            return ApprovalPolicyDecision::Deny;
+        }
+        if self.auto_allow.iter().any(|pattern| glob_match(pattern, subject)) {
+            return ApprovalPolicyDecision::Allow;
+        }
+        match self.default {
+            ApprovalPolicyDefault::Ask => ApprovalPolicyDecision::Ask,
+            ApprovalPolicyDefault::Allow => ApprovalPolicyDecision::Allow,
+            ApprovalPolicyDefault::Deny => ApprovalPolicyDecision::Deny,
+        }
+    }
+}
+
 fn glob_match(pattern: &str, value: &str) -> bool {
     let pat = pattern.as_bytes();
     let val = value.as_bytes();
@@ -401,6 +452,8 @@ pub struct AgentProfile {
     pub mcp_servers: Vec<String>,
     #[serde(default)]
     pub tool_policy: AgentToolPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<ApprovalPolicy>,
     #[serde(default)]
     pub skills: Vec<String>,
     #[serde(default)]
@@ -488,6 +541,8 @@ pub struct AgentProfileOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_policy: Option<AgentToolPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_policy: Option<ApprovalPolicy>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<BTreeMap<String, bool>>,
@@ -564,6 +619,7 @@ impl AgentProfileOverlay {
             communication,
             mcp_servers,
             tool_policy,
+            approval_policy,
             skills,
             capabilities,
             mcp_server_configs,
@@ -601,6 +657,7 @@ impl From<AgentProfile> for AgentProfileOverlay {
             communication: Some(profile.communication),
             mcp_servers: Some(profile.mcp_servers),
             tool_policy: Some(profile.tool_policy),
+            approval_policy: profile.approval_policy,
             skills: Some(profile.skills),
             capabilities: Some(profile.capabilities),
             mcp_server_configs: profile.mcp_server_configs,
@@ -1269,6 +1326,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     extra_args: vec![],
                     codex_config_overrides: vec![],
                     max_continuations: None,
+                    approval_policy: None,
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1309,6 +1367,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     extra_args: vec![],
                     codex_config_overrides: vec![],
                     max_continuations: None,
+                    approval_policy: None,
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1370,6 +1429,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     extra_args: vec![],
                     codex_config_overrides: vec![],
                     max_continuations: None,
+                    approval_policy: None,
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1433,6 +1493,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     extra_args: vec![],
                     codex_config_overrides: vec![],
                     max_continuations: None,
+                    approval_policy: None,
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1473,6 +1534,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     extra_args: vec![],
                     codex_config_overrides: vec![],
                     max_continuations: None,
+                    approval_policy: None,
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1862,6 +1924,9 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfileOverlay) {
     }
     if let Some(tool_policy) = &overlay.tool_policy {
         base.tool_policy = tool_policy.clone();
+    }
+    if overlay.approval_policy.is_some() {
+        base.approval_policy = overlay.approval_policy.clone();
     }
     if let Some(skills) = &overlay.skills {
         base.skills = skills.clone();
@@ -2553,6 +2618,52 @@ mod tests {
     use super::*;
     use crate::test_support::{env_lock, EnvVarGuard};
     use std::fs;
+
+    #[test]
+    fn approval_policy_deny_wins_over_allow_and_default_applies() {
+        let policy = ApprovalPolicy {
+            auto_allow: vec!["git.*".to_string(), "cargo test".to_string()],
+            auto_deny: vec!["git.push*".to_string(), "*prod*".to_string()],
+            default: ApprovalPolicyDefault::Ask,
+        };
+        assert_eq!(policy.evaluate("git.commit"), ApprovalPolicyDecision::Allow);
+        assert_eq!(policy.evaluate("git.push --force"), ApprovalPolicyDecision::Deny);
+        assert_eq!(policy.evaluate("cargo test"), ApprovalPolicyDecision::Allow);
+        assert_eq!(policy.evaluate("deploy to prod cluster"), ApprovalPolicyDecision::Deny);
+        assert_eq!(policy.evaluate("rm -rf node_modules"), ApprovalPolicyDecision::Ask);
+
+        let allow_by_default = ApprovalPolicy { default: ApprovalPolicyDefault::Allow, ..Default::default() };
+        assert_eq!(allow_by_default.evaluate("anything"), ApprovalPolicyDecision::Allow);
+        let deny_by_default = ApprovalPolicy { default: ApprovalPolicyDefault::Deny, ..Default::default() };
+        assert_eq!(deny_by_default.evaluate("anything"), ApprovalPolicyDecision::Deny);
+    }
+
+    #[test]
+    fn approval_policy_round_trips_through_agent_overlay() {
+        let overlay: AgentProfileOverlay = serde_json::from_value(json!({
+            "approval_policy": {
+                "auto_allow": ["task.*"],
+                "auto_deny": ["daemon.stop"],
+                "default": "deny"
+            }
+        }))
+        .expect("overlay parses");
+        let policy = overlay.approval_policy.clone().expect("approval policy present");
+        assert_eq!(policy.auto_allow, vec!["task.*".to_string()]);
+        assert_eq!(policy.auto_deny, vec!["daemon.stop".to_string()]);
+        assert_eq!(policy.default, ApprovalPolicyDefault::Deny);
+
+        let mut base = AgentProfile::default();
+        assert!(base.approval_policy.is_none());
+        merge_agent_profile(&mut base, &overlay);
+        assert_eq!(base.approval_policy.as_ref(), Some(&policy));
+
+        let round_tripped = AgentProfileOverlay::from(base.clone());
+        assert_eq!(round_tripped.approval_policy.as_ref(), Some(&policy));
+
+        let serialized = serde_json::to_value(&base).expect("profile serializes");
+        assert_eq!(serialized.pointer("/approval_policy/default").and_then(Value::as_str), Some("deny"));
+    }
 
     #[test]
     fn workflow_tool_redeclare_with_executable_only_preserves_capabilities() {

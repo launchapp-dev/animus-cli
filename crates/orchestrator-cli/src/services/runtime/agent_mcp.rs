@@ -31,7 +31,7 @@ use tracing::warn;
 
 use animus_runtime_shared::config_context::RuntimeConfigContext;
 use animus_runtime_shared::runtime_contract::{
-    inject_default_stdio_mcp_with_config, inject_named_mcp_servers, set_mcp_tool_policy,
+    inject_default_stdio_mcp_for_agent, inject_named_mcp_servers, set_mcp_tool_policy,
 };
 use orchestrator_config::agent_runtime_config::AgentToolPolicy;
 
@@ -100,6 +100,7 @@ pub(crate) fn assemble_agent_mcp_contract(
     tool_policy: &AgentToolPolicy,
     scope_selected: bool,
     disable_animus: bool,
+    agent_id: Option<&str>,
 ) -> Result<Option<Value>> {
     // Base contract carries the per-tool `cli` block (including
     // `cli/capabilities/supports_mcp`) plus an empty `mcp` block the
@@ -135,7 +136,15 @@ pub(crate) fn assemble_agent_mcp_contract(
         if let Some(command) = animus_cli_command() {
             mcp_config.stdio_command = Some(command);
         }
-        inject_default_stdio_mcp_with_config(&mut runtime_contract, &project_root.to_string_lossy(), &mcp_config);
+        // Pin the spawned `animus mcp serve` to the selected agent profile
+        // (`--agent-id`) so the blocking approval/question tools cannot be
+        // routed through another profile's approval_policy via the payload.
+        inject_default_stdio_mcp_for_agent(
+            &mut runtime_contract,
+            &project_root.to_string_lossy(),
+            &mcp_config,
+            agent_id,
+        );
 
         // Mirror the shared IPC path: when a stdio MCP command is injected
         // (no HTTP endpoint), flip `mcp.enforce_only` and seed
@@ -752,6 +761,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap();
         assert!(contract.is_none(), "an unknown/unsupported tool must inject no MCP contract");
@@ -770,6 +780,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP so a contract is built");
@@ -792,6 +803,33 @@ mod tests {
     }
 
     #[test]
+    fn selected_agent_pins_identity_on_the_injected_serve_command() {
+        let tmp = tempfile::tempdir().unwrap();
+        let contract = assemble_agent_mcp_contract(
+            tmp.path(),
+            "claude",
+            "claude-sonnet-4-6",
+            &names(&["animus"]),
+            &[],
+            &[],
+            &AgentToolPolicy::default(),
+            true,
+            false,
+            Some("swe"),
+        )
+        .unwrap()
+        .expect("claude supports MCP");
+        let args: Vec<&str> = contract
+            .pointer("/mcp/stdio/args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        let position = args.iter().position(|arg| *arg == "--agent-id");
+        assert!(position.is_some(), "the injected serve command must pin --agent-id; args: {args:?}");
+        assert_eq!(args.get(position.unwrap() + 1), Some(&"swe"), "args: {args:?}");
+    }
+
+    #[test]
     fn assembled_contract_strips_cli_launch_so_provider_keeps_its_own() {
         // The assembler passes an EMPTY placeholder prompt to
         // build_runtime_contract, so any `cli.launch` it built would launch
@@ -808,6 +846,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -836,6 +875,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             true,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -858,6 +898,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true, // scope_selected
             false,
+            None,
         )
         .expect_err("an undefined server name must error");
         let message = err.to_string();
@@ -882,6 +923,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true, // scope WAS selected (a --agent was passed)
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -912,6 +954,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -983,6 +1026,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1012,6 +1056,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true, // scope_selected
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1040,6 +1085,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true, // scope_selected
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1067,6 +1113,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true, // scope_selected
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1089,6 +1136,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1129,6 +1177,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1184,6 +1233,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1235,6 +1285,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true, // scope_selected
             true, // --no-animus-mcp so only `trading` is materialized
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1250,6 +1301,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true, // scope_selected
             true,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1286,6 +1338,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1307,6 +1360,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             true,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1409,6 +1463,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1463,6 +1518,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1498,6 +1554,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1531,6 +1588,7 @@ mod tests {
             &policy,
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1565,6 +1623,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1590,6 +1649,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1619,6 +1679,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1661,6 +1722,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1697,6 +1759,7 @@ mod tests {
             &AgentToolPolicy::default(),
             false,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1727,6 +1790,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1793,6 +1857,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
@@ -1861,6 +1926,7 @@ mod tests {
             &AgentToolPolicy::default(),
             true,
             false,
+            None,
         )
         .unwrap()
         .expect("claude supports MCP");
