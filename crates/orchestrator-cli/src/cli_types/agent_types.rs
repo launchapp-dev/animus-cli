@@ -124,6 +124,12 @@ pub(crate) struct AgentRunArgs {
         help = "Reasoning/thinking effort for the provider: low, medium, or high. Overrides any configured value."
     )]
     pub(crate) reasoning_effort: Option<ReasoningEffortArg>,
+    #[arg(
+        long,
+        value_name = "MODE",
+        help = "Provider permission/approval mode, forwarded verbatim (claude: default|acceptEdits|bypassPermissions|plan; codex: untrusted|on-failure|on-request|never; gemini: default|auto_edit|yolo). Overrides any configured agent-profile value."
+    )]
+    pub(crate) permission_mode: Option<String>,
     #[arg(long, value_name = "PATH", help = "Working directory for the run. Must resolve inside the project root.")]
     pub(crate) cwd: Option<String>,
     #[arg(

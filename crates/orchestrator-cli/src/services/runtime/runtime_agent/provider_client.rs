@@ -99,7 +99,10 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
     // so we don't pay for them twice.
     if let Some(map) = context_object.clone() {
         for (key, value) in map {
-            if matches!(key.as_str(), "prompt" | "cwd" | "timeout_secs" | "tool" | "model" | "project_root") {
+            if matches!(
+                key.as_str(),
+                "prompt" | "cwd" | "timeout_secs" | "tool" | "model" | "project_root" | "permission_mode"
+            ) {
                 continue;
             }
             extras.insert(key, value);
@@ -112,6 +115,22 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
     // (codex `-c model_reasoning_effort`, claude `--effort`).
     if let Some(level) = args.reasoning_effort {
         extras.insert("reasoning_effort".to_string(), Value::String(level.as_str().to_string()));
+    }
+
+    // Permission mode: the `--permission-mode` flag wins over a
+    // `permission_mode` forwarded through `--context-json`, which wins over
+    // the selected `--agent` profile's `permission_mode`. The value is
+    // provider-specific (claude `--permission-mode`, codex
+    // `-c approval_policy`, gemini approval mode) and rides the typed
+    // `SessionRequest.permission_mode` field verbatim; unknown values only
+    // warn, never block.
+    let permission_mode = args
+        .permission_mode
+        .clone()
+        .or_else(|| context_str(context_object.as_ref(), "permission_mode"))
+        .or_else(|| profile_permission_mode(&project_root_path, args.agent.as_deref()));
+    if let Some(mode) = permission_mode.as_deref() {
+        warn_unknown_permission_mode(mode);
     }
 
     // `--runtime-contract-json` wins over a `runtime_contract` key
@@ -199,11 +218,38 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         cwd,
         project_root: Some(project_root_path),
         mcp_endpoint: None,
-        permission_mode: None,
+        permission_mode,
         timeout_secs,
         env_vars: Vec::new(),
         extras: Value::Object(extras),
     })
+}
+
+/// Resolve the `permission_mode` declared on an agent profile. Reads the
+/// compiled agent runtime config, which already folds workflow YAML
+/// `agents:` overlays onto the builtin profiles.
+pub(crate) fn profile_permission_mode(project_root: &Path, agent_id: Option<&str>) -> Option<String> {
+    let agent_id = agent_id?;
+    orchestrator_core::load_agent_runtime_config_or_default(project_root)
+        .agent_profile(agent_id)
+        .and_then(|profile| profile.permission_mode.as_deref())
+        .map(str::trim)
+        .filter(|mode| !mode.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+/// Warn on stderr when a permission mode is not in the union of values any
+/// known provider accepts. Modes are provider-specific and forwarded
+/// verbatim, so this never blocks — it only catches likely typos.
+pub(crate) fn warn_unknown_permission_mode(mode: &str) {
+    if !orchestrator_config::agent_runtime_config::is_known_permission_mode(mode) {
+        eprintln!(
+            "warning: permission mode '{mode}' is not a known value for any provider \
+             (claude: default|acceptEdits|bypassPermissions|plan; \
+             codex: untrusted|on-failure|on-request|never; \
+             gemini: default|auto_edit|yolo); passing it through verbatim"
+        );
+    }
 }
 
 /// Start a session through the resolver for the supplied request.
@@ -392,6 +438,7 @@ mod tests {
             model: Some("claude-sonnet-4-6".to_string()),
             prompt: Some("hi".to_string()),
             reasoning_effort: None,
+            permission_mode: None,
             cwd: Some(project_root.to_string()),
             timeout_secs: None,
             context_json: None,
@@ -573,6 +620,101 @@ agents:
             !serialized.contains("tok-profile-secret"),
             "the resolved bearer token must never appear in extras: {serialized}"
         );
+    }
+
+    #[test]
+    fn agent_run_without_permission_mode_leaves_request_field_unset() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let args = base_args(&root_str);
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert!(request.permission_mode.is_none(), "no flag/profile/context must leave permission_mode unset");
+    }
+
+    #[test]
+    fn agent_run_permission_mode_flag_rides_the_typed_request_field() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let mut args = base_args(&root_str);
+        args.permission_mode = Some("acceptEdits".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert_eq!(request.permission_mode.as_deref(), Some("acceptEdits"));
+        assert!(
+            request.extras.pointer("/permission_mode").is_none(),
+            "permission_mode must ride the typed field, not extras; extras: {}",
+            request.extras
+        );
+    }
+
+    #[test]
+    fn agent_run_permission_mode_resolves_from_the_agent_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+        std::fs::create_dir_all(root.join(".animus")).unwrap();
+        std::fs::write(
+            root.join(".animus").join("workflows.yaml"),
+            r#"
+agents:
+  cautious:
+    description: "Cautious agent"
+    permission_mode: plan
+"#,
+        )
+        .unwrap();
+
+        let mut args = base_args(&root_str);
+        args.agent = Some("cautious".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert_eq!(
+            request.permission_mode.as_deref(),
+            Some("plan"),
+            "the --agent profile's permission_mode must reach the request"
+        );
+    }
+
+    #[test]
+    fn agent_run_permission_mode_flag_wins_over_the_agent_profile() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+        std::fs::create_dir_all(root.join(".animus")).unwrap();
+        std::fs::write(
+            root.join(".animus").join("workflows.yaml"),
+            r#"
+agents:
+  cautious:
+    description: "Cautious agent"
+    permission_mode: plan
+"#,
+        )
+        .unwrap();
+
+        let mut args = base_args(&root_str);
+        args.agent = Some("cautious".to_string());
+        args.permission_mode = Some("bypassPermissions".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert_eq!(
+            request.permission_mode.as_deref(),
+            Some("bypassPermissions"),
+            "the explicit --permission-mode flag must win over the profile"
+        );
+    }
+
+    #[test]
+    fn agent_run_unknown_permission_mode_passes_through_without_blocking() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let mut args = base_args(&root_str);
+        args.permission_mode = Some("totally-custom-mode".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("an unknown mode must not block the run");
+        assert_eq!(request.permission_mode.as_deref(), Some("totally-custom-mode"));
     }
 
     #[test]

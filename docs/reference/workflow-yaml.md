@@ -325,6 +325,7 @@ agents:
 | `tool` | string | no | CLI tool to invoke (claude, codex, gemini, etc.) |
 | `tool_profile` | string | no | Named global Claude profile to resolve into launch env; only valid for `claude` |
 | `reasoning_effort` | string | no | Provider reasoning/thinking effort: `low`, `medium`, or `high`. Mapped per provider (codex `-c model_reasoning_effort="<level>"`, claude `--effort <level>`); other providers ignore it. Validated at compile time |
+| `permission_mode` | string | no | Provider permission/approval mode, forwarded verbatim (claude: `default`/`acceptEdits`/`bypassPermissions`/`plan`; codex: `untrusted`/`on-failure`/`on-request`/`never`; gemini: `default`/`auto_edit`/`yolo`). Unknown values warn but pass through. The `animus agent run` / `animus chat send` `--permission-mode` flag overrides it |
 | `mcp_servers` | string[] | no | Names of `mcp_servers` entries this agent can use |
 | `skills` | string[] | no | Skill identifiers to attach. Skills resolve from built-ins, `.animus/config/skill_definitions/*.yml`, and Markdown skills such as `.animus/skills/<name>/SKILL.md` or `.animus/skills/<name>.md` |
 | `capabilities` | map\<string, bool\> | no | Capability flags |
@@ -425,13 +426,19 @@ When `runtime.tool_profile` is set, the effective tool must resolve to
 its environment into the Claude launch contract.
 
 The phase `runtime` block accepts the same provider knobs as an agent
-profile — including `reasoning_effort` (`low`/`medium`/`high`). Resolution
-cascades **phase runtime → agent profile**: a non-empty `runtime.reasoning_effort`
-on the phase wins over the agent profile's value, mirroring how `model` and
-`tool` cascade. The resolved level maps per provider (codex
+profile — including `reasoning_effort` (`low`/`medium`/`high`) and
+`permission_mode`. Resolution cascades **phase runtime → agent profile**: a
+non-empty `runtime.reasoning_effort` or `runtime.permission_mode` on the
+phase wins over the agent profile's value, mirroring how `model` and
+`tool` cascade. The resolved effort level maps per provider (codex
 `-c model_reasoning_effort`, claude `--effort`) and is validated at compile
-time. The `animus agent run` / `animus chat send` `--reasoning-effort` flag
-overrides both.
+time; `permission_mode` is forwarded verbatim (claude `--permission-mode`,
+codex `-c approval_policy`, gemini approval mode) and unknown values only
+warn. The `animus agent run` / `animus chat send` `--reasoning-effort` and
+`--permission-mode` flags override both. Note: the ad-hoc surfaces
+(`animus agent run` / `animus chat send` with `--agent`) honour
+`permission_mode` today; workflow phase execution enforces it once the
+out-of-tree workflow-runner plugin pin consumes the new field.
 
 ### evals (experimental — runtime enforcement deferred)
 

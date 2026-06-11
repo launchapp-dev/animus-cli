@@ -300,6 +300,19 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     let raw_cwd = args.cwd.clone().unwrap_or_else(|| project_root.to_string());
     let cwd = PathBuf::from(canonicalize_cwd_in_project(&raw_cwd, project_root)?);
 
+    // Permission mode: the `--permission-mode` flag wins over the selected
+    // `--agent` profile's `permission_mode`. Provider-specific and forwarded
+    // verbatim; an unknown value only warns (stderr), never blocks.
+    let permission_mode = args.permission_mode.clone().or_else(|| {
+        crate::services::runtime::runtime_agent::provider_client::profile_permission_mode(
+            &project_root_path,
+            args.agent.as_deref(),
+        )
+    });
+    if let Some(mode) = permission_mode.as_deref() {
+        crate::services::runtime::runtime_agent::provider_client::warn_unknown_permission_mode(mode);
+    }
+
     let producer = ResolverTurnProducer::for_project(&project_root_path);
 
     // Resolve the per-agent MCP server set (profile ∪ skill ∪ --mcp-server
@@ -353,6 +366,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         cwd,
         project_root: project_root_path.clone(),
         reasoning_effort: args.reasoning_effort.map(|level| level.as_str()),
+        permission_mode: permission_mode.as_deref(),
         mcp_contract: mcp_contract.as_ref(),
     };
 

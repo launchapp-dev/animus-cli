@@ -207,6 +207,29 @@ Plugins:
 { "name": "animus-provider-claude" }           // animus.plugin.update
 ```
 
+## Permission Modes
+
+Spawned provider CLIs run with their own default permission posture unless a
+permission mode is configured. Two surfaces feed it:
+
+- Agent profile: set `permission_mode` on an `agents:` entry in workflow YAML
+  (or a phase `runtime:` block, which wins over the profile). See
+  [Workflow YAML](../reference/workflow-yaml.md#agents).
+- CLI flag: `--permission-mode <MODE>` on `animus agent run` and
+  `animus chat send` overrides any configured value.
+
+The value is forwarded verbatim to the provider; it is provider-specific:
+
+| Provider | Accepted modes | Mapped flag |
+|---|---|---|
+| claude | `default`, `acceptEdits`, `bypassPermissions`, `plan` | `--permission-mode <mode>` |
+| codex | `untrusted`, `on-failure`, `on-request`, `never` | `-c approval_policy="<mode>"` |
+| gemini | `default`, `auto_edit`, `yolo` | approval-mode mapping |
+
+A value outside the union of known modes prints a stderr warning but still
+passes through unchanged, so future provider modes work without an Animus
+release.
+
 ## Recommended Flow
 
 1. Discover or create a subject with `animus.subject.list` or `animus.subject.create`.
