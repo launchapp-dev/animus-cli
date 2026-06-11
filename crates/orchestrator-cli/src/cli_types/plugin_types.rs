@@ -336,9 +336,10 @@ pub(crate) struct PluginUpdateArgs {
     /// Reinstall even if the installed tag already matches the recommended pin.
     #[arg(long, default_value_t = false)]
     pub(crate) force: bool,
-    /// After updating, attempt to restart the daemon (best-effort) so the new
-    /// binaries are picked up. Default off — the operator usually wants to
-    /// schedule the restart themselves.
+    /// After a successful update, restart the running daemon so the new
+    /// binaries are picked up (graceful stop, then a detached start). No-op
+    /// with a note when the daemon is not running. Default off — the operator
+    /// usually wants to schedule the restart themselves.
     #[arg(long, default_value_t = false)]
     pub(crate) restart_daemon: bool,
 }

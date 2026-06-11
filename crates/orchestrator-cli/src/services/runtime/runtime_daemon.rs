@@ -25,7 +25,7 @@ fn read_notification_config_from_pm_config(pm_config: &serde_json::Value) -> ser
 
 use crate::{
     print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonMetricsArgs, DaemonPreflightArgs,
-    DaemonRunArgs, DaemonStartArgs, DaemonStopArgs, DaemonStreamArgs, RunnerScopeArg,
+    DaemonRestartArgs, DaemonRunArgs, DaemonStartArgs, DaemonStopArgs, DaemonStreamArgs, RunnerScopeArg,
 };
 
 mod control_routing;
@@ -658,103 +658,8 @@ pub(crate) async fn handle_daemon(
     let daemon = hub.daemon();
 
     match command {
-        DaemonCommand::Start(args) => {
-            if !json {
-                let _ = crate::services::metrics::maybe_prompt_first_run(std::path::Path::new(project_root));
-            }
-            if let Some(existing_pid) = get_daemon_pid(project_root)? {
-                if is_process_alive(existing_pid) {
-                    if args.autonomous {
-                        let _ = set_runtime_paused(project_root, false);
-                        return print_value(
-                            serde_json::json!({
-                                "message": "daemon already running",
-                                "autonomous": true,
-                                "daemon_pid": existing_pid,
-                            }),
-                            json,
-                        );
-                    }
-                    return Err(anyhow!(
-                        "autonomous daemon is already running (pid {}); stop it before non-autonomous start",
-                        existing_pid
-                    ));
-                }
-                let _ = set_daemon_pid(project_root, None);
-            }
-
-            if args.autonomous {
-                let mut daemon_spawn = spawn_autonomous_daemon_run(project_root, &args)?;
-                let daemon_pid = daemon_spawn.child.id();
-                let startup_status = wait_for_autonomous_startup_probe(
-                    &mut daemon_spawn.child,
-                    Duration::from_secs(AUTONOMOUS_STARTUP_PROBE_SECS),
-                )
-                .await?;
-                if startup_status.is_some() {
-                    let _ = set_daemon_pid(project_root, None);
-                    return Err(autonomous_startup_failure_error(
-                        daemon_pid,
-                        startup_status,
-                        daemon_spawn.log_path.as_path(),
-                        daemon_spawn.startup_log_offset,
-                    ));
-                }
-
-                if !is_process_alive(daemon_pid) {
-                    let _ = set_daemon_pid(project_root, None);
-                    return Err(autonomous_startup_failure_error(
-                        daemon_pid,
-                        None,
-                        daemon_spawn.log_path.as_path(),
-                        daemon_spawn.startup_log_offset,
-                    ));
-                }
-
-                drop(daemon_spawn.child);
-                let _ = set_daemon_pid(project_root, Some(daemon_pid));
-                write_daemon_pid(project_root, daemon_pid);
-
-                if let Ok(Some(recorded_pid)) = get_daemon_pid(project_root) {
-                    if recorded_pid != daemon_pid {
-                        let _ = set_daemon_pid(project_root, None);
-                        return Err(anyhow!(
-                            "autonomous daemon startup validation failed: daemon-state.json recorded pid {} but expected {}",
-                            recorded_pid,
-                            daemon_pid
-                        ));
-                    }
-                }
-
-                let _ = set_runtime_paused(project_root, false);
-                // DaemonStarted metric is emitted by the spawned child's
-                // `handle_daemon_run` path; recording it here too would
-                // double-count autonomous starts.
-                return print_value(
-                    serde_json::json!({
-                        "message": "daemon started",
-                        "autonomous": true,
-                        "daemon_pid": daemon_pid,
-                    }),
-                    json,
-                );
-            }
-
-            let _ = set_daemon_pid(project_root, None);
-            handle_daemon_run(
-                DaemonRunArgs {
-                    scheduler: args.scheduler,
-                    skip_runner: args.skip_runner,
-                    runner_scope: args.runner_scope,
-                    once: false,
-                    auto_install: args.auto_install,
-                    skip_preflight: args.skip_preflight,
-                },
-                project_root,
-                json,
-            )
-            .await
-        }
+        DaemonCommand::Start(args) => handle_daemon_start(args, project_root, json).await,
+        DaemonCommand::Restart(args) => handle_daemon_restart(args, hub.clone(), project_root, json).await,
         DaemonCommand::Run(args) => handle_daemon_run(args, project_root, json).await,
         DaemonCommand::Events(args) => handle_daemon_events(args, json).await,
         DaemonCommand::Stop(args) => {
@@ -804,6 +709,149 @@ pub(crate) async fn handle_daemon(
         DaemonCommand::Preflight(args) => handle_daemon_preflight(args, project_root, json).await,
         DaemonCommand::Metrics(args) => handle_daemon_metrics(args, project_root, json).await,
     }
+}
+
+async fn handle_daemon_start(args: DaemonStartArgs, project_root: &str, json: bool) -> Result<()> {
+    if !json {
+        let _ = crate::services::metrics::maybe_prompt_first_run(std::path::Path::new(project_root));
+    }
+    if let Some(existing_pid) = get_daemon_pid(project_root)? {
+        if is_process_alive(existing_pid) {
+            if args.autonomous {
+                let _ = set_runtime_paused(project_root, false);
+                return print_value(
+                    serde_json::json!({
+                        "message": "daemon already running",
+                        "autonomous": true,
+                        "daemon_pid": existing_pid,
+                    }),
+                    json,
+                );
+            }
+            return Err(anyhow!(
+                "autonomous daemon is already running (pid {}); stop it before non-autonomous start",
+                existing_pid
+            ));
+        }
+        let _ = set_daemon_pid(project_root, None);
+    }
+
+    if args.autonomous {
+        let daemon_pid = start_autonomous_daemon(project_root, &args).await?;
+        return print_value(
+            serde_json::json!({
+                "message": "daemon started",
+                "autonomous": true,
+                "daemon_pid": daemon_pid,
+            }),
+            json,
+        );
+    }
+
+    let _ = set_daemon_pid(project_root, None);
+    handle_daemon_run(
+        DaemonRunArgs {
+            scheduler: args.scheduler,
+            skip_runner: args.skip_runner,
+            runner_scope: args.runner_scope,
+            once: false,
+            auto_install: args.auto_install,
+            skip_preflight: args.skip_preflight,
+        },
+        project_root,
+        json,
+    )
+    .await
+}
+
+async fn start_autonomous_daemon(project_root: &str, args: &DaemonStartArgs) -> Result<u32> {
+    let mut daemon_spawn = spawn_autonomous_daemon_run(project_root, args)?;
+    let daemon_pid = daemon_spawn.child.id();
+    let startup_status =
+        wait_for_autonomous_startup_probe(&mut daemon_spawn.child, Duration::from_secs(AUTONOMOUS_STARTUP_PROBE_SECS))
+            .await?;
+    if startup_status.is_some() {
+        let _ = set_daemon_pid(project_root, None);
+        return Err(autonomous_startup_failure_error(
+            daemon_pid,
+            startup_status,
+            daemon_spawn.log_path.as_path(),
+            daemon_spawn.startup_log_offset,
+        ));
+    }
+
+    if !is_process_alive(daemon_pid) {
+        let _ = set_daemon_pid(project_root, None);
+        return Err(autonomous_startup_failure_error(
+            daemon_pid,
+            None,
+            daemon_spawn.log_path.as_path(),
+            daemon_spawn.startup_log_offset,
+        ));
+    }
+
+    drop(daemon_spawn.child);
+    let _ = set_daemon_pid(project_root, Some(daemon_pid));
+    write_daemon_pid(project_root, daemon_pid);
+
+    if let Ok(Some(recorded_pid)) = get_daemon_pid(project_root) {
+        if recorded_pid != daemon_pid {
+            let _ = set_daemon_pid(project_root, None);
+            return Err(anyhow!(
+                "autonomous daemon startup validation failed: daemon-state.json recorded pid {} but expected {}",
+                recorded_pid,
+                daemon_pid
+            ));
+        }
+    }
+
+    let _ = set_runtime_paused(project_root, false);
+    // DaemonStarted metric is emitted by the spawned child's
+    // `handle_daemon_run` path; recording it here too would
+    // double-count autonomous starts.
+    Ok(daemon_pid)
+}
+
+async fn handle_daemon_restart(
+    args: DaemonRestartArgs,
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    json: bool,
+) -> Result<()> {
+    let running_pid = get_daemon_pid(project_root)?.filter(|pid| is_process_alive(*pid));
+    if let Some(pid) = running_pid {
+        if !json {
+            println!("stopping daemon (pid {pid})...");
+        }
+        stop_daemon(hub.as_ref(), project_root, args.shutdown_timeout_secs).await?;
+    } else if !json {
+        println!("daemon is not running; starting it");
+    }
+    handle_daemon_start(args.start, project_root, json).await
+}
+
+/// Outcome of a programmatic restart attempt (used by
+/// `animus plugin update --restart-daemon`).
+pub(crate) enum DaemonRestartOutcome {
+    NotRunning,
+    Restarted { daemon_pid: u32 },
+}
+
+/// Restart the daemon only if it is currently running: graceful stop, then a
+/// detached/background start with default flags. Returns `NotRunning` (and
+/// changes nothing) when no live daemon process is found.
+pub(crate) async fn restart_running_daemon(
+    hub: &dyn ServiceHub,
+    project_root: &str,
+    shutdown_timeout_secs: u64,
+) -> Result<DaemonRestartOutcome> {
+    let running = get_daemon_pid(project_root)?.is_some_and(is_process_alive);
+    if !running {
+        return Ok(DaemonRestartOutcome::NotRunning);
+    }
+    stop_daemon(hub, project_root, shutdown_timeout_secs).await?;
+    let daemon_pid = start_autonomous_daemon(project_root, &DaemonStartArgs::detached_defaults()).await?;
+    Ok(DaemonRestartOutcome::Restarted { daemon_pid })
 }
 
 async fn handle_daemon_metrics(args: DaemonMetricsArgs, project_root: &str, json: bool) -> Result<()> {
@@ -1210,21 +1258,25 @@ fn discover_log_files(logs_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     files
 }
 
-async fn handle_daemon_stop(
-    args: DaemonStopArgs,
-    hub: Arc<dyn ServiceHub>,
+struct DaemonStopOutcome {
+    existing_pid: Option<u32>,
+    forced: bool,
+}
+
+async fn stop_daemon(
+    hub: &dyn ServiceHub,
     project_root: &str,
-    json: bool,
-) -> Result<()> {
+    shutdown_timeout_secs: u64,
+) -> Result<DaemonStopOutcome> {
     let daemon = hub.daemon();
     let existing_pid = get_daemon_pid(project_root)?;
     let mut forced = false;
 
     if let Some(pid) = existing_pid {
         if is_process_alive(pid) {
-            let _ = set_shutdown_requested(project_root, true, Some(args.shutdown_timeout_secs));
+            let _ = set_shutdown_requested(project_root, true, Some(shutdown_timeout_secs));
 
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(args.shutdown_timeout_secs);
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(shutdown_timeout_secs);
 
             loop {
                 if !is_process_alive(pid) {
@@ -1252,7 +1304,18 @@ async fn handle_daemon_stop(
     }
     result?;
 
-    let graceful = existing_pid.map(|pid| !forced && !is_process_alive(pid)).unwrap_or(true);
+    Ok(DaemonStopOutcome { existing_pid, forced })
+}
+
+async fn handle_daemon_stop(
+    args: DaemonStopArgs,
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    json: bool,
+) -> Result<()> {
+    let outcome = stop_daemon(hub.as_ref(), project_root, args.shutdown_timeout_secs).await?;
+
+    let graceful = outcome.existing_pid.map(|pid| !outcome.forced && !is_process_alive(pid)).unwrap_or(true);
 
     print_value(
         serde_json::json!({

@@ -59,7 +59,7 @@ pub(crate) async fn handle_update(args: UpdateArgs, project_root: &str, json: bo
             "installed" => {
                 if let Some(installed) = installed.as_deref() {
                     eprintln!(
-                        "Updated animus v{current} -> v{installed}. Restart any running daemons (`animus daemon stop && animus daemon start`)."
+                        "Updated animus v{current} -> v{installed}. Restart any running daemons (`animus daemon restart --autonomous`)."
                     );
                 }
             }

@@ -22,6 +22,7 @@ animus
 │   ├── start                Start the daemon in detached/background mode
 │   ├── run                  Run the daemon in the current foreground process
 │   ├── stop                 Stop the running daemon
+│   ├── restart              Stop the running daemon (graceful), then start it again with the supplied start flags
 │   ├── status               Show daemon runtime status
 │   ├── health               Show daemon health diagnostics
 │   ├── pause                Pause daemon scheduling
@@ -339,6 +340,20 @@ daemon will fail at the first plugin RPC if the plugin really is missing.
 |---|---|
 | `--auto-install` | When preflight finds a missing role, install the daemon's recommended default plugin (pinned `owner/repo@tag`) before continuing. Avoids surprise network fetches when omitted. |
 | `--skip-preflight` | Bypass preflight entirely. Escape hatch for dev iteration or intentionally degraded runs when required provider or subject plugins are not installed. |
+
+### `animus daemon restart`
+
+Stops the running daemon (graceful shutdown, same path as `animus daemon
+stop`), then starts it again. If the daemon is not running, it just starts.
+Accepts every flag `animus daemon start` accepts (`--autonomous`,
+`--auto-install`, `--skip-preflight`, scheduler overrides, ...) — the start
+flags are taken from the restart invocation, not recovered from the previous
+run, so pass `--autonomous` to restart into detached/background mode.
+
+| Flag | Description |
+|---|---|
+| `--shutdown-timeout-secs <SECONDS>` | Maximum seconds to wait for in-flight agents to finish before force-stopping the old daemon (default 60). |
+| (all `animus daemon start` flags) | Forwarded to the start step. |
 
 ### `animus daemon preflight`
 
@@ -749,8 +764,12 @@ even when the installed tag already matches the recommended pin, and downgrades
 when the installed tag is *ahead* of the pin. Plugins installed from
 `--path`/`--url` sources (i.e. `source_kind != "release"`) and plugins whose
 slug has no recommended pin are reported with a clear `skip` note and never
-mutated. `--restart-daemon` is currently a placeholder — restart the daemon
-manually after a successful update.
+mutated. `--restart-daemon` restarts the running daemon after a fully
+successful update (graceful stop, then a detached/background start with
+default flags) so the new plugin binaries are picked up; when the daemon is
+not running it is a no-op with a note, and when any plugin update failed the
+restart is skipped. In `--json` mode the outcome is reported under a
+`daemon_restart` key in the result envelope.
 
 ### `animus plugin lock`
 

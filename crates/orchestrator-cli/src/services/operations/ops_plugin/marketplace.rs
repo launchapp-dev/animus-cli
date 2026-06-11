@@ -860,8 +860,15 @@ pub(crate) async fn handle_plugin_update(args: PluginUpdateArgs, project_root: &
     })
     .await?;
 
+    let restart =
+        if args.restart_daemon { Some(restart_daemon_after_update(project_root, output.failed).await) } else { None };
+
     if json {
-        print_value(&output, true)?;
+        let mut envelope = serde_json::to_value(&output)?;
+        if let Some(restart) = &restart {
+            envelope["daemon_restart"] = restart.to_json();
+        }
+        print_value(envelope, true)?;
     } else {
         println!();
         println!(
@@ -875,21 +882,83 @@ pub(crate) async fn handle_plugin_update(args: PluginUpdateArgs, project_root: &
                 }
             }
         }
-        if args.restart_daemon {
-            eprintln!();
-            eprintln!(
-                "warning: --restart-daemon is a placeholder in v0.5.8 — the daemon is NOT \
-                 restarted automatically. Run `animus daemon stop && animus daemon start` to \
-                 pick up the new plugin binaries."
-            );
+        if let Some(restart) = &restart {
+            println!();
+            println!("{}", restart.human_message());
         }
     }
 
     if output.failed > 0 {
         return Err(anyhow!("animus plugin update completed with {} failure(s)", output.failed));
     }
+    if let Some(UpdateDaemonRestart::Failed { error }) = &restart {
+        return Err(anyhow!("plugin update succeeded but the daemon restart failed: {error}"));
+    }
 
     Ok(())
+}
+
+/// Outcome of the `--restart-daemon` step after `animus plugin update`.
+enum UpdateDaemonRestart {
+    SkippedFailures,
+    NotRunning,
+    Restarted { daemon_pid: u32 },
+    Failed { error: String },
+}
+
+impl UpdateDaemonRestart {
+    fn to_json(&self) -> serde_json::Value {
+        match self {
+            Self::SkippedFailures => serde_json::json!({
+                "restarted": false,
+                "reason": "update completed with failures; daemon restart skipped",
+            }),
+            Self::NotRunning => serde_json::json!({
+                "restarted": false,
+                "reason": "daemon not running; nothing to restart",
+            }),
+            Self::Restarted { daemon_pid } => serde_json::json!({
+                "restarted": true,
+                "daemon_pid": daemon_pid,
+            }),
+            Self::Failed { error } => serde_json::json!({
+                "restarted": false,
+                "error": error,
+            }),
+        }
+    }
+
+    fn human_message(&self) -> String {
+        match self {
+            Self::SkippedFailures => {
+                "--restart-daemon: skipped because the update completed with failures".to_string()
+            }
+            Self::NotRunning => "--restart-daemon: daemon is not running; nothing to restart".to_string(),
+            Self::Restarted { daemon_pid } => format!("--restart-daemon: daemon restarted (pid {daemon_pid})"),
+            Self::Failed { error } => format!(
+                "--restart-daemon: restart failed: {error}\n  run `animus daemon restart` manually to pick up the new plugin binaries"
+            ),
+        }
+    }
+}
+
+const UPDATE_RESTART_SHUTDOWN_TIMEOUT_SECS: u64 = 60;
+
+async fn restart_daemon_after_update(project_root: &str, update_failures: usize) -> UpdateDaemonRestart {
+    use crate::services::runtime::{restart_running_daemon, DaemonRestartOutcome};
+
+    if update_failures > 0 {
+        return UpdateDaemonRestart::SkippedFailures;
+    }
+    let hub = match orchestrator_core::services::FileServiceHub::new(project_root) {
+        Ok(hub) => hub,
+        Err(err) => return UpdateDaemonRestart::Failed { error: format!("{err:#}") },
+    };
+    match restart_running_daemon(&hub, project_root, UPDATE_RESTART_SHUTDOWN_TIMEOUT_SECS).await {
+        Ok(DaemonRestartOutcome::NotRunning) => UpdateDaemonRestart::NotRunning,
+        Ok(DaemonRestartOutcome::Restarted { daemon_pid }) => UpdateDaemonRestart::Restarted { daemon_pid },
+        Err(err) => UpdateDaemonRestart::Failed { error: format!("{err:#}") },
+    }
 }
 
 // =================== Installed registry parsing ===================
