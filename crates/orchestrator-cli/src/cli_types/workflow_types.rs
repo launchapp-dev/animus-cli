@@ -25,6 +25,10 @@ pub(crate) enum WorkflowCommand {
     Pause(WorkflowPauseArgs),
     /// Cancel a workflow (confirmation required).
     Cancel(WorkflowCancelArgs),
+    /// Prune terminal workflow runs from history and disk. Dry-run by default; pass --yes to delete.
+    Prune(WorkflowPruneArgs),
+    /// Delete a single terminal workflow run from history and disk. Dry-run by default; pass --yes to delete.
+    Delete(WorkflowDeleteArgs),
     /// Manual actions for a specific workflow phase.
     Phase {
         #[command(subcommand)]
@@ -320,6 +324,48 @@ pub(crate) struct WorkflowCancelArgs {
     pub(crate) confirm: Option<String>,
     #[arg(long, default_value_t = false, help = "Preview cancellation payload without mutating workflow state.")]
     pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowPruneArgs {
+    #[arg(
+        long,
+        value_name = "DAYS",
+        help = "Only prune runs that completed (or started) more than this many days ago."
+    )]
+    pub(crate) older_than: Option<u64>,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        help = "Keep the N most recent matching runs overall (not per workflow definition) and prune the rest."
+    )]
+    pub(crate) keep_last: Option<usize>,
+    #[arg(
+        long,
+        value_name = "STATUS",
+        help = "Only prune runs with this terminal status (completed, failed, escalated, cancelled). Default: all terminal statuses. In-progress, queued, and paused runs are never pruned."
+    )]
+    pub(crate) status: Option<String>,
+    #[arg(
+        long,
+        visible_alias = "force",
+        default_value_t = false,
+        help = "Actually delete the matching runs. Without this flag the command is a dry-run preview."
+    )]
+    pub(crate) yes: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowDeleteArgs {
+    #[arg(long, value_name = "RUN_ID", help = "Workflow run identifier to delete.")]
+    pub(crate) run_id: String,
+    #[arg(
+        long,
+        visible_alias = "force",
+        default_value_t = false,
+        help = "Actually delete the run. Without this flag the command is a dry-run preview."
+    )]
+    pub(crate) yes: bool,
 }
 
 #[derive(Debug, Args)]

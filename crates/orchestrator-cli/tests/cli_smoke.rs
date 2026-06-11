@@ -70,6 +70,30 @@ fn help_surfaces_command_descriptions_for_core_groups() -> Result<(), Box<dyn st
         "workflow checkpoints prune help should explain age-based retention"
     );
 
+    let workflow_prune_help = Command::new(&binary).args(["workflow", "prune", "--help"]).output()?;
+    assert!(workflow_prune_help.status.success(), "workflow prune help should succeed");
+    let workflow_prune_stdout = String::from_utf8(workflow_prune_help.stdout)?;
+    assert!(
+        workflow_prune_stdout.contains("--older-than <DAYS>"),
+        "workflow prune help should explain age-based retention"
+    );
+    assert!(
+        workflow_prune_stdout.contains("--keep-last <COUNT>"),
+        "workflow prune help should explain keep-last retention"
+    );
+    assert!(
+        workflow_prune_stdout.contains("dry-run preview"),
+        "workflow prune help should explain that --yes is required to delete"
+    );
+
+    let workflow_delete_help = Command::new(&binary).args(["workflow", "delete", "--help"]).output()?;
+    assert!(workflow_delete_help.status.success(), "workflow delete help should succeed");
+    let workflow_delete_stdout = String::from_utf8(workflow_delete_help.stdout)?;
+    assert!(
+        workflow_delete_stdout.contains("--run-id <RUN_ID>"),
+        "workflow delete help should document the run id flag"
+    );
+
     let skill_help = Command::new(&binary).args(["skill", "--help"]).output()?;
     assert!(skill_help.status.success(), "skill help should succeed");
     let skill_stdout = String::from_utf8(skill_help.stdout)?;

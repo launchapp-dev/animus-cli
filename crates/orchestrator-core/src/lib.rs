@@ -143,6 +143,10 @@ pub use workflow::{
     WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
     DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
 };
+pub use workflow::{
+    is_terminal_workflow_run_status, select_workflow_prune_candidates, WorkflowRunDeletion, WorkflowRunPruneCandidate,
+    WorkflowRunPruneFilter, WorkflowRunPruneReport,
+};
 pub use workflow_config::{
     builtin_workflow_config, compile_yaml_workflow_files, ensure_workflow_config_compiled, ensure_workflow_config_file,
     expand_variables, expand_workflow_phases, generated_workflow_phase_is_defined, legacy_workflow_config_paths,
