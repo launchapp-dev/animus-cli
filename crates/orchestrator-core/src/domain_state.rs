@@ -44,6 +44,12 @@ pub struct HistoryExecutionRecord {
     pub task_id: Option<String>,
     #[serde(default)]
     pub workflow_id: Option<String>,
+    /// Latest per-phase agent run id for this execution, when known.
+    /// Pivots `history search` into `animus output read --run-id <id>`.
+    /// Additive (serde-default): records written before this field
+    /// existed load as `None` and the CLI resolves it at read time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
     pub status: String,
     #[serde(default)]
     pub started_at: Option<String>,
@@ -104,4 +110,47 @@ pub fn load_errors(project_root: &str) -> Result<ErrorStore> {
 
 pub fn save_errors(project_root: &str, store: &ErrorStore) -> Result<()> {
     write_json_pretty(&errors_path(project_root), store)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn history_record_round_trips_run_id() {
+        let record = HistoryExecutionRecord {
+            execution_id: "exec-1".to_string(),
+            task_id: Some("TASK-1".to_string()),
+            workflow_id: Some("wf-1".to_string()),
+            run_id: Some("run-abc".to_string()),
+            status: "completed".to_string(),
+            started_at: Some("2026-06-01T00:00:00Z".to_string()),
+            completed_at: Some("2026-06-01T01:00:00Z".to_string()),
+            details: serde_json::json!({}),
+        };
+        let serialized = serde_json::to_string(&record).expect("serialize");
+        assert!(serialized.contains("\"run_id\":\"run-abc\""));
+        let parsed: HistoryExecutionRecord = serde_json::from_str(&serialized).expect("deserialize");
+        assert_eq!(parsed.run_id.as_deref(), Some("run-abc"));
+    }
+
+    #[test]
+    fn history_record_without_run_id_still_loads_and_omits_field() {
+        // Old records on disk predate `run_id`; they must keep loading.
+        let legacy = r#"{
+            "execution_id": "exec-legacy",
+            "task_id": "TASK-9",
+            "workflow_id": "wf-9",
+            "status": "failed",
+            "started_at": "2025-01-01T00:00:00Z",
+            "completed_at": null,
+            "details": {}
+        }"#;
+        let parsed: HistoryExecutionRecord = serde_json::from_str(legacy).expect("legacy record must load");
+        assert_eq!(parsed.run_id, None);
+        // And `None` is omitted on the way back out so legacy readers
+        // never see an unexpected null field.
+        let serialized = serde_json::to_string(&parsed).expect("serialize");
+        assert!(!serialized.contains("run_id"));
+    }
 }

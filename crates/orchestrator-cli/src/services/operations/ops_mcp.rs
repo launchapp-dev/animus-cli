@@ -69,7 +69,7 @@ mod output_inputs;
 #[path = "ops_mcp/output_tail_events.rs"]
 mod output_tail_events;
 #[path = "ops_mcp/output_tail_resolution.rs"]
-mod output_tail_resolution;
+pub(crate) mod output_tail_resolution;
 #[path = "ops_mcp/output_tail_types.rs"]
 mod output_tail_types;
 #[path = "ops_mcp/output_tools.rs"]

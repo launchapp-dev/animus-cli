@@ -79,7 +79,14 @@ fn workflow_timestamp(workflow: &OrchestratorWorkflow) -> i64 {
     workflow.completed_at.unwrap_or(workflow.started_at).timestamp_millis()
 }
 
-fn resolve_latest_workflow_run_dir(project_root: &str, workflow_id: &str) -> Result<Option<(String, PathBuf)>> {
+/// Scan the run roots for legacy `wf-<workflow_id>-...` named run dirs and
+/// pick the most recently active one (events.jsonl mtime, then dir mtime,
+/// then name). Shared with `output read/decisions --workflow-id` as the
+/// fallback when no session checkpoints exist for the workflow.
+pub(crate) fn resolve_latest_workflow_run_dir(
+    project_root: &str,
+    workflow_id: &str,
+) -> Result<Option<(String, PathBuf)>> {
     let run_ids = run_ids_for_workflow(project_root, workflow_id)?;
     let mut candidates = Vec::new();
     for run_id in run_ids {

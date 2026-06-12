@@ -789,7 +789,10 @@ mod tests {
         let cli =
             Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1"]).expect("output read should parse");
         match cli.command {
-            Command::Output { command: OutputCommand::Read(args) } => assert_eq!(args.run_id, "RUN-1"),
+            Command::Output { command: OutputCommand::Read(args) } => {
+                assert_eq!(args.run_id.as_deref(), Some("RUN-1"));
+                assert_eq!(args.workflow_id, None);
+            }
             other => panic!("expected output read, got {other:?}"),
         }
         let error = Cli::try_parse_from(["animus", "output", "run", "--run-id", "RUN-1"])
@@ -798,6 +801,98 @@ mod tests {
         let help = subcommand_help(&["output"]);
         assert!(help_lists_subcommand(&help, "read"), "output help must list `read`:\n{help}");
         assert!(!help_lists_subcommand(&help, "run"), "output help must not list the retired `run` verb:\n{help}");
+    }
+
+    #[test]
+    fn output_read_accepts_workflow_id_but_not_both_or_neither() {
+        let cli = Cli::try_parse_from(["animus", "output", "read", "--workflow-id", "WF-1"])
+            .expect("output read --workflow-id should parse");
+        match cli.command {
+            Command::Output { command: OutputCommand::Read(args) } => {
+                assert_eq!(args.run_id, None);
+                assert_eq!(args.workflow_id.as_deref(), Some("WF-1"));
+            }
+            other => panic!("expected output read, got {other:?}"),
+        }
+        Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1", "--workflow-id", "WF-1"])
+            .expect_err("--run-id and --workflow-id must conflict");
+        Cli::try_parse_from(["animus", "output", "read"]).expect_err("one of --run-id/--workflow-id is required");
+    }
+
+    #[test]
+    fn output_decisions_parses_run_id_or_workflow_id() {
+        let cli = Cli::try_parse_from(["animus", "output", "decisions", "--run-id", "RUN-9"])
+            .expect("output decisions --run-id should parse");
+        match cli.command {
+            Command::Output { command: OutputCommand::Decisions(args) } => {
+                assert_eq!(args.run_id.as_deref(), Some("RUN-9"));
+                assert_eq!(args.workflow_id, None);
+            }
+            other => panic!("expected output decisions, got {other:?}"),
+        }
+        let cli = Cli::try_parse_from(["animus", "output", "decisions", "--workflow-id", "WF-9"])
+            .expect("output decisions --workflow-id should parse");
+        match cli.command {
+            Command::Output { command: OutputCommand::Decisions(args) } => {
+                assert_eq!(args.workflow_id.as_deref(), Some("WF-9"));
+            }
+            other => panic!("expected output decisions, got {other:?}"),
+        }
+        Cli::try_parse_from(["animus", "output", "decisions"]).expect_err("one of --run-id/--workflow-id is required");
+    }
+
+    #[test]
+    fn history_search_since_parses_durations_and_conflicts_with_started_after() {
+        let cli = Cli::try_parse_from(["animus", "history", "search", "--since", "7d"])
+            .expect("history search --since 7d should parse");
+        match cli.command {
+            Command::History { command: HistoryCommand::Search(args) } => {
+                assert_eq!(args.since, Some(7 * 86_400));
+            }
+            other => panic!("expected history search, got {other:?}"),
+        }
+        let cli = Cli::try_parse_from(["animus", "history", "search", "--since", "30m"])
+            .expect("history search --since 30m should parse");
+        match cli.command {
+            Command::History { command: HistoryCommand::Search(args) } => assert_eq!(args.since, Some(30 * 60)),
+            other => panic!("expected history search, got {other:?}"),
+        }
+        let cli =
+            Cli::try_parse_from(["animus", "history", "search", "--since", "90"]).expect("bare numbers mean seconds");
+        match cli.command {
+            Command::History { command: HistoryCommand::Search(args) } => assert_eq!(args.since, Some(90)),
+            other => panic!("expected history search, got {other:?}"),
+        }
+        Cli::try_parse_from(["animus", "history", "search", "--since", "5y"])
+            .expect_err("unknown duration units must be rejected");
+        Cli::try_parse_from([
+            "animus",
+            "history",
+            "search",
+            "--since",
+            "7d",
+            "--started-after",
+            "2026-06-01T00:00:00Z",
+        ])
+        .expect_err("--since must conflict with --started-after");
+        let cli = Cli::try_parse_from([
+            "animus",
+            "history",
+            "search",
+            "--started-after",
+            "2026-06-01T00:00:00Z",
+            "--started-before",
+            "2026-06-02T00:00:00Z",
+        ])
+        .expect("RFC3339 flags must keep working");
+        match cli.command {
+            Command::History { command: HistoryCommand::Search(args) } => {
+                assert_eq!(args.started_after.as_deref(), Some("2026-06-01T00:00:00Z"));
+                assert_eq!(args.started_before.as_deref(), Some("2026-06-02T00:00:00Z"));
+                assert_eq!(args.since, None);
+            }
+            other => panic!("expected history search, got {other:?}"),
+        }
     }
 
     #[test]
