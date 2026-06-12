@@ -4,6 +4,38 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Budget-breach visibility and operability. When the daemon's housekeeping
+  sweep pauses a workflow for a declared `budget:` cap, the breach cause is
+  now visible without grepping logs:
+  - **Task annotation** — `animus subject get` shows the cause inline, e.g.
+    `paused by workflow wf-... — budget exceeded ($7.50 > $5.00
+    max_cost_usd)` (phase caps read `phase <id> budget exceeded (…)`). The
+    pause marker still clears on `animus workflow resume`; the clear logic
+    now matches the `paused by workflow <id>` head by prefix, so both bare
+    (pre-change) and enriched markers clear correctly and a genuine failure
+    `blocked_reason` is never touched.
+  - **`animus daemon health`** — gains a
+    `budget_enforcement: {enabled, last_sweep_at}` line (persisted to
+    `budget-enforcement.v1.json` each sweep) plus a `breaches in last 24h`
+    rollup with the worst offender.
+  - **`animus status`** — a Budget section showing enforcement state and
+    the active-breach count + worst offender, using a sharper resolution
+    heuristic (a `pause` breach is active only while its workflow is still
+    `Paused`).
+- `ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT=1` kill-switch (daemon restart
+  required) skips the budget-enforcement housekeeping leg; the sweep still
+  records its disabled status for the health/status surfaces. Documented
+  under `configuration.md#plugin-kill-switches`.
+- `animus cost top --by provider` — cross-run provider leaderboard,
+  mirroring `--by model`.
+- Attribution-honesty hint: the grouped `cost summary --by` /
+  `cost workflow --by` / `cost top --by model|provider` views now print a
+  one-line note when the `unknown` bucket exceeds 20% of grouped cost
+  (`N% of spend lacks <model|provider> attribution; provider plugins must
+  report model_id`).
+
 ## [0.5.14] - 2026-06-12
 
 **The 9.5 campaign release: budgets that enforce, skills that supercharge any

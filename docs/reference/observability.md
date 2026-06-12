@@ -365,6 +365,7 @@ animus cost workflow wf-... --by provider # one run, grouped by tool
 animus cost workflow wf-... --by model    # one run, grouped by model
 animus cost workflow wf-... --by phase    # one run, grouped by phase
 animus cost top --by model               # cross-run model leaderboard
+animus cost top --by provider            # cross-run provider leaderboard
 ```
 
 Each grouped row reports total tokens, total USD, and that group's
@@ -373,6 +374,22 @@ token share when no USD is reported). Phases with no attribution —
 legacy cost-state records written before attribution capture, or runs
 whose checkpoint predates it — fold into an `unknown` bucket rather than
 being dropped.
+
+### Attribution-honesty hint
+
+When the `unknown` bucket exceeds **20%** of grouped cost, the grouped
+`--by model` / `--by provider` views (and `cost top --by model|provider`)
+print a one-line note:
+
+```
+note: 35% of spend lacks model attribution; provider plugins must report model_id
+```
+
+A large `unknown` share means provider plugins are not reporting
+`model_id` (or provider) in their run metadata, so the breakdown cannot
+be trusted as complete. Fix it at the plugin: have the provider emit
+`model_id` on its `AgentRunEvent::Metadata` frames. The hint is purely
+advisory and never changes the numbers.
 
 Scope notes:
 
@@ -387,6 +404,65 @@ Scope notes:
   built from workflow-level totals (including history), and per-bucket
   provider attribution would require migrating the `HistorySummary`
   storage shape to carry per-phase rollups. Left for a follow-up.
+
+## Budget breach visibility
+
+When the daemon's housekeeping sweep enforces a declared `budget:` cap, it
+no longer hides the cause in the logs. Three surfaces now explain a budget
+stall directly:
+
+### On the task (`animus subject get`)
+
+A workflow paused by a budget breach annotates its task's `blocked_reason`
+with the cause inline:
+
+```
+paused by workflow wf-... — budget exceeded ($7.50 > $5.00 max_cost_usd)
+```
+
+Phase-level breaches read `phase <id> budget exceeded (… > … max_tokens)`.
+The marker is informational only — it does not flip the task's status or
+`paused` flag — and is cleared by `animus workflow resume` (or any
+non-blocked status transition). The clear logic matches the
+`paused by workflow <id>` head by prefix, so both bare (pre-change) and
+enriched markers clear correctly; a genuine failure `blocked_reason` is
+never touched.
+
+### On the dashboards (`animus status`, `animus daemon health`)
+
+Both surfaces carry a budget rollup read from the scoped breach log
+(`~/.animus/<repo-scope>/decisions.jsonl`):
+
+```bash
+animus daemon health        # budget_enforcement: enabled=true last_sweep_at=…
+animus status               # Budget section: enforcement + active breaches
+```
+
+`animus daemon health` adds a `budget_enforcement: {enabled, last_sweep_at}`
+line — `enabled` reflects the `ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT`
+kill-switch and `last_sweep_at` is the timestamp of the most recent
+housekeeping leg (both persisted to `budget-enforcement.v1.json` each
+sweep). It also reports `breaches in last 24h: N` with the worst offender.
+
+`animus status` shows an active-breach count and worst offender. It uses a
+sharper resolution heuristic because it already loads workflow records:
+
+> **Resolution heuristic.** A breach is **active** when its `on_exceed` is
+> `pause` *and* the breaching workflow is still `Paused`. Resuming the
+> workflow (or raising the cap so the breach re-arms) drops it from the
+> active count. `warn` / `fail` breaches are terminal-by-declaration and
+> never count as active. `daemon health` does not load workflow records, so
+> it falls back to a **"breaches in last 24h: N"** recency count instead of
+> the active/resolved split. Drill into the full log with
+> `animus cost decisions [--since <dur>]`.
+
+### Disabling enforcement
+
+Set `ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT=1` (daemon restart required)
+to skip the enforcement leg entirely — see
+`configuration.md#plugin-kill-switches`. The sweep still records its
+disabled status so the health/status surfaces show
+`enforcement_enabled: false`.
 
 ## Quick recipes
 

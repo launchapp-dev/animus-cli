@@ -323,7 +323,8 @@ pub(crate) async fn resume_workflow_with_runner(
         if let Ok(repaused) = hub.workflows().pause(workflow_id).await {
             if repaused.status == orchestrator_core::WorkflowStatus::Paused {
                 if let Some(task_id) = orchestrator_core::workflow_task_id(&repaused) {
-                    let _ = orchestrator_core::project_task_workflow_paused(hub.clone(), &task_id, workflow_id).await;
+                    let _ =
+                        orchestrator_core::project_task_workflow_paused(hub.clone(), &task_id, workflow_id, None).await;
                 }
             }
         }

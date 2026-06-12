@@ -28,6 +28,12 @@ pub const WORKFLOW_RUNNER_BLOCKED_PREFIX: &str = "workflow runner failed: ";
 /// `animus workflow resume` (via [`project_task_workflow_pause_cleared`]) and
 /// by any non-blocked status transition (`apply_task_status` clears all
 /// `blocked_*` bookkeeping).
+///
+/// The annotation may carry a trailing cause detail (e.g. a budget breach
+/// summary) appended after the `<id>`, producing
+/// `paused by workflow <id> — budget exceeded ($7.50 > $5.00 max_cost_usd)`.
+/// The clear path matches by this prefix-plus-`<id>` head, not by exact
+/// string, so both bare and detail-bearing markers clear on resume.
 pub const WORKFLOW_PAUSED_REASON_PREFIX: &str = "paused by workflow ";
 
 pub async fn project_task_status(hub: Arc<dyn ServiceHub>, task_id: &str, status: TaskStatus) -> Result<()> {
@@ -55,25 +61,66 @@ pub async fn project_task_blocked_with_reason(
     Ok(())
 }
 
+/// Build the `blocked_reason` marker for a paused workflow. The head is
+/// always `paused by workflow <id>` (the prefix the resume-clear path
+/// matches); an optional `reason_detail` is appended as
+/// ` — <detail>` so `animus subject get` can show the cause (e.g. a budget
+/// breach) inline. Keeping the prefix-plus-`<id>` head stable means both
+/// bare and detail-bearing markers clear on resume.
+pub fn workflow_paused_reason(workflow_id: &str, reason_detail: Option<&str>) -> String {
+    match reason_detail.map(str::trim).filter(|detail| !detail.is_empty()) {
+        Some(detail) => format!("{WORKFLOW_PAUSED_REASON_PREFIX}{workflow_id} — {detail}"),
+        None => format!("{WORKFLOW_PAUSED_REASON_PREFIX}{workflow_id}"),
+    }
+}
+
+/// `true` when `reason` is a pause marker emitted for `workflow_id` —
+/// either the bare `paused by workflow <id>` head or that head followed by
+/// a ` — <detail>` cause suffix. Used by the resume-clear path so an
+/// enriched (budget-detail) marker clears exactly like a bare one.
+pub fn is_workflow_paused_reason(reason: &str, workflow_id: &str) -> bool {
+    let head = format!("{WORKFLOW_PAUSED_REASON_PREFIX}{workflow_id}");
+    reason == head || reason.strip_prefix(&head).is_some_and(|rest| rest.starts_with(" — "))
+}
+
 /// Annotate a task with "paused by workflow `<id>`" so `animus subject get`
 /// explains why nothing is progressing. Informational only: status and the
 /// `paused` flag are untouched, so the daemon's view of the task is unchanged
-/// and no ghost state can be left behind.
-pub async fn project_task_workflow_paused(hub: Arc<dyn ServiceHub>, task_id: &str, workflow_id: &str) -> Result<()> {
+/// and no ghost state can be left behind. `reason_detail` (when present)
+/// appends a human cause to the marker (e.g. a budget breach summary).
+pub async fn project_task_workflow_paused(
+    hub: Arc<dyn ServiceHub>,
+    task_id: &str,
+    workflow_id: &str,
+    reason_detail: Option<&str>,
+) -> Result<()> {
     let Ok(mut task) = hub.tasks().get(task_id).await else {
         return Ok(());
     };
     if matches!(task.status, TaskStatus::Done | TaskStatus::Cancelled) {
         return Ok(());
     }
-    // Never clobber an existing blocked_reason (a real failure projection or
+    // Never clobber a foreign blocked_reason (a real failure projection or
     // dependency gate): the pause marker is informational and loses to any
-    // pre-existing explanation. Re-annotating for the same workflow is a
-    // no-op either way.
-    if task.blocked_reason.is_some() {
-        return Ok(());
+    // pre-existing explanation. For a same-workflow pause marker, only
+    // UPGRADE (bare → enriched): the generic pause path writes the bare head
+    // first and the budget sweep then enriches it. A later detail-less pause
+    // (e.g. `animus workflow pause` on an already-paused workflow) must NOT
+    // downgrade an enriched marker back to bare and lose the breach cause.
+    let bare_marker = workflow_paused_reason(workflow_id, None);
+    if let Some(existing) = task.blocked_reason.as_deref() {
+        if !is_workflow_paused_reason(existing, workflow_id) {
+            return Ok(());
+        }
+        // Same-workflow pause marker present. Only act when we are adding
+        // detail to a currently-bare marker; a detail-less pause must not
+        // overwrite (and thereby downgrade) an already-enriched marker.
+        let has_detail = reason_detail.map(str::trim).is_some_and(|detail| !detail.is_empty());
+        if existing != bare_marker || !has_detail {
+            return Ok(());
+        }
     }
-    task.blocked_reason = Some(format!("{WORKFLOW_PAUSED_REASON_PREFIX}{workflow_id}"));
+    task.blocked_reason = Some(workflow_paused_reason(workflow_id, reason_detail));
     if task.blocked_by.is_none() {
         task.blocked_by = Some(workflow_id.to_string());
     }
@@ -95,8 +142,10 @@ pub async fn project_task_workflow_pause_cleared(
     let Ok(mut task) = hub.tasks().get(task_id).await else {
         return Ok(());
     };
-    let marker = format!("{WORKFLOW_PAUSED_REASON_PREFIX}{workflow_id}");
-    if task.blocked_reason.as_deref() != Some(marker.as_str()) {
+    // Match both the bare `paused by workflow <id>` head and any enriched
+    // `… — <detail>` variant (e.g. a budget breach summary). A genuine
+    // `blocked_reason` written by a failure projection is left alone.
+    if !task.blocked_reason.as_deref().is_some_and(|reason| is_workflow_paused_reason(reason, workflow_id)) {
         return Ok(());
     }
     task.blocked_reason = None;
@@ -243,7 +292,10 @@ mod tests {
     use chrono::Utc;
     use protocol::{SubjectExecutionFact, SUBJECT_KIND_TASK};
 
-    use super::{execution_fact_subject_kind, project_execution_fact};
+    use super::{
+        execution_fact_subject_kind, is_workflow_paused_reason, project_execution_fact,
+        project_task_workflow_pause_cleared, project_task_workflow_paused, workflow_paused_reason,
+    };
     use crate::{
         services::ServiceHub, InMemoryServiceHub, OrchestratorTask, Priority, ResourceRequirements, Scope,
         TaskMetadata, TaskStatus, TaskType, WorkflowMetadata,
@@ -426,5 +478,129 @@ mod tests {
         let projected = project_execution_fact(hub, ".", &fact).await;
 
         assert!(!projected);
+    }
+
+    #[test]
+    fn workflow_paused_reason_formats_bare_and_enriched() {
+        assert_eq!(workflow_paused_reason("wf-1", None), "paused by workflow wf-1");
+        assert_eq!(
+            workflow_paused_reason("wf-1", Some("budget exceeded ($7.50 > $5.00 max_cost_usd)")),
+            "paused by workflow wf-1 — budget exceeded ($7.50 > $5.00 max_cost_usd)"
+        );
+        // Empty / whitespace detail degrades to the bare head.
+        assert_eq!(workflow_paused_reason("wf-1", Some("   ")), "paused by workflow wf-1");
+    }
+
+    #[test]
+    fn is_workflow_paused_reason_matches_bare_and_enriched_markers() {
+        // Old bare markers (back-compat) and new enriched ones both match.
+        assert!(is_workflow_paused_reason("paused by workflow wf-1", "wf-1"));
+        assert!(is_workflow_paused_reason("paused by workflow wf-1 — budget exceeded ($7 > $5 max_cost_usd)", "wf-1"));
+        // A different workflow id must NOT match (no cross-clearing).
+        assert!(!is_workflow_paused_reason("paused by workflow wf-2", "wf-1"));
+        // A foreign blocked_reason must not be treated as a pause marker.
+        assert!(!is_workflow_paused_reason("workflow runner failed: boom", "wf-1"));
+        // A prefix collision without the ` — ` separator must not match.
+        assert!(!is_workflow_paused_reason("paused by workflow wf-1-extra", "wf-1"));
+    }
+
+    #[tokio::test]
+    async fn paused_marker_carries_budget_detail_and_resume_clears_it() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        upsert_task(&hub, "TASK-1", TaskStatus::InProgress).await;
+        project_task_workflow_paused(
+            hub.clone(),
+            "TASK-1",
+            "wf-1",
+            Some("budget exceeded ($7.50 > $5.00 max_cost_usd)"),
+        )
+        .await
+        .unwrap();
+        let task = hub.tasks().get("TASK-1").await.unwrap();
+        assert_eq!(
+            task.blocked_reason.as_deref(),
+            Some("paused by workflow wf-1 — budget exceeded ($7.50 > $5.00 max_cost_usd)")
+        );
+        assert_eq!(task.blocked_by.as_deref(), Some("wf-1"));
+
+        // Resume clears the enriched marker.
+        project_task_workflow_pause_cleared(hub.clone(), "TASK-1", "wf-1").await.unwrap();
+        let task = hub.tasks().get("TASK-1").await.unwrap();
+        assert!(task.blocked_reason.is_none());
+        assert!(task.blocked_by.is_none());
+    }
+
+    #[tokio::test]
+    async fn bare_pause_marker_is_upgraded_to_carry_budget_detail() {
+        // The generic pause path writes the bare head; the budget sweep then
+        // enriches it. The enrichment must overwrite the same-workflow bare
+        // marker (not bail on "blocked_reason already set").
+        let hub = Arc::new(InMemoryServiceHub::new());
+        upsert_task(&hub, "TASK-1", TaskStatus::InProgress).await;
+        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", None).await.unwrap();
+        assert_eq!(hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(), Some("paused by workflow wf-1"));
+
+        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", Some("budget exceeded ($9 > $5 max_cost_usd)"))
+            .await
+            .unwrap();
+        assert_eq!(
+            hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(),
+            Some("paused by workflow wf-1 — budget exceeded ($9 > $5 max_cost_usd)")
+        );
+    }
+
+    #[tokio::test]
+    async fn detail_less_repause_does_not_downgrade_enriched_marker() {
+        // Regression (codex P2): once a budget breach has enriched the
+        // marker, a later generic `animus workflow pause` (reason_detail:
+        // None) on the same already-paused workflow must NOT erase the cause.
+        let hub = Arc::new(InMemoryServiceHub::new());
+        upsert_task(&hub, "TASK-1", TaskStatus::InProgress).await;
+        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", Some("budget exceeded ($9 > $5 max_cost_usd)"))
+            .await
+            .unwrap();
+        // Generic re-pause with no detail.
+        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", None).await.unwrap();
+        assert_eq!(
+            hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(),
+            Some("paused by workflow wf-1 — budget exceeded ($9 > $5 max_cost_usd)"),
+            "enriched marker must survive a detail-less re-pause"
+        );
+    }
+
+    #[tokio::test]
+    async fn old_bare_marker_still_clears_on_resume() {
+        // Back-compat: a task annotated by a pre-change daemon carries the
+        // exact bare marker; the new prefix-based clear must still clear it.
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let mut task = upsert_task(&hub, "TASK-1", TaskStatus::InProgress).await;
+        task.blocked_reason = Some("paused by workflow wf-legacy".to_string());
+        task.blocked_by = Some("wf-legacy".to_string());
+        hub.tasks().replace(task).await.unwrap();
+
+        project_task_workflow_pause_cleared(hub.clone(), "TASK-1", "wf-legacy").await.unwrap();
+        let task = hub.tasks().get("TASK-1").await.unwrap();
+        assert!(task.blocked_reason.is_none(), "old bare marker must still clear");
+    }
+
+    #[tokio::test]
+    async fn foreign_blocked_reason_is_not_clobbered_or_cleared() {
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let mut task = upsert_task(&hub, "TASK-1", TaskStatus::InProgress).await;
+        task.blocked_reason = Some("workflow runner failed: boom".to_string());
+        hub.tasks().replace(task).await.unwrap();
+
+        // Pause annotation must not clobber a real failure reason.
+        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", Some("budget exceeded")).await.unwrap();
+        assert_eq!(
+            hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(),
+            Some("workflow runner failed: boom")
+        );
+        // Resume-clear must leave the foreign reason intact.
+        project_task_workflow_pause_cleared(hub.clone(), "TASK-1", "wf-1").await.unwrap();
+        assert_eq!(
+            hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(),
+            Some("workflow runner failed: boom")
+        );
     }
 }

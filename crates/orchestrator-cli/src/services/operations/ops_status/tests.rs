@@ -271,6 +271,13 @@ fn render_status_dashboard_uses_required_section_order() {
             error: None,
             cached: false,
         },
+        budget: BudgetSlice {
+            available: true,
+            enforcement_enabled: true,
+            last_sweep_at: None,
+            breaches: crate::services::cost::summarize_breaches(&[], None),
+            error: None,
+        },
     };
 
     let output = render_status_dashboard(&dashboard);

@@ -49,8 +49,8 @@ pub use execution_projection::{
     project_requirement_workflow_status, project_schedule_dispatch_attempt, project_schedule_dispatch_missed,
     project_schedule_execution_fact, project_task_blocked_with_reason, project_task_execution_fact,
     project_task_status, project_task_terminal_workflow_status, project_task_workflow_pause_cleared,
-    project_task_workflow_paused, project_task_workflow_start, ExecutionProjector, ExecutionProjectorRegistry,
-    WORKFLOW_PAUSED_REASON_PREFIX, WORKFLOW_RUNNER_BLOCKED_PREFIX,
+    project_task_workflow_paused, project_task_workflow_start, workflow_paused_reason, ExecutionProjector,
+    ExecutionProjectorRegistry, WORKFLOW_PAUSED_REASON_PREFIX, WORKFLOW_RUNNER_BLOCKED_PREFIX,
 };
 pub use flavor::{
     list_available_flavor_names, load_flavor, locate_flavor_manifest, FlavorDefaults, FlavorManifest,

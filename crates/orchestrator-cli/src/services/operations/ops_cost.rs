@@ -106,6 +106,35 @@ fn render_grouped_rows(rows: &[GroupedRow], dimension: &str) {
         );
     }
 }
+
+/// Threshold above which the `unknown` attribution bucket triggers the
+/// honesty hint (20% of grouped cost).
+const UNKNOWN_ATTRIBUTION_HINT_THRESHOLD: f64 = 20.0;
+
+/// The `unknown` bucket's share of grouped cost (its `percent`), or `None`
+/// when there is no unknown bucket. Token-share fallback is already baked
+/// into `GroupedRow::percent` by [`group_rows`].
+fn unknown_attribution_percent(rows: &[GroupedRow]) -> Option<f64> {
+    rows.iter().find(|row| row.key == UNKNOWN_GROUP).map(|row| row.percent)
+}
+
+/// Print the attribution-honesty hint when the `unknown` bucket exceeds the
+/// threshold: provider plugins that omit attribution leave spend
+/// unattributable. `dimension` is the grouping noun (`model` / `provider`);
+/// the remediation field name varies with it. Pass the FULL grouped rows
+/// (before any `--limit` truncation), so a hidden-but-large `unknown` bucket
+/// still trips the hint.
+fn print_unknown_attribution_hint(rows: &[GroupedRow], dimension: &str) {
+    if let Some(percent) = unknown_attribution_percent(rows) {
+        if percent > UNKNOWN_ATTRIBUTION_HINT_THRESHOLD {
+            let field = if dimension == "provider" { "provider" } else { "model_id" };
+            println!(
+                "  note: {percent:.0}% of spend lacks {dimension} attribution; \
+                 provider plugins must report {field}"
+            );
+        }
+    }
+}
 const DECISIONS_SCHEMA: &str = "animus.cost.decisions.v1";
 
 pub(crate) async fn handle_cost(command: CostCommand, project_root: &str, json: bool) -> Result<()> {
@@ -462,6 +491,7 @@ fn handle_summary_breakdown(
         println!("  spend:  ${:.4} across {} tokens (active runs only)", view.total_cost_usd, view.total_tokens);
         println!();
         render_grouped_rows(&view.rows, view.by);
+        print_unknown_attribution_hint(&view.rows, view.by);
         Ok(())
     }
 }
@@ -577,6 +607,7 @@ fn handle_workflow_breakdown(
             view.workflow_run_id, view.workflow_id, view.by, view.total_cost_usd, view.total_tokens
         );
         render_grouped_rows(&view.rows, view.by);
+        print_unknown_attribution_hint(&view.rows, view.by);
         Ok(())
     }
 }
@@ -694,37 +725,62 @@ struct TopModelsView {
     rows: Vec<GroupedRow>,
 }
 
-/// Render `cost top --by model`: a cross-workflow leaderboard of models
-/// ranked by total USD spend. Only live workflows (which retain
-/// per-phase model attribution) contribute named rows; archived history
-/// runs carry no model detail and fold into the `unknown` bucket.
-fn handle_top_models(state: &CostState, limit: usize, json: bool) -> Result<()> {
+/// Render `cost top --by model|provider`: a cross-workflow leaderboard of
+/// the requested attribution dimension ranked by total USD spend. Only live
+/// workflows (which retain per-phase attribution) contribute named rows;
+/// archived history runs carry no model/provider detail and fold into the
+/// `unknown` bucket.
+fn top_grouped_rows(state: &CostState, dimension: &str) -> Vec<GroupedRow> {
     let mut entries: Vec<(Option<&str>, u64, f64)> = Vec::new();
     for workflow in state.workflows.values() {
         for phase in workflow.phases.values() {
-            entries.push((phase.model.as_deref(), phase.total_tokens(), phase.cost_usd));
+            let key = match dimension {
+                "provider" => phase.provider.as_deref(),
+                _ => phase.model.as_deref(),
+            };
+            entries.push((key, phase.total_tokens(), phase.cost_usd));
         }
     }
     for history in &state.history {
         entries.push((None, history.total_tokens, history.total_cost_usd));
     }
-    let mut rows = group_rows(entries);
+    // Returns the FULL ranking; the caller truncates to `--limit` for display
+    // but keeps the full set so the attribution hint sees a large `unknown`
+    // bucket even when it would rank below the cutoff.
+    group_rows(entries)
+}
+
+fn handle_top_grouped(state: &CostState, dimension: &'static str, limit: usize, json: bool) -> Result<()> {
+    let full_rows = top_grouped_rows(state, dimension);
+    // Decide the hint from the FULL ranking, before `--limit` can hide a
+    // large `unknown` bucket below the cutoff.
+    let unknown_percent = unknown_attribution_percent(&full_rows);
+    let mut rows = full_rows;
     rows.truncate(limit);
     let view =
-        TopModelsView { schema: TOP_MODELS_SCHEMA, state_schema: COST_STATE_SCHEMA_ID, by: "model", limit, rows };
+        TopModelsView { schema: TOP_MODELS_SCHEMA, state_schema: COST_STATE_SCHEMA_ID, by: dimension, limit, rows };
     if json {
         print_value(&view, json)
     } else {
-        println!("animus cost top by model (limit {})", view.rows.len());
-        render_grouped_rows(&view.rows, "model");
+        println!("animus cost top by {dimension} (limit {})", view.rows.len());
+        render_grouped_rows(&view.rows, dimension);
+        if unknown_percent.is_some_and(|percent| percent > UNKNOWN_ATTRIBUTION_HINT_THRESHOLD) {
+            let field = if dimension == "provider" { "provider" } else { "model_id" };
+            println!(
+                "  note: {:.0}% of spend lacks {dimension} attribution; provider plugins must report {field}",
+                unknown_percent.unwrap()
+            );
+        }
         Ok(())
     }
 }
 
 fn handle_top(project_path: &Path, args: CostTopArgs, json: bool) -> Result<()> {
     let state = refresh_state(project_path)?;
-    if let CostTopBy::Model = args.by {
-        return handle_top_models(&state, args.limit, json);
+    match args.by {
+        CostTopBy::Model => return handle_top_grouped(&state, "model", args.limit, json),
+        CostTopBy::Provider => return handle_top_grouped(&state, "provider", args.limit, json),
+        CostTopBy::Tokens | CostTopBy::Cost => {}
     }
     let mut rows: Vec<TopSpenderRow> = state
         .workflows
@@ -746,18 +802,22 @@ fn handle_top(project_path: &Path, args: CostTopArgs, json: bool) -> Result<()> 
             status: format!("{:?}", history.final_status).to_lowercase(),
         });
     }
-    // `CostTopBy::Model` is handled by the early return above.
+    // `CostTopBy::Model` / `Provider` are handled by the early return above.
     let by_label: &'static str = match args.by {
         CostTopBy::Tokens => "tokens",
         CostTopBy::Cost => "cost",
-        CostTopBy::Model => unreachable!("model grouping returns early via handle_top_models"),
+        CostTopBy::Model | CostTopBy::Provider => {
+            unreachable!("grouped rankings return early via handle_top_grouped")
+        }
     };
     match args.by {
         CostTopBy::Tokens => rows.sort_by_key(|row| std::cmp::Reverse(row.total_tokens)),
         CostTopBy::Cost => {
             rows.sort_by(|a, b| b.total_cost_usd.partial_cmp(&a.total_cost_usd).unwrap_or(std::cmp::Ordering::Equal))
         }
-        CostTopBy::Model => unreachable!("model grouping returns early via handle_top_models"),
+        CostTopBy::Model | CostTopBy::Provider => {
+            unreachable!("grouped rankings return early via handle_top_grouped")
+        }
     }
     rows.truncate(args.limit);
     let view = TopView { schema: TOP_SCHEMA, state_schema: COST_STATE_SCHEMA_ID, by: by_label, rows };
@@ -1045,6 +1105,91 @@ mod tests {
         assert_eq!(filtered.since.as_deref(), Some("24h"));
 
         assert!(decisions_view(Vec::new(), Some("bogus")).is_err(), "invalid duration must error");
+    }
+
+    #[test]
+    fn top_grouped_rows_ranks_providers_across_workflows() {
+        use crate::services::cost::aggregator::{MetadataDelta, WorkflowCost};
+        let now = Utc::now();
+        let mut state = CostState::default();
+        let mut wf_a = WorkflowCost::new("flow-a", now);
+        wf_a.record_metadata(
+            "impl",
+            now,
+            MetadataDelta {
+                cost_usd: 0.30,
+                provider: Some("claude".into()),
+                model: Some("claude-x".into()),
+                ..Default::default()
+            },
+        );
+        let mut wf_b = WorkflowCost::new("flow-b", now);
+        wf_b.record_metadata(
+            "impl",
+            now,
+            MetadataDelta {
+                cost_usd: 0.70,
+                provider: Some("codex".into()),
+                model: Some("gpt-x".into()),
+                ..Default::default()
+            },
+        );
+        wf_b.record_metadata(
+            "review",
+            now,
+            MetadataDelta {
+                cost_usd: 0.10,
+                provider: Some("claude".into()),
+                model: Some("claude-y".into()),
+                ..Default::default()
+            },
+        );
+        state.workflows.insert("wf-a".into(), wf_a);
+        state.workflows.insert("wf-b".into(), wf_b);
+
+        let rows = top_grouped_rows(&state, "provider");
+        assert_eq!(rows.len(), 2, "two providers across the two workflows");
+        assert_eq!(rows[0].key, "codex", "codex leads on $0.70 cost");
+        assert!((rows[0].total_cost_usd - 0.70).abs() < 1e-9);
+        assert_eq!(rows[1].key, "claude");
+        assert!((rows[1].total_cost_usd - 0.40).abs() < 1e-9, "claude folds 0.30 + 0.10 across workflows");
+    }
+
+    #[test]
+    fn top_grouped_rows_folds_missing_provider_into_unknown() {
+        use crate::services::cost::aggregator::{MetadataDelta, WorkflowCost};
+        let now = Utc::now();
+        let mut state = CostState::default();
+        let mut wf = WorkflowCost::new("flow", now);
+        wf.record_metadata("impl", now, MetadataDelta { cost_usd: 0.50, provider: None, ..Default::default() });
+        state.workflows.insert("wf".into(), wf);
+        let rows = top_grouped_rows(&state, "provider");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].key, UNKNOWN_GROUP);
+    }
+
+    #[test]
+    fn unknown_attribution_hint_fires_above_threshold() {
+        // 30% unknown → above the 20% threshold.
+        let rows = group_rows([(Some("claude"), 700, 0.70), (None, 300, 0.30)]);
+        let percent = unknown_attribution_percent(&rows).unwrap();
+        assert!((percent - 30.0).abs() < 1e-6);
+        assert!(percent > UNKNOWN_ATTRIBUTION_HINT_THRESHOLD, "30% must trip the hint");
+    }
+
+    #[test]
+    fn unknown_attribution_hint_silent_at_or_below_threshold() {
+        // Exactly 20% unknown → NOT strictly greater than the threshold.
+        let rows = group_rows([(Some("claude"), 800, 0.80), (None, 200, 0.20)]);
+        let percent = unknown_attribution_percent(&rows).unwrap();
+        assert!((percent - 20.0).abs() < 1e-6);
+        assert!(percent <= UNKNOWN_ATTRIBUTION_HINT_THRESHOLD, "20% must not trip the hint");
+    }
+
+    #[test]
+    fn unknown_attribution_percent_absent_when_fully_attributed() {
+        let rows = group_rows([(Some("claude"), 700, 0.70), (Some("gemini"), 300, 0.30)]);
+        assert!(unknown_attribution_percent(&rows).is_none(), "no unknown bucket → no hint");
     }
 
     #[test]

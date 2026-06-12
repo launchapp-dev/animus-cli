@@ -2534,7 +2534,7 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
     crate::dispatch_workflow_event(
         hub.clone(),
         &root,
-        crate::WorkflowEvent::Pause { workflow_id: workflow.id.clone() },
+        crate::WorkflowEvent::Pause { workflow_id: workflow.id.clone(), reason_detail: None },
     )
     .await
     .expect("pause workflow");
