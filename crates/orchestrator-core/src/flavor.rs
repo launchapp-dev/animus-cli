@@ -219,6 +219,28 @@ pub fn load_flavor_in(project_root: &Path, name: &str) -> Result<Option<FlavorMa
     Ok(None)
 }
 
+/// Read the persisted active-flavor selection for a project, falling back
+/// to [`DEFAULT_FLAVOR_ID`] when none is recorded. The selection is stored
+/// in `<project_root>/.animus/plugin-scope.yaml` under `active_flavor:`
+/// (written by `animus plugin install-defaults --flavor` / `animus flavor
+/// install`). This is the ONE function every flavor-resolving surface
+/// (the daemon scope resolver, `animus plugin list/scope`, `animus flavor
+/// current`) calls so they cannot disagree about which flavor is active.
+pub fn active_flavor_id_in(project_root: &Path) -> String {
+    orchestrator_plugin_host::read_active_flavor(project_root).unwrap_or_else(|| DEFAULT_FLAVOR_ID.to_string())
+}
+
+/// Load the active flavor manifest for a project: reads the persisted
+/// `active_flavor:` selection (default `default`), then resolves the
+/// manifest with [`load_flavor_in`]. Returns the resolved `(name,
+/// manifest)` pair so callers can report the selection even when the
+/// manifest resolves from the binary-bundled default fallback.
+pub fn load_active_flavor_in(project_root: &Path) -> Result<(String, Option<FlavorManifest>)> {
+    let name = active_flavor_id_in(project_root);
+    let manifest = load_flavor_in(project_root, &name)?;
+    Ok((name, manifest))
+}
+
 /// CWD-anchored variant retained for callers that have no project root to
 /// hand. Production surfaces should prefer [`load_flavor_in`].
 pub fn load_flavor(name: &str) -> Result<Option<FlavorManifest>> {

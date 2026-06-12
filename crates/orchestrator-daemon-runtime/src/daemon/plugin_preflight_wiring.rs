@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use orchestrator_core::flavor::{load_flavor_in, locate_flavor_manifest_in, DEFAULT_FLAVOR_ID};
+use orchestrator_core::flavor::{active_flavor_id_in, load_flavor_in, locate_flavor_manifest_in};
 use orchestrator_core::{
     summarize_discovered_plugins_with_lock, InstalledPluginSummary, PluginInstaller, PluginPreflightRunner,
     PluginPreflightSpec, PreflightResult,
@@ -205,6 +205,27 @@ fn normalize_flavor_slug(slug: &str) -> String {
 }
 
 fn resolve_flavor_plugins(project_root: &Path) -> (BTreeSet<String>, bool, Option<(PathBuf, String)>) {
+    // Resolve the persisted active flavor (default `default`) so a
+    // project that opted into a non-default flavor via `animus plugin
+    // install-defaults --flavor <name>` scopes against THAT flavor's
+    // plugin set rather than always `flavors/default.toml`. A persisted
+    // name whose `flavors/<name>.toml` is gone (renamed/deleted) is
+    // STALE: per the spec we fall back to the `default` flavor rather than
+    // fail-closed to an empty admit set (which an explicit `mode:
+    // flavor-only` file would otherwise enforce).
+    let active = active_flavor_id_in(project_root);
+    let default_id = orchestrator_core::flavor::DEFAULT_FLAVOR_ID;
+    let stale_fallback = active != default_id && locate_flavor_manifest_in(project_root, &active).is_none();
+    let flavor_name = if stale_fallback {
+        tracing::warn!(
+            flavor = %active,
+            "persisted active flavor `{active}` has no manifest on disk (flavors/{active}.toml); \
+             falling back to the `default` flavor for plugin scope resolution"
+        );
+        default_id.to_string()
+    } else {
+        active
+    };
     // `load_flavor_in` falls back to the binary-bundled default flavor
     // when no on-disk manifest is present. For the scope-default
     // decision we must distinguish "project actually opted into a
@@ -213,10 +234,20 @@ fn resolve_flavor_plugins(project_root: &Path) -> (BTreeSet<String>, bool, Optio
     // installed. `locate_flavor_manifest_in` returns None when the
     // operator has not written `flavors/<id>.toml`, so we drive the
     // presence flag from that.
-    let Some(manifest_path) = locate_flavor_manifest_in(project_root, DEFAULT_FLAVOR_ID) else {
+    //
+    // EXCEPTION: when we fell back from a stale non-default selection to
+    // `default`, an explicit `mode: flavor-only` scope file is still in
+    // force, so returning an empty admit set here would filter out every
+    // plugin. Instead, resolve the bundled-default flavor's plugins
+    // (`load_flavor_in` honors the binary-bundled manifest) so the admit
+    // set is non-empty — the documented "fall back to default, never
+    // fail-closed to empty" behavior.
+    if locate_flavor_manifest_in(project_root, &flavor_name).is_none() && !stale_fallback {
         return (BTreeSet::new(), false, None);
-    };
-    match load_flavor_in(project_root, DEFAULT_FLAVOR_ID) {
+    }
+    let manifest_path = locate_flavor_manifest_in(project_root, &flavor_name)
+        .unwrap_or_else(|| project_root.join("flavors").join("default.toml"));
+    match load_flavor_in(project_root, &flavor_name) {
         Ok(Some(manifest)) => {
             // Include `recommended` plugins as well: operators who opted
             // into the recommended set (`animus plugin install-defaults
@@ -388,6 +419,93 @@ required = ["launchapp-dev/animus-provider-claude"]
         assert!(matches!(scope.mode, PluginScopeMode::All));
         assert!(scope.flavor_manifest_error.is_none());
         assert!(flavor_gating_error(&scope).is_none());
+    }
+
+    #[test]
+    fn resolve_scope_honors_persisted_active_flavor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let flavors = temp.path().join("flavors");
+        std::fs::create_dir_all(&flavors).expect("mkdir flavors");
+        // Default flavor present but EMPTY; a non-default flavor declares
+        // the plugin we expect the active selection to admit.
+        std::fs::write(flavors.join("default.toml"), VALID_FLAVOR).expect("write default");
+        std::fs::write(
+            flavors.join("enterprise.toml"),
+            r#"schema = "animus.flavor.v1"
+id = "enterprise"
+version = "0.5.0"
+title = "ent"
+description = "ent"
+
+[providers]
+required = ["acme/animus-provider-enterprise"]
+"#,
+        )
+        .expect("write enterprise");
+        let animus = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus).expect("mkdir .animus");
+        std::fs::write(
+            animus.join("plugin-scope.yaml"),
+            "schema: animus.plugin-scope.v1\nmode: flavor-only\nactive_flavor: enterprise\n",
+        )
+        .expect("write scope");
+
+        let scope = resolve_scope_for_project(temp.path());
+        assert!(matches!(scope.mode, PluginScopeMode::FlavorOnly));
+        assert!(
+            scope.flavor_plugins.contains("animus-provider-enterprise"),
+            "resolver must scope against the persisted active flavor, not flavors/default.toml"
+        );
+        assert!(
+            !scope.flavor_plugins.contains("animus-provider-claude"),
+            "default flavor's plugins must NOT leak when a non-default flavor is active"
+        );
+    }
+
+    #[test]
+    fn resolve_scope_stale_active_flavor_falls_back_to_default_flavor_not_empty() {
+        // Explicit `mode: flavor-only` file + a STALE active flavor whose
+        // manifest was removed. Without the default fallback the admit set
+        // would be empty (every plugin filtered out). With it, the default
+        // flavor's plugins admit instead.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let flavors = temp.path().join("flavors");
+        std::fs::create_dir_all(&flavors).expect("mkdir flavors");
+        std::fs::write(flavors.join("default.toml"), VALID_FLAVOR).expect("write default");
+        // NB: no flavors/enterprise.toml on disk — the selection is stale.
+        let animus = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus).expect("mkdir .animus");
+        std::fs::write(
+            animus.join("plugin-scope.yaml"),
+            "schema: animus.plugin-scope.v1\nmode: flavor-only\nactive_flavor: enterprise\n",
+        )
+        .expect("write scope");
+
+        let scope = resolve_scope_for_project(temp.path());
+        assert!(matches!(scope.mode, PluginScopeMode::FlavorOnly));
+        assert!(
+            scope.flavor_plugins.contains("animus-provider-claude"),
+            "stale active flavor must fall back to the default flavor's plugin set, not an empty admit set"
+        );
+        assert!(!scope.effective_admit_set().is_empty(), "must not fail-closed to empty on a stale active flavor");
+    }
+
+    #[test]
+    fn resolve_scope_unknown_active_flavor_falls_back_to_mode_all() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let animus = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus).expect("mkdir .animus");
+        // Persist a flavor with no manifest on disk and no flavors/ dir.
+        std::fs::write(
+            animus.join("plugin-scope.yaml"),
+            "schema: animus.plugin-scope.v1\nmode: all\nactive_flavor: ghost\n",
+        )
+        .expect("write scope");
+
+        let scope = resolve_scope_for_project(temp.path());
+        // Never fail-closed to empty on an unknown persisted name.
+        assert!(matches!(scope.mode, PluginScopeMode::All));
+        assert!(scope.flavor_manifest_error.is_none());
     }
 
     #[test]

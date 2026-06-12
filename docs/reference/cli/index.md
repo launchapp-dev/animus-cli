@@ -958,9 +958,12 @@ animus flavor list
 animus flavor info --name default
 animus flavor info --name default --json
 
-# Show drift: which required plugins are installed vs missing.
+# Show the active flavor + drift: which required plugins are installed vs missing.
+# With no --name, `current` probes the project's PERSISTED active flavor
+# (see "Active flavor persistence" below), falling back to `default`.
 animus flavor current
 animus flavor current --json
+animus flavor current --name enterprise   # probe a specific flavor regardless
 
 # Install the flavor: every plugin the manifest marks `required`.
 animus flavor install            # uses `default`
@@ -990,7 +993,30 @@ The loader probes for `flavors/<name>.toml` in this order:
 2. `<cwd>/flavors/`
 3. parent directories walking up to `/`
 
-JSON output uses the `animus.flavor.cli.v1` envelope.
+JSON output uses the `animus.flavor.cli.v1` envelope. `animus flavor current`
+adds a `source` field reporting where the probed name came from: `flag` (you
+passed `--name`), `persisted` (read from the project's
+`.animus/plugin-scope.yaml` `active_flavor:` key), or `default` (no persisted
+selection).
+
+#### Active flavor persistence
+
+A successful `animus plugin install-defaults --flavor <name>` (or
+`animus flavor install <name>`) records the selected flavor project-locally
+in `.animus/plugin-scope.yaml` under an `active_flavor:` key. The daemon's
+flavor-only plugin scope resolver and the CLI's `animus plugin list` /
+`animus plugin scope show` read that selection back, so a non-default flavor's
+plugins are admitted by scoped discovery instead of being filtered out against
+`flavors/default.toml`. Selecting `default` again clears the persisted key
+(and downgrades a leftover `flavor-only` mode to `all` when no on-disk
+`flavors/default.toml` exists, so the project keeps a working scope). When the
+persisted name has no `flavors/<name>.toml` on disk (a stale selection), the
+resolver logs a warning and falls back to the `default` flavor's plugin set
+(on-disk or binary-bundled) for the admit set — it never fail-closes
+discovery to an empty set. The scope file's `mode` is preserved; `animus
+plugin scope show` still reports the raw persisted name plus
+`active_flavor_source`. The selection is merged into any existing scope file,
+preserving the operator's `mode` / `allow` / `extras`.
 
 ### `animus plugin install-defaults`
 

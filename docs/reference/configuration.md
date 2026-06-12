@@ -157,6 +157,28 @@ in a `shadowed` array. The per-project plugin scope file
 does global ones — an allowlist that omits a project-installed plugin
 excludes it from discovery.
 
+**Active flavor (`active_flavor:`).** `.animus/plugin-scope.yaml` also carries
+an optional `active_flavor:` key recording which flavor the project opted
+into. It is written by a successful `animus plugin install-defaults --flavor
+<name>` / `animus flavor install <name>` (a `default` selection is omitted,
+keeping the common-case file clean). The daemon's flavor-only scope resolver
+and `animus plugin list` / `animus plugin scope show` read it back, so a
+non-default flavor's plugins are admitted by `flavor-only` scoped discovery
+instead of always being matched against `flavors/default.toml`. When the
+recorded name has no `flavors/<name>.toml` on disk (a stale selection — the
+manifest was renamed or removed), the resolver logs a warning and falls back
+to the **`default` flavor's** plugin set (resolved from `flavors/default.toml`
+or the binary-bundled default) for the admit set — it never fail-closes
+discovery to an empty admit set. The scope file's `mode` is preserved (a
+`flavor-only` file stays `flavor-only`, now scoping against the default
+flavor's plugins). `animus plugin scope show` reports the raw persisted
+`active_flavor` name plus its `active_flavor_source` (`persisted` | `default`)
+for diagnostics, even when the resolver fell back to the default flavor's
+plugins. Selecting `default` via `install-defaults`/`flavor install` clears
+the persisted key and re-synthesizes a working scope mode (downgrading a
+leftover `flavor-only` to `all` when no on-disk `flavors/default.toml`
+exists).
+
 **Version control.** Project plugin BINARIES should not be committed —
 `animus init` and `animus plugin install --project` write a
 `.animus/.gitignore` covering `plugins/`. The project lockfile

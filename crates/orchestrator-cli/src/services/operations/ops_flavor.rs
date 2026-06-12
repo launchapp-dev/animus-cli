@@ -43,6 +43,10 @@ struct FlavorSummary {
 struct FlavorCurrentOutput {
     schema: &'static str,
     name: String,
+    /// Where `name` came from: `persisted` (read from
+    /// `.animus/plugin-scope.yaml`), `flag` (operator passed `--name`), or
+    /// `default` (no persisted selection, fell back to `default`).
+    source: &'static str,
     installed: bool,
     drift: Vec<FlavorDriftEntry>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -113,7 +117,19 @@ fn handle_flavor_list(project_root: &str, json: bool) -> Result<()> {
 
 fn handle_flavor_current(args: FlavorCurrentArgs, project_root: &str, json: bool) -> Result<()> {
     let root = std::path::Path::new(project_root);
-    let manifest = load_flavor_in(root, &args.name)?;
+    // Resolve which flavor to probe and where the name came from:
+    //   * `--name <x>` → operator override (`flag`).
+    //   * else the persisted `active_flavor:` selection (`persisted`).
+    //   * else the canonical `default` (`default`).
+    let persisted = orchestrator_plugin_host::read_active_flavor(root);
+    let (name, source): (String, &'static str) = match args.name {
+        Some(n) => (n, "flag"),
+        None => match persisted {
+            Some(n) => (n, "persisted"),
+            None => (orchestrator_core::flavor::DEFAULT_FLAVOR_ID.to_string(), "default"),
+        },
+    };
+    let manifest = load_flavor_in(root, &name)?;
     let drift = match &manifest {
         Some(m) => compute_drift(project_root, m)?,
         None => Vec::new(),
@@ -122,7 +138,8 @@ fn handle_flavor_current(args: FlavorCurrentArgs, project_root: &str, json: bool
     let total = drift.len();
     let output = FlavorCurrentOutput {
         schema: FLAVOR_SCHEMA,
-        name: args.name.clone(),
+        name: name.clone(),
+        source,
         installed: manifest.is_some() && installed == total,
         drift,
         manifest,
@@ -131,10 +148,10 @@ fn handle_flavor_current(args: FlavorCurrentArgs, project_root: &str, json: bool
         return print_value(output, true);
     }
     if output.manifest.is_none() {
-        println!("flavor '{}' not found on disk", output.name);
+        println!("flavor '{}' not found on disk (source: {})", output.name, output.source);
         return Ok(());
     }
-    println!("flavor: {} ({}/{}) installed", output.name, installed, total);
+    println!("flavor: {} (source: {}) ({}/{}) installed", output.name, output.source, installed, total);
     for entry in &output.drift {
         let mark = if entry.installed { "ok" } else { "missing" };
         println!("  [{mark}] {} ({})", entry.plugin, entry.role);
