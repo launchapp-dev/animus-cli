@@ -106,14 +106,15 @@ The daemon emits facts; it never interprets them. This separation means adding a
 ## Starting and Stopping
 
 ```bash
-animus daemon start --autonomous    # Start daemon in background (forks child process)
+animus daemon start    # Start daemon in background (forks child process)
 animus daemon status                # Check daemon health and active workflows
 animus daemon pause                 # Pause dispatch (running workflows continue)
 animus daemon resume                # Resume dispatch
 animus daemon stop                  # Graceful shutdown
 ```
 
-When started with `--autonomous`, the daemon forks a child process. Structured
+`animus daemon start` always forks a detached child process (use
+`animus daemon run` to stay in the foreground for debugging). Structured
 runtime events are written through the active log storage backend and mirrored
 locally at `~/.animus/<repo-scope>/logs/events.jsonl`. Use `animus daemon stream`
 for live events and `animus logs tail` for recent persisted entries.

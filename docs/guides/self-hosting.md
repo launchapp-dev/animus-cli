@@ -32,7 +32,7 @@ animus subject status --kind task --id task:TASK-001 --status done
 ## Autonomous Execution
 
 ```bash
-animus daemon start --autonomous
+animus daemon start
 animus daemon status
 animus daemon health
 animus daemon events

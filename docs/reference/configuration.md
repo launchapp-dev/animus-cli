@@ -280,13 +280,13 @@ storing them with `animus secret set <KEY>`. Explicit process env still
 wins on collision. Example:
 
 ```bash
-LINEAR_API_TOKEN=lin_api_... OPENAI_API_KEY=sk-... animus daemon start --autonomous
+LINEAR_API_TOKEN=lin_api_... OPENAI_API_KEY=sk-... animus daemon start
 ```
 
 ```bash
 animus secret set LINEAR_API_TOKEN --value lin_api_...
 animus secret set OPENAI_API_KEY --value sk-...
-animus daemon start --autonomous
+animus daemon start
 ```
 
 ### Workflow YAML interpolation (non-secret config)
@@ -356,7 +356,7 @@ daemon, source them in the parent shell:
 
 ```bash
 set -a; source .env; set +a
-animus daemon start --autonomous
+animus daemon start
 ```
 
 Or use a process supervisor (systemd, launchd, docker-compose) that supports an

@@ -561,6 +561,15 @@ fn build_daemon_start_args_with_flags() {
 }
 
 #[test]
+fn build_daemon_start_args_ignores_deprecated_autonomous_input() {
+    // `daemon start` always detaches; the deprecated `autonomous` input is
+    // accepted in the schema but never forwarded to the CLI.
+    let input = DaemonStartInput { autonomous: Some(true), ..Default::default() };
+    let args = build_daemon_start_args(&input);
+    assert_eq!(args, vec!["daemon".to_string(), "start".to_string()]);
+}
+
+#[test]
 fn build_daemon_start_args_includes_stale_threshold_hours() {
     let input = DaemonStartInput { stale_threshold_hours: Some(48), ..Default::default() };
     let args = build_daemon_start_args(&input);

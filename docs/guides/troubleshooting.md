@@ -18,7 +18,7 @@ animus doctor --fix
 
 ## Daemon Won't Start
 
-**Symptoms**: `animus daemon start --autonomous` exits immediately or `animus daemon status` shows not running.
+**Symptoms**: `animus daemon start` exits immediately or `animus daemon status` shows not running.
 
 **Steps**:
 
@@ -49,13 +49,13 @@ animus doctor --fix
 
 ```bash
 unset CLAUDECODE
-animus daemon start --autonomous
+animus daemon start
 ```
 
 Or use an env prefix:
 
 ```bash
-env -u CLAUDECODE animus daemon start --autonomous
+env -u CLAUDECODE animus daemon start
 ```
 
 ## Agent Runtime Config Overriding Compiled Defaults

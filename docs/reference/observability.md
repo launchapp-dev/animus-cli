@@ -172,9 +172,9 @@ human-readable formatting on stderr. Enable JSON-line output by setting
 either of these environment variables before launching the daemon:
 
 ```bash
-ANIMUS_LOG_FORMAT=json animus daemon start --autonomous
+ANIMUS_LOG_FORMAT=json animus daemon start
 # or, the legacy alias (still honored):
-ANIMUS_LOG_JSON=1 animus daemon start --autonomous
+ANIMUS_LOG_JSON=1 animus daemon start
 ```
 
 With JSON formatting enabled, every tracing event is serialized as a
@@ -184,7 +184,7 @@ with `RUST_LOG` to control verbosity:
 ```bash
 RUST_LOG=info,orchestrator_daemon_runtime=debug \
 ANIMUS_LOG_FORMAT=json \
-animus daemon start --autonomous
+animus daemon start
 ```
 
 ### Shipping logs to an aggregator
@@ -205,7 +205,7 @@ journalctl -u animus.service -o cat -f | vector --config vector.yaml
 For macOS / non-systemd dev environments:
 
 ```bash
-ANIMUS_LOG_FORMAT=json animus daemon start --autonomous 2> >(tee -a daemon.json.log >&2)
+ANIMUS_LOG_FORMAT=json animus daemon start 2> >(tee -a daemon.json.log >&2)
 ```
 
 Then feed `daemon.json.log` to whatever ingester you prefer.

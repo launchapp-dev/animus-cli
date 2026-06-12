@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING:** `animus daemon start` now always starts the daemon as a
+  detached background process. Previously it silently fell through to the
+  foreground `daemon run` path unless `--autonomous` was passed. The
+  `--autonomous` flag remains accepted as a hidden, deprecated no-op (it now
+  just names the default), so existing `daemon start --autonomous` automation
+  keeps working unchanged. Use `animus daemon run` for a foreground
+  (dev/debug) daemon. `daemon start` success output now reports the daemon
+  pid and the background log path, and starting while a daemon is already
+  running is idempotent for all invocations (previously the flag-less form
+  errored). `animus daemon restart` restarts into detached mode, matching
+  the new default.
+
 ## [0.5.13] - 2026-06-11
 
 **Human-in-the-loop agents, MCP pass-down on every provider, an event-driven

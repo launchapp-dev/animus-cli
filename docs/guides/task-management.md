@@ -66,7 +66,7 @@ animus queue list
 animus queue hold task:TASK-001
 animus queue release task:TASK-001 task:TASK-002
 animus queue drop --all --yes
-animus daemon start --autonomous
+animus daemon start
 ```
 
 ## Notes

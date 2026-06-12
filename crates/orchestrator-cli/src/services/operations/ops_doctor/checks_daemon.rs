@@ -82,7 +82,7 @@ pub(crate) async fn run(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
                     .fix(CheckFix::command(
                         "restart_daemon",
                         "Restart the daemon to recover from a wedged control loop.",
-                        "animus daemon restart --autonomous --auto-install",
+                        "animus daemon restart --auto-install",
                     )),
             ),
         }

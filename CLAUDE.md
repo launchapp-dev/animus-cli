@@ -184,6 +184,12 @@ them, then opens the browser. Run
 standard set (`launchapp-dev/animus-transport-http`,
 `animus-transport-graphql`, `animus-web-ui`).
 
+`animus daemon start` always starts the daemon as a detached background
+process as of v0.6 (the legacy `--autonomous` flag is a hidden, deprecated
+no-op kept for fleet automation back-compat). `animus daemon run` is the
+foreground dev/debug verb. The pre-v0.6 behavior where flag-less
+`daemon start` fell through to the foreground run path was removed.
+
 `animus daemon start` and `animus daemon run` perform a plugin preflight
 before booting. Default posture is refuse-to-start when any required role
 is unsatisfied; the error surfaces the exact `animus plugin install ...`

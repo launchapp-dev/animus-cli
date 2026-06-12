@@ -136,7 +136,7 @@ dispatch control.
 
 ```json
 {}                                          // animus.daemon.status / health / agents
-{ "autonomous": true, "pool_size": 3, "auto_install": true } // animus.daemon.start
+{ "pool_size": 3, "auto_install": true }                    // animus.daemon.start (always detaches)
 { "skip_preflight": true }                  // animus.daemon.start (dev escape hatch)
 { "auto_run_ready": true, "pool_size": 4 }  // animus.daemon.config-set
 { "limit": 50 }                              // animus.daemon.events

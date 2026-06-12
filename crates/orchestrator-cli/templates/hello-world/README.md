@@ -18,7 +18,7 @@ runner → daemon pipeline.
 animus workflow run hello-world --sync
 
 # Or asynchronously via the daemon:
-animus daemon start --autonomous
+animus daemon start
 animus workflow run hello-world
 ```
 

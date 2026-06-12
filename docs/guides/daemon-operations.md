@@ -4,15 +4,17 @@ The Animus daemon is the autonomous scheduler that picks up tasks, dispatches wo
 
 ## Starting the Daemon
 
-### Background Mode (Autonomous)
+### Background Mode (Default)
 
-Start the daemon as a detached background process:
+Start the daemon as a detached background process (as of v0.6 `daemon start`
+always detaches; the legacy `--autonomous` flag is a deprecated no-op):
 
 ```bash
-animus daemon start --autonomous
+animus daemon start
 ```
 
-This forks a child process and continuously polls for ready work. Structured
+This forks a child process and continuously polls for ready work. The
+command prints the daemon pid and the background log path. Structured
 runtime events are persisted through the active log storage backend, and the
 scoped local mirror remains `~/.animus/<repo-scope>/logs/events.jsonl`.
 
@@ -200,7 +202,7 @@ the decision to you.
 ### Start Daemon and Monitor
 
 ```bash
-animus daemon start --autonomous
+animus daemon start
 animus daemon status
 animus daemon events --follow
 ```

@@ -14,6 +14,7 @@ pub(super) struct DaemonStartInput {
     pub(super) phase_timeout_secs: Option<u64>,
     #[serde(default)]
     pub(super) skip_runner: Option<bool>,
+    /// Deprecated no-op: `daemon start` always detaches into the background.
     #[serde(default)]
     pub(super) autonomous: Option<bool>,
     #[serde(default)]

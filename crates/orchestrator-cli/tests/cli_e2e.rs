@@ -43,13 +43,14 @@ fn assert_shared_destructive_dry_run_contract(
 }
 
 #[test]
-fn e2e_daemon_autonomous_start_idempotent_then_stop() -> Result<()> {
+fn e2e_daemon_start_detaches_by_default_idempotent_then_stop() -> Result<()> {
     let harness = CliHarness::new()?;
 
+    // `daemon start` without any detach flag must spawn a detached
+    // background daemon (v0.6: detached is the default and only behavior).
     let started = harness.run_json_ok(&[
         "daemon",
         "start",
-        "--autonomous",
         "--skip-runner",
         "--interval-secs",
         "1",
@@ -68,9 +69,20 @@ fn e2e_daemon_autonomous_start_idempotent_then_stop() -> Result<()> {
     let daemon_pid = started
         .pointer("/data/daemon_pid")
         .and_then(Value::as_u64)
-        .context("daemon start --autonomous should return data.daemon_pid")?;
+        .context("daemon start should return data.daemon_pid")?;
     assert!(daemon_pid > 0, "daemon pid should be > 0");
+    assert_eq!(
+        started.pointer("/data/detached").and_then(Value::as_bool),
+        Some(true),
+        "daemon start should report detached mode"
+    );
+    assert!(
+        started.pointer("/data/log_path").and_then(Value::as_str).is_some_and(|path| !path.is_empty()),
+        "daemon start should report the background log path"
+    );
 
+    // The deprecated `--autonomous` flag stays accepted as a hidden no-op
+    // and behaves identically (idempotent against the running daemon).
     let already_running = harness.run_json_ok(&[
         "daemon",
         "start",
@@ -93,7 +105,7 @@ fn e2e_daemon_autonomous_start_idempotent_then_stop() -> Result<()> {
     assert_eq!(
         already_running.pointer("/data/daemon_pid").and_then(Value::as_u64),
         Some(daemon_pid),
-        "second autonomous start should report the same running daemon pid"
+        "second start (with deprecated --autonomous) should report the same running daemon pid"
     );
 
     harness.run_json_ok(&["daemon", "stop"])?;
@@ -101,7 +113,7 @@ fn e2e_daemon_autonomous_start_idempotent_then_stop() -> Result<()> {
 }
 
 #[test]
-fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
+fn e2e_daemon_start_reports_early_exit_failure() -> Result<()> {
     let harness = CliHarness::new()?;
 
     let lock_path = harness.scoped_root().join("daemon").join("daemon.lock");
@@ -119,7 +131,6 @@ fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
     let (failure, exit_code) = harness.run_json_err_with_exit(&[
         "daemon",
         "start",
-        "--autonomous",
         "--skip-runner",
         "--interval-secs",
         "1",
@@ -134,7 +145,7 @@ fn e2e_daemon_autonomous_start_reports_early_exit_failure() -> Result<()> {
         "--max-tasks-per-tick",
         "1",
     ])?;
-    assert_ne!(exit_code, 0, "daemon start should fail when autonomous child exits");
+    assert_ne!(exit_code, 0, "daemon start should fail when the detached child exits");
     let message = failure
         .pointer("/error/message")
         .and_then(Value::as_str)
@@ -198,7 +209,6 @@ fn e2e_daemon_start_without_preflight_refuses_when_no_plugins() -> Result<()> {
     let (failure, exit_code) = harness.run_json_err_with_exit(&[
         "daemon",
         "start",
-        "--autonomous",
         "--skip-runner",
         "--interval-secs",
         "1",
