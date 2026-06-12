@@ -7,7 +7,6 @@ pub(crate) enum PackCommand {
     /// List discovered packs and indicate which ones are active for this project.
     List(PackListArgs),
     /// Show details of a discovered pack or a local pack manifest.
-    #[command(alias = "inspect")]
     Info(PackInspectArgs),
     /// Pin a pack version/source or toggle enablement for this project.
     Pin(PackPinArgs),

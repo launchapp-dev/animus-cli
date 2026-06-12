@@ -653,28 +653,22 @@ mod tests {
         assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
     }
 
-    /// Codex round-5 P3 regression: replacing `IdArgs` with
-    /// `WorkflowResumeArgs` dropped the `-i` short alias and broke
-    /// `animus workflow resume -i <id>` scripts. The short flag must keep
-    /// parsing alongside the canonical long form.
+    /// v0.6 breaking cleanup: the `-i` short alias on `workflow resume`
+    /// was retired. Only the canonical `--id` long form (and the
+    /// `--workflow-id` domain-prefixed form) parse now.
     #[test]
-    fn workflow_resume_accepts_short_i_flag() {
-        let cli = Cli::try_parse_from(["animus", "workflow", "resume", "-i", "wf-abc-123"])
-            .expect("workflow resume -i must parse");
-        match cli.command {
-            Command::Workflow { command: WorkflowCommand::Resume(args) } => {
-                assert_eq!(args.id, "wf-abc-123");
-                assert!(!args.force, "force should default to false");
-            }
-            _ => panic!("expected workflow resume command"),
-        }
+    fn workflow_resume_rejects_retired_short_i_flag() {
+        let error = Cli::try_parse_from(["animus", "workflow", "resume", "-i", "wf-abc-123"])
+            .expect_err("workflow resume -i was retired in v0.6 and must fail to parse");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
 
-        // Long form must still work in parallel.
+        // The canonical long form keeps working.
         let cli_long = Cli::try_parse_from(["animus", "workflow", "resume", "--id", "wf-xyz"])
             .expect("workflow resume --id must continue to parse");
         match cli_long.command {
             Command::Workflow { command: WorkflowCommand::Resume(args) } => {
                 assert_eq!(args.id, "wf-xyz");
+                assert!(!args.force, "force should default to false");
             }
             _ => panic!("expected workflow resume command"),
         }
@@ -736,80 +730,90 @@ mod tests {
     }
 
     #[test]
-    fn pack_info_is_primary_and_inspect_stays_a_hidden_alias() {
-        for verb in ["info", "inspect"] {
-            let cli = Cli::try_parse_from(["animus", "pack", verb, "--pack-id", "animus.task"])
-                .unwrap_or_else(|error| panic!("pack {verb} should parse: {error}"));
-            match cli.command {
-                Command::Pack { command: PackCommand::Info(args) } => {
-                    assert_eq!(args.pack_id.as_deref(), Some("animus.task"));
-                }
-                other => panic!("expected pack info, got {other:?}"),
+    fn pack_info_is_primary_and_inspect_alias_is_retired() {
+        let cli = Cli::try_parse_from(["animus", "pack", "info", "--pack-id", "animus.task"])
+            .expect("pack info should parse");
+        match cli.command {
+            Command::Pack { command: PackCommand::Info(args) } => {
+                assert_eq!(args.pack_id.as_deref(), Some("animus.task"));
             }
+            other => panic!("expected pack info, got {other:?}"),
         }
+        let error = Cli::try_parse_from(["animus", "pack", "inspect", "--pack-id", "animus.task"])
+            .expect_err("pack inspect was retired in v0.6 and must fail to parse");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
         let help = subcommand_help(&["pack"]);
         assert!(help_lists_subcommand(&help, "info"), "pack help must list `info`:\n{help}");
-        assert!(!help_lists_subcommand(&help, "inspect"), "pack help must hide the `inspect` alias:\n{help}");
+        assert!(
+            !help_lists_subcommand(&help, "inspect"),
+            "pack help must not list the retired `inspect` verb:\n{help}"
+        );
     }
 
     #[test]
-    fn skill_info_is_primary_and_show_stays_a_hidden_alias() {
-        for verb in ["info", "show"] {
-            let cli = Cli::try_parse_from(["animus", "skill", verb, "--name", "alpha"])
-                .unwrap_or_else(|error| panic!("skill {verb} should parse: {error}"));
-            match cli.command {
-                Command::Skill { command: SkillCommand::Info(args) } => assert_eq!(args.name, "alpha"),
-                other => panic!("expected skill info, got {other:?}"),
-            }
+    fn skill_info_is_primary_and_show_alias_is_retired() {
+        let cli = Cli::try_parse_from(["animus", "skill", "info", "--name", "alpha"]).expect("skill info should parse");
+        match cli.command {
+            Command::Skill { command: SkillCommand::Info(args) } => assert_eq!(args.name, "alpha"),
+            other => panic!("expected skill info, got {other:?}"),
         }
+        let error = Cli::try_parse_from(["animus", "skill", "show", "--name", "alpha"])
+            .expect_err("skill show was retired in v0.6 and must fail to parse");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
         let help = subcommand_help(&["skill"]);
         assert!(help_lists_subcommand(&help, "info"), "skill help must list `info`:\n{help}");
-        assert!(!help_lists_subcommand(&help, "show"), "skill help must hide the `show` alias:\n{help}");
+        assert!(!help_lists_subcommand(&help, "show"), "skill help must not list the retired `show` verb:\n{help}");
     }
 
     #[test]
-    fn flavor_info_is_primary_and_describe_stays_a_hidden_alias() {
-        for verb in ["info", "describe"] {
-            let cli = Cli::try_parse_from(["animus", "flavor", verb, "--name", "default"])
-                .unwrap_or_else(|error| panic!("flavor {verb} should parse: {error}"));
-            match cli.command {
-                Command::Flavor { command: FlavorCommand::Info(args) } => assert_eq!(args.name, "default"),
-                other => panic!("expected flavor info, got {other:?}"),
-            }
+    fn flavor_info_is_primary_and_describe_alias_is_retired() {
+        let cli =
+            Cli::try_parse_from(["animus", "flavor", "info", "--name", "default"]).expect("flavor info should parse");
+        match cli.command {
+            Command::Flavor { command: FlavorCommand::Info(args) } => assert_eq!(args.name, "default"),
+            other => panic!("expected flavor info, got {other:?}"),
         }
+        let error = Cli::try_parse_from(["animus", "flavor", "describe", "--name", "default"])
+            .expect_err("flavor describe was retired in v0.6 and must fail to parse");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
         let help = subcommand_help(&["flavor"]);
         assert!(help_lists_subcommand(&help, "info"), "flavor help must list `info`:\n{help}");
-        assert!(!help_lists_subcommand(&help, "describe"), "flavor help must hide the `describe` alias:\n{help}");
+        assert!(
+            !help_lists_subcommand(&help, "describe"),
+            "flavor help must not list the retired `describe` verb:\n{help}"
+        );
     }
 
     #[test]
-    fn output_read_is_primary_and_run_stays_a_hidden_alias() {
-        for verb in ["read", "run"] {
-            let cli = Cli::try_parse_from(["animus", "output", verb, "--run-id", "RUN-1"])
-                .unwrap_or_else(|error| panic!("output {verb} should parse: {error}"));
-            match cli.command {
-                Command::Output { command: OutputCommand::Read(args) } => assert_eq!(args.run_id, "RUN-1"),
-                other => panic!("expected output read, got {other:?}"),
-            }
+    fn output_read_is_primary_and_run_alias_is_retired() {
+        let cli =
+            Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1"]).expect("output read should parse");
+        match cli.command {
+            Command::Output { command: OutputCommand::Read(args) } => assert_eq!(args.run_id, "RUN-1"),
+            other => panic!("expected output read, got {other:?}"),
         }
+        let error = Cli::try_parse_from(["animus", "output", "run", "--run-id", "RUN-1"])
+            .expect_err("output run was retired in v0.6 and must fail to parse");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
         let help = subcommand_help(&["output"]);
         assert!(help_lists_subcommand(&help, "read"), "output help must list `read`:\n{help}");
-        assert!(!help_lists_subcommand(&help, "run"), "output help must hide the `run` alias:\n{help}");
+        assert!(!help_lists_subcommand(&help, "run"), "output help must not list the retired `run` verb:\n{help}");
     }
 
     #[test]
-    fn project_set_active_is_primary_and_load_stays_a_hidden_alias() {
-        for verb in ["set-active", "load"] {
-            let cli = Cli::try_parse_from(["animus", "project", verb, "--id", "PRJ-1"])
-                .unwrap_or_else(|error| panic!("project {verb} should parse: {error}"));
-            match cli.command {
-                Command::Project { command: ProjectCommand::SetActive(args) } => assert_eq!(args.id, "PRJ-1"),
-                other => panic!("expected project set-active, got {other:?}"),
-            }
+    fn project_set_active_is_primary_and_load_alias_is_retired() {
+        let cli = Cli::try_parse_from(["animus", "project", "set-active", "--id", "PRJ-1"])
+            .expect("project set-active should parse");
+        match cli.command {
+            Command::Project { command: ProjectCommand::SetActive(args) } => assert_eq!(args.id, "PRJ-1"),
+            other => panic!("expected project set-active, got {other:?}"),
         }
+        let error = Cli::try_parse_from(["animus", "project", "load", "--id", "PRJ-1"])
+            .expect_err("project load was retired in v0.6 and must fail to parse");
+        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
         let help = subcommand_help(&["project"]);
         assert!(help_lists_subcommand(&help, "set-active"), "project help must list `set-active`:\n{help}");
-        assert!(!help_lists_subcommand(&help, "load"), "project help must hide the `load` alias:\n{help}");
+        assert!(!help_lists_subcommand(&help, "load"), "project help must not list the retired `load` verb:\n{help}");
     }
 
     #[test]
@@ -894,6 +898,37 @@ mod tests {
         assert!(error.to_string().contains("unknown unit"), "got: {error}");
     }
 
+    /// v0.6 breaking cleanup: the `--force` visible alias for `--yes` on
+    /// `workflow prune` / `workflow delete` was retired. Only `--yes`
+    /// applies the deletion now.
+    #[test]
+    fn workflow_prune_and_delete_reject_retired_force_alias() {
+        let prune = Cli::try_parse_from(["animus", "workflow", "prune", "--force"])
+            .expect_err("workflow prune --force was retired in v0.6 and must fail to parse");
+        assert_eq!(prune.kind(), ErrorKind::UnknownArgument);
+
+        let delete = Cli::try_parse_from(["animus", "workflow", "delete", "--run-id", "wf-1", "--force"])
+            .expect_err("workflow delete --force was retired in v0.6 and must fail to parse");
+        assert_eq!(delete.kind(), ErrorKind::UnknownArgument);
+
+        let prune_yes = Cli::try_parse_from(["animus", "workflow", "prune", "--yes"])
+            .expect("workflow prune --yes must keep parsing");
+        match prune_yes.command {
+            Command::Workflow { command: WorkflowCommand::Prune(args) } => assert!(args.yes),
+            other => panic!("expected workflow prune, got {other:?}"),
+        }
+
+        let delete_yes = Cli::try_parse_from(["animus", "workflow", "delete", "--run-id", "wf-1", "--yes"])
+            .expect("workflow delete --yes must keep parsing");
+        match delete_yes.command {
+            Command::Workflow { command: WorkflowCommand::Delete(args) } => {
+                assert_eq!(args.run_id, "wf-1");
+                assert!(args.yes);
+            }
+            other => panic!("expected workflow delete, got {other:?}"),
+        }
+    }
+
     #[test]
     fn parse_duration_secs_default_days_handles_units_and_rejects_garbage() {
         assert_eq!(parse_duration_secs_default_days("30"), Ok(30 * 86_400));
@@ -959,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn git_confirm_alias_round_trips_to_the_same_approval_commands() {
+    fn git_confirm_alias_is_retired() {
         let request = Cli::try_parse_from([
             "animus",
             "git",
@@ -970,48 +1005,20 @@ mod tests {
             "--repo-name",
             "repo-a",
         ])
-        .expect("git confirm request alias should still parse");
-        match request.command {
-            Command::Git { command: GitCommand::Confirm { command: ApprovalCommand::Request(args) } } => {
-                assert_eq!(args.operation_type, "force_push");
-                assert_eq!(args.repo_name, "repo-a");
-            }
-            other => panic!("expected git confirm request alias, got {other:?}"),
-        }
+        .expect_err("git confirm was retired in v0.6 and must fail to parse");
+        assert_eq!(request.kind(), ErrorKind::InvalidSubcommand);
 
         let respond = Cli::try_parse_from(["animus", "git", "confirm", "respond", "--request-id", "confirm-1"])
-            .expect("git confirm respond alias should still parse");
-        match respond.command {
-            Command::Git { command: GitCommand::Confirm { command: ApprovalCommand::Respond(args) } } => {
-                assert_eq!(args.request_id, "confirm-1");
-                assert!(!args.approved);
-            }
-            other => panic!("expected git confirm respond alias, got {other:?}"),
-        }
+            .expect_err("git confirm respond must fail to parse");
+        assert_eq!(respond.kind(), ErrorKind::InvalidSubcommand);
 
-        let outcome = Cli::try_parse_from([
-            "animus",
-            "git",
-            "confirm",
-            "outcome",
-            "--request-id",
-            "confirm-1",
-            "--message",
-            "aborted",
-        ])
-        .expect("git confirm outcome alias should still parse");
-        match outcome.command {
-            Command::Git { command: GitCommand::Confirm { command: ApprovalCommand::Outcome(args) } } => {
-                assert_eq!(args.request_id, "confirm-1");
-                assert!(!args.success);
-                assert_eq!(args.message, "aborted");
-            }
-            other => panic!("expected git confirm outcome alias, got {other:?}"),
-        }
+        let outcome = Cli::try_parse_from(["animus", "git", "confirm", "outcome", "--request-id", "confirm-1"])
+            .expect_err("git confirm outcome must fail to parse");
+        assert_eq!(outcome.kind(), ErrorKind::InvalidSubcommand);
     }
 
     #[test]
-    fn approval_group_renders_in_top_level_help_and_git_confirm_stays_hidden() {
+    fn approval_group_renders_in_top_level_help_and_git_confirm_is_gone() {
         let top_level = Cli::try_parse_from(["animus", "--help"]).expect_err("help short-circuits parsing");
         assert_eq!(top_level.kind(), ErrorKind::DisplayHelp);
         let top_level_help = top_level.to_string();
@@ -1022,12 +1029,12 @@ mod tests {
         let git_help_text = git_help.to_string();
         assert!(
             !git_help_text.lines().any(|line| line.split_whitespace().next() == Some("confirm")),
-            "git help must not advertise the hidden confirm alias"
+            "git help must not list the retired confirm subcommand"
         );
 
         let confirm_help =
             Cli::try_parse_from(["animus", "git", "confirm", "--help"]).expect_err("help short-circuits parsing");
-        assert_eq!(confirm_help.kind(), ErrorKind::DisplayHelp, "hidden alias must still answer --help");
+        assert_eq!(confirm_help.kind(), ErrorKind::InvalidSubcommand, "retired alias must not answer --help");
     }
 
     #[test]

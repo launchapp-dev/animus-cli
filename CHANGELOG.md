@@ -30,6 +30,15 @@ All notable changes to this project will be documented in this file.
   aliases (v0.4 removal precedent). The `metrics` value also left the
   telemetry `command_group` tag enum — `animus daemon metrics ...`
   invocations record as `daemon`.
+- **BREAKING (alias retirement)**: the legacy CLI aliases added during
+  the v0.5.13 conventions convergence were removed with no replacement
+  aliases (matching the v0.4 no-alias precedent) — `pack inspect` (use
+  `pack info`), `skill show` (use `skill info`), `flavor describe` (use
+  `flavor info`), `output run` (use `output read`), `project load` (use
+  `project set-active`), the hidden `animus git confirm {request, respond,
+  outcome}` subcommand (use `animus approval`), the `-i` short flag on
+  `workflow resume` (use `--id` / `--workflow-id`), and the `--force`
+  visible alias for `--yes` on `workflow prune` / `workflow delete`.
 
 ## [0.5.13] - 2026-06-11
 

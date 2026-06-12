@@ -159,7 +159,7 @@ Prefer borrowing over cloning.
         "install --path should preserve sibling skill files"
     );
 
-    let shown = harness.run_json_ok(&["skill", "show", "--name", "rust-skills"])?;
+    let shown = harness.run_json_ok(&["skill", "info", "--name", "rust-skills"])?;
     assert_eq!(shown.pointer("/data/source").and_then(Value::as_str), Some("project"));
     assert!(
         shown

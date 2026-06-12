@@ -1,7 +1,5 @@
 use clap::{Args, Subcommand};
 
-use super::approval_types::ApprovalCommand;
-
 #[derive(Debug, Subcommand)]
 pub(crate) enum GitCommand {
     /// Manage repo registry entries.
@@ -23,12 +21,6 @@ pub(crate) enum GitCommand {
     Worktree {
         #[command(subcommand)]
         command: GitWorktreeCommand,
-    },
-    /// Hidden alias for `animus approval` (the former `git confirm` path).
-    #[command(hide = true)]
-    Confirm {
-        #[command(subcommand)]
-        command: ApprovalCommand,
     },
 }
 

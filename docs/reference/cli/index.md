@@ -37,7 +37,7 @@ a no-op (see the `animus logs tail` section below).
 
 The convention for destructive verbs is dry-run by default: invoked without
 `--yes` they print a preview of what *would* be deleted and exit 0 without
-touching anything; pass `--yes` (alias `--force` where noted) to actually
+touching anything; pass `--yes` to actually
 apply. `subject delete`, `workflow prune`, and `workflow delete` follow it
 today. Two families still differ: `queue drop --all` confirms interactively
 and requires `--yes` in non-TTY contexts (scripts, CI, `--json` pipelines),
@@ -60,9 +60,8 @@ The command surface converges on a small set of conventions:
 - **Verbs**: `list` / `get` / `info` / `create` / `update` / `delete`.
   `info` is the detail-view verb across groups (`plugin info`, `pack info`,
   `skill info`, `flavor info`). The pre-convergence verbs (`pack inspect`,
-  `skill show`, `flavor describe`, `output run`, `project load`) keep working
-  as hidden aliases — nothing breaks — but new docs and help only show the
-  primary names.
+  `skill show`, `flavor describe`, `output run`, `project load`) were
+  retired in v0.6 — only the primary names parse.
 - **Confirmation**: destructive verbs are dry-run by default and take `--yes`
   to apply (`workflow prune --yes`, `subject delete --yes`, `queue drop --all
   --yes`). `--force` is reserved for overriding a *safety check* (overwrite an
@@ -144,7 +143,7 @@ animus
 │   ├── active               Show the active project
 │   ├── get                  Get a project by id
 │   ├── create               Create a new project entry
-│   ├── set-active           Mark a project as active (alias: `load`)
+│   ├── set-active           Mark a project as active
 │   ├── rename               Rename a project
 │   ├── archive              Archive a project
 │   └── remove               Remove a project
@@ -171,8 +170,8 @@ animus
 │   ├── resume-status        Check whether a workflow can be resumed
 │   ├── pause                Pause an active workflow (confirmation required)
 │   ├── cancel               Cancel a workflow (confirmation required)
-│   ├── prune                Prune terminal workflow runs from history and disk; dry-run by default, `--yes`/`--force` deletes
-│   ├── delete               Delete a single terminal workflow run from history and disk; dry-run by default, `--yes`/`--force` deletes
+│   ├── prune                Prune terminal workflow runs from history and disk; dry-run by default, `--yes` deletes
+│   ├── delete               Delete a single terminal workflow run from history and disk; dry-run by default, `--yes` deletes
 │   ├── phase
 │   │   ├── approve          Approve a pending phase gate
 │   │   └── reject           Reject a pending phase gate
@@ -238,7 +237,7 @@ animus
 │   ├── search               Search skills across built-in, user, project, and registry sources
 │   ├── install              Install a skill with deterministic resolution
 │   ├── list                 List all available skills (built-in, user, project, and installed)
-│   ├── info                 Show details of a resolved skill definition (alias: `show`)
+│   ├── info                 Show details of a resolved skill definition
 │   ├── update               Re-resolve one or all installed skills
 │   ├── uninstall            Remove an installed skill's materialized files and registry/lock entries (supports --source and --dry-run)
 │   ├── publish              Publish a new skill version into the registry catalog
@@ -251,7 +250,7 @@ animus
 ├── pack                     Install, inspect, pin, and uninstall workflow packs
 │   ├── install              Install a pack from a local path or marketplace registry
 │   ├── list                 List discovered packs and indicate which ones are active for this project
-│   ├── info                 Show details of a discovered pack or a local pack manifest (alias: `inspect`)
+│   ├── info                 Show details of a discovered pack or a local pack manifest
 │   ├── pin                  Pin a pack version/source or toggle enablement for this project
 │   ├── uninstall            Remove an installed pack (all versions or --version) plus its project selection entry; refuses while project workflow YAML references the pack unless --force (supports --dry-run)
 │   ├── search               Search packs across marketplace registries
@@ -288,7 +287,7 @@ animus
 │
 ├── status                   Show a unified project status dashboard
 ├── output                   Inspect run output and artifacts
-│   ├── read                 Read run event payloads (alias: `run`)
+│   ├── read                 Read run event payloads
 │   ├── phase-outputs        Read persisted workflow phase outputs
 │   ├── artifacts            List artifacts for an execution id
 │   ├── download             Download an artifact payload
@@ -331,7 +330,7 @@ animus
 ├── flavor                   Inspect or install Animus flavor manifests (`flavors/<name>.toml`) — v0.5
 │   ├── list                 List available flavor manifests on disk
 │   ├── current              Show the active flavor and drift against the manifest
-│   ├── info                 Print a parsed flavor manifest (TOML by default, JSON via `--json`) (alias: `describe`)
+│   ├── info                 Print a parsed flavor manifest (TOML by default, JSON via `--json`)
 │   └── install              Install the named flavor (`default` only in v0.5); equivalent to `animus plugin install-defaults --include-subjects --include-transports` plus the default `workflow_runner` and `queue` plugins
 │
 ├── self                     Manage the `animus` binary itself — check for and install updates
@@ -655,8 +654,8 @@ different store from the agent human-in-the-loop inbox: approvals that agents
 raise mid-run via `animus.agent.request_approval` are answered with
 `animus agent interactions answer <ID> --allow|--deny`, not here.
 
-`animus git confirm {request, respond, outcome}` remains as a hidden alias
-for backwards compatibility and dispatches to the same handlers.
+The former `animus git confirm {request, respond, outcome}` alias was
+removed in v0.6 — `animus approval` is the only surface.
 
 ### `animus queue hold` / `release` / `drop` (bulk subject operations)
 
@@ -703,7 +702,7 @@ eligible — in-progress, queued, and paused runs are always skipped, and
 `animus workflow delete` refuses a non-terminal run.
 
 Both commands are dry-run by default: they print the runs that would be
-deleted and the bytes that would be reclaimed. Pass `--yes` (alias `--force`)
+deleted and the bytes that would be reclaimed. Pass `--yes`
 to actually delete. With `--json`, output is an `animus.cli.v1` envelope whose
 `data` carries `dry_run`, the `deleted` list (`workflow_id`, `status`,
 `bytes_reclaimed`), and `total_bytes_reclaimed`.
@@ -714,7 +713,7 @@ to actually delete. With `--json`, output is an `animus.cli.v1` envelope whose
 | `--keep-last <COUNT>` | (prune) Keep the COUNT most recent matching runs overall — not per workflow definition — and prune the rest |
 | `--status <STATUS>` | (prune) Only prune runs with this terminal status; default is all terminal statuses |
 | `--run-id <RUN_ID>` | (delete) Workflow run identifier to delete |
-| `--yes` / `--force` | Actually delete; without it the command is a dry-run preview |
+| `--yes` | Actually delete; without it the command is a dry-run preview |
 
 ```bash
 animus workflow prune --older-than 30              # preview (30 days)
