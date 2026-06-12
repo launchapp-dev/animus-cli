@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.14] - 2026-06-12
+
+**The 9.5 campaign release: budgets that enforce, skills that supercharge any
+agent, a forensic chain that never dead-ends, and a smaller, honest surface.**
+Driven by an 8-surface product-owner review (baseline 6.2/10, re-reviewed at
+7.6 mid-campaign); every fix below was independently verified against the
+review findings. BREAKING items are marked.
+
 ### Added
 
 - Audited trust-on-first-use (TOFU) for plugin installs. The trusted-orgs
