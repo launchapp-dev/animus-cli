@@ -21,6 +21,15 @@ pub use projector_registry::{
 
 pub const WORKFLOW_RUNNER_BLOCKED_PREFIX: &str = "workflow runner failed: ";
 
+/// Prefix used for the informational `blocked_reason` annotation written to a
+/// task when its workflow is paused (`animus workflow pause`). The annotation
+/// is purely descriptive: it does not flip the task's status or `paused` flag,
+/// so it can never ghost the task out of scheduling. It is cleared by
+/// `animus workflow resume` (via [`project_task_workflow_pause_cleared`]) and
+/// by any non-blocked status transition (`apply_task_status` clears all
+/// `blocked_*` bookkeeping).
+pub const WORKFLOW_PAUSED_REASON_PREFIX: &str = "paused by workflow ";
+
 pub async fn project_task_status(hub: Arc<dyn ServiceHub>, task_id: &str, status: TaskStatus) -> Result<()> {
     hub.tasks().set_status(task_id, status, false).await?;
     Ok(())
@@ -43,6 +52,61 @@ pub async fn project_task_blocked_with_reason(
     updated.metadata.updated_by = protocol::ACTOR_DAEMON.to_string();
     updated.metadata.version = updated.metadata.version.saturating_add(1);
     hub.tasks().replace(updated).await?;
+    Ok(())
+}
+
+/// Annotate a task with "paused by workflow `<id>`" so `animus subject get`
+/// explains why nothing is progressing. Informational only: status and the
+/// `paused` flag are untouched, so the daemon's view of the task is unchanged
+/// and no ghost state can be left behind.
+pub async fn project_task_workflow_paused(hub: Arc<dyn ServiceHub>, task_id: &str, workflow_id: &str) -> Result<()> {
+    let Ok(mut task) = hub.tasks().get(task_id).await else {
+        return Ok(());
+    };
+    if matches!(task.status, TaskStatus::Done | TaskStatus::Cancelled) {
+        return Ok(());
+    }
+    // Never clobber an existing blocked_reason (a real failure projection or
+    // dependency gate): the pause marker is informational and loses to any
+    // pre-existing explanation. Re-annotating for the same workflow is a
+    // no-op either way.
+    if task.blocked_reason.is_some() {
+        return Ok(());
+    }
+    task.blocked_reason = Some(format!("{WORKFLOW_PAUSED_REASON_PREFIX}{workflow_id}"));
+    if task.blocked_by.is_none() {
+        task.blocked_by = Some(workflow_id.to_string());
+    }
+    task.metadata.updated_at = Utc::now();
+    task.metadata.updated_by = protocol::ACTOR_CORE.to_string();
+    task.metadata.version = task.metadata.version.saturating_add(1);
+    hub.tasks().replace(task).await?;
+    Ok(())
+}
+
+/// Clear the pause annotation written by [`project_task_workflow_paused`] when
+/// the workflow resumes. Only the matching marker is cleared — a genuine
+/// `blocked_reason` written by a failure projection is left alone.
+pub async fn project_task_workflow_pause_cleared(
+    hub: Arc<dyn ServiceHub>,
+    task_id: &str,
+    workflow_id: &str,
+) -> Result<()> {
+    let Ok(mut task) = hub.tasks().get(task_id).await else {
+        return Ok(());
+    };
+    let marker = format!("{WORKFLOW_PAUSED_REASON_PREFIX}{workflow_id}");
+    if task.blocked_reason.as_deref() != Some(marker.as_str()) {
+        return Ok(());
+    }
+    task.blocked_reason = None;
+    if task.blocked_by.as_deref() == Some(workflow_id) {
+        task.blocked_by = None;
+    }
+    task.metadata.updated_at = Utc::now();
+    task.metadata.updated_by = protocol::ACTOR_CORE.to_string();
+    task.metadata.version = task.metadata.version.saturating_add(1);
+    hub.tasks().replace(task).await?;
     Ok(())
 }
 

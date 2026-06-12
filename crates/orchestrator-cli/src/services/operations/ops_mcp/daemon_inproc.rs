@@ -66,7 +66,11 @@ pub(super) async fn daemon_health_inproc(default_project_root: &str, project_roo
     if let Some(client) = ControlClient::try_connect(project_root_path).await? {
         match client.daemon_health().await {
             Ok(response) => {
+                let healthy = crate::services::runtime::daemon_health_verdict(response.status, &response.plugins);
                 let mut value = serde_json::to_value(response)?;
+                if let Some(map) = value.as_object_mut() {
+                    map.insert("healthy".to_string(), Value::Bool(healthy));
+                }
                 overlay_runtime_pause(&mut value, &project_root);
                 return Ok(value);
             }
@@ -79,23 +83,10 @@ pub(super) async fn daemon_health_inproc(default_project_root: &str, project_roo
 
     let mut health = orchestrator_core::load_daemon_health_snapshot(project_root_path).await?;
     let pid = read_daemon_pid(&project_root);
-    if let Some(pid) = pid {
-        let alive = is_process_alive(pid);
-        health.daemon_pid = Some(pid);
-        health.process_alive = Some(alive);
-        if !alive && matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
-            health.status = DaemonStatus::Crashed;
-            health.healthy = false;
-            health.runtime_paused = false;
-            health.paused_at = None;
-            remove_daemon_pid(&project_root);
-            let _ = set_daemon_pid(&project_root, None);
-        }
-    } else if matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
-        health.status = DaemonStatus::Crashed;
-        health.healthy = false;
-        health.runtime_paused = false;
-        health.paused_at = None;
+    let alive = pid.map(is_process_alive);
+    if crate::services::runtime::finalize_offline_health(&mut health, pid, alive) {
+        remove_daemon_pid(&project_root);
+        let _ = set_daemon_pid(&project_root, None);
     }
     Ok(serde_json::to_value(health)?)
 }

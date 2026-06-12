@@ -119,8 +119,76 @@ async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json
     if status.is_empty() {
         return Err(invalid_input_error("--status must not be empty"));
     }
-    let params = Some(json!({ "id": id, "status": status }));
-    dispatch(&kind, "status", params, project_root, json).await
+
+    let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
+    // Snapshot the subject before the transition so the human output can
+    // report which stuck-state flags (`paused`, `blocked_*`) the backend
+    // cleared. Best-effort: a failed pre-fetch never blocks the transition.
+    let before = if json {
+        None
+    } else {
+        route_or_not_found(&resolution.selected, &format!("{kind}/get"), Some(json!({ "id": id }))).await.ok()
+    };
+    let method = format!("{kind}/status");
+    let result = route_or_not_found(&resolution.selected, &method, Some(json!({ "id": id, "status": status }))).await?;
+    orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
+    if let Some(before) = before.as_ref() {
+        if let Some(line) = describe_cleared_block_flags(before, &result) {
+            eprintln!("{line}");
+        }
+    }
+    print_value(
+        SubjectCallResponse {
+            kind: kind.to_string(),
+            verb: "status",
+            method,
+            plugin_count: resolution.selected.plugin_count(),
+            result,
+        },
+        json,
+    )
+}
+
+/// Compare a subject's pre/post-transition JSON and describe which
+/// stuck-state flags the transition cleared (`paused: true -> false`,
+/// `blocked_reason` / `blocked_by` / `blocked_at` / `blocked_phase`
+/// set -> null). Returns `None` when nothing was cleared. Pure so it can be
+/// unit-tested without spawning subject plugins.
+fn describe_cleared_block_flags(before: &Value, after: &Value) -> Option<String> {
+    fn subject_object(value: &Value) -> Option<&serde_json::Map<String, Value>> {
+        let object = value.as_object()?;
+        for key in ["subject", "task", "item"] {
+            if let Some(nested) = object.get(key).and_then(Value::as_object) {
+                return Some(nested);
+            }
+        }
+        Some(object)
+    }
+
+    let before = subject_object(before)?;
+    let after = subject_object(after)?;
+    let mut cleared = Vec::new();
+    if before.get("paused").and_then(Value::as_bool) == Some(true)
+        && after.get("paused").and_then(Value::as_bool) == Some(false)
+    {
+        cleared.push("paused".to_string());
+    }
+    for key in ["blocked_reason", "blocked_by", "blocked_at", "blocked_phase"] {
+        let Some(previous) = before.get(key).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        if after.get(key).map(Value::is_null).unwrap_or(true) {
+            match previous.as_str() {
+                Some(text) => cleared.push(format!("{key} (\"{text}\")")),
+                None => cleared.push(key.to_string()),
+            }
+        }
+    }
+    if cleared.is_empty() {
+        None
+    } else {
+        Some(format!("unstuck: cleared {}", cleared.join(", ")))
+    }
 }
 
 async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json: bool) -> Result<()> {
@@ -351,6 +419,54 @@ mod tests {
             let err = classify_subject_rpc_error("task/get", &rpc_error);
             assert_eq!(crate::classify_cli_error_kind(&err), expected, "rpc message: {}", rpc_error.message);
         }
+    }
+
+    #[test]
+    fn describe_cleared_block_flags_reports_paused_and_blocked_fields() {
+        let before = json!({
+            "id": "task:TASK-9",
+            "status": "blocked",
+            "paused": true,
+            "blocked_reason": "paused by workflow wf-123",
+            "blocked_by": "wf-123",
+            "blocked_at": "2026-06-10T12:00:00Z",
+        });
+        let after = json!({
+            "id": "task:TASK-9",
+            "status": "ready",
+            "paused": false,
+            "blocked_reason": null,
+            "blocked_by": null,
+            "blocked_at": null,
+        });
+        let line = describe_cleared_block_flags(&before, &after).expect("cleared flags reported");
+        assert!(line.starts_with("unstuck: cleared "), "got: {line}");
+        assert!(line.contains("paused"), "got: {line}");
+        assert!(line.contains("blocked_reason (\"paused by workflow wf-123\")"), "got: {line}");
+        assert!(line.contains("blocked_by (\"wf-123\")"), "got: {line}");
+        assert!(line.contains("blocked_at"), "got: {line}");
+    }
+
+    #[test]
+    fn describe_cleared_block_flags_handles_nested_subject_payloads() {
+        let before = json!({ "subject": { "paused": true, "blocked_reason": "stuck" } });
+        let after = json!({ "subject": { "paused": false } });
+        let line = describe_cleared_block_flags(&before, &after).expect("nested payload diffed");
+        assert!(line.contains("paused"), "got: {line}");
+        assert!(line.contains("blocked_reason (\"stuck\")"), "got: {line}");
+    }
+
+    #[test]
+    fn describe_cleared_block_flags_is_silent_when_nothing_cleared() {
+        let clean_before = json!({ "id": "task:TASK-1", "status": "ready", "paused": false });
+        let clean_after = json!({ "id": "task:TASK-1", "status": "in-progress", "paused": false });
+        assert!(describe_cleared_block_flags(&clean_before, &clean_after).is_none());
+
+        // Still-blocked transitions must not claim a clear.
+        let blocked = json!({ "paused": true, "blocked_reason": "dep gate" });
+        assert!(describe_cleared_block_flags(&blocked, &blocked).is_none());
+        // Non-object payloads are ignored gracefully.
+        assert!(describe_cleared_block_flags(&json!("ok"), &json!("ok")).is_none());
     }
 
     #[test]

@@ -512,6 +512,22 @@ plugin, so operators no longer have to read state files or logs to tell
 All new fields are additive with serde defaults — pre-v0.5.10 payloads
 still parse, and old consumers ignore the new keys.
 
+v0.5.x adds a one-line health verdict. Human `animus daemon health` output
+now LEADS with `healthy: true|false`, and `animus daemon health --json` (and
+the `animus.daemon.health` MCP tool) carries the same boolean as an additive
+`healthy` key. The rule:
+
+- `healthy: false` when the daemon is not running, crashed (snapshot claims
+  Running/Paused but the pid is dead), reports a critically failing
+  subsystem (`Unhealthy`/`Down`), or when any plugin row reports
+  `Unhealthy`/`Down` — which includes plugins disabled by the restart
+  supervisor.
+- `healthy: true` otherwise. Transitional `Degraded` states (daemon
+  starting/stopping, a plugin restarting) stay `true`.
+- A paused runtime is a deliberate operator action, not a failure: it
+  renders as `healthy: true (paused)` (JSON: `healthy: true` plus
+  `runtime_paused: true`).
+
 ### `animus agent run` / `animus chat send` (reasoning effort)
 
 Both surfaces accept a `--reasoning-effort` flag that controls how much
@@ -685,6 +701,29 @@ the same per-item payload.
 The MCP tools `animus.queue.hold` / `release` / `drop` accept either a single
 `subject_id` or a `subject_ids[]` array and route through the same CLI bulk
 path.
+
+### `animus workflow pause` / `resume` / `cancel` (task sync)
+
+Workflow lifecycle controls keep the bound task subject explainable instead
+of leaving ghost state:
+
+- `workflow pause` annotates the task's `blocked_reason` with
+  `paused by workflow <id>` (and sets `blocked_by` to the workflow id) so
+  `animus subject get` explains the stall. The annotation is informational
+  only — the task's status and `paused` flag are untouched, so the daemon's
+  scheduling view never changes.
+- `workflow resume` clears that exact annotation. A genuine failure-projected
+  `blocked_reason` is never clobbered, and any non-blocked status transition
+  (e.g. `animus subject status --status ready`) also clears it.
+- `workflow cancel` syncs the task to `cancelled` (unless it is already
+  `done`/`cancelled`), matching the daemon-side projection used by the
+  execution-fact path and the orphan reconciler — the end state is the same
+  no matter which surface handled the cancel. Use the task reopen flow to
+  pick the work back up.
+- `animus subject status ... --status ready` prints an
+  `unstuck: cleared paused, blocked_reason (...)` line (stderr, human output
+  only) whenever the transition cleared stuck-state flags, so the unsticking
+  is visible.
 
 ### `animus workflow prune` / `animus workflow delete`
 

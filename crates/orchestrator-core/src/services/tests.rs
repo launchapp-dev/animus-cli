@@ -2590,3 +2590,124 @@ async fn execute_requirements_skips_tasks_with_active_workflow_on_file_hub() {
         execution.workflow_ids_started
     );
 }
+
+#[tokio::test]
+async fn manual_phase_approval_resume_clears_task_pause_marker() {
+    // Codex P2 (ghost-fix wave): manual approve/reject of a paused workflow
+    // resumes it via `hub.workflows().resume(...)` instead of the
+    // `WorkflowEvent::Resume` arm, so it must clear the "paused by workflow
+    // <id>" annotation written to the task by `workflow pause` as well.
+    let temp = tempfile::tempdir().expect("tempdir");
+
+    ensure_test_config_env();
+    let mut workflow_config = crate::builtin_workflow_config();
+    workflow_config.phase_catalog.insert(
+        "qa-signoff".to_string(),
+        crate::PhaseUiDefinition {
+            label: "QA Signoff".to_string(),
+            description: String::new(),
+            category: "qa".to_string(),
+            icon: None,
+            docs_url: None,
+            tags: Vec::new(),
+            visible: true,
+        },
+    );
+    workflow_config.workflows.push(crate::WorkflowDefinition {
+        id: "manual-only".to_string(),
+        name: "Manual Only".to_string(),
+        description: "single manual gate".to_string(),
+        phases: vec!["qa-signoff".to_string().into()],
+        post_success: None,
+        variables: Vec::new(),
+        worktree: None,
+        budget: None,
+    });
+    crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
+
+    let mut runtime_config = crate::load_agent_runtime_config_or_default(temp.path());
+    runtime_config.phases.insert(
+        "qa-signoff".to_string(),
+        crate::PhaseExecutionDefinition {
+            mode: crate::PhaseExecutionMode::Manual,
+            agent_id: None,
+            directive: Some("manual".to_string()),
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: None,
+            manual: Some(crate::PhaseManualDefinition {
+                instructions: "approve qa signoff".to_string(),
+                approval_note_required: false,
+                timeout_secs: None,
+            }),
+            default_tool: None,
+            idempotency: crate::Idempotency::Unknown,
+            worktree: None,
+            evals: None,
+        },
+    );
+    crate::write_agent_runtime_config(temp.path(), &runtime_config).expect("write runtime config");
+
+    let hub: std::sync::Arc<dyn ServiceHub> = std::sync::Arc::new(file_hub(temp.path()).expect("create hub"));
+    let task = hub
+        .tasks()
+        .create(TaskCreateInput {
+            title: "Manual gate".to_string(),
+            description: String::new(),
+            task_type: None,
+            priority: None,
+            created_by: None,
+            tags: Vec::new(),
+            linked_requirements: Vec::new(),
+            linked_architecture_entities: Vec::new(),
+        })
+        .await
+        .expect("create task");
+    let workflow = hub
+        .workflows()
+        .run(WorkflowRunInput::for_task(task.id.clone(), Some("manual-only".to_string())))
+        .await
+        .expect("run workflow");
+    assert_eq!(workflow.current_phase.as_deref(), Some("qa-signoff"));
+
+    let root = temp.path().to_string_lossy().to_string();
+    crate::dispatch_workflow_event(
+        hub.clone(),
+        &root,
+        crate::WorkflowEvent::Pause { workflow_id: workflow.id.clone() },
+    )
+    .await
+    .expect("pause workflow");
+    let paused_task = hub.tasks().get(&task.id).await.expect("task after pause");
+    assert_eq!(
+        paused_task.blocked_reason.as_deref(),
+        Some(format!("paused by workflow {}", workflow.id).as_str()),
+        "pause must annotate the task"
+    );
+
+    crate::dispatch_workflow_event(
+        hub.clone(),
+        &root,
+        crate::WorkflowEvent::ApproveManualPhase {
+            workflow_id: workflow.id.clone(),
+            phase_id: "qa-signoff".to_string(),
+            note: None,
+        },
+    )
+    .await
+    .expect("approve manual phase");
+
+    let resumed_task = hub.tasks().get(&task.id).await.expect("task after approval");
+    assert!(
+        resumed_task.blocked_reason.is_none(),
+        "manual approval resume must clear the pause annotation, got: {:?}",
+        resumed_task.blocked_reason
+    );
+    assert!(resumed_task.blocked_by.is_none());
+}

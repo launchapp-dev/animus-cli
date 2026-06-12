@@ -82,7 +82,7 @@ Or read the config cascade documentation in the [Model Routing Guide](model-rout
 
 **Symptoms**: A task shows as blocked or paused but should be ready. The daemon skips it.
 
-**Cause**: When tasks are blocked, `paused=true` is set internally. The daemon skips paused tasks during scheduling. Direct JSON edits or incomplete status transitions can leave ghost state.
+**Cause**: When tasks are blocked, `paused=true` is set internally. Direct JSON edits or incomplete status transitions can leave ghost state. (Pausing a workflow only writes an informational `paused by workflow <id>` annotation to the task's `blocked_reason` — it never sets the `paused` flag — and `workflow cancel` syncs the task to `cancelled`, so workflow lifecycle controls no longer leave ghosts on their own.)
 
 **Fix**: Always reset via `animus subject status --kind task`:
 
@@ -90,7 +90,7 @@ Or read the config cascade documentation in the [Model Routing Guide](model-rout
 animus subject status --kind task --id task:TASK-XXX --status ready
 ```
 
-This clears `paused`, `blocked_at`, `blocked_reason`, and `blocked_by`. Never hand-edit Animus-managed runtime JSON or SQLite state.
+This clears `paused`, `blocked_at`, `blocked_reason`, `blocked_phase`, and `blocked_by`, and the command prints an `unstuck: cleared ...` line naming exactly which flags it cleared. Never hand-edit Animus-managed runtime JSON or SQLite state.
 
 ## Runner Connection Issues
 

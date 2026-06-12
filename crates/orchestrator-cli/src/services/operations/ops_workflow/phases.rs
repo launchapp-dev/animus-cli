@@ -317,7 +317,16 @@ pub(crate) async fn resume_workflow_with_runner(
         return Err(anyhow!("workflow '{}' not found", workflow_id));
     };
     if let Err(error) = spawn_detached_workflow_runner(project_root, workflow_id, &DetachedRunnerOverrides::default()) {
-        let _ = hub.workflows().pause(workflow_id).await;
+        // Re-pause AND re-annotate: the Resume dispatch above already
+        // cleared the task's "paused by workflow <id>" marker, so without
+        // re-adding it the re-paused workflow would stall unexplained.
+        if let Ok(repaused) = hub.workflows().pause(workflow_id).await {
+            if repaused.status == orchestrator_core::WorkflowStatus::Paused {
+                if let Some(task_id) = orchestrator_core::workflow_task_id(&repaused) {
+                    let _ = orchestrator_core::project_task_workflow_paused(hub.clone(), &task_id, workflow_id).await;
+                }
+            }
+        }
         let _ = unregister_workflow_runner_pid(Path::new(project_root), workflow_id);
         return Err(error.context(format!("failed to start workflow runner for resumed workflow '{workflow_id}'")));
     }
