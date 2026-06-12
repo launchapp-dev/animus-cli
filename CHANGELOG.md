@@ -6,6 +6,30 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Cost attribution by provider and model. Per-phase cost records now
+  carry a `provider` (sourced from the phase session checkpoint) and a
+  `model` (already captured from run metadata events), so operators can
+  answer "how much did claude vs gemini spend" and "which model drove
+  the spike". New grouped breakdown views: `animus cost summary --by
+  provider|model`, `animus cost workflow <run-id> --by provider|model|
+  phase`, and `animus cost top --by model` (a cross-run model
+  leaderboard). Each grouped row reports total tokens, total USD, and
+  the group's percentage of the grand total (token share when no USD is
+  reported); phases without attribution fold into an `unknown` bucket.
+  The grouped views attribute live workflows only — archived `history`
+  rows lack per-phase detail and are excluded (`cost workflow --by` is
+  rejected for archived runs; they land under `unknown` in `cost top
+  --by model`). `cost trends` is intentionally left workflow-level (no
+  provider/model split) since per-bucket attribution across history
+  would require a `HistorySummary` storage migration. New JSON envelope
+  schemas: `animus.cost.summary.breakdown.v1`,
+  `animus.cost.workflow.breakdown.v1`, `animus.cost.top.models.v1`. The
+  additive `PhaseCost.provider` field deserializes old cost-state files
+  unchanged.
+- `animus status --failures <N>` controls how many recent workflow
+  failures the dashboard lists (default 3), applied to both the human
+  and `--json` output.
+
 - Skill application is now VERIFIABLE end to end. `animus output
   phase-outputs` grew a human-readable per-phase view (verdict, reason,
   commit summary) with a Skills block showing requested vs applied

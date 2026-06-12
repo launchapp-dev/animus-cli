@@ -302,6 +302,44 @@ animus workflow decisions --id wf-...          # 4. why phases advanced/reworked
 animus cost workflow wf-...                    # 5. what it cost
 ```
 
+## Cost attribution by provider and model
+
+Per-phase cost records carry a `(provider, model)` attribution captured
+from the phase session checkpoint (`provider`) and the run's metadata
+events (`model`). That powers grouped breakdown views so operators can
+answer "how much did claude vs gemini spend" and "which model drove the
+spike" without scraping per-phase rows by hand:
+
+```bash
+animus cost summary --by provider        # spend grouped by tool, with %
+animus cost summary --by model           # spend grouped by model id, with %
+animus cost workflow wf-... --by provider # one run, grouped by tool
+animus cost workflow wf-... --by model    # one run, grouped by model
+animus cost workflow wf-... --by phase    # one run, grouped by phase
+animus cost top --by model               # cross-run model leaderboard
+```
+
+Each grouped row reports total tokens, total USD, and that group's
+percentage of the grouped grand total (the percentage falls back to the
+token share when no USD is reported). Phases with no attribution —
+legacy cost-state records written before attribution capture, or runs
+whose checkpoint predates it — fold into an `unknown` bucket rather than
+being dropped.
+
+Scope notes:
+
+- `cost summary --by` and `cost top --by model` attribute **live**
+  workflows only. Archived `history` rows retain workflow-level totals
+  but not per-phase provider/model detail, so they contribute to the
+  `unknown` bucket in `cost top --by model` and are excluded from
+  `cost summary --by`.
+- `cost workflow <id> --by` is rejected for archived runs for the same
+  reason; use `cost top --by model` for a cross-run model view.
+- `cost trends` is **not** split by provider/model: trend buckets are
+  built from workflow-level totals (including history), and per-bucket
+  provider attribution would require migrating the `HistorySummary`
+  storage shape to carry per-phase rollups. Left for a follow-up.
+
 ## Quick recipes
 
 ### "Is the daemon healthy right now?"

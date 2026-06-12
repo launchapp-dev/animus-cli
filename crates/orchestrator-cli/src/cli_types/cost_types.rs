@@ -21,6 +21,15 @@ pub(crate) struct CostConversationArgs {
     pub(crate) conversation_id: String,
 }
 
+/// Grouping dimension for `cost summary` breakdown views.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum CostSummaryBy {
+    /// Group spend by provider / tool (claude, codex, gemini, ...).
+    Provider,
+    /// Group spend by model id.
+    Model,
+}
+
 #[derive(Debug, Args)]
 pub(crate) struct CostSummaryArgs {
     /// Lookback window. Accepts `30m`, `12h`, `7d`, `2w`. Defaults to `24h`.
@@ -29,6 +38,20 @@ pub(crate) struct CostSummaryArgs {
     /// Cap on top-spender rows printed in the text view.
     #[arg(long, default_value_t = 5)]
     pub(crate) top: usize,
+    /// Group totals by provider or model instead of the workflow leaderboard.
+    #[arg(long, value_enum)]
+    pub(crate) by: Option<CostSummaryBy>,
+}
+
+/// Grouping dimension for the `cost workflow` breakdown view.
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub(crate) enum CostWorkflowBy {
+    /// Group spend by provider / tool.
+    Provider,
+    /// Group spend by model id.
+    Model,
+    /// Group spend by phase id (the default rollup).
+    Phase,
 }
 
 #[derive(Debug, Args)]
@@ -36,17 +59,22 @@ pub(crate) struct CostWorkflowArgs {
     /// Workflow run id, e.g. `wf-standard-workflow-impl-1-abc123`.
     #[arg(value_name = "WORKFLOW_RUN_ID")]
     pub(crate) workflow_run_id: String,
+    /// Group the per-workflow rollup by provider, model, or phase.
+    #[arg(long, value_enum)]
+    pub(crate) by: Option<CostWorkflowBy>,
 }
 
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 pub(crate) enum CostTopBy {
     Tokens,
     Cost,
+    /// Rank model groups by total USD cost.
+    Model,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct CostTopArgs {
-    /// Rank by total tokens or total USD cost.
+    /// Rank by total tokens, total USD cost, or model group.
     #[arg(long, value_enum, default_value_t = CostTopBy::Cost)]
     pub(crate) by: CostTopBy,
     /// Number of workflows to list.
