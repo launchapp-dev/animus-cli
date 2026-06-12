@@ -64,11 +64,16 @@ where
     if mode.housekeeping && args.reconcile_stale {
         hooks.reconcile_stale_in_progress_tasks(root, args.stale_threshold_hours).await?;
     }
+    // Budget-cap enforcement rescans run spend on disk, so it rides the
+    // housekeeping cadence with the other heavy legs — a nudge storm must
+    // not multiply cost scans.
+    let budget_breaches = if mode.housekeeping { hooks.enforce_budget_caps(root).await? } else { Vec::new() };
     let mut execution_outcome = ProjectTickExecutionOutcome {
         reconciled_workflows: reconciled_workflows + reconciled_zombie_workflows,
         executed_workflow_phases: completed_reconciliation.executed_workflow_phases,
         failed_workflow_phases: completed_reconciliation.failed_workflow_phases,
         workflow_failures: completed_reconciliation.workflow_failures,
+        budget_breaches,
         ..Default::default()
     };
     // Recompute the dispatch limits after all reconciliation hooks have run.
@@ -114,6 +119,7 @@ mod tests {
         manual_timeout_calls: usize,
         zombie_calls: usize,
         stale_calls: usize,
+        budget_cap_calls: usize,
     }
 
     #[async_trait::async_trait(?Send)]
@@ -139,6 +145,11 @@ mod tests {
         ) -> Result<usize> {
             self.stale_calls += 1;
             Ok(0)
+        }
+
+        async fn enforce_budget_caps(&mut self, _root: &str) -> Result<Vec<crate::BudgetBreachEvent>> {
+            self.budget_cap_calls += 1;
+            Ok(Vec::new())
         }
 
         async fn capture_snapshot(&mut self, _root: &str) -> Result<ProjectTickSnapshot> {
@@ -198,6 +209,7 @@ mod tests {
                 task_state_changes: Vec::new(),
                 phase_execution_events: Vec::new(),
                 workflow_failures: Vec::new(),
+                budget_breaches: Vec::new(),
             })
         }
     }
@@ -258,6 +270,7 @@ mod tests {
         assert_eq!(hooks.manual_timeout_calls, 1);
         assert_eq!(hooks.zombie_calls, 1);
         assert_eq!(hooks.stale_calls, 1);
+        assert_eq!(hooks.budget_cap_calls, 1, "housekeeping sweeps must evaluate budget caps");
         assert_eq!(hooks.completed_process_calls, 1);
         assert_eq!(hooks.schedule_calls, 1);
         assert_eq!(hooks.dispatch_calls.len(), 1);
@@ -270,6 +283,7 @@ mod tests {
         assert_eq!(hooks.manual_timeout_calls, 0, "event wakes must not run manual-timeout reconciliation");
         assert_eq!(hooks.zombie_calls, 0, "event wakes must not run zombie-workflow reconciliation");
         assert_eq!(hooks.stale_calls, 0, "event wakes must not run stale-in-progress reconciliation");
+        assert_eq!(hooks.budget_cap_calls, 0, "event wakes must not rescan run spend for budget caps");
         assert_eq!(hooks.completed_process_calls, 1, "completed-process reaping frees headroom; always runs");
         assert_eq!(hooks.schedule_calls, 1, "schedules are a dispatch leg; they run on event wakes");
         assert_eq!(hooks.dispatch_calls.len(), 1, "dispatch must run on event wakes");

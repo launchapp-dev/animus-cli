@@ -14,11 +14,11 @@ use chrono::{DateTime, Datelike, Duration, Utc};
 use serde::Serialize;
 
 use crate::cli_types::{
-    CostCommand, CostConversationArgs, CostSummaryArgs, CostTopArgs, CostTopBy, CostTrendWindow, CostTrendsArgs,
-    CostWorkflowArgs,
+    CostCommand, CostConversationArgs, CostDecisionsArgs, CostSummaryArgs, CostTopArgs, CostTopBy, CostTrendWindow,
+    CostTrendsArgs, CostWorkflowArgs,
 };
 use crate::services::cost::{
-    aggregator::COST_STATE_SCHEMA_ID, enforce_caps, load_cost_state, save_cost_state, scan_runs, CostState, PhaseCost,
+    aggregator::COST_STATE_SCHEMA_ID, enforce_caps, read_decision_records, refresh_cost_state, CostState, PhaseCost,
     WorkflowCost,
 };
 use crate::services::runtime::runtime_chat::store::{ConversationStore, FileConversationStore};
@@ -29,6 +29,7 @@ const WORKFLOW_SCHEMA: &str = "animus.cost.workflow.v1";
 const TOP_SCHEMA: &str = "animus.cost.top.v1";
 const TRENDS_SCHEMA: &str = "animus.cost.trends.v1";
 const CONVERSATION_SCHEMA: &str = "animus.cost.conversation.v1";
+const DECISIONS_SCHEMA: &str = "animus.cost.decisions.v1";
 
 pub(crate) async fn handle_cost(command: CostCommand, project_root: &str, json: bool) -> Result<()> {
     let project_path = Path::new(project_root);
@@ -38,6 +39,7 @@ pub(crate) async fn handle_cost(command: CostCommand, project_root: &str, json: 
         CostCommand::Top(args) => handle_top(project_path, args, json),
         CostCommand::Trends(args) => handle_trends(project_path, args, json),
         CostCommand::Conversation(args) => handle_conversation(project_path, args, json),
+        CostCommand::Decisions(args) => handle_decisions(project_path, args, json),
     }
 }
 
@@ -129,47 +131,85 @@ fn refresh_state(project_path: &Path) -> Result<CostState> {
     // Merge: scanner produces live workflow rollups, but it cannot
     // see archived workflows (the daemon's auto-pause hook moves
     // completed runs to `history` and clears them from
-    // `workflows`). Preserve the persisted history so `top` / `trends`
-    // see completed runs across daemon restarts.
-    let mut state = scan_runs(project_path)?;
-    match load_cost_state(project_path) {
-        Ok(persisted) => {
-            // Drop scanned workflow rollups whose run id is already in
-            // persisted history. Otherwise an in-place `events.jsonl`
-            // for a completed run double-counts: once from the live
-            // scan, once from the archived `HistorySummary`.
-            let archived_ids: std::collections::HashSet<String> =
-                persisted.history.iter().map(|entry| entry.workflow_run_id.clone()).collect();
-            state.workflows.retain(|run_id, _| !archived_ids.contains(run_id));
-            state.history = persisted.history;
-        }
-        Err(error) => {
-            eprintln!("warning: failed to load persisted cost state ({error}); reporting live scan only");
-        }
-    }
-    // Cache for downstream readers. A persistence failure is not
-    // fatal — surface a warning but still render the live view.
-    if let Err(error) = save_cost_state(project_path, &state) {
-        eprintln!("warning: failed to persist cost state cache: {error}; using in-memory view only");
-    }
+    // `workflows`). The shared refresh preserves the persisted
+    // history so `top` / `trends` see completed runs across daemon
+    // restarts, and caches the merged view for downstream readers.
+    let state = refresh_cost_state(project_path, |message| eprintln!("warning: {message}"))?;
     // Evaluate declared budget caps against the freshest rollup. Any
-    // breach is appended to `decisions.jsonl`; the workflow runner
-    // honors `on_exceed: pause|fail|warn` based on those records.
-    // Failure here is non-fatal — surface a warning and continue so
-    // the view still renders.
-    //
-    // TODO(codex-p2): cap evaluation currently fires only from
-    // `animus cost ...` invocations and writes to the scoped-root
-    // `decisions.jsonl`. The runtime decision replay reads
-    // `runs/<run_id>/decisions.jsonl`, so active workflows do not
-    // observe the breach. Wiring `enforce_caps` into the daemon
-    // tick path (and writing per-run decision records) lands in
-    // the v0.5.5 follow-up that touches
-    // `launchapp-dev/animus-workflow-runner-default`.
+    // breach is appended to the scoped `decisions.jsonl` (the fleet
+    // view `animus cost decisions` reads). This manual path records
+    // only — pausing the breaching workflow, writing the per-run
+    // decision record, and notifying are the daemon housekeeping
+    // sweep's job (`services::cost::enforcement`). Failure here is
+    // non-fatal — surface a warning and continue so the view still
+    // renders.
     if let Err(error) = enforce_caps(project_path, &state) {
         eprintln!("warning: failed to evaluate budget caps: {error}");
     }
     Ok(state)
+}
+
+#[derive(Debug, Serialize)]
+struct DecisionsView {
+    schema: &'static str,
+    since: Option<String>,
+    count: usize,
+    records: Vec<crate::services::cost::BudgetExceededRecord>,
+}
+
+fn decisions_view(
+    mut records: Vec<crate::services::cost::BudgetExceededRecord>,
+    since: Option<&str>,
+) -> Result<DecisionsView> {
+    if let Some(window) = since {
+        let cutoff = Utc::now() - parse_duration(window)?;
+        records.retain(|record| record.observed_at >= cutoff);
+    }
+    Ok(DecisionsView { schema: DECISIONS_SCHEMA, since: since.map(str::to_string), count: records.len(), records })
+}
+
+/// Read the scoped budget-breach log (`~/.animus/<repo-scope>/decisions.jsonl`)
+/// — the fleet-level record stream, distinct from the per-run
+/// `runs/<run_id>/decisions.jsonl` that `animus output decisions` renders.
+fn handle_decisions(project_path: &Path, args: CostDecisionsArgs, json: bool) -> Result<()> {
+    let records = read_decision_records(project_path)?;
+    let view = decisions_view(records, args.since.as_deref())?;
+    if json {
+        return print_value(&view, json);
+    }
+    match view.since.as_deref() {
+        Some(window) => println!("animus cost — budget breaches (last {window})"),
+        None => println!("animus cost — budget breaches (all recorded)"),
+    }
+    if view.records.is_empty() {
+        println!("  none recorded");
+        return Ok(());
+    }
+    for record in &view.records {
+        let scope = match record.phase_id.as_deref() {
+            Some(phase_id) => format!("phase {phase_id}"),
+            None => "workflow".to_string(),
+        };
+        let (actual, budget) = match record.limit_field {
+            crate::services::cost::BudgetLimitField::MaxCostUsd => {
+                (format!("${:.4}", record.actual), format!("${:.4}", record.budget))
+            }
+            crate::services::cost::BudgetLimitField::MaxTokens => {
+                (format!("{} toks", record.actual as u64), format!("{} toks", record.budget as u64))
+            }
+        };
+        println!(
+            "  {}  {}  {} {} exceeded: {} > {}  → {}",
+            record.observed_at.format("%Y-%m-%d %H:%M:%S"),
+            record.workflow_run_id,
+            scope,
+            record.limit_field.as_str(),
+            actual,
+            budget,
+            record.on_exceed
+        );
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -664,6 +704,36 @@ mod tests {
     fn parse_duration_rejects_unknown_unit() {
         assert!(parse_duration("5y").is_err());
         assert!(parse_duration("5").is_err());
+    }
+
+    #[test]
+    fn decisions_view_filters_by_since_window() {
+        use crate::services::cost::{
+            BudgetExceededRecord, BudgetLimitField, BudgetLimitKind, BUDGET_EXCEEDED_SCHEMA_ID,
+        };
+        let record = |observed_at: chrono::DateTime<Utc>| BudgetExceededRecord {
+            schema: BUDGET_EXCEEDED_SCHEMA_ID.to_string(),
+            workflow_run_id: "wf-run".to_string(),
+            workflow_id: "wf-run".to_string(),
+            phase_id: None,
+            limit_kind: BudgetLimitKind::Workflow,
+            limit_field: BudgetLimitField::MaxCostUsd,
+            actual: 6.0,
+            budget: 5.0,
+            on_exceed: "pause".to_string(),
+            observed_at,
+        };
+        let now = Utc::now();
+        let records = vec![record(now - Duration::days(3)), record(now - Duration::minutes(5))];
+
+        let unfiltered = decisions_view(records.clone(), None).unwrap();
+        assert_eq!(unfiltered.count, 2);
+
+        let filtered = decisions_view(records, Some("24h")).unwrap();
+        assert_eq!(filtered.count, 1, "only the recent breach falls inside the 24h window");
+        assert_eq!(filtered.since.as_deref(), Some("24h"));
+
+        assert!(decisions_view(Vec::new(), Some("bogus")).is_err(), "invalid duration must error");
     }
 
     #[test]

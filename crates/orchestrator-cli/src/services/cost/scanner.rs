@@ -32,7 +32,7 @@ use super::cap_check::{check_caps, CapCheckInputs};
 use super::model_rates::estimate_cost_usd;
 use super::persistence::append_decision_record;
 
-const WORKFLOW_RUN_PREFIX: &str = "wf-";
+pub(crate) const WORKFLOW_RUN_PREFIX: &str = "wf-";
 pub(crate) const FALLBACK_PHASE_ID: &str = "default";
 
 #[derive(Debug, Clone)]
@@ -48,11 +48,25 @@ pub fn runs_root(project_root: &Path) -> PathBuf {
 
 /// Walk `state.workflows`, look up each workflow's declared
 /// [`BudgetConfig`] from `WorkflowConfig`, and append one decision
-/// record per breach to `decisions.jsonl`. De-duplication is the
-/// caller's responsibility — typically the workflow runner picks up
+/// record per breach to the scoped `decisions.jsonl`. De-duplication is
+/// the caller's responsibility — typically the workflow runner picks up
 /// the latest record per `workflow_run_id` and acts on it. Returns
-/// the breaches found.
+/// the breaches found. This is the manual `animus cost ...` path; the
+/// daemon's housekeeping sweep uses [`super::enforcement`], which
+/// de-duplicates and additionally pauses + notifies.
 pub fn enforce_caps(project_root: &Path, state: &CostState) -> Result<Vec<super::aggregator::BudgetExceededRecord>> {
+    let breaches = evaluate_caps(project_root, state)?;
+    for record in &breaches {
+        append_decision_record(project_root, record)?;
+    }
+    Ok(breaches)
+}
+
+/// Pure cap evaluation: walk `state.workflows`, look up each workflow's
+/// declared [`BudgetConfig`](orchestrator_config::workflow_config::BudgetConfig)
+/// from `WorkflowConfig`, and return one [`BudgetExceededRecord`] per cap
+/// the observed totals crossed. Writes nothing.
+pub fn evaluate_caps(project_root: &Path, state: &CostState) -> Result<Vec<super::aggregator::BudgetExceededRecord>> {
     use orchestrator_config::workflow_config::WorkflowDefinition;
     let workflow_config = orchestrator_core::load_workflow_config_or_default(project_root).config;
     // Map runtime workflow id (the daemon-assigned id stored in
@@ -101,7 +115,6 @@ pub fn enforce_caps(project_root: &Path, state: &CostState) -> Result<Vec<super:
             phase_cost_usd: 0.0,
             observed_at,
         }) {
-            append_decision_record(project_root, &record)?;
             breaches.push(record);
             continue;
         }
@@ -123,7 +136,6 @@ pub fn enforce_caps(project_root: &Path, state: &CostState) -> Result<Vec<super:
                 phase_cost_usd: phase_cost.cost_usd,
                 observed_at,
             }) {
-                append_decision_record(project_root, &record)?;
                 breaches.push(record);
             }
         }
@@ -134,6 +146,16 @@ pub fn enforce_caps(project_root: &Path, state: &CostState) -> Result<Vec<super:
 /// Scan `<scoped-root>/runs/` for workflow runs and fold metadata
 /// events into a fresh [`CostState`]. Idempotent and side-effect free.
 pub fn scan_runs(project_root: &Path) -> Result<CostState> {
+    scan_runs_skipping(project_root, &std::collections::HashSet::new())
+}
+
+/// [`scan_runs`], but skip run directories whose workflow run id is in
+/// `skip_run_ids`. Used by the refresh path to avoid re-folding
+/// `events.jsonl` files for workflows already archived into the persisted
+/// `cost-state.v1.json` history — those rollups would be dropped after the
+/// merge anyway, so skipping them keeps the daemon's housekeeping sweep
+/// from re-reading completed runs on every pass.
+pub fn scan_runs_skipping(project_root: &Path, skip_run_ids: &std::collections::HashSet<String>) -> Result<CostState> {
     let mut state = CostState::default();
     let runs_dir = runs_root(project_root);
     if !runs_dir.exists() {
@@ -173,6 +195,11 @@ pub fn scan_runs(project_root: &Path) -> Result<CostState> {
                 }
             }
         };
+        if skip_run_ids.contains(&mapping.workflow_id) {
+            // Already archived into persisted history — the merged view
+            // drops the live rollup anyway, so don't re-read its events.
+            continue;
+        }
         fold_events_for_run(&mapping, &events_path, &mut state)?;
     }
     Ok(state)

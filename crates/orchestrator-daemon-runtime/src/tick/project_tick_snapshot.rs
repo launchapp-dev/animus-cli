@@ -40,6 +40,7 @@ impl ProjectTickSnapshot {
                 Vec::new()
             },
             workflow_failures: execution_outcome.workflow_failures,
+            budget_breaches: execution_outcome.budget_breaches,
         }
     }
 }

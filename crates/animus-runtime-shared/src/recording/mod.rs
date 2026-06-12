@@ -88,7 +88,7 @@ pub mod sweeper;
 pub mod tail;
 
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -214,7 +214,13 @@ impl DecisionEvent {
 }
 
 struct RecorderInner {
-    writer: BufWriter<File>,
+    // A raw `File` (NOT a `BufWriter`): every record is flushed anyway, and
+    // emitting each `line\n` as ONE `write_all` on the `O_APPEND` handle
+    // keeps concurrent appenders (the daemon's out-of-band budget-breach
+    // records via [`append_decision_event`]) from interleaving bytes inside
+    // a record. With both writers issuing whole-record appends, the kernel
+    // serializes them at EOF.
+    file: File,
     written_since_fsync: usize,
 }
 
@@ -255,11 +261,7 @@ impl Recorder {
                 }
             }
         }
-        Ok(Self {
-            inner: Mutex::new(RecorderInner { writer: BufWriter::new(file), written_since_fsync: 0 }),
-            path,
-            durability,
-        })
+        Ok(Self { inner: Mutex::new(RecorderInner { file, written_since_fsync: 0 }), path, durability })
     }
 
     pub fn for_run(project_root: &str, run_id: &str) -> Result<Option<Self>> {
@@ -282,23 +284,21 @@ impl Recorder {
     }
 
     pub fn record(&self, event: &DecisionEvent) -> Result<()> {
-        let line = serde_json::to_string(event).context("serialize decision event")?;
+        let mut line = serde_json::to_vec(event).context("serialize decision event")?;
+        line.push(b'\n');
         let mut guard = self.inner.lock().expect("recorder mutex poisoned");
-        guard.writer.write_all(line.as_bytes()).context("write decision event")?;
-        guard.writer.write_all(b"\n").context("write decision newline")?;
-        guard.writer.flush().context("flush decision event")?;
+        // Single whole-record append — see the `RecorderInner` note.
+        guard.file.write_all(&line).context("write decision event")?;
         match self.durability {
             Durability::FlushOnly => {}
             Durability::FsyncPerEvent => {
-                let inner_file = guard.writer.get_ref();
-                inner_file.sync_data().context("fsync decision event")?;
+                guard.file.sync_data().context("fsync decision event")?;
             }
             Durability::FsyncEveryN(n) => {
                 guard.written_since_fsync = guard.written_since_fsync.saturating_add(1);
                 let threshold = n.max(1);
                 if guard.written_since_fsync >= threshold {
-                    let inner_file = guard.writer.get_ref();
-                    inner_file.sync_data().context("fsync decision batch")?;
+                    guard.file.sync_data().context("fsync decision batch")?;
                     guard.written_since_fsync = 0;
                 }
             }
@@ -310,8 +310,7 @@ impl Recorder {
     /// flush any pending FsyncEveryN window before the recorder drops).
     pub fn fsync_now(&self) -> Result<()> {
         let mut guard = self.inner.lock().expect("recorder mutex poisoned");
-        guard.writer.flush().context("flush before fsync")?;
-        guard.writer.get_ref().sync_data().context("fsync now")?;
+        guard.file.sync_data().context("fsync now")?;
         guard.written_since_fsync = 0;
         Ok(())
     }
@@ -323,13 +322,39 @@ impl Drop for Recorder {
         // events even when callers forget to call `fsync_now`. We swallow
         // errors here because Drop can't fail.
         if let Ok(mut guard) = self.inner.lock() {
-            let _ = guard.writer.flush();
             if guard.written_since_fsync > 0 {
-                let _ = guard.writer.get_ref().sync_data();
+                let _ = guard.file.sync_data();
                 guard.written_since_fsync = 0;
             }
         }
     }
+}
+
+/// Append one event to a decision log that another process (the phase
+/// runner) may be writing concurrently. Unlike [`Recorder`], which holds a
+/// `BufWriter` and emits the JSON line and trailing newline as separate
+/// writes, this serializes the full `line\n` into ONE buffer and issues a
+/// single `write_all` on an `O_APPEND` handle — the kernel appends the
+/// whole buffer at EOF atomically with respect to other appenders, so the
+/// daemon's out-of-band records (e.g. budget-breach metadata) cannot split
+/// a record of its own across a concurrent writer's lines. Syncs before
+/// returning.
+pub fn append_decision_event(path: impl AsRef<Path>, event: &DecisionEvent) -> Result<()> {
+    let path = path.as_ref();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("create decision-log parent dir {}", parent.display()))?;
+    }
+    let mut line = serde_json::to_vec(event).context("serialize decision event")?;
+    line.push(b'\n');
+    let mut file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .with_context(|| format!("open decision log {}", path.display()))?;
+    file.write_all(&line).with_context(|| format!("append decision event to {}", path.display()))?;
+    file.sync_data().with_context(|| format!("fsync decision log {}", path.display()))?;
+    Ok(())
 }
 
 pub fn decision_log_path(project_root: &str, run_id: &str) -> Option<PathBuf> {
@@ -499,6 +524,17 @@ pub fn env_replay_source() -> Result<Option<ReplaySource>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn append_decision_event_appends_single_parseable_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("decisions.jsonl");
+        super::append_decision_event(&path, &super::DecisionEvent::metadata(serde_json::json!({"k": 1}))).unwrap();
+        super::append_decision_event(&path, &super::DecisionEvent::metadata(serde_json::json!({"k": 2}))).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        let events: Vec<super::DecisionEvent> = raw.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(events.len(), 2);
+    }
+
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
     use tempfile::TempDir;

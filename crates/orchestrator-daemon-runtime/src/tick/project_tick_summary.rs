@@ -2,7 +2,7 @@ use animus_runtime_shared::PhaseExecutionEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{DispatchSelectionSource, WorkflowFailureEvent};
+use crate::{BudgetBreachEvent, DispatchSelectionSource, WorkflowFailureEvent};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskStateChangeEvent {
@@ -41,4 +41,6 @@ pub struct ProjectTickSummary {
     pub phase_execution_events: Vec<PhaseExecutionEvent>,
     #[serde(default)]
     pub workflow_failures: Vec<WorkflowFailureEvent>,
+    #[serde(default)]
+    pub budget_breaches: Vec<BudgetBreachEvent>,
 }

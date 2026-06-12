@@ -764,7 +764,21 @@ plugins already emit. The rollups live under
 `~/.animus/<scope>/cost-state.v1.json` (schema
 `animus.cost-state.v1`) and budget-exceeded decision records are
 appended to `~/.animus/<scope>/decisions.jsonl` (schema
-`animus.budget-exceeded.v1`).
+`animus.budget-exceeded.v1`; inspect with
+`animus cost decisions [--since <dur>]`).
+
+Declared `budget:` caps are enforced by the daemon on its housekeeping
+cadence: once per heartbeat interval (`interval_secs`) the sweep rescans
+run spend (reusing the persisted `cost-state.v1.json` history so
+completed runs are not re-read), evaluates caps, and acts on newly
+crossed ones — per-run breach decision in `runs/<run_id>/decisions.jsonl`,
+scoped fleet record, the declared `on_exceed` action (`pause` goes
+through the standard workflow pause path, `fail` fails the current phase
+terminally, `warn` records only), and one `workflow-budget-breach`
+notifier event per breach. Enforcement is not
+mid-phase token-by-token: a phase in flight can overshoot by up to one
+sweep before the pause lands. With no daemon running, `animus cost`
+commands record breaches to the scoped log but never pause anything.
 
 When a provider does not report `cost` on the metadata frame, the
 aggregator estimates USD from a small per-model rate table

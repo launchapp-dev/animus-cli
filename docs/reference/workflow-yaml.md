@@ -625,15 +625,23 @@ variables:
 
 ## budget
 
-> **Enforcement status:** budget caps are currently only evaluated when an
-> `animus cost` command (`summary`, `workflow`, `top`, `trends`) runs — the
-> daemon tick does **not** check `max_tokens` / `max_cost_usd` while a
-> workflow executes, so `on_exceed` actions fire late (or never, if you do
-> not run `animus cost`). Declaring a `budget:` block therefore emits a
-> declared-but-unenforced warning at compile time and in
-> `animus workflow config validate`. Daemon-side enforcement is planned in
-> the v0.5.5 follow-up that touches
-> `launchapp-dev/animus-workflow-runner-default`.
+> **Enforcement status (v0.5.x):** the daemon enforces budget caps on its
+> housekeeping cadence — once per heartbeat interval (`interval_secs`,
+> default 30s), not mid-phase token-by-token. Each sweep rescans run
+> spend, evaluates declared caps, and acts on any NEWLY crossed cap:
+> a breach decision is written to the breaching run's
+> `runs/<run_id>/decisions.jsonl` (visible via `animus output decisions`)
+> and to the scoped fleet log (visible via `animus cost decisions`), the
+> declared action is applied — `on_exceed: pause` pauses the workflow
+> through the standard pause path, `on_exceed: fail` fails the current
+> phase terminally, `warn` records + notifies only — and a
+> `workflow-budget-breach` event reaches notifier plugins —
+> exactly once per breach. Two honest caveats: a phase in flight can
+> overshoot the cap by up to one sweep before the pause lands, and
+> enforcement requires a running daemon — with no daemon, caps are only
+> recorded (never paused) when an `animus cost` command runs. The
+> declared-but-unenforced warning that `budget:` blocks used to emit at
+> compile/validate time was removed when this enforcement landed.
 
 The `budget:` block declares cost ceilings. It can live at three places:
 

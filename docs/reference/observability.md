@@ -248,13 +248,24 @@ specifically so operators of an autonomous daemon learn when work is stuck:
   Payload: `task_id`, `from_status`, `blocked_reason`, `changed_at`.
   Transitions are diffed against the pre-tick snapshot, so re-evaluating an
   already-blocked task on later ticks does not re-notify.
+- **`workflow-budget-breach`** — emitted once per budget-cap breach when
+  the daemon's housekeeping sweep enforces a declared `budget:` block
+  (see `workflow-yaml.md#budget`). Payload: `workflow_run_id`,
+  `workflow_id`, `phase_id` (workflow-level breaches carry `null`),
+  `limit_kind` (`workflow`/`phase`), `limit_field`
+  (`max_tokens`/`max_cost_usd`), `actual`, `budget`, `on_exceed`, `action`
+  (`paused`/`failed`/`recorded`), `observed_at`. Breaches are
+  de-duplicated against the already-recorded
+  per-run decision log, so a breach that stays breached on later sweeps
+  does not re-notify.
 
 The generic `task-state-change` event also carries a `blocked_reason` field
 when the target status is `blocked`.
 
 Subscribe a notifier connector to these via the persisted
 `notification_config` block's `subscriptions[].event_types` (for example
-`["workflow-failed", "task-blocked"]`, or `["*"]` for everything). See
+`["workflow-failed", "task-blocked", "workflow-budget-breach"]`, or
+`["*"]` for everything). See
 `docs/reference/configuration.md` for how `notification_config` is stored
 and which env vars are forwarded to notifier plugins.
 
@@ -285,10 +296,14 @@ Each link hands you the identifier the next command needs.
    event stream, distinct from
    `animus workflow decisions --id <workflow_id>`, which shows the
    phase-advance verdicts (advance/skip/rework) recorded on workflow
-   state. Budget-cap breach records land in the scoped
-   `~/.animus/<repo-scope>/decisions.jsonl` written by the cost layer.
-5. **`animus cost workflow <workflow_id>`** — per-phase token/cost
-   breakdown for the same execution.
+   state. Budget-cap breaches enforced by the daemon also land here as
+   metadata records (schema `animus.budget-exceeded.v1`); the scoped
+   fleet copy in `~/.animus/<repo-scope>/decisions.jsonl` is read by
+   `animus cost decisions [--since <dur>]`.
+5. **`animus cost workflow <WORKFLOW_RUN_ID>`** — per-phase token/cost
+   breakdown for the same execution. Note this takes the workflow RUN
+   id (the per-run identifier `animus cost summary`/`top` rows carry),
+   not a workflow definition id.
 
 A complete walkthrough:
 

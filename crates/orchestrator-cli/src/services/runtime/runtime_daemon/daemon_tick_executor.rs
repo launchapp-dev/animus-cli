@@ -7,9 +7,9 @@ use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
 use orchestrator_core::{TaskStatus, WorkflowStateManager, WorkflowStatus};
 use orchestrator_daemon_runtime::{
-    default_slim_project_tick_driver, CompletedProcess, CompletedProcessReconciliation, DefaultProjectTickServices,
-    DefaultSlimProjectTickDriver, DispatchNotice, DispatchSelectionSource, DispatchWorkflowStart,
-    DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot,
+    default_slim_project_tick_driver, BudgetBreachEvent, CompletedProcess, CompletedProcessReconciliation,
+    DefaultProjectTickServices, DefaultSlimProjectTickDriver, DispatchNotice, DispatchSelectionSource,
+    DispatchWorkflowStart, DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot,
 };
 use orchestrator_logging::Logger;
 use protocol::SubjectDispatchExt;
@@ -57,6 +57,44 @@ impl DefaultProjectTickServices for CliProjectTickServices {
 
     async fn reconcile_manual_timeouts(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<usize> {
         reconcile_manual_phase_timeouts(hub, root).await
+    }
+
+    /// Housekeeping-cadence budget-cap sweep: rescan run spend, evaluate
+    /// declared caps, and act on newly crossed ones (per-run decision
+    /// record + scoped record + pause). Enforcement failures must never
+    /// take the tick down — they are logged and the sweep retries on the
+    /// next heartbeat.
+    async fn enforce_budget_caps(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<Vec<BudgetBreachEvent>> {
+        let logger = self.logger.clone();
+        let mut warn = |message: String| {
+            logger.warn("budget", message).emit();
+        };
+        match crate::services::cost::enforcement::run_budget_enforcement(hub, root, &mut warn).await {
+            Ok(events) => {
+                for event in &events {
+                    self.logger
+                        .warn(
+                            "budget",
+                            format!(
+                                "budget breach: workflow run {} crossed {} {} ({} > {}) — on_exceed={}, action={}",
+                                event.workflow_run_id,
+                                event.limit_kind,
+                                event.limit_field,
+                                event.actual,
+                                event.budget,
+                                event.on_exceed,
+                                event.action
+                            ),
+                        )
+                        .emit();
+                }
+                Ok(events)
+            }
+            Err(error) => {
+                self.logger.error("budget", "budget-cap sweep failed").err(error.to_string()).emit();
+                Ok(Vec::new())
+            }
+        }
     }
 
     async fn reconcile_stale_in_progress_tasks(

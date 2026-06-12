@@ -147,6 +147,7 @@ impl ProjectTickHooks for StubDriver {
             task_state_changes: Vec::new(),
             phase_execution_events: Vec::new(),
             workflow_failures: Vec::new(),
+            budget_breaches: Vec::new(),
         })
     }
 }
@@ -382,6 +383,7 @@ impl ProjectTickHooks for PauseProbeDriver {
             task_state_changes: Vec::new(),
             phase_execution_events: Vec::new(),
             workflow_failures: Vec::new(),
+            budget_breaches: Vec::new(),
         })
     }
 }

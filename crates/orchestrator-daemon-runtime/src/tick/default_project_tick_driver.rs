@@ -9,9 +9,10 @@ use orchestrator_core::{
 use serde_json::Value;
 
 use crate::{
-    CompletedProcess, CompletedProcessReconciliation, DaemonRuntimeOptions, DispatchNotice, DispatchWorkflowStart,
-    DispatchWorkflowStartSummary, ProcessManager, ProjectTickHooks, ProjectTickSnapshot, ProjectTickSummary,
-    ProjectTickSummaryInput, ScheduleDispatch, TaskStateChangeEvent, TickBudget, TickSummaryBuilder, TriggerDispatch,
+    BudgetBreachEvent, CompletedProcess, CompletedProcessReconciliation, DaemonRuntimeOptions, DispatchNotice,
+    DispatchWorkflowStart, DispatchWorkflowStartSummary, ProcessManager, ProjectTickHooks, ProjectTickSnapshot,
+    ProjectTickSummary, ProjectTickSummaryInput, ScheduleDispatch, TaskStateChangeEvent, TickBudget,
+    TickSummaryBuilder, TriggerDispatch,
 };
 
 #[async_trait::async_trait(?Send)]
@@ -69,6 +70,13 @@ pub trait DefaultProjectTickServices {
         _max_age_hours: u64,
     ) -> Result<usize> {
         Ok(0)
+    }
+
+    /// Evaluate workflow/phase budget caps against observed run spend and
+    /// act on newly crossed caps. Default is a no-op; the CLI tick services
+    /// wire the cost scanner + cap enforcement in here.
+    async fn enforce_budget_caps(&mut self, _hub: Arc<dyn ServiceHub>, _root: &str) -> Result<Vec<BudgetBreachEvent>> {
+        Ok(Vec::new())
     }
 
     async fn dispatch_ready_tasks(
@@ -315,6 +323,11 @@ where
     async fn cleanup_stale_workflows(&mut self, root: &str, max_age_hours: u64) -> Result<usize> {
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
         self.services.cleanup_stale_workflows(hub, root, max_age_hours).await
+    }
+
+    async fn enforce_budget_caps(&mut self, root: &str) -> Result<Vec<BudgetBreachEvent>> {
+        let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(root)?);
+        self.services.enforce_budget_caps(hub, root).await
     }
 
     async fn dispatch_ready_tasks(

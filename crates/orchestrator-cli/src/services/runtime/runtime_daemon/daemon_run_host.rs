@@ -499,6 +499,29 @@ impl DefaultDaemonRunHost {
             )?;
         }
 
+        // Budget breaches are de-duplicated at enforcement time (the
+        // per-run decision record is the marker), so each breach reaches
+        // notifiers exactly once even though the housekeeping sweep
+        // re-evaluates caps every heartbeat.
+        for breach in &summary.budget_breaches {
+            self.emit_daemon_event_with_notifications(
+                "workflow-budget-breach",
+                Some(summary.project_root.clone()),
+                json!({
+                    "workflow_run_id": breach.workflow_run_id,
+                    "workflow_id": breach.workflow_id,
+                    "phase_id": breach.phase_id,
+                    "limit_kind": breach.limit_kind,
+                    "limit_field": breach.limit_field,
+                    "actual": breach.actual,
+                    "budget": breach.budget,
+                    "on_exceed": breach.on_exceed,
+                    "action": breach.action,
+                    "observed_at": breach.observed_at,
+                }),
+            )?;
+        }
+
         for task_change in &summary.task_state_changes {
             let mut data = json!({
                 "task_id": task_change.task_id,
