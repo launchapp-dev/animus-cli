@@ -57,7 +57,7 @@ Use a pack when you want to:
 
 Packs are installed from a git URL or a local path. Marketplace packs are discovered via `animus pack search` once a registry is added with `animus pack registry add`.
 
-**Deep doc:** [Plugin, Pack & Kernel Architecture](../architecture/plugin-pack-kernel.md) · [Pack Author Guide](../architecture/plugin-pack-kernel.md)
+**Deep doc:** [Plugin, Pack & Kernel Architecture](../architecture/plugin-pack-kernel.md) · [Pack Contract reference](../architecture/plugin-pack-kernel.md#plugin-pack-contract)
 
 ## Plugins
 

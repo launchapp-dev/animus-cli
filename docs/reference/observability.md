@@ -29,7 +29,9 @@ There are several distinct log/event surfaces (`daemon events`, `daemon logs`,
 (default 20) caps the merged tail and the delegated stream tail. The bare and
 window forms label each merged line with its `source` (`events` / `logs`) and
 order them chronologically. `--json` returns `{matrix, recent}` (bare) or
-`{lines}` (window/source).
+`{lines}` (window/source). Each `matrix` entry is a keyed object
+`{verb, data_source, live, filters, when}` (not a positional array), so
+machine consumers read named fields.
 
 ## Metrics
 

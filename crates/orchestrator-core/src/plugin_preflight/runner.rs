@@ -58,7 +58,7 @@ impl PluginPreflightRunner {
             });
         }
 
-        Ok(PreflightResult { satisfied, missing, auto_installed, flavor_manifest_error: None })
+        Ok(PreflightResult { satisfied, missing, auto_installed, flavor_manifest_error: None, warnings: Vec::new() })
     }
 }
 

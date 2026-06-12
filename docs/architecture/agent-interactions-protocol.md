@@ -51,6 +51,18 @@ bypasses MCP.
   run with the decision threaded in as feedback — no pool slot or process stays
   parked waiting. When in doubt for a workflow phase, prefer suspend; reserve
   block for genuinely interactive sessions.
+  - **Third criterion — crash-replayability:** a parked **block**-mode call
+    lives only in the holding process; if the daemon or runner crashes while
+    it waits, the call is lost and the run cannot replay it (the agent must
+    re-ask on a fresh run). **Suspend** persists the pending interaction id
+    into the phase session checkpoint, so a crash mid-wait is recoverable —
+    the answer still resumes the workflow after restart. For any path where a
+    crash window matters (long-lived, daemon-driven, or expensive-to-restart
+    phases), prefer suspend on durability grounds alone. The wait-mode
+    failure semantics (block timeout → proceed/best-judgment for questions,
+    deny/fail-closed for approvals) are tabulated in
+    [MCP Tools — Interactions](../reference/mcp-tools.md#interactions-2-tools)
+    and [the agents guide](../guides/agents.md#human-in-the-loop-questions-and-approvals).
 - **Inbox:** `animus agent interactions list|show|answer <id>` (`--text` for
   questions, `--allow|--deny [--message]` for approvals), `animus.cli.v1` JSON
   envelopes. Non-blocking `animus.interactions.list` / `animus.interactions.answer`

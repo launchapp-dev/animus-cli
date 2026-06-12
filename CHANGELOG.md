@@ -4,6 +4,66 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `animus init --walkthrough` now offers an interactive flavor picker:
+  when more than the bundled `default` flavor is discoverable
+  (`flavors/*.toml` via `list_available_flavor_names_in`, anchored at the
+  init target root), it prompts
+  `Flavor [default]:` and threads the choice into the walkthrough's
+  `plugin install-defaults --flavor <name>` invocation so `active_flavor`
+  persists. The prompt is TTY-guarded; non-interactive and `--json` runs
+  keep the `default` flavor. The bundled `default` flavor is always offered
+  alongside any on-disk custom flavors (a sole custom flavor still triggers
+  the picker). The plan/apply envelopes now report the selected `flavor`.
+- `animus subject batch-create` / `animus subject batch-update` CLI verbs,
+  mirroring the `animus.subject.batch-*` MCP tools. Both take a JSON items
+  array via `--file <json>` (bare array or `{ "items": [...] }` wrapper),
+  honor `--on-error stop|continue`, enforce the 100-item cap, and emit an
+  `animus.cli.v1`-wrapped `animus.cli.batch.result.v1` envelope with
+  per-item results. A batch where any item failed exits non-zero with the
+  full payload attached under `/error/details` so scripts can detect
+  partial failure.
+
+### Changed
+
+- The stale-in-progress reconcile sweep now projects a task **Cancelled**
+  (not Blocked) when its terminal workflow died **Cancelled** in a crash
+  window, reusing `project_task_terminal_workflow_status`. Failed/Escalated
+  terminal workflows still project Blocked.
+- `animus daemon preflight` now emits a non-fatal **WARNING** when the
+  installed `workflow_runner` plugin's manifest version is below the skill
+  payload floor (v0.4.2) — such a runner silently ignores phase skills.
+  The warning never fails preflight; it surfaces in the report JSON
+  (`warnings[]`), on daemon-start (`tracing::warn`), and on stderr in the
+  human `daemon preflight` view, with an `animus plugin update` hint.
+- Bumped the curated `DEFAULT_WORKFLOW_RUNNER_PLUGINS` auto-install pin
+  (`animus-workflow-runner-default`) from v0.4.1 to v0.4.3 so fresh
+  `--auto-install` installs already meet the new skill-payload floor
+  (v0.4.2) and never warn against themselves.
+
+### Fixed
+
+- The `daemon observe --source <s> --follow` rejection error now echoes the
+  user's kebab token (e.g. `events`) instead of the Rust enum `Debug` form
+  (`Events`).
+- The bare `daemon observe --json` `matrix` is now keyed as objects
+  (`{verb, data_source, live, filters, when}`) instead of positional
+  arrays.
+
+### Docs
+
+- Regenerated the CLI command-surface summary counts (28 top-level / 209
+  nested entries) and documented the counting basis.
+- CLAUDE.md "CLI Reality Check" lists the full visible command-group set
+  (`chat`/`cost`/`auth`/`events`/`state`/`secret`/`approval`/`flavor`),
+  matching AGENTS.md.
+- `extending-animus.md` duplicate pack link split to distinct targets;
+  skill `pin` known-limitation, capabilities-as-feature-flags reframe,
+  block-mode-not-crash-replayable selection criterion, and the
+  participant-roster-is-advisory note added; scrubbed the `self update
+  --check-only` lineage phrase from `update --check` help.
+
 ## [0.5.14] - 2026-06-12
 
 **The 9.5 campaign release: budgets that enforce, skills that supercharge any

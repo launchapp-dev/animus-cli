@@ -332,6 +332,7 @@ fn flavor_manifest_error_leads_rendered_message_and_suppresses_install_advice() 
         flavor_manifest_error: Some(
             "flavor manifest at /proj/flavors/default.toml failed to load: failed to parse flavor manifest".to_string(),
         ),
+        warnings: Vec::new(),
     };
 
     let message = result.render_missing_message();
@@ -366,6 +367,7 @@ fn multiple_missing_roles_render_one_composed_flavor_fix_command() {
         missing: vec![missing_role("queue"), missing_role("workflow_runner")],
         auto_installed: Vec::new(),
         flavor_manifest_error: None,
+        warnings: Vec::new(),
     };
 
     let message = result.render_missing_message();
@@ -389,6 +391,7 @@ fn single_missing_role_keeps_per_role_fix_without_composed_command() {
         }],
         auto_installed: Vec::new(),
         flavor_manifest_error: None,
+        warnings: Vec::new(),
     };
 
     let message = result.render_missing_message();
@@ -408,9 +411,41 @@ fn missing_roles_without_flavor_error_keep_install_advice_template() {
         }],
         auto_installed: Vec::new(),
         flavor_manifest_error: None,
+        warnings: Vec::new(),
     };
 
     let message = result.render_missing_message();
     assert!(message.contains("the daemon requires plugins that are not installed"), "got: {message}");
     assert!(message.contains("Re-run with `--auto-install`"), "got: {message}");
+}
+
+#[test]
+fn workflow_runner_underpin_warning_fires_below_floor() {
+    // v0.4.1 < v0.4.2 floor → warning naming the plugin + upgrade hint.
+    let warning = super::workflow_runner_underpin_warning("animus-workflow-runner-default", "v0.4.1")
+        .expect("under-pinned runner must warn");
+    assert!(warning.contains("animus-workflow-runner-default"), "got: {warning}");
+    assert!(warning.contains("phase skills"), "got: {warning}");
+    assert!(warning.contains("animus plugin update"), "got: {warning}");
+
+    // A `v`-prefix-free version is accepted identically.
+    assert!(super::workflow_runner_underpin_warning("rnr", "0.3.9").is_some());
+}
+
+#[test]
+fn workflow_runner_underpin_warning_silent_at_or_above_floor() {
+    assert!(super::workflow_runner_underpin_warning("rnr", "v0.4.2").is_none(), "the floor itself must not warn");
+    assert!(super::workflow_runner_underpin_warning("rnr", "0.5.0").is_none());
+    assert!(super::workflow_runner_underpin_warning("rnr", "1.0.0").is_none());
+    // A pre-release suffix on the floor patch still meets it.
+    assert!(super::workflow_runner_underpin_warning("rnr", "0.4.2-rc1").is_none());
+}
+
+#[test]
+fn workflow_runner_underpin_warning_ignores_unparseable_versions() {
+    // An unparseable version is not actionable as an under-pin signal and
+    // must never produce a (potentially false) warning.
+    assert!(super::workflow_runner_underpin_warning("rnr", "unknown").is_none());
+    assert!(super::workflow_runner_underpin_warning("rnr", "0.4").is_none());
+    assert!(super::workflow_runner_underpin_warning("rnr", "").is_none());
 }

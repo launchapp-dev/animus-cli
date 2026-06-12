@@ -853,6 +853,61 @@ fn prompt_template_selection(templates: &[ProjectTemplateSummary]) -> Result<Pro
     }
 }
 
+/// Interactive flavor picker for the walkthrough. Lists the discovered
+/// flavors (`flavors/*.toml` plus the bundled `default`), prompts
+/// `Flavor [default]:`, and returns the chosen name. An empty line (or a
+/// bare `default`) selects the default flavor. Unknown entries re-prompt.
+///
+/// Defense-in-depth alongside the guided-mode TTY guard at the call site:
+/// a non-TTY stdin errors cleanly instead of blocking on `read_line`.
+fn prompt_flavor_selection(names: &[String]) -> Result<String> {
+    if !io::stdin().is_terminal() {
+        return Err(invalid_input_error(
+            "flavor selection requires an interactive terminal; rerun with the default flavor or set it via \
+             `animus plugin install-defaults --flavor <NAME>`",
+        ));
+    }
+    let default_id = orchestrator_core::flavor::DEFAULT_FLAVOR_ID;
+    let mut stdout = io::stdout();
+    let mut input = String::new();
+
+    loop {
+        println!("Choose an Animus flavor:");
+        for (index, name) in names.iter().enumerate() {
+            if name == default_id {
+                println!("  {}. {name} (default)", index + 1);
+            } else {
+                println!("  {}. {name}", index + 1);
+            }
+        }
+        print!("Flavor [{default_id}]: ");
+        stdout.flush()?;
+
+        input.clear();
+        let bytes_read = io::stdin().read_line(&mut input)?;
+        if bytes_read == 0 {
+            // EOF (e.g. Ctrl-D): fall back to the default rather than fail —
+            // the default flavor is always a valid choice.
+            return Ok(default_id.to_string());
+        }
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            return Ok(default_id.to_string());
+        }
+        if let Ok(choice) = trimmed.parse::<usize>() {
+            // Displayed choices are 1-based; `0` is invalid and must re-prompt
+            // rather than silently selecting the first flavor.
+            if let Some(name) = choice.checked_sub(1).and_then(|i| names.get(i)) {
+                return Ok(name.clone());
+            }
+        }
+        if let Some(name) = names.iter().find(|name| name.eq_ignore_ascii_case(trimmed)) {
+            return Ok(name.clone());
+        }
+        println!("Enter a flavor number or name.");
+    }
+}
+
 fn ensure_daemon_project_config(project_root: &Path, daemon_config_exists_before: bool) -> Result<bool> {
     if daemon_config_exists_before {
         return Ok(false);
@@ -921,6 +976,32 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
         true
     };
 
+    // Flavor selection (interactive only). The chosen flavor threads into
+    // the walkthrough's `plugin install-defaults --flavor <name>` invocation
+    // so `active_flavor` persists. Non-interactive runs keep `default`.
+    let selected_flavor = if install_plugins && interactive && !args.non_interactive && !args.plan {
+        // Anchor discovery at the init target root (codex review P2: a
+        // `--project-root` pointing elsewhere must list THAT project's
+        // `flavors/`, not the caller's CWD).
+        let mut available = orchestrator_core::flavor::list_available_flavor_names_in(project_root);
+        // `list_available_flavor_names` only injects `default` when NO flavor
+        // files exist on disk, so a project with exactly one custom flavor
+        // (e.g. only `flavors/acme.toml`) returns a single-element list.
+        // Always offer the bundled `default` fallback alongside it, then
+        // prompt whenever there is a real choice beyond bare `default`
+        // (codex review P2: a sole custom flavor must still be pickable).
+        if !available.iter().any(|name| name == orchestrator_core::flavor::DEFAULT_FLAVOR_ID) {
+            available.insert(0, orchestrator_core::flavor::DEFAULT_FLAVOR_ID.to_string());
+        }
+        if available.len() > 1 {
+            prompt_flavor_selection(&available)?
+        } else {
+            orchestrator_core::flavor::DEFAULT_FLAVOR_ID.to_string()
+        }
+    } else {
+        orchestrator_core::flavor::DEFAULT_FLAVOR_ID.to_string()
+    };
+
     let recommended_pack_ids = recommended_packs().iter().map(|pack| pack.id.clone()).collect::<Vec<_>>().join(", ");
     let install_packs = if args.no_packs {
         false
@@ -971,6 +1052,7 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
                 },
                 "planned_actions": {
                     "install_plugins": install_plugins,
+                    "flavor": selected_flavor,
                     "install_packs": install_packs,
                     "copy_template": copy_template,
                     "auto_start_daemon": auto_start_daemon,
@@ -997,7 +1079,7 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
     }
 
     let plugin_step = if install_plugins {
-        run_install_defaults_subprocess(project_root, json).await
+        run_install_defaults_subprocess(project_root, &selected_flavor, json).await
     } else {
         WalkthroughPluginStep { skipped: true, invoked: false, exit_code: None, stderr_tail: None }
     };
@@ -1050,6 +1132,7 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
             },
             "secrets": secrets_advice,
             "apply": {
+                "flavor": selected_flavor,
                 "plugins": plugin_step,
                 "packs": pack_step,
                 "secrets": secret_step,
@@ -1161,7 +1244,7 @@ fn copy_walkthrough_template(project_root: &Path, template_name: &str, force: bo
     Ok(WalkthroughTemplateStep { skipped: false, written, skipped_existing })
 }
 
-async fn run_install_defaults_subprocess(project_root: &Path, json: bool) -> WalkthroughPluginStep {
+async fn run_install_defaults_subprocess(project_root: &Path, flavor: &str, json: bool) -> WalkthroughPluginStep {
     let exe = match std::env::current_exe() {
         Ok(p) => p,
         Err(err) => {
@@ -1188,6 +1271,13 @@ async fn run_install_defaults_subprocess(project_root: &Path, json: bool) -> Wal
     // half of the defense-in-depth fix; the other half is removing
     // `--skip-preflight` from the daemon spawn below.
     cmd.args(["plugin", "install-defaults", "--yes", "--include-subjects", "--include-transports"]);
+    // Thread the walkthrough's flavor choice so `active_flavor` persists to
+    // `.animus/plugin-scope.yaml` and the project scopes against that
+    // flavor's plugin set. `default` is the install-defaults default, so we
+    // only pass `--flavor` when it differs (keeps the command minimal).
+    if flavor != orchestrator_core::flavor::DEFAULT_FLAVOR_ID {
+        cmd.args(["--flavor", flavor]);
+    }
     cmd.stdin(Stdio::null());
     // In JSON mode, pipe stdout (and discard) so the child's `--json` output
     // does not interleave with the parent envelope. In human mode, inherit

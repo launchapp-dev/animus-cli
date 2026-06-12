@@ -374,6 +374,14 @@ through `animus agent message send` or the MCP tool `animus.agent.message.send`.
 only receive channel context when their profile has `communication.enabled:
 true` and lists that channel.
 
+> **The participant roster is advisory, not an access-control boundary.**
+> `participants` documents the intended membership and drives which agents
+> the channel context is injected for; it does not hard-deny a write. The
+> load-bearing gate is the per-profile `communication` block
+> (`enabled: true` + the channel listed under `channels`). Treat the roster
+> as a coordination hint, not a security control — do not rely on it to keep
+> an agent out of a channel.
+
 | Field | Type | Required | Description |
 |---|---|---|---|
 | `description` | string | no | Human-readable channel description |

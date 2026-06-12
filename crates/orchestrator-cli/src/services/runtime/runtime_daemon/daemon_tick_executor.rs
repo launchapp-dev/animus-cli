@@ -333,11 +333,27 @@ pub(crate) async fn reconcile_stale_in_progress_tasks_for_hub(
             // automatic — only an agent or human should mark a task done after
             // verifying the work actually landed.
             if !any_success {
-                let latest_terminal_at = task_workflows.iter().map(|w| w.completed_at.unwrap_or(w.started_at)).max();
+                // Pick the workflow with the latest terminal timestamp; its
+                // terminal status decides the projection.
+                let latest = task_workflows.iter().max_by_key(|w| w.completed_at.unwrap_or(w.started_at));
+                let latest_terminal_at = latest.map(|w| w.completed_at.unwrap_or(w.started_at));
                 if latest_terminal_at.is_some_and(|terminal_at| last_transition_at >= terminal_at) {
                     continue;
                 }
-                let _ = hub.tasks().set_status(&task.id, TaskStatus::Blocked, false).await;
+                // A workflow that died Cancelled in a crash window must
+                // project the task Cancelled, not Blocked. Reuse the shared
+                // terminal projection so the mapping stays in one place.
+                if latest.is_some_and(|w| w.status == WorkflowStatus::Cancelled) {
+                    orchestrator_core::project_task_terminal_workflow_status(
+                        hub.clone(),
+                        &task.id,
+                        WorkflowStatus::Cancelled,
+                        None,
+                    )
+                    .await;
+                } else {
+                    let _ = hub.tasks().set_status(&task.id, TaskStatus::Blocked, false).await;
+                }
                 reconciled += 1;
             }
         }
@@ -363,6 +379,7 @@ mod tests {
     use crate::shared::test_env_lock;
     use orchestrator_core::{
         services::ServiceHub, FileServiceHub, Priority, TaskCreateInput, TaskStatus, TaskType, WorkflowRunInput,
+        WorkflowStatus,
     };
     use protocol::test_utils::EnvVarGuard;
     use std::collections::HashSet;
@@ -432,7 +449,21 @@ mod tests {
             .run(WorkflowRunInput::for_task(task_id.clone(), None))
             .await
             .expect("workflow should start");
-        hub.workflows().cancel(&workflow.id).await.expect("workflow should cancel");
+        // Drive the workflow to a terminal Failed state (distinct from
+        // Cancelled, which now projects the task Cancelled). A fresh run is
+        // Running; fail_current_phase records the phase failure and, on a
+        // single-phase default plan with no retries left, lands the workflow
+        // in a terminal non-success state.
+        hub.workflows().fail_current_phase(&workflow.id, "boom".to_string()).await.expect("workflow phase should fail");
+        // Cancel as a deterministic terminal fallback if the failure
+        // transition retried instead of terminating — but assert below the
+        // status is NOT Cancelled so we genuinely exercise the Blocked path.
+        let wf_after = hub.workflows().get(&workflow.id).await.expect("workflow reload");
+        assert_ne!(
+            wf_after.status,
+            WorkflowStatus::Cancelled,
+            "this fixture must exercise a non-Cancelled terminal workflow"
+        );
 
         // An ordinary field edit after the crash bumps `updated_at` but is
         // NOT a status transition — it must not shield the task from
@@ -465,6 +496,34 @@ mod tests {
         assert_eq!(reconciled, 1, "task whose only workflow ended after its last transition must be reconciled");
         let task = hub.tasks().get(&task_id).await.expect("task should reload");
         assert_eq!(task.status, TaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn stale_in_progress_task_with_cancelled_workflow_is_cancelled() {
+        // Crash-window fixture: the workflow died Cancelled while the daemon
+        // was down, so the task is still InProgress. The reconcile sweep must
+        // project the task Cancelled (mirroring the terminal projection), not
+        // Blocked.
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let (hub, task_id) = hub_with_task(&temp, "cancelled workflow residue").await;
+
+        hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let workflow = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task_id.clone(), None))
+            .await
+            .expect("workflow should start");
+        hub.workflows().cancel(&workflow.id).await.expect("workflow should cancel");
+
+        let reconciled = reconcile_stale_in_progress_tasks_for_hub(hub.clone(), &HashSet::new(), 90)
+            .await
+            .expect("reconciliation should run");
+        assert_eq!(reconciled, 1, "task whose only workflow died Cancelled must be reconciled");
+        let task = hub.tasks().get(&task_id).await.expect("task should reload");
+        assert_eq!(task.status, TaskStatus::Cancelled, "Cancelled workflow projects task Cancelled, not Blocked");
     }
 
     #[tokio::test]

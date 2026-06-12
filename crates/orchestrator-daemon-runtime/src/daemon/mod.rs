@@ -17,7 +17,8 @@ pub use daemon_run_hooks::DaemonRunHooks;
 pub use daemon_runtime_options::DaemonRuntimeOptions;
 pub use daemon_runtime_state::DaemonRuntimeState;
 pub use plugin_preflight_wiring::{
-    discover_installed_plugins, discover_installed_plugins_with_flavor_error, run_plugin_preflight, PreflightOutcome,
+    discover_installed_plugins, discover_installed_plugins_with_flavor_error, run_plugin_preflight,
+    workflow_runner_warnings, PreflightOutcome,
 };
 pub use run_daemon::{current_workflow_event_broadcaster, current_workflow_event_emitter, run_daemon};
 #[cfg(test)]

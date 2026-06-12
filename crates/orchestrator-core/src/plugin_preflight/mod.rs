@@ -21,6 +21,55 @@ const PLUGIN_KIND_WORKFLOW_RUNNER: &str = "workflow_runner";
 /// Plugin-kind wire value for `queue`. See [`PLUGIN_KIND_WORKFLOW_RUNNER`].
 const PLUGIN_KIND_QUEUE: &str = "queue";
 
+/// Minimum `workflow_runner` plugin version that consumes phase skill
+/// payloads. The reference runner
+/// (`launchapp-dev/animus-workflow-runner-default`) started enforcing the
+/// skill payload contract (prompt / tool_policy / mcp_servers / model /
+/// capabilities / ...) at v0.4.2 — see
+/// `docs/architecture/skill-system.md`. A runner below this floor installs
+/// and runs fine but silently ignores phase skills, so preflight surfaces
+/// a non-fatal WARNING rather than failing.
+pub const WORKFLOW_RUNNER_SKILL_FLOOR: &str = "0.4.2";
+
+/// Build the under-pin preflight warning for a discovered `workflow_runner`
+/// plugin whose manifest `version` is below [`WORKFLOW_RUNNER_SKILL_FLOOR`].
+/// Returns `None` when the version meets the floor or cannot be parsed
+/// (an unparseable version is not actionable as an under-pin warning and
+/// must never fail preflight). The accepted `version` may carry a leading
+/// `v` (e.g. `v0.4.1`).
+pub fn workflow_runner_underpin_warning(name: &str, version: &str) -> Option<String> {
+    let installed = parse_version_triple(version)?;
+    let floor = parse_version_triple(WORKFLOW_RUNNER_SKILL_FLOOR)?;
+    if installed < floor {
+        // Normalize an already-`v`-prefixed manifest version so the message
+        // reads `v0.4.1`, never `vv0.4.1`.
+        let display_version = version.trim().trim_start_matches('v');
+        Some(format!(
+            "installed workflow runner {name} v{display_version} silently ignores phase skills \
+             (needs v{WORKFLOW_RUNNER_SKILL_FLOOR}+); upgrade with `animus plugin update`"
+        ))
+    } else {
+        None
+    }
+}
+
+/// Parse a `major.minor.patch` version (optionally `v`-prefixed, with any
+/// pre-release/build suffix on the patch component ignored) into a
+/// comparable tuple. Returns `None` for anything that does not start with
+/// three dot-separated integers — an unparseable version is not a valid
+/// under-pin signal.
+fn parse_version_triple(version: &str) -> Option<(u64, u64, u64)> {
+    let trimmed = version.trim().trim_start_matches('v');
+    let mut parts = trimmed.split('.');
+    let major = parts.next()?.parse::<u64>().ok()?;
+    let minor = parts.next()?.parse::<u64>().ok()?;
+    let patch_raw = parts.next()?;
+    // Drop a `-prerelease` / `+build` suffix on the patch component.
+    let patch_digits: String = patch_raw.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let patch = patch_digits.parse::<u64>().ok()?;
+    Some((major, minor, patch))
+}
+
 /// Default provider repo spec preflight should auto-install when
 /// `at_least_one_provider` is unsatisfied. Resolved at call time from the
 /// shared `plugin_registry` constants so version bumps land in one place.
@@ -151,10 +200,18 @@ pub struct PreflightResult {
     /// runner itself never sets it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub flavor_manifest_error: Option<String>,
+    /// Non-fatal advisories that never gate daemon startup. Today the only
+    /// source is an under-pinned `workflow_runner` plugin whose manifest
+    /// version is below [`WORKFLOW_RUNNER_SKILL_FLOOR`] — such a runner
+    /// silently ignores phase skill payloads. Callers attach these after
+    /// [`PluginPreflightRunner::run`]; the runner itself never sets them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 impl PreflightResult {
     pub fn is_ok(&self) -> bool {
+        // Warnings are advisory and never affect the OK verdict.
         self.missing.is_empty() && self.flavor_manifest_error.is_none()
     }
 

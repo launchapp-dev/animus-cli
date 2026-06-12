@@ -153,6 +153,16 @@ enforces every structural field when a skill activates for a phase:
 - `capabilities` — override the phase's `PhaseCapabilities`
   (`apply_skill_capability_overrides`); unknown capability keys fail
   validation at load time.
+
+  Think of capabilities as **feature flags**, not permissions the skill
+  requests and the host grants. They are a flat set of named gates a skill
+  flips on or off for the phase it activates in (e.g. enabling a tool family,
+  toggling a side-effecting behavior). There is no negotiation, escalation
+  prompt, or runtime consent step: the override is applied deterministically
+  at load time, and an unknown flag is a config error rather than a denied
+  request. Treating them as feature flags keeps the mental model simple —
+  the resolved phase capability set is just the phase defaults with the
+  skill's flags merged in.
 - `extra_args`, `env`, `codex_config_overrides` — injected into the runtime
   contract's `/cli/launch/args` and `/cli/launch/env`, which travel to the
   provider plugin on `AgentRunRequest.runtime_contract`.
