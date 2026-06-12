@@ -260,6 +260,17 @@ pub(crate) async fn run_turn(
     // env) needs a grafted `cli.launch` block on EVERY turn's contract, and a
     // grafted launch carries no native resume args — so such skills force the
     // full-history replay path for consistent per-process behavior.
+    //
+    // Why `animus agent run` needs no analogous guard: run is single-shot.
+    // `session_request_from_args` rebuilds the launch graft from the REAL
+    // final prompt on every invocation — there is no resume seam to poison,
+    // because run never re-attaches to a native session via the message-only
+    // mode-1 prompt that this replay-forcing protects. Even run's one
+    // continuation channel (`--context-json '{"session_id": ...}'`) forwards
+    // the freshly-grafted `runtime_contract` alongside the session_id (see
+    // `PluginSessionBackend::build_run_params`), so the launch flags still
+    // apply. The asymmetry is therefore correct, not a hole. Documented at
+    // `docs/reference/cli/index.md` (ad-hoc skills section).
     let skill_forces_replay = ctx.skill.is_some_and(skill_has_launch_extras);
     let can_resume =
         meta.session_id.is_some() && tool_unchanged && producer.supports_resume(ctx.tool) && !skill_forces_replay;

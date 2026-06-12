@@ -67,6 +67,18 @@ bypasses MCP.
    agent to summarize in-progress state and end its turn; transports do not need
    changes for suspend — ending a turn is the normal completion path.
 
+**`permission_mode` × `approval_policy` compose (not a conflict).** A profile
+may declare both. `permission_mode` is the **transport-level guard** — it rides
+the typed `SessionRequest.permission_mode` and maps to the provider CLI's own
+permission flag (claude `--permission-mode`, codex `-c approval_policy`, gemini
+approval mode), governing whether the provider acts autonomously or escalates at
+all. `approval_policy` is the **kernel inbox layer** — its presence is exactly
+what sets `extras.approvals: true` (above), routing escalations through
+`animus.agent.request_approval` where `ApprovalPolicy::evaluate` auto-allows /
+auto-denies / asks. The two are orthogonal and both apply: `permission_mode`
+decides whether the provider asks; `approval_policy` decides what happens to the
+asks that reach the kernel.
+
 ## Layer 3 — plugin-protocol surface (additive, v0.1.13.5)
 
 Only for providers with native HITL channels (codex app-server approvals; future

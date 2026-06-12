@@ -198,13 +198,40 @@ from builtin agent-profile defaults (pack-provided names like the
 explicit/implicit split (`RequestedPhaseSkills.implicit`): they are
 legitimately absent until the pack is installed.
 
-### Ad-hoc runs (`animus chat` / agent MCP scope resolution)
+### Ad-hoc runs (`animus agent run` / `animus chat`)
 
-The kernel's ad-hoc path consumes only `mcp_servers` and `tool_policy`
-(profile ∪ skill ∪ `--mcp-server`). Skill `model`, `timeout_secs`,
-`capabilities`, `extra_args`, `env`, and `codex_config_overrides` do not
-apply to ad-hoc chat turns — declare those expectations on the agent profile
-or pass explicit flags instead.
+The kernel's ad-hoc paths now apply nearly the full structural surface of a
+selected skill, with the same `explicit-flags-win` precedence the workflow
+path uses (explicit CLI flag / `--context-json` value > skill > defaults):
+
+| Field | Applied on ad-hoc runs | Mechanism |
+| --- | --- | --- |
+| `mcp_servers`, `tool_policy` | yes | merged into the assembled runtime contract (profile ∪ skill ∪ `--mcp-server`) and mirrored onto `extras.mcp_servers` |
+| `prompt.*` | yes | prefixes / `Skill directives:` / body / suffixes wrap the outgoing prompt (same ordering as workflow phases); `prompt.system` rides `extras.system_prompt` (an explicit `--context-json system_prompt` precedes the skill fragment) |
+| `extra_args` | yes | grafted into `runtime_contract.cli.launch.args` |
+| `env` | yes | rides `SessionRequest.env_vars` **and** `runtime_contract.cli.launch.env` (the plugin host still gates forwarded env against the provider plugin's `env_required` manifest) |
+| `codex_config_overrides` | yes | grafted into `cli.launch.args` for codex; codex-gated (no-op for other tools) |
+| `model` (`preferred` / adapter) | yes | feeds the model precedence chain when no `--model` / context model is given |
+| `timeout_secs` | yes | applies as the request timeout when no `--timeout-secs` / context timeout is given |
+| `capabilities` | no | ad-hoc runs have no `PhaseCapabilities` to override — declare on the agent profile / pass flags |
+
+Launch-affecting fields (`extra_args`, `codex_config_overrides`, launch
+`env`) graft a `cli.launch` block only when the skill actually declares them
+— runs without them keep the provider transport's own launch behavior.
+
+**`animus chat` replay-forcing for launch-affecting skills.** A grafted
+`cli.launch` block must be rebuilt from the turn's real prompt and carries no
+native-resume args. So when a chat skill declares any launch-affecting field,
+the turn loop forces the full-history replay path (mode 2) for every turn
+instead of native session resume, keeping the launch flags consistent
+per-process. `animus agent run` needs no analogous guard: it is single-shot
+and always rebuilds the launch graft from the real prompt — there is no
+resume seam to poison. See `docs/reference/cli/index.md` (ad-hoc skills) and
+the comment at `runtime_chat/turn.rs` (`skill_forces_replay`).
+
+A caller-supplied `runtime_contract` (via `--runtime-contract-json` or a
+`runtime_contract` key in `--context-json`) is the expert full-override
+channel and disables skill application entirely.
 
 ### Activation matching and inert tool ids
 

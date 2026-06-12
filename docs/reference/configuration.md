@@ -808,7 +808,10 @@ loop is gone. A dispatch pass runs when any of these fire:
    daemon is not running, or predates the `daemon/nudge` method, the
    sender silently ignores the failure and the next heartbeat picks the
    work up. Bursts coalesce — N rapid nudges produce at most one extra
-   pass.
+   pass. A nudge wakes the scheduler immediately, but the resulting
+   dispatch waits for the current tick's in-flight work to finish before
+   the new pass runs — so end-to-end pickup is typically sub-second,
+   bounded by in-flight tick work, not an instantaneous guarantee.
 2. **Cron deadlines** — the loop computes the earliest upcoming occurrence
    across all compiled `schedules:` and sleeps until exactly that instant,
    so cron fires on time instead of on the next polling tick. The deadline
