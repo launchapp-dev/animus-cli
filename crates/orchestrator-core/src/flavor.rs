@@ -251,10 +251,12 @@ pub fn load_flavor(name: &str) -> Result<Option<FlavorManifest>> {
     load_flavor_in(&cwd, name)
 }
 
-/// List every flavor name available on the discovery search paths. v0.5
-/// always returns at least `["default"]` even if the flavor file is
-/// missing, so the CLI surface stays consistent.
-pub fn list_available_flavor_names() -> Vec<String> {
+/// List every flavor name available on the discovery search paths anchored
+/// at `root` (the project root). Probes `ANIMUS_FLAVORS_DIR` first, then
+/// `<root>/flavors/` and every ancestor's `flavors/` directory. v0.5 always
+/// returns at least `["default"]` even if the flavor file is missing, so
+/// the CLI surface stays consistent.
+pub fn list_available_flavor_names_in(root: &Path) -> Vec<String> {
     let mut names = std::collections::BTreeSet::new();
     let mut probe = |dir: PathBuf| {
         if let Ok(entries) = std::fs::read_dir(&dir) {
@@ -271,19 +273,26 @@ pub fn list_available_flavor_names() -> Vec<String> {
     if let Ok(dir) = std::env::var("ANIMUS_FLAVORS_DIR") {
         probe(PathBuf::from(dir));
     }
-    if let Ok(cwd) = std::env::current_dir() {
-        probe(cwd.join("flavors"));
-        let mut walker: &Path = &cwd;
-        while let Some(parent) = walker.parent() {
-            probe(parent.join("flavors"));
-            walker = parent;
-        }
+    probe(root.join("flavors"));
+    let mut walker: &Path = root;
+    while let Some(parent) = walker.parent() {
+        probe(parent.join("flavors"));
+        walker = parent;
     }
 
     if names.is_empty() {
         names.insert(DEFAULT_FLAVOR_ID.to_string());
     }
     names.into_iter().collect()
+}
+
+/// CWD-anchored variant retained for callers that have no project root to
+/// hand. Production surfaces should prefer [`list_available_flavor_names_in`].
+pub fn list_available_flavor_names() -> Vec<String> {
+    match std::env::current_dir() {
+        Ok(cwd) => list_available_flavor_names_in(&cwd),
+        Err(_) => vec![DEFAULT_FLAVOR_ID.to_string()],
+    }
 }
 
 #[cfg(test)]

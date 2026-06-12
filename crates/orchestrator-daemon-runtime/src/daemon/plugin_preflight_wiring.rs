@@ -115,6 +115,12 @@ pub async fn run_plugin_preflight<H: DaemonRunHooks>(
     if !result.is_ok() && result.flavor_manifest_error.is_none() {
         annotate_missing_with_scope_excludes(project_root, &mut result);
     }
+    // Non-fatal advisories (e.g. under-pinned workflow runner). Never
+    // affect the OK verdict or abort startup.
+    result.warnings = workflow_runner_warnings(project_root);
+    for warning in &result.warnings {
+        tracing::warn!("plugin preflight: {warning}");
+    }
 
     let _ = hooks.handle_event(DaemonRunEvent::PluginPreflight {
         project_root: primary_root.to_string(),
@@ -153,6 +159,27 @@ pub fn discover_installed_plugins_with_flavor_error(
     // (matches pre-v0.5.7 behavior).
     let lockfile = PluginLockfile::load_default(Some(root)).ok();
     Ok((summarize_discovered_plugins_with_lock(&plugins, lockfile.as_ref()), flavor_error))
+}
+
+/// Non-fatal preflight advisories derived from discovered plugin manifests.
+///
+/// Today the only advisory is an under-pinned `workflow_runner` plugin: a
+/// runner whose manifest version is below the skill-payload floor installs
+/// and runs fine but silently ignores phase skills. This NEVER fails
+/// preflight — it is surfaced as a WARNING so operators can `animus plugin
+/// update`. Discovery errors are swallowed (returns an empty list): a
+/// warning probe must not be able to abort startup.
+pub fn workflow_runner_warnings(project_root: &str) -> Vec<String> {
+    let root = Path::new(project_root);
+    let scope = resolve_scope_for_project(root);
+    let Ok(plugins) = PluginDiscovery::new().with_project_root(root).with_scope(scope).discover() else {
+        return Vec::new();
+    };
+    plugins
+        .iter()
+        .filter(|p| p.manifest.plugin_kind == "workflow_runner")
+        .filter_map(|p| orchestrator_core::workflow_runner_underpin_warning(&p.name, &p.manifest.version))
+        .collect()
 }
 
 /// Render the scope's recorded flavor-manifest failure when (and only

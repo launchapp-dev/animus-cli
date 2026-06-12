@@ -59,6 +59,20 @@ pub(crate) enum ObserveSource {
     Workflow,
 }
 
+impl ObserveSource {
+    /// The kebab-case `--source` token a user types for this variant, so
+    /// error messages echo the user's input (`stream`) rather than the Rust
+    /// enum's `Debug` form (`Stream`).
+    pub(crate) fn as_token(self) -> &'static str {
+        match self {
+            ObserveSource::Events => "events",
+            ObserveSource::Logs => "logs",
+            ObserveSource::Stream => "stream",
+            ObserveSource::Workflow => "workflow",
+        }
+    }
+}
+
 /// `daemon observe` is a routing front-door, not a new data path. It reuses the
 /// `events` / `logs` / `stream` handlers; no flag introduces its own reader.
 #[derive(Debug, Args)]

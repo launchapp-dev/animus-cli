@@ -630,6 +630,9 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
     let installer_ref = installer.as_ref().map(|i| i as &dyn orchestrator_core::PluginInstaller);
     let mut result = PluginPreflightRunner::run(&spec, installed, installer_ref).await?;
     result.flavor_manifest_error = flavor_error;
+    // Non-fatal advisories (e.g. under-pinned workflow runner) — surfaced
+    // in the report but never affect the OK verdict / exit code.
+    result.warnings = orchestrator_daemon_runtime::workflow_runner_warnings(project_root);
 
     let payload = serde_json::json!({
         "schema": "animus.daemon.preflight.v1",
@@ -637,10 +640,20 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
         "satisfied": result.satisfied,
         "missing": result.missing,
         "auto_installed": result.auto_installed,
+        "warnings": result.warnings,
         "flavor_manifest_error": result.flavor_manifest_error,
         "ok": result.is_ok(),
         "fix_message": if result.is_ok() { String::new() } else { result.render_missing_message() },
     });
+
+    // Echo advisories to stderr in human mode even when preflight passes,
+    // so an operator running `animus daemon preflight` sees the under-pin
+    // warning before the OK summary.
+    if !json {
+        for warning in &result.warnings {
+            eprintln!("warning: {warning}");
+        }
+    }
 
     if result.is_ok() {
         return print_value(payload, json);
@@ -1116,9 +1129,10 @@ async fn handle_daemon_observe(args: DaemonObserveArgs, project_root: &str, json
         // wrong stream; `stream`/`workflow` are stream-backed and allowed.
         if let Some(source) = args.source {
             if !matches!(source, ObserveSource::Stream | ObserveSource::Workflow) {
+                let token = source.as_token();
                 return Err(anyhow!(
-                    "--source {source:?} cannot be combined with --follow; --follow only tails the live stream. \
-                     Drop --follow to read the {source:?} source, or use --source stream/workflow."
+                    "--source {token} cannot be combined with --follow; --follow only tails the live stream. \
+                     Drop --follow to read the {token} source, or use --source stream/workflow."
                 ));
             }
         }
@@ -1199,7 +1213,9 @@ async fn handle_daemon_observe(args: DaemonObserveArgs, project_root: &str, json
             collect_observe_window(project_root, u64::MAX, args.workflow.as_deref(), args.limit, ObserveSources::Both);
         return print_value(
             serde_json::json!({
-                "matrix": observe_matrix_rows(),
+                // Key each matrix row as an object so machine consumers read
+                // named fields instead of positional array indices.
+                "matrix": observe_matrix_json(),
                 "recent": lines.iter().map(|l| serde_json::json!({
                     "source": l.source,
                     "timestamp": l.timestamp,
@@ -1458,6 +1474,25 @@ fn observe_matrix_rows() -> Vec<[&'static str; 5]> {
             "counters, histograms, telemetry opt-in",
         ],
     ]
+}
+
+/// The `observe` data-source matrix as keyed JSON objects
+/// (`{verb, data_source, live, filters, when}`) so machine consumers read
+/// named fields instead of positional array indices. Kept beside
+/// [`observe_matrix_rows`] so the human table and JSON stay in sync.
+fn observe_matrix_json() -> Vec<serde_json::Value> {
+    observe_matrix_rows()
+        .into_iter()
+        .map(|row| {
+            serde_json::json!({
+                "verb": row[0],
+                "data_source": row[1],
+                "live": row[2],
+                "filters": row[3],
+                "when": row[4],
+            })
+        })
+        .collect()
 }
 
 fn print_observe_matrix() {
@@ -2333,6 +2368,23 @@ mod tests {
     }
 
     #[test]
+    fn observe_matrix_json_keys_rows_as_objects() {
+        let matrix = observe_matrix_json();
+        assert_eq!(matrix.len(), observe_matrix_rows().len(), "JSON matrix must cover every row");
+        for entry in &matrix {
+            let object = entry.as_object().expect("each matrix entry must be a JSON object, not an array");
+            for key in ["verb", "data_source", "live", "filters", "when"] {
+                assert!(object.contains_key(key), "matrix object must carry `{key}`: {entry}");
+                assert!(object[key].is_string(), "matrix field `{key}` must be a string: {entry}");
+            }
+        }
+        // Spot-check the first row maps positionally onto the named fields.
+        let first = &matrix[0];
+        assert_eq!(first["verb"], serde_json::json!("daemon events"));
+        assert_eq!(first["data_source"], serde_json::json!("daemon-events.jsonl (queue/workflow lifecycle)"));
+    }
+
+    #[test]
     fn render_observe_lines_json_shape_includes_source_label() {
         let lines =
             vec![ObserveLine { source: "events", timestamp: "2026-06-11T10:00:01Z".into(), text: "queue {}".into() }];
@@ -2398,7 +2450,12 @@ mod tests {
             handle_daemon_observe(args, &project_root, false).await
         });
         let err = rejected.expect_err("--source events --follow must be rejected");
-        assert!(err.to_string().contains("cannot be combined with --follow"));
+        let message = err.to_string();
+        assert!(message.contains("cannot be combined with --follow"), "got: {message}");
+        // The error must echo the user's kebab token (`events`), not the Rust
+        // enum Debug form (`Events`).
+        assert!(message.contains("--source events"), "error must echo the kebab token: {message}");
+        assert!(!message.contains("Events"), "error must not leak the enum Debug form: {message}");
 
         // --source stream --follow IS allowed (stream-backed).
         let allowed = runtime.block_on(async {

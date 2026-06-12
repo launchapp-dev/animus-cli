@@ -4,8 +4,7 @@ use clap::{Args, ValueEnum};
 pub(crate) struct UpdateArgs {
     /// Print the available version vs. installed and exit without
     /// touching the binary. Exit code 0 when an update is available,
-    /// 1 when already on the latest release (matches `animus self
-    /// update --check-only` semantics so CI hooks stay scriptable).
+    /// 1 when already on the latest release (scriptable for CI hooks).
     #[arg(long, default_value_t = false)]
     pub(crate) check: bool,
     /// Skip the interactive `[y/N]` confirmation. Required when piping

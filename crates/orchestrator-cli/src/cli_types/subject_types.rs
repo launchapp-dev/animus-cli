@@ -1,4 +1,29 @@
-use clap::{Args, Subcommand};
+use std::path::PathBuf;
+
+use clap::{Args, Subcommand, ValueEnum};
+
+/// CLI mirror of the MCP batch `on_error` policy. `stop` (default) marks
+/// every item after the first failure as skipped; `continue` processes
+/// every item regardless of failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+#[clap(rename_all = "kebab-case")]
+pub(crate) enum BatchOnError {
+    #[default]
+    Stop,
+    Continue,
+}
+
+impl BatchOnError {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            BatchOnError::Stop => "stop",
+            BatchOnError::Continue => "continue",
+        }
+    }
+    pub(crate) fn is_stop(self) -> bool {
+        matches!(self, BatchOnError::Stop)
+    }
+}
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SubjectCommand {
@@ -14,8 +39,24 @@ pub(crate) enum SubjectCommand {
     Get(SubjectGetArgs),
     /// Create a subject through the active subject_backend plugin.
     Create(SubjectCreateArgs),
+    /// Create multiple subjects of one kind from a JSON items file.
+    ///
+    /// Mirrors the `animus.subject.batch-create` MCP tool: `--file` points
+    /// at a JSON array of `{title, status?, priority?, labels?, body?}`
+    /// items (max 100). Items run one at a time in order; `--on-error stop`
+    /// (default) skips the remainder after the first failure,
+    /// `--on-error continue` runs every item. Emits an
+    /// `animus.cli.v1`-wrapped batch result with per-item outcomes.
+    BatchCreate(SubjectBatchCreateArgs),
     /// Update a subject through the active subject_backend plugin.
     Update(SubjectUpdateArgs),
+    /// Apply patches to multiple subjects of one kind from a JSON items file.
+    ///
+    /// Mirrors the `animus.subject.batch-update` MCP tool: `--file` points
+    /// at a JSON array of `{id, status?, priority?, labels?}` items (max
+    /// 100); each item needs at least one of status / priority / labels.
+    /// `--on-error` semantics match `batch-create`.
+    BatchUpdate(SubjectBatchUpdateArgs),
     /// Return the highest-priority Ready subject for the given kind.
     ///
     /// Backed by the active subject_backend plugin for the resolved kind.
@@ -111,6 +152,42 @@ pub(crate) struct SubjectUpdateArgs {
     /// Replace labels with this comma-separated list.
     #[arg(long, value_name = "L1,L2", value_delimiter = ',')]
     pub labels: Vec<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SubjectBatchCreateArgs {
+    /// Subject kind to route through. When omitted, falls back to
+    /// `default_subject_kind` in `.animus/config.json` (defaults to
+    /// `task`).
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<String>,
+    /// Path to a JSON file containing the items array. Each item is
+    /// `{"title": "...", "status"?, "priority"?, "labels"?: [..], "body"?}`.
+    /// Maximum 100 items.
+    #[arg(long, value_name = "JSON")]
+    pub file: PathBuf,
+    /// Error policy: `stop` (default) skips remaining items after the first
+    /// failure; `continue` processes every item.
+    #[arg(long, value_name = "POLICY", default_value = "stop")]
+    pub on_error: BatchOnError,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SubjectBatchUpdateArgs {
+    /// Subject kind to route through. When omitted, falls back to
+    /// `default_subject_kind` in `.animus/config.json` (defaults to
+    /// `task`).
+    #[arg(long, value_name = "KIND")]
+    pub kind: Option<String>,
+    /// Path to a JSON file containing the items array. Each item is
+    /// `{"id": "...", "status"?, "priority"?, "labels"?: [..]}` and must
+    /// carry at least one of status / priority / labels. Maximum 100 items.
+    #[arg(long, value_name = "JSON")]
+    pub file: PathBuf,
+    /// Error policy: `stop` (default) skips remaining items after the first
+    /// failure; `continue` processes every item.
+    #[arg(long, value_name = "POLICY", default_value = "stop")]
+    pub on_error: BatchOnError,
 }
 
 #[derive(Debug, Args)]

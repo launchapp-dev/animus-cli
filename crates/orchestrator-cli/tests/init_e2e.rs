@@ -676,6 +676,30 @@ fn init_walkthrough_without_install_packs_flag_keeps_previous_behavior() -> Resu
 }
 
 #[test]
+fn init_walkthrough_non_interactive_keeps_default_flavor() -> Result<()> {
+    // Non-interactive walkthrough must never prompt for a flavor and must
+    // record `default` in both the plan and the apply envelope.
+    let harness = CliHarness::new()?;
+
+    let plan = harness.run_json_ok(&["init", "--walkthrough", "--non-interactive", "--plan", "--no-template"])?;
+    assert_eq!(
+        plan.pointer("/data/planned_actions/flavor").and_then(Value::as_str),
+        Some("default"),
+        "non-interactive walkthrough plan must report the default flavor, got: {plan:?}"
+    );
+
+    let apply =
+        harness.run_json_ok(&["init", "--walkthrough", "--non-interactive", "--no-install", "--no-template"])?;
+    assert_eq!(
+        apply.pointer("/data/apply/flavor").and_then(Value::as_str),
+        Some("default"),
+        "non-interactive walkthrough apply must report the default flavor, got: {apply:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
 fn init_walkthrough_surfaces_secrets_migration_for_env_keys() -> Result<()> {
     let harness = CliHarness::new()?;
 

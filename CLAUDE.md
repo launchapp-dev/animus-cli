@@ -168,10 +168,11 @@ Web UI:
 Visible top-level command groups currently include:
 
 - `daemon` (with `start`, `run`, `stop`, `status`, `preflight`, ...)
-- `agent`, `queue`, `workflow`, `subject`
+- `agent`, `chat`, `queue`, `workflow`, `subject`
 - `history`, `git`, `approval`, `skill`
-- `status`, `output`, `mcp`, `web`, `init`, `doctor`, `update`
-- `pack`, `plugin` (with `install`, `install-defaults`, `list`, `info`, ...), `trigger`, `logs`, `flavor`
+- `status`, `output`, `events`, `state`, `mcp`, `web`, `init`, `doctor`, `update`
+- `cost`, `auth`, `secret`, `flavor`
+- `pack`, `plugin` (with `install`, `install-defaults`, `list`, `info`, ...), `trigger`, `logs`
 
 Hidden but implemented: none currently. The former hidden
 `animus git confirm {request, respond, outcome}` alias was removed in the

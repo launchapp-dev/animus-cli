@@ -8,9 +8,21 @@ use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::{
-    invalid_input_error, not_found_error, print_value, unavailable_error, SubjectCommand, SubjectCreateArgs,
-    SubjectDeleteArgs, SubjectGetArgs, SubjectListArgs, SubjectNextArgs, SubjectStatusArgs, SubjectUpdateArgs,
+    invalid_input_error, not_found_error, print_value, unavailable_error, BatchOnError, SubjectBatchCreateArgs,
+    SubjectBatchUpdateArgs, SubjectCommand, SubjectCreateArgs, SubjectDeleteArgs, SubjectGetArgs, SubjectListArgs,
+    SubjectNextArgs, SubjectStatusArgs, SubjectUpdateArgs,
 };
+
+/// Maximum items per `subject batch-create` / `batch-update` call. Mirrors
+/// the `MAX_BATCH_SIZE` cap enforced by the `animus.subject.batch-*` MCP
+/// tools so both surfaces reject oversized payloads identically.
+const MAX_BATCH_SIZE: usize = 100;
+
+/// Result-envelope schema tag for CLI batch operations. Distinct from the
+/// MCP `animus.mcp.batch.result.v1` tag so machine consumers can tell which
+/// surface produced the envelope, while the body shape (summary + per-item
+/// results) is identical.
+const CLI_BATCH_RESULT_SCHEMA: &str = "animus.cli.batch.result.v1";
 
 #[derive(Debug, Serialize)]
 struct SubjectCallResponse {
@@ -26,7 +38,9 @@ pub(crate) async fn handle_subject(command: SubjectCommand, project_root: &str, 
         SubjectCommand::List(args) => handle_subject_list(args, project_root, json).await,
         SubjectCommand::Get(args) => handle_subject_get(args, project_root, json).await,
         SubjectCommand::Create(args) => handle_subject_create(args, project_root, json).await,
+        SubjectCommand::BatchCreate(args) => handle_subject_batch_create(args, project_root, json).await,
         SubjectCommand::Update(args) => handle_subject_update(args, project_root, json).await,
+        SubjectCommand::BatchUpdate(args) => handle_subject_batch_update(args, project_root, json).await,
         SubjectCommand::Next(args) => handle_subject_next(args, project_root, json).await,
         SubjectCommand::Status(args) => handle_subject_status(args, project_root, json).await,
         SubjectCommand::Delete(args) => handle_subject_delete(args, project_root, json).await,
@@ -102,6 +116,273 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
     }
     let params = Some(json!({ "id": id, "patch": Value::Object(patch) }));
     dispatch(&kind, "update", params, project_root, json).await
+}
+
+/// One item of a `subject batch-create` request. Mirrors the MCP
+/// `SubjectBatchCreateItem` shape so the same JSON items array works against
+/// either surface.
+#[derive(Debug, serde::Deserialize)]
+struct BatchCreateItem {
+    title: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    labels: Vec<String>,
+    #[serde(default)]
+    body: Option<String>,
+}
+
+/// One item of a `subject batch-update` request. Mirrors the MCP
+/// `SubjectBatchUpdateItem` shape.
+#[derive(Debug, serde::Deserialize)]
+struct BatchUpdateItem {
+    id: String,
+    #[serde(default)]
+    status: Option<String>,
+    #[serde(default)]
+    priority: Option<String>,
+    #[serde(default)]
+    labels: Vec<String>,
+}
+
+/// Read and deserialize a JSON items array from `--file`. Accepts either a
+/// bare array (`[ {..}, {..} ]`) or an object wrapper `{ "items": [..] }`
+/// so payloads copied from the MCP tool input also work. Enforces the
+/// non-empty + 100-item cap shared with the MCP tools.
+fn read_batch_items<T: serde::de::DeserializeOwned>(file: &Path, tool_name: &str, kind: &str) -> Result<Vec<T>> {
+    if kind.trim().is_empty() {
+        return Err(invalid_input_error(format!("{tool_name}: kind must not be empty")));
+    }
+    let raw = std::fs::read_to_string(file).map_err(|err| {
+        invalid_input_error(format!("{tool_name}: failed to read items file {}: {err}", file.display()))
+    })?;
+    let value: Value = serde_json::from_str(&raw).map_err(|err| {
+        invalid_input_error(format!("{tool_name}: items file {} is not valid JSON: {err}", file.display()))
+    })?;
+    let items_value = match value {
+        Value::Array(_) => value,
+        Value::Object(ref map) if map.contains_key("items") => map.get("items").cloned().unwrap_or(Value::Null),
+        _ => {
+            return Err(invalid_input_error(format!(
+                "{tool_name}: items file must be a JSON array, or an object with an \"items\" array"
+            )))
+        }
+    };
+    let items: Vec<T> = serde_json::from_value(items_value).map_err(|err| {
+        invalid_input_error(format!("{tool_name}: items file {} has the wrong shape: {err}", file.display()))
+    })?;
+    if items.is_empty() {
+        return Err(invalid_input_error(format!("{tool_name}: items must not be empty")));
+    }
+    if items.len() > MAX_BATCH_SIZE {
+        return Err(invalid_input_error(format!(
+            "{tool_name}: items count {} exceeds maximum {MAX_BATCH_SIZE}",
+            items.len()
+        )));
+    }
+    Ok(items)
+}
+
+/// Run pre-built per-item subject calls through one shared dispatch
+/// resolution, honoring `on_error` (stop = remaining items are marked
+/// skipped; continue = every item runs) and assembling an
+/// `animus.cli.batch.result.v1` envelope whose per-item result shape matches
+/// the MCP `run_batch_items` output. The `items` carry `(target_id, method,
+/// params)` triples; routing goes through the same `route_or_not_found` path
+/// the single-item verbs use.
+async fn run_subject_batch(
+    tool_name: &str,
+    kind: &str,
+    verb: &'static str,
+    items: Vec<(String, Option<Value>)>,
+    on_error: BatchOnError,
+    project_root: &str,
+    json: bool,
+) -> Result<()> {
+    let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
+    let method = format!("{kind}/{verb}");
+    let requested = items.len();
+    let mut outcomes: Vec<Value> = Vec::with_capacity(requested);
+    let mut stopped = false;
+    let mut any_change = false;
+    // Track the classified kind of every failure so the batch can preserve a
+    // single-item verb's typed exit class when every item failed the same way
+    // (e.g. no subject backend → all `Unavailable`/exit 5). `None` once two
+    // distinct kinds are seen: a mixed-failure batch has no single class.
+    let mut failure_kind: Option<crate::CliErrorKind> = None;
+    let mut failure_kind_uniform = true;
+
+    for (index, (target_id, params)) in items.into_iter().enumerate() {
+        if stopped {
+            outcomes.push(json!({
+                "index": index,
+                "status": "skipped",
+                "target_id": target_id,
+                "result": null,
+                "error": null,
+                "reason": "stopped after earlier failure",
+            }));
+            continue;
+        }
+        match route_or_not_found(&resolution.selected, &method, params).await {
+            Ok(result) => {
+                any_change = true;
+                outcomes.push(json!({
+                    "index": index,
+                    "status": "success",
+                    "target_id": target_id,
+                    "result": result,
+                }));
+            }
+            Err(err) => {
+                let kind = crate::classify_cli_error_kind(&err);
+                match failure_kind {
+                    None => failure_kind = Some(kind),
+                    Some(existing) if existing != kind => failure_kind_uniform = false,
+                    Some(_) => {}
+                }
+                outcomes.push(json!({
+                    "index": index,
+                    "status": "failed",
+                    "target_id": target_id,
+                    "result": null,
+                    "error": { "message": err.to_string() },
+                }));
+                if on_error.is_stop() {
+                    stopped = true;
+                }
+            }
+        }
+    }
+
+    // A successful write may have made new work dispatchable — wake a
+    // running daemon once for the whole batch (best-effort; no-ops when the
+    // daemon is down). Matches the single-item create/update/status nudge.
+    if any_change {
+        orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
+    }
+
+    let executed = outcomes.iter().filter(|o| o["status"] != "skipped").count();
+    let succeeded = outcomes.iter().filter(|o| o["status"] == "success").count();
+    let failed = outcomes.iter().filter(|o| o["status"] == "failed").count();
+    let skipped = outcomes.iter().filter(|o| o["status"] == "skipped").count();
+
+    let payload = json!({
+        "schema": CLI_BATCH_RESULT_SCHEMA,
+        "tool": tool_name,
+        "kind": kind,
+        "method": method,
+        "plugin_count": resolution.selected.plugin_count(),
+        "on_error": on_error.as_str(),
+        "summary": {
+            "requested": requested,
+            "executed": executed,
+            "succeeded": succeeded,
+            "failed": failed,
+            "skipped": skipped,
+            "completed": failed == 0,
+        },
+        "results": outcomes,
+    });
+
+    if failed == 0 {
+        return print_value(payload, json);
+    }
+
+    // One or more items failed: the command must exit non-zero so scripts
+    // can detect the partial failure (codex review P2; mirrors the
+    // `daemon preflight` pattern). Human mode pre-prints the full per-item
+    // report to stderr before the error summary line; JSON mode carries the
+    // same payload under `/error/details` in the `animus.cli.v1` error
+    // envelope.
+    if !json {
+        if let Ok(rendered) = serde_json::to_string_pretty(&payload) {
+            eprintln!("{rendered}");
+        }
+    }
+    // Preserve the single-item verb's typed exit class when every *executed*
+    // item failed for one uniform reason — e.g. no subject backend installed
+    // maps to `Unavailable`/exit 5 just like `subject create` would, keeping
+    // the batch verbs drop-in for scripts (codex review P2). Skipped items
+    // (default `--on-error stop` after the first failure) don't dilute the
+    // class: the only failures observed share one kind. A partial-success or
+    // mixed-failure batch has no single class, so it stays `Internal`.
+    let exit_kind = match failure_kind {
+        Some(kind) if failure_kind_uniform && succeeded == 0 => kind,
+        _ => crate::CliErrorKind::Internal,
+    };
+    Err(crate::CliError::new(
+        exit_kind,
+        format!("{tool_name}: {failed} of {requested} batch items failed (see details)"),
+    )
+    .with_details(payload)
+    .into())
+}
+
+async fn handle_subject_batch_create(args: SubjectBatchCreateArgs, project_root: &str, json: bool) -> Result<()> {
+    let tool_name = "animus.subject.batch-create";
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
+    let items: Vec<BatchCreateItem> = read_batch_items(&args.file, tool_name, &kind)?;
+    let mut calls: Vec<(String, Option<Value>)> = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        if item.title.trim().is_empty() {
+            return Err(invalid_input_error(format!("{tool_name}: item[{i}].title must not be empty")));
+        }
+        let mut payload = serde_json::Map::new();
+        payload.insert("title".to_string(), json!(item.title.trim()));
+        if let Some(status) = item.status.as_deref() {
+            payload.insert("status".to_string(), json!(status));
+        }
+        if let Some(priority) = item.priority.as_deref() {
+            payload.insert("priority".to_string(), json!(priority));
+        }
+        if !item.labels.is_empty() {
+            payload.insert("labels".to_string(), json!(item.labels));
+        }
+        if let Some(body) = item.body.as_deref() {
+            payload.insert("body".to_string(), json!(body));
+        }
+        calls.push((item.title.trim().to_string(), Some(Value::Object(payload))));
+    }
+    run_subject_batch(tool_name, &kind, "create", calls, args.on_error, project_root, json).await
+}
+
+async fn handle_subject_batch_update(args: SubjectBatchUpdateArgs, project_root: &str, json: bool) -> Result<()> {
+    let tool_name = "animus.subject.batch-update";
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
+    let items: Vec<BatchUpdateItem> = read_batch_items(&args.file, tool_name, &kind)?;
+    let mut calls: Vec<(String, Option<Value>)> = Vec::with_capacity(items.len());
+    for (i, item) in items.iter().enumerate() {
+        let id = item.id.trim();
+        if id.is_empty() {
+            return Err(invalid_input_error(format!("{tool_name}: item[{i}].id must not be empty")));
+        }
+        let mut patch = serde_json::Map::new();
+        if let Some(status) = item.status.as_deref() {
+            patch.insert("status".to_string(), json!(status));
+        }
+        if let Some(priority) = item.priority.as_deref() {
+            patch.insert("priority".to_string(), json!(priority));
+        }
+        // TODO(codex-p2): an explicit `"labels": []` is currently treated as
+        // an absent field (no label-clear forwarded), matching the single-item
+        // `subject update --labels` verb and the create path. Forwarding an
+        // explicit empty array as a clear would diverge batch-update from
+        // those contracts; revisit only if the single-item verb gains the same
+        // label-clear semantics so both surfaces stay aligned.
+        if !item.labels.is_empty() {
+            patch.insert("labels".to_string(), json!(item.labels));
+        }
+        if patch.is_empty() {
+            return Err(invalid_input_error(format!(
+                "{tool_name}: item[{i}] requires at least one of status / priority / labels"
+            )));
+        }
+        calls.push((id.to_string(), Some(json!({ "id": id, "patch": Value::Object(patch) }))));
+    }
+    run_subject_batch(tool_name, &kind, "update", calls, args.on_error, project_root, json).await
 }
 
 async fn handle_subject_next(args: SubjectNextArgs, project_root: &str, json: bool) -> Result<()> {
@@ -347,6 +628,100 @@ fn classify_subject_rpc_error(method: &str, rpc_error: &animus_plugin_protocol::
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn write_items(dir: &std::path::Path, name: &str, contents: &str) -> std::path::PathBuf {
+        let path = dir.join(name);
+        std::fs::write(&path, contents).expect("write items file");
+        path
+    }
+
+    #[test]
+    fn read_batch_items_accepts_bare_array_and_items_wrapper() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let bare = write_items(tmp.path(), "bare.json", r#"[{"title":"a"},{"title":"b"}]"#);
+        let items: Vec<BatchCreateItem> =
+            read_batch_items(&bare, "animus.subject.batch-create", "task").expect("bare array parses");
+        assert_eq!(items.len(), 2);
+
+        let wrapped = write_items(tmp.path(), "wrapped.json", r#"{"items":[{"title":"a"}]}"#);
+        let items: Vec<BatchCreateItem> =
+            read_batch_items(&wrapped, "animus.subject.batch-create", "task").expect("items wrapper parses");
+        assert_eq!(items.len(), 1);
+    }
+
+    #[test]
+    fn read_batch_items_enforces_empty_cap_and_shape() {
+        let tmp = tempfile::tempdir().expect("tmp");
+
+        let empty = write_items(tmp.path(), "empty.json", "[]");
+        let err = read_batch_items::<BatchCreateItem>(&empty, "animus.subject.batch-create", "task")
+            .expect_err("empty rejected");
+        assert!(err.to_string().contains("items must not be empty"), "got: {err}");
+
+        let big_items: Vec<String> = (0..101).map(|i| format!(r#"{{"title":"t{i}"}}"#)).collect();
+        let big = write_items(tmp.path(), "big.json", &format!("[{}]", big_items.join(",")));
+        let err = read_batch_items::<BatchCreateItem>(&big, "animus.subject.batch-create", "task")
+            .expect_err("over cap rejected");
+        assert!(err.to_string().contains("exceeds maximum 100"), "got: {err}");
+
+        let not_array = write_items(tmp.path(), "obj.json", r#"{"title":"a"}"#);
+        let err = read_batch_items::<BatchCreateItem>(&not_array, "animus.subject.batch-create", "task")
+            .expect_err("non-array rejected");
+        assert!(err.to_string().contains("must be a JSON array"), "got: {err}");
+    }
+
+    #[test]
+    fn read_batch_items_rejects_empty_kind() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let file = write_items(tmp.path(), "x.json", r#"[{"title":"a"}]"#);
+        let err = read_batch_items::<BatchCreateItem>(&file, "animus.subject.batch-create", "  ")
+            .expect_err("empty kind rejected");
+        assert!(err.to_string().contains("kind must not be empty"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn run_subject_batch_continue_marks_each_item_failed_without_backend() {
+        // Isolated from any globally installed subject plugins (codex review
+        // P2): pin HOME to a temp dir and force subject plugin discovery off
+        // so the dispatch is deterministically empty and no real subjects
+        // are ever created by the test.
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().expect("tmp");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(tmp.path().to_string_lossy().as_ref()));
+        let _disable =
+            protocol::test_utils::EnvVarGuard::set(orchestrator_daemon_runtime::SUBJECT_PLUGINS_DISABLE_ENV, Some("1"));
+        let project_root = tmp.path().to_str().expect("utf-8");
+        let calls =
+            vec![("a".to_string(), Some(json!({ "title": "a" }))), ("b".to_string(), Some(json!({ "title": "b" })))];
+        // Every item fails (empty dispatch). With on_error=continue all items
+        // execute; the command exits non-zero with the batch payload attached
+        // as structured details so scripts can detect the partial failure.
+        let res = run_subject_batch(
+            "animus.subject.batch-create",
+            "task",
+            "create",
+            calls,
+            BatchOnError::Continue,
+            project_root,
+            true,
+        )
+        .await;
+        let err = res.expect_err("a batch where items failed must exit non-zero");
+        // Every item failed for the same reason (no subject backend mounted),
+        // so the batch preserves that single-item typed exit class
+        // (`Unavailable`/exit 5) rather than collapsing to `Internal`.
+        assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::Unavailable);
+        assert!(err.to_string().contains("2 of 2 batch items failed"), "got: {err}");
+        let details = crate::extract_cli_error_details(&err).expect("error details carry the batch payload");
+        assert_eq!(details.pointer("/schema").and_then(serde_json::Value::as_str), Some("animus.cli.batch.result.v1"));
+        assert_eq!(details.pointer("/summary/failed").and_then(serde_json::Value::as_u64), Some(2));
+        assert_eq!(details.pointer("/summary/executed").and_then(serde_json::Value::as_u64), Some(2));
+        assert_eq!(
+            details.pointer("/results/0/status").and_then(serde_json::Value::as_str),
+            Some("failed"),
+            "per-item results must be present in details"
+        );
+    }
 
     #[test]
     fn validate_kind_rejects_empty_and_slash() {

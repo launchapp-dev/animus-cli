@@ -875,7 +875,7 @@ mod tests {
             .expect("task should be created");
 
         // Crashed-workflow ordering: the task transitions to InProgress
-        // BEFORE its workflow ends. The reconciler only re-blocks tasks
+        // BEFORE its workflow ends. The reconciler only re-transitions tasks
         // whose latest terminal workflow postdates the task's own last
         // transition — setting InProgress after the cancel would look like
         // an operator manually re-working the task and be left alone.
@@ -891,8 +891,10 @@ mod tests {
             .await
             .expect("workflow should run");
         // Cancel the workflow so all task workflows are terminal with no success.
-        // The stale-in-progress reconciler only auto-transitions tasks to Blocked
-        // when every workflow failed/cancelled (it never auto-completes tasks).
+        // The stale-in-progress reconciler auto-transitions the task to a
+        // terminal state when every workflow failed/cancelled (it never
+        // auto-completes tasks). A Cancelled terminal workflow projects the
+        // task Cancelled (a Failed/Escalated one would project Blocked).
         let workflow = primary_hub.workflows().cancel(&workflow.id).await.expect("workflow should cancel");
         assert_eq!(workflow.status, orchestrator_core::WorkflowStatus::Cancelled);
 
@@ -933,7 +935,7 @@ mod tests {
             })
             .expect("task-state-change event should be emitted");
         assert_eq!(transition_event.data.get("from_status").and_then(serde_json::Value::as_str), Some("in-progress"));
-        assert_eq!(transition_event.data.get("to_status").and_then(serde_json::Value::as_str), Some("blocked"));
+        assert_eq!(transition_event.data.get("to_status").and_then(serde_json::Value::as_str), Some("cancelled"));
         assert!(transition_event
             .data
             .get("changed_at")
