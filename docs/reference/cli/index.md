@@ -1033,6 +1033,12 @@ passed `--name`), `persisted` (read from the project's
 `.animus/plugin-scope.yaml` `active_flavor:` key), or `default` (no persisted
 selection).
 
+The drift report counts a required plugin as installed when it is present in
+EITHER the global plugin install dir OR the project-scoped install set
+(`<project>/.animus/plugins/` + `<project>/.animus/plugins.yaml`). A plugin
+installed `animus plugin install --project` therefore reports satisfied, in
+line with `animus plugin list` / `animus plugin outdated`.
+
 #### Active flavor persistence
 
 A successful `animus plugin install-defaults --flavor <name>` (or
@@ -1121,6 +1127,14 @@ The discovery scan deliberately omits `$PATH` by default in v0.4.0 to prevent st
 binaries from being picked up. Pass `--include-system-path` to opt in to scanning
 `$PATH` for `animus-provider-*` and `animus-plugin-*` binaries.
 
+Stale `plugins.yaml` entries (a configured plugin whose binary path has
+vanished) collapse to a single summary warning line above the table — naming
+the prune remedy (`animus plugin uninstall <name>`) instead of repeating one
+warning per entry. Warnings from other discovery tiers (e.g. a genuinely broken
+installed plugin) still print one line each. Pass `--verbose` to restore the
+full per-entry detail for every tier; `--json` always carries the complete
+`warnings` array regardless.
+
 `animus plugin info`, `animus plugin ping`, and `animus plugin call` spawn the
 target binary with manifest-derived env checks enabled. If the plugin declares
 required vars in `env_required` and they are unset, these commands now fail
@@ -1128,7 +1142,7 @@ before handshake instead of proceeding with a partially initialized process.
 
 | Command | Flags |
 |---|---|
-| `animus plugin list` | `--include-system-path` |
+| `animus plugin list` | `--include-system-path`, `--verbose` |
 | `animus plugin info` | `--name <NAME>`, `--include-system-path` |
 | `animus plugin call` | `--name <NAME>`, `--method <METHOD>`, `--params <JSON>`, `--include-system-path` |
 | `animus plugin ping` | `--name <NAME>`, `--include-system-path` |

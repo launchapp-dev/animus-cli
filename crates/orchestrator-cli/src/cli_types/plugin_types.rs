@@ -609,6 +609,12 @@ pub(crate) struct PluginUninstallArgs {
 pub(crate) struct PluginListArgs {
     #[arg(long, default_value_t = false, help = "Also scan $PATH for animus-provider-* and animus-plugin-* binaries.")]
     pub(crate) include_system_path: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Print one warning line per unloadable/stale plugin instead of a single summary line."
+    )]
+    pub(crate) verbose: bool,
 }
 
 #[derive(Debug, Args)]

@@ -212,18 +212,25 @@ async fn handle_flavor_install(args: FlavorInstallArgs, project_root: &str, json
 }
 
 /// Compare the set of installed plugins on disk against the manifest's
-/// declared plugins.  v0.5: a slug is considered "installed" iff the
-/// plugin install directory contains a directory whose name matches the
-/// repo basename. The comparison set is
-/// [`FlavorManifest::required_plugins`] — the exact same required-set
-/// function that drives `animus plugin install-defaults --flavor` /
-/// `animus flavor install`, so the drift report and the install plan
-/// cannot disagree.
-fn compute_drift(_project_root: &str, manifest: &FlavorManifest) -> Result<Vec<FlavorDriftEntry>> {
+/// declared plugins.  v0.5: a slug is considered "installed" iff EITHER the
+/// global plugin install directory OR the project-scoped install set
+/// (`<project>/.animus/plugins/` + `<project>/.animus/plugins.yaml`)
+/// contains an entry whose name matches the repo basename. Unioning the
+/// project scope matters because a plugin installed `animus plugin install
+/// --project` is invisible to a global-dir-only scan, so `flavor current`
+/// would report `[missing]` even though discovery / `plugin list` /
+/// `plugin outdated` all see it. The project-scope name set is the same one
+/// `ops_plugin` consults for shadowed-install bookkeeping — reused here, not
+/// duplicated. The comparison set is [`FlavorManifest::required_plugins`] —
+/// the exact same required-set function that drives `animus plugin
+/// install-defaults --flavor` / `animus flavor install`, so the drift report
+/// and the install plan cannot disagree.
+fn compute_drift(project_root: &str, manifest: &FlavorManifest) -> Result<Vec<FlavorDriftEntry>> {
     let install_dir = orchestrator_plugin_host::plugin_install_dir();
-    let installed_basenames: std::collections::HashSet<String> = std::fs::read_dir(&install_dir)
+    let mut installed_basenames: std::collections::HashSet<String> = std::fs::read_dir(&install_dir)
         .map(|iter| iter.flatten().filter_map(|entry| entry.file_name().to_str().map(str::to_string)).collect())
         .unwrap_or_default();
+    installed_basenames.extend(super::ops_plugin::project_scope_installed_names(std::path::Path::new(project_root)));
 
     let mut entries = Vec::new();
     for (role, slug) in manifest.required_plugins() {
@@ -283,5 +290,52 @@ required = ["launchapp-dev/animus-queue-default"]
             !drift.iter().any(|e| e.plugin.contains("codex")),
             "recommended plugins are not part of the drift comparison set"
         );
+    }
+
+    /// Regression (F1): a required plugin installed `--project` (only ever
+    /// landing in `<project>/.animus/plugins/`) must report SATISFIED in the
+    /// `flavor current` drift report. Before the project-scope union,
+    /// `compute_drift` scanned the global install dir alone and reported the
+    /// plugin `[missing]` even though discovery / `plugin list` saw it.
+    #[test]
+    fn project_scoped_install_satisfies_drift() {
+        let manifest: FlavorManifest = toml::from_str(
+            r#"
+schema = "animus.flavor.v1"
+id = "default"
+version = "0.5.0"
+title = "Test"
+description = "Project-scope drift fixture."
+
+[providers]
+required = ["launchapp-dev/animus-provider-claude"]
+"#,
+        )
+        .unwrap();
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("home");
+        let global_dir = tmp.path().join("global-plugins");
+        let project_root = tmp.path().join("project");
+        let project_plugins = project_root.join(".animus").join("plugins");
+        for dir in [&home, &global_dir, &project_plugins] {
+            std::fs::create_dir_all(dir).expect("mkdir");
+        }
+        // The required provider lives ONLY in the project install dir; the
+        // global dir is empty.
+        std::fs::create_dir_all(project_plugins.join("animus-provider-claude")).expect("mkdir project plugin");
+
+        // Pin HOME + ANIMUS_PLUGIN_DIR so the global-dir scan is isolated
+        // from the developer's real `~/.animus/plugins`.
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.to_str().expect("utf-8")));
+        let _plugin_dir =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(global_dir.to_str().expect("utf-8")));
+
+        let drift = compute_drift(project_root.to_str().expect("utf-8"), &manifest).unwrap();
+        let claude = drift
+            .iter()
+            .find(|e| e.plugin == "launchapp-dev/animus-provider-claude")
+            .expect("required provider must appear in drift");
+        assert!(claude.installed, "project-scoped install must satisfy drift; got {drift:?}");
     }
 }
