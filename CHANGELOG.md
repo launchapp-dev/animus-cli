@@ -16,6 +16,27 @@ All notable changes to this project will be documented in this file.
   installs the manifest's `recommended` set (extra providers, web UI, GraphQL
   transport, more subject backends). Unknown flavor names error instead of
   silently falling back.
+- Phase-level `skills:` now actually reach workflow phase agents. The daemon
+  resolves the union of each phase's `skills:` list and the executing agent
+  profile's `skills:` at dispatch time — using the same scoped skill sources
+  and trust rules as the ad-hoc `--skill` path (project > user > installed >
+  agent-host prompt-only, with agent-host structural fields stripped at
+  load) — and ships the resolved definitions to the workflow runner as an
+  additive `ANIMUS_PHASE_SKILLS_JSON` spawn-env payload
+  (`animus.phase-skills.v1`; older runners ignore it, and a newer runner
+  paired with an older daemon resolves locally with the same rules via the
+  new `animus_runtime_shared::phase_skills` module). Activation gating
+  (`activation.tools` / `activation.models`) is applied runner-side against
+  the actually selected tool/model; applied skills inject prompt fragments,
+  tool policy, launch args/env, and skill-declared MCP servers (joining the
+  phase contract like `phase_mcp_bindings`; unknown server names warn and
+  are skipped). Missing skill names are a loud dispatch-log warning plus a
+  `missing` metadata record — never a hard failure. Phase execution
+  metadata now records `requested_skills`, `resolved_skills`, and
+  `applied_skills` truthfully, and `animus workflow prompt render` previews
+  the skill-injected prompt. Runtime enforcement in dispatched workflows
+  lands when the out-of-tree `animus-workflow-runner-default` pin bumps to
+  consume the payload.
 
 ### Changed
 

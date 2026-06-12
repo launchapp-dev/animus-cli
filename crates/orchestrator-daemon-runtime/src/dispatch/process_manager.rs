@@ -61,8 +61,52 @@ pub const RUNNER_SECRET_ALLOWLIST_ENV: &str = "ANIMUS_RUNNER_SECRET_ALLOWLIST";
 /// Env keys the daemon manages itself on the workflow-runner spawn —
 /// never replace these from the keychain even if a user stores a
 /// matching key. (codex round-5 P2.)
-const DAEMON_MANAGED_RUNNER_ENV_KEYS: &[&str] =
-    &[ANIMUS_AGENT_RUN_ID_ENV, "ANIMUS_WORKFLOW_REATTACH_SOCKET", "ANIMUS_WORKFLOW_EVENT_PIPE"];
+const DAEMON_MANAGED_RUNNER_ENV_KEYS: &[&str] = &[
+    ANIMUS_AGENT_RUN_ID_ENV,
+    "ANIMUS_WORKFLOW_REATTACH_SOCKET",
+    "ANIMUS_WORKFLOW_EVENT_PIPE",
+    animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV,
+];
+
+/// Upper bound on the serialized phase-skills payload the daemon will put on
+/// the runner spawn environment. Oversized payloads are dropped with a
+/// warning; the runner then resolves skills locally (its no-payload
+/// fallback), so nothing is lost beyond the daemon-side resolution log.
+/// Windows caps the entire process environment block at ~32 KiB, so the cap
+/// there must leave headroom for the inherited daemon environment; Unix
+/// limits (ARG_MAX-style, typically >= 1 MiB shared) allow a roomier cap.
+/// (codex P2.)
+#[cfg(windows)]
+const PHASE_SKILLS_ENV_MAX_BYTES: usize = 16 * 1024;
+#[cfg(not(windows))]
+const PHASE_SKILLS_ENV_MAX_BYTES: usize = 512 * 1024;
+
+/// Resolve the project's phase/profile skill declarations (same scoped
+/// sources and trust rules as the ad-hoc `--skill` path) and serialize the
+/// result for the runner spawn env. Returns `None` when no phase declares
+/// skills. Missing skill names have already been logged by the resolver;
+/// they ride along in the payload's `missing` lists so the runner records
+/// them on phase metadata.
+fn workflow_skills_env_payload(project_root: &str) -> Option<String> {
+    let payload = animus_runtime_shared::phase_skills::resolve_workflow_skills_payload(project_root);
+    if payload.phases.is_empty() {
+        return None;
+    }
+    match serde_json::to_string(&payload) {
+        Ok(json) if json.len() > PHASE_SKILLS_ENV_MAX_BYTES => {
+            tracing::warn!(
+                bytes = json.len(),
+                "phase-skills payload exceeds env size cap; runner falls back to local skill resolution"
+            );
+            None
+        }
+        Ok(json) => Some(json),
+        Err(error) => {
+            tracing::warn!(%error, "failed to serialize phase-skills payload; runner falls back to local skill resolution");
+            None
+        }
+    }
+}
 
 fn runner_secret_allowlist() -> Vec<String> {
     let mut out: Vec<String> = RUNNER_SECRET_ALLOWLIST_DEFAULT.iter().map(|s| (*s).to_string()).collect();
@@ -242,6 +286,20 @@ impl ProcessManager {
         // `replay_gap_from_spawn_record` falls back to scanning runs/ for
         // the most recent decisions.jsonl matching the spawn time.
         command.env(ANIMUS_AGENT_RUN_ID_ENV, &pending_session_id);
+        // Phase skills pass-down: resolve the union of phase-level `skills:`
+        // and the executing agent profile's `skills:` daemon-side (scoped
+        // sources + trust stripping, identical to the ad-hoc `--skill`
+        // path) and ship the resolved definitions on the spawn env. Older
+        // runners ignore the env var; newer runners apply activation gating
+        // at phase execution where the selected tool/model is known, and
+        // fall back to resolving locally when the var is absent.
+        // Clear any inherited value first: `Command` inherits the daemon's
+        // environment, so a stale parent-process payload must never reach
+        // the runner when this dispatch produces none. (codex P2.)
+        command.env_remove(animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV);
+        if let Some(skills_json) = workflow_skills_env_payload(project_root) {
+            command.env(animus_runtime_shared::phase_skills::ANIMUS_PHASE_SKILLS_ENV, skills_json);
+        }
         // v0.5.8 secrets: inject keychain entries into the runner env so
         // workflow runs see the same secret values as
         // `PluginHost::spawn_with_options` would. The runner is a
@@ -1036,5 +1094,46 @@ mod tests {
         assert_eq!(completed.len(), 1);
         assert_eq!(completed[0].subject_id, "pack.review::REV-7");
         assert_eq!(completed[0].subject_kind.as_deref(), Some("pack.review"));
+    }
+
+    #[test]
+    fn workflow_skills_env_payload_resolves_declared_phase_skills() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::test_env::stable_test_home();
+
+        let temp_dir = TempDir::new().expect("temp directory");
+        let project_root = temp_dir.path().to_str().expect("utf-8 tempdir");
+
+        // No `.animus` config at all: only the builtin agent-profile skill
+        // defaults (which reference the extracted `animus.core-skills`
+        // pack) can appear, and none of them resolve in a vanilla project.
+        if let Some(json) = super::workflow_skills_env_payload(project_root) {
+            let payload: animus_runtime_shared::phase_skills::WorkflowSkillsPayload =
+                serde_json::from_str(&json).expect("vanilla payload must parse");
+            assert!(
+                payload.phases.values().all(|resolution| resolution.resolved.is_empty()),
+                "vanilla project must not resolve any skill: {json}"
+            );
+        }
+
+        let animus = temp_dir.path().join(".animus");
+        let skills_dir = animus.join("config").join("skill_definitions");
+        fs::create_dir_all(&skills_dir).expect("create skills dir");
+        fs::write(skills_dir.join("deep-search.yaml"), "name: deep-search\nprompt:\n  prefix: deep-search prefix\n")
+            .expect("write skill");
+        fs::write(
+            animus.join("workflows.yaml"),
+            "phases:\n  research:\n    mode: agent\n    skills:\n      - deep-search\n      - ghost-skill\nworkflows:\n  - id: research-only\n    name: Research Only\n    phases:\n      - research\n",
+        )
+        .expect("write workflows.yaml");
+
+        let json = super::workflow_skills_env_payload(project_root)
+            .expect("project with declared phase skills must produce a payload");
+        let payload: animus_runtime_shared::phase_skills::WorkflowSkillsPayload =
+            serde_json::from_str(&json).expect("payload must round-trip");
+        let research = payload.phases.get("research").expect("research phase entry");
+        assert_eq!(research.resolved.len(), 1);
+        assert_eq!(research.resolved[0].definition.name, "deep-search");
+        assert_eq!(research.missing, vec!["ghost-skill"]);
     }
 }

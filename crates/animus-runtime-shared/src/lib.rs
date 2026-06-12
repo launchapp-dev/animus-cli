@@ -27,6 +27,7 @@ pub mod phase_metadata;
 pub mod phase_output;
 pub mod phase_prompt;
 pub mod phase_session;
+pub mod phase_skills;
 pub mod reattach;
 pub mod recording;
 pub mod runtime_contract;
@@ -66,6 +67,13 @@ pub use phase_prompt::{
     phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt,
     render_phase_prompt_with_ctx, render_phase_prompt_with_ctx_overrides, PhasePromptInputs, PhasePromptParams,
     PhaseRenderParams, RenderedPhasePrompt,
+};
+pub use phase_skills::{
+    apply_phase_skills, apply_phase_skills_preview, apply_skill_capability_overrides, inject_skill_mcp_servers,
+    load_workflow_skills_payload_from_env, phase_requested_skills, phase_skills_resolution,
+    populate_phase_skills_metadata, resolve_phase_skill_names, resolve_workflow_skills_payload,
+    resolve_workflow_skills_payload_with_ctx, AppliedPhaseSkills, PhaseSkillsResolution, RequestedPhaseSkills,
+    WorkflowSkillsPayload, ANIMUS_PHASE_SKILLS_ENV, PHASE_SKILLS_PAYLOAD_SCHEMA,
 };
 pub use runtime_contract::{install_memory_mcp_stdio_command_override, validate_basic_json_schema};
 pub use runtime_support::*;
