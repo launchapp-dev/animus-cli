@@ -189,6 +189,20 @@ impl AoMcpServer {
         let args = build_workflow_phase_approve_args(&input);
         self.run_tool("animus.workflow.phase.approve", args, input.project_root).await
     }
+
+    #[tool(
+        name = "animus.workflow.phase.reject",
+        description = "Reject a gated workflow phase. Purpose: Decline a gate phase that requires manual sign-off, recording the rejection note. Prerequisites: Workflow must have a pending gate phase (use animus.workflow.get to confirm a gate is pending). Example: {\"workflow_id\": \"wf-abc123\", \"phase_id\": \"po-review\", \"reason\": \"Spec mismatch\"}. Sequencing: Use animus.workflow.get first to see pending gates; mirror of animus.workflow.phase.approve for the decline path.",
+        input_schema = ao_schema_for_type::<WorkflowPhaseRejectInput>()
+    )]
+    async fn ao_workflow_phase_reject(
+        &self,
+        params: Parameters<WorkflowPhaseRejectInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = build_workflow_phase_reject_args(&input);
+        self.run_tool("animus.workflow.phase.reject", args, input.project_root).await
+    }
 }
 
 fn push_workflow_run_pipeline_arg(args: &mut Vec<String>, workflow_ref: Option<String>) {
@@ -209,6 +223,20 @@ fn build_workflow_phase_approve_args(input: &WorkflowPhaseApproveInput) -> Vec<S
     args.push(input.phase_id.clone());
     push_opt(&mut args, "--note", input.feedback.clone());
     args
+}
+
+fn build_workflow_phase_reject_args(input: &WorkflowPhaseRejectInput) -> Vec<String> {
+    vec![
+        "workflow".to_string(),
+        "phase".to_string(),
+        "reject".to_string(),
+        "--id".to_string(),
+        input.workflow_id.clone(),
+        "--phase".to_string(),
+        input.phase_id.clone(),
+        "--note".to_string(),
+        input.reason.clone(),
+    ]
 }
 
 #[cfg(test)]
@@ -238,6 +266,33 @@ mod tests {
                 "review".to_string(),
                 "--note".to_string(),
                 "Approved".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_workflow_phase_reject_args_uses_cli_flags() {
+        let input = WorkflowPhaseRejectInput {
+            workflow_id: "wf-123".to_string(),
+            phase_id: "review".to_string(),
+            reason: "Spec mismatch".to_string(),
+            project_root: None,
+        };
+
+        let args = build_workflow_phase_reject_args(&input);
+
+        assert_eq!(
+            args,
+            vec![
+                "workflow".to_string(),
+                "phase".to_string(),
+                "reject".to_string(),
+                "--id".to_string(),
+                "wf-123".to_string(),
+                "--phase".to_string(),
+                "review".to_string(),
+                "--note".to_string(),
+                "Spec mismatch".to_string(),
             ]
         );
     }

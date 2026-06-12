@@ -7,14 +7,15 @@ For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.m
 
 ## Overview
 
-Animus currently exposes **83 built-in MCP tools** across these families:
+Animus currently exposes **86 built-in MCP tools** across these families:
 
 | Group | Tools | Purpose |
 |---|---:|---|
 | `animus.agent.*` | 12 | Agent profiles, runs, memory, agent messaging, and blocking human-in-the-loop questions/approvals |
-| `animus.daemon.*` | 11 | Daemon lifecycle, health, events, and config |
+| `animus.daemon.*` | 12 | Daemon lifecycle, health, events, config, and the `observe` observability front-door |
+| `animus.cost.*` | 1 | Budget-cap breach inspection from the scoped breach log |
 | `animus.subject.*` | 8 | Task, requirement, and external subject backends, including bulk create/update |
-| `animus.workflow.*` | 16 | Workflow execution, control, and definition inspection |
+| `animus.workflow.*` | 17 | Workflow execution, control (incl. gate approve/reject), and definition inspection |
 | `animus.queue.*` | 7 | Dispatch queue inspection and mutation |
 | `animus.output.*` | 6 | Run output, artifacts, JSONL, and live monitoring |
 | `animus.skill.*` | 5 | Skill discovery, inspection, and authoring at project or user scope |
@@ -25,7 +26,7 @@ Animus currently exposes **83 built-in MCP tools** across these families:
 | `animus.tools.*` | 2 | Tool discovery over the live registry: ranked keyword search plus a grouped one-line catalog |
 
 **Tool discovery.** When you are unsure which tool fits an intent — or your
-context budget is too tight to carry all 83 schemas — start with
+context budget is too tight to carry all 86 schemas — start with
 `animus.tools.search` (e.g. `{"query": "pause workflow"}`). It searches the
 server's live registry (tool names, descriptions, and parameter names), ranks
 matches (name hits outrank description hits outrank parameter hits; an exact

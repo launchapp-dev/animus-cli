@@ -1,6 +1,6 @@
 use super::{
     push_bool_flag, push_bool_set, push_opt, push_opt_num, push_opt_usize, DaemonConfigSetInput, DaemonEventsInput,
-    DaemonLogsInput, DaemonStartInput, DEFAULT_DAEMON_EVENTS_LIMIT, MAX_DAEMON_EVENTS_LIMIT,
+    DaemonLogsInput, DaemonObserveInput, DaemonStartInput, DEFAULT_DAEMON_EVENTS_LIMIT, MAX_DAEMON_EVENTS_LIMIT,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -38,6 +38,18 @@ pub(super) fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<
     if input.clear_notification_config {
         args.push("--clear-notification-config".to_string());
     }
+    args
+}
+
+/// Builds args for `daemon observe`. The MCP surface deliberately never sets
+/// `--follow`: it returns the merged window the CLI's non-streaming path
+/// produces, so the tool always terminates.
+pub(super) fn build_daemon_observe_args(input: &DaemonObserveInput) -> Vec<String> {
+    let mut args = vec!["daemon".to_string(), "observe".to_string()];
+    push_opt(&mut args, "--since", input.since.clone());
+    push_opt(&mut args, "--source", input.source.clone());
+    push_opt(&mut args, "--workflow", input.workflow_id.clone());
+    push_opt_usize(&mut args, "--limit", input.limit);
     args
 }
 
@@ -121,5 +133,43 @@ mod tests {
         assert!(args.contains(&"--notification-config-file".to_string()));
         assert!(args.contains(&".animus/notification-config.json".to_string()));
         assert!(args.contains(&"--clear-notification-config".to_string()));
+    }
+
+    #[test]
+    fn build_daemon_observe_args_defaults_minimal() {
+        let args = build_daemon_observe_args(&DaemonObserveInput::default());
+        assert_eq!(args, vec!["daemon".to_string(), "observe".to_string()]);
+        // Never streams: --follow must never appear.
+        assert!(!args.contains(&"--follow".to_string()));
+    }
+
+    #[test]
+    fn build_daemon_observe_args_wires_all_params_without_follow() {
+        let input = DaemonObserveInput {
+            since: Some("2h".to_string()),
+            source: Some("events".to_string()),
+            workflow_id: Some("wf-abc123".to_string()),
+            limit: Some(50),
+            project_root: Some("/repo".to_string()),
+        };
+
+        let args = build_daemon_observe_args(&input);
+
+        assert_eq!(
+            args,
+            vec![
+                "daemon".to_string(),
+                "observe".to_string(),
+                "--since".to_string(),
+                "2h".to_string(),
+                "--source".to_string(),
+                "events".to_string(),
+                "--workflow".to_string(),
+                "wf-abc123".to_string(),
+                "--limit".to_string(),
+                "50".to_string(),
+            ]
+        );
+        assert!(!args.contains(&"--follow".to_string()));
     }
 }
