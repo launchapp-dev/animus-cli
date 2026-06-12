@@ -62,6 +62,7 @@ pub use phase_output::{
     phase_output_dir, read_persisted_decision, write_phase_completion_marker, PersistedDecisionReadError,
     PersistedPhaseOutput, PhaseCompletionMarker,
 };
+pub use phase_prompt::{apply_skill_prompt_to_body, merge_skill_system_prompt, skill_directives_section};
 pub use phase_prompt::{
     build_phase_prompt, phase_requires_commit_message, phase_requires_commit_message_with_config,
     phase_requires_commit_message_with_ctx, phase_result_kind_for_ctx, render_phase_prompt,

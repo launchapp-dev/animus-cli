@@ -40,8 +40,11 @@ use std::sync::Arc;
 use animus_session_backend::session::{SessionEvent, SessionRequest, SessionRun};
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
+use orchestrator_config::skill_definition::SkillApplicationResult;
 use orchestrator_plugin_host::session::SessionBackendResolver;
 use serde_json::{json, Value};
+
+use crate::services::runtime::runtime_agent::provider_client::{graft_skill_launch_contract, skill_has_launch_extras};
 
 use super::sink::{ChatStreamEvent, ChatStreamSink};
 use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationStore, TurnBlock};
@@ -173,6 +176,16 @@ pub(crate) struct TurnContext<'a> {
     /// `extras.runtime_contract` so the provider wires the profile/skill-
     /// scoped MCP servers. `None` when the tool cannot speak MCP.
     pub mcp_contract: Option<&'a Value>,
+    /// The `--skill`'s full application for this conversation, resolved ONCE
+    /// per `animus chat send` invocation (the same lifecycle as
+    /// `mcp_contract`) and applied to every attempt within the turn: prompt
+    /// prefixes/suffixes/directives wrap the outgoing prompt, system-prompt
+    /// fragments ride `extras.system_prompt`, env rides
+    /// `SessionRequest.env_vars`, and launch-affecting fields
+    /// (`extra_args` / `codex_config_overrides` / `env`) are grafted onto the
+    /// runtime contract's `cli.launch` block. `None` when no `--skill` is
+    /// selected or the skill application is empty.
+    pub skill: Option<&'a SkillApplicationResult>,
 }
 
 /// Run a single conversation turn.
@@ -243,7 +256,13 @@ pub(crate) async fn run_turn(
     // message-only prompt would silently drop all prior context, so its only
     // continuity is Animus's full-history replay (codex round-4 P2).
     let tool_unchanged = meta.tool.as_deref() == Some(ctx.tool);
-    let can_resume = meta.session_id.is_some() && tool_unchanged && producer.supports_resume(ctx.tool);
+    // A skill with launch-affecting fields (extra_args / codex overrides /
+    // env) needs a grafted `cli.launch` block on EVERY turn's contract, and a
+    // grafted launch carries no native resume args — so such skills force the
+    // full-history replay path for consistent per-process behavior.
+    let skill_forces_replay = ctx.skill.is_some_and(skill_has_launch_extras);
+    let can_resume =
+        meta.session_id.is_some() && tool_unchanged && producer.supports_resume(ctx.tool) && !skill_forces_replay;
 
     // History to replay in mode 2: every turn EXCEPT the user message we
     // just appended (which goes in as the prompt's trailing "User:" line).
@@ -362,6 +381,24 @@ async fn drive_once(
         (render_history_prompt(prior_history, ctx.user_message), Value::Object(Default::default()), None)
     };
 
+    // Skill prompt fragments wrap EVERY turn's outgoing prompt (each turn is
+    // an independent provider process): prefixes, "Skill directives:"
+    // section, the turn body, suffixes — same ordering as workflow phases.
+    let prompt = match ctx.skill {
+        Some(skill) => animus_runtime_shared::apply_skill_prompt_to_body(&prompt, skill),
+        None => prompt,
+    };
+
+    // Skill system-prompt fragments ride `extras.system_prompt` on every
+    // turn (chat has no explicit system-prompt flag to merge with).
+    if let Some(skill) = ctx.skill {
+        if let Value::Object(map) = &mut extras {
+            if let Some(merged) = animus_runtime_shared::merge_skill_system_prompt(None, skill) {
+                map.insert("system_prompt".to_string(), Value::String(merged));
+            }
+        }
+    }
+
     // Provider reasoning/thinking effort rides on extras for the transport
     // to map to its own flag; applies to both the resume and replay paths.
     if let Some(level) = ctx.reasoning_effort {
@@ -382,20 +419,47 @@ async fn drive_once(
     // Per-agent MCP runtime contract rides on extras.runtime_contract so the
     // provider plugin wires the profile/skill-scoped MCP servers. Applies to
     // both the resume and replay paths so tool access is consistent across a
-    // conversation.
-    if let Some(contract) = ctx.mcp_contract {
+    // conversation. A skill with launch-affecting fields additionally grafts
+    // a `cli.launch` block built from this turn's final prompt (the same
+    // mechanism the workflow path uses); `run_turn` already forced the
+    // replay path for such skills, so a grafted launch never has to carry
+    // native resume args.
+    let mut contract = ctx.mcp_contract.cloned();
+    if let Some(skill) = ctx.skill {
+        if skill_has_launch_extras(skill) {
+            if let Some(grafted) = graft_skill_launch_contract(
+                contract.as_ref(),
+                ctx.tool,
+                ctx.model,
+                &prompt,
+                ctx.permission_mode,
+                ctx.reasoning_effort,
+                skill,
+            ) {
+                contract = Some(grafted);
+            }
+        }
+    }
+    if let Some(contract) = contract {
         if let Value::Object(map) = &mut extras {
-            map.insert("runtime_contract".to_string(), contract.clone());
             // Mirror the SAME resolved per-agent set onto the
             // plugin-protocol `mcp_servers` channel (forwarded verbatim to
             // the provider as `AgentRunRequest.mcp_servers`); an empty
             // resolved set populates nothing.
-            let servers = crate::services::runtime::agent_mcp::contract_mcp_servers_for_wire(contract);
+            let servers = crate::services::runtime::agent_mcp::contract_mcp_servers_for_wire(&contract);
             if !servers.is_empty() {
                 map.insert("mcp_servers".to_string(), Value::Object(servers));
             }
+            map.insert("runtime_contract".to_string(), contract);
         }
     }
+
+    // Skill env rides `SessionRequest.env_vars`; the plugin host still gates
+    // the forwarded env against the provider plugin's manifest.
+    let env_vars: Vec<(String, String)> = ctx
+        .skill
+        .map(|skill| skill.env.iter().map(|(key, value)| (key.clone(), value.clone())).collect())
+        .unwrap_or_default();
 
     let request = SessionRequest {
         tool: ctx.tool.to_string(),
@@ -405,8 +469,10 @@ async fn drive_once(
         project_root: Some(ctx.project_root.clone()),
         mcp_endpoint: None,
         permission_mode: ctx.permission_mode.map(ToOwned::to_owned),
-        timeout_secs: None,
-        env_vars: Vec::new(),
+        // Chat has no explicit timeout flag; the skill's `timeout_secs`
+        // preference applies when declared.
+        timeout_secs: ctx.skill.and_then(|skill| skill.timeout_secs),
+        env_vars,
         extras,
     };
 
@@ -741,6 +807,7 @@ mod tests {
             permission_mode: None,
             approvals: false,
             mcp_contract: None,
+            skill: None,
         }
     }
 
@@ -1170,6 +1237,7 @@ mod tests {
                                 permission_mode: None,
                                 approvals: false,
                                 mcp_contract: None,
+                                skill: None,
                             },
                         ))
                         .expect("concurrent send turn")
@@ -1215,6 +1283,104 @@ mod tests {
         // The continuity pointer survives so the next turn can still resume.
         let meta = store.load_meta("c1").unwrap().unwrap();
         assert_eq!(meta.session_id.as_deref(), Some("sess-1"), "session pointer must survive a dead stream");
+    }
+
+    fn prompt_skill() -> SkillApplicationResult {
+        SkillApplicationResult {
+            system_prompt_fragments: vec!["You are skill-guided.".to_string()],
+            prompt_prefixes: vec!["PREFIX-TEXT".to_string()],
+            ..Default::default()
+        }
+    }
+
+    fn launch_skill() -> SkillApplicationResult {
+        SkillApplicationResult {
+            extra_args: vec!["--strict-mcp-config".to_string()],
+            env: std::collections::BTreeMap::from([("SKILL_MODE".to_string(), "on".to_string())]),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_prompt_and_system_prompt_apply_on_every_turn_without_breaking_resume() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), text_turn("a2", "sess-1")]);
+        let skill = prompt_skill();
+
+        let mut sink = CapturingSink::new();
+        let first = TurnContext { skill: Some(&skill), ..ctx("c1", "claude", "q1", &tmp) };
+        run_turn(&producer, &store, &mut sink, first).await.unwrap();
+        let mut sink2 = CapturingSink::new();
+        let second = TurnContext { skill: Some(&skill), ..ctx("c1", "claude", "q2", &tmp) };
+        run_turn(&producer, &store, &mut sink2, second).await.unwrap();
+
+        let reqs = producer.requests();
+        assert_eq!(reqs.len(), 2);
+        for (index, request) in reqs.iter().enumerate() {
+            assert!(
+                request.prompt.starts_with("PREFIX-TEXT\n\n"),
+                "turn {index} prompt must carry the skill prefix; prompt: {}",
+                request.prompt
+            );
+            assert_eq!(
+                request.extras.pointer("/system_prompt").and_then(Value::as_str),
+                Some("You are skill-guided."),
+                "turn {index} must carry the skill system prompt"
+            );
+        }
+        // A prompt-only skill does NOT disturb continuity: the second turn
+        // still resumes with the (wrapped) new message only.
+        assert_eq!(producer.resume_ids()[1].as_deref(), Some("sess-1"));
+        assert!(reqs[1].prompt.ends_with("q2"), "resumed prompt is the wrapped message only: {}", reqs[1].prompt);
+        assert!(!reqs[1].prompt.contains("q1"), "resumed prompt must not replay history");
+    }
+
+    #[tokio::test]
+    async fn launch_affecting_skill_forces_replay_and_grafts_the_launch_contract() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), text_turn("a2", "sess-1")]);
+        let skill = launch_skill();
+
+        let mut sink = CapturingSink::new();
+        let first = TurnContext { skill: Some(&skill), ..ctx("c1", "claude", "q1", &tmp) };
+        run_turn(&producer, &store, &mut sink, first).await.unwrap();
+        let mut sink2 = CapturingSink::new();
+        let second = TurnContext { skill: Some(&skill), ..ctx("c1", "claude", "q2", &tmp) };
+        run_turn(&producer, &store, &mut sink2, second).await.unwrap();
+
+        let reqs = producer.requests();
+        assert_eq!(reqs.len(), 2);
+        for (index, request) in reqs.iter().enumerate() {
+            let args: Vec<&str> = request
+                .extras
+                .pointer("/runtime_contract/cli/launch/args")
+                .and_then(Value::as_array)
+                .unwrap_or_else(|| panic!("turn {index} must graft cli.launch; extras: {}", request.extras))
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert!(args.contains(&"--strict-mcp-config"), "turn {index} launch args: {args:?}");
+            assert_eq!(args.last().copied(), Some(request.prompt.as_str()), "launch carries this turn's prompt");
+            assert_eq!(
+                request.env_vars,
+                vec![("SKILL_MODE".to_string(), "on".to_string())],
+                "turn {index} must carry the skill env"
+            );
+        }
+        // Launch-affecting skills force the replay path: no resume seam, no
+        // extras.session_id, full history in the second turn's prompt.
+        assert_eq!(producer.resume_ids()[1], None, "launch-affecting skill must not resume");
+        assert!(reqs[1].extras.get("session_id").is_none());
+        assert!(reqs[1].prompt.contains("User: q1"), "second turn must replay history: {}", reqs[1].prompt);
+        let resumed = sink2.events.iter().find_map(|e| match e {
+            ChatStreamEvent::TurnStarted { resumed, .. } => Some(*resumed),
+            _ => None,
+        });
+        assert_eq!(resumed, Some(false));
     }
 
     #[tokio::test]

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 
 use animus_session_backend::session::{SessionEvent, SessionRequest, SessionRun};
 use anyhow::{anyhow, Result};
+use orchestrator_config::skill_definition::SkillApplicationResult;
 use orchestrator_plugin_host::session::{discover_provider_plugins, SessionBackendResolver};
 use protocol::{
     AgentRunEvent, ArtifactInfo, ArtifactType, OutputStreamType, RunId, Timestamp, TokenUsage, ToolCallInfo,
@@ -81,7 +82,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
     let canonical_cwd = canonicalize_cwd_in_project(&raw_cwd, project_root)?;
     let cwd = PathBuf::from(canonical_cwd);
 
-    let prompt = args.prompt.clone().or_else(|| context_str(context_object.as_ref(), "prompt")).unwrap_or_default();
+    let mut prompt = args.prompt.clone().or_else(|| context_str(context_object.as_ref(), "prompt")).unwrap_or_default();
     let timeout_secs = args.timeout_secs.or_else(|| context_u64(context_object.as_ref(), "timeout_secs"));
 
     let mut extras = serde_json::Map::new();
@@ -168,26 +169,47 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         .or_else(|| context_str(context_object.as_ref(), "tool"))
         .unwrap_or_else(|| args.tool.clone());
 
+    // Resolve the agent/skill scope once (the same resolution feeds the MCP
+    // contract assembly AND the full skill application). Skipped entirely
+    // when the caller supplied a runtime_contract — a hand-built contract is
+    // the expert full-override channel, so skill application is disabled.
+    let scope = if runtime_contract_value.is_none() {
+        Some(crate::services::runtime::agent_mcp::resolve_agent_scope(
+            &project_root_path,
+            &tool,
+            args.agent.as_deref(),
+            args.skill.as_deref(),
+        )?)
+    } else {
+        None
+    };
+    let skill_application =
+        scope.as_ref().and_then(|scope| scope.skill_application.as_ref()).filter(|skill| !skill.is_empty());
+
+    // Model / timeout precedence: explicit flag > context-json > skill
+    // preference > compiled default.
     let model = args
         .model
         .clone()
         .or_else(|| context_str(context_object.as_ref(), "model"))
+        .or_else(|| skill_application.and_then(|skill| skill.model.clone()))
         .unwrap_or_else(|| protocol::default_model_for_tool(&tool).unwrap_or("claude-sonnet-4-6").to_string());
+    let timeout_secs = timeout_secs.or_else(|| skill_application.and_then(|skill| skill.timeout_secs));
+
+    // Skill env entries the run forwards via `SessionRequest.env_vars`.
+    // Explicit caller env always wins on collision (today the ad-hoc path
+    // supplies no caller env, but the guard keeps the precedence rule
+    // load-bearing if a channel is added).
+    let mut env_vars: Vec<(String, String)> = Vec::new();
 
     // When the caller did NOT supply a runtime_contract (neither
     // `--runtime-contract-json` nor a `runtime_contract` key in
     // `--context-json`), assemble one from the agent's profile/skill MCP
     // servers so an ad-hoc `animus agent run` agent sees the MCP servers its
     // profile/skill declares. A caller-supplied contract is never clobbered.
-    if runtime_contract_value.is_none() {
-        let scope = crate::services::runtime::agent_mcp::resolve_agent_scope(
-            &project_root_path,
-            &tool,
-            args.agent.as_deref(),
-            args.skill.as_deref(),
-        )?;
+    if let Some(scope) = scope.as_ref() {
         let scope_selected = args.agent.is_some() || args.skill.is_some();
-        if let Some(contract) = crate::services::runtime::agent_mcp::assemble_agent_mcp_contract(
+        let mut contract = crate::services::runtime::agent_mcp::assemble_agent_mcp_contract(
             &project_root_path,
             &tool,
             &model,
@@ -198,7 +220,60 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
             scope_selected,
             args.no_animus_mcp,
             args.agent.as_deref(),
-        )? {
+        )?;
+
+        // Apply the REST of the resolved skill (its MCP servers + tool
+        // policy already rode the contract assembly above, and its model /
+        // timeout preferences fed the precedence chain earlier): prompt
+        // fragments, system-prompt fragments, env, and launch-affecting
+        // fields (extra_args / codex_config_overrides). Precedence for every
+        // field: explicit CLI flag / context-json value > skill > defaults.
+        if let Some(skill) = skill_application {
+            // Prompt body: prefixes, "Skill directives:" section, body,
+            // suffixes — the same ordering the workflow phase renderer uses.
+            prompt = animus_runtime_shared::apply_skill_prompt_to_body(&prompt, skill);
+
+            // System prompt: an explicit `--context-json system_prompt`
+            // comes FIRST, then the skill's fragments (matching the
+            // workflow renderer where the configured system prompt precedes
+            // skill fragments).
+            let explicit_system_prompt = extras.get("system_prompt").and_then(Value::as_str).map(ToOwned::to_owned);
+            if let Some(merged) =
+                animus_runtime_shared::merge_skill_system_prompt(explicit_system_prompt.as_deref(), skill)
+            {
+                extras.insert("system_prompt".to_string(), Value::String(merged));
+            }
+
+            // Skill env → `SessionRequest.env_vars`. Note the plugin host
+            // still gates the forwarded env against the provider plugin's
+            // manifest `env_required` (same gate the workflow path's
+            // launch-env channel passes through).
+            for (key, value) in &skill.env {
+                if !env_vars.iter().any(|(existing, _)| existing == key) {
+                    env_vars.push((key.clone(), value.clone()));
+                }
+            }
+
+            // Launch-affecting fields ride the SAME mechanism the workflow
+            // path uses: `runtime_contract.cli.launch`. The launch block is
+            // grafted ONLY when the skill actually declares such fields, so
+            // runs without them keep the provider's own launch behavior.
+            if skill_has_launch_extras(skill) {
+                if let Some(grafted) = graft_skill_launch_contract(
+                    contract.as_ref(),
+                    &tool,
+                    &model,
+                    &prompt,
+                    permission_mode.as_deref(),
+                    extras.get("reasoning_effort").and_then(Value::as_str),
+                    skill,
+                ) {
+                    contract = Some(grafted);
+                }
+            }
+        }
+
+        if let Some(contract) = contract {
             // Provider CLIs that auto-discover a cwd-local `.mcp.json`
             // (claude-code) register MCP servers from that file rather than
             // the runtime contract, so materialize the per-agent set there
@@ -230,9 +305,111 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         mcp_endpoint: None,
         permission_mode,
         timeout_secs,
-        env_vars: Vec::new(),
+        env_vars,
         extras: Value::Object(extras),
     })
+}
+
+/// Whether a skill application carries launch-affecting fields that require
+/// a `runtime_contract.cli.launch` block on the ad-hoc paths: `extra_args`,
+/// `codex_config_overrides`, or launch `env`.
+pub(crate) fn skill_has_launch_extras(skill: &SkillApplicationResult) -> bool {
+    !skill.extra_args.is_empty() || !skill.codex_config_overrides.is_empty() || !skill.env.is_empty()
+}
+
+/// Graft a `cli.launch` block carrying the skill's launch-affecting fields
+/// onto an assembled ad-hoc runtime contract.
+///
+/// The ad-hoc contract assembler deliberately strips `cli.launch` (it is
+/// built from an empty placeholder prompt), letting the provider transport
+/// drive its own launch from the request. Skills that declare `extra_args`,
+/// `codex_config_overrides`, or `env` need the workflow path's mechanism —
+/// the provider consumes `runtime_contract.cli.launch` wholesale — so this
+/// rebuilds the launch block from the REAL final prompt and injects the
+/// skill fields via the same `animus-runtime-shared` helpers the workflow
+/// runner uses. Because a contract launch replaces the transport's own
+/// argv assembly, the explicit `--permission-mode` and codex
+/// `--reasoning-effort` values are re-applied here so CLI flags keep winning
+/// over the skill.
+///
+/// Returns `None` when no launch contract can be built for `tool` (unknown
+/// tool); the caller keeps the un-grafted contract in that case.
+pub(crate) fn graft_skill_launch_contract(
+    base_contract: Option<&Value>,
+    tool: &str,
+    model: &str,
+    final_prompt: &str,
+    permission_mode: Option<&str>,
+    reasoning_effort: Option<&str>,
+    skill: &SkillApplicationResult,
+) -> Option<Value> {
+    let built = animus_runtime_shared::build_runtime_contract(tool, model, final_prompt)?;
+    let launch = built.pointer("/cli/launch")?.clone();
+    let mut contract = base_contract.cloned().unwrap_or(built);
+    {
+        let cli = contract.get_mut("cli").and_then(Value::as_object_mut)?;
+        cli.insert("launch".to_string(), launch);
+    }
+    // Skill fields first (workflow injection order: codex config overrides,
+    // then extra args, then launch env)...
+    animus_runtime_shared::inject_codex_config_overrides_list(&mut contract, tool, &skill.codex_config_overrides);
+    animus_runtime_shared::inject_cli_extra_args_list(&mut contract, &skill.extra_args);
+    animus_runtime_shared::inject_cli_launch_env(&mut contract, &skill.env);
+    // ...then the EXPLICIT flags, applied last with replace semantics so a
+    // skill override on the same key (e.g. `approval_policy` or
+    // `model_reasoning_effort`) cannot invert the documented
+    // CLI-flag-over-skill precedence.
+    apply_permission_mode_to_launch(&mut contract, tool, permission_mode);
+    if let Some(effort) = reasoning_effort.map(str::trim).filter(|effort| !effort.is_empty()) {
+        animus_runtime_shared::inject_codex_config_overrides_list(
+            &mut contract,
+            tool,
+            &[format!("model_reasoning_effort={}", effort.to_ascii_lowercase())],
+        );
+    }
+    Some(contract)
+}
+
+/// Re-apply an explicit permission mode onto a grafted launch block so the
+/// CLI flag keeps winning once the transport's own argv assembly (which maps
+/// `SessionRequest.permission_mode`) is replaced by the contract launch.
+/// claude: swap the default `--dangerously-skip-permissions` for
+/// `--permission-mode <mode>`; codex: upsert `-c approval_policy="<mode>"`.
+/// Other tools pass through (their transports do not map a mode flag today).
+fn apply_permission_mode_to_launch(contract: &mut Value, tool: &str, permission_mode: Option<&str>) {
+    let Some(mode) = permission_mode.map(str::trim).filter(|mode| !mode.is_empty()) else {
+        return;
+    };
+    match tool.trim().to_ascii_lowercase().as_str() {
+        "claude" => {
+            if let Some(args) = contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
+                // The explicit mode replaces the skip-permissions default
+                // (including a duplicate a skill's extra_args may have added).
+                args.retain(|arg| arg.as_str() != Some("--dangerously-skip-permissions"));
+                if let Some(pos) = args.iter().position(|arg| arg.as_str() == Some("--permission-mode")) {
+                    // A skill's extra_args may have injected its own mode —
+                    // overwrite the value so explicit > skill holds.
+                    if pos + 1 < args.len() {
+                        args[pos + 1] = Value::String(mode.to_string());
+                    } else {
+                        args.push(Value::String(mode.to_string()));
+                    }
+                } else {
+                    let insert_at = 1.min(args.len());
+                    args.insert(insert_at, Value::String("--permission-mode".to_string()));
+                    args.insert(insert_at + 1, Value::String(mode.to_string()));
+                }
+            }
+        }
+        "codex" => {
+            animus_runtime_shared::inject_codex_config_overrides_list(
+                contract,
+                "codex",
+                &[format!("approval_policy=\"{mode}\"")],
+            );
+        }
+        _ => {}
+    }
 }
 
 /// Resolve the `permission_mode` declared on an agent profile. Reads the
@@ -429,7 +606,9 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::test_env_lock;
     use crate::AgentRunArgs;
+    use protocol::test_utils::EnvVarGuard;
 
     fn base_args(project_root: &str) -> AgentRunArgs {
         AgentRunArgs {
@@ -802,6 +981,278 @@ agents:
             Some(true),
             "an --agent profile with an approval_policy must set extras.approvals"
         );
+    }
+
+    /// Write a project-scoped standalone skill definition named `test-skill`.
+    fn write_test_skill(root: &Path, yaml: &str) {
+        let dir = root.join(".animus").join("config").join("skill_definitions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("test-skill.yaml"), yaml).unwrap();
+    }
+
+    const PROMPT_SKILL_YAML: &str = r#"
+name: test-skill
+prompt:
+  system: You are skill-guided.
+  prefix: PREFIX-TEXT
+  suffix: SUFFIX-TEXT
+  directives:
+    - Directive one
+"#;
+
+    const LAUNCH_SKILL_YAML: &str = r#"
+name: test-skill
+extra_args:
+  - "--strict-mcp-config"
+env:
+  SKILL_MODE: "on"
+"#;
+
+    const CODEX_OVERRIDE_SKILL_YAML: &str = r#"
+name: test-skill
+codex_config_overrides:
+  - model_reasoning_effort="high"
+"#;
+
+    /// Build a request for a tmp project that has `test-skill` defined,
+    /// pinning HOME so user-scoped skill dirs under `~` never leak in.
+    fn request_with_skill(yaml: &str, mutate: impl FnOnce(&mut AgentRunArgs)) -> SessionRequest {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set("HOME", Some(tmp.path().to_string_lossy().as_ref()));
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+        write_test_skill(&root, yaml);
+
+        let mut args = base_args(&root_str);
+        args.skill = Some("test-skill".to_string());
+        mutate(&mut args);
+        session_request_from_args(&args, &root_str).expect("request builds")
+    }
+
+    #[test]
+    fn skill_prompt_fragments_wrap_the_prompt_and_set_the_system_prompt() {
+        let request = request_with_skill(PROMPT_SKILL_YAML, |_| {});
+        assert_eq!(request.prompt, "PREFIX-TEXT\n\nSkill directives:\n- Directive one\n\nhi\n\nSUFFIX-TEXT");
+        assert_eq!(
+            request.extras.pointer("/system_prompt").and_then(Value::as_str),
+            Some("You are skill-guided."),
+            "skill system fragment must ride extras.system_prompt; extras: {}",
+            request.extras
+        );
+        // Prompt-only skills do NOT graft a launch block — the provider keeps
+        // its own launch behavior.
+        if let Some(contract) = request.extras.pointer("/runtime_contract") {
+            assert!(contract.pointer("/cli/launch").is_none(), "prompt-only skill must not graft cli.launch");
+        }
+        assert!(request.env_vars.is_empty(), "prompt-only skill contributes no env");
+    }
+
+    #[test]
+    fn explicit_context_json_system_prompt_precedes_the_skill_fragment() {
+        let request = request_with_skill(PROMPT_SKILL_YAML, |args| {
+            args.context_json = Some(r#"{"system_prompt":"EXPLICIT"}"#.to_string());
+        });
+        assert_eq!(
+            request.extras.pointer("/system_prompt").and_then(Value::as_str),
+            Some("EXPLICIT\n\nYou are skill-guided."),
+            "the explicit context-json system_prompt must come FIRST; extras: {}",
+            request.extras
+        );
+    }
+
+    #[test]
+    fn skill_extra_args_and_env_are_grafted_onto_the_launch_contract() {
+        let request = request_with_skill(LAUNCH_SKILL_YAML, |_| {});
+        let contract = request.extras.pointer("/runtime_contract").expect("contract assembled");
+        let args: Vec<&str> = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch-affecting skill must graft cli.launch")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        let prompt_pos = args.iter().position(|a| *a == request.prompt).expect("launch carries the final prompt");
+        let extra_pos = args.iter().position(|a| *a == "--strict-mcp-config").expect("skill extra arg present");
+        assert!(extra_pos < prompt_pos, "extra args insert before the trailing prompt; args: {args:?}");
+        assert_eq!(
+            contract.pointer("/cli/launch/env/SKILL_MODE").and_then(Value::as_str),
+            Some("on"),
+            "skill env must ride cli.launch.env; contract: {contract}"
+        );
+        assert_eq!(
+            request.env_vars,
+            vec![("SKILL_MODE".to_string(), "on".to_string())],
+            "skill env must also ride SessionRequest.env_vars"
+        );
+    }
+
+    #[test]
+    fn skill_codex_overrides_apply_to_codex_and_not_to_claude() {
+        let codex_request = request_with_skill(CODEX_OVERRIDE_SKILL_YAML, |args| {
+            args.tool = "codex".to_string();
+            args.model = Some("gpt-5.2-codex".to_string());
+        });
+        let codex_args: Vec<String> = codex_request
+            .extras
+            .pointer("/runtime_contract/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("codex skill must graft cli.launch")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect();
+        assert!(
+            codex_args.iter().any(|a| a == "model_reasoning_effort=\"high\""),
+            "codex override must land in launch args: {codex_args:?}"
+        );
+
+        let claude_request = request_with_skill(CODEX_OVERRIDE_SKILL_YAML, |_| {});
+        let claude_args: Vec<String> = claude_request
+            .extras
+            .pointer("/runtime_contract/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch grafted (codex_config_overrides is launch-affecting)")
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect();
+        assert!(
+            !claude_args.iter().any(|a| a.contains("model_reasoning_effort")),
+            "codex overrides are codex-gated; claude args: {claude_args:?}"
+        );
+    }
+
+    const MODEL_SKILL_YAML: &str = r#"
+name: test-skill
+model:
+  preferred: claude-opus-4-1
+timeout_secs: 900
+"#;
+
+    #[test]
+    fn skill_model_and_timeout_apply_when_no_explicit_values_are_given() {
+        let request = request_with_skill(MODEL_SKILL_YAML, |args| {
+            args.model = None;
+            args.timeout_secs = None;
+        });
+        assert_eq!(request.model, "claude-opus-4-1", "skill model preference must beat the compiled default");
+        assert_eq!(request.timeout_secs, Some(900), "skill timeout_secs must apply when no flag is given");
+    }
+
+    #[test]
+    fn explicit_model_and_timeout_win_over_the_skill_preference() {
+        let request = request_with_skill(MODEL_SKILL_YAML, |args| {
+            args.model = Some("claude-sonnet-4-6".to_string());
+            args.timeout_secs = Some(60);
+        });
+        assert_eq!(request.model, "claude-sonnet-4-6");
+        assert_eq!(request.timeout_secs, Some(60));
+    }
+
+    #[test]
+    fn explicit_reasoning_effort_wins_over_a_skill_codex_override() {
+        let yaml = r#"
+name: test-skill
+codex_config_overrides:
+  - model_reasoning_effort="low"
+"#;
+        let request = request_with_skill(yaml, |args| {
+            args.tool = "codex".to_string();
+            args.model = Some("gpt-5.2-codex".to_string());
+            args.reasoning_effort = Some(crate::cli_types::ReasoningEffortArg::High);
+        });
+        let args: Vec<&str> = request
+            .extras
+            .pointer("/runtime_contract/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch grafted")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            args.contains(&"model_reasoning_effort=high"),
+            "explicit --reasoning-effort must replace the skill's override: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|a| a.contains("model_reasoning_effort=\"low\"")),
+            "the skill's conflicting override must be replaced: {args:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_permission_mode_survives_the_skill_launch_graft() {
+        let request = request_with_skill(LAUNCH_SKILL_YAML, |args| {
+            args.permission_mode = Some("plan".to_string());
+        });
+        let args: Vec<&str> = request
+            .extras
+            .pointer("/runtime_contract/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch grafted")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        let mode_pos = args.iter().position(|a| *a == "--permission-mode").expect("explicit mode must survive");
+        assert_eq!(args.get(mode_pos + 1).copied(), Some("plan"));
+        assert!(
+            !args.contains(&"--dangerously-skip-permissions"),
+            "--permission-mode replaces the skip-permissions default; args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn explicit_permission_mode_overwrites_a_skill_supplied_mode_in_extra_args() {
+        let yaml = r#"
+name: test-skill
+extra_args:
+  - "--permission-mode"
+  - acceptEdits
+"#;
+        let request = request_with_skill(yaml, |args| {
+            args.permission_mode = Some("plan".to_string());
+        });
+        let args: Vec<&str> = request
+            .extras
+            .pointer("/runtime_contract/cli/launch/args")
+            .and_then(Value::as_array)
+            .expect("launch grafted")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        let mode_positions: Vec<usize> =
+            args.iter().enumerate().filter(|(_, a)| **a == "--permission-mode").map(|(i, _)| i).collect();
+        assert_eq!(mode_positions.len(), 1, "exactly one --permission-mode flag; args: {args:?}");
+        assert_eq!(args.get(mode_positions[0] + 1).copied(), Some("plan"), "explicit mode must win; args: {args:?}");
+        assert!(!args.contains(&"acceptEdits"), "the skill's mode value must be replaced; args: {args:?}");
+        assert!(!args.contains(&"--dangerously-skip-permissions"), "no skip-permissions default; args: {args:?}");
+    }
+
+    #[test]
+    fn caller_supplied_runtime_contract_disables_skill_application() {
+        let request = request_with_skill(PROMPT_SKILL_YAML, |args| {
+            args.runtime_contract_json = Some(r#"{"cli":{"name":"claude"},"mcp":{}}"#.to_string());
+        });
+        assert_eq!(request.prompt, "hi", "a caller-supplied contract is a full override; skill prompt must not apply");
+        assert!(request.extras.pointer("/system_prompt").is_none());
+        assert!(request.env_vars.is_empty());
+    }
+
+    #[test]
+    fn no_skill_run_is_a_noop_for_prompt_system_prompt_and_env() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set("HOME", Some(tmp.path().to_string_lossy().as_ref()));
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+
+        let args = base_args(&root_str);
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        assert_eq!(request.prompt, "hi");
+        assert!(request.extras.pointer("/system_prompt").is_none());
+        assert!(request.env_vars.is_empty());
+        let contract = request.extras.pointer("/runtime_contract").expect("contract assembled");
+        assert!(contract.pointer("/cli/launch").is_none(), "no skill → launch stays stripped");
     }
 
     #[test]

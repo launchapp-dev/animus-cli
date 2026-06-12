@@ -533,6 +533,12 @@ pub(crate) struct ResolvedAgentScope {
     /// an ad-hoc agent honors the same MCP tool restrictions a workflow run
     /// would (e.g. a profile that denies `animus.daemon.stop`).
     pub(crate) tool_policy: orchestrator_config::agent_runtime_config::AgentToolPolicy,
+    /// The FULL skill application for the selected `--skill` (prompt
+    /// fragments, extra_args, env, codex_config_overrides, ...). `None` when
+    /// no `--skill` is given. The MCP servers and tool policy above are
+    /// extracted from this same application; callers consume the remaining
+    /// fields to apply the skill on the ad-hoc paths without resolving twice.
+    pub(crate) skill_application: Option<orchestrator_config::skill_definition::SkillApplicationResult>,
 }
 
 /// Resolve the MCP server names that an `--agent` profile and `--skill`
@@ -597,6 +603,7 @@ pub(crate) fn resolve_agent_scope(
         None => Vec::new(),
     };
 
+    let mut skill_application = None;
     let skill_servers = match skill {
         Some(skill_name) => {
             let resolved = orchestrator_config::skill_resolution::resolve_skills_for_project(
@@ -609,11 +616,13 @@ pub(crate) fn resolve_agent_scope(
                 // tool_policy are merged with the skill's top-level values.
                 Some(skill) => {
                     let applied = orchestrator_config::skill_definition::apply_skill_for_tool(&skill.definition, tool);
-                    if let Some(policy) = applied.tool_policy {
+                    if let Some(policy) = applied.tool_policy.clone() {
                         tool_policy.allow.extend(policy.allow);
                         tool_policy.deny.extend(policy.deny);
                     }
-                    applied.mcp_servers
+                    let servers = applied.mcp_servers.clone();
+                    skill_application = Some(applied);
+                    servers
                 }
                 None => Vec::new(),
             }
@@ -628,7 +637,7 @@ pub(crate) fn resolve_agent_scope(
     tool_policy.deny.sort();
     tool_policy.deny.dedup();
 
-    Ok(ResolvedAgentScope { profile_servers, skill_servers, tool_policy })
+    Ok(ResolvedAgentScope { profile_servers, skill_servers, tool_policy, skill_application })
 }
 
 /// Build the de-duplicated, ordered-by-name set of MCP server names for an

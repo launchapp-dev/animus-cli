@@ -292,9 +292,26 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         eprintln!("conversation: {conversation_id}");
     }
 
+    // Resolve the per-agent MCP server set (profile ∪ skill ∪ --mcp-server
+    // additions − the built-in animus when --no-animus-mcp) ONCE for this
+    // send invocation. The same resolution also carries the skill's full
+    // application (prompt fragments, env, extra_args, model preference, ...).
+    let scope = crate::services::runtime::agent_mcp::resolve_agent_scope(
+        &project_root_path,
+        &args.tool,
+        args.agent.as_deref(),
+        args.skill.as_deref(),
+    )?;
+    // The skill's FULL application binds to this `chat send` invocation and
+    // is applied per turn by the turn loop (same lifecycle as the MCP
+    // contract below).
+    let skill_application = scope.skill_application.as_ref().filter(|skill| !skill.is_empty());
+
+    // Model precedence: explicit --model > skill preference > compiled default.
     let model = args
         .model
         .clone()
+        .or_else(|| skill_application.and_then(|skill| skill.model.clone()))
         .unwrap_or_else(|| protocol::default_model_for_tool(&args.tool).unwrap_or("claude-sonnet-4-6").to_string());
 
     let raw_cwd = args.cwd.clone().unwrap_or_else(|| project_root.to_string());
@@ -324,17 +341,9 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
 
     let producer = ResolverTurnProducer::for_project(&project_root_path);
 
-    // Resolve the per-agent MCP server set (profile ∪ skill ∪ --mcp-server
-    // additions − the built-in animus when --no-animus-mcp), then assemble
-    // the runtime contract the provider receives so the chat agent sees the
-    // MCP servers its profile/skill declares. Plain chat (no --agent/--skill)
-    // defaults to the built-in `animus` server only.
-    let scope = crate::services::runtime::agent_mcp::resolve_agent_scope(
-        &project_root_path,
-        &args.tool,
-        args.agent.as_deref(),
-        args.skill.as_deref(),
-    )?;
+    // Assemble the runtime contract the provider receives so the chat agent
+    // sees the MCP servers its profile/skill declares. Plain chat (no
+    // --agent/--skill) defaults to the built-in `animus` server only.
     let scope_selected = args.agent.is_some() || args.skill.is_some();
     let mcp_contract = crate::services::runtime::agent_mcp::assemble_agent_mcp_contract(
         &project_root_path,
@@ -379,6 +388,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         permission_mode: permission_mode.as_deref(),
         approvals,
         mcp_contract: mcp_contract.as_ref(),
+        skill: skill_application,
     };
 
     let assistant_seq = run_turn(&producer, &store, sink.as_mut(), ctx).await?;

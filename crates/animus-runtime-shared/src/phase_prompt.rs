@@ -279,12 +279,7 @@ pub fn render_phase_prompt_with_ctx_overrides(
                 .iter()
                 .filter_map(|directive| expand_prompt_fragment(directive, &inputs.pipeline_vars))
                 .collect::<Vec<_>>();
-            if !directives.is_empty() {
-                let mut section = String::from("Skill directives:");
-                for directive in directives {
-                    section.push_str("\n- ");
-                    section.push_str(&directive);
-                }
+            if let Some(section) = skill_directives_section(&directives) {
                 prompt_sections.push(section);
             }
         }
@@ -355,6 +350,73 @@ pub fn render_phase_prompt_with_ctx_overrides(
         phase_prompt_body,
         final_prompt,
     }
+}
+
+/// Render a "Skill directives:" bullet section from already-expanded
+/// directive lines. Returns `None` when no non-empty directive remains.
+/// Shared core between the workflow phase renderer (which expands pipeline
+/// vars per directive first) and the ad-hoc prompt assembly (which has no
+/// pipeline vars).
+pub fn skill_directives_section<S: AsRef<str>>(directives: &[S]) -> Option<String> {
+    let cleaned: Vec<&str> = directives.iter().map(|d| d.as_ref().trim()).filter(|d| !d.is_empty()).collect();
+    if cleaned.is_empty() {
+        return None;
+    }
+    let mut section = String::from("Skill directives:");
+    for directive in cleaned {
+        section.push_str("\n- ");
+        section.push_str(directive);
+    }
+    Some(section)
+}
+
+/// Wrap an ad-hoc prompt body with a skill's prompt fragments, in the SAME
+/// order the workflow phase renderer applies them: prefixes first, then the
+/// "Skill directives:" section, then the body, then suffixes — sections
+/// joined by blank lines. No pipeline-var expansion happens here (ad-hoc runs
+/// have no pipeline vars); empty/whitespace fragments are skipped. A skill
+/// with no prompt fragments returns the body unchanged.
+pub fn apply_skill_prompt_to_body(body: &str, skill: &SkillApplicationResult) -> String {
+    let mut sections: Vec<String> = Vec::new();
+    for prefix in &skill.prompt_prefixes {
+        let trimmed = prefix.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed.to_string());
+        }
+    }
+    if let Some(directives) = skill_directives_section(&skill.directives) {
+        sections.push(directives);
+    }
+    if sections.is_empty() && skill.prompt_suffixes.iter().all(|s| s.trim().is_empty()) {
+        return body.to_string();
+    }
+    sections.push(body.to_string());
+    for suffix in &skill.prompt_suffixes {
+        let trimmed = suffix.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed.to_string());
+        }
+    }
+    sections.join("\n\n")
+}
+
+/// Merge an explicit caller-supplied system prompt with a skill's
+/// `system_prompt_fragments`. The EXPLICIT value comes first (matching the
+/// workflow renderer, where the configured phase system prompt precedes the
+/// skill fragments), then each non-empty fragment, joined by blank lines.
+/// Returns `None` when neither side contributes anything.
+pub fn merge_skill_system_prompt(explicit: Option<&str>, skill: &SkillApplicationResult) -> Option<String> {
+    let mut sections: Vec<String> = Vec::new();
+    if let Some(explicit) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
+        sections.push(explicit.to_string());
+    }
+    for fragment in &skill.system_prompt_fragments {
+        let trimmed = fragment.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed.to_string());
+        }
+    }
+    (!sections.is_empty()).then(|| sections.join("\n\n"))
 }
 
 fn expand_prompt_fragment(fragment: &str, pipeline_vars: &HashMap<String, String>) -> Option<String> {
@@ -695,7 +757,10 @@ pub fn phase_result_kind_for_ctx(ctx: &RuntimeConfigContext, phase_id: &str) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::phase_action_rule;
+    use super::{
+        apply_skill_prompt_to_body, merge_skill_system_prompt, phase_action_rule, skill_directives_section,
+        SkillApplicationResult,
+    };
 
     #[test]
     fn mutating_state_phases_are_not_rendered_as_strictly_read_only() {
@@ -708,5 +773,63 @@ mod tests {
     fn strict_read_only_phases_keep_read_only_guidance() {
         let rule = phase_action_rule(&protocol::PhaseCapabilities::default());
         assert!(rule.contains("READ-ONLY phase"));
+    }
+
+    fn skill_with_prompt() -> SkillApplicationResult {
+        SkillApplicationResult {
+            system_prompt_fragments: vec!["You are skill-guided.".to_string()],
+            prompt_prefixes: vec!["PREFIX-TEXT".to_string()],
+            prompt_suffixes: vec!["SUFFIX-TEXT".to_string()],
+            directives: vec!["Directive one".to_string(), "Directive two".to_string()],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn apply_skill_prompt_to_body_orders_prefix_directives_body_suffix() {
+        let wrapped = apply_skill_prompt_to_body("THE-BODY", &skill_with_prompt());
+        let expected = "PREFIX-TEXT\n\nSkill directives:\n- Directive one\n- Directive two\n\nTHE-BODY\n\nSUFFIX-TEXT";
+        assert_eq!(wrapped, expected);
+    }
+
+    #[test]
+    fn apply_skill_prompt_to_body_without_fragments_returns_body_unchanged() {
+        let wrapped = apply_skill_prompt_to_body("THE-BODY", &SkillApplicationResult::default());
+        assert_eq!(wrapped, "THE-BODY");
+    }
+
+    #[test]
+    fn apply_skill_prompt_to_body_skips_blank_fragments() {
+        let skill = SkillApplicationResult {
+            prompt_prefixes: vec!["   ".to_string()],
+            prompt_suffixes: vec!["TAIL".to_string()],
+            ..Default::default()
+        };
+        assert_eq!(apply_skill_prompt_to_body("BODY", &skill), "BODY\n\nTAIL");
+    }
+
+    #[test]
+    fn merge_skill_system_prompt_puts_explicit_value_first() {
+        let merged = merge_skill_system_prompt(Some("EXPLICIT"), &skill_with_prompt()).expect("merged");
+        assert_eq!(merged, "EXPLICIT\n\nYou are skill-guided.");
+    }
+
+    #[test]
+    fn merge_skill_system_prompt_without_explicit_uses_fragments_only() {
+        let merged = merge_skill_system_prompt(None, &skill_with_prompt()).expect("merged");
+        assert_eq!(merged, "You are skill-guided.");
+    }
+
+    #[test]
+    fn merge_skill_system_prompt_returns_none_when_nothing_contributes() {
+        assert!(merge_skill_system_prompt(None, &SkillApplicationResult::default()).is_none());
+        assert!(merge_skill_system_prompt(Some("  "), &SkillApplicationResult::default()).is_none());
+    }
+
+    #[test]
+    fn skill_directives_section_skips_empty_lines() {
+        assert!(skill_directives_section::<&str>(&[]).is_none());
+        assert!(skill_directives_section(&["  "]).is_none());
+        assert_eq!(skill_directives_section(&["One", " "]).as_deref(), Some("Skill directives:\n- One"));
     }
 }
