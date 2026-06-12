@@ -7,7 +7,7 @@ For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.m
 
 ## Overview
 
-Animus currently exposes **79 built-in MCP tools** across these families:
+Animus currently exposes **81 built-in MCP tools** across these families:
 
 | Group | Tools | Purpose |
 |---|---:|---|
@@ -22,6 +22,16 @@ Animus currently exposes **79 built-in MCP tools** across these families:
 | `animus.plugin.*` | 9 | Installed-plugin inspection/mutation plus marketplace discovery/update |
 | `animus.logs.*` | 1 | Tail log entries from the active log backend |
 | `animus.interactions.*` | 2 | Non-blocking inbox over pending agent questions and approval requests (`animus mcp serve --management` only) |
+| `animus.tools.*` | 2 | Tool discovery over the live registry: ranked keyword search plus a grouped one-line catalog |
+
+**Tool discovery.** When you are unsure which tool fits an intent — or your
+context budget is too tight to carry all 81 schemas — start with
+`animus.tools.search` (e.g. `{"query": "pause workflow"}`). It searches the
+server's live registry (tool names, descriptions, and parameter names), ranks
+matches (name hits outrank description hits outrank parameter hits; an exact
+tool-name query always ranks first), and returns each match with a compact
+parameter summary so you can call it directly. `animus.tools.list` returns the
+whole surface grouped by family with one-line summaries and no schemas.
 
 Most project-scoped tools accept an optional `project_root`. Marketplace tools
 may omit it because they operate on the public registry. Plugin mutation tools
