@@ -8,8 +8,8 @@ mod status;
 
 pub(crate) use control_routing::build_plugin_routing;
 pub(crate) use marketplace::{
-    run_plugin_browse, run_plugin_search, run_plugin_update, PluginBrowseRequest, PluginSearchRequest,
-    PluginUpdateRequest, PluginUpdateSelector,
+    read_installed_index, run_plugin_browse, run_plugin_search, run_plugin_update, InstalledPlugin,
+    PluginBrowseRequest, PluginSearchRequest, PluginUpdateRequest, PluginUpdateSelector,
 };
 #[allow(unused_imports)]
 pub(crate) use signing::{

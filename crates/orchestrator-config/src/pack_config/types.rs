@@ -160,6 +160,31 @@ pub struct PackDependency {
     pub reason: Option<String>,
 }
 
+/// A plugin requirement declared by a pack via `[[requires_plugins]]`.
+///
+/// Packs whose workflows depend on installed Animus plugins (for example a
+/// subject backend or provider) declare them here so `animus pack install`
+/// can check the installed-plugin registry up front instead of failing at
+/// phase time. Additive as of animus v0.5.14: older animus versions reject
+/// manifests that USE this section (`deny_unknown_fields`), so packs that
+/// declare it should also set `compatibility.animus_core = ">=0.5.14"`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PackPluginRequirement {
+    /// GitHub repo slug of the plugin, e.g. `launchapp-dev/animus-subject-linear`.
+    pub repo: String,
+    /// Optional release tag to suggest/install, e.g. `v0.2.0`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// Informational role hint, e.g. `subject_backend:linear`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default)]
+    pub optional: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct PackPermissions {
@@ -217,6 +242,11 @@ pub struct PackManifest {
     pub schedules: Option<PackSchedules>,
     #[serde(default)]
     pub dependencies: Vec<PackDependency>,
+    /// Animus plugins this pack's workflows require. Additive section: older
+    /// animus versions reject manifests that declare it, so pair with a
+    /// `compatibility.animus_core` floor of `>=0.5.14`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_plugins: Vec<PackPluginRequirement>,
     #[serde(default)]
     pub permissions: PackPermissions,
     #[serde(default)]

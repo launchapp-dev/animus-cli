@@ -233,6 +233,12 @@ id = "animus.task"
 version = ">=0.1.0"
 reason = "Requirement workflows materialize and bootstrap task execution."
 
+[[requires_plugins]]
+repo = "launchapp-dev/animus-subject-linear"
+tag = "v0.2.0"
+role = "subject_backend:linear"
+reason = "Linear-backed subjects power the triage workflows."
+
 [runtime]
 agent_overlay = "runtime/agent-runtime.overlay.yaml"
 
@@ -241,6 +247,47 @@ feature = "plugin_ao_requirement"
 module_id = "animus.requirement"
 optional = true
 ```
+
+### Pack Dependencies
+
+`[[dependencies]]` entries are acted on by `animus pack install` (v0.5.14+):
+after the requested pack installs, each non-optional dependency is resolved —
+already-installed versions that satisfy the semver `version` requirement are
+skipped, otherwise the dependency installs through the same source-resolution
+path its parent came from (the `ANIMUS_INIT_PACK_SOURCE_DIR` offline override
+always wins, then the marketplace registries when the parent was installed via
+`--name`, then the pinned GitHub release for packs in the recommended
+`default-install.json` set). Resolution recurses into dependencies of
+dependencies up to a depth of 5 with cycle detection by pack id. Optional
+dependencies are printed as suggestions, never auto-installed. A failing
+dependency never aborts the parent install — the failure is reported together
+with the exact manual install command. `--no-deps` skips dependency
+resolution entirely; `--dry-run` prints the full dependency closure without
+installing anything.
+
+### Required Plugins
+
+`[[requires_plugins]]` (v0.5.14+) lets a pack declare the Animus plugins its
+workflows need — e.g. a subject backend — so the gap surfaces at install time
+instead of phase time:
+
+- `repo` (required): GitHub `OWNER/REPO` slug of the plugin.
+- `tag` (optional): release tag to suggest/install.
+- `role` (optional, informational): e.g. `subject_backend:linear`.
+- `optional`, `reason`: same semantics as pack dependencies.
+
+At `animus pack install`, every declared plugin is checked against the
+installed-plugin registry. Missing required plugins are never silent: in an
+interactive terminal Animus offers to install them (default yes),
+`--install-plugins` installs them non-interactively, and otherwise the exact
+`animus plugin install <repo>@<tag>` commands are printed. `animus pack info`
+shows both dependencies and required plugins with installed/missing status.
+
+Compatibility: the section is additive within `animus.pack.v1`. Older Animus
+versions (< 0.5.14) reject manifests that declare `[[requires_plugins]]`
+(unknown manifest fields are denied), while packs WITHOUT the section keep
+loading everywhere. Packs that use it should therefore also declare
+`compatibility.animus_core = ">=0.5.14"`.
 
 ### Runtime Requirements
 

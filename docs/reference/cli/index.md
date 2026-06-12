@@ -249,9 +249,9 @@ animus
 │       └── list             List all registered registry sources
 │
 ├── pack                     Install, inspect, pin, and uninstall workflow packs
-│   ├── install              Install a pack from a local path or marketplace registry
+│   ├── install              Install a pack from a local path or marketplace registry; installs the pack's declared non-optional pack dependencies (skip with --no-deps), checks [[requires_plugins]] against the installed-plugin registry (--install-plugins installs missing ones non-interactively), and --dry-run prints the dependency closure + plugin requirements without installing
 │   ├── list                 List discovered packs and indicate which ones are active for this project
-│   ├── info                 Show details of a discovered pack or a local pack manifest
+│   ├── info                 Show details of a discovered pack or a local pack manifest, including pack dependencies and required plugins with installed/missing status
 │   ├── pin                  Pin a pack version/source or toggle enablement for this project
 │   ├── uninstall            Remove an installed pack (all versions or --version) plus its project selection entry; refuses while project workflow YAML references the pack unless --force (supports --dry-run)
 │   ├── search               Search packs across marketplace registries
