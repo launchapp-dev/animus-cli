@@ -331,6 +331,69 @@ mod tests {
     }
 
     #[test]
+    fn daemon_observe_bare_defaults() {
+        let cli = Cli::try_parse_from(["animus", "daemon", "observe"]).expect("bare observe should parse");
+        match cli.command {
+            Command::Daemon { command: DaemonCommand::Observe(args) } => {
+                assert!(!args.follow);
+                assert!(args.since.is_none());
+                assert!(args.source.is_none());
+                assert!(args.workflow.is_none());
+                assert_eq!(args.limit, 20);
+            }
+            other => panic!("expected daemon observe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_observe_routes_per_flag() {
+        let follow = Cli::try_parse_from(["animus", "daemon", "observe", "--follow"]).expect("follow parses");
+        match follow.command {
+            Command::Daemon { command: DaemonCommand::Observe(args) } => assert!(args.follow),
+            other => panic!("expected observe, got {other:?}"),
+        }
+
+        let since = Cli::try_parse_from(["animus", "daemon", "observe", "--since", "15m"]).expect("since parses");
+        match since.command {
+            Command::Daemon { command: DaemonCommand::Observe(args) } => assert_eq!(args.since.as_deref(), Some("15m")),
+            other => panic!("expected observe, got {other:?}"),
+        }
+
+        for (flag, expected) in [
+            ("logs", ObserveSource::Logs),
+            ("events", ObserveSource::Events),
+            ("stream", ObserveSource::Stream),
+            ("workflow", ObserveSource::Workflow),
+        ] {
+            let cli = Cli::try_parse_from(["animus", "daemon", "observe", "--source", flag])
+                .unwrap_or_else(|e| panic!("--source {flag} should parse: {e}"));
+            match cli.command {
+                Command::Daemon { command: DaemonCommand::Observe(args) } => {
+                    assert_eq!(args.source, Some(expected), "--source {flag}");
+                }
+                other => panic!("expected observe, got {other:?}"),
+            }
+        }
+
+        let wf = Cli::try_parse_from(["animus", "daemon", "observe", "--workflow", "WF-9", "--limit", "5"])
+            .expect("workflow + limit parses");
+        match wf.command {
+            Command::Daemon { command: DaemonCommand::Observe(args) } => {
+                assert_eq!(args.workflow.as_deref(), Some("WF-9"));
+                assert_eq!(args.limit, 5);
+            }
+            other => panic!("expected observe, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_observe_rejects_unknown_source() {
+        let error = Cli::try_parse_from(["animus", "daemon", "observe", "--source", "bogus"])
+            .expect_err("unknown --source should fail");
+        assert_eq!(error.kind(), ErrorKind::InvalidValue);
+    }
+
+    #[test]
     fn queue_hold_accepts_multiple_positional_subject_ids() {
         let cli = Cli::try_parse_from(["animus", "queue", "hold", "TASK-1", "TASK-2"])
             .expect("multiple positional subject ids should parse");

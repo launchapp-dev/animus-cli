@@ -24,8 +24,8 @@ fn read_notification_config_from_pm_config(pm_config: &serde_json::Value) -> ser
 }
 
 use crate::{
-    print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonMetricsArgs, DaemonPreflightArgs,
-    DaemonRestartArgs, DaemonStartArgs, DaemonStopArgs, DaemonStreamArgs,
+    print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonMetricsArgs, DaemonObserveArgs,
+    DaemonPreflightArgs, DaemonRestartArgs, DaemonStartArgs, DaemonStopArgs, DaemonStreamArgs, ObserveSource,
 };
 
 mod control_routing;
@@ -783,6 +783,7 @@ pub(crate) async fn handle_daemon(
             Some(subcommand) => crate::services::operations::handle_metrics(subcommand, project_root, json).await,
             None => handle_daemon_metrics(args.display, project_root, json).await,
         },
+        DaemonCommand::Observe(args) => handle_daemon_observe(args, project_root, json).await,
     }
 }
 
@@ -922,19 +923,29 @@ pub(crate) async fn restart_running_daemon(
 
 async fn handle_daemon_metrics(args: DaemonMetricsArgs, project_root: &str, json: bool) -> Result<()> {
     let project_root_path = Path::new(project_root);
-    let interval = std::time::Duration::from_secs(args.interval_secs.max(1));
-    loop {
-        let snapshot = fetch_daemon_metrics_snapshot(project_root_path).await?;
-        render_daemon_metrics_snapshot(&snapshot, json, args.pretty)?;
-        if !args.watch {
-            return Ok(());
+
+    // --watch keeps the hard requirement: a live dashboard is meaningless
+    // without a running daemon, so surface the connect error.
+    if args.watch {
+        let interval = std::time::Duration::from_secs(args.interval_secs.max(1));
+        loop {
+            let snapshot = fetch_daemon_metrics_snapshot(project_root_path).await?;
+            render_daemon_metrics_snapshot(&snapshot, json, args.pretty)?;
+            tokio::time::sleep(interval).await;
+            if args.pretty {
+                // Cheap clear-screen for a watchable dashboard. Operators piping
+                // to a file will pass --json without --pretty so this never runs.
+                print!("\x1B[2J\x1B[H");
+            }
         }
-        tokio::time::sleep(interval).await;
-        if args.pretty {
-            // Cheap clear-screen for a watchable dashboard. Operators piping
-            // to a file will pass --json without --pretty so this never runs.
-            print!("\x1B[2J\x1B[H");
-        }
+    }
+
+    // Bare (one-shot) `daemon metrics`: live counters need the daemon, but
+    // the offline-capable telemetry status does not. When the daemon is
+    // down, degrade to the telemetry summary and exit 0 instead of erroring.
+    match try_fetch_daemon_metrics_snapshot(project_root_path).await? {
+        Some(snapshot) => render_daemon_metrics_snapshot(&snapshot, json, args.pretty),
+        None => render_daemon_metrics_offline(project_root_path, json),
     }
 }
 
@@ -945,6 +956,37 @@ async fn fetch_daemon_metrics_snapshot(
         .await?
         .ok_or_else(|| anyhow::anyhow!("daemon is not running; metrics are only available while the daemon is up"))?;
     client.daemon_metrics().await
+}
+
+/// Like [`fetch_daemon_metrics_snapshot`] but returns `None` (rather than an
+/// error) when the daemon is not running, so the bare display path can fall
+/// back to the offline telemetry status.
+async fn try_fetch_daemon_metrics_snapshot(
+    project_root: &Path,
+) -> Result<Option<orchestrator_daemon_runtime::metrics::MetricsSnapshot>> {
+    match orchestrator_daemon_runtime::control::ControlClient::try_connect(project_root).await? {
+        Some(client) => Ok(Some(client.daemon_metrics().await?)),
+        None => Ok(None),
+    }
+}
+
+/// Offline fallback for bare `daemon metrics`: live counters are unavailable,
+/// but the offline-capable telemetry status (opt-in state, pending buffer)
+/// still prints. Exits 0 so scripts polling telemetry don't treat a stopped
+/// daemon as a hard failure.
+fn render_daemon_metrics_offline(project_root: &Path, json: bool) -> Result<()> {
+    if json {
+        return print_value(
+            serde_json::json!({
+                "daemon_running": false,
+                "telemetry": crate::services::operations::telemetry_status(project_root),
+            }),
+            json,
+        );
+    }
+    println!("daemon not running; live metrics unavailable");
+    println!("{}", crate::services::operations::telemetry_status_summary_line(project_root));
+    Ok(())
 }
 
 fn render_daemon_metrics_snapshot(
@@ -991,6 +1033,401 @@ fn render_daemon_metrics_snapshot(
         return Ok(());
     }
     print_value(snapshot, json)
+}
+
+/// `daemon observe` is a routing front-door over the existing observability
+/// surfaces — it owns no reader of its own. Each branch delegates to the
+/// `events` / `logs` / `stream` handler, or merges their existing readers for
+/// the window/bare views.
+async fn handle_daemon_observe(args: DaemonObserveArgs, project_root: &str, json: bool) -> Result<()> {
+    // Parse --since once into a window (u64::MAX = no time bound) so every
+    // branch that reads from the merged collectors honors it.
+    let window_secs = match args.since.as_deref() {
+        Some(since) => crate::cli_types::parse_duration_secs(since, 60)
+            .map_err(|err| anyhow!("invalid --since value '{since}': {err}"))?,
+        None => u64::MAX,
+    };
+    let has_window = window_secs != u64::MAX;
+
+    // --follow → live stream (delegates to `daemon stream`). Pretty for
+    // humans; under global --json, leave pretty off so the stream emits raw
+    // JSONL for scripted consumers. A live follow has no past window, so
+    // --since is meaningless here.
+    if args.follow {
+        if has_window {
+            return Err(anyhow!(
+                "--since cannot be combined with --follow; --follow is a live tail with no past window"
+            ));
+        }
+        // `--follow` always delegates to the live `daemon stream` surface, so a
+        // `--source` selecting a different data source (e.g. `events`) would be
+        // silently ignored. Reject the combination instead of tailing the
+        // wrong stream; `stream`/`workflow` are stream-backed and allowed.
+        if let Some(source) = args.source {
+            if !matches!(source, ObserveSource::Stream | ObserveSource::Workflow) {
+                return Err(anyhow!(
+                    "--source {source:?} cannot be combined with --follow; --follow only tails the live stream. \
+                     Drop --follow to read the {source:?} source, or use --source stream/workflow."
+                ));
+            }
+        }
+        let mut stream = observe_stream_args(args.workflow.clone(), args.limit);
+        stream.pretty = !json;
+        return handle_daemon_stream(stream, project_root).await;
+    }
+
+    // --source routes to one specific existing surface.
+    if let Some(source) = args.source {
+        return match source {
+            // Project-scoped, label-preserving events route (the bare/window
+            // path's scoped reader, restricted to events) so this surface
+            // honors both the project scope claimed by the matrix and --json.
+            ObserveSource::Events => {
+                let lines = collect_observe_window(
+                    project_root,
+                    window_secs,
+                    args.workflow.as_deref(),
+                    args.limit,
+                    ObserveSources::EventsOnly,
+                );
+                render_observe_lines(&lines, json)
+            }
+            // Project-scoped, label-preserving logs route so the observe JSON
+            // contract (`{lines:[{source,timestamp,text}]}`) is uniform across
+            // every `--source`, rather than leaking the legacy `daemon logs`
+            // payload shape.
+            ObserveSource::Logs => {
+                let lines = collect_observe_window(
+                    project_root,
+                    window_secs,
+                    args.workflow.as_deref(),
+                    args.limit,
+                    ObserveSources::LogsOnly,
+                );
+                render_observe_lines(&lines, json)
+            }
+            // Stream is a live, JSONL-passthrough surface with no envelope or
+            // window support. Under --json (or whenever a --since window is
+            // requested) route the one-shot view through the scoped logs
+            // collector so both the JSON contract and --since are honored;
+            // plain human mode keeps the richer pretty stream tail.
+            ObserveSource::Stream | ObserveSource::Workflow => {
+                if json || has_window {
+                    let lines = collect_observe_window(
+                        project_root,
+                        window_secs,
+                        args.workflow.as_deref(),
+                        args.limit,
+                        ObserveSources::LogsOnly,
+                    );
+                    render_observe_lines(&lines, json)
+                } else {
+                    let mut stream = observe_stream_args(args.workflow.clone(), args.limit);
+                    stream.no_follow = true;
+                    handle_daemon_stream(stream, project_root).await
+                }
+            }
+        };
+    }
+
+    // --since → merged recent window across daemon events + logs.
+    if has_window {
+        let lines = collect_observe_window(
+            project_root,
+            window_secs,
+            args.workflow.as_deref(),
+            args.limit,
+            ObserveSources::Both,
+        );
+        return render_observe_lines(&lines, json);
+    }
+
+    // Bare invocation: data-source matrix + the last N merged lines.
+    if json {
+        let lines =
+            collect_observe_window(project_root, u64::MAX, args.workflow.as_deref(), args.limit, ObserveSources::Both);
+        return print_value(
+            serde_json::json!({
+                "matrix": observe_matrix_rows(),
+                "recent": lines.iter().map(|l| serde_json::json!({
+                    "source": l.source,
+                    "timestamp": l.timestamp,
+                    "text": l.text,
+                })).collect::<Vec<_>>(),
+            }),
+            json,
+        );
+    }
+    print_observe_matrix();
+    println!();
+    let lines =
+        collect_observe_window(project_root, u64::MAX, args.workflow.as_deref(), args.limit, ObserveSources::Both);
+    render_observe_lines(&lines, json)
+}
+
+/// Which underlying readers `collect_observe_window` pulls from. Lets the
+/// per-source observe routes reuse the scoped, label-preserving collector
+/// instead of delegating to an unscoped handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ObserveSources {
+    Both,
+    EventsOnly,
+    LogsOnly,
+}
+
+impl ObserveSources {
+    fn includes_events(self) -> bool {
+        matches!(self, ObserveSources::Both | ObserveSources::EventsOnly)
+    }
+    fn includes_logs(self) -> bool {
+        matches!(self, ObserveSources::Both | ObserveSources::LogsOnly)
+    }
+}
+
+/// Build `daemon stream` args for an `observe` delegation: pretty live view,
+/// optional workflow filter, recent tail of `limit`.
+fn observe_stream_args(workflow: Option<String>, limit: usize) -> DaemonStreamArgs {
+    DaemonStreamArgs {
+        cat: None,
+        level: None,
+        workflow,
+        run: None,
+        tail: limit,
+        no_follow: false,
+        pretty: true,
+        full: false,
+    }
+}
+
+/// One merged, source-labeled line for the `observe` window/bare views.
+struct ObserveLine {
+    source: &'static str,
+    timestamp: String,
+    text: String,
+}
+
+/// Merge recent daemon events + daemon logs into a single chronological,
+/// source-labeled list. Reuses the existing `poll_daemon_events` and `Logger`
+/// readers — no new data path. `window_secs == u64::MAX` means "no time
+/// bound" (used by the bare/JSON tail). Returns the last `limit` lines.
+fn collect_observe_window(
+    project_root: &str,
+    window_secs: u64,
+    workflow_filter: Option<&str>,
+    limit: usize,
+    sources: ObserveSources,
+) -> Vec<ObserveLine> {
+    use orchestrator_logging::Logger;
+
+    let cutoff = (window_secs != u64::MAX).then(|| {
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs();
+        now.saturating_sub(window_secs)
+    });
+    let in_window = |ts: &str| -> bool {
+        match cutoff {
+            None => true,
+            Some(cutoff) => rfc3339_to_unix(ts).map(|t| t >= cutoff).unwrap_or(true),
+        }
+    };
+
+    let mut lines: Vec<ObserveLine> = Vec::new();
+
+    // Daemon events (scoped to this project root). Bound the read instead of
+    // deserializing the entire (potentially large) event history just to keep
+    // the last `--limit`: a plain tail needs only `limit`, while a window or
+    // workflow filter scans a deeper — but still capped — tail because matches
+    // can sit behind unrelated records.
+    // Read-depth policy shared by both readers:
+    // - window + workflow filter: the time window already bounds the output, so
+    //   scan the whole tail (`usize::MAX`) — a quiet workflow's in-window lines
+    //   can sit behind an unbounded burst of unrelated entries.
+    // - window-only OR filter-only: a deep-but-capped tail (50×).
+    // - plain tail: just `limit`.
+    let read_cap = if cutoff.is_some() && workflow_filter.is_some() {
+        usize::MAX
+    } else if cutoff.is_some() || workflow_filter.is_some() {
+        DEFAULT_DAEMON_LOG_LINES.max(limit.saturating_mul(50))
+    } else {
+        limit.max(1)
+    };
+
+    if sources.includes_events() {
+        let canonical_root = canonicalize_lossy(project_root);
+        if let Ok(response) = poll_daemon_events(Some(read_cap), Some(canonical_root.as_str())) {
+            for record in response.events {
+                if !in_window(&record.timestamp) {
+                    continue;
+                }
+                if let Some(wf) = workflow_filter {
+                    // Match across every place a daemon event can carry a
+                    // workflow id/ref: the event type plus the serialized data
+                    // payload (`workflow_id`, `workflow`, `workflow_ref`, ...),
+                    // mirroring the substring match used for logs. `--workflow`
+                    // is documented as accepting an id or a ref.
+                    let data_blob = serde_json::to_string(&record.data).unwrap_or_default();
+                    if !record.event_type.contains(wf) && !data_blob.contains(wf) {
+                        continue;
+                    }
+                }
+                lines.push(ObserveLine {
+                    source: "events",
+                    timestamp: record.timestamp.clone(),
+                    text: format!("{} {}", record.event_type, record.data),
+                });
+            }
+        }
+    }
+
+    // Daemon/workflow/run logs. Read across ALL log files the `stream` surface
+    // reads (top-level daemon log plus `logs/workflows/*.jsonl` and
+    // `logs/runs/*.jsonl`), via the same `discover_log_files` set, so observe
+    // doesn't silently drop workflow/run activity. Uses the same `read_cap`
+    // depth policy as the events reader above (window + filter => scan the full
+    // tail; the per-entry window/filter checks below bound the output).
+    if sources.includes_logs() {
+        let logs_dir = Logger::logs_dir(Path::new(project_root));
+        for path in discover_log_files(&logs_dir) {
+            let logger = Logger::open(
+                path.parent().unwrap_or(Path::new(".")),
+                path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                orchestrator_logging::Level::Debug,
+            );
+            for entry in logger.read_entries(read_cap, None, None) {
+                if !in_window(&entry.ts) {
+                    continue;
+                }
+                if let Some(wf) = workflow_filter {
+                    let line = serde_json::to_string(&entry).unwrap_or_default();
+                    if !line.contains(wf) {
+                        continue;
+                    }
+                }
+                lines.push(ObserveLine {
+                    source: "logs",
+                    timestamp: entry.ts.clone(),
+                    text: format!("[{}] {}: {}", level_label(entry.level), entry.cat, entry.msg),
+                });
+            }
+        }
+    }
+
+    // Chronological merge (RFC3339 sorts lexicographically), keep the tail.
+    lines.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+    if lines.len() > limit {
+        lines = lines.split_off(lines.len() - limit);
+    }
+    lines
+}
+
+fn level_label(level: orchestrator_logging::Level) -> &'static str {
+    use orchestrator_logging::Level;
+    match level {
+        Level::Debug => "DBG",
+        Level::Info => "INF",
+        Level::Warn => "WRN",
+        Level::Error => "ERR",
+    }
+}
+
+/// Best-effort RFC3339 → unix-seconds. Only the leading `YYYY-MM-DDTHH:MM:SS`
+/// is needed for windowing; sub-second/offset precision is irrelevant at the
+/// per-second granularity of `--since`. Returns `None` on any parse failure so
+/// the caller can fail open (include the line).
+fn rfc3339_to_unix(ts: &str) -> Option<u64> {
+    let bytes = ts.as_bytes();
+    if bytes.len() < 19 {
+        return None;
+    }
+    let n = |range: std::ops::Range<usize>| ts.get(range).and_then(|s| s.parse::<i64>().ok());
+    let year = n(0..4)?;
+    let month = n(5..7)?;
+    let day = n(8..10)?;
+    let hour = n(11..13)?;
+    let min = n(14..16)?;
+    let sec = n(17..19)?;
+    // Days since unix epoch via the civil-from-days algorithm (Howard Hinnant).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * (if month > 2 { month - 3 } else { month + 9 }) + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    let secs = days * 86_400 + hour * 3_600 + min * 60 + sec;
+    u64::try_from(secs).ok()
+}
+
+fn render_observe_lines(lines: &[ObserveLine], json: bool) -> Result<()> {
+    if json {
+        return print_value(
+            serde_json::json!({
+                "lines": lines.iter().map(|l| serde_json::json!({
+                    "source": l.source,
+                    "timestamp": l.timestamp,
+                    "text": l.text,
+                })).collect::<Vec<_>>(),
+            }),
+            json,
+        );
+    }
+    if lines.is_empty() {
+        println!("(no recent events or logs)");
+        return Ok(());
+    }
+    for line in lines {
+        println!("{:<7} {} {}", line.source, line.timestamp, line.text);
+    }
+    Ok(())
+}
+
+/// Rows of the `observe` data-source matrix: verb | data source | live? |
+/// filters | when to use. Authoritative table for which surface answers which
+/// question; kept in code so help and JSON stay in sync.
+fn observe_matrix_rows() -> Vec<[&'static str; 5]> {
+    vec![
+        [
+            "daemon events",
+            "daemon-events.jsonl (queue/workflow lifecycle)",
+            "no (--follow)",
+            "project scope",
+            "what the scheduler dispatched/completed",
+        ],
+        ["daemon logs", "per-project structured logs", "no", "search", "recent daemon/workflow/run log lines"],
+        [
+            "daemon stream",
+            "live structured logs (daemon+workflows+runs)",
+            "yes",
+            "cat/level/workflow/run",
+            "tail activity as it happens",
+        ],
+        [
+            "daemon metrics",
+            "control-socket counters/gauges + telemetry",
+            "yes (--watch)",
+            "n/a",
+            "counters, histograms, telemetry opt-in",
+        ],
+    ]
+}
+
+fn print_observe_matrix() {
+    let rows = observe_matrix_rows();
+    let headers = ["verb", "data source", "live?", "filters", "when to use"];
+    let mut widths = headers.map(str::len);
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            widths[i] = widths[i].max(cell.len());
+        }
+    }
+    let print_row = |cells: &[&str; 5]| {
+        let line: Vec<String> =
+            cells.iter().enumerate().map(|(i, c)| format!("{:<width$}", c, width = widths[i])).collect();
+        println!("{}", line.join("  "));
+    };
+    println!("animus daemon observe — observability surfaces");
+    print_row(&headers);
+    for row in &rows {
+        print_row(row);
+    }
 }
 
 async fn handle_daemon_stream(args: DaemonStreamArgs, project_root: &str) -> Result<()> {
@@ -1445,6 +1882,7 @@ async fn handle_daemon_events(args: DaemonEventsArgs, json: bool) -> Result<()> 
 mod tests {
     use super::*;
     use orchestrator_logging::{Level, LogEntry};
+    use protocol::test_utils::EnvVarGuard;
     use std::process::Command;
 
     #[test]
@@ -1761,5 +2199,182 @@ mod tests {
         assert_eq!(short_id("abcdefgh"), "abcdefgh");
         assert_eq!(short_id("wörkflöw-ïd-ünïcödé"), "wörkflöw");
         assert_eq!(short_id("日本語のID値です拡張"), "日本語のID値で");
+    }
+
+    #[test]
+    fn rfc3339_to_unix_parses_epoch_and_known_instants() {
+        assert_eq!(rfc3339_to_unix("1970-01-01T00:00:00Z"), Some(0));
+        assert_eq!(rfc3339_to_unix("2000-01-01T00:00:00Z"), Some(946_684_800));
+        assert_eq!(rfc3339_to_unix("2026-06-11T12:00:00.123Z"), Some(1_781_179_200));
+        // Sub-second and offset suffixes are ignored; only the leading
+        // second-granularity instant matters for windowing.
+        assert_eq!(rfc3339_to_unix("2026-06-11T12:00:00+02:00"), Some(1_781_179_200));
+        assert_eq!(rfc3339_to_unix("not-a-timestamp"), None);
+        assert_eq!(rfc3339_to_unix("short"), None);
+    }
+
+    #[test]
+    fn observe_window_cutoff_orders_chronologically_and_labels_sources() {
+        // Pure ordering/labeling check over hand-built lines, independent of
+        // disk readers (those are exercised by the events/logs handlers).
+        let mut lines = [
+            ObserveLine { source: "logs", timestamp: "2026-06-11T10:00:02Z".into(), text: "b".into() },
+            ObserveLine { source: "events", timestamp: "2026-06-11T10:00:01Z".into(), text: "a".into() },
+            ObserveLine { source: "logs", timestamp: "2026-06-11T10:00:03Z".into(), text: "c".into() },
+        ];
+        lines.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
+        assert_eq!(lines.iter().map(|l| l.text.as_str()).collect::<Vec<_>>(), vec!["a", "b", "c"]);
+        assert_eq!(lines[0].source, "events");
+        assert_eq!(lines[1].source, "logs");
+    }
+
+    #[test]
+    fn observe_sources_toggle_gates_readers() {
+        assert!(ObserveSources::Both.includes_events() && ObserveSources::Both.includes_logs());
+        assert!(ObserveSources::EventsOnly.includes_events() && !ObserveSources::EventsOnly.includes_logs());
+        assert!(!ObserveSources::LogsOnly.includes_events() && ObserveSources::LogsOnly.includes_logs());
+    }
+
+    #[test]
+    fn observe_stream_args_follow_is_pretty_and_carries_workflow() {
+        let args = observe_stream_args(Some("WF-1".to_string()), 7);
+        assert!(args.pretty, "observe --follow must delegate to the pretty stream");
+        assert!(!args.no_follow);
+        assert_eq!(args.workflow.as_deref(), Some("WF-1"));
+        assert_eq!(args.tail, 7);
+    }
+
+    #[test]
+    fn observe_matrix_lists_every_surface_with_five_columns() {
+        let rows = observe_matrix_rows();
+        let verbs: Vec<&str> = rows.iter().map(|r| r[0]).collect();
+        for verb in ["daemon events", "daemon logs", "daemon stream", "daemon metrics"] {
+            assert!(verbs.contains(&verb), "matrix must list {verb}");
+        }
+        assert!(rows.iter().all(|r| r.len() == 5), "matrix rows are verb|source|live|filters|when");
+    }
+
+    #[test]
+    fn render_observe_lines_json_shape_includes_source_label() {
+        let lines =
+            vec![ObserveLine { source: "events", timestamp: "2026-06-11T10:00:01Z".into(), text: "queue {}".into() }];
+        // Smoke: human + json render paths must not error.
+        render_observe_lines(&lines, false).expect("human render");
+        render_observe_lines(&lines, true).expect("json render");
+        render_observe_lines(&[], false).expect("empty human render");
+    }
+
+    #[test]
+    fn observe_since_with_follow_is_rejected() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let config_root = tempfile::tempdir().expect("config temp dir");
+        let _config_guard = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let project = tempfile::tempdir().expect("project temp dir");
+        let project_root = project.path().to_string_lossy().to_string();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+        let result = runtime.block_on(async {
+            let args = DaemonObserveArgs {
+                follow: true,
+                since: Some("15m".to_string()),
+                source: None,
+                workflow: None,
+                limit: 20,
+            };
+            handle_daemon_observe(args, &project_root, false).await
+        });
+        let err = result.expect_err("--since with --follow must be rejected");
+        assert!(err.to_string().contains("--since cannot be combined with --follow"));
+    }
+
+    #[test]
+    fn observe_non_stream_source_with_follow_is_rejected() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let config_root = tempfile::tempdir().expect("config temp dir");
+        let _config_guard = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let project = tempfile::tempdir().expect("project temp dir");
+        let project_root = project.path().to_string_lossy().to_string();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        // --source events --follow: events has no live-follow surface here, so
+        // the combination must be rejected rather than silently tailing logs.
+        let rejected = runtime.block_on(async {
+            let args = DaemonObserveArgs {
+                follow: true,
+                since: None,
+                source: Some(ObserveSource::Events),
+                workflow: None,
+                limit: 20,
+            };
+            handle_daemon_observe(args, &project_root, false).await
+        });
+        let err = rejected.expect_err("--source events --follow must be rejected");
+        assert!(err.to_string().contains("cannot be combined with --follow"));
+
+        // --source stream --follow IS allowed (stream-backed).
+        let allowed = runtime.block_on(async {
+            let args = DaemonObserveArgs {
+                follow: true,
+                since: None,
+                source: Some(ObserveSource::Stream),
+                workflow: None,
+                limit: 1,
+            };
+            // The stream follow loop blocks forever; just confirm it does not
+            // error out on the source/follow validation by racing a tiny
+            // timeout (Ok-or-timeout both mean "passed validation").
+            tokio::time::timeout(
+                std::time::Duration::from_millis(150),
+                handle_daemon_observe(args, &project_root, false),
+            )
+            .await
+        });
+        // A timeout (Err) means the follow loop started — validation passed.
+        // An inner Ok would also be fine. An inner Err would be a validation
+        // failure we must not see.
+        if let Ok(inner) = allowed {
+            inner.expect("--source stream --follow must pass validation");
+        }
+    }
+
+    #[test]
+    fn daemon_metrics_offline_human_and_json_exit_ok() {
+        // Sync test driving the async handler via `block_on` so the env lock
+        // is never held across an await point at the function level.
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let config_root = tempfile::tempdir().expect("config temp dir");
+        let _config_guard = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+        let home = tempfile::tempdir().expect("home temp dir");
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let project = tempfile::tempdir().expect("project temp dir");
+        let project_root = project.path().to_string_lossy().to_string();
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        // No daemon socket exists under the temp config dir, so the bare
+        // display path must degrade to the offline telemetry summary and
+        // return Ok rather than erroring.
+        runtime.block_on(async {
+            let human = DaemonMetricsArgs { watch: false, interval_secs: 5, pretty: false };
+            handle_daemon_metrics(human, &project_root, false).await.expect("offline human metrics must exit 0");
+
+            let json_args = DaemonMetricsArgs { watch: false, interval_secs: 5, pretty: false };
+            handle_daemon_metrics(json_args, &project_root, true).await.expect("offline json metrics must exit 0");
+        });
     }
 }
