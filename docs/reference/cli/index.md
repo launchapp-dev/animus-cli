@@ -233,7 +233,8 @@ animus
 │   ├── respond              Approve or reject an approval request
 │   └── outcome              Record operation outcome for an approval request
 │
-├── skill                    Search, install, update, uninstall, and publish versioned skills
+├── skill                    Author, search, install, update, uninstall, and publish versioned skills
+│   ├── create               Author a new skill definition at project (default) or user scope
 │   ├── search               Search skills across built-in, user, project, and registry sources
 │   ├── install              Install a skill with deterministic resolution
 │   ├── list                 List all available skills; definition rows carry a non-fatal `warnings` array when inert tool-id declarations are detected
@@ -721,6 +722,31 @@ animus workflow prune --older-than 30 --yes        # delete
 animus workflow prune --older-than 12h --yes       # unit suffix: hours
 animus workflow prune --keep-last 50 --status failed --yes
 animus workflow delete --run-id <RUN_ID> --yes
+```
+
+### `animus skill create`
+
+Author a new YAML skill definition. The written file is round-tripped through
+the skill parser before landing on disk, so a malformed skill is never left
+behind. Project-scoped skills shadow user-scoped skills with the same name
+during resolution.
+
+| Flag | Description |
+|---|---|
+| `--name <SLUG>` | Skill slug: lowercase ASCII letters/digits plus `-`/`_`, no path separators. Becomes the file name `<scope dir>/<name>.yaml` |
+| `--description <TEXT>` | Human-readable description shown in `skill list` / `skill search` |
+| `--prompt <TEXT>` | Skill instruction body (stored as `prompt.system`). Mutually exclusive with `--prompt-file` |
+| `--prompt-file <PATH>` | Read the instruction body from a file |
+| `--category <CATEGORY>` | Optional: `implementation`, `testing`, `review`, `research`, `documentation`, `operations`, `planning` |
+| `--tags <TAGS>` | Optional discovery tags (comma-separated or repeated) |
+| `--project` | Write to the project scope at `.animus/config/skill_definitions/` (default). Mutually exclusive with `--user` |
+| `--user` | Write to the user scope at `~/.animus/config/skill_definitions/` (shared across projects) |
+| `--force` | Overwrite an existing skill definition at the same scope; without it the command refuses |
+
+```bash
+animus skill create --name pr-reviewer --description "Reviews PRs" --prompt "You review pull requests."
+animus skill create --name rust-tips --description "Rust guidance" --prompt-file tips.md --user
+animus skill create --name pr-reviewer --description "v2" --prompt "..." --force
 ```
 
 ### `animus logs tail`

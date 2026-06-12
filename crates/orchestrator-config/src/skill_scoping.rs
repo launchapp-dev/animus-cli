@@ -566,6 +566,63 @@ pub fn project_skill_yaml_path(project_root: &Path, name: &str) -> PathBuf {
     project_skills_dir(project_root).join(format!("{name}.yaml"))
 }
 
+/// Authoring scope for skill writes. `Project` targets
+/// `.animus/config/skill_definitions/` under the project root; `User` targets
+/// the user tier at `~/.animus/config/skill_definitions/` — the exact same
+/// directories [`load_skill_sources`] reads, so an authored skill is
+/// immediately discoverable. Project-scoped skills shadow user-scoped skills
+/// of the same name during resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillWriteScope {
+    Project,
+    User,
+}
+
+impl std::fmt::Display for SkillWriteScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SkillWriteScope::Project => write!(f, "project"),
+            SkillWriteScope::User => write!(f, "user"),
+        }
+    }
+}
+
+/// The YAML skill-definition directory for `scope` (the tier
+/// [`load_skill_sources`] reads).
+pub fn skill_scope_yaml_dir(project_root: &Path, scope: SkillWriteScope) -> PathBuf {
+    match scope {
+        SkillWriteScope::Project => project_skills_dir(project_root),
+        SkillWriteScope::User => user_skills_dir(),
+    }
+}
+
+/// The markdown (`SKILL.md`) skill directory for `scope`.
+pub fn skill_scope_markdown_dir(project_root: &Path, scope: SkillWriteScope) -> PathBuf {
+    match scope {
+        SkillWriteScope::Project => project_markdown_skills_dir(project_root),
+        SkillWriteScope::User => user_markdown_skills_dir(),
+    }
+}
+
+/// Where an authored skill named `name` is written for `scope`.
+pub fn skill_yaml_path_for_scope(project_root: &Path, scope: SkillWriteScope, name: &str) -> PathBuf {
+    skill_scope_yaml_dir(project_root, scope).join(format!("{name}.yaml"))
+}
+
+/// Parse a skill category label ("implementation", "testing", "review",
+/// "research", "documentation", "operations", "planning") into a
+/// [`crate::skill_definition::SkillCategory`]. Shared by the CLI and MCP
+/// authoring surfaces so the accepted vocabulary stays identical.
+pub fn parse_skill_category_label(raw: &str) -> Result<crate::skill_definition::SkillCategory> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    serde_yaml::from_str::<crate::skill_definition::SkillCategory>(&normalized).map_err(|_| {
+        anyhow::anyhow!(
+            "unknown category '{}': expected one of implementation, testing, review, research, documentation, operations, planning",
+            raw.trim()
+        )
+    })
+}
+
 /// Outcome of a project-skill authoring write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillWriteOutcome {
@@ -573,12 +630,12 @@ pub enum SkillWriteOutcome {
     Updated,
 }
 
-/// Locate where `name` currently resolves within the project skill tier:
-/// the standalone YAML path, a manifest YAML declaring it under `skills:`,
-/// or a markdown skill under `.animus/skills/` whose resolved name matches.
-/// Returns the defining file path, or `None` when the name is unclaimed.
-fn find_project_skill_definition_path(project_root: &Path, name: &str) -> Option<PathBuf> {
-    let yaml_dir = project_skills_dir(project_root);
+/// Locate where `name` currently resolves within one skill tier (project or
+/// user): the standalone YAML path, a manifest YAML declaring it under
+/// `skills:`, or a markdown skill in the tier's `skills/` directory whose
+/// resolved name matches. Returns the defining file path, or `None` when the
+/// name is unclaimed at that tier.
+fn find_skill_definition_path_in_dirs(yaml_dir: &Path, markdown_dir: &Path, name: &str) -> Option<PathBuf> {
     for ext in ["yaml", "yml"] {
         let candidate = yaml_dir.join(format!("{name}.{ext}"));
         if candidate.is_file() {
@@ -586,7 +643,7 @@ fn find_project_skill_definition_path(project_root: &Path, name: &str) -> Option
         }
     }
 
-    if let Ok(entries) = fs::read_dir(&yaml_dir) {
+    if let Ok(entries) = fs::read_dir(yaml_dir) {
         let mut paths: Vec<PathBuf> = entries
             .filter_map(|entry| entry.ok())
             .map(|entry| entry.path())
@@ -605,8 +662,7 @@ fn find_project_skill_definition_path(project_root: &Path, name: &str) -> Option
         }
     }
 
-    let markdown_dir = project_markdown_skills_dir(project_root);
-    if let Ok(entries) = fs::read_dir(&markdown_dir) {
+    if let Ok(entries) = fs::read_dir(markdown_dir) {
         let mut candidates: Vec<PathBuf> = entries
             .filter_map(|entry| entry.ok())
             .filter(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
@@ -641,19 +697,41 @@ fn find_project_skill_definition_path(project_root: &Path, name: &str) -> Option
 /// definition.
 ///
 /// This is the single serialization path for authored project skills; callers
-/// (CLI and MCP) must not hand-roll YAML.
+/// (CLI and MCP) must not hand-roll YAML. Equivalent to
+/// [`write_skill_yaml`] with [`SkillWriteScope::Project`].
 pub fn write_project_skill_yaml(
     project_root: &Path,
+    definition: &SkillDefinition,
+    overwrite: bool,
+) -> Result<(PathBuf, SkillWriteOutcome)> {
+    write_skill_yaml(project_root, SkillWriteScope::Project, definition, overwrite)
+}
+
+/// Serialize a [`SkillDefinition`] to YAML and write it as an authored skill
+/// at `scope` — `.animus/config/skill_definitions/<name>.yaml` for
+/// [`SkillWriteScope::Project`], `~/.animus/config/skill_definitions/<name>.yaml`
+/// for [`SkillWriteScope::User`]. Same validation, overwrite-guard, and
+/// round-trip guarantees as [`write_project_skill_yaml`]; the overwrite guard
+/// only inspects the target scope's tier (a project write is allowed to shadow
+/// a user-scoped skill of the same name, and vice versa).
+///
+/// This is the single serialization path for authored skills at both scopes;
+/// callers (CLI and MCP) must not hand-roll YAML.
+pub fn write_skill_yaml(
+    project_root: &Path,
+    scope: SkillWriteScope,
     definition: &SkillDefinition,
     overwrite: bool,
 ) -> Result<(PathBuf, SkillWriteOutcome)> {
     let name = validate_skill_slug(&definition.name)?;
     validate_skill_definition(definition)?;
 
-    let path = project_skill_yaml_path(project_root, &name);
+    let yaml_dir = skill_scope_yaml_dir(project_root, scope);
+    let markdown_dir = skill_scope_markdown_dir(project_root, scope);
+    let path = skill_yaml_path_for_scope(project_root, scope, &name);
     let existed = path.exists();
     if !overwrite {
-        if let Some(existing) = find_project_skill_definition_path(project_root, &name) {
+        if let Some(existing) = find_skill_definition_path_in_dirs(&yaml_dir, &markdown_dir, &name) {
             if existing == path {
                 anyhow::bail!(
                     "skill '{name}' already exists at {} (pass overwrite=true to replace it)",
@@ -2039,6 +2117,63 @@ Body.
         let msg = err.to_string();
         assert!(msg.contains("bundle.yaml"), "error should point at the manifest: {msg}");
         assert!(!project_skill_yaml_path(tmp.path(), "guarded").exists(), "guard must not write the file");
+    }
+
+    #[test]
+    fn write_skill_yaml_user_scope_lands_in_user_dir_and_loader_reads_it() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = TempDir::new().unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let project = TempDir::new().unwrap();
+
+        let definition: SkillDefinition =
+            serde_yaml::from_str("name: user-authored\ndescription: user tier\n").unwrap();
+        let (path, outcome) = write_skill_yaml(project.path(), SkillWriteScope::User, &definition, false).unwrap();
+        assert_eq!(outcome, SkillWriteOutcome::Created);
+        assert_eq!(
+            path,
+            home.path().join(".animus").join("config").join("skill_definitions").join("user-authored.yaml")
+        );
+        assert_eq!(
+            path,
+            user_skills_dir().join("user-authored.yaml"),
+            "writer must target the same dir the loader reads"
+        );
+        assert!(!project_skill_yaml_path(project.path(), "user-authored").exists());
+
+        let sources = load_skill_sources(project.path(), None).unwrap();
+        let user_source = sources.iter().find(|s| s.origin == SkillSourceOrigin::User).expect("user source");
+        assert_eq!(user_source.skills.get("user-authored").map(|s| s.description.as_str()), Some("user tier"));
+    }
+
+    #[test]
+    fn write_skill_yaml_overwrite_guard_is_per_scope() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = TempDir::new().unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let project = TempDir::new().unwrap();
+
+        let definition: SkillDefinition = serde_yaml::from_str("name: dual\ndescription: v1\n").unwrap();
+        write_skill_yaml(project.path(), SkillWriteScope::User, &definition, false).unwrap();
+
+        // Same name at PROJECT scope is allowed without overwrite: scopes are
+        // independent tiers (project shadows user at resolution time).
+        let (_, outcome) = write_skill_yaml(project.path(), SkillWriteScope::Project, &definition, false).unwrap();
+        assert_eq!(outcome, SkillWriteOutcome::Created);
+
+        // But re-writing the same scope without overwrite is refused.
+        let err = write_skill_yaml(project.path(), SkillWriteScope::User, &definition, false).unwrap_err();
+        assert!(err.to_string().contains("already exists"), "unexpected error: {err}");
+        let (_, outcome) = write_skill_yaml(project.path(), SkillWriteScope::User, &definition, true).unwrap();
+        assert_eq!(outcome, SkillWriteOutcome::Updated);
+    }
+
+    #[test]
+    fn parse_skill_category_label_accepts_known_and_rejects_unknown() {
+        assert!(parse_skill_category_label(" Review ").is_ok());
+        assert!(parse_skill_category_label("implementation").is_ok());
+        let err = parse_skill_category_label("bogus").unwrap_err();
+        assert!(err.to_string().contains("unknown category 'bogus'"));
     }
 
     #[test]

@@ -1,20 +1,26 @@
 use crate::cli_types::{
-    SkillCommand, SkillInstallArgs, SkillListArgs, SkillMigrateFromAoArgs, SkillPublishArgs, SkillRegistryAddArgs,
-    SkillRegistryCommand, SkillRegistryRemoveArgs, SkillSearchArgs, SkillShowArgs, SkillUninstallArgs, SkillUpdateArgs,
+    SkillCommand, SkillCreateArgs, SkillInstallArgs, SkillListArgs, SkillMigrateFromAoArgs, SkillPublishArgs,
+    SkillRegistryAddArgs, SkillRegistryCommand, SkillRegistryRemoveArgs, SkillSearchArgs, SkillShowArgs,
+    SkillUninstallArgs, SkillUpdateArgs,
 };
 use crate::{conflict_error, invalid_input_error, not_found_error, print_value, unavailable_error};
 use anyhow::{Context, Result};
+<<<<<<< HEAD
 use orchestrator_config::skill_definition::{skill_definition_warnings, SkillDefinition};
+=======
+use orchestrator_config::skill_definition::{SkillActivation, SkillDefinition, SkillModelPreference, SkillPrompt};
+>>>>>>> agent/gaps6/skill-create
 use orchestrator_config::skill_resolution::{list_available_skills, resolve_skill};
 use orchestrator_config::skill_scoping::{
     legacy_project_markdown_skills_dir, legacy_project_yaml_skills_dir, legacy_user_markdown_skills_dir,
     legacy_user_yaml_skills_dir, load_markdown_skill_file, load_skill_sources, markdown_skill_file_for_path,
-    migrate_legacy_skills_from_ao, project_markdown_skills_dir, project_skills_dir, user_markdown_skills_dir,
-    user_skills_dir, MigrateFromAoOutcome,
+    migrate_legacy_skills_from_ao, parse_skill_category_label, project_markdown_skills_dir, project_skills_dir,
+    user_markdown_skills_dir, user_skills_dir, validate_skill_slug, write_skill_yaml, MigrateFromAoOutcome,
+    SkillWriteOutcome, SkillWriteScope,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -321,6 +327,88 @@ fn install_local_markdown_skills(
     }
 
     Ok(installed)
+}
+
+const PROJECT_SHADOWS_USER_NOTE: &str =
+    "project-scoped skills shadow user-scoped skills with the same name during resolution";
+
+fn skill_write_outcome_label(outcome: SkillWriteOutcome) -> &'static str {
+    match outcome {
+        SkillWriteOutcome::Created => "created",
+        SkillWriteOutcome::Updated => "updated",
+    }
+}
+
+fn handle_create(args: SkillCreateArgs, project_root: &str, json: bool) -> Result<()> {
+    let name = validate_skill_slug(&args.name).map_err(|err| invalid_input_error(err.to_string()))?;
+
+    let description = args.description.trim().to_string();
+    if description.is_empty() {
+        return Err(invalid_input_error("description must not be empty"));
+    }
+
+    let prompt = match (args.prompt, args.prompt_file) {
+        (Some(prompt), None) => prompt,
+        (None, Some(path)) => {
+            fs::read_to_string(&path).with_context(|| format!("failed to read --prompt-file {}", path.display()))?
+        }
+        (None, None) => return Err(invalid_input_error("pass --prompt or --prompt-file")),
+        (Some(_), Some(_)) => unreachable!("clap conflicts_with prevents --prompt with --prompt-file"),
+    };
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(invalid_input_error("prompt must not be empty"));
+    }
+
+    let category = match args.category.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+        Some(raw) => Some(parse_skill_category_label(raw).map_err(|err| invalid_input_error(err.to_string()))?),
+        None => None,
+    };
+
+    // `--project` and `--user` are mutually exclusive via clap; project is the default.
+    let scope = match (args.project, args.user) {
+        (_, true) => SkillWriteScope::User,
+        (_, false) => SkillWriteScope::Project,
+    };
+
+    let definition = SkillDefinition {
+        name: name.clone(),
+        version: None,
+        description,
+        category,
+        activation: SkillActivation::default(),
+        prompt: SkillPrompt { system: Some(prompt), ..SkillPrompt::default() },
+        tool_policy: None,
+        model: SkillModelPreference::default(),
+        mcp_servers: Vec::new(),
+        timeout_secs: None,
+        capabilities: BTreeMap::new(),
+        extra_args: Vec::new(),
+        env: BTreeMap::new(),
+        codex_config_overrides: Vec::new(),
+        adapters: BTreeMap::new(),
+        tags: args.tags.into_iter().map(|tag| tag.trim().to_string()).filter(|tag| !tag.is_empty()).collect(),
+    };
+
+    let (path, outcome) = write_skill_yaml(Path::new(project_root), scope, &definition, args.force).map_err(|err| {
+        let message = err.to_string().replace("pass overwrite=true", "pass --force");
+        if message.contains("already") {
+            conflict_error(message)
+        } else {
+            invalid_input_error(message)
+        }
+    })?;
+
+    print_value(
+        serde_json::json!({
+            "name": name,
+            "scope": scope.to_string(),
+            "path": path,
+            "outcome": skill_write_outcome_label(outcome),
+            "note": PROJECT_SHADOWS_USER_NOTE,
+        }),
+        json,
+    )
 }
 
 fn handle_search(args: SkillSearchArgs, project_root: &str, json: bool) -> Result<()> {
@@ -994,6 +1082,143 @@ mod tests {
         fs::write(skill_dir.join("SKILL.md"), "---\nname: \"alpha\"\n---\n\nbody\n").expect("write skill file");
     }
 
+    fn create_args(name: &str) -> SkillCreateArgs {
+        SkillCreateArgs {
+            name: name.to_string(),
+            description: "A test skill".to_string(),
+            prompt: Some("Do the thing.".to_string()),
+            prompt_file: None,
+            category: None,
+            tags: Vec::new(),
+            project: false,
+            user: false,
+            force: false,
+        }
+    }
+
+    #[test]
+    fn create_defaults_to_project_scope_and_loader_resolves_it() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+
+        let mut args = create_args("authored-cli");
+        args.tags = vec!["one".to_string(), " two ".to_string()];
+        args.category = Some("review".to_string());
+        handle_create(args, root, true).expect("create should succeed");
+
+        let path = project_skills_dir(temp.path()).join("authored-cli.yaml");
+        assert!(path.exists(), "project-scope create should write {}", path.display());
+        assert!(!user_skills_dir().join("authored-cli.yaml").exists(), "default scope must not touch the user tier");
+
+        let sources = load_skill_sources(temp.path(), None).expect("load sources");
+        let resolved = resolve_skill("authored-cli", &sources).expect("resolve authored skill");
+        assert_eq!(resolved.source.to_string(), "project");
+        assert_eq!(resolved.definition.description, "A test skill");
+        assert_eq!(resolved.definition.prompt.system.as_deref(), Some("Do the thing."));
+        assert_eq!(resolved.definition.tags, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn create_user_scope_writes_to_user_skill_definitions_dir() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+
+        let mut args = create_args("user-cli");
+        args.user = true;
+        handle_create(args, root, true).expect("user-scope create should succeed");
+
+        let expected = home.path().join(".animus").join("config").join("skill_definitions").join("user-cli.yaml");
+        assert!(expected.exists(), "user-scope create should write {}", expected.display());
+        assert!(
+            !project_skills_dir(temp.path()).join("user-cli.yaml").exists(),
+            "user scope must not touch the project tier"
+        );
+
+        let sources = load_skill_sources(temp.path(), None).expect("load sources");
+        let resolved = resolve_skill("user-cli", &sources).expect("resolve user-scoped skill");
+        assert_eq!(resolved.source.to_string(), "user");
+    }
+
+    #[test]
+    fn create_refuses_overwrite_without_force() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+
+        handle_create(create_args("dup-cli"), root, true).expect("first create");
+        let error = handle_create(create_args("dup-cli"), root, true).expect_err("second create should fail");
+        let message = error.to_string();
+        assert!(message.contains("already exists"), "got: {message}");
+        assert!(message.contains("--force"), "refusal should suggest --force, got: {message}");
+        assert!(!message.contains("overwrite=true"), "CLI error must not leak the MCP remedy: {message}");
+
+        let mut forced = create_args("dup-cli");
+        forced.description = "Replaced".to_string();
+        forced.force = true;
+        handle_create(forced, root, true).expect("forced create should succeed");
+
+        let sources = load_skill_sources(temp.path(), None).expect("load sources");
+        let resolved = resolve_skill("dup-cli", &sources).expect("resolve");
+        assert_eq!(resolved.definition.description, "Replaced");
+    }
+
+    #[test]
+    fn create_validates_slug_prompt_and_category() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+
+        for bad in ["../escape", "Has Space", "UPPER", "a/b"] {
+            let mut args = create_args(bad);
+            args.name = bad.to_string();
+            assert!(handle_create(args, root, true).is_err(), "slug {bad:?} should be rejected");
+        }
+
+        let mut no_prompt = create_args("no-prompt");
+        no_prompt.prompt = None;
+        let error = handle_create(no_prompt, root, true).expect_err("missing prompt should fail");
+        assert!(error.to_string().contains("--prompt"));
+
+        let mut blank_prompt = create_args("blank-prompt");
+        blank_prompt.prompt = Some("   ".to_string());
+        assert!(handle_create(blank_prompt, root, true).is_err(), "blank prompt should be rejected");
+
+        let mut bad_category = create_args("bad-category");
+        bad_category.category = Some("bogus".to_string());
+        let error = handle_create(bad_category, root, true).expect_err("unknown category should fail");
+        assert!(error.to_string().contains("unknown category 'bogus'"));
+    }
+
+    #[test]
+    fn create_reads_prompt_from_file() {
+        let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let temp = tempfile::tempdir().expect("tempdir");
+        let root = temp.path().to_str().expect("utf8 path");
+
+        let prompt_path = temp.path().join("prompt.md");
+        fs::write(&prompt_path, "Prompt from file.\n").expect("write prompt file");
+        let mut args = create_args("from-file");
+        args.prompt = None;
+        args.prompt_file = Some(prompt_path);
+        handle_create(args, root, true).expect("create from --prompt-file");
+
+        let sources = load_skill_sources(temp.path(), None).expect("load sources");
+        let resolved = resolve_skill("from-file", &sources).expect("resolve");
+        assert_eq!(resolved.definition.prompt.system.as_deref(), Some("Prompt from file."));
+    }
+
     #[test]
     fn uninstall_removes_state_entries_and_materialized_files() {
         let _guard = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
@@ -1148,6 +1373,7 @@ mod tests {
 
 pub(crate) async fn handle_skill(command: SkillCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
+        SkillCommand::Create(args) => handle_create(args, project_root, json),
         SkillCommand::Search(args) => handle_search(args, project_root, json),
         SkillCommand::Install(args) => handle_install(args, project_root, json),
         SkillCommand::List(args) => handle_list(args, project_root, json),
