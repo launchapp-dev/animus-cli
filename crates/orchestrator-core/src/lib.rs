@@ -48,8 +48,9 @@ pub use execution_projection::{
     builtin_execution_projector_registry, execution_fact_subject_kind, project_execution_fact,
     project_requirement_workflow_status, project_schedule_dispatch_attempt, project_schedule_dispatch_missed,
     project_schedule_execution_fact, project_task_blocked_with_reason, project_task_execution_fact,
-    project_task_status, project_task_terminal_workflow_status, project_task_workflow_start, ExecutionProjector,
-    ExecutionProjectorRegistry, WORKFLOW_RUNNER_BLOCKED_PREFIX,
+    project_task_status, project_task_terminal_workflow_status, project_task_workflow_pause_cleared,
+    project_task_workflow_paused, project_task_workflow_start, ExecutionProjector, ExecutionProjectorRegistry,
+    WORKFLOW_PAUSED_REASON_PREFIX, WORKFLOW_RUNNER_BLOCKED_PREFIX,
 };
 pub use flavor::{
     list_available_flavor_names, load_flavor, locate_flavor_manifest, FlavorDefaults, FlavorManifest,
@@ -163,7 +164,7 @@ pub use workflow_config::{
     WorkflowDefinition, WorkflowPhaseConfig, WorkflowPhaseEntry, WorkflowSchedule, WorkflowTrigger, WorkflowVariable,
     WORKFLOW_CONFIG_FILE_NAME, WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
 };
-pub use workflow_events::{dispatch_workflow_event, WorkflowEvent, WorkflowEventOutcome};
+pub use workflow_events::{dispatch_workflow_event, workflow_task_id, WorkflowEvent, WorkflowEventOutcome};
 pub use workflow_runner_registry::{
     active_workflow_runner_ids, register_workflow_runner_pid, unregister_workflow_runner_pid,
 };

@@ -79,6 +79,32 @@ All notable changes to this project will be documented in this file.
   than one required role is missing, the message also prints the single
   composed fix (`animus plugin install-defaults --flavor default --yes`)
   alongside the per-role install commands.
+### Fixed
+
+- Workflow lifecycle controls no longer leave the bound task in unexplained
+  ghost state. `animus workflow cancel` now syncs the task to `cancelled`
+  (unless already terminal), matching the daemon-side execution-fact
+  projection and the orphan reconciler, so a CLI-local cancel can no longer
+  strand the task in-progress forever. `animus workflow pause` annotates the
+  task's `blocked_reason` with `paused by workflow <id>` (informational only
+  — task status and the `paused` flag are untouched) so `animus subject get`
+  explains the stall, and `animus workflow resume` clears exactly that
+  annotation without clobbering genuine failure reasons. Resetting a subject
+  with `animus subject status ... --status ready` now prints an
+  `unstuck: cleared ...` line naming the `paused` / `blocked_*` flags the
+  transition cleared.
+
+### Changed
+
+- `animus daemon health` now leads its human output with a one-line verdict:
+  `healthy: true`, `healthy: true (paused)` (paused runtime is a deliberate
+  operator action, not a failure), or `healthy: false`. The verdict is
+  `false` when the daemon is down/crashed, a critical subsystem is failing,
+  or any plugin reports unhealthy (including supervisor-disabled plugins);
+  transitional degraded states stay `true`. The same boolean is added
+  additively as a `healthy` key to `animus daemon health --json` and the
+  `animus.daemon.health` MCP tool on the live control-wire path (the offline
+  snapshot already carried it).
 
 - **BREAKING:** `animus daemon start` now always starts the daemon as a
   detached background process. Previously it silently fell through to the

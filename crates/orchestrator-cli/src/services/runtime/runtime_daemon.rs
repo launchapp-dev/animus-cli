@@ -172,12 +172,16 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
         match client.daemon_health().await {
             Ok(response) => {
                 let pause = runtime_pause_state(project_root);
+                let healthy = daemon_health_verdict(response.status, &response.plugins);
                 if json {
                     let mut value = serde_json::to_value(&response)?;
+                    if let Some(map) = value.as_object_mut() {
+                        map.insert("healthy".to_string(), serde_json::Value::Bool(healthy));
+                    }
                     overlay_runtime_pause(&mut value, project_root);
                     return print_value(value, true);
                 }
-                return render_daemon_health_human(&response, pause);
+                return render_daemon_health_human(&response, healthy, pause);
             }
             Err(err) if orchestrator_daemon_runtime::control::is_method_unavailable(&err) => {
                 tracing::debug!(error = %err, "daemon/health wire unavailable; falling back to local");
@@ -188,31 +192,86 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
 
     let mut health = orchestrator_core::load_daemon_health_snapshot(Path::new(project_root)).await?;
     let pid = read_daemon_pid(project_root);
-    if let Some(pid) = pid {
-        let alive = is_process_alive(pid);
-        health.daemon_pid = Some(pid);
-        health.process_alive = Some(alive);
-        if !alive && matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
-            health.status = DaemonStatus::Crashed;
-            health.healthy = false;
-            health.runtime_paused = false;
-            health.paused_at = None;
-            remove_daemon_pid(project_root);
-            let _ = set_daemon_pid(project_root, None);
-        }
-    } else if matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused) {
-        health.status = DaemonStatus::Crashed;
-        health.healthy = false;
-        health.runtime_paused = false;
-        health.paused_at = None;
+    let alive = pid.map(is_process_alive);
+    if finalize_offline_health(&mut health, pid, alive) {
+        remove_daemon_pid(project_root);
+        let _ = set_daemon_pid(project_root, None);
+    }
+    if !json {
+        println!("{}", health_verdict_line(health.healthy, health.runtime_paused));
     }
     print_value(health, json)
 }
 
+/// One-line health verdict rule (documented in `docs/reference/cli/index.md`):
+///
+/// - `false` when the daemon is not running (`Down`) or crashed/critically
+///   failing (`Unhealthy`), or when any plugin row reports `Unhealthy` or
+///   `Down` (this covers supervisor-disabled plugins, which surface as
+///   `Unhealthy` rows).
+/// - `true` otherwise, including transitional `Degraded` daemon states
+///   (starting/stopping, plugin restarting) and a paused runtime — paused
+///   is a deliberate operator action, rendered as `healthy: true (paused)`.
+pub(crate) fn daemon_health_verdict(
+    status: animus_control_protocol::types::DaemonHealthStatus,
+    plugins: &[animus_control_protocol::types::PluginHealth],
+) -> bool {
+    use animus_control_protocol::types::DaemonHealthStatus as Status;
+    let daemon_ok = matches!(status, Status::Healthy | Status::Degraded);
+    let plugins_ok = plugins.iter().all(|plugin| matches!(plugin.status, Status::Healthy | Status::Degraded));
+    daemon_ok && plugins_ok
+}
+
+pub(crate) fn health_verdict_line(healthy: bool, runtime_paused: bool) -> String {
+    if healthy && runtime_paused {
+        "healthy: true (paused)".to_string()
+    } else {
+        format!("healthy: {healthy}")
+    }
+}
+
+/// Apply pid-liveness crash detection to an offline `DaemonHealth` snapshot:
+/// a snapshot claiming Running/Paused with a dead (or missing) pid is
+/// downgraded to Crashed with `healthy: false`. Returns `true` when the
+/// stale pid record should be removed from disk.
+pub(crate) fn finalize_offline_health(
+    health: &mut orchestrator_core::DaemonHealth,
+    pid: Option<u32>,
+    alive: Option<bool>,
+) -> bool {
+    let claims_alive = matches!(health.status, DaemonStatus::Running | DaemonStatus::Paused);
+    let mark_crashed = |health: &mut orchestrator_core::DaemonHealth| {
+        health.status = DaemonStatus::Crashed;
+        health.healthy = false;
+        health.runtime_paused = false;
+        health.paused_at = None;
+    };
+    match pid {
+        Some(pid) => {
+            let alive = alive.unwrap_or(false);
+            health.daemon_pid = Some(pid);
+            health.process_alive = Some(alive);
+            if !alive && claims_alive {
+                mark_crashed(health);
+                return true;
+            }
+            false
+        }
+        None => {
+            if claims_alive {
+                mark_crashed(health);
+            }
+            false
+        }
+    }
+}
+
 fn render_daemon_health_human(
     response: &animus_control_protocol::types::DaemonHealthResponse,
+    healthy: bool,
     (runtime_paused, paused_at): (bool, Option<String>),
 ) -> Result<()> {
+    println!("{}", health_verdict_line(healthy, runtime_paused));
     println!("daemon: {:?}", response.status);
     if runtime_paused {
         match paused_at {
@@ -1569,6 +1628,130 @@ mod tests {
 
         assert!(stream_workflow_matches(&entry, Some("work-planner")));
         assert!(!stream_workflow_matches(&entry, Some("planner")));
+    }
+
+    fn plugin_row(
+        status: animus_control_protocol::types::DaemonHealthStatus,
+    ) -> animus_control_protocol::types::PluginHealth {
+        animus_control_protocol::types::PluginHealth {
+            name: "animus-subject-default".to_string(),
+            kind: "task".to_string(),
+            status,
+            uptime_ms: None,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn verdict_true_for_healthy_daemon_with_healthy_plugins() {
+        use animus_control_protocol::types::DaemonHealthStatus as S;
+        assert!(daemon_health_verdict(S::Healthy, &[plugin_row(S::Healthy)]));
+        assert!(daemon_health_verdict(S::Healthy, &[]));
+    }
+
+    #[test]
+    fn verdict_true_for_transitional_degraded_daemon() {
+        use animus_control_protocol::types::DaemonHealthStatus as S;
+        assert!(daemon_health_verdict(S::Degraded, &[plugin_row(S::Degraded)]));
+    }
+
+    #[test]
+    fn verdict_false_when_daemon_down_or_unhealthy() {
+        use animus_control_protocol::types::DaemonHealthStatus as S;
+        assert!(!daemon_health_verdict(S::Down, &[]));
+        assert!(!daemon_health_verdict(S::Unhealthy, &[plugin_row(S::Healthy)]));
+    }
+
+    #[test]
+    fn verdict_false_when_any_plugin_unhealthy() {
+        // Supervisor-disabled plugins surface as Unhealthy rows (with the
+        // top-level verdict only Degraded), so this also covers the
+        // disabled-by-supervisor case.
+        use animus_control_protocol::types::DaemonHealthStatus as S;
+        assert!(!daemon_health_verdict(S::Degraded, &[plugin_row(S::Healthy), plugin_row(S::Unhealthy)]));
+        assert!(!daemon_health_verdict(S::Healthy, &[plugin_row(S::Down)]));
+    }
+
+    #[test]
+    fn verdict_line_marks_paused_runtime_as_healthy() {
+        assert_eq!(health_verdict_line(true, true), "healthy: true (paused)");
+        assert_eq!(health_verdict_line(true, false), "healthy: true");
+        assert_eq!(health_verdict_line(false, false), "healthy: false");
+        // A crashed daemon never reports paused, but the verdict must win
+        // even if stale pause state lingers on disk.
+        assert_eq!(health_verdict_line(false, true), "healthy: false");
+    }
+
+    fn offline_health(status: DaemonStatus, runtime_paused: bool) -> orchestrator_core::DaemonHealth {
+        orchestrator_core::DaemonHealth {
+            healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
+            status,
+            runner_connected: false,
+            runner_pid: None,
+            provider_plugins_healthy: false,
+            active_agents: 0,
+            pool_size: None,
+            project_root: None,
+            daemon_pid: None,
+            process_alive: None,
+            pool_utilization_percent: None,
+            queued_tasks: None,
+            total_agents_spawned: None,
+            total_agents_completed: None,
+            total_agents_failed: None,
+            flavor: None,
+            runtime_paused,
+            paused_at: runtime_paused.then(|| "2026-06-11T00:00:00Z".to_string()),
+        }
+    }
+
+    #[test]
+    fn offline_running_snapshot_with_live_pid_stays_healthy() {
+        let mut health = offline_health(DaemonStatus::Running, false);
+        let cleanup = finalize_offline_health(&mut health, Some(4242), Some(true));
+        assert!(!cleanup);
+        assert!(health.healthy);
+        assert_eq!(health.status, DaemonStatus::Running);
+        assert_eq!(health_verdict_line(health.healthy, health.runtime_paused), "healthy: true");
+    }
+
+    #[test]
+    fn offline_paused_snapshot_reports_healthy_true_paused() {
+        let mut health = offline_health(DaemonStatus::Paused, true);
+        let cleanup = finalize_offline_health(&mut health, Some(4242), Some(true));
+        assert!(!cleanup);
+        assert!(health.healthy);
+        assert!(health.runtime_paused);
+        assert_eq!(health_verdict_line(health.healthy, health.runtime_paused), "healthy: true (paused)");
+    }
+
+    #[test]
+    fn offline_running_snapshot_with_dead_pid_downgrades_to_crashed() {
+        let mut health = offline_health(DaemonStatus::Running, false);
+        let cleanup = finalize_offline_health(&mut health, Some(4242), Some(false));
+        assert!(cleanup, "stale pid record must be cleaned up");
+        assert!(!health.healthy);
+        assert_eq!(health.status, DaemonStatus::Crashed);
+        assert_eq!(health_verdict_line(health.healthy, health.runtime_paused), "healthy: false");
+    }
+
+    #[test]
+    fn offline_running_snapshot_without_pid_downgrades_to_crashed() {
+        let mut health = offline_health(DaemonStatus::Running, false);
+        let cleanup = finalize_offline_health(&mut health, None, None);
+        assert!(!cleanup, "no pid record to clean");
+        assert!(!health.healthy);
+        assert_eq!(health.status, DaemonStatus::Crashed);
+    }
+
+    #[test]
+    fn offline_stopped_snapshot_stays_unhealthy_false_verdict() {
+        let mut health = offline_health(DaemonStatus::Stopped, false);
+        let cleanup = finalize_offline_health(&mut health, None, None);
+        assert!(!cleanup);
+        assert!(!health.healthy);
+        assert_eq!(health.status, DaemonStatus::Stopped);
+        assert_eq!(health_verdict_line(health.healthy, health.runtime_paused), "healthy: false");
     }
 
     #[test]
