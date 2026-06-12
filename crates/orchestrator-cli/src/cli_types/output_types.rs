@@ -3,7 +3,6 @@ use clap::{Args, Subcommand};
 #[derive(Debug, Subcommand)]
 pub(crate) enum OutputCommand {
     /// Read run event payloads.
-    #[command(alias = "run")]
     Read(OutputRunArgs),
     /// Read persisted workflow phase outputs.
     PhaseOutputs(OutputPhaseOutputsArgs),

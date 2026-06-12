@@ -307,7 +307,7 @@ pub(crate) struct WorkflowPromptRenderArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowResumeArgs {
-    #[arg(short = 'i', long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    #[arg(long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
     pub(crate) id: String,
     #[arg(
         long,
@@ -368,7 +368,6 @@ pub(crate) struct WorkflowPruneArgs {
     pub(crate) status: Option<String>,
     #[arg(
         long,
-        visible_alias = "force",
         default_value_t = false,
         help = "Actually delete the matching runs. Without this flag the command is a dry-run preview."
     )]
@@ -381,7 +380,6 @@ pub(crate) struct WorkflowDeleteArgs {
     pub(crate) run_id: String,
     #[arg(
         long,
-        visible_alias = "force",
         default_value_t = false,
         help = "Actually delete the run. Without this flag the command is a dry-run preview."
     )]

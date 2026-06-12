@@ -9,7 +9,7 @@ impl AoMcpServer {
     )]
     async fn ao_output_run(&self, params: Parameters<RunIdInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
-        let args = vec!["output".to_string(), "run".to_string(), "--run-id".to_string(), input.run_id];
+        let args = vec!["output".to_string(), "read".to_string(), "--run-id".to_string(), input.run_id];
         self.run_tool("animus.output.run", args, input.project_root).await
     }
 

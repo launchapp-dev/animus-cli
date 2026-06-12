@@ -10,7 +10,6 @@ pub(crate) enum SkillCommand {
     /// List all available skills (built-in, user, project, and installed).
     List(SkillListArgs),
     /// Show details of a resolved skill definition.
-    #[command(alias = "show")]
     Info(SkillShowArgs),
     /// Re-resolve one or all installed skills.
     Update(SkillUpdateArgs),

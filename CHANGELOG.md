@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING (v0.6 alias retirement)**: the legacy CLI aliases added during
+  the v0.5.13 conventions convergence were removed with no replacement
+  aliases (matching the v0.4 no-alias precedent) — `pack inspect` (use
+  `pack info`), `skill show` (use `skill info`), `flavor describe` (use
+  `flavor info`), `output run` (use `output read`), `project load` (use
+  `project set-active`), the hidden `animus git confirm {request, respond,
+  outcome}` subcommand (use `animus approval`), the `-i` short flag on
+  `workflow resume` (use `--id` / `--workflow-id`), and the `--force`
+  visible alias for `--yes` on `workflow prune` / `workflow delete`.
+
 ## [0.5.13] - 2026-06-11
 
 **Human-in-the-loop agents, MCP pass-down on every provider, an event-driven
