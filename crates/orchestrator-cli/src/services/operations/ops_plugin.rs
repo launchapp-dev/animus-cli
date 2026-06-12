@@ -2559,7 +2559,7 @@ fn plugin_list_warning_lines(warnings: &[PluginWarningRow], verbose: bool) -> Ve
     for warning in warnings {
         // Collapse only the stale not-found entries; an existing binary whose
         // manifest probe failed is a real load error and stays per-entry.
-        if matches!(warning.source.as_str(), "explicit_config" | "project_local")
+        if matches!(&*warning.source, "explicit_config" | "project_local")
             && warning.reason.starts_with("configured binary not found")
         {
             stale_config += 1;
