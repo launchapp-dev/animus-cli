@@ -106,8 +106,16 @@ fn handle_cleanup(json: bool) -> Result<()> {
 }
 
 fn handle_status(project_root: &Path, json: bool) -> Result<()> {
+    print_value(telemetry_status(project_root), json)
+}
+
+/// Build the offline-capable telemetry status (opt-in state, install id,
+/// pending buffer). Reads disk only — never connects to the daemon — so it
+/// is safe to surface when the daemon is down. Shared by `daemon metrics
+/// status`, the offline `daemon metrics` fallback, and `daemon observe`.
+pub(crate) fn telemetry_status(project_root: &Path) -> impl Serialize {
     let metrics = read_metrics_block_without_creating(project_root).unwrap_or_default();
-    let status = MetricsStatus {
+    MetricsStatus {
         enabled: metrics.enabled,
         env_disabled: metrics_env_disabled(),
         endpoint: metrics.endpoint,
@@ -115,8 +123,24 @@ fn handle_status(project_root: &Path, json: bool) -> Result<()> {
         install_id: metrics.install_id,
         pending_events: pending_event_count(project_root),
         last_send: last_send_timestamp(project_root),
+    }
+}
+
+/// One-line human summary of the offline telemetry status, used in the
+/// offline `daemon metrics` fallback and the `daemon observe` matrix.
+pub(crate) fn telemetry_status_summary_line(project_root: &Path) -> String {
+    let metrics = read_metrics_block_without_creating(project_root).unwrap_or_default();
+    let opt_in = match metrics.enabled {
+        Some(true) => "enabled",
+        Some(false) => "disabled",
+        None => "unset",
     };
-    print_value(status, json)
+    let env = if metrics_env_disabled() { ", env-suppressed" } else { "" };
+    format!(
+        "telemetry: {opt_in}{env}; pending_events={}, install_id={}",
+        pending_event_count(project_root),
+        metrics.install_id.as_deref().unwrap_or("(none)"),
+    )
 }
 
 fn handle_enable(_project_root: &Path, json: bool) -> Result<()> {

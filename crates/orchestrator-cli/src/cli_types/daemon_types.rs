@@ -40,6 +40,62 @@ pub(crate) enum DaemonCommand {
     /// Print daemon observability metrics (counters, gauges, histograms);
     /// subcommands manage opt-in anonymous usage telemetry.
     Metrics(DaemonMetricsCommandArgs),
+    /// One observability front-door: routes to the right log/event surface.
+    /// Bare invocation prints a data-source matrix plus a recent merged tail;
+    /// flags delegate to the existing `events`/`logs`/`stream` handlers.
+    Observe(DaemonObserveArgs),
+}
+
+/// Which underlying observability surface `daemon observe --source` routes to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub(crate) enum ObserveSource {
+    /// Daemon event history (`daemon events`): queue/workflow lifecycle records.
+    Events,
+    /// Daemon/workflow/run structured logs (`daemon logs`).
+    Logs,
+    /// Live structured log stream (`daemon stream`).
+    Stream,
+    /// Workflow lifecycle events filtered to a workflow (`daemon stream`).
+    Workflow,
+}
+
+/// `daemon observe` is a routing front-door, not a new data path. It reuses the
+/// `events` / `logs` / `stream` handlers; no flag introduces its own reader.
+#[derive(Debug, Args)]
+pub(crate) struct DaemonObserveArgs {
+    #[arg(
+        long,
+        action = ArgAction::SetTrue,
+        help = "Follow live: delegate to the `daemon stream --pretty` handler."
+    )]
+    pub(crate) follow: bool,
+    #[arg(
+        long,
+        value_name = "DURATION",
+        help = "Recent window (e.g. 15m, 2h, 1d): merge daemon events + logs chronologically, labeling each line's source."
+    )]
+    pub(crate) since: Option<String>,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "SOURCE",
+        help = "Route to a specific existing surface: logs | events | stream | workflow."
+    )]
+    pub(crate) source: Option<ObserveSource>,
+    #[arg(
+        long,
+        value_name = "ID",
+        help = "Scope to a workflow ID/ref where the underlying surface supports filtering."
+    )]
+    pub(crate) workflow: Option<String>,
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value_t = 20,
+        value_parser = parse_positive_usize,
+        help = "Number of recent merged lines to show in the bare/window views."
+    )]
+    pub(crate) limit: usize,
 }
 
 #[derive(Debug, Args)]

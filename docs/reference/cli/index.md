@@ -80,7 +80,11 @@ Note on overlapping observability surfaces: `daemon logs` reads the daemon's
 own process log and `daemon events` prints daemon event history, while
 `logs tail` reads the structured log storage backend and `events tail`
 streams workflow lifecycle events. They are distinct data sources, not
-aliases of each other.
+aliases of each other. **Start at `animus daemon observe`** — it is the single
+entry point that prints a data-source matrix (verb | data source | live? |
+filters | when to use) and routes to the right surface via `--source`,
+`--follow`, `--since`, and `--workflow`. See the `animus daemon observe`
+section below and `docs/reference/observability.md`.
 
 ## Top-Level Command Tree
 
@@ -96,6 +100,7 @@ animus
 │   ├── health               Show daemon health diagnostics
 │   ├── pause                Pause daemon scheduling
 │   ├── resume               Resume daemon scheduling
+│   ├── observe              One observability front-door: routes to events/logs/stream; bare prints a data-source matrix + recent merged tail
 │   ├── events               Print recent daemon event history and exit; `--follow` keeps streaming new events until Ctrl-C
 │   ├── logs                 Read daemon logs
 │   ├── stream               Stream structured log events in real-time across daemon, workflows, and runs
@@ -103,7 +108,7 @@ animus
 │   ├── agents               List daemon-managed agents
 │   ├── config               Update daemon automation configuration
 │   ├── preflight            Report plugin preflight status (which required plugins are installed, which are missing, and the fix commands)
-│   └── metrics              Print daemon observability metrics (counters, gauges, histograms); subcommands manage opt-in anonymous usage telemetry (v0.5.14)
+│   └── metrics              Print daemon observability metrics (counters, gauges, histograms); subcommands manage opt-in anonymous usage telemetry (v0.5.14). Offline (no daemon): bare invocation prints the telemetry status and exits 0; `--watch` still requires a live daemon
 │       ├── status           Show telemetry enabled flag, install_id, pending event count, last-send timestamp
 │       ├── enable           Opt in to anonymous metrics (skips the first-run prompt re-show)
 │       ├── disable          Opt out and drop any buffered events
@@ -529,6 +534,51 @@ the `animus.daemon.health` MCP tool) carries the same boolean as an additive
 - A paused runtime is a deliberate operator action, not a failure: it
   renders as `healthy: true (paused)` (JSON: `healthy: true` plus
   `runtime_paused: true`).
+
+### `animus daemon observe` (observability front-door)
+
+`animus daemon observe` is the single entry point for the daemon's
+observability surfaces. It is a **router, not a new data path** — every branch
+delegates to the existing `daemon events` / `daemon logs` / `daemon stream`
+handlers; it adds no reader of its own.
+
+| Flag | Behavior |
+|---|---|
+| `--follow` | Live follow: delegates to `daemon stream` (pretty for humans, raw JSONL under `--json`). Carries `--workflow` and `--limit` as the stream tail. Cannot be combined with `--since` (a live tail has no past window). |
+| `--since <DURATION>` | Recent window (`15m`, `2h`, `1d`): merges daemon **events** + **logs** chronologically and labels each line's source (`events` / `logs`). Also applies to `--source` routes (a `--source stream`/`workflow` request with `--since` falls back to the windowed log collector). |
+| `--source <logs\|events\|stream\|workflow>` | Route to one specific existing surface. `events` uses the project-scoped, source-labeled reader. `workflow` and `stream` route to the pretty `daemon stream` tail in human mode; under `--json` or `--since` they fall back to the scoped log reader so the JSON contract and the window still hold. Combining a non-stream `--source` (e.g. `events`) with `--follow` is rejected — `--follow` only tails the live stream. |
+| `--workflow <ID>` | Scope to a workflow id/ref where the underlying surface supports it (the stream surface and the merged-window event filter). |
+| `--limit <COUNT>` | Number of recent merged lines for the bare/window views, and the stream tail for delegated surfaces. Default `20`. |
+
+Bare `animus daemon observe` prints a **data-source matrix** (verb | data
+source | live? | filters | when to use) followed by the last `--limit` merged
+lines, so an operator who doesn't know which surface to reach for can start
+here. `--json` returns `{matrix, recent}` for the bare form and `{lines}` for
+the window/source forms, each line carrying its `source` label.
+
+Because it reuses the underlying readers, `daemon observe` inherits their
+scope: events are project-scoped, logs are per-project structured logs, and
+the live stream spans daemon + workflows + runs. See
+`docs/reference/observability.md` for the full surface map.
+
+### `animus daemon metrics` (offline-tolerant display)
+
+Bare `animus daemon metrics` prints the live counter/gauge/histogram snapshot
+when the daemon is reachable over the control socket. When the daemon is
+**not running**, the live counters are unavailable but the offline-capable
+telemetry status (opt-in state, install id, pending buffer) still prints — so
+the command degrades instead of erroring:
+
+- human: prints `daemon not running; live metrics unavailable` plus a
+  one-line telemetry summary, and exits `0`.
+- `--json`: returns `{"daemon_running": false, "telemetry": {...}}` and exits
+  `0`.
+
+The hard "daemon required" behavior is retained only for `--watch`: a live
+dashboard is meaningless without a running daemon, so `daemon metrics --watch`
+still errors when the daemon is down. The telemetry subcommands
+(`status` / `enable` / `disable` / `flush` / `cleanup`) are unchanged and have
+always worked offline.
 
 ### `animus agent run` / `animus chat send` (reasoning effort)
 

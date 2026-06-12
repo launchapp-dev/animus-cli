@@ -6,6 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- One observability entry point: `animus daemon observe`. PO review found five
+  log/event verbs (`daemon logs`, `daemon events`, `daemon stream`,
+  `logs tail`, `events tail`) with no front-door — distinct data sources with
+  no signpost for which answers which question. `daemon observe` is a routing
+  front-door, not a new data path: `--follow` delegates to `daemon stream
+  --pretty`; `--source <logs|events|stream|workflow>` routes to the specific
+  existing handler; `--since <dur>` merges daemon events + logs chronologically
+  across a recent window, labeling each line's source; `--workflow <id>` scopes
+  surfaces that support filtering. Bare `daemon observe` prints a data-source
+  matrix (verb | data source | live? | filters | when to use) plus the last
+  ~20 merged lines. `--json` returns `{matrix, recent}` (bare) or `{lines}`
+  (window/source). Every branch reuses the existing `events`/`logs`/`stream`
+  readers — zero duplicated data paths.
 - Skill application is now VERIFIABLE end to end. `animus output
   phase-outputs` grew a human-readable per-phase view (verdict, reason,
   commit summary) with a Skills block showing requested vs applied
@@ -163,6 +176,16 @@ All notable changes to this project will be documented in this file.
   gauges, histograms; `--watch / --interval-secs / --pretty` unchanged),
   and the opt-in anonymous usage telemetry controls moved under it as
   `animus daemon metrics {status, enable, disable, flush, cleanup}`.
+
+### Fixed
+
+- `animus daemon metrics` no longer hard-errors when the daemon is offline.
+  The telemetry subcommands already worked offline; the bare display did not.
+  Now bare `animus daemon metrics` with no daemon prints `daemon not running;
+  live metrics unavailable` plus the offline telemetry status summary and exits
+  `0` (`--json` returns `{"daemon_running": false, "telemetry": {...}}`). The
+  hard "daemon required" behavior is retained only for `--watch`, where a live
+  dashboard is meaningless without a running daemon.
 
 ### Removed
 

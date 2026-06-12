@@ -8,6 +8,29 @@ The metrics endpoint shipped in v0.4.12 alongside the existing
 `daemon health`, `daemon events`, and `daemon logs` surfaces. Use this
 page to wire the daemon into your observability stack.
 
+## Front-door: `animus daemon observe`
+
+There are several distinct log/event surfaces (`daemon events`, `daemon logs`,
+`daemon stream`, `daemon metrics`), each reading a different data source.
+`animus daemon observe` is the single entry point that routes to the right one
+— it is a router over the existing handlers, not a new data path.
+
+| `observe` form | Delegates to | Live? | When to use |
+| --- | --- | --- | --- |
+| `daemon observe` (bare) | matrix + merged events/logs tail | no | you don't know which surface to reach for |
+| `daemon observe --follow` | `daemon stream --pretty` | yes | tail activity as it happens |
+| `daemon observe --since <dur>` | merged `events` + `logs` | no | recent window, chronological, source-labeled |
+| `daemon observe --source events` | `daemon events` | no | scheduler dispatch/completion records |
+| `daemon observe --source logs` | `daemon logs` | no | recent daemon/workflow/run log lines |
+| `daemon observe --source stream` | `daemon stream` (one-shot) | no | structured log tail |
+| `daemon observe --source workflow` | `daemon stream` (workflow-filtered) | no | one workflow's lifecycle |
+
+`--workflow <id>` scopes the surfaces that support filtering; `--limit`
+(default 20) caps the merged tail and the delegated stream tail. The bare and
+window forms label each merged line with its `source` (`events` / `logs`) and
+order them chronologically. `--json` returns `{matrix, recent}` (bare) or
+`{lines}` (window/source).
+
 ## Metrics
 
 ### Accessing the snapshot
@@ -23,9 +46,19 @@ animus daemon metrics --watch         # refresh every 5s (Ctrl+C to stop)
 animus daemon metrics --watch --interval-secs 1
 ```
 
-`daemon metrics` requires the daemon to be running — it talks over the
-control socket. There is no on-disk fallback because counters reset on
-daemon restart.
+The live counter/gauge/histogram snapshot requires the daemon to be running —
+it talks over the control socket, and counters reset on daemon restart so
+there is no on-disk fallback for them. **Offline behavior (bare invocation):**
+when the daemon is not running, `animus daemon metrics` no longer errors. It
+prints the offline-capable telemetry status instead and exits `0`:
+
+- human: `daemon not running; live metrics unavailable` plus a one-line
+  telemetry summary.
+- `--json`: `{"daemon_running": false, "telemetry": {...}}`.
+
+`animus daemon metrics --watch` keeps the hard requirement — a live dashboard
+is meaningless without a running daemon, so it still errors when the daemon is
+down.
 
 As of v0.5.14, `animus daemon metrics` also carries the opt-in anonymous usage
 telemetry controls as subcommands — `status`, `enable`, `disable`, `flush`,
