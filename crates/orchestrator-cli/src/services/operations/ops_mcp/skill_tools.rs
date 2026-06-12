@@ -506,8 +506,10 @@ impl AoMcpServer {
         let mut result = json!({
             "name": name,
             "path": path.to_string_lossy(),
-            "source": "project",
+            "source": scope.to_string(),
+            "scope": scope.to_string(),
             "outcome": skill_write_outcome_str(outcome),
+            "note": PROJECT_SHADOWS_USER_NOTE,
         });
         let warnings = definition_warning_strings(&definition);
         if !warnings.is_empty() {
@@ -515,18 +517,7 @@ impl AoMcpServer {
         }
         Ok(CallToolResult::structured(json!({
             "tool": "animus.skill.create",
-<<<<<<< HEAD
             "result": result,
-=======
-            "result": {
-                "name": name,
-                "path": path.to_string_lossy(),
-                "source": scope.to_string(),
-                "scope": scope.to_string(),
-                "outcome": skill_write_outcome_str(outcome),
-                "note": PROJECT_SHADOWS_USER_NOTE,
-            }
->>>>>>> agent/gaps6/skill-create
         })))
     }
 
@@ -637,8 +628,10 @@ impl AoMcpServer {
         let mut result = json!({
             "name": name,
             "path": path.to_string_lossy(),
-            "source": "project",
+            "source": scope.to_string(),
+            "scope": scope.to_string(),
             "outcome": skill_write_outcome_str(outcome),
+            "note": PROJECT_SHADOWS_USER_NOTE,
         });
         let warnings = definition_warning_strings(&definition);
         if !warnings.is_empty() {
@@ -646,18 +639,7 @@ impl AoMcpServer {
         }
         Ok(CallToolResult::structured(json!({
             "tool": "animus.skill.update",
-<<<<<<< HEAD
             "result": result,
-=======
-            "result": {
-                "name": name,
-                "path": path.to_string_lossy(),
-                "source": scope.to_string(),
-                "scope": scope.to_string(),
-                "outcome": skill_write_outcome_str(outcome),
-                "note": PROJECT_SHADOWS_USER_NOTE,
-            }
->>>>>>> agent/gaps6/skill-create
         })))
     }
 }

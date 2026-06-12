@@ -5,11 +5,9 @@ use crate::cli_types::{
 };
 use crate::{conflict_error, invalid_input_error, not_found_error, print_value, unavailable_error};
 use anyhow::{Context, Result};
-<<<<<<< HEAD
-use orchestrator_config::skill_definition::{skill_definition_warnings, SkillDefinition};
-=======
-use orchestrator_config::skill_definition::{SkillActivation, SkillDefinition, SkillModelPreference, SkillPrompt};
->>>>>>> agent/gaps6/skill-create
+use orchestrator_config::skill_definition::{
+    skill_definition_warnings, SkillActivation, SkillDefinition, SkillModelPreference, SkillPrompt,
+};
 use orchestrator_config::skill_resolution::{list_available_skills, resolve_skill};
 use orchestrator_config::skill_scoping::{
     legacy_project_markdown_skills_dir, legacy_project_yaml_skills_dir, legacy_user_markdown_skills_dir,
