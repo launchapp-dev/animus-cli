@@ -47,11 +47,10 @@ pub const PLUGIN_SCOPE_SCHEMA_V1: &str = "animus.plugin-scope.v1";
 /// loader reads.
 pub const PLUGIN_SCOPE_FILE: &str = "plugin-scope.yaml";
 
-/// Conventional path the loader probes for a flavor manifest. Matches the
-/// rule in `crates/orchestrator-core/src/flavor.rs`. Only used to decide
-/// the default mode when the project has neither a scope file nor a
-/// flavor name supplied by the caller.
-const FLAVOR_DEFAULT_MANIFEST_REL: &str = "flavors/default.toml";
+/// Canonical default flavor id. Mirrors
+/// `orchestrator_core::flavor::DEFAULT_FLAVOR_ID`; kept local so the
+/// plugin-host crate does not depend on `orchestrator-core`.
+pub const DEFAULT_FLAVOR_ID: &str = "default";
 
 /// How the scope filter behaves when no explicit decision has been
 /// recorded. The Cargo round-trip preserves the same wire constants
@@ -109,6 +108,12 @@ struct PluginScopeFile {
     schema: Option<String>,
     #[serde(default)]
     mode: Option<String>,
+    /// Active flavor selection, persisted by `animus plugin
+    /// install-defaults --flavor <name>` / `animus flavor install <name>`.
+    /// `None` (the common case) means the canonical [`DEFAULT_FLAVOR_ID`].
+    /// Drives which `flavors/<name>.toml` the scope resolver reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    active_flavor: Option<String>,
     #[serde(default)]
     allow: Vec<String>,
     #[serde(default)]
@@ -137,6 +142,12 @@ pub struct PluginScope {
     /// Stored so [`PluginScope::admits`] is a pure function of the
     /// loaded scope without re-reading disk.
     pub flavor_plugins: BTreeSet<String>,
+    /// Persisted active flavor selection from the scope file's
+    /// `active_flavor:` key. `None` means the canonical
+    /// [`DEFAULT_FLAVOR_ID`] is in effect. Surfaced so `animus flavor
+    /// current` and `animus plugin scope show` can report which flavor
+    /// the resolver is scoping against.
+    pub active_flavor: Option<String>,
     /// Path the scope was loaded from, if any. `None` means the scope
     /// was synthesized from defaults (no `plugin-scope.yaml` on disk).
     pub source_path: Option<PathBuf>,
@@ -157,6 +168,7 @@ impl Default for PluginScope {
             require: BTreeSet::new(),
             extras: BTreeSet::new(),
             flavor_plugins: BTreeSet::new(),
+            active_flavor: None,
             source_path: None,
             flavor_manifest_error: None,
         }
@@ -186,22 +198,60 @@ impl PluginScope {
     /// recorded on [`PluginScope::flavor_manifest_error`] so discovery
     /// can surface it as a [`crate::DiscoveryWarning`].
     pub fn load_for_project(project_root: &Path) -> Result<Self> {
-        let (flavor_plugins, flavor_manifest_error) = match load_flavor_required_slugs_from_disk(project_root) {
-            Ok(plugins) => (plugins, None),
-            Err(err) => {
-                let manifest_path = locate_default_flavor_manifest(project_root)
-                    .unwrap_or_else(|| project_root.join(FLAVOR_DEFAULT_MANIFEST_REL));
-                tracing::warn!(
-                    manifest = %manifest_path.display(),
-                    error = %format!("{err:#}"),
-                    "flavor manifest failed to load; flavor-only scope will admit NO plugins until it is fixed"
-                );
-                (BTreeSet::new(), Some((manifest_path, format!("{err:#}"))))
-            }
+        let active_flavor = read_active_flavor(project_root);
+        // A persisted active flavor whose `flavors/<name>.toml` is gone is
+        // STALE: resolve plugins against the `default` flavor instead of
+        // fail-closing to an empty admit set (matches the daemon and CLI
+        // resolvers). `active_flavor` is still surfaced verbatim so
+        // `scope show` reports what the operator recorded.
+        let stale_fallback = matches!(active_flavor.as_deref(),
+            Some(name) if name != DEFAULT_FLAVOR_ID && locate_flavor_manifest(project_root, name).is_none());
+        let flavor_name: String = if stale_fallback {
+            let name = active_flavor.as_deref().unwrap_or(DEFAULT_FLAVOR_ID);
+            tracing::warn!(
+                flavor = %name,
+                "persisted active flavor `{name}` has no manifest on disk (flavors/{name}.toml); \
+                 falling back to the `default` flavor for plugin scope resolution"
+            );
+            DEFAULT_FLAVOR_ID.to_string()
+        } else {
+            active_flavor.as_deref().unwrap_or(DEFAULT_FLAVOR_ID).to_string()
         };
-        let flavor_present = !flavor_plugins.is_empty() || locate_default_flavor_manifest(project_root).is_some();
+        let flavor_name = flavor_name.as_str();
+        let (mut flavor_plugins, flavor_manifest_error) =
+            match load_flavor_required_slugs_from_disk(project_root, flavor_name) {
+                Ok(plugins) => (plugins, None),
+                Err(err) => {
+                    let manifest_path = locate_flavor_manifest(project_root, flavor_name)
+                        .unwrap_or_else(|| project_root.join("flavors").join(format!("{flavor_name}.toml")));
+                    tracing::warn!(
+                        manifest = %manifest_path.display(),
+                        error = %format!("{err:#}"),
+                        "flavor manifest failed to load; flavor-only scope will admit NO plugins until it is fixed"
+                    );
+                    (BTreeSet::new(), Some((manifest_path, format!("{err:#}"))))
+                }
+            };
+        // On a STALE fallback to `default` with no on-disk
+        // `flavors/default.toml`, parse the binary-bundled default manifest
+        // so direct `PluginDiscovery` callers get the same non-empty admit
+        // set the daemon/CLI resolvers do — otherwise an explicit `mode:
+        // flavor-only` scope file would filter out every plugin. Parity
+        // with `orchestrator_core::flavor`'s bundled fallback, kept
+        // dependency-free by embedding the same TOML.
+        let mut bundled_default_used = false;
+        if stale_fallback && flavor_plugins.is_empty() && locate_flavor_manifest(project_root, flavor_name).is_none() {
+            flavor_plugins = bundled_default_flavor_slugs();
+            bundled_default_used = !flavor_plugins.is_empty();
+        }
+        let flavor_present = bundled_default_used
+            || !flavor_plugins.is_empty()
+            || locate_flavor_manifest(project_root, flavor_name).is_some();
         let mut scope = Self::load_for_project_with_flavor(project_root, &flavor_plugins, flavor_present)?;
         scope.flavor_manifest_error = flavor_manifest_error;
+        if scope.active_flavor.is_none() {
+            scope.active_flavor = active_flavor;
+        }
         Ok(scope)
     }
 
@@ -225,6 +275,12 @@ impl PluginScope {
             return Self::load_from_file(&scope_path, flavor_plugins);
         }
 
+        // No scope file: the active flavor can only come from a future
+        // scope file, so honor the canonical default here. (When a scope
+        // file IS present, `load_from_file` reads `active_flavor:` from it.)
+        let active_flavor = read_active_flavor(project_root);
+        let flavor_name = active_flavor.as_deref().unwrap_or(DEFAULT_FLAVOR_ID);
+
         // Two distinct presence signals:
         //   * `flavor_manifest_present` is the caller's authoritative
         //     assertion ("I parsed the flavor and I'm certain it
@@ -244,7 +300,7 @@ impl PluginScope {
         // finds a manifest and the lightweight TOML parser already
         // resolved a non-empty plugin set. Otherwise `mode: all`.
         let mode = if flavor_manifest_present
-            || (!flavor_plugins.is_empty() && locate_default_flavor_manifest(project_root).is_some())
+            || (!flavor_plugins.is_empty() && locate_flavor_manifest(project_root, flavor_name).is_some())
         {
             PluginScopeMode::FlavorOnly
         } else {
@@ -257,6 +313,7 @@ impl PluginScope {
             require: BTreeSet::new(),
             extras: BTreeSet::new(),
             flavor_plugins: flavor_plugins.clone(),
+            active_flavor,
             source_path: None,
             flavor_manifest_error: None,
         })
@@ -294,6 +351,7 @@ impl PluginScope {
             require: parsed.require.into_iter().collect(),
             extras: parsed.extras.into_iter().collect(),
             flavor_plugins: flavor_plugins.clone(),
+            active_flavor: parsed.active_flavor.filter(|s| !s.is_empty()),
             source_path: Some(path.to_path_buf()),
             flavor_manifest_error: None,
         })
@@ -311,6 +369,9 @@ impl PluginScope {
         let file = PluginScopeFile {
             schema: Some(PLUGIN_SCOPE_SCHEMA_V1.to_string()),
             mode: Some(self.mode.as_wire().to_string()),
+            // Persist only a non-default selection; `None`/`default`
+            // serializes to nothing so the common case keeps a clean file.
+            active_flavor: self.active_flavor.clone().filter(|s| !s.is_empty() && s != DEFAULT_FLAVOR_ID),
             allow: self.allow.iter().cloned().collect(),
             require: self.require.iter().cloned().collect(),
             extras: self.extras.iter().cloned().collect(),
@@ -404,16 +465,45 @@ impl PluginScope {
 /// log them — the public [`PluginScope::load_for_project`] swallows the
 /// error and falls back to "no flavor plugins resolved" to keep
 /// discovery alive when an operator hand-edits an invalid manifest.
-fn load_flavor_required_slugs_from_disk(project_root: &Path) -> Result<BTreeSet<String>> {
-    let path = match locate_default_flavor_manifest(project_root) {
-        Some(p) => p,
-        None => return Ok(BTreeSet::new()),
-    };
-    let body =
-        fs::read_to_string(&path).with_context(|| format!("failed to read flavor manifest at {}", path.display()))?;
-    let parsed: FlavorManifestStub =
-        toml::from_str(&body).with_context(|| format!("failed to parse flavor manifest at {}", path.display()))?;
+/// Read the persisted `active_flavor:` selection from
+/// `<project_root>/.animus/plugin-scope.yaml`, if present. Returns `None`
+/// when the file is absent, unparseable, or has no `active_flavor` key —
+/// callers fall back to [`DEFAULT_FLAVOR_ID`]. A blank value is treated as
+/// unset. Kept dependency-free so the plugin-host crate resolves the
+/// active flavor without importing `orchestrator-core`.
+pub fn read_active_flavor(project_root: &Path) -> Option<String> {
+    let path = project_root.join(".animus").join(PLUGIN_SCOPE_FILE);
+    let body = fs::read_to_string(&path).ok()?;
+    let parsed: PluginScopeFile = serde_yaml::from_str(&body).ok()?;
+    parsed.active_flavor.filter(|s| !s.trim().is_empty())
+}
 
+/// Binary-bundled copy of the canonical `flavors/default.toml`, mirroring
+/// `orchestrator_core::flavor`'s bundled fallback so the plugin-host scope
+/// loader can resolve the default flavor's plugin set even when no on-disk
+/// manifest exists. Embedding the same file keeps the plugin-host crate
+/// dependency-free of `orchestrator-core`.
+const BUNDLED_DEFAULT_FLAVOR: &str = include_str!("../../../flavors/default.toml");
+
+/// Parse the bundled default flavor manifest into its normalized plugin
+/// slug set (required + recommended, OWNER stripped). Returns an empty set
+/// if the embedded TOML ever fails to parse — callers treat that as "no
+/// bundled plugins resolved" rather than erroring.
+fn bundled_default_flavor_slugs() -> BTreeSet<String> {
+    let parsed: FlavorManifestStub = match toml::from_str(BUNDLED_DEFAULT_FLAVOR) {
+        Ok(p) => p,
+        Err(err) => {
+            tracing::warn!(error = %err, "bundled default flavor manifest failed to parse");
+            return BTreeSet::new();
+        }
+    };
+    flavor_stub_slugs(&parsed)
+}
+
+/// Collect the normalized (OWNER stripped) plugin slug set from a parsed
+/// flavor stub: both `required` and `recommended` across every role
+/// section. Shared by the disk reader and the bundled-default fallback.
+fn flavor_stub_slugs(parsed: &FlavorManifestStub) -> BTreeSet<String> {
     let mut out: BTreeSet<String> = BTreeSet::new();
     for section in [
         &parsed.workflow_runner,
@@ -426,17 +516,29 @@ fn load_flavor_required_slugs_from_disk(project_root: &Path) -> Result<BTreeSet<
         &parsed.durable_store,
         &parsed.memory_store,
     ] {
-        // Include both `required` and `recommended` — the default
-        // v0.5 flavor lists some role-covering backends under
-        // `recommended` (e.g. `animus-subject-requirements` for the
-        // `subject_kind:requirement` role) and a strict `required`-only
-        // admit set would silently filter out an installed plugin that
-        // preflight legitimately needs.
         for slug in section.required.iter().chain(section.recommended.iter()) {
             out.insert(normalize_flavor_slug_str(slug));
         }
     }
-    Ok(out)
+    out
+}
+
+fn load_flavor_required_slugs_from_disk(project_root: &Path, flavor_name: &str) -> Result<BTreeSet<String>> {
+    let path = match locate_flavor_manifest(project_root, flavor_name) {
+        Some(p) => p,
+        None => return Ok(BTreeSet::new()),
+    };
+    let body =
+        fs::read_to_string(&path).with_context(|| format!("failed to read flavor manifest at {}", path.display()))?;
+    let parsed: FlavorManifestStub =
+        toml::from_str(&body).with_context(|| format!("failed to parse flavor manifest at {}", path.display()))?;
+
+    // Include both `required` and `recommended` — the default v0.5 flavor
+    // lists some role-covering backends under `recommended` (e.g.
+    // `animus-subject-requirements` for the `subject_kind:requirement`
+    // role) and a strict `required`-only admit set would silently filter
+    // out an installed plugin that preflight legitimately needs.
+    Ok(flavor_stub_slugs(&parsed))
 }
 
 /// Mirror of `orchestrator_core::flavor::locate_flavor_manifest_in` so
@@ -445,25 +547,26 @@ fn load_flavor_required_slugs_from_disk(project_root: &Path) -> Result<BTreeSet<
 /// flavor schema source-of-truth is `crates/orchestrator-core/src/flavor.rs`.
 ///
 /// Order:
-/// 1. `$ANIMUS_FLAVORS_DIR/default.toml` when the env var is set.
-/// 2. `<project_root>/flavors/default.toml`.
-/// 3. Walk up ancestors looking for a sibling `flavors/default.toml`.
-fn locate_default_flavor_manifest(project_root: &Path) -> Option<PathBuf> {
+/// 1. `$ANIMUS_FLAVORS_DIR/<name>.toml` when the env var is set.
+/// 2. `<project_root>/flavors/<name>.toml`.
+/// 3. Walk up ancestors looking for a sibling `flavors/<name>.toml`.
+fn locate_flavor_manifest(project_root: &Path, flavor_name: &str) -> Option<PathBuf> {
+    let rel = PathBuf::from("flavors").join(format!("{flavor_name}.toml"));
     if let Ok(dir) = std::env::var("ANIMUS_FLAVORS_DIR") {
-        let path = Path::new(&dir).join("default.toml");
+        let path = Path::new(&dir).join(format!("{flavor_name}.toml"));
         if path.is_file() {
             return Some(path);
         }
     }
 
-    let direct = project_root.join(FLAVOR_DEFAULT_MANIFEST_REL);
+    let direct = project_root.join(&rel);
     if direct.is_file() {
         return Some(direct);
     }
 
     let mut walker: &Path = project_root;
     while let Some(parent) = walker.parent() {
-        let candidate = parent.join(FLAVOR_DEFAULT_MANIFEST_REL);
+        let candidate = parent.join(&rel);
         if candidate.is_file() {
             return Some(candidate);
         }
@@ -737,6 +840,123 @@ required = ["launchapp-dev/animus-provider-claude"]
         assert!(scope.flavor_plugins.contains("animus-workflow-runner-default"));
         assert!(scope.admits(&plugin("animus-provider-claude")));
         assert!(!scope.admits(&plugin("animus-subject-linear")));
+    }
+
+    #[test]
+    fn read_active_flavor_returns_none_when_no_scope_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert!(read_active_flavor(temp.path()).is_none());
+    }
+
+    #[test]
+    fn read_active_flavor_reads_persisted_selection() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let animus = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus).expect("mkdir .animus");
+        std::fs::write(
+            animus.join(PLUGIN_SCOPE_FILE),
+            "schema: animus.plugin-scope.v1\nmode: all\nactive_flavor: enterprise\n",
+        )
+        .expect("write scope");
+        assert_eq!(read_active_flavor(temp.path()).as_deref(), Some("enterprise"));
+    }
+
+    #[test]
+    fn write_then_read_round_trips_active_flavor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join(".animus").join(PLUGIN_SCOPE_FILE);
+        let mut scope = PluginScope::default();
+        scope.active_flavor = Some("enterprise".to_string());
+        scope.write_to_file(&path).expect("write");
+
+        let loaded = PluginScope::load_from_file(&path, &BTreeSet::new()).expect("reload");
+        assert_eq!(loaded.active_flavor.as_deref(), Some("enterprise"));
+        // And the dependency-free reader agrees.
+        assert_eq!(read_active_flavor(temp.path()).as_deref(), Some("enterprise"));
+    }
+
+    #[test]
+    fn write_omits_default_active_flavor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let path = temp.path().join(".animus").join(PLUGIN_SCOPE_FILE);
+        let mut scope = PluginScope::default();
+        scope.active_flavor = Some(DEFAULT_FLAVOR_ID.to_string());
+        scope.write_to_file(&path).expect("write");
+        let body = std::fs::read_to_string(&path).expect("read");
+        assert!(!body.contains("active_flavor"), "default selection must not be persisted: {body}");
+    }
+
+    #[test]
+    fn load_for_project_resolves_against_persisted_active_flavor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        // Two flavor manifests on disk: default (empty) and enterprise.
+        let flavors = temp.path().join("flavors");
+        std::fs::create_dir_all(&flavors).expect("mkdir flavors");
+        std::fs::write(
+            flavors.join("default.toml"),
+            "schema = \"animus.flavor.v1\"\nid = \"default\"\nversion = \"0.5.0\"\ntitle = \"d\"\ndescription = \"d\"\n",
+        )
+        .expect("write default");
+        std::fs::write(
+            flavors.join("enterprise.toml"),
+            r#"schema = "animus.flavor.v1"
+id = "enterprise"
+version = "0.5.0"
+title = "ent"
+description = "ent"
+
+[providers]
+required = ["acme/animus-provider-enterprise"]
+"#,
+        )
+        .expect("write enterprise");
+        // Persist the enterprise selection.
+        let animus = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus).expect("mkdir .animus");
+        std::fs::write(
+            animus.join(PLUGIN_SCOPE_FILE),
+            "schema: animus.plugin-scope.v1\nmode: flavor-only\nactive_flavor: enterprise\n",
+        )
+        .expect("write scope");
+
+        let scope = PluginScope::load_for_project(temp.path()).expect("load");
+        assert_eq!(scope.mode, PluginScopeMode::FlavorOnly);
+        assert!(
+            scope.admits(&plugin("animus-provider-enterprise")),
+            "enterprise flavor's plugin must admit when it is the active flavor"
+        );
+        assert!(scope.active_flavor.as_deref() == Some("enterprise"));
+    }
+
+    #[test]
+    fn load_for_project_stale_active_flavor_uses_bundled_default_not_empty() {
+        // Persisted non-default flavor with NO on-disk manifest, an
+        // explicit `mode: flavor-only` scope file, and NO flavors/ dir
+        // (so even `default` resolves only via the binary-bundled copy).
+        // Without the bundled-default fallback the admit set would be
+        // empty and every plugin would be filtered out.
+        let temp = tempfile::tempdir().expect("tempdir");
+        let animus = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus).expect("mkdir .animus");
+        std::fs::write(
+            animus.join(PLUGIN_SCOPE_FILE),
+            "schema: animus.plugin-scope.v1\nmode: flavor-only\nactive_flavor: ghost\n",
+        )
+        .expect("write scope");
+
+        let scope = PluginScope::load_for_project(temp.path()).expect("load");
+        assert_eq!(scope.mode, PluginScopeMode::FlavorOnly);
+        assert!(
+            !scope.effective_admit_set().is_empty(),
+            "stale active flavor must resolve the bundled default flavor's plugins, not an empty admit set"
+        );
+        // active_flavor is still surfaced verbatim for diagnostics.
+        assert_eq!(scope.active_flavor.as_deref(), Some("ghost"));
+    }
+
+    #[test]
+    fn bundled_default_flavor_slugs_is_non_empty() {
+        assert!(!bundled_default_flavor_slugs().is_empty(), "the embedded default flavor must resolve some plugins");
     }
 
     #[test]

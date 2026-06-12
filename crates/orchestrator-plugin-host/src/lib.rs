@@ -45,7 +45,7 @@ pub use manifest_cache::{CachedEntry, ManifestCache};
 #[cfg(test)]
 pub(crate) static TEST_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub use registry::PluginRegistry;
-pub use scope::{PluginScope, PluginScopeMode, PLUGIN_SCOPE_FILE, PLUGIN_SCOPE_SCHEMA_V1};
+pub use scope::{read_active_flavor, PluginScope, PluginScopeMode, PLUGIN_SCOPE_FILE, PLUGIN_SCOPE_SCHEMA_V1};
 pub use signature_verifier::{
     cosign_available, verify_plugin_binary_keyless, verify_plugin_install, PolicyMode, SignaturePolicy,
     TrustedPublisher, VerificationResult, GITHUB_OIDC_ISSUER,

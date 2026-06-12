@@ -25,6 +25,25 @@ All notable changes to this project will be documented in this file.
   (`org` + `trusted_at` + `decided_by`) in the install JSON envelope and
   the `plugin_install` audit line, so `plugin install --json` can answer
   "when did we trust this org?".
+- Active flavor persistence: a successful `animus plugin install-defaults
+  --flavor <name>` (or `animus flavor install <name>`) now records the
+  selected flavor project-locally in `.animus/plugin-scope.yaml` under an
+  `active_flavor:` key. The daemon's flavor-only plugin scope resolver
+  (`resolve_flavor_plugins` in `plugin_preflight_wiring.rs`) and the CLI's
+  `animus plugin list` / `animus plugin scope show` read that selection back
+  via `orchestrator_core::flavor::active_flavor_id_in`, so a non-default
+  flavor's plugins are admitted by scoped discovery instead of being filtered
+  out against `flavors/default.toml`. Selecting `default` again clears the
+  persisted key. An unknown persisted name (no `flavors/<name>.toml` on disk)
+  logs a warning and falls back to unrestricted (`mode: all`) scope — it
+  never fail-closes discovery to an empty set. The selection merges into any
+  existing scope file, preserving the operator's `mode` / `allow` / `extras`.
+  `animus flavor current` with no `--name` now probes the persisted active
+  flavor (was always `default`) and reports a `source` field
+  (`flag` | `persisted` | `default`); `animus plugin scope show` adds
+  `active_flavor` + `active_flavor_source`. Closes the codex-flagged TODO in
+  `build_install_defaults_targets`.
+
 - Cost attribution by provider and model. Per-phase cost records now
   carry a `provider` (sourced from the phase session checkpoint) and a
   `model` (already captured from run metadata events), so operators can

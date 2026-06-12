@@ -640,20 +640,12 @@ fn build_install_defaults_targets(
     };
 
     if let Some(manifest) = manifest {
-        // TODO(codex-p2): runtime flavor-only scoping
-        // (`resolve_flavor_plugins` in daemon-runtime) still resolves the
-        // admit set from `flavors/default.toml` only. Installing a
-        // non-default flavor works, but its plugins can be filtered out of
-        // scoped discovery until the scope resolver learns about the
-        // active flavor. Warn so operators are not surprised; the proper
-        // fix is persisting the selected flavor for scope resolution.
-        if args.flavor != DEFAULT_FLAVOR_ID {
-            tracing::warn!(
-                flavor = %args.flavor,
-                "installing a non-default flavor: project flavor-only plugin scoping still resolves \
-                 against flavors/default.toml, so these plugins may be filtered out of scoped discovery"
-            );
-        }
+        // The selected flavor is persisted to `.animus/plugin-scope.yaml`
+        // on a successful install (see `handle_plugin_install_defaults`),
+        // and the daemon + CLI scope resolvers read it back via
+        // `active_flavor_id_in`, so a non-default flavor's plugins are
+        // admitted by scoped discovery rather than filtered out.
+        //
         // The manifest's REQUIRED set is the canonical install plan — the
         // same set `animus flavor current` reports drift against.
         let mut slugs: Vec<String> = manifest.required_plugins().into_iter().map(|(_, slug)| slug).collect();
@@ -875,6 +867,23 @@ async fn handle_plugin_install_defaults(args: PluginInstallDefaultsArgs, project
         InstallDefaultsOutput { results, summary: InstallDefaultsSummary { installed, skipped, failed } },
         args.json,
     )?;
+
+    // Persist the active flavor selection so the daemon + CLI scope
+    // resolvers admit THIS flavor's plugins (not always
+    // `flavors/default.toml`). Only on a clean run (no install failures):
+    // recording a selection whose plugins failed to install would scope
+    // discovery to a set the operator does not actually have. Best-effort
+    // — a scope-file write failure must not fail the install that already
+    // succeeded; surface it as a warning.
+    if failed == 0 {
+        if let Err(err) = scope::persist_active_flavor(std::path::Path::new(project_root), &args.flavor) {
+            tracing::warn!(
+                flavor = %args.flavor,
+                error = %format!("{err:#}"),
+                "installed flavor plugins but failed to persist the active flavor selection to plugin-scope.yaml"
+            );
+        }
+    }
 
     // Codex round-6 P2: partial-failure must propagate as a non-zero exit
     // code so installer scripts and CI jobs notice. Previously the

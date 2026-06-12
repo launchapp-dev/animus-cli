@@ -15,9 +15,12 @@ pub(crate) enum FlavorCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct FlavorCurrentArgs {
-    /// Flavor id to probe (defaults to `default`).
-    #[arg(long, default_value = "default")]
-    pub(crate) name: String,
+    /// Flavor id to probe. Defaults to the project's persisted active
+    /// flavor (`.animus/plugin-scope.yaml` `active_flavor:`), falling back
+    /// to `default` when none is recorded. Pass `--name` to probe a
+    /// specific flavor regardless of the persisted selection.
+    #[arg(long)]
+    pub(crate) name: Option<String>,
 }
 
 #[derive(Debug, Args)]
