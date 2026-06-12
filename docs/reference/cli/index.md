@@ -89,7 +89,7 @@ aliases of each other.
 animus
 ├── version                  Show installed animus version
 ├── daemon                   Manage daemon lifecycle and automation settings
-│   ├── start                Start the daemon as a detached background process (always detaches as of v0.6)
+│   ├── start                Start the daemon as a detached background process (always detaches as of v0.5.14)
 │   ├── run                  Run the daemon in the current foreground process (dev/debug)
 │   ├── stop                 Stop the running daemon
 │   ├── restart              Stop the running daemon (graceful), then start it again detached with the supplied start flags
@@ -385,7 +385,7 @@ need to script against.
 
 ### `animus daemon start` vs `animus daemon run`
 
-As of v0.6 the two verbs have a fixed, non-overlapping split:
+As of v0.5.14 the two verbs have a fixed, non-overlapping split:
 
 - `animus daemon start` **always** spawns the daemon as a detached background
   process and returns immediately. The success output reports the daemon
@@ -399,7 +399,7 @@ As of v0.6 the two verbs have a fixed, non-overlapping split:
 The legacy `--autonomous` flag is a deprecated, hidden no-op: detached mode
 is now the default and only behavior of `daemon start`, so
 `animus daemon start --autonomous` behaves identically to
-`animus daemon start`. Before v0.6, `daemon start` without `--autonomous`
+`animus daemon start`. Before v0.5.14, `daemon start` without `--autonomous`
 silently fell through to the foreground `run` path — that fallthrough was
 removed.
 

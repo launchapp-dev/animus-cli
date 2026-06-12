@@ -88,7 +88,7 @@ real feature, and not all of them are within this dispatch's reach:
    when an agent profile has `memory_bindings`. The binding should warn and
    no-op until a matching plugin is installed.
 
-## Target YAML Shape (v0.6)
+## Target YAML Shape (v0.5.14)
 
 The proposed binding shape lives at agent level for per-agent corpora and at
 workflow level for shared corpora.
@@ -102,7 +102,7 @@ agents:
       scope: trade-analyst
       max_context_chars: 6000
 
-    # New corpus bindings (v0.6):
+    # New corpus bindings (v0.5.14):
     memory_bindings:
       - plugin: memory-zep
         binding: market-context
@@ -154,7 +154,7 @@ Field semantics:
 - `inject_when.phases` — optional phase allowlist. Empty / absent means all
   phases.
 
-## Runtime Topology (v0.6)
+## Runtime Topology (v0.5.14)
 
 ```mermaid
 graph TD
@@ -199,7 +199,7 @@ shape and naming. The new function would be
 6. Emit a structured audit log entry per query (binding id, plugin id, top_k,
    bytes returned, tokens deducted, phase id, agent id, task id).
 
-## CLI Surface (v0.6)
+## CLI Surface (v0.5.14)
 
 A new `animus memory` command group, parallel to `animus subject`:
 
