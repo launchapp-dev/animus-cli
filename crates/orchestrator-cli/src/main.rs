@@ -244,6 +244,14 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Daemon { command: DaemonCommand::Health } => {
             services::runtime::handle_daemon_health_command(&project_root, cli.json).await
         }
+        // Telemetry subcommands are global controls (user-global config +
+        // every repo scope under `~/.animus/`); dispatch them before the
+        // FileServiceHub bootstrap so they never create or migrate project
+        // state. Bare `daemon metrics` (display) falls through to the
+        // generic daemon path below.
+        Command::Daemon { command: DaemonCommand::Metrics(DaemonMetricsCommandArgs { command: Some(sub), .. }) } => {
+            services::operations::handle_metrics(sub, &project_root, cli.json).await
+        }
         Command::History { command } => services::operations::handle_history(command, &project_root, cli.json).await,
         Command::Approval { command } => services::operations::handle_approval(command, &project_root, cli.json),
         Command::Trigger { command } => services::operations::handle_trigger(command, &project_root, cli.json).await,
@@ -252,7 +260,6 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
         Command::SelfCmd { command } => services::operations::handle_self(command, &project_root, cli.json).await,
         Command::Update(args) => services::operations::handle_update(args, &project_root, cli.json).await,
-        Command::Metrics { command } => services::operations::handle_metrics(command, &project_root, cli.json).await,
         Command::Cost { command } => services::operations::handle_cost(command, &project_root, cli.json).await,
         Command::Chat { command } => services::runtime::handle_chat(command, &project_root, cli.json).await,
         Command::Auth { command } => {
@@ -305,7 +312,6 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Flavor { .. }
                 | Command::SelfCmd { .. }
                 | Command::Update(_)
-                | Command::Metrics { .. }
                 | Command::Cost { .. }
                 | Command::Chat { .. }
                 | Command::Auth { .. }
@@ -394,7 +400,6 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Flavor { .. } => CommandGroup::Flavor,
         Command::SelfCmd { .. } => CommandGroup::SelfUpdate,
         Command::Update(_) => CommandGroup::SelfUpdate,
-        Command::Metrics { .. } => CommandGroup::Metrics,
         Command::Cost { .. } => CommandGroup::Cost,
         Command::Auth { .. } => CommandGroup::Auth,
         Command::Events { .. } => CommandGroup::Events,

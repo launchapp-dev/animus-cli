@@ -151,11 +151,6 @@ pub(crate) enum Command {
     /// Thin top-level alias over `animus self update` with the simplified
     /// `--check / --yes / --channel` surface.
     Update(UpdateArgs),
-    /// Manage opt-in anonymous usage telemetry.
-    Metrics {
-        #[command(subcommand)]
-        command: MetricsCommand,
-    },
     /// Inspect token + USD spend across workflow runs (v0.5.5).
     Cost {
         #[command(subcommand)]

@@ -101,7 +101,6 @@ pub(crate) enum CommandGroup {
     Subject,
     Flavor,
     SelfUpdate,
-    Metrics,
     Cost,
     Auth,
     Events,

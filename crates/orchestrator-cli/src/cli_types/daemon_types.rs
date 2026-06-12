@@ -37,8 +37,9 @@ pub(crate) enum DaemonCommand {
     /// Report plugin preflight status (which required plugins are installed,
     /// which are missing, and the fix commands).
     Preflight(DaemonPreflightArgs),
-    /// Print daemon observability metrics (counters, gauges, histograms).
-    Metrics(DaemonMetricsArgs),
+    /// Print daemon observability metrics (counters, gauges, histograms);
+    /// subcommands manage opt-in anonymous usage telemetry.
+    Metrics(DaemonMetricsCommandArgs),
 }
 
 #[derive(Debug, Args)]
@@ -293,6 +294,33 @@ pub(crate) struct DaemonStreamArgs {
         help = "In pretty mode, render full message bodies (LLM output, command stdout) as formatted markdown blocks instead of a truncated preview."
     )]
     pub(crate) full: bool,
+}
+
+/// Bare `animus daemon metrics` keeps the live-counters display (the common
+/// read path); the subcommands control opt-in anonymous usage telemetry
+/// (folded in from the deleted top-level `animus metrics` group in v0.6).
+#[derive(Debug, Args)]
+pub(crate) struct DaemonMetricsCommandArgs {
+    #[command(subcommand)]
+    pub(crate) command: Option<DaemonMetricsSubcommand>,
+    #[command(flatten)]
+    pub(crate) display: DaemonMetricsArgs,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum DaemonMetricsSubcommand {
+    /// Show the current opt-in state, install id, and pending event count.
+    Status,
+    /// Opt in to anonymous usage telemetry (skips re-prompting on first run).
+    Enable,
+    /// Opt out of anonymous usage telemetry. Drops any buffered events.
+    Disable,
+    /// Force-send any buffered events to the configured endpoint. Debug helper.
+    Flush,
+    /// Sweep every repo-scoped metrics dir for orphaned/oversized `flushing-*`
+    /// snapshots and oversized `pending.jsonl`, reclaiming disk. Safe to run any
+    /// time — guards against the runaway buffer that once grew to multi-GB.
+    Cleanup,
 }
 
 #[derive(Debug, Args)]

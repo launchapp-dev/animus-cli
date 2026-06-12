@@ -12,7 +12,6 @@ mod history_types;
 mod init_types;
 mod logs_types;
 mod mcp_types;
-mod metrics_types;
 mod output_types;
 mod pack_types;
 mod plugin_types;
@@ -45,7 +44,6 @@ pub(crate) use history_types::*;
 pub(crate) use init_types::*;
 pub(crate) use logs_types::*;
 pub(crate) use mcp_types::*;
-pub(crate) use metrics_types::*;
 pub(crate) use output_types::*;
 pub(crate) use pack_types::*;
 pub(crate) use plugin_types::*;
@@ -265,6 +263,70 @@ mod tests {
         match explicit_false.command {
             Command::Daemon { command: DaemonCommand::Events(args) } => assert!(!args.follow),
             other => panic!("expected daemon events, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_metrics_bare_defaults_to_display() {
+        let cli = Cli::try_parse_from(["animus", "daemon", "metrics"]).expect("bare daemon metrics should parse");
+        match cli.command {
+            Command::Daemon { command: DaemonCommand::Metrics(args) } => {
+                assert!(args.command.is_none(), "bare invocation must keep the display path");
+                assert!(!args.display.watch);
+                assert_eq!(args.display.interval_secs, 5);
+                assert!(!args.display.pretty);
+            }
+            other => panic!("expected daemon metrics, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_metrics_bare_accepts_display_flags() {
+        let cli = Cli::try_parse_from(["animus", "daemon", "metrics", "--watch", "--interval-secs", "2", "--pretty"])
+            .expect("daemon metrics display flags should parse");
+        match cli.command {
+            Command::Daemon { command: DaemonCommand::Metrics(args) } => {
+                assert!(args.command.is_none());
+                assert!(args.display.watch);
+                assert_eq!(args.display.interval_secs, 2);
+                assert!(args.display.pretty);
+            }
+            other => panic!("expected daemon metrics, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn daemon_metrics_parses_telemetry_subcommands() {
+        for (verb, expected) in [
+            ("status", DaemonMetricsSubcommand::Status),
+            ("enable", DaemonMetricsSubcommand::Enable),
+            ("disable", DaemonMetricsSubcommand::Disable),
+            ("flush", DaemonMetricsSubcommand::Flush),
+            ("cleanup", DaemonMetricsSubcommand::Cleanup),
+        ] {
+            let cli = Cli::try_parse_from(["animus", "daemon", "metrics", verb])
+                .unwrap_or_else(|error| panic!("daemon metrics {verb} should parse: {error}"));
+            match cli.command {
+                Command::Daemon { command: DaemonCommand::Metrics(args) } => {
+                    let parsed = args.command.unwrap_or_else(|| panic!("daemon metrics {verb} must set a subcommand"));
+                    assert!(
+                        std::mem::discriminant(&parsed) == std::mem::discriminant(&expected),
+                        "daemon metrics {verb} parsed to the wrong subcommand: {parsed:?}"
+                    );
+                }
+                other => panic!("expected daemon metrics {verb}, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_removed_top_level_metrics_command_tree() {
+        for argv in
+            [vec!["animus", "metrics"], vec!["animus", "metrics", "status"], vec!["animus", "metrics", "enable"]]
+        {
+            let error = Cli::try_parse_from(argv.clone())
+                .expect_err("the top-level metrics group was folded into daemon metrics in v0.6");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "argv {argv:?}");
         }
     }
 

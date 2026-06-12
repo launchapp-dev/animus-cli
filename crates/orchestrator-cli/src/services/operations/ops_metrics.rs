@@ -9,7 +9,7 @@ use crate::services::metrics::recorder::{
     cleanup_metrics_dir, last_send_timestamp, pending_event_count, read_metrics_block_without_creating,
 };
 use crate::services::metrics::{flush_pending, FlushOutcome};
-use crate::{print_value, MetricsCommand};
+use crate::{print_value, DaemonMetricsSubcommand};
 
 /// Remove `flushing-*` snapshots older than this many seconds during a
 /// `metrics cleanup` sweep. A real flush completes in well under a second
@@ -55,14 +55,14 @@ struct MetricsCleanupResult {
     message: String,
 }
 
-pub(crate) async fn handle_metrics(command: MetricsCommand, project_root: &str, json: bool) -> Result<()> {
+pub(crate) async fn handle_metrics(command: DaemonMetricsSubcommand, project_root: &str, json: bool) -> Result<()> {
     let project_path = Path::new(project_root);
     match command {
-        MetricsCommand::Status => handle_status(project_path, json),
-        MetricsCommand::Enable => handle_enable(project_path, json),
-        MetricsCommand::Disable => handle_disable(project_path, json),
-        MetricsCommand::Flush => handle_flush(project_path, json).await,
-        MetricsCommand::Cleanup => handle_cleanup(json),
+        DaemonMetricsSubcommand::Status => handle_status(project_path, json),
+        DaemonMetricsSubcommand::Enable => handle_enable(project_path, json),
+        DaemonMetricsSubcommand::Disable => handle_disable(project_path, json),
+        DaemonMetricsSubcommand::Flush => handle_flush(project_path, json).await,
+        DaemonMetricsSubcommand::Cleanup => handle_cleanup(json),
     }
 }
 
