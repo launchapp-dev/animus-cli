@@ -351,6 +351,7 @@ impl AoMcpServer {
             // MCP callers who don't opt in.
             force_rewrite_lockfile: force_rewrite_lockfile.unwrap_or(false),
             as_kind: None,
+            project: false,
         })
         .await
         .map_err(anyhow_to_mcp)?;
@@ -376,6 +377,7 @@ impl AoMcpServer {
             name,
             plugin_dir,
             project_root: Some(resolved_project_root),
+            project: false,
         })
         .map_err(anyhow_to_mcp)?;
         // Drop every cached plugin registry so subsequent calls re-discover

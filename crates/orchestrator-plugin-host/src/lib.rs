@@ -13,9 +13,10 @@ mod subject_router;
 mod transport;
 
 pub use discovery::{
-    discover_by_kind, discover_plugins, legacy_plugins_registry_path, plugin_install_dir, plugins_registry_path,
-    registered_skip_manifest_check_at_install, DiscoveredPlugin, DiscoverySource, DiscoveryWarning, PluginConfigEntry,
-    PluginDiscovery,
+    discover_by_kind, discover_plugins, is_scanned_plugin_name, legacy_plugins_registry_path, plugin_install_dir,
+    plugins_registry_path, project_plugin_install_dir, project_plugins_registry_path,
+    registered_skip_manifest_check_at_install, registered_skip_manifest_check_at_install_scoped, DiscoveredPlugin,
+    DiscoverySource, DiscoveryWarning, PluginConfigEntry, PluginDiscovery,
 };
 pub use host::{
     check_protocol_compat, current_secret_snapshot_provider, install_process_slot_factory,
@@ -30,7 +31,8 @@ pub use host::{
     install_process_slot_factory_for_test, install_secret_snapshot_provider_for_test,
 };
 pub use lockfile::{
-    global_lockfile_path, sha256_of_file, LockEntry, LockVerifyResult, PluginLockfile, LOCKFILE_SCHEMA_VERSION,
+    global_lockfile_path, project_lockfile_path, sha256_of_file, LockEntry, LockVerifyResult, PluginLockfile,
+    LOCKFILE_SCHEMA_VERSION,
 };
 pub use manifest_cache::{CachedEntry, ManifestCache};
 

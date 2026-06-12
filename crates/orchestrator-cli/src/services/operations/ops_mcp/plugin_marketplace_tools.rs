@@ -164,6 +164,7 @@ impl AoMcpServer {
             // resolution to the server's default project root so a
             // daemon-initiated update touches the right `.animus/plugins.lock`.
             project_root: Some(self.default_project_root.clone()),
+            project: false,
         })
         .await
         .map_err(anyhow_to_mcp_marketplace)?;

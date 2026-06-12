@@ -27,8 +27,9 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_daemon_runtime::{Audit, AuditActor, AuditEvent, AuditEventKind};
 use orchestrator_plugin_host::session::is_reserved_provider_tool;
 use orchestrator_plugin_host::{
-    discover_plugins, legacy_plugins_registry_path, plugin_install_dir, plugins_registry_path,
-    registered_skip_manifest_check_at_install, sha256_of_file as plugin_host_sha256_of_file, DiscoveredPlugin,
+    discover_plugins, global_lockfile_path, legacy_plugins_registry_path, plugin_install_dir, plugins_registry_path,
+    project_lockfile_path, project_plugin_install_dir, project_plugins_registry_path,
+    registered_skip_manifest_check_at_install_scoped, sha256_of_file as plugin_host_sha256_of_file, DiscoveredPlugin,
     DiscoverySource, DiscoveryWarning, LockEntry, LockVerifyResult, PluginDiscovery, PluginHost, PluginLockfile,
     PluginSpawnOptions, PolicyMode as PluginPolicyMode,
 };
@@ -53,6 +54,23 @@ pub(crate) struct DiscoveredPluginRow {
     pub(crate) capabilities: Vec<String>,
     pub(crate) source: &'static str,
     pub(crate) path: String,
+    /// Install scope the discovered binary belongs to: `project` for
+    /// `<project>/.animus/plugins/` hits, `global` otherwise.
+    pub(crate) scope: &'static str,
+}
+
+/// A global install that exists on disk but is hidden by a project-local
+/// install of the same name (discovery prefers the project tier and dedupes
+/// by name, so the global binary never reaches `plugins`).
+#[derive(Debug, Serialize)]
+pub(crate) struct ShadowedPluginRow {
+    pub(crate) name: String,
+    /// Path of the hidden global binary.
+    pub(crate) path: String,
+    /// Path of the project-local binary that wins discovery.
+    pub(crate) shadowed_by: String,
+    /// Always `"shadowed by project install"` — stable marker for scripts.
+    pub(crate) note: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -68,6 +86,9 @@ pub(crate) struct PluginListOutput {
     pub(crate) plugins: Vec<DiscoveredPluginRow>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub(crate) warnings: Vec<PluginWarningRow>,
+    /// Global installs hidden by a same-named project-local install.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub(crate) shadowed: Vec<ShadowedPluginRow>,
 }
 
 #[derive(Debug, Serialize)]
@@ -131,6 +152,9 @@ pub(crate) struct PluginInstallOutput {
     /// renames via the `animus.plugin.install.v1` envelope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) native_kind: Option<String>,
+    /// Install scope: `global` (the historical default) or `project`
+    /// (`--project`, landing under `<project_root>/.animus/`).
+    pub(crate) scope: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -138,6 +162,8 @@ pub(crate) struct PluginUninstallOutput {
     pub(crate) name: String,
     pub(crate) removed_path: Option<String>,
     pub(crate) plugins_yaml: String,
+    /// Uninstall scope: `global` or `project` (mirrors the install flag).
+    pub(crate) scope: &'static str,
 }
 
 // ===== Typed request structs (shared between CLI and MCP) =====
@@ -246,6 +272,13 @@ pub(crate) struct PluginInstallRequest {
     /// an existing install. Provider plugins follow the same logic against
     /// their `provider_tool` capability.
     pub(crate) as_kind: Option<String>,
+    /// When `true`, install into the project-local plugin root instead of
+    /// the global one: binary -> `<project_root>/.animus/plugins/`,
+    /// registry -> `<project_root>/.animus/plugins.yaml`, lockfile ->
+    /// `<project_root>/.animus/plugins.lock`. Requires `project_root` and
+    /// is mutually exclusive with `plugin_dir` (the CLI enforces the
+    /// conflict via clap; this pipeline re-validates for non-CLI callers).
+    pub(crate) project: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -254,6 +287,10 @@ pub(crate) struct PluginUninstallRequest {
     pub(crate) plugin_dir: Option<String>,
     /// Project root for lockfile + audit-log resolution.
     pub(crate) project_root: Option<String>,
+    /// When `true`, uninstall from the project-local plugin root (binary,
+    /// registry, and lockfile under `<project_root>/.animus/`) instead of
+    /// the global one. Mutually exclusive with `plugin_dir`.
+    pub(crate) project: bool,
 }
 
 pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, json: bool) -> Result<()> {
@@ -280,7 +317,7 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
         PluginCommand::Search(args) => marketplace::handle_plugin_search(args).await,
         PluginCommand::Browse(args) => marketplace::handle_plugin_browse(args).await,
         PluginCommand::Update(args) => marketplace::handle_plugin_update(args, project_root, json).await,
-        PluginCommand::Outdated(args) => marketplace::handle_plugin_outdated(args, json).await,
+        PluginCommand::Outdated(args) => marketplace::handle_plugin_outdated(args, project_root, json).await,
         PluginCommand::InstallDefaults(mut args) => {
             args.json = args.json || json;
             handle_plugin_install_defaults(args, project_root).await
@@ -590,7 +627,7 @@ async fn handle_plugin_install_defaults(args: PluginInstallDefaultsArgs, project
         let project_root_for_lock: Option<&std::path::Path> = Some(&project_root_path);
         let lock_existed = PluginLockfile::default_path(project_root_for_lock).exists();
         let lock_parsed_clean = PluginLockfile::load_default(project_root_for_lock).is_ok();
-        let mut lock = load_or_refuse_lockfile(project_root_for_lock, args.force_rewrite_lockfile)?;
+        let mut lock = load_or_refuse_lockfile(project_root_for_lock, None, args.force_rewrite_lockfile)?;
         if args.force_rewrite_lockfile && lock_existed && !lock_parsed_clean {
             // Persist the freshly emptied lockfile so a no-op (all-skipped)
             // batch still completes the remediation. The per-install
@@ -601,6 +638,27 @@ async fn handle_plugin_install_defaults(args: PluginInstallDefaultsArgs, project
                 lockfile = %lock.path().display(),
                 "SECURITY: install-defaults --force-rewrite-lockfile rewrote a corrupt lockfile to a fresh empty state",
             );
+        }
+        // Global-scope installs fail closed on a corrupt
+        // `~/.animus/plugins.lock` too (see run_plugin_install's preflight),
+        // so the batch pre-check must validate (and, with the flag,
+        // rewrite) that file as well — otherwise an all-skipped run inside
+        // an initialized project would mask the corruption (codex P2).
+        let global_lock_path = global_lockfile_path();
+        if global_lock_path != PluginLockfile::default_path(project_root_for_lock) {
+            let global_existed = global_lock_path.exists();
+            let global_parsed_clean = PluginLockfile::load_or_empty(&global_lock_path).is_ok();
+            let mut global_lock =
+                load_or_refuse_lockfile(project_root_for_lock, Some(&global_lock_path), args.force_rewrite_lockfile)?;
+            if args.force_rewrite_lockfile && global_existed && !global_parsed_clean {
+                global_lock
+                    .save()
+                    .with_context(|| format!("failed to rewrite plugin lockfile at {}", global_lock_path.display()))?;
+                tracing::warn!(
+                    lockfile = %global_lock_path.display(),
+                    "SECURITY: install-defaults --force-rewrite-lockfile rewrote a corrupt global lockfile to a fresh empty state",
+                );
+            }
         }
     }
 
@@ -727,6 +785,7 @@ pub(crate) fn run_plugin_list(req: PluginListRequest) -> Result<PluginListOutput
             protocol_version: plugin.manifest.protocol_version,
             capabilities: plugin.manifest.capabilities,
             source: source_label(plugin.source),
+            scope: scope_label(plugin.source),
             path: plugin.path.display().to_string(),
         })
         .collect();
@@ -739,7 +798,40 @@ pub(crate) fn run_plugin_list(req: PluginListRequest) -> Result<PluginListOutput
             reason: warning.reason,
         })
         .collect();
-    Ok(PluginListOutput { plugins: rows, warnings: warning_rows })
+
+    // Surface global installs hidden by a same-named project-local install.
+    // Discovery dedupes by name with the project tier winning, so the global
+    // binary silently disappears from `plugins` — make the shadowing visible
+    // instead of leaving operators to wonder where the global copy went.
+    // Two probe locations per name: the resolved global install dir, and the
+    // absolute binary path recorded in the global registry (covers global
+    // installs placed elsewhere via `--plugin-dir`).
+    let global_dir = plugin_install_dir();
+    let registry_index = marketplace::read_installed_index().unwrap_or_default();
+    let shadowed: Vec<ShadowedPluginRow> = rows
+        .iter()
+        .filter(|row| row.scope == "project")
+        .filter_map(|row| {
+            let registry_candidate = registry_index
+                .get(&row.name)
+                .and_then(|entry| entry.binary.as_deref())
+                .map(PathBuf::from)
+                .filter(|path| path.is_file());
+            let global_candidate = Some(global_dir.join(&row.name)).filter(|path| path.is_file());
+            let hidden = global_candidate.or(registry_candidate)?;
+            if hidden.display().to_string() == row.path {
+                return None;
+            }
+            Some(ShadowedPluginRow {
+                name: row.name.clone(),
+                path: hidden.display().to_string(),
+                shadowed_by: row.path.clone(),
+                note: "shadowed by project install",
+            })
+        })
+        .collect();
+
+    Ok(PluginListOutput { plugins: rows, warnings: warning_rows, shadowed })
 }
 
 fn spawn_options_for_discovered(plugin: &DiscoveredPlugin) -> PluginSpawnOptions {
@@ -761,7 +853,10 @@ pub(crate) async fn run_plugin_info(req: PluginInfoRequest) -> Result<PluginInfo
         PluginHost::spawn_with_options(&discovered.path, &[], options).await.context("failed to spawn plugin")?;
     let initialize = host.handshake().await.context("plugin initialize failed")?;
     let _ = host.shutdown().await;
-    let skip_flag = registered_skip_manifest_check_at_install(&discovered.name);
+    let skip_flag = registered_skip_manifest_check_at_install_scoped(
+        Some(std::path::Path::new(&req.project_root)),
+        &discovered.name,
+    );
     Ok(PluginInfoOutput {
         name: discovered.name,
         source: source_label(discovered.source),
@@ -811,7 +906,8 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
         return Err(invalid_input_error("name must not be empty"));
     }
 
-    let yaml_path = plugins_yaml_path()?;
+    let scope_paths = resolve_install_scope(req.project, req.project_root.as_deref(), req.plugin_dir.as_deref())?;
+    let yaml_path = scope_paths.registry_yaml.clone();
     let mut config = load_plugins_yaml(&yaml_path)?;
     let key = serde_yaml::Value::String(plugin_name.clone());
     let entry_for_binaries = config.plugins.get(&key).cloned().or_else(|| config.providers.get(&key).cloned());
@@ -820,7 +916,7 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
         save_plugins_yaml(&yaml_path, &config)?;
     }
 
-    let install_dir = install_root(req.plugin_dir.as_deref())?;
+    let install_dir = scope_paths.install_dir.clone();
     let mut binary_names: Vec<String> = vec![plugin_name.clone()];
     if let Some(serde_yaml::Value::Mapping(entry_map)) = entry_for_binaries {
         let binaries_key = serde_yaml::Value::String("binaries".to_string());
@@ -854,19 +950,87 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
         return Err(not_found_error(format!("plugin '{plugin_name}' is not installed")));
     }
 
-    // Remove the lockfile entry (best-effort; never blocks uninstall).
+    // Remove the lockfile entries (best-effort; never blocks uninstall).
     let project_root_pb = req.project_root.as_deref().map(std::path::PathBuf::from);
     let project_root_for_lock: Option<&std::path::Path> = project_root_pb.as_deref();
-    if let Ok(mut lockfile) = PluginLockfile::load_default(project_root_for_lock) {
-        let mut changed = false;
-        for name in &binary_names {
-            if lockfile.remove(name).is_some() {
-                changed = true;
+    if scope_paths.scope == "project" {
+        let project_lock_path = scope_paths
+            .lockfile_override
+            .clone()
+            .unwrap_or_else(|| PluginLockfile::default_path(project_root_for_lock));
+        if let Ok(mut lockfile) = PluginLockfile::load_or_empty(&project_lock_path) {
+            let mut changed = false;
+            for name in &binary_names {
+                if lockfile.remove(name).is_some() {
+                    changed = true;
+                }
+            }
+            // A project-scoped uninstall can un-shadow a same-named GLOBAL
+            // install whose lock entry (incl. installed_kind alias
+            // metadata) lives in `~/.animus/plugins.lock` — a file project
+            // runtime readers (`PluginLockfile::load_default`) never
+            // consult. COPY (not migrate) the global entry into the project
+            // lockfile so the re-exposed global plugin keeps its alias +
+            // integrity claim while the global lockfile stays the
+            // cross-project record (codex P2 rounds 10-12).
+            if let Ok(global_lock) = PluginLockfile::load_or_empty(&global_lockfile_path()) {
+                for name in &binary_names {
+                    if let Some(global_entry) = global_lock.find(name) {
+                        lockfile.upsert(global_entry.clone());
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                if let Err(err) = lockfile.save() {
+                    tracing::warn!(path = %lockfile.path().display(), %err, "failed to persist plugin lockfile after uninstall");
+                }
             }
         }
-        if changed {
-            if let Err(err) = lockfile.save() {
-                tracing::warn!(path = %lockfile.path().display(), %err, "failed to persist plugin lockfile after uninstall");
+    } else {
+        // Global scope: split removals PER BINARY NAME. Names claimed by a
+        // project-scoped install keep their project lock entry (it protects
+        // the project binary); everything else is removed from both the
+        // default lockfile (legacy-reader location) and the global mirror
+        // (codex P2 rounds 14-15).
+        let default_lock_path = PluginLockfile::default_path(project_root_for_lock);
+        let global_lock_path = global_lockfile_path();
+        let mut default_lock = PluginLockfile::load_or_empty(&default_lock_path).ok();
+        let mut global_lock = if global_lock_path == default_lock_path {
+            None
+        } else {
+            PluginLockfile::load_or_empty(&global_lock_path).ok()
+        };
+        let mut default_changed = false;
+        let mut global_changed = false;
+        for name in &binary_names {
+            let project_claimed =
+                project_root_for_lock.map(|root| project_scope_claims_name(root, name)).unwrap_or(false);
+            if !project_claimed {
+                if let Some(lock) = default_lock.as_mut() {
+                    if lock.remove(name).is_some() {
+                        default_changed = true;
+                    }
+                }
+            }
+            if let Some(lock) = global_lock.as_mut() {
+                if lock.remove(name).is_some() {
+                    global_changed = true;
+                }
+            }
+        }
+        if default_changed {
+            if let Some(lock) = default_lock.as_mut() {
+                if let Err(err) = lock.save() {
+                    tracing::warn!(path = %lock.path().display(), %err, "failed to persist plugin lockfile after uninstall");
+                }
+            }
+        }
+        if global_changed {
+            if let Some(lock) = global_lock.as_mut() {
+                if let Err(err) = lock.save() {
+                    tracing::warn!(path = %lock.path().display(), %err, "failed to persist global lockfile mirror after uninstall");
+                }
             }
         }
     }
@@ -889,6 +1053,7 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
         name: plugin_name,
         removed_path: removed,
         plugins_yaml: yaml_path.to_string_lossy().to_string(),
+        scope: scope_paths.scope,
     })
 }
 
@@ -902,11 +1067,15 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
 /// On `force_rewrite_lockfile = true`, the unreadable file is discarded with
 /// a `warn!` and an empty in-memory lockfile is returned; the eventual `save()`
 /// at the end of the install pipeline rewrites it from scratch.
-fn load_or_refuse_lockfile(project_root: Option<&Path>, force_rewrite_lockfile: bool) -> Result<PluginLockfile> {
-    match PluginLockfile::load_default(project_root) {
+fn load_or_refuse_lockfile(
+    project_root: Option<&Path>,
+    explicit_path: Option<&Path>,
+    force_rewrite_lockfile: bool,
+) -> Result<PluginLockfile> {
+    let lock_path = explicit_path.map(Path::to_path_buf).unwrap_or_else(|| PluginLockfile::default_path(project_root));
+    match PluginLockfile::load_or_empty(&lock_path) {
         Ok(lock) => Ok(lock),
         Err(err) => {
-            let lock_path = PluginLockfile::default_path(project_root);
             if force_rewrite_lockfile {
                 tracing::warn!(
                     lockfile = %lock_path.display(),
@@ -981,9 +1150,45 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     // verify_installed/upsert step below so a concurrent install that
     // committed during source download / manifest probe is not silently
     // erased on save.
+    let scope_paths = resolve_install_scope(req.project, req.project_root.as_deref(), req.plugin_dir.as_deref())?;
     let project_root_pb_pre = req.project_root.as_deref().map(std::path::PathBuf::from);
     let project_root_for_lock_pre: Option<&std::path::Path> = project_root_pb_pre.as_deref();
-    let _ = load_or_refuse_lockfile(project_root_for_lock_pre, req.force_rewrite_lockfile)?;
+    let _ = load_or_refuse_lockfile(
+        project_root_for_lock_pre,
+        scope_paths.lockfile_override.as_deref(),
+        req.force_rewrite_lockfile,
+    )?;
+    // Global-scope installs may be re-routed to `~/.animus/plugins.lock`
+    // later (when the resolved plugin name turns out to be project-scope
+    // installed — see `global_scope_lockfile_override`). The plugin name is
+    // not known yet at this point, so validate the global lockfile too;
+    // otherwise a corrupt global lock would only fail AFTER the source
+    // download + `--manifest` probe, breaking the fail-closed invariant.
+    if scope_paths.scope == "global" {
+        let global_lock_path = global_lockfile_path();
+        if global_lock_path != PluginLockfile::default_path(project_root_for_lock_pre) {
+            let parsed_clean = PluginLockfile::load_or_empty(&global_lock_path).is_ok();
+            let mut global_lock = load_or_refuse_lockfile(
+                project_root_for_lock_pre,
+                Some(&global_lock_path),
+                req.force_rewrite_lockfile,
+            )?;
+            // Complete the --force-rewrite-lockfile remediation for the
+            // prechecked global lock: the eventual install usually writes
+            // the project-default lockfile, so without this save a corrupt
+            // global lock would stay corrupt on disk and refuse the NEXT
+            // install at this same precheck (codex P2).
+            if req.force_rewrite_lockfile && global_lock_path.exists() && !parsed_clean {
+                global_lock
+                    .save()
+                    .with_context(|| format!("failed to rewrite plugin lockfile at {}", global_lock_path.display()))?;
+                tracing::warn!(
+                    lockfile = %global_lock_path.display(),
+                    "SECURITY: --force-rewrite-lockfile rewrote a corrupt global lockfile to a fresh empty state",
+                );
+            }
+        }
+    }
 
     // `_install_temp` keeps the install-staging directory alive for the
     // remainder of this function. It drops at the end (RAII) so the
@@ -1108,7 +1313,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         }
     };
 
-    let install_dir = install_root(req.plugin_dir.as_deref())?;
+    let install_dir = scope_paths.install_dir.clone();
     let installed_path = install_dir.join(&plugin_name);
 
     // ---- Lockfile pre-check (runs BEFORE the already-installed gate) ----
@@ -1128,7 +1333,17 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     // still holds — the same `load_or_refuse_lockfile` helper applies.
     let project_root_pb = req.project_root.as_deref().map(std::path::PathBuf::from);
     let project_root_for_lock: Option<&std::path::Path> = project_root_pb.as_deref();
-    let mut lockfile = load_or_refuse_lockfile(project_root_for_lock, req.force_rewrite_lockfile)?;
+    // Global-scope installs must not overwrite a project-scoped lock entry
+    // for the same name (the project install shadows the global one); pin
+    // the write to the global lockfile in that case.
+    let global_shadow_override = if scope_paths.scope == "global" {
+        global_scope_lockfile_override(project_root_for_lock, &plugin_name)
+    } else {
+        None
+    };
+    let effective_lock_override = scope_paths.lockfile_override.clone().or(global_shadow_override);
+    let mut lockfile =
+        load_or_refuse_lockfile(project_root_for_lock, effective_lock_override.as_deref(), req.force_rewrite_lockfile)?;
     let lockfile_path_for_log = lockfile.path().to_path_buf();
     let is_upgrade = installed_path.exists();
     if is_upgrade {
@@ -1327,7 +1542,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         }
     }
 
-    let yaml_path = plugins_yaml_path()?;
+    let yaml_path = scope_paths.registry_yaml.clone();
     let mut config = load_plugins_yaml(&yaml_path)?;
     let entry: serde_yaml::Mapping = {
         let mut map = serde_yaml::Mapping::new();
@@ -1435,7 +1650,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     // ---- Lockfile: persist this install ----
     let bundle_sha = provenance.bundle_path.as_deref().and_then(|p| plugin_host_sha256_of_file(p).ok());
     let recorded_at = chrono::Utc::now().to_rfc3339();
-    let lock_entry = LockEntry {
+    let mut new_lock_entries: Vec<LockEntry> = vec![LockEntry {
         name: plugin_name.clone(),
         version: provenance.release_tag.clone().unwrap_or_default(),
         artifact_sha256: computed_sha.clone(),
@@ -1443,10 +1658,9 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         installed_at: recorded_at.clone(),
         installed_kind: assigned_kind.clone(),
         native_kind: native_kind_for_lock.clone(),
-    };
-    lockfile.upsert(lock_entry);
+    }];
     for (secondary_name, _path, secondary_sha, _temp) in &secondary_installed {
-        lockfile.upsert(LockEntry {
+        new_lock_entries.push(LockEntry {
             name: secondary_name.clone(),
             version: provenance.release_tag.clone().unwrap_or_default(),
             artifact_sha256: secondary_sha.clone(),
@@ -1455,6 +1669,25 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             installed_kind: None,
             native_kind: None,
         });
+    }
+    // Multi-binary follow-up to the primary-name routing above: secondary
+    // binary names only become known after the multi-binary fetch, so
+    // re-check the full entry set and re-route the write to the global
+    // lockfile when ANY name is claimed by a project-scoped install
+    // (codex P2 round 14).
+    if scope_paths.scope == "global" && lockfile.path() != global_lockfile_path() {
+        if let Some(root) = project_root_for_lock {
+            if new_lock_entries.iter().any(|entry| project_scope_claims_name(root, &entry.name)) {
+                lockfile = load_or_refuse_lockfile(
+                    project_root_for_lock,
+                    Some(&global_lockfile_path()),
+                    req.force_rewrite_lockfile,
+                )?;
+            }
+        }
+    }
+    for entry in &new_lock_entries {
+        lockfile.upsert(entry.clone());
     }
     let alias_required = match (assigned_kind.as_deref(), native_kind_for_lock.as_deref()) {
         (Some(installed), Some(native)) => installed != native,
@@ -1511,6 +1744,28 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             )));
         }
         tracing::warn!(path = %lockfile.path().display(), %err, "failed to persist plugin lockfile");
+    }
+
+    // Dual-write: when a global-scope install was recorded in the
+    // project-default lockfile (the legacy-reader location), mirror the
+    // entries into `~/.animus/plugins.lock` too so other projects and
+    // out-of-project commands keep the integrity + alias record for the
+    // global binary (codex P2 rounds 10-12). Best-effort, like the primary
+    // non-aliased save.
+    if scope_paths.scope == "global" && lockfile.path() != global_lockfile_path() {
+        match PluginLockfile::load_or_empty(&global_lockfile_path()) {
+            Ok(mut global_lock) => {
+                for entry in &new_lock_entries {
+                    global_lock.upsert(entry.clone());
+                }
+                if let Err(err) = global_lock.save() {
+                    tracing::warn!(path = %global_lock.path().display(), %err, "failed to persist global lockfile mirror after install");
+                }
+            }
+            Err(err) => {
+                tracing::warn!(%err, "failed to load global lockfile for post-install mirror");
+            }
+        }
     }
 
     // ---- Audit log ----
@@ -1619,6 +1874,16 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
 
     let signature_detail = Some(signature_detail);
 
+    // Project-scope installs drop binaries under `.animus/plugins/`; keep
+    // them out of version control while leaving the lockfile committable.
+    if scope_paths.scope == "project" {
+        if let Some(root) = project_root_for_lock {
+            if let Err(err) = ensure_project_plugins_gitignore(root) {
+                tracing::warn!(%err, "failed to update .animus/.gitignore after project-scoped install");
+            }
+        }
+    }
+
     Ok(PluginInstallOutput {
         name: plugin_name,
         installed_path: installed_path.to_string_lossy().to_string(),
@@ -1634,6 +1899,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         signature_detail,
         assigned_kind,
         native_kind: native_kind_for_lock,
+        scope: scope_paths.scope,
     })
 }
 
@@ -2024,6 +2290,17 @@ fn source_label(source: DiscoverySource) -> &'static str {
     }
 }
 
+/// Map a discovery source onto the install scope shown in `plugin list`.
+/// Only the project-local tier (`<project>/.animus/plugins/`) counts as
+/// `project`; everything else (registry config, global install dir,
+/// `$ANIMUS_PLUGIN_PATH`, `$PATH`) is `global`.
+fn scope_label(source: DiscoverySource) -> &'static str {
+    match source {
+        DiscoverySource::ProjectLocal => "project",
+        _ => "global",
+    }
+}
+
 async fn handle_plugin_list(args: PluginListArgs, project_root: &str, json: bool) -> Result<()> {
     // C6: prefer the control wire when the daemon is running so the
     // daemon's view of installed plugins is authoritative. For CLI text
@@ -2039,6 +2316,10 @@ async fn handle_plugin_list(args: PluginListArgs, project_root: &str, json: bool
     // (the daemon hardcodes false in routing.rs), so honoring the flag
     // requires the local discovery path. Without this guard the daemon
     // wire would silently drop the user-supplied flag.
+    // TODO(codex-p2): the wire PluginListResponse does not yet carry the
+    // `scope` / `shadowed` fields the local JSON shape exposes; extending
+    // the control protocol needs a coordinated animus-control-protocol
+    // bump. Documented as a caveat in docs/reference/cli/index.md.
     if json && !args.include_system_path {
         let project_root_path = std::path::Path::new(project_root);
         if let Some(client) = ControlClient::try_connect(project_root_path).await? {
@@ -2069,21 +2350,29 @@ async fn handle_plugin_list(args: PluginListArgs, project_root: &str, json: bool
         );
     }
 
-    print_plugin_list_table(&output)
+    print_plugin_list_table(&output, project_root)
 }
 
 /// Render `plugin list` results as a table with source-of-truth columns:
 /// `NAME  KIND  VERSION  SOURCE  INSTALLED  PATH`.
-fn print_plugin_list_table(output: &PluginListOutput) -> Result<()> {
+fn print_plugin_list_table(output: &PluginListOutput, project_root: &str) -> Result<()> {
     if output.plugins.is_empty() {
         println!("no plugins discovered");
         return Ok(());
     }
     let installed = marketplace::read_installed_index().unwrap_or_default();
+    // Project-scoped rows resolve their install metadata (source +
+    // installed-at) from the PROJECT registry; falling through to the
+    // global index would show `--` (or a same-named global install's
+    // metadata) for project installs.
+    let project_installed =
+        marketplace::read_installed_index_at(&project_plugins_registry_path(Path::new(project_root)))
+            .unwrap_or_default();
     struct Row {
         name: String,
         kind: String,
         version: String,
+        scope: String,
         source: String,
         installed: String,
         path: String,
@@ -2092,7 +2381,8 @@ fn print_plugin_list_table(output: &PluginListOutput) -> Result<()> {
         .plugins
         .iter()
         .map(|p| {
-            let installed_entry = installed.get(&p.name);
+            let installed_entry =
+                if p.scope == "project" { project_installed.get(&p.name) } else { installed.get(&p.name) };
             let source = installed_entry.map(marketplace::format_installed_source).unwrap_or_else(|| "--".to_string());
             let installed_at = installed_entry
                 .and_then(|e| e.installed_at.as_deref())
@@ -2102,6 +2392,7 @@ fn print_plugin_list_table(output: &PluginListOutput) -> Result<()> {
                 name: p.name.clone(),
                 kind: p.plugin_kind.clone(),
                 version: if p.version.is_empty() { "--".to_string() } else { p.version.clone() },
+                scope: p.scope.to_string(),
                 source,
                 installed: installed_at,
                 path: p.path.clone(),
@@ -2112,14 +2403,16 @@ fn print_plugin_list_table(output: &PluginListOutput) -> Result<()> {
         rows.iter().map(|r| r.name.len()).max().unwrap_or(4).max(4),
         rows.iter().map(|r| r.kind.len()).max().unwrap_or(4).max(4),
         rows.iter().map(|r| r.version.len()).max().unwrap_or(7).max(7),
+        rows.iter().map(|r| r.scope.len()).max().unwrap_or(5).max(5),
         rows.iter().map(|r| r.source.len()).max().unwrap_or(6).max(6),
         rows.iter().map(|r| r.installed.len()).max().unwrap_or(9).max(9),
     ];
     println!(
-        "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  PATH",
+        "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {:<w5$}  PATH",
         "NAME",
         "KIND",
         "VERSION",
+        "SCOPE",
         "SOURCE",
         "INSTALLED",
         w0 = widths[0],
@@ -2127,13 +2420,15 @@ fn print_plugin_list_table(output: &PluginListOutput) -> Result<()> {
         w2 = widths[2],
         w3 = widths[3],
         w4 = widths[4],
+        w5 = widths[5],
     );
     for row in &rows {
         println!(
-            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {}",
+            "{:<w0$}  {:<w1$}  {:<w2$}  {:<w3$}  {:<w4$}  {:<w5$}  {}",
             row.name,
             row.kind,
             row.version,
+            row.scope,
             row.source,
             row.installed,
             row.path,
@@ -2142,6 +2437,13 @@ fn print_plugin_list_table(output: &PluginListOutput) -> Result<()> {
             w2 = widths[2],
             w3 = widths[3],
             w4 = widths[4],
+            w5 = widths[5],
+        );
+    }
+    for shadow in &output.shadowed {
+        println!(
+            "note: global install of '{}' at {} is shadowed by the project install at {}",
+            shadow.name, shadow.path, shadow.shadowed_by
         );
     }
     Ok(())
@@ -2275,6 +2577,170 @@ fn install_root(cli_override: Option<&str>) -> Result<PathBuf> {
     };
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create install dir {}", dir.display()))?;
     Ok(dir)
+}
+
+/// The (install dir, registry yaml, lockfile) triple for one install scope.
+///
+/// Global scope mirrors the historical behavior exactly: install dir from
+/// `--plugin-dir` / `$ANIMUS_PLUGIN_DIR` / `~/.animus/plugins/`, registry at
+/// `~/.animus/plugins.yaml`, and lockfile via
+/// [`PluginLockfile::default_path`] (which prefers
+/// `<project>/.animus/plugins.lock` when the project has opted into Animus).
+/// Project scope pins all three under `<project_root>/.animus/`.
+#[derive(Debug, Clone)]
+struct InstallScopePaths {
+    /// `"global"` or `"project"` — surfaced in output envelopes.
+    scope: &'static str,
+    install_dir: PathBuf,
+    registry_yaml: PathBuf,
+    /// `Some(path)` pins the lockfile explicitly (project scope);
+    /// `None` keeps the legacy [`PluginLockfile::default_path`] resolution.
+    lockfile_override: Option<PathBuf>,
+}
+
+/// Resolve the scope triple for an install/uninstall request. `project=true`
+/// requires `project_root` and refuses an explicit `plugin_dir` (defense in
+/// depth behind the clap `conflicts_with`).
+fn resolve_install_scope(
+    project: bool,
+    project_root: Option<&str>,
+    plugin_dir: Option<&str>,
+) -> Result<InstallScopePaths> {
+    if !project {
+        return Ok(InstallScopePaths {
+            scope: "global",
+            install_dir: install_root(plugin_dir)?,
+            registry_yaml: plugins_yaml_path()?,
+            lockfile_override: None,
+        });
+    }
+    if plugin_dir.is_some() {
+        return Err(invalid_input_error("--project and --plugin-dir are mutually exclusive"));
+    }
+    let root = project_root
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| invalid_input_error("--project requires a resolvable project root"))?;
+    let root = Path::new(root);
+    let install_dir = project_plugin_install_dir(root);
+    std::fs::create_dir_all(&install_dir)
+        .with_context(|| format!("failed to create project plugin dir {}", install_dir.display()))?;
+    Ok(InstallScopePaths {
+        scope: "project",
+        install_dir,
+        registry_yaml: project_plugins_registry_path(root),
+        lockfile_override: Some(project_lockfile_path(root)),
+    })
+}
+
+/// Decide the lockfile a GLOBAL-scope install/uninstall of `plugin_name`
+/// should write. Legacy behavior: `PluginLockfile::default_path`, which
+/// prefers `<project>/.animus/plugins.lock` once a project has opted into
+/// Animus. That is fine until the same name is ALSO project-scope
+/// installed — then a global op routed at the project lockfile would
+/// overwrite or delete the entry that protects the project binary. In that
+/// shadowed case, pin global-scope lock writes to the global
+/// `~/.animus/plugins.lock` instead (codex P2, project-scoped installs).
+fn global_scope_lockfile_override(project_root: Option<&Path>, plugin_name: &str) -> Option<PathBuf> {
+    let root = project_root?;
+    let default = PluginLockfile::default_path(Some(root));
+    let global = global_lockfile_path();
+    if default == global {
+        return None;
+    }
+    if project_scope_claims_name(root, plugin_name) {
+        return Some(global);
+    }
+    None
+}
+
+/// Whether `plugin_name` belongs to a project-scoped install of
+/// `project_root`: either the binary sits in `<project>/.animus/plugins/`
+/// or the project registry (`<project>/.animus/plugins.yaml`) records it.
+/// The registry check matters when the binary was deleted out of band —
+/// the project lock entry still describes the project install and must not
+/// be reassigned to global-scope semantics. Project lockfile entries alone
+/// are NOT consulted: pre-`--project` global installs recorded their
+/// entries there via `PluginLockfile::default_path`, and those legacy
+/// entries are exactly the ones global ops should keep maintaining.
+fn project_scope_claims_name(project_root: &Path, plugin_name: &str) -> bool {
+    if project_plugin_install_dir(project_root).join(plugin_name).exists() {
+        return true;
+    }
+    project_registry_claimed_names(project_root).contains(plugin_name)
+}
+
+/// Every binary name the project registry claims: the table keys of
+/// `<project>/.animus/plugins.yaml` PLUS any secondary names recorded in an
+/// entry's `binaries:` list (multi-binary release installs write one lock
+/// entry per secondary but only one registry key). Empty when the registry
+/// is missing or unreadable.
+fn project_registry_claimed_names(project_root: &Path) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    let path = project_plugins_registry_path(project_root);
+    let Ok(config) = load_plugins_yaml(&path) else {
+        return names;
+    };
+    let binaries_key = serde_yaml::Value::String("binaries".to_string());
+    for table in [&config.plugins, &config.providers] {
+        for (key, value) in table.iter() {
+            if let serde_yaml::Value::String(name) = key {
+                names.insert(name.clone());
+            }
+            if let serde_yaml::Value::Mapping(entry) = value {
+                if let Some(serde_yaml::Value::Sequence(seq)) = entry.get(&binaries_key) {
+                    for item in seq {
+                        if let serde_yaml::Value::String(name) = item {
+                            names.insert(name.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    names
+}
+
+/// Ensure `<project_root>/.animus/.gitignore` ignores the `plugins/`
+/// directory so project-local plugin BINARIES are never committed. The
+/// project lockfile (`plugins.lock`) and registry (`plugins.yaml`) are
+/// intentionally NOT ignored — committing them is how a repo pins its own
+/// plugin set. Idempotent: appends the pattern only when missing; never
+/// rewrites operator-managed lines.
+pub(crate) fn ensure_project_plugins_gitignore(project_root: &Path) -> Result<()> {
+    let animus_dir = project_root.join(".animus");
+    std::fs::create_dir_all(&animus_dir).with_context(|| format!("failed to create {}", animus_dir.display()))?;
+    let gitignore = animus_dir.join(".gitignore");
+    let existing = match std::fs::read_to_string(&gitignore) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => {
+            return Err(anyhow::Error::new(err).context(format!("failed to read {}", gitignore.display())));
+        }
+    };
+    // An operator-managed wildcard already covers the binaries, but it ALSO
+    // ignores the committable lockfile/registry that pin the project's
+    // plugin set. Respect the operator's file (no rewrite), but say so
+    // loudly instead of silently leaving the pin uncommittable (codex P2).
+    if existing.lines().map(str::trim).any(|line| line == "*") {
+        eprintln!(
+            "note: {} ignores everything in .animus/ — to commit the project plugin pin, add \
+             `!plugins.lock` (and optionally `!plugins.yaml`) below the `*` line",
+            gitignore.display()
+        );
+        return Ok(());
+    }
+    let already_covered =
+        existing.lines().map(str::trim).any(|line| matches!(line, "plugins/" | "plugins" | "/plugins/" | "/plugins"));
+    if already_covered {
+        return Ok(());
+    }
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with('\n') {
+        updated.push('\n');
+    }
+    updated.push_str("# Project-local plugin binaries (commit plugins.lock, not the binaries).\nplugins/\n");
+    std::fs::write(&gitignore, updated).with_context(|| format!("failed to write {}", gitignore.display()))
 }
 
 /// Resolves the plugin registry yaml path, performing a one-shot migration from
@@ -3505,6 +3971,7 @@ async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json
         project_root: Some(project_root.to_string()),
         force_rewrite_lockfile: args.force_rewrite_lockfile,
         as_kind: args.as_kind,
+        project: args.project,
     })
     .await?;
     let role = output
@@ -3574,6 +4041,7 @@ fn handle_plugin_uninstall(args: PluginUninstallArgs, project_root: &str, json: 
         name: args.name,
         plugin_dir: args.plugin_dir,
         project_root: Some(project_root.to_string()),
+        project: args.project,
     })?;
     print_value(output, json)
 }
@@ -3840,11 +4308,22 @@ struct PluginLockVerifyEntry {
     actual_sha256: Option<String>,
     installed_path: Option<String>,
     detail: Option<String>,
+    /// Lockfile root the entry came from: `global`
+    /// (`~/.animus/plugins.lock`), `project`
+    /// (`<project>/.animus/plugins.lock`), or `explicit` (`--lockfile`).
+    scope: &'static str,
+    /// Path of the lockfile the entry was read from.
+    lockfile: String,
 }
 
 #[derive(Debug, Serialize)]
 struct PluginLockVerifyOutput {
+    /// Primary lockfile path (back-compat field). Equals the `--lockfile`
+    /// override when supplied, otherwise the default-resolved path.
     lockfile: String,
+    /// Every lockfile root the verify swept (global + project when both
+    /// exist as distinct files).
+    lockfiles: Vec<String>,
     entries: Vec<PluginLockVerifyEntry>,
     matched: usize,
     mismatched: usize,
@@ -4114,109 +4593,200 @@ fn run_lock_list(args: PluginLockListArgs, project_root: &str) -> Result<()> {
 }
 
 fn run_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result<()> {
-    let path = args.lockfile.unwrap_or_else(|| PluginLockfile::default_path(Some(std::path::Path::new(project_root))));
-    let lockfile = PluginLockfile::load_or_empty(&path)?;
-    let install_dir = install_root(args.plugin_dir.as_deref())?;
-    let mut entries = Vec::with_capacity(lockfile.plugins.len());
-    let mut matched = 0_usize;
-    let mut mismatched = 0_usize;
-    let mut missing_binary = 0_usize;
-    for entry in &lockfile.plugins {
-        let installed_path = install_dir.join(&entry.name);
-        if !installed_path.exists() {
-            missing_binary += 1;
-            entries.push(PluginLockVerifyEntry {
-                name: entry.name.clone(),
-                status: "missing_binary",
-                expected_sha256: entry.artifact_sha256.clone(),
-                actual_sha256: None,
-                installed_path: Some(installed_path.to_string_lossy().to_string()),
-                detail: Some("installed binary not found at expected path".to_string()),
-            });
-            continue;
-        }
-        match lockfile.verify_installed(&entry.name, &installed_path) {
-            Ok(LockVerifyResult::Match) => {
-                matched += 1;
-                entries.push(PluginLockVerifyEntry {
-                    name: entry.name.clone(),
-                    status: "ok",
-                    expected_sha256: entry.artifact_sha256.clone(),
-                    actual_sha256: Some(entry.artifact_sha256.clone()),
-                    installed_path: Some(installed_path.to_string_lossy().to_string()),
-                    detail: None,
-                });
-            }
-            Ok(LockVerifyResult::Mismatch { expected, actual }) => {
-                mismatched += 1;
-                if let Some(scoped) = protocol::repository_scope::scoped_state_root(std::path::Path::new(project_root))
-                {
-                    Audit::at_scoped_root(&scoped).log_event(AuditEvent::new(
-                        AuditActor::User,
-                        AuditEventKind::LockfileMismatch,
-                        serde_json::json!({
-                            "plugin": entry.name,
-                            "expected_sha256": expected,
-                            "actual_sha256": actual,
-                            "lockfile": path.display().to_string(),
-                        }),
-                    ));
-                }
-                entries.push(PluginLockVerifyEntry {
-                    name: entry.name.clone(),
-                    status: "mismatch",
-                    expected_sha256: expected,
-                    actual_sha256: Some(actual),
-                    installed_path: Some(installed_path.to_string_lossy().to_string()),
-                    detail: Some("sha256 of installed binary does not match lockfile".to_string()),
-                });
-            }
-            Ok(LockVerifyResult::Missing) => {
-                // Should not happen because we just iterated the lockfile entries.
-                entries.push(PluginLockVerifyEntry {
-                    name: entry.name.clone(),
-                    status: "missing_lock_entry",
-                    expected_sha256: entry.artifact_sha256.clone(),
-                    actual_sha256: None,
-                    installed_path: Some(installed_path.to_string_lossy().to_string()),
-                    detail: Some("entry vanished between read and verify".to_string()),
-                });
-            }
-            Err(err) => {
-                entries.push(PluginLockVerifyEntry {
-                    name: entry.name.clone(),
-                    status: "error",
-                    expected_sha256: entry.artifact_sha256.clone(),
-                    actual_sha256: None,
-                    installed_path: Some(installed_path.to_string_lossy().to_string()),
-                    detail: Some(err.to_string()),
-                });
-            }
-        }
-    }
-    let output = PluginLockVerifyOutput {
-        lockfile: path.to_string_lossy().to_string(),
-        entries,
-        matched,
-        mismatched,
-        missing_binary,
-    };
+    let json = args.json;
+    let output = compute_lock_verify(args, project_root)?;
     // `animus plugin lock verify` is meant to be wired into CI / cron as a
     // tamper-detection gate. Both a hash mismatch AND a missing on-disk binary
     // for a tracked entry indicate the install state has drifted from the
     // lockfile, so either condition must exit non-zero.
-    let exit_err = if mismatched > 0 || missing_binary > 0 {
+    let exit_err = if output.mismatched > 0 || output.missing_binary > 0 {
         Some(anyhow!(
-            "plugin lock verify failed: {mismatched} mismatched, {missing_binary} missing binary, {matched} matched"
+            "plugin lock verify failed: {} mismatched, {} missing binary, {} matched",
+            output.mismatched,
+            output.missing_binary,
+            output.matched
         ))
     } else {
         None
     };
-    print_value(output, args.json)?;
+    print_value(output, json)?;
     if let Some(err) = exit_err {
         return Err(err);
     }
     Ok(())
+}
+
+fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result<PluginLockVerifyOutput> {
+    let project_root_path = std::path::Path::new(project_root);
+    let global_dir = install_root(args.plugin_dir.as_deref())?;
+    let project_dir = project_plugin_install_dir(project_root_path);
+
+    // The verify targets: (lockfile path, scope, candidate install dirs in
+    // probe order). With an explicit `--lockfile` override only that file is
+    // verified (legacy behavior). Otherwise BOTH roots are swept: the global
+    // lockfile against the global install dir, and the project lockfile with
+    // the project dir probed first and the global dir as fallback (pre-flag
+    // installs recorded global-dir binaries into the project lockfile via
+    // `PluginLockfile::default_path`).
+    let mut targets: Vec<(PathBuf, &'static str, Vec<PathBuf>)> = Vec::new();
+    let primary_path: PathBuf;
+    if let Some(explicit) = args.lockfile {
+        // An explicit lockfile brings its own natural install dir: the
+        // `plugins/` sibling next to the file (`<project>/.animus/plugins/`
+        // for a committed project lockfile, `~/.animus/plugins/` for the
+        // global one). Probe it alongside the resolved global dir so
+        // `--lockfile <project>/.animus/plugins.lock` verifies project
+        // binaries without also requiring `--plugin-dir` (codex P2). An
+        // explicit `--plugin-dir` keeps first priority.
+        let sibling_dir = explicit.parent().map(|parent| parent.join("plugins"));
+        let mut candidate_dirs: Vec<PathBuf> = Vec::new();
+        if args.plugin_dir.is_some() {
+            candidate_dirs.push(global_dir.clone());
+        }
+        if let Some(sibling) = sibling_dir {
+            if !candidate_dirs.contains(&sibling) {
+                candidate_dirs.push(sibling);
+            }
+        }
+        if !candidate_dirs.contains(&global_dir) {
+            candidate_dirs.push(global_dir.clone());
+        }
+        primary_path = explicit.clone();
+        targets.push((explicit, "explicit", candidate_dirs));
+    } else {
+        primary_path = PluginLockfile::default_path(Some(project_root_path));
+        let global_path = global_lockfile_path();
+        let project_path = project_lockfile_path(project_root_path);
+        targets.push((global_path.clone(), "global", vec![global_dir.clone()]));
+        if project_path != global_path {
+            targets.push((project_path, "project", vec![project_dir.clone(), global_dir.clone()]));
+        }
+    }
+
+    // Names recorded by a true project-scoped install. For those entries
+    // the global-dir fallback below must NOT apply: when the project binary
+    // is missing, falling back to a same-named global binary would report
+    // `ok` and defeat the project tamper gate (codex P2). The fallback only
+    // serves legacy project-lock entries written by global installs, which
+    // never appear in the project registry.
+    let project_registry_names: BTreeSet<String> = project_registry_claimed_names(project_root_path);
+
+    let mut lockfiles: Vec<String> = Vec::with_capacity(targets.len());
+    let mut entries = Vec::new();
+    let mut matched = 0_usize;
+    let mut mismatched = 0_usize;
+    let mut missing_binary = 0_usize;
+    for (path, scope, candidate_dirs) in &targets {
+        let lockfile = PluginLockfile::load_or_empty(path)?;
+        let lockfile_display = path.to_string_lossy().to_string();
+        lockfiles.push(lockfile_display.clone());
+        // An explicit `--lockfile` pointing at the project lockfile carries
+        // the same project-scope semantics (CI verifying the committed
+        // lock) — pin its project-registry entries to the project dir too.
+        // Canonicalize both sides so a relative invocation
+        // (`--lockfile .animus/plugins.lock` from the project root) still
+        // matches the absolute project path (codex P2).
+        let canonical = |p: &Path| p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
+        let target_is_project_lock = *scope == "project"
+            || (*scope == "explicit" && canonical(path) == canonical(&project_lockfile_path(project_root_path)));
+        for entry in &lockfile.plugins {
+            let pin_to_project_dir = target_is_project_lock && project_registry_names.contains(&entry.name);
+            let entry_dirs: &[PathBuf] =
+                if pin_to_project_dir { std::slice::from_ref(&project_dir) } else { candidate_dirs.as_slice() };
+            let installed_path = entry_dirs
+                .iter()
+                .map(|dir| dir.join(&entry.name))
+                .find(|candidate| candidate.exists())
+                .unwrap_or_else(|| entry_dirs[0].join(&entry.name));
+            if !installed_path.exists() {
+                missing_binary += 1;
+                entries.push(PluginLockVerifyEntry {
+                    name: entry.name.clone(),
+                    status: "missing_binary",
+                    expected_sha256: entry.artifact_sha256.clone(),
+                    actual_sha256: None,
+                    installed_path: Some(installed_path.to_string_lossy().to_string()),
+                    detail: Some("installed binary not found at expected path".to_string()),
+                    scope,
+                    lockfile: lockfile_display.clone(),
+                });
+                continue;
+            }
+            match lockfile.verify_installed(&entry.name, &installed_path) {
+                Ok(LockVerifyResult::Match) => {
+                    matched += 1;
+                    entries.push(PluginLockVerifyEntry {
+                        name: entry.name.clone(),
+                        status: "ok",
+                        expected_sha256: entry.artifact_sha256.clone(),
+                        actual_sha256: Some(entry.artifact_sha256.clone()),
+                        installed_path: Some(installed_path.to_string_lossy().to_string()),
+                        detail: None,
+                        scope,
+                        lockfile: lockfile_display.clone(),
+                    });
+                }
+                Ok(LockVerifyResult::Mismatch { expected, actual }) => {
+                    mismatched += 1;
+                    if let Some(scoped) = protocol::repository_scope::scoped_state_root(project_root_path) {
+                        Audit::at_scoped_root(&scoped).log_event(AuditEvent::new(
+                            AuditActor::User,
+                            AuditEventKind::LockfileMismatch,
+                            serde_json::json!({
+                                "plugin": entry.name,
+                                "expected_sha256": expected,
+                                "actual_sha256": actual,
+                                "lockfile": lockfile_display.clone(),
+                            }),
+                        ));
+                    }
+                    entries.push(PluginLockVerifyEntry {
+                        name: entry.name.clone(),
+                        status: "mismatch",
+                        expected_sha256: expected,
+                        actual_sha256: Some(actual),
+                        installed_path: Some(installed_path.to_string_lossy().to_string()),
+                        detail: Some("sha256 of installed binary does not match lockfile".to_string()),
+                        scope,
+                        lockfile: lockfile_display.clone(),
+                    });
+                }
+                Ok(LockVerifyResult::Missing) => {
+                    // Should not happen because we just iterated the lockfile entries.
+                    entries.push(PluginLockVerifyEntry {
+                        name: entry.name.clone(),
+                        status: "missing_lock_entry",
+                        expected_sha256: entry.artifact_sha256.clone(),
+                        actual_sha256: None,
+                        installed_path: Some(installed_path.to_string_lossy().to_string()),
+                        detail: Some("entry vanished between read and verify".to_string()),
+                        scope,
+                        lockfile: lockfile_display.clone(),
+                    });
+                }
+                Err(err) => {
+                    entries.push(PluginLockVerifyEntry {
+                        name: entry.name.clone(),
+                        status: "error",
+                        expected_sha256: entry.artifact_sha256.clone(),
+                        actual_sha256: None,
+                        installed_path: Some(installed_path.to_string_lossy().to_string()),
+                        detail: Some(err.to_string()),
+                        scope,
+                        lockfile: lockfile_display.clone(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(PluginLockVerifyOutput {
+        lockfile: primary_path.to_string_lossy().to_string(),
+        lockfiles,
+        entries,
+        matched,
+        mismatched,
+        missing_binary,
+    })
 }
 
 #[cfg(test)]
@@ -5594,8 +6164,8 @@ trusted_signers:
         let lock_path = animus_dir.join("plugins.lock");
         std::fs::write(&lock_path, b"definitely not toml").unwrap();
 
-        let err =
-            load_or_refuse_lockfile(Some(&project_root), false).expect_err("default must refuse corrupt lockfile");
+        let err = load_or_refuse_lockfile(Some(&project_root), None, false)
+            .expect_err("default must refuse corrupt lockfile");
         let msg = format!("{err}");
         assert!(msg.contains("plugin lockfile"));
         assert!(msg.contains("unreadable"));
@@ -5612,7 +6182,7 @@ trusted_signers:
         let lock_path = animus_dir.join("plugins.lock");
         std::fs::write(&lock_path, b"definitely not toml").unwrap();
 
-        let lock = load_or_refuse_lockfile(Some(&project_root), true)
+        let lock = load_or_refuse_lockfile(Some(&project_root), None, true)
             .expect("--force-rewrite-lockfile must produce a fresh in-memory lock");
         assert_eq!(lock.path(), &lock_path, "lockfile path must point at the project-local file");
         // The in-memory lock starts empty; the on-disk corrupt bytes are
@@ -7224,5 +7794,464 @@ required = ["launchapp-dev/animus-queue-default"]
             canonical_names.contains(&"custom-task".to_string()),
             "discovery must surface the plugin under its name_override: {canonical_names:?}",
         );
+    }
+
+    // ===== Project-scoped plugin installation (`--project`) =====
+    //
+    // Every test pins HOME + ANIMUS_CONFIG_DIR + ANIMUS_PLUGIN_DIR to a
+    // tempdir (via EnvVarGuard, behind INSTALL_ENV_GUARD + the crate env
+    // lock) so the real `~/.animus` is never touched.
+
+    #[cfg(unix)]
+    struct ProjectScopeEnv {
+        _tmp: tempfile::TempDir,
+        _home: protocol::test_utils::EnvVarGuard,
+        _config: protocol::test_utils::EnvVarGuard,
+        _plugin_dir: protocol::test_utils::EnvVarGuard,
+        global_dir: PathBuf,
+        project_root: PathBuf,
+        scratch: PathBuf,
+    }
+
+    #[cfg(unix)]
+    fn project_scope_env() -> ProjectScopeEnv {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let home = tmp.path().join("home");
+        let config_dir = tmp.path().join("config");
+        let global_dir = tmp.path().join("global-plugins");
+        let project_root = tmp.path().join("project");
+        let scratch = tmp.path().join("scratch");
+        for dir in [&home, &config_dir, &global_dir, &project_root, &scratch] {
+            std::fs::create_dir_all(dir).expect("mkdir");
+        }
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.to_str().expect("utf-8")));
+        let _config =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_dir.to_str().expect("utf-8")));
+        let _plugin_dir =
+            protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(global_dir.to_str().expect("utf-8")));
+        ProjectScopeEnv { _tmp: tmp, _home, _config, _plugin_dir, global_dir, project_root, scratch }
+    }
+
+    #[cfg(unix)]
+    async fn install_for_test(env: &ProjectScopeEnv, binary_name: &str, project: bool) -> PluginInstallOutput {
+        let source = env.scratch.join(binary_name);
+        write_fake_plugin_binary(&source, binary_name, "subject_backend");
+        let req = PluginInstallRequest {
+            path: Some(source.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            force: true,
+            project,
+            project_root: if project { Some(env.project_root.to_string_lossy().to_string()) } else { None },
+            ..Default::default()
+        };
+        run_plugin_install(req).await.expect("install must succeed")
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)] // intentional: guards process-global env mutation across the install await
+    async fn install_project_scope_lands_in_project_dirs_and_lockfile() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+
+        let output = install_for_test(&env, "animus-plugin-projscoped", true).await;
+
+        assert_eq!(output.scope, "project");
+        let binary = env.project_root.join(".animus/plugins/animus-plugin-projscoped");
+        assert!(binary.is_file(), "binary must land in <project>/.animus/plugins/");
+        assert_eq!(output.installed_path, binary.to_string_lossy());
+
+        // Registry: project-local plugins.yaml, not the global one.
+        let registry = env.project_root.join(".animus/plugins.yaml");
+        assert_eq!(output.plugins_yaml, registry.to_string_lossy());
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&registry).unwrap()).unwrap();
+        assert!(yaml.get("plugins").and_then(|p| p.get("animus-plugin-projscoped")).is_some());
+        assert!(!plugins_registry_path().exists(), "global plugins.yaml must stay untouched");
+
+        // Lockfile: project-local plugins.lock with an entry; the global
+        // lockfile under the pinned HOME must not exist.
+        let lock = PluginLockfile::load_or_empty(&project_lockfile_path(&env.project_root)).unwrap();
+        assert!(lock.find("animus-plugin-projscoped").is_some(), "project lockfile must record the install");
+        assert!(!global_lockfile_path().exists(), "global lockfile must stay untouched");
+
+        // Binaries stay out of version control; the lockfile stays committable.
+        let gitignore = std::fs::read_to_string(env.project_root.join(".animus/.gitignore")).unwrap();
+        assert!(gitignore.lines().any(|l| l.trim() == "plugins/"), "gitignore must cover plugins/: {gitignore}");
+        assert!(
+            !gitignore.lines().any(|l| l.trim() == "plugins.lock"),
+            "lockfile must remain committable: {gitignore}"
+        );
+
+        // Nothing may leak into the global install dir.
+        assert_eq!(std::fs::read_dir(&env.global_dir).unwrap().count(), 0, "global install dir must stay empty");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn uninstall_project_scope_removes_binary_registry_and_lock_entry() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        install_for_test(&env, "animus-plugin-projgone", true).await;
+
+        let output = run_plugin_uninstall(PluginUninstallRequest {
+            name: "animus-plugin-projgone".to_string(),
+            plugin_dir: None,
+            project_root: Some(env.project_root.to_string_lossy().to_string()),
+            project: true,
+        })
+        .expect("uninstall must succeed");
+        assert_eq!(output.scope, "project");
+        assert!(output.removed_path.is_some());
+        assert!(!env.project_root.join(".animus/plugins/animus-plugin-projgone").exists());
+
+        let registry = env.project_root.join(".animus/plugins.yaml");
+        let yaml: serde_yaml::Value = serde_yaml::from_str(&std::fs::read_to_string(&registry).unwrap()).unwrap();
+        assert!(yaml.get("plugins").and_then(|p| p.get("animus-plugin-projgone")).is_none());
+
+        let lock = PluginLockfile::load_or_empty(&project_lockfile_path(&env.project_root)).unwrap();
+        assert!(lock.find("animus-plugin-projgone").is_none(), "project lock entry must be removed");
+    }
+
+    /// A project-local install shadows a global install of the same name:
+    /// discovery returns the project copy (scope=project) and `plugin list`
+    /// surfaces the hidden global binary in `shadowed`.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn plugin_list_marks_scope_and_renders_shadowed_global_install() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        install_for_test(&env, "animus-plugin-shadowed", false).await;
+        install_for_test(&env, "animus-plugin-shadowed", true).await;
+
+        let output = run_plugin_list(PluginListRequest {
+            project_root: env.project_root.to_string_lossy().to_string(),
+            include_system_path: false,
+        })
+        .expect("plugin list");
+        let rows: Vec<_> = output.plugins.iter().filter(|p| p.name == "animus-plugin-shadowed").collect();
+        assert_eq!(rows.len(), 1, "name dedup must keep exactly one row");
+        assert_eq!(rows[0].scope, "project", "project install must win discovery");
+        assert!(rows[0].path.starts_with(&*env.project_root.to_string_lossy()), "winning path must be project-local");
+
+        assert_eq!(output.shadowed.len(), 1, "the hidden global binary must be surfaced");
+        let shadow = &output.shadowed[0];
+        assert_eq!(shadow.name, "animus-plugin-shadowed");
+        assert_eq!(shadow.note, "shadowed by project install");
+        assert!(shadow.path.starts_with(&*env.global_dir.to_string_lossy()));
+        assert_eq!(shadow.shadowed_by, rows[0].path);
+    }
+
+    /// `plugin lock verify` sweeps BOTH lockfile roots: global entries
+    /// against the global dir, project entries against the project dir.
+    /// Tampering with the project-installed binary fails the gate.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn lock_verify_covers_global_and_project_roots() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        install_for_test(&env, "animus-plugin-globalroot", false).await;
+        install_for_test(&env, "animus-plugin-projroot", true).await;
+
+        let verify_args = || PluginLockVerifyArgs { lockfile: None, plugin_dir: None, json: true };
+        let output = compute_lock_verify(verify_args(), env.project_root.to_string_lossy().as_ref())
+            .expect("verify must compute");
+        assert_eq!(output.lockfiles.len(), 2, "both lockfile roots must be swept: {:?}", output.lockfiles);
+        let scope_of = |name: &str| {
+            output.entries.iter().find(|e| e.name == name).map(|e| (e.scope, e.status)).unwrap_or_else(|| {
+                panic!("entry for {name} missing in {:?}", output.entries.iter().map(|e| &e.name).collect::<Vec<_>>())
+            })
+        };
+        assert_eq!(scope_of("animus-plugin-globalroot"), ("global", "ok"));
+        assert_eq!(scope_of("animus-plugin-projroot"), ("project", "ok"));
+        assert_eq!(output.mismatched, 0);
+        assert_eq!(output.missing_binary, 0);
+
+        // Explicit `--lockfile <project>/.animus/plugins.lock` (the
+        // committed-lockfile CI use case) must probe the lockfile's sibling
+        // `plugins/` dir, not just the global install dir.
+        let explicit = compute_lock_verify(
+            PluginLockVerifyArgs {
+                lockfile: Some(project_lockfile_path(&env.project_root)),
+                plugin_dir: None,
+                json: true,
+            },
+            env.project_root.to_string_lossy().as_ref(),
+        )
+        .expect("explicit verify must compute");
+        let proj_entry = explicit.entries.iter().find(|e| e.name == "animus-plugin-projroot").expect("project entry");
+        assert_eq!((proj_entry.scope, proj_entry.status), ("explicit", "ok"));
+
+        // Tamper with the project binary: verify must flag a project-scope mismatch.
+        std::fs::write(env.project_root.join(".animus/plugins/animus-plugin-projroot"), b"tampered").unwrap();
+        let tampered = compute_lock_verify(verify_args(), env.project_root.to_string_lossy().as_ref()).unwrap();
+        assert_eq!(tampered.mismatched, 1);
+        let bad = tampered.entries.iter().find(|e| e.name == "animus-plugin-projroot").unwrap();
+        assert_eq!(bad.scope, "project");
+        assert_eq!(bad.status, "mismatch");
+    }
+
+    /// A global-scope install/uninstall of a name that is ALSO
+    /// project-scope installed must not touch the project lockfile entry
+    /// that protects the project binary: the global op is routed to the
+    /// global `~/.animus/plugins.lock` instead.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn global_ops_do_not_clobber_project_lock_entry_for_shadowed_name() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        install_for_test(&env, "animus-plugin-bothscopes", true).await;
+        let project_lock = || PluginLockfile::load_or_empty(&project_lockfile_path(&env.project_root)).unwrap();
+        let project_sha = project_lock().find("animus-plugin-bothscopes").unwrap().artifact_sha256.clone();
+
+        // Global install of the SAME name, with the project root supplied
+        // (as the CLI always does). The lock entry must land in the global
+        // lockfile, leaving the project entry untouched.
+        let source = env.scratch.join("animus-plugin-bothscopes");
+        write_fake_plugin_binary(&source, "animus-plugin-bothscopes", "subject_backend");
+        let req = PluginInstallRequest {
+            path: Some(source.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            force: true,
+            project: false,
+            project_root: Some(env.project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        run_plugin_install(req).await.expect("global install must succeed");
+        let global_lock = PluginLockfile::load_or_empty(&global_lockfile_path()).unwrap();
+        assert!(global_lock.find("animus-plugin-bothscopes").is_some(), "global op must write the global lockfile");
+        assert_eq!(
+            project_lock().find("animus-plugin-bothscopes").unwrap().artifact_sha256,
+            project_sha,
+            "project lock entry must be untouched by the global install"
+        );
+
+        // With both installs present (identical artifact!), deleting the
+        // PROJECT binary must surface as missing_binary on the project
+        // entry — the same-named global binary must not satisfy it.
+        let project_binary = env.project_root.join(".animus/plugins/animus-plugin-bothscopes");
+        let project_binary_bytes = std::fs::read(&project_binary).unwrap();
+        std::fs::remove_file(&project_binary).unwrap();
+        let verify = compute_lock_verify(
+            PluginLockVerifyArgs { lockfile: None, plugin_dir: None, json: true },
+            env.project_root.to_string_lossy().as_ref(),
+        )
+        .unwrap();
+        let project_entry = verify
+            .entries
+            .iter()
+            .find(|e| e.scope == "project" && e.name == "animus-plugin-bothscopes")
+            .expect("project entry");
+        assert_eq!(
+            project_entry.status, "missing_binary",
+            "a same-named global binary must not satisfy a project-scoped lock entry"
+        );
+        std::fs::write(&project_binary, project_binary_bytes).unwrap();
+        ensure_executable(&project_binary).unwrap();
+
+        // Global uninstall: removes the global binary + global lock entry,
+        // but never the project entry.
+        run_plugin_uninstall(PluginUninstallRequest {
+            name: "animus-plugin-bothscopes".to_string(),
+            plugin_dir: None,
+            project_root: Some(env.project_root.to_string_lossy().to_string()),
+            project: false,
+        })
+        .expect("global uninstall must succeed");
+        let global_lock = PluginLockfile::load_or_empty(&global_lockfile_path()).unwrap();
+        assert!(global_lock.find("animus-plugin-bothscopes").is_none(), "global lock entry must be removed");
+        assert!(
+            project_lock().find("animus-plugin-bothscopes").is_some(),
+            "project lock entry must survive a global uninstall"
+        );
+        assert!(
+            env.project_root.join(".animus/plugins/animus-plugin-bothscopes").exists(),
+            "project binary must survive a global uninstall"
+        );
+    }
+
+    /// `.animus/plugin-scope.yaml` admit-filtering applies to
+    /// project-installed plugins exactly as it does to global ones.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn plugin_scope_allowlist_filters_project_installed_plugin() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        install_for_test(&env, "animus-plugin-scopedout", true).await;
+
+        let list = |root: &Path| {
+            run_plugin_list(PluginListRequest {
+                project_root: root.to_string_lossy().to_string(),
+                include_system_path: false,
+            })
+            .expect("plugin list")
+        };
+        assert!(
+            list(&env.project_root).plugins.iter().any(|p| p.name == "animus-plugin-scopedout"),
+            "without a scope file the project install must be discovered"
+        );
+
+        std::fs::write(
+            env.project_root.join(".animus/plugin-scope.yaml"),
+            "schema: animus.plugin-scope.v1\nmode: allowlist\nallow:\n  - some-other-plugin\n",
+        )
+        .unwrap();
+        assert!(
+            !list(&env.project_root).plugins.iter().any(|p| p.name == "animus-plugin-scopedout"),
+            "an allowlist that omits the project-installed plugin must exclude it"
+        );
+    }
+
+    /// `plugin update --project` reads the PROJECT registry, not the global one.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn plugin_update_project_reads_project_registry() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        install_for_test(&env, "animus-plugin-globalonly", false).await;
+        install_for_test(&env, "animus-plugin-projonly", true).await;
+
+        let output = marketplace::run_plugin_update(marketplace::PluginUpdateRequest {
+            selector: PluginUpdateSelector::All,
+            tag_override: None,
+            check: true,
+            force: false,
+            project_root: Some(env.project_root.to_string_lossy().to_string()),
+            project: true,
+        })
+        .await
+        .expect("update --check must succeed");
+        let names: Vec<&str> = output.results.iter().map(|r| r.name.as_str()).collect();
+        assert!(names.contains(&"animus-plugin-projonly"), "project install must be considered: {names:?}");
+        assert!(!names.contains(&"animus-plugin-globalonly"), "global install must NOT leak into --project: {names:?}");
+    }
+
+    /// `plugin outdated` includes project-scope rows alongside global ones.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn plugin_outdated_includes_project_scope_rows() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        install_for_test(&env, "animus-plugin-globaldrift", false).await;
+        install_for_test(&env, "animus-plugin-projdrift", true).await;
+
+        // `offline: true` keeps the test off the network: the registry fetch
+        // degrades to latest=unknown without failing the command.
+        let output = marketplace::run_plugin_outdated(marketplace::PluginOutdatedRequest {
+            registry_url: String::new(),
+            no_cache: false,
+            offline: true,
+            project_root: Some(env.project_root.to_string_lossy().to_string()),
+        })
+        .await
+        .expect("outdated must succeed offline");
+        let scope_of = |name: &str| output.rows.iter().find(|r| r.name == name).map(|r| r.scope);
+        assert_eq!(scope_of("animus-plugin-globaldrift"), Some("global"));
+        assert_eq!(scope_of("animus-plugin-projdrift"), Some("project"));
+    }
+
+    /// A project-scoped install whose name falls outside the dir-scanned
+    /// prefixes (official plugins like `animus-subject-default`, or a
+    /// custom `--name`) must still be discoverable — via the project
+    /// registry tier (`<project>/.animus/plugins.yaml`).
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn project_install_with_unscanned_name_is_discoverable_via_project_registry() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        let source = env.scratch.join("animus-subject-default");
+        write_fake_plugin_binary(&source, "animus-subject-default", "subject_backend");
+        let req = PluginInstallRequest {
+            path: Some(source.to_string_lossy().to_string()),
+            skip_signature: true,
+            yes: true,
+            project: true,
+            project_root: Some(env.project_root.to_string_lossy().to_string()),
+            ..Default::default()
+        };
+        let output = run_plugin_install(req).await.expect("project install of official subject plugin");
+        assert_eq!(output.scope, "project");
+
+        let list = run_plugin_list(PluginListRequest {
+            project_root: env.project_root.to_string_lossy().to_string(),
+            include_system_path: false,
+        })
+        .expect("plugin list");
+        let row = list
+            .plugins
+            .iter()
+            .find(|p| p.name == "animus-subject-default")
+            .expect("project registry tier must surface the unscanned name");
+        assert_eq!(row.scope, "project");
+        assert!(row.path.starts_with(&*env.project_root.to_string_lossy()));
+    }
+
+    #[test]
+    fn resolve_install_scope_rejects_plugin_dir_and_missing_root() {
+        let err = resolve_install_scope(true, Some("/tmp/x"), Some("/tmp/dir")).unwrap_err();
+        assert!(format!("{err}").contains("mutually exclusive"), "got: {err}");
+        let err = resolve_install_scope(true, None, None).unwrap_err();
+        assert!(format!("{err}").contains("project root"), "got: {err}");
+    }
+
+    #[test]
+    fn cli_rejects_project_with_plugin_dir() {
+        use clap::Parser;
+        let err = crate::Cli::try_parse_from([
+            "animus",
+            "plugin",
+            "install",
+            "owner/repo",
+            "--project",
+            "--plugin-dir",
+            "/tmp/x",
+        ])
+        .expect_err("--project + --plugin-dir must conflict");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+
+        let err = crate::Cli::try_parse_from([
+            "animus",
+            "plugin",
+            "uninstall",
+            "--name",
+            "x",
+            "--project",
+            "--plugin-dir",
+            "/tmp/x",
+        ])
+        .expect_err("--project + --plugin-dir must conflict on uninstall");
+        assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn ensure_project_plugins_gitignore_is_idempotent_and_appends() {
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(tmp.path().to_str().unwrap()));
+        let root = tmp.path().join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+
+        ensure_project_plugins_gitignore(&root).unwrap();
+        let first = std::fs::read_to_string(root.join(".animus/.gitignore")).unwrap();
+        assert!(first.lines().any(|l| l.trim() == "plugins/"));
+        ensure_project_plugins_gitignore(&root).unwrap();
+        let second = std::fs::read_to_string(root.join(".animus/.gitignore")).unwrap();
+        assert_eq!(first, second, "second call must be a no-op");
+
+        // Operator-managed file with other lines: pattern is appended once.
+        std::fs::write(root.join(".animus/.gitignore"), "daemon.log\n").unwrap();
+        ensure_project_plugins_gitignore(&root).unwrap();
+        let appended = std::fs::read_to_string(root.join(".animus/.gitignore")).unwrap();
+        assert!(appended.starts_with("daemon.log\n"), "existing lines preserved: {appended}");
+        assert!(appended.lines().any(|l| l.trim() == "plugins/"));
     }
 }

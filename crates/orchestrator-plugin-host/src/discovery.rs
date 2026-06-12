@@ -338,9 +338,16 @@ impl PluginDiscovery {
     /// source that yields it. Later sources can never override an earlier one
     /// — duplicates from lower-precedence sources are silently skipped:
     ///
-    /// 1. Explicit registry config (`~/.animus/plugins.yaml`, or the path
-    ///    supplied to [`PluginDiscovery::with_config_path`]).
-    /// 2. Project-local install dir (`<project_root>/.animus/plugins/`).
+    /// 1. Project-local tier: the install dir scan
+    ///    (`<project_root>/.animus/plugins/`) followed by the project
+    ///    registry (`<project_root>/.animus/plugins.yaml`) — the
+    ///    highest-priority tier so a project-scoped install
+    ///    (`animus plugin install --project`) shadows BOTH a hand-pinned
+    ///    global registry entry and a global install of the same name.
+    /// 2. Explicit registry config (`~/.animus/plugins.yaml`, or the path
+    ///    supplied to [`PluginDiscovery::with_config_path`]). Every global
+    ///    `animus plugin install` records its entry here, so this tier is
+    ///    where registry-recorded global installs resolve.
     /// 3. Global install dir (`$ANIMUS_PLUGIN_DIR` when set, otherwise
     ///    `~/.animus/plugins/`) — the canonical destination for
     ///    `animus plugin install`. Scanned unconditionally so a binary
@@ -361,8 +368,10 @@ impl PluginDiscovery {
         let cache = ManifestCache::from_default();
         let lockfile = PluginLockfile::load_default(self.project_root.as_deref()).ok();
 
-        self.discover_configured(&mut discovered, &mut warnings, &mut seen, &cache, lockfile.as_ref())?;
-
+        // Project-local installs scan FIRST: the explicit registry yaml is
+        // written by every global `animus plugin install`, so letting it win
+        // would silently invert the documented "project shadows global" rule
+        // for any name that was ever installed globally.
         if let Some(project_root) = &self.project_root {
             scan_dir(
                 &project_root.join(".animus/plugins"),
@@ -373,7 +382,21 @@ impl PluginDiscovery {
                 &cache,
                 lockfile.as_ref(),
             );
+            // The dir scan only matches `animus-plugin-*` /
+            // `animus-provider-*` file names; the project registry tier
+            // resolves project-scoped installs of every other official
+            // plugin name (`animus-subject-*`, `animus-queue-*`, ...).
+            self.discover_project_registry(
+                project_root,
+                &mut discovered,
+                &mut warnings,
+                &mut seen,
+                &cache,
+                lockfile.as_ref(),
+            );
         }
+
+        self.discover_configured(&mut discovered, &mut warnings, &mut seen, &cache, lockfile.as_ref())?;
 
         // Scan the global plugin install dir unconditionally. This is the
         // canonical destination for `animus plugin install` and the
@@ -513,6 +536,62 @@ impl PluginDiscovery {
 
         let config = load_plugins_config(&config_path)
             .with_context(|| format!("failed to read plugin config at {}", config_path.display()))?;
+        self.discover_from_config(config, DiscoverySource::ExplicitConfig, discovered, warnings, seen, cache, lockfile);
+        Ok(())
+    }
+
+    /// Project-registry tier: `<project_root>/.animus/plugins.yaml`,
+    /// written by `animus plugin install --project`. Needed because the
+    /// project dir scan only picks up `animus-plugin-*` /
+    /// `animus-provider-*` file names — official plugins like
+    /// `animus-subject-default` or `animus-queue-default` are only
+    /// discoverable through their registry entry, exactly like their
+    /// global counterparts resolve through `~/.animus/plugins.yaml`.
+    /// A corrupt project registry degrades to a warning (the daemon must
+    /// not lose every plugin because one project file is broken).
+    fn discover_project_registry(
+        &self,
+        project_root: &Path,
+        discovered: &mut Vec<DiscoveredPlugin>,
+        warnings: &mut Vec<DiscoveryWarning>,
+        seen: &mut HashSet<String>,
+        cache: &ManifestCache,
+        lockfile: Option<&PluginLockfile>,
+    ) {
+        let config_path = project_plugins_registry_path(project_root);
+        if !config_path.exists() {
+            return;
+        }
+        let config = match load_plugins_config(&config_path) {
+            Ok(config) => config,
+            Err(err) => {
+                warnings.push(DiscoveryWarning {
+                    name: config_path
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or("plugins.yaml")
+                        .to_string(),
+                    path: config_path.clone(),
+                    source: DiscoverySource::ProjectLocal,
+                    reason: format!("failed to read project plugin registry: {err:#}"),
+                });
+                return;
+            }
+        };
+        self.discover_from_config(config, DiscoverySource::ProjectLocal, discovered, warnings, seen, cache, lockfile);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn discover_from_config(
+        &self,
+        config: PluginsConfig,
+        source: DiscoverySource,
+        discovered: &mut Vec<DiscoveredPlugin>,
+        warnings: &mut Vec<DiscoveryWarning>,
+        seen: &mut HashSet<String>,
+        cache: &ManifestCache,
+        lockfile: Option<&PluginLockfile>,
+    ) {
         let mut candidates: Vec<ProbeCandidate> = Vec::new();
         for (logical_name, entry) in config.plugins.iter().chain(config.providers.iter()) {
             // v0.5.8+: `name_override` records the install-time `--name <NAME>`
@@ -536,13 +615,13 @@ impl PluginDiscovery {
                 tracing::warn!(
                     plugin = %logical_name,
                     binary = %entry.binary,
-                    source = "explicit_config",
+                    source = ?source,
                     "plugin manifest probe skipped: {reason}"
                 );
                 warnings.push(DiscoveryWarning {
                     name: effective_name.clone(),
                     path: PathBuf::from(&entry.binary),
-                    source: DiscoverySource::ExplicitConfig,
+                    source,
                     reason,
                 });
                 continue;
@@ -560,7 +639,7 @@ impl PluginDiscovery {
             // effective name) doesn't enqueue a second probe candidate for
             // the same logical plugin. Codex round 1 P2.
             seen.insert(name.clone());
-            candidates.push(ProbeCandidate { name, path, source: DiscoverySource::ExplicitConfig });
+            candidates.push(ProbeCandidate { name, path, source });
         }
 
         let outcomes = resolve_manifests(&candidates, cache, lockfile);
@@ -581,15 +660,13 @@ impl PluginDiscovery {
                     tracing::warn!(
                         plugin = %name,
                         path = %path.display(),
-                        source = "explicit_config",
+                        source = ?source,
                         "plugin manifest probe failed: {reason}"
                     );
                     warnings.push(DiscoveryWarning { name, path, source, reason });
                 }
             }
         }
-
-        Ok(())
     }
 }
 
@@ -827,7 +904,12 @@ fn scan_dir(
     }
 }
 
-fn is_scanned_plugin_name(name: &str) -> bool {
+/// Whether a binary file name is picked up by the directory-scan discovery
+/// tiers (project-local dir, global install dir, `$ANIMUS_PLUGIN_PATH`,
+/// `$PATH`). Names outside these prefixes are only discoverable via a
+/// registry entry (`~/.animus/plugins.yaml` for global installs,
+/// `<project>/.animus/plugins.yaml` for project-scoped ones).
+pub fn is_scanned_plugin_name(name: &str) -> bool {
     name.starts_with("animus-plugin-") || name.starts_with("animus-provider-")
 }
 
@@ -864,6 +946,22 @@ pub fn plugin_install_dir() -> PathBuf {
     animus_home().join("plugins")
 }
 
+/// Returns the project-local plugin install directory
+/// (`<project_root>/.animus/plugins/`). Discovery scans this directory at a
+/// HIGHER precedence than the global install dir, so a project-local install
+/// shadows a global install of the same name.
+pub fn project_plugin_install_dir(project_root: &Path) -> PathBuf {
+    project_root.join(".animus").join("plugins")
+}
+
+/// Returns the project-local plugin registry yaml path
+/// (`<project_root>/.animus/plugins.yaml`). Mirrors the global
+/// [`plugins_registry_path`] shape; written by `animus plugin install
+/// --project`.
+pub fn project_plugins_registry_path(project_root: &Path) -> PathBuf {
+    project_root.join(".animus").join("plugins.yaml")
+}
+
 /// Returns the canonical plugin registry yaml path.
 ///
 /// The new location is `<animus_home>/plugins.yaml`. The legacy location
@@ -890,6 +988,26 @@ pub fn legacy_plugins_registry_path() -> PathBuf {
 /// "flag absent" — the audit field is informational and must never block
 /// discovery or `plugin info`.
 pub fn registered_skip_manifest_check_at_install(plugin_name: &str) -> bool {
+    registered_skip_manifest_check_at_install_scoped(None, plugin_name)
+}
+
+/// Like [`registered_skip_manifest_check_at_install`], but consults the
+/// project-local registry (`<project_root>/.animus/plugins.yaml`) FIRST so
+/// the audit flag of an `animus plugin install --project
+/// --skip-manifest-check` install is reported correctly. Falls back to the
+/// global registry when the project registry is absent or has no matching
+/// entry.
+pub fn registered_skip_manifest_check_at_install_scoped(project_root: Option<&Path>, plugin_name: &str) -> bool {
+    if let Some(root) = project_root {
+        let project_path = root.join(".animus").join("plugins.yaml");
+        if project_path.exists() {
+            if let Ok(config) = load_plugins_config(&project_path) {
+                if let Some(flag) = skip_manifest_flag_in_config(&config, plugin_name) {
+                    return flag;
+                }
+            }
+        }
+    }
     let config_path = default_config_path();
     if !config_path.exists() {
         return false;
@@ -897,15 +1015,19 @@ pub fn registered_skip_manifest_check_at_install(plugin_name: &str) -> bool {
     let Ok(config) = load_plugins_config(&config_path) else {
         return false;
     };
+    skip_manifest_flag_in_config(&config, plugin_name).unwrap_or(false)
+}
+
+fn skip_manifest_flag_in_config(config: &PluginsConfig, plugin_name: &str) -> Option<bool> {
     let trimmed = plugin_name.trim();
     for (logical_name, entry) in config.plugins.iter().chain(config.providers.iter()) {
         let registered_name = entry.name.as_deref().unwrap_or(logical_name);
         let override_name = entry.name_override.as_deref();
         if registered_name == trimmed || logical_name == trimmed || override_name == Some(trimmed) {
-            return entry.skip_manifest_check_at_install;
+            return Some(entry.skip_manifest_check_at_install);
         }
     }
-    false
+    None
 }
 
 fn default_config_path() -> PathBuf {
@@ -1499,6 +1621,53 @@ mod tests {
         assert!(warnings.is_empty(), "expected zero warnings, got {warnings:?}");
         assert_eq!(discovered.len(), 1, "duplicate name across sources must dedupe to one entry, got {discovered:?}");
         assert_eq!(discovered[0].path, project_path, "project-local install must outrank the global install dir");
+        assert_eq!(discovered[0].source, DiscoverySource::ProjectLocal);
+    }
+
+    /// Every global `animus plugin install` records its binary in the
+    /// explicit registry yaml, so the "project shadows global" rule is only
+    /// real if the project-local tier also outranks the EXPLICIT CONFIG
+    /// tier. Regression guard for the v0.5.x project-scoped install work.
+    #[cfg(unix)]
+    #[test]
+    fn discovery_project_local_takes_precedence_over_explicit_config() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let fake_install = fake_home.join("plugins");
+        fs::create_dir_all(&fake_install).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+
+        let project_root = temp.path().join("project");
+        let project_plugins = project_root.join(".animus/plugins");
+        fs::create_dir_all(&project_plugins).expect("mkdir project plugins");
+
+        let plugin_name = "animus-plugin-registered";
+        let project_path = project_plugins.join(plugin_name);
+        let global_path = fake_install.join(plugin_name);
+        write_executable_plugin(&project_path, plugin_name);
+        write_executable_plugin(&global_path, plugin_name);
+
+        // Registry entry as written by a global `animus plugin install`.
+        let config = temp.path().join("plugins.yaml");
+        fs::write(&config, format!("plugins:\n  {plugin_name}:\n    binary: {}\n", global_path.display()))
+            .expect("write config");
+
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_project_root(&project_root)
+            .with_config_path(&config)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(warnings.is_empty(), "expected zero warnings, got {warnings:?}");
+        assert_eq!(discovered.len(), 1, "duplicate name across tiers must dedupe to one entry, got {discovered:?}");
+        assert_eq!(
+            discovered[0].path, project_path,
+            "project-local install must outrank the registry-recorded global install"
+        );
         assert_eq!(discovered[0].source, DiscoverySource::ProjectLocal);
     }
 
