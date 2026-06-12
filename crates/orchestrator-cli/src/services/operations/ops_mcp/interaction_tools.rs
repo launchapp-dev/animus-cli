@@ -3,7 +3,7 @@ use crate::services::runtime::runtime_agent::interactions::{
     answer_interaction_op_with_resume, emit_interaction_event, pause_workflow_for_suspended_interaction,
     resume_workflow_for_answered_interaction, AnswerOptions,
 };
-use animus_runtime_shared::{InteractionKind, InteractionRecord, InteractionStatus};
+use animus_runtime_shared::{InteractionKind, InteractionQuestion, InteractionRecord, InteractionStatus};
 use orchestrator_config::agent_runtime_config::ApprovalPolicyDecision;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -72,9 +72,19 @@ fn resolve_wait_mode(workflow_pinned: bool, requested: Option<&str>, tool_name: 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct AgentAskInput {
     pub(super) agent_id: String,
-    pub(super) question: String,
+    /// Single-question convenience. Optional when `questions[]` is supplied;
+    /// at least one of `question` / `questions` must be present.
+    #[serde(default)]
+    pub(super) question: Option<String>,
     #[serde(default)]
     pub(super) options: Option<Vec<String>>,
+    /// Structured multi-question / multi-select / described-option form
+    /// (parity with claude's native AskUserQuestion channel). When present,
+    /// the flat `question`/`options` fields are ignored and the answer comes
+    /// back as `{ answers: { <question text>: <label | [labels] | free text> },
+    /// response?, answer }`.
+    #[serde(default)]
+    pub(super) questions: Option<Vec<AskQuestionInput>>,
     #[serde(default)]
     pub(super) timeout_secs: Option<u64>,
     #[serde(default)]
@@ -83,6 +93,47 @@ pub(super) struct AgentAskInput {
     pub(super) task_id: Option<String>,
     #[serde(default)]
     pub(super) wait: Option<String>,
+}
+
+/// One structured question accepted by `animus.agent.ask`'s `questions[]`
+/// parity path. Mirrors `animus_runtime_shared::InteractionQuestion` but lives
+/// in the CLI crate so it can derive `JsonSchema` without pulling schemars
+/// into the dependency-light shared crate. Converted via [`From`].
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct AskQuestionInput {
+    pub(super) question: String,
+    #[serde(default)]
+    pub(super) header: Option<String>,
+    #[serde(default)]
+    pub(super) options: Vec<AskQuestionOptionInput>,
+    #[serde(default, alias = "multiSelect")]
+    pub(super) multi_select: bool,
+}
+
+/// One choice inside an [`AskQuestionInput`].
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct AskQuestionOptionInput {
+    pub(super) label: String,
+    #[serde(default)]
+    pub(super) description: Option<String>,
+}
+
+impl From<AskQuestionInput> for InteractionQuestion {
+    fn from(input: AskQuestionInput) -> Self {
+        InteractionQuestion {
+            question: input.question,
+            header: input.header,
+            options: input
+                .options
+                .into_iter()
+                .map(|option| animus_runtime_shared::InteractionQuestionOption {
+                    label: option.label,
+                    description: option.description,
+                })
+                .collect(),
+            multi_select: input.multi_select,
+        }
+    }
 }
 
 // The input accepts BOTH shapes:
@@ -273,6 +324,23 @@ fn ask_user_question_updated_input(record: &InteractionRecord) -> Value {
     updated
 }
 
+/// Answer payload for an `animus.agent.ask` call that supplied structured
+/// `questions[]`. Unlike the native AskUserQuestion channel, this does NOT
+/// emit the SDK `behavior/updatedInput` envelope — codex/gemini/opencode read
+/// a plain `{ answers, response?, answer }` shape. The flat `answer` string
+/// is the readable join so agents reading `.answer` still get something
+/// sensible.
+fn ask_structured_answered_payload(record: &InteractionRecord) -> Value {
+    json!({
+        "id": record.id,
+        "answers": record.answers.clone().unwrap_or_default(),
+        "response": record.response,
+        "answer": record.answer,
+        "answered_by": record.answered_by,
+        "answer_message": record.answer_message,
+    })
+}
+
 /// Build the full response payload for an answered interaction parked on by
 /// the blocking `animus.agent.request_approval` tool.
 fn sdk_answered_payload(tool_name: &str, record: &InteractionRecord) -> Value {
@@ -421,39 +489,107 @@ fn interaction_to_json(record: &InteractionRecord) -> Value {
 impl AoMcpServer {
     #[tool(
         name = "animus.agent.ask",
-        description = "Ask a human a question and WAIT for the answer. Purpose: Human-in-the-loop round-trip for agents that hit an ambiguity mid-run; the question lands in the `animus agent interactions` inbox. Always operates on the server's own project scope. Wait modes: \"block\" parks the call until answered or timeout (default for ad-hoc runs); \"suspend\" returns { status: \"pending\", interaction_id, instruction } immediately, pauses the bound workflow, and the session resumes with the answer (default when the server pins a workflow via --workflow-id / ANIMUS_MCP_WORKFLOW_ID; suspend->block override allowed, block->suspend is ignored). Params: agent_id (ignored when the server pins ANIMUS_MCP_AGENT_ID), question, optional options (suggested answers), timeout_secs (default 600, max 3600), workflow_id (ignored when the server pins a workflow), task_id, wait. Returns: { id, answer, answered_by, answer_message? } once answered, the pending payload in suspend mode, or a structured timeout error instructing the agent to proceed with its best judgment. Example: {\"agent_id\": \"swe\", \"question\": \"Migrate in place or copy table?\", \"options\": [\"in place\", \"copy\"]}.",
+        description = "Ask a human one or more questions and WAIT for the answer. Purpose: Human-in-the-loop round-trip for agents that hit an ambiguity mid-run; the question lands in the `animus agent interactions` inbox. Two forms: (1) flat single question — pass `question` plus optional `options` (suggested answer strings); returns { id, answer, answered_by, answer_message? }. (2) structured `questions[]` — multi-question / multi-select / described-option form giving codex/gemini/opencode parity with claude's native AskUserQuestion channel; each entry is { question, header?, options: [{ label, description? }], multi_select? }, and the answer comes back as { id, answers: { <question text>: <label | [labels] | free text> }, response?, answer } where `answer` is a readable join for back-compat. When `questions[]` is present the flat `question`/`options` are ignored. Always operates on the server's own project scope. Wait modes: \"block\" parks the call until answered or timeout (default for ad-hoc runs); \"suspend\" returns { status: \"pending\", interaction_id, instruction } immediately, pauses the bound workflow, and the session resumes with the answer (default when the server pins a workflow via --workflow-id / ANIMUS_MCP_WORKFLOW_ID; suspend->block override allowed, block->suspend is ignored). Params: agent_id (ignored when the server pins ANIMUS_MCP_AGENT_ID), question, options, questions, timeout_secs (default 600, max 3600), workflow_id (ignored when the server pins a workflow), task_id, wait. On timeout returns a structured error instructing the agent to proceed with its best judgment. Examples: {\"agent_id\": \"swe\", \"question\": \"Migrate in place or copy table?\", \"options\": [\"in place\", \"copy\"]} or {\"agent_id\": \"swe\", \"questions\": [{\"question\": \"Which sections?\", \"header\": \"Sections\", \"options\": [{\"label\": \"Intro\"}, {\"label\": \"Conclusion\"}], \"multi_select\": true}]}.",
         input_schema = ao_schema_for_type::<AgentAskInput>()
     )]
     async fn ao_agent_ask(&self, params: Parameters<AgentAskInput>) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "animus.agent.ask";
         let input = params.0;
         let project_root = self.default_project_root.clone();
         let agent_id = self.bound_agent_id(Some(&input.agent_id));
         let workflow_pinned = self.workflow_pin().is_some();
         let workflow_id = self.bound_workflow_id(input.workflow_id.as_deref());
-        let wait_mode = resolve_wait_mode(workflow_pinned, input.wait.as_deref(), "animus.agent.ask");
+        let wait_mode = resolve_wait_mode(workflow_pinned, input.wait.as_deref(), TOOL);
         let timeout_secs = effective_timeout_secs(input.timeout_secs);
+
+        // Structured path: when `questions[]` is supplied, create the
+        // interaction via the shared structured constructor (tool_name = None,
+        // so it is NOT marked as the native AskUserQuestion SDK channel) and
+        // answer with the plain `{ answers, response, answer }` shape. The
+        // flat `question`/`options` fields are ignored for this call.
+        if let Some(questions_input) = input.questions {
+            if questions_input.is_empty() {
+                return structured_err(TOOL, "`questions` must not be an empty array".to_string());
+            }
+            if questions_input.iter().any(|q| q.question.trim().is_empty()) {
+                return structured_err(TOOL, "each `questions[].question` must be non-empty".to_string());
+            }
+            let questions: Vec<InteractionQuestion> =
+                questions_input.into_iter().map(InteractionQuestion::from).collect();
+            // Synthesize the `arguments` raw input from the questions so the
+            // record carries the question shapes verbatim (mirrors the native
+            // path's preserved tool input).
+            let raw_input = json!({ "questions": questions });
+            let created = match animus_runtime_shared::create_structured_question_interaction(
+                &project_root,
+                &agent_id,
+                questions,
+                None,
+                raw_input,
+                None,
+                Some(timeout_secs),
+                workflow_id.as_deref(),
+                input.task_id.as_deref(),
+            ) {
+                Ok(record) => record,
+                Err(err) => return structured_err(TOOL, err.to_string()),
+            };
+            emit_interaction_event("interaction_created", &project_root, &created);
+
+            if wait_mode == InteractionWaitMode::Suspend {
+                return suspend_pending_response(TOOL, &project_root, &created, false).await;
+            }
+            return match wait_for_answer(&project_root, &created.id, timeout_secs).await {
+                InteractionWait::Answered(record) => structured_ok(TOOL, ask_structured_answered_payload(&record)),
+                InteractionWait::TimedOut => {
+                    if let Ok(Some(expired)) = animus_runtime_shared::load_interaction(&project_root, &created.id) {
+                        emit_interaction_event("interaction_expired", &project_root, &expired);
+                    }
+                    Ok(CallToolResult::structured_error(json!({
+                        "tool": TOOL,
+                        "error": format!(
+                            "no human answered within {timeout_secs}s. Proceed with your best judgment, state the assumption you made, and continue."
+                        ),
+                        "interaction_id": created.id,
+                        "timed_out": true,
+                    })))
+                }
+                InteractionWait::Lost(message) => structured_err(TOOL, message),
+            };
+        }
+
+        // Flat single-question path (back-compat, unchanged behaviour).
+        let question = match normalize_non_empty(input.question) {
+            Some(question) => question,
+            None => {
+                return structured_err(
+                    TOOL,
+                    "either `question` or a non-empty `questions` array is required".to_string(),
+                );
+            }
+        };
         let options = input.options.unwrap_or_default();
         let created = match animus_runtime_shared::create_question_interaction(
             &project_root,
             &agent_id,
-            &input.question,
+            &question,
             &options,
             Some(timeout_secs),
             workflow_id.as_deref(),
             input.task_id.as_deref(),
         ) {
             Ok(record) => record,
-            Err(err) => return structured_err("animus.agent.ask", err.to_string()),
+            Err(err) => return structured_err(TOOL, err.to_string()),
         };
         emit_interaction_event("interaction_created", &project_root, &created);
 
         if wait_mode == InteractionWaitMode::Suspend {
-            return suspend_pending_response("animus.agent.ask", &project_root, &created, false).await;
+            return suspend_pending_response(TOOL, &project_root, &created, false).await;
         }
 
         match wait_for_answer(&project_root, &created.id, timeout_secs).await {
             InteractionWait::Answered(record) => structured_ok(
-                "animus.agent.ask",
+                TOOL,
                 json!({
                     "id": record.id,
                     "answer": record.answer,
@@ -466,7 +602,7 @@ impl AoMcpServer {
                     emit_interaction_event("interaction_expired", &project_root, &expired);
                 }
                 Ok(CallToolResult::structured_error(json!({
-                    "tool": "animus.agent.ask",
+                    "tool": TOOL,
                     "error": format!(
                         "no human answered within {timeout_secs}s. Proceed with your best judgment, state the assumption you made, and continue."
                     ),
@@ -474,7 +610,7 @@ impl AoMcpServer {
                     "timed_out": true,
                 })))
             }
-            InteractionWait::Lost(message) => structured_err("animus.agent.ask", message),
+            InteractionWait::Lost(message) => structured_err(TOOL, message),
         }
     }
 
@@ -847,8 +983,9 @@ mod interaction_tool_tests {
             let result = server
                 .ao_agent_ask(Parameters(AgentAskInput {
                     agent_id: "swe".to_string(),
-                    question: "Migrate in place or copy table?".to_string(),
+                    question: Some("Migrate in place or copy table?".to_string()),
                     options: Some(vec!["in place".to_string(), "copy".to_string()]),
+                    questions: None,
                     timeout_secs: Some(10),
                     workflow_id: None,
                     task_id: None,
@@ -875,8 +1012,9 @@ mod interaction_tool_tests {
             let result = server
                 .ao_agent_ask(Parameters(AgentAskInput {
                     agent_id: "swe".to_string(),
-                    question: "Anyone home?".to_string(),
+                    question: Some("Anyone home?".to_string()),
                     options: None,
+                    questions: None,
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
@@ -1319,8 +1457,9 @@ phases:
             let result = server
                 .ao_agent_ask(Parameters(AgentAskInput {
                     agent_id: "swe".to_string(),
-                    question: "Which approach?".to_string(),
+                    question: Some("Which approach?".to_string()),
                     options: None,
+                    questions: None,
                     timeout_secs: Some(600),
                     // Payload workflow_id must be overridden by the pin.
                     workflow_id: Some("wf-other".to_string()),
@@ -1409,8 +1548,9 @@ phases:
             let result = server
                 .ao_agent_ask(Parameters(AgentAskInput {
                     agent_id: "swe".to_string(),
-                    question: "Anyone home?".to_string(),
+                    question: Some("Anyone home?".to_string()),
                     options: None,
+                    questions: None,
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
@@ -1434,8 +1574,9 @@ phases:
             let result = server
                 .ao_agent_ask(Parameters(AgentAskInput {
                     agent_id: "swe".to_string(),
-                    question: "Anyone home?".to_string(),
+                    question: Some("Anyone home?".to_string()),
                     options: None,
+                    questions: None,
                     timeout_secs: Some(1),
                     // Payload workflow_id alone does not enable suspend.
                     workflow_id: Some("wf-unpinned".to_string()),
@@ -1907,6 +2048,373 @@ phases:
                 resume.pointer("/guidance").and_then(Value::as_str),
                 Some(format!("animus workflow resume {}", workflow.id).as_str())
             );
+        });
+    }
+
+    fn two_structured_questions() -> Vec<AskQuestionInput> {
+        serde_json::from_value(serde_json::json!([
+            {
+                "question": "How should I format the output?",
+                "header": "Format",
+                "options": [{ "label": "Summary" }, { "label": "Detailed" }],
+                "multi_select": false
+            },
+            {
+                "question": "Which sections should I include?",
+                "header": "Sections",
+                "options": [{ "label": "Introduction" }, { "label": "Conclusion" }],
+                "multi_select": true
+            }
+        ]))
+        .expect("parse structured questions")
+    }
+
+    fn two_structured_questions_record() -> Vec<InteractionQuestion> {
+        two_structured_questions().into_iter().map(InteractionQuestion::from).collect()
+    }
+
+    // Structured ask (block mode): create with questions[] -> answer with
+    // --select -> the tool returns the answers map, response, and a readable
+    // legacy `answer` join. Codex/gemini/opencode parity with the native
+    // claude AskUserQuestion channel.
+    #[test]
+    fn structured_ask_block_round_trips_answers_map_and_legacy_answer() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+
+            let answer_root = project_root.clone();
+            let answer_server = server.clone();
+            let answerer = tokio::spawn(async move {
+                loop {
+                    let pending =
+                        animus_runtime_shared::list_interactions(&answer_root, false, None).expect("list pending");
+                    if let Some(record) = pending.first() {
+                        // The ask-originated structured record must NOT be
+                        // marked as the native AskUserQuestion SDK channel.
+                        assert_eq!(record.kind, InteractionKind::Question);
+                        assert_eq!(record.questions.len(), 2, "structured questions parsed onto the record");
+                        assert!(record.tool_name.is_none(), "ask-originated questions are not the native SDK channel");
+                        let _ = &answer_server;
+                        // Emulate the CLI `--select` answer path (resolves
+                        // labels by question header / text into the answers map).
+                        crate::services::runtime::runtime_agent::interactions::answer_interaction_op_with_resume(
+                            &answer_root,
+                            &record.id,
+                            crate::services::runtime::runtime_agent::interactions::AnswerOptions {
+                                selects: vec![
+                                    "Format=Summary".to_string(),
+                                    "Sections=Introduction,Conclusion".to_string(),
+                                ],
+                                response: Some("keep it short".to_string()),
+                                answered_by: Some("sami".to_string()),
+                                ..Default::default()
+                            },
+                        )
+                        .await
+                        .expect("structured answer via --select");
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+
+            let result = server
+                .ao_agent_ask(Parameters(AgentAskInput {
+                    agent_id: "swe".to_string(),
+                    question: None,
+                    options: None,
+                    questions: Some(two_structured_questions()),
+                    timeout_secs: Some(10),
+                    workflow_id: None,
+                    task_id: None,
+                    wait: None,
+                }))
+                .await
+                .expect("structured ask should not error");
+            answerer.await.expect("answerer task");
+
+            assert_ne!(result.is_error, Some(true), "structured ask must succeed once answered");
+            let payload = data(&result);
+            assert_eq!(
+                payload.pointer("/answers/How should I format the output?").and_then(Value::as_str),
+                Some("Summary")
+            );
+            assert_eq!(
+                payload.pointer("/answers/Which sections should I include?"),
+                Some(&serde_json::json!(["Introduction", "Conclusion"]))
+            );
+            assert_eq!(payload.pointer("/response").and_then(Value::as_str), Some("keep it short"));
+            // Legacy readable join still present for back-compat.
+            assert!(payload
+                .pointer("/answer")
+                .and_then(Value::as_str)
+                .is_some_and(|answer| answer.contains("Summary") && answer.contains("Introduction")));
+            // The structured ask is NOT the SDK channel: no behavior/updatedInput.
+            assert!(structured(&result).pointer("/behavior").is_none());
+        });
+    }
+
+    // multiSelect-only answer through the direct `answers` map (MCP path).
+    #[test]
+    fn structured_ask_block_multi_select_via_answers_map() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+
+            let answer_root = project_root.clone();
+            let answer_server = server.clone();
+            let answerer = tokio::spawn(async move {
+                loop {
+                    let pending =
+                        animus_runtime_shared::list_interactions(&answer_root, false, None).expect("list pending");
+                    if let Some(record) = pending.first() {
+                        let mut answers = BTreeMap::new();
+                        answers.insert(
+                            "Which sections should I include?".to_string(),
+                            serde_json::json!(["Introduction", "Conclusion"]),
+                        );
+                        let result = answer_server
+                            .ao_interactions_answer(Parameters(InteractionsAnswerInput {
+                                id: record.id.clone(),
+                                text: None,
+                                decision: None,
+                                message: None,
+                                answered_by: Some("sami".to_string()),
+                                answers: Some(answers),
+                                response: None,
+                                updated_input: None,
+                                updated_permissions: None,
+                                remember: None,
+                                project_root: Some(answer_root.clone()),
+                            }))
+                            .await
+                            .expect("answer should not error");
+                        assert_ne!(result.is_error, Some(true), "multi-select answer must succeed: {result:?}");
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+
+            let only_multi = vec![two_structured_questions()[1].clone()];
+            let result = server
+                .ao_agent_ask(Parameters(AgentAskInput {
+                    agent_id: "swe".to_string(),
+                    question: None,
+                    options: None,
+                    questions: Some(only_multi),
+                    timeout_secs: Some(10),
+                    workflow_id: None,
+                    task_id: None,
+                    wait: None,
+                }))
+                .await
+                .expect("structured ask should not error");
+            answerer.await.expect("answerer task");
+
+            let payload = data(&result);
+            assert_eq!(
+                payload.pointer("/answers/Which sections should I include?"),
+                Some(&serde_json::json!(["Introduction", "Conclusion"]))
+            );
+        });
+    }
+
+    // Response-only answer to a structured ask (freeform reply, no per-question
+    // answers).
+    #[test]
+    fn structured_ask_block_response_only_answer() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+
+            let answer_root = project_root.clone();
+            let answer_server = server.clone();
+            let answerer = tokio::spawn(async move {
+                loop {
+                    let pending =
+                        animus_runtime_shared::list_interactions(&answer_root, false, None).expect("list pending");
+                    if let Some(record) = pending.first() {
+                        let result = answer_server
+                            .ao_interactions_answer(Parameters(InteractionsAnswerInput {
+                                id: record.id.clone(),
+                                text: None,
+                                decision: None,
+                                message: None,
+                                answered_by: Some("sami".to_string()),
+                                answers: None,
+                                response: Some("just ship it".to_string()),
+                                updated_input: None,
+                                updated_permissions: None,
+                                remember: None,
+                                project_root: Some(answer_root.clone()),
+                            }))
+                            .await
+                            .expect("answer should not error");
+                        assert_ne!(result.is_error, Some(true), "response-only answer must succeed: {result:?}");
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+
+            let result = server
+                .ao_agent_ask(Parameters(AgentAskInput {
+                    agent_id: "swe".to_string(),
+                    question: None,
+                    options: None,
+                    questions: Some(two_structured_questions()),
+                    timeout_secs: Some(10),
+                    workflow_id: None,
+                    task_id: None,
+                    wait: None,
+                }))
+                .await
+                .expect("structured ask should not error");
+            answerer.await.expect("answerer task");
+
+            let payload = data(&result);
+            assert_eq!(payload.pointer("/response").and_then(Value::as_str), Some("just ship it"));
+            assert!(payload.pointer("/answers").and_then(Value::as_object).is_some_and(|map| map.is_empty()));
+            assert_eq!(payload.pointer("/answer").and_then(Value::as_str), Some("just ship it"));
+        });
+    }
+
+    // Flat ask regression: the single-question convenience form is unchanged.
+    #[test]
+    fn flat_ask_still_returns_legacy_shape() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+
+            let answer_root = project_root.clone();
+            let answerer = tokio::spawn(async move {
+                loop {
+                    let pending =
+                        animus_runtime_shared::list_interactions(&answer_root, false, None).expect("list pending");
+                    if let Some(record) = pending.first() {
+                        assert!(record.questions.is_empty(), "flat ask carries no structured questions");
+                        animus_runtime_shared::answer_interaction(
+                            &answer_root,
+                            &record.id,
+                            "copy table",
+                            None,
+                            Some("sami"),
+                        )
+                        .expect("answer interaction");
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+
+            let result = server
+                .ao_agent_ask(Parameters(AgentAskInput {
+                    agent_id: "swe".to_string(),
+                    question: Some("Migrate in place or copy table?".to_string()),
+                    options: Some(vec!["in place".to_string(), "copy".to_string()]),
+                    questions: None,
+                    timeout_secs: Some(10),
+                    workflow_id: None,
+                    task_id: None,
+                    wait: None,
+                }))
+                .await
+                .expect("flat ask should not error");
+            answerer.await.expect("answerer task");
+
+            let payload = data(&result);
+            assert_eq!(payload.pointer("/answer").and_then(Value::as_str), Some("copy table"));
+            assert_eq!(payload.pointer("/answered_by").and_then(Value::as_str), Some("sami"));
+            assert!(payload.pointer("/answers").is_none(), "flat ask returns no answers map");
+        });
+    }
+
+    // Empty `questions: []` is rejected with a structured error (not silently
+    // treated as a flat ask with an empty question).
+    #[test]
+    fn structured_ask_rejects_empty_questions_array() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+
+            let result = server
+                .ao_agent_ask(Parameters(AgentAskInput {
+                    agent_id: "swe".to_string(),
+                    question: None,
+                    options: None,
+                    questions: Some(Vec::new()),
+                    timeout_secs: Some(1),
+                    workflow_id: None,
+                    task_id: None,
+                    wait: None,
+                }))
+                .await
+                .expect("ask should produce a structured result");
+            assert_eq!(result.is_error, Some(true));
+            assert!(structured(&result)
+                .pointer("/error")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("empty")));
+        });
+    }
+
+    // Suspend feedback for an ask-originated structured question: the resume
+    // feedback renders the per-question answers (the sdk-conform builder keys
+    // off `questions` being non-empty, not the native tool_name marker).
+    #[test]
+    fn ask_structured_suspend_feedback_renders_per_question_answers() {
+        use crate::services::runtime::runtime_agent::interactions::resume_feedback_for_interaction;
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+
+            let raw_input = serde_json::json!({ "questions": two_structured_questions_record() });
+            let created = animus_runtime_shared::create_structured_question_interaction(
+                &project_root,
+                "swe",
+                two_structured_questions_record(),
+                None,
+                raw_input,
+                None,
+                Some(600),
+                Some("wf-1"),
+                None,
+            )
+            .expect("create ask-originated structured question");
+            assert!(created.tool_name.is_none(), "ask-originated structured questions are not the native SDK channel");
+
+            let mut answers = BTreeMap::new();
+            answers.insert("How should I format the output?".to_string(), Value::String("Summary".to_string()));
+            answers.insert(
+                "Which sections should I include?".to_string(),
+                serde_json::json!(["Introduction", "Conclusion"]),
+            );
+            let answered = animus_runtime_shared::apply_interaction_answer(
+                &project_root,
+                &created.id,
+                animus_runtime_shared::InteractionAnswer {
+                    answer: "Format: Summary; Sections: Introduction, Conclusion".to_string(),
+                    answers: Some(answers),
+                    response: Some("keep it short".to_string()),
+                    answered_by: Some("sami".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("structured answer");
+
+            let feedback = resume_feedback_for_interaction(&answered);
+            assert!(feedback.contains("The user answered your questions:"));
+            assert!(feedback.contains("How should I format the output?"));
+            assert!(feedback.contains("Summary"));
+            assert!(feedback.contains("Introduction, Conclusion"));
+            assert!(feedback.contains("keep it short"));
         });
     }
 }
