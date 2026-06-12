@@ -12,6 +12,14 @@ pub(crate) struct UpdateArgs {
     /// or running under CI.
     #[arg(long, default_value_t = false)]
     pub(crate) yes: bool,
+    /// Re-install the resolved release even when it matches the installed
+    /// version (useful to repair a broken install).
+    #[arg(long, default_value_t = false)]
+    pub(crate) force: bool,
+    /// Consider prereleases regardless of the selected `--channel`. Folded
+    /// in from the retired `self update --prerelease` flag.
+    #[arg(long, default_value_t = false)]
+    pub(crate) prerelease: bool,
     /// Release channel to poll. `stable` follows the latest non-prerelease
     /// GitHub release; `nightly` follows the most recent prerelease
     /// (mapped to the existing `AutoUpdateChannel::Prerelease` admission

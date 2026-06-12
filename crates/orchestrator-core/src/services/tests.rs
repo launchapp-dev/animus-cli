@@ -28,39 +28,6 @@ fn file_hub(project_root: &std::path::Path) -> anyhow::Result<FileServiceHub> {
     FileServiceHub::new(project_root)
 }
 
-#[tokio::test]
-async fn file_hub_persists_projects_with_rich_payload() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let hub = file_hub(temp.path()).expect("create hub");
-    let created = ProjectServiceApi::create(
-        &hub,
-        ProjectCreateInput {
-            name: "Standalone Core".to_string(),
-            path: temp.path().join("standalone-core").display().to_string(),
-            project_type: Some(ProjectType::WebApp),
-            description: Some("Core project".to_string()),
-            tech_stack: vec!["rust".to_string(), "desktop-gui".to_string()],
-            metadata: Some(crate::types::ProjectMetadata {
-                problem_statement: Some("Unify desktop and CLI".to_string()),
-                target_users: vec!["engineers".to_string()],
-                goals: vec!["single runtime".to_string()],
-                description: None,
-                custom: std::collections::HashMap::new(),
-            }),
-        },
-    )
-    .await
-    .expect("create project");
-
-    let second_hub = file_hub(temp.path()).expect("reload hub");
-    let loaded = ProjectServiceApi::load(&second_hub, &created.path).await.expect("load by path");
-    assert_eq!(loaded.id, created.id);
-    assert_eq!(loaded.config.project_type, ProjectType::WebApp);
-    assert_eq!(loaded.config.tech_stack, vec!["rust", "desktop-gui"]);
-    assert_eq!(loaded.metadata.goals, vec!["single runtime"]);
-    assert_eq!(loaded.metadata.description, Some("Core project".to_string()));
-}
-
 #[test]
 fn file_hub_new_does_not_rewrite_existing_core_state_on_boot() {
     let temp = tempfile::tempdir().expect("tempdir");
@@ -145,27 +112,13 @@ fn file_hub_new_bootstraps_ao_without_initializing_git_repository() {
     assert!(!head_status.success());
 }
 
-#[tokio::test]
-async fn file_hub_project_create_bootstraps_base_configs_for_project_path() {
+#[test]
+fn file_hub_new_bootstraps_base_configs_for_project_path() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = file_hub(temp.path()).expect("create hub");
     let project_path = temp.path().join("scaffolded-project");
 
-    let created = ProjectServiceApi::create(
-        &hub,
-        ProjectCreateInput {
-            name: "Scaffolded".to_string(),
-            path: project_path.display().to_string(),
-            project_type: Some(ProjectType::WebApp),
-            description: None,
-            tech_stack: vec![],
-            metadata: None,
-        },
-    )
-    .await
-    .expect("create project");
+    let _hub = file_hub(&project_path).expect("create hub at project path");
 
-    assert_eq!(created.path, project_path.display().to_string());
     let scoped = scoped_ao_root(&project_path);
     assert!(scoped.join("core-state.json").exists());
     assert!(project_path.join(".animus").join("config.json").exists());
@@ -209,27 +162,13 @@ fn file_hub_explicit_git_bootstrap_initializes_repository_and_head() {
     assert!(head_status.success());
 }
 
-#[tokio::test]
-async fn file_hub_bootstraps_workflow_yaml_with_phase_catalog() {
+#[test]
+fn file_hub_bootstraps_workflow_yaml_with_phase_catalog() {
     let temp = tempfile::tempdir().expect("tempdir");
-    let hub = file_hub(temp.path()).expect("create hub");
     let project_path = temp.path().join("configured-project");
 
-    let created = ProjectServiceApi::create(
-        &hub,
-        ProjectCreateInput {
-            name: "Configured".to_string(),
-            path: project_path.display().to_string(),
-            project_type: Some(ProjectType::WebApp),
-            description: None,
-            tech_stack: vec![],
-            metadata: None,
-        },
-    )
-    .await
-    .expect("create project");
+    let _hub = file_hub(&project_path).expect("create hub at project path");
 
-    assert_eq!(created.path, project_path.display().to_string());
     let config = crate::load_workflow_config(&project_path).expect("workflow config should load");
 
     assert_eq!(config.schema.as_str(), "animus.workflow-config.v2");
@@ -259,48 +198,6 @@ async fn file_hub_bootstraps_architecture_docs_file() {
         serde_json::from_str(&std::fs::read_to_string(architecture_path).expect("architecture doc should be readable"))
             .expect("architecture doc should be json");
     assert_eq!(architecture_json.get("schema").and_then(serde_json::Value::as_str), Some("animus.architecture.v1"));
-}
-
-#[tokio::test]
-async fn file_hub_load_persists_active_project_selection() {
-    let temp = tempfile::tempdir().expect("tempdir");
-    let hub = file_hub(temp.path()).expect("create hub");
-
-    let first = ProjectServiceApi::create(
-        &hub,
-        ProjectCreateInput {
-            name: "First".to_string(),
-            path: temp.path().join("first").display().to_string(),
-            project_type: Some(ProjectType::Other),
-            description: None,
-            tech_stack: vec![],
-            metadata: None,
-        },
-    )
-    .await
-    .expect("create first");
-
-    let second = ProjectServiceApi::create(
-        &hub,
-        ProjectCreateInput {
-            name: "Second".to_string(),
-            path: temp.path().join("second").display().to_string(),
-            project_type: Some(ProjectType::Other),
-            description: None,
-            tech_stack: vec![],
-            metadata: None,
-        },
-    )
-    .await
-    .expect("create second");
-
-    assert_ne!(first.id, second.id);
-    ProjectServiceApi::load(&hub, &first.id).await.expect("load first");
-
-    let reloaded = file_hub(temp.path()).expect("reload hub");
-    let active =
-        ProjectServiceApi::active(&reloaded).await.expect("active project").expect("active project should exist");
-    assert_eq!(active.id, first.id);
 }
 
 #[tokio::test]
@@ -1159,49 +1056,6 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
             "planning-started workflows should use configured phase order"
         );
     }
-}
-
-#[tokio::test]
-async fn project_service_tracks_active_project_and_rename() {
-    let hub = InMemoryServiceHub::new();
-    let first = ProjectServiceApi::create(
-        &hub,
-        ProjectCreateInput {
-            name: "One".to_string(),
-            path: "/tmp/project-one".to_string(),
-            project_type: Some(ProjectType::Other),
-            description: None,
-            tech_stack: vec![],
-            metadata: None,
-        },
-    )
-    .await
-    .expect("create first project");
-    let second = ProjectServiceApi::create(
-        &hub,
-        ProjectCreateInput {
-            name: "Two".to_string(),
-            path: "/tmp/project-two".to_string(),
-            project_type: Some(ProjectType::Other),
-            description: None,
-            tech_stack: vec![],
-            metadata: None,
-        },
-    )
-    .await
-    .expect("create second project");
-
-    let active = ProjectServiceApi::active(&hub).await.expect("active project").expect("expected active project");
-    assert_eq!(active.id, second.id);
-
-    let loaded = ProjectServiceApi::load(&hub, &first.id).await.expect("load by id");
-    assert_eq!(loaded.id, first.id);
-
-    let renamed = ProjectServiceApi::rename(&hub, &first.id, "Renamed").await.expect("rename project");
-    assert_eq!(renamed.name, "Renamed");
-
-    let active = ProjectServiceApi::active(&hub).await.expect("active project").expect("expected active project");
-    assert_eq!(active.id, first.id);
 }
 
 #[tokio::test]

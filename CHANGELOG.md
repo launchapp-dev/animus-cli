@@ -255,6 +255,28 @@ All notable changes to this project will be documented in this file.
 
 ### Removed
 
+- **BREAKING**: the `animus project` command group (`list`, `active`,
+  `get`, `create`, `set-active`, `rename`, `archive`, `remove`). The
+  project registry was a CLI-only facade with no daemon, workflow, or MCP
+  consumers — the daemon routes purely via git-root + repo-scope. The
+  underlying `ProjectServiceApi` trait, its `InMemoryServiceHub` /
+  `FileServiceHub` impls, the `project_shared` helper module, and the
+  `ServiceHub::projects()` method were deleted from `orchestrator-core`.
+  No aliases (model/runner removal precedent).
+- **BREAKING**: the `animus self` command group. Its only verb,
+  `self update`, folded into the canonical top-level `animus update`:
+  `--check` replaces `--check-only`, and `--force` / `--prerelease` are
+  folded in alongside the existing `--yes` / `--channel`. No aliases.
+- **BREAKING**: trimmed `animus git` to inspection-only. Kept:
+  `git repo list`, `git worktree list`, `git worktree prune`. Removed:
+  `git repo {get,init,clone}`, `git branches`, `git status`,
+  `git commit`, `git push`, `git pull`, and
+  `git worktree {create,get,remove,pull,push,sync,sync-status}`.
+  Agent-driven merge/PR/commit behavior lives in the out-of-tree workflow
+  runner plugin via `post_success.merge`, not these in-tree handlers;
+  there were never any `animus.git.*` MCP tools, so no MCP surface
+  changed. `git worktree prune` keeps its `prune_worktrees` approval gate.
+  No aliases.
 - **BREAKING**: the top-level `animus metrics` command group. Its five
   telemetry verbs live under `animus daemon metrics` now; there are no
   aliases (v0.4 removal precedent). The `metrics` value also left the

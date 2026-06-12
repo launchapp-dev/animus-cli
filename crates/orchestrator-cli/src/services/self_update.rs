@@ -30,7 +30,7 @@ pub(crate) const ENV_DISABLE: &str = "ANIMUS_AUTO_UPDATE_DISABLE";
 /// short-running command.
 const STARTUP_FETCH_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// HTTP timeout for the manual `animus self update` flow.
+/// HTTP timeout for the manual `animus update` flow.
 const MANUAL_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Persisted across runs to throttle startup checks to the configured
@@ -418,7 +418,7 @@ pub(crate) fn atomic_install(staged: &Path, target: &Path) -> Result<()> {
         if target.exists() {
             std::fs::rename(target, &backup).with_context(|| {
                 format!(
-                    "Windows self-update could not move live binary aside ({}). Re-run `animus self update` from outside the running CLI, or replace the binary manually.",
+                    "Windows self-update could not move live binary aside ({}). Re-run `animus update` from outside the running CLI, or replace the binary manually.",
                     target.display()
                 )
             })?;
@@ -580,7 +580,7 @@ pub struct ManualUpdateOptions {
 /// Pick the channel for a manual update invocation by stacking the
 /// CLI-level `channel_override` (highest priority — used by `animus
 /// update --channel <c>`), the `prerelease_override` boolean (used by
-/// `animus self update --prerelease`), and the persisted config block
+/// `animus update --prerelease`), and the persisted config block
 /// (lowest priority).
 pub(crate) fn select_channel(
     config_block: Option<&AutoUpdateConfig>,
@@ -595,7 +595,7 @@ pub(crate) fn select_channel(
     config_block.map(|c| c.channel).unwrap_or_default()
 }
 
-/// Manual entry point — used by `animus self update`.
+/// Manual entry point — used by `animus update`.
 pub async fn run_manual_update(
     config_block: Option<&AutoUpdateConfig>,
     options: ManualUpdateOptions,
@@ -822,9 +822,9 @@ pub async fn run_startup_check(
             let _ = next_state.save();
             match mode {
                 AutoUpdateMode::Off => None,
-                AutoUpdateMode::Notify => Some(format!(
-                    "Update available: v{current_version} -> v{version}. Run `animus self update` to apply."
-                )),
+                AutoUpdateMode::Notify => {
+                    Some(format!("Update available: v{current_version} -> v{version}. Run `animus update` to apply."))
+                }
                 AutoUpdateMode::Prompt => {
                     // Honor configured `prompt` mode when stdin is a TTY: ask
                     // the operator inline. Non-TTY (CI / piped) downgrades to
@@ -842,12 +842,12 @@ pub async fn run_startup_check(
                             Some(format!("Installed v{version} (was v{current_version})."))
                         } else {
                             Some(format!(
-                                "Update available: v{current_version} -> v{version}. Run `animus self update` to apply."
+                                "Update available: v{current_version} -> v{version}. Run `animus update` to apply."
                             ))
                         }
                     } else {
                         Some(format!(
-                            "Update available: v{current_version} -> v{version}. Run `animus self update` to apply."
+                            "Update available: v{current_version} -> v{version}. Run `animus update` to apply."
                         ))
                     }
                 }

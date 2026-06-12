@@ -134,7 +134,6 @@ Visible top-level commands:
 - `daemon`
 - `agent`
 - `chat`
-- `project`
 - `queue`
 - `workflow`
 - `history`
@@ -153,7 +152,6 @@ Visible top-level commands:
 - `logs`
 - `subject`
 - `flavor`
-- `self`
 - `update`
 - `cost`
 - `auth`
@@ -170,7 +168,7 @@ Use these reference docs instead of hand-maintained summaries:
 ## Mutation Policy
 
 - Treat `~/.animus/<repo-scope>/` and `.animus/*.json` as Animus-managed state.
-- Use `animus project`, `animus queue`, `animus subject`, `animus workflow`, `animus plugin`, and `animus pack` commands for mutations.
+- Use `animus queue`, `animus subject`, `animus workflow`, `animus plugin`, and `animus pack` commands for mutations.
 - Do not hand-edit generated state JSON unless the task is explicitly about persistence or migrations.
 - Supported exception: project-local workflow YAML overlays in `.animus/workflows.yaml` and `.animus/workflows/*.yaml`.
 - In scripts and automation, always pass `--project-root "$(pwd)"`.
@@ -193,7 +191,6 @@ cargo test -p orchestrator-cli
 cargo test --workspace
 
 animus status
-animus project list
 animus subject list --kind task
 animus subject next --kind task
 animus queue list

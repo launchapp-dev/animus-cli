@@ -20,14 +20,14 @@ use crate::subject_adapter::{
 use crate::types::{
     AgentHandoffRequestInput, AgentHandoffResult, ArchitectureGraph, Assignee, ChecklistItem, CheckpointReason,
     CodebaseInsight, Complexity, ComplexityAssessment, DaemonHealth, DaemonStatus, DependencyType, ListPage, LogEntry,
-    LogLevel, OrchestratorProject, OrchestratorTask, OrchestratorWorkflow, PhaseDecision, Priority, ProjectConfig,
-    ProjectCreateInput, ProjectType, RequirementFilter, RequirementItem, RequirementPriority, RequirementPriorityExt,
-    RequirementQuery, RequirementQuerySort, RequirementStatus, RequirementsDraftInput, RequirementsDraftResult,
-    RequirementsExecutionInput, RequirementsExecutionResult, RequirementsRefineInput, RiskLevel, Scope,
-    TaskCreateInput, TaskDensity, TaskDependency, TaskFilter, TaskMetadata, TaskPriorityDistribution,
-    TaskPriorityPolicyReport, TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan,
-    TaskQuery, TaskQuerySort, TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput,
-    WorkflowFilter, WorkflowMetadata, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
+    LogLevel, OrchestratorProject, OrchestratorTask, OrchestratorWorkflow, PhaseDecision, Priority, RequirementFilter,
+    RequirementItem, RequirementPriority, RequirementPriorityExt, RequirementQuery, RequirementQuerySort,
+    RequirementStatus, RequirementsDraftInput, RequirementsDraftResult, RequirementsExecutionInput,
+    RequirementsExecutionResult, RequirementsRefineInput, RiskLevel, Scope, TaskCreateInput, TaskDensity,
+    TaskDependency, TaskFilter, TaskMetadata, TaskPriorityDistribution, TaskPriorityPolicyReport,
+    TaskPriorityRebalanceChange, TaskPriorityRebalanceOptions, TaskPriorityRebalancePlan, TaskQuery, TaskQuerySort,
+    TaskStatistics, TaskStatus, TaskType, TaskUpdateInput, VisionDocument, VisionDraftInput, WorkflowFilter,
+    WorkflowMetadata, WorkflowQuery, WorkflowQuerySort, WorkflowRunInput, WorkflowStatus,
 };
 use crate::workflow::{
     ResumeConfig, WorkflowLifecycleExecutor, WorkflowRunPruneFilter, WorkflowRunPruneReport, WorkflowStateManager,
@@ -38,8 +38,6 @@ mod phase_execution;
 mod planning_impl;
 mod planning_shared;
 mod planning_utils;
-mod project_impl;
-mod project_shared;
 mod query_support;
 mod review_impl;
 mod schedule_state;
@@ -109,19 +107,6 @@ pub trait DaemonServiceApi: Send + Sync {
     async fn clear_logs(&self) -> Result<()>;
     async fn active_agents(&self) -> Result<usize>;
     async fn set_active_process_count(&self, count: usize) -> Result<()>;
-}
-
-#[async_trait]
-pub trait ProjectServiceApi: Send + Sync {
-    async fn list(&self) -> Result<Vec<OrchestratorProject>>;
-    async fn get(&self, id: &str) -> Result<OrchestratorProject>;
-    async fn active(&self) -> Result<Option<OrchestratorProject>>;
-    async fn create(&self, input: ProjectCreateInput) -> Result<OrchestratorProject>;
-    async fn upsert(&self, project: OrchestratorProject) -> Result<OrchestratorProject>;
-    async fn load(&self, id: &str) -> Result<OrchestratorProject>;
-    async fn rename(&self, id: &str, new_name: &str) -> Result<OrchestratorProject>;
-    async fn archive(&self, id: &str) -> Result<OrchestratorProject>;
-    async fn remove(&self, id: &str) -> Result<()>;
 }
 
 #[async_trait]
@@ -215,7 +200,6 @@ pub trait ReviewServiceApi: Send + Sync {
 
 pub trait ServiceHub: Send + Sync {
     fn daemon(&self) -> Arc<dyn DaemonServiceApi>;
-    fn projects(&self) -> Arc<dyn ProjectServiceApi>;
     fn tasks(&self) -> Arc<dyn TaskServiceApi>;
     fn task_provider(&self) -> Arc<dyn TaskProvider>;
     fn subject_resolver(&self) -> Arc<dyn SubjectResolver>;
@@ -683,10 +667,6 @@ impl ServiceHub for InMemoryServiceHub {
         Arc::new(self.clone())
     }
 
-    fn projects(&self) -> Arc<dyn ProjectServiceApi> {
-        Arc::new(self.clone())
-    }
-
     fn tasks(&self) -> Arc<dyn TaskServiceApi> {
         Arc::new(self.clone())
     }
@@ -734,10 +714,6 @@ impl ServiceHub for InMemoryServiceHub {
 
 impl ServiceHub for FileServiceHub {
     fn daemon(&self) -> Arc<dyn DaemonServiceApi> {
-        Arc::new(self.clone())
-    }
-
-    fn projects(&self) -> Arc<dyn ProjectServiceApi> {
         Arc::new(self.clone())
     }
 

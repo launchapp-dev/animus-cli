@@ -1,5 +1,5 @@
 use anyhow::Result;
-use orchestrator_core::{ProjectType, WorkflowQuerySort, WorkflowStatus};
+use orchestrator_core::{WorkflowQuerySort, WorkflowStatus};
 use protocol::{AgentRunEvent, RunId};
 use serde_json::Value;
 
@@ -7,8 +7,6 @@ use crate::{ensure_safe_run_id, event_matches_run, invalid_input_error, not_foun
 
 const WORKFLOW_STATUS_EXPECTED: &str = "pending|running|paused|completed|failed|escalated|cancelled";
 const WORKFLOW_SORT_EXPECTED: &str = "started-at|started_at|status|workflow-ref|workflow_ref|id";
-const PROJECT_TYPE_EXPECTED: &str =
-    "web-app|mobile-app|desktop-app|full-stack-platform|full-stack|saas|library|infrastructure|other";
 pub(crate) const COMMAND_HELP_HINT: &str = "run the same command with --help";
 
 fn invalid_value_error(domain: &str, value: &str, expected: &str) -> anyhow::Error {
@@ -17,21 +15,6 @@ fn invalid_value_error(domain: &str, value: &str, expected: &str) -> anyhow::Err
     invalid_input_error(format!(
         "invalid {domain} '{normalized_value}'; expected one of: {expected}; {COMMAND_HELP_HINT}"
     ))
-}
-
-pub(crate) fn parse_input_json_or<T, F>(input_json: Option<String>, fallback: F) -> Result<T>
-where
-    T: serde::de::DeserializeOwned,
-    F: FnOnce() -> Result<T>,
-{
-    match input_json {
-        Some(raw) => serde_json::from_str::<T>(&raw).map_err(|error| {
-            invalid_input_error(format!(
-                "failed to parse --input-json payload as JSON: {error}; {COMMAND_HELP_HINT} for the expected shape"
-            ))
-        }),
-        None => fallback(),
-    }
 }
 
 pub(crate) fn ensure_destructive_confirmation(
@@ -175,63 +158,12 @@ pub(crate) fn parse_workflow_query_sort_opt(value: Option<&str>) -> Result<Optio
     Ok(Some(sort))
 }
 
-pub(crate) fn parse_project_type_opt(value: Option<&str>) -> Result<Option<ProjectType>> {
-    let Some(value) = value else {
-        return Ok(Some(ProjectType::Other));
-    };
-
-    let normalized = value.trim().to_ascii_lowercase();
-    let project_type = match normalized.as_str() {
-        "web-app" | "web_app" | "webapp" => ProjectType::WebApp,
-        "mobile-app" | "mobile_app" | "mobileapp" => ProjectType::MobileApp,
-        "desktop-app" | "desktop_app" | "desktopapp" => ProjectType::DesktopApp,
-        "full-stack-platform"
-        | "full_stack_platform"
-        | "fullstackplatform"
-        | "full-stack"
-        | "full_stack"
-        | "fullstack"
-        | "saas" => ProjectType::FullStackPlatform,
-        "library" => ProjectType::Library,
-        "infrastructure" => ProjectType::Infrastructure,
-        "other" | "greenfield" | "existing" => ProjectType::Other,
-        _ => return Err(invalid_value_error("project type", value, PROJECT_TYPE_EXPECTED)),
-    };
-
-    Ok(Some(project_type))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use protocol::{AgentRunEvent, RunId, Timestamp};
 
     use protocol::test_utils::EnvVarGuard;
-
-    #[test]
-    fn parse_project_type_accepts_saas_alias() {
-        let parsed = parse_project_type_opt(Some("saas"))
-            .expect("saas alias should parse")
-            .expect("project type should be present");
-        assert_eq!(parsed, ProjectType::FullStackPlatform);
-    }
-
-    #[test]
-    fn parse_project_type_is_case_insensitive_and_trimmed() {
-        let parsed = parse_project_type_opt(Some("  WeB-aPp  "))
-            .expect("mixed-case value should parse")
-            .expect("project type should be present");
-        assert_eq!(parsed, ProjectType::WebApp);
-    }
-
-    #[test]
-    fn parse_project_type_rejects_unknown_values() {
-        let err = parse_project_type_opt(Some("nonsense")).expect_err("unknown value should fail");
-        let message = err.to_string();
-        assert!(message.contains("invalid project type"));
-        assert!(message.contains("expected one of"));
-        assert!(message.contains("--help"));
-    }
 
     #[test]
     fn parse_workflow_filters_accept_aliases() {
@@ -243,16 +175,6 @@ mod tests {
     fn parse_workflow_status_accepts_both_cancelled_spellings() {
         assert_eq!(parse_workflow_status_opt(Some("cancelled")).unwrap(), Some(WorkflowStatus::Cancelled));
         assert_eq!(parse_workflow_status_opt(Some("canceled")).unwrap(), Some(WorkflowStatus::Cancelled));
-    }
-
-    #[test]
-    fn parse_input_json_or_reports_help_hint_on_invalid_json() {
-        let err =
-            parse_input_json_or::<serde_json::Value, _>(Some("{invalid".to_string()), || Ok(serde_json::Value::Null))
-                .expect_err("invalid json should fail");
-        let message = err.to_string();
-        assert!(message.contains("failed to parse --input-json payload as JSON"));
-        assert!(message.contains(COMMAND_HELP_HINT));
     }
 
     #[test]

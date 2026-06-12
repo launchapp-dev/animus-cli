@@ -16,10 +16,6 @@ pub(super) fn load_git_repo_registry(project_root: &str) -> Result<GitRepoRegist
     read_json_or_default(&git_repo_registry_path(project_root))
 }
 
-pub(super) fn save_git_repo_registry(project_root: &str, registry: &GitRepoRegistry) -> Result<()> {
-    write_json_pretty(&git_repo_registry_path(project_root), registry)
-}
-
 pub(super) fn load_git_confirmations(project_root: &str) -> Result<GitConfirmationStoreCli> {
     read_json_or_default(&git_confirmations_path(project_root))
 }
@@ -28,7 +24,7 @@ pub(super) fn save_git_confirmations(project_root: &str, store: &GitConfirmation
     write_json_pretty(&git_confirmations_path(project_root), store)
 }
 
-pub(super) fn repos_root(project_root: &str) -> PathBuf {
+fn repos_root(project_root: &str) -> PathBuf {
     Path::new(project_root).join(".animus").join("repos")
 }
 
@@ -115,15 +111,6 @@ fn parse_worktree_list_output(output: &str) -> Vec<GitWorktreeInfoCli> {
 pub(super) fn load_worktrees(repo_path: &Path) -> Result<Vec<GitWorktreeInfoCli>> {
     let output = run_git(repo_path, &["worktree", "list", "--porcelain"])?;
     Ok(parse_worktree_list_output(&output))
-}
-
-pub(super) fn resolve_worktree_path(repo_path: &Path, worktree_name: &str) -> Result<PathBuf> {
-    let worktrees = load_worktrees(repo_path)?;
-    let worktree = worktrees
-        .into_iter()
-        .find(|entry| entry.worktree_name == worktree_name || entry.path.ends_with(worktree_name))
-        .ok_or_else(|| not_found_error(format!("worktree not found: {worktree_name}")))?;
-    Ok(PathBuf::from(worktree.path))
 }
 
 pub(super) fn git_confirmation_next_step(operation_type: &str, repo_name: &str) -> String {

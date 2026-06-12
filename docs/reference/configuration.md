@@ -536,16 +536,17 @@ Modes:
 
 `channel` filters releases: `stable` drops anything tagged
 `prerelease: true` on GitHub; `prerelease` admits both. Pass
-`animus self update --prerelease` to override per-invocation.
+`animus update --prerelease` to override per-invocation.
 
-Manual trigger: `animus self update` bypasses the mode check and applies
+Manual trigger: `animus update` bypasses the mode check and applies
 the newest matching release. Flags:
 
-- `--check-only` — print the available version and exit 0 if newer,
+- `--check` — print the available version and exit 0 if newer,
   non-zero otherwise. Useful in CI.
 - `--force` — re-install the latest tag even when already current
   (repair).
 - `--prerelease` — include prereleases regardless of `channel`.
+- `--channel <stable|nightly>` — pick the release channel to poll.
 - `--yes` — skip the interactive confirmation prompt.
 
 Integrity: when the GitHub release asset has an inline `digest:
@@ -557,7 +558,7 @@ operators are encouraged to publish digests upstream.
 The startup check is fire-and-forget — it runs as a tokio background
 task and never delays the subcommand the user actually asked for.
 Network failures during the background check are silently dropped; run
-`animus self update --check-only` to surface them.
+`animus update --check` to surface them.
 
 ## Environment Variables
 
