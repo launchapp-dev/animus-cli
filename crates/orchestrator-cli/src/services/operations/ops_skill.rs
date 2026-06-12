@@ -4,7 +4,7 @@ use crate::cli_types::{
 };
 use crate::{conflict_error, invalid_input_error, not_found_error, print_value, unavailable_error};
 use anyhow::{Context, Result};
-use orchestrator_config::skill_definition::SkillDefinition;
+use orchestrator_config::skill_definition::{skill_definition_warnings, SkillDefinition};
 use orchestrator_config::skill_resolution::{list_available_skills, resolve_skill};
 use orchestrator_config::skill_scoping::{
     legacy_project_markdown_skills_dir, legacy_project_yaml_skills_dir, legacy_user_markdown_skills_dir,
@@ -184,6 +184,13 @@ fn build_integrity(name: &str, version: &str, source: &str, artifact: &str) -> S
 
 fn skill_install_root(project_root: &str) -> PathBuf {
     project_markdown_skills_dir(Path::new(project_root))
+}
+
+/// Render non-fatal definition warnings (inert `activation.tools` /
+/// `adapters` entries) as display strings for CLI/JSON output. Empty when the
+/// definition is clean.
+fn definition_warning_strings(definition: &SkillDefinition) -> Vec<String> {
+    skill_definition_warnings(definition).iter().map(ToString::to_string).collect()
 }
 
 fn render_skill_definition_as_markdown(definition: &SkillDefinition) -> Result<String> {
@@ -591,13 +598,18 @@ fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()
                     continue;
                 }
             }
-            items.push(serde_json::json!({
+            let mut item = serde_json::json!({
                 "name": resolved.definition.name,
                 "description": resolved.definition.description,
                 "source": origin,
                 "category": resolved.definition.category.as_ref().map(|c| format!("{:?}", c)),
                 "type": "definition",
-            }));
+            });
+            let warnings = definition_warning_strings(&resolved.definition);
+            if !warnings.is_empty() {
+                item.as_object_mut().unwrap().insert("warnings".to_string(), serde_json::json!(warnings));
+            }
+            items.push(item);
         }
     }
 
@@ -821,27 +833,29 @@ fn handle_show(args: SkillShowArgs, project_root: &str, json: bool) -> Result<()
     match resolve_skill(&args.name, &sources) {
         Ok(resolved) => {
             let def = &resolved.definition;
-            print_value(
-                serde_json::json!({
-                    "name": def.name,
-                    "description": def.description,
-                    "source": resolved.source.to_string(),
-                    "category": def.category.as_ref().map(|c| format!("{:?}", c)),
-                    "version": def.version,
-                    "tags": def.tags,
-                    "prompt": {
-                        "system": def.prompt.system,
-                        "prefix": def.prompt.prefix,
-                        "suffix": def.prompt.suffix,
-                        "directives": def.prompt.directives,
-                    },
-                    "mcp_servers": def.mcp_servers,
-                    "timeout_secs": def.timeout_secs,
-                    "capabilities": def.capabilities,
-                    "adapters": def.adapters.keys().collect::<Vec<_>>(),
-                }),
-                json,
-            )
+            let mut payload = serde_json::json!({
+                "name": def.name,
+                "description": def.description,
+                "source": resolved.source.to_string(),
+                "category": def.category.as_ref().map(|c| format!("{:?}", c)),
+                "version": def.version,
+                "tags": def.tags,
+                "prompt": {
+                    "system": def.prompt.system,
+                    "prefix": def.prompt.prefix,
+                    "suffix": def.prompt.suffix,
+                    "directives": def.prompt.directives,
+                },
+                "mcp_servers": def.mcp_servers,
+                "timeout_secs": def.timeout_secs,
+                "capabilities": def.capabilities,
+                "adapters": def.adapters.keys().collect::<Vec<_>>(),
+            });
+            let warnings = definition_warning_strings(def);
+            if !warnings.is_empty() {
+                payload.as_object_mut().unwrap().insert("warnings".to_string(), serde_json::json!(warnings));
+            }
+            print_value(payload, json)
         }
         Err(_) => {
             let state = load_skill_registry_state(project_root)?;

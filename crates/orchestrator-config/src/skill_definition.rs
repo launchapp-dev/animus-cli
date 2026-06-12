@@ -225,6 +225,106 @@ pub fn parse_skill_definition(yaml: &str) -> Result<SkillDefinition> {
     Ok(skill)
 }
 
+// ---------------------------------------------------------------------------
+// Non-fatal skill definition warnings
+// ---------------------------------------------------------------------------
+
+/// A structured warning for a skill definition that parses and validates but
+/// contains a declaration the runtime will silently ignore (e.g. an
+/// `activation.tools` value that can never match a real tool id). Warnings
+/// never fail a load — existing definitions keep loading.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SkillDefinitionWarning {
+    /// Dotted path of the offending declaration, e.g. `activation.tools[0]`.
+    pub field: String,
+    /// One-line explanation of why the declaration is inert and how to fix it.
+    pub message: String,
+}
+
+impl std::fmt::Display for SkillDefinitionWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "`{}`: {}", self.field, self.message)
+    }
+}
+
+/// THE single registry of skill-definition warning checks.
+///
+/// Every emission point (`animus skill info`, `animus skill list`,
+/// `animus.skill.get` / `animus.skill.create` / `animus.skill.update` MCP
+/// tools) reads this table via [`skill_definition_warnings`]. When a check
+/// becomes obsolete (e.g. activation matching learns to normalize aliases),
+/// delete its entry here and update `docs/architecture/skill-system.md`.
+const SKILL_WARNING_CHECKS: &[fn(&SkillDefinition, &mut Vec<SkillDefinitionWarning>)] =
+    &[warn_unknown_activation_tools, warn_unknown_adapter_tools];
+
+fn known_tool_ids_label() -> String {
+    protocol::KNOWN_TOOL_IDS.join(", ")
+}
+
+/// Activation and adapter matching compare the DECLARED value literally
+/// (case-insensitive, untrimmed) against the runtime tool id — see
+/// [`SkillActivation::matches`] and `find_tool_adapter`. A declared value is
+/// flagged when:
+///
+/// - it carries leading/trailing whitespace (the runtime tool id is trimmed,
+///   the declared candidate is not, so a padded value never matches), or
+/// - it does not normalize to a known canonical tool id — most often a typo,
+///   but custom CLI tools (workflow YAML `tools:` / compiled `cli_tools`)
+///   also land here, so the wording is "only matches if a custom tool with
+///   this exact id is configured" rather than "never matches", or
+/// - it is an alias for a canonical id (`oai` → `oai-runner`): workflow
+///   phases always match against canonical ids, so the alias never activates
+///   there. Ad-hoc runs pass `--tool` through verbatim, where the literal
+///   alias can still match — hence the softer "will not activate on workflow
+///   phases" wording rather than "never matches".
+fn tool_id_warning_message(declared: &str) -> Option<String> {
+    if declared != declared.trim() {
+        return Some(format!(
+            "'{declared}' has leading/trailing whitespace; matching compares the declared value literally, so this entry never matches — remove the padding"
+        ));
+    }
+    let normalized = protocol::normalize_tool_id(declared);
+    if !protocol::KNOWN_TOOL_IDS.contains(&normalized.as_str()) {
+        return Some(format!(
+            "'{declared}' is not a built-in tool id ({}) — it only matches if a custom CLI tool with this exact id is configured (workflow YAML `tools:`); otherwise the entry is silently ignored",
+            known_tool_ids_label()
+        ));
+    }
+    if !declared.eq_ignore_ascii_case(&normalized) {
+        return Some(format!(
+            "'{declared}' is an alias for '{normalized}'; workflow phases match canonical tool ids, so this entry will not activate there — declare '{normalized}' instead",
+        ));
+    }
+    None
+}
+
+fn warn_unknown_activation_tools(skill: &SkillDefinition, out: &mut Vec<SkillDefinitionWarning>) {
+    for (index, declared) in skill.activation.tools.iter().enumerate() {
+        if let Some(message) = tool_id_warning_message(declared) {
+            out.push(SkillDefinitionWarning { field: format!("activation.tools[{index}]"), message });
+        }
+    }
+}
+
+fn warn_unknown_adapter_tools(skill: &SkillDefinition, out: &mut Vec<SkillDefinitionWarning>) {
+    for declared in skill.adapters.keys() {
+        if let Some(message) = tool_id_warning_message(declared) {
+            out.push(SkillDefinitionWarning { field: format!("adapters.{declared}"), message });
+        }
+    }
+}
+
+/// Scan a skill definition for declarations the runtime will silently ignore.
+/// Returns one warning per inert declaration; never errors. Companion to
+/// [`validate_skill_definition`], which owns the fatal checks.
+pub fn skill_definition_warnings(skill: &SkillDefinition) -> Vec<SkillDefinitionWarning> {
+    let mut warnings = Vec::new();
+    for check in SKILL_WARNING_CHECKS {
+        check(skill, &mut warnings);
+    }
+    warnings
+}
+
 pub fn validate_skill_definition(skill: &SkillDefinition) -> Result<()> {
     if skill.name.is_empty() {
         return Err(anyhow!("Skill name must not be empty"));
@@ -653,6 +753,69 @@ adapters:
         assert!(!json.contains("\"mcp_servers\""));
         assert!(!json.contains("\"capabilities\""));
         assert!(!json.contains("\"codex_config_overrides\""));
+    }
+
+    #[test]
+    fn test_no_warnings_for_minimal_and_full_fixtures() {
+        let minimal = parse_skill_definition(minimal_yaml()).unwrap();
+        assert!(skill_definition_warnings(&minimal).is_empty());
+
+        let full = parse_skill_definition(full_skill_yaml()).unwrap();
+        assert!(skill_definition_warnings(&full).is_empty(), "claude/gemini activation + gemini adapter are canonical");
+    }
+
+    #[test]
+    fn test_warning_fires_for_unknown_activation_tool() {
+        let yaml = "name: x\nactivation:\n  tools:\n    - claud\n    - codex\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        let warnings = skill_definition_warnings(&skill);
+        assert_eq!(warnings.len(), 1, "only the typo entry should warn: {warnings:?}");
+        assert_eq!(warnings[0].field, "activation.tools[0]");
+        assert!(warnings[0].message.contains("'claud' is not a built-in tool id"));
+        assert!(warnings[0].message.contains("claude, codex, gemini, opencode, oai-runner"));
+    }
+
+    #[test]
+    fn test_warning_fires_for_alias_activation_tool() {
+        let yaml = "name: x\nactivation:\n  tools:\n    - minimax\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        let warnings = skill_definition_warnings(&skill);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].message.contains("alias for 'oai-runner'"), "got: {}", warnings[0].message);
+        assert!(warnings[0].message.contains("will not activate there"), "got: {}", warnings[0].message);
+    }
+
+    #[test]
+    fn test_warning_fires_for_whitespace_padded_activation_tool() {
+        let yaml = "name: x\nactivation:\n  tools:\n    - ' claude '\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        let warnings = skill_definition_warnings(&skill);
+        assert_eq!(warnings.len(), 1, "padded entry should warn: {warnings:?}");
+        assert!(warnings[0].message.contains("whitespace"), "got: {}", warnings[0].message);
+    }
+
+    #[test]
+    fn test_no_warning_for_known_tools_in_any_case() {
+        let yaml = "name: x\nactivation:\n  tools:\n    - Claude\n    - CODEX\n    - oai-runner\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        assert!(skill_definition_warnings(&skill).is_empty());
+    }
+
+    #[test]
+    fn test_warning_fires_for_unknown_adapter_key() {
+        let yaml = "name: x\nadapters:\n  geminni:\n    model: gemini-2.5-pro\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        let warnings = skill_definition_warnings(&skill);
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].field, "adapters.geminni");
+        assert!(warnings[0].message.contains("not a built-in tool id"));
+    }
+
+    #[test]
+    fn test_warnings_never_fail_parse_or_validate() {
+        let yaml = "name: x\nactivation:\n  tools:\n    - not-a-tool\n";
+        let skill = parse_skill_definition(yaml).expect("warning-bearing definition must still load");
+        assert!(validate_skill_definition(&skill).is_ok());
     }
 
     #[test]

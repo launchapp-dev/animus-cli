@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orchestrator_config::skill_definition::{
-    SkillActivation, SkillCategory, SkillDefinition, SkillModelPreference, SkillPrompt,
+    skill_definition_warnings, SkillActivation, SkillCategory, SkillDefinition, SkillModelPreference, SkillPrompt,
 };
 use orchestrator_config::skill_resolution::{list_available_skills, resolve_skill};
 use orchestrator_config::skill_scoping::{
@@ -262,12 +262,22 @@ fn skill_summary(definition: &SkillDefinition, origin: &SkillSourceOrigin) -> Va
     payload
 }
 
+/// Non-fatal definition warnings (inert `activation.tools` / `adapters`
+/// entries) rendered as display strings. Empty when the definition is clean.
+fn definition_warning_strings(definition: &SkillDefinition) -> Vec<String> {
+    skill_definition_warnings(definition).iter().map(ToString::to_string).collect()
+}
+
 fn skill_full(definition: &SkillDefinition, origin: &SkillSourceOrigin) -> Value {
     let mut payload = json!({
         "definition": definition,
         "source": source_tag(origin),
         "source_detail": source_detail(origin),
     });
+    let warnings = definition_warning_strings(definition);
+    if !warnings.is_empty() {
+        payload.as_object_mut().unwrap().insert("warnings".to_string(), json!(warnings));
+    }
     if let SkillSourceOrigin::AgentHost { .. } = origin {
         payload
             .as_object_mut()
@@ -337,7 +347,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.skill.get",
-        description = "Resolve a skill by name and return its full SkillDefinition plus source provenance. Resolution honors the priority chain: project > user > installed/pack > agent-host. Returns the parsed definition (prompt, tool_policy, model, mcp_servers, capabilities, adapters, tags, etc.) under `definition`. For agent-host sources, structural fields are stripped at parse time and a `notice` field warns that only prompt text is trusted.",
+        description = "Resolve a skill by name and return its full SkillDefinition plus source provenance. Resolution honors the priority chain: project > user > installed/pack > agent-host. Returns the parsed definition (prompt, tool_policy, model, mcp_servers, capabilities, adapters, tags, etc.) under `definition`. For agent-host sources, structural fields are stripped at parse time and a `notice` field warns that only prompt text is trusted. When the definition contains likely-inert declarations (e.g. an `activation.tools` or `adapters` entry that is not a built-in tool id — claude, codex, gemini, opencode, oai-runner — and no custom CLI tool is configured with that id, it never matches), a non-fatal `warnings` array is included.",
         input_schema = ao_schema_for_type::<SkillGetInput>()
     )]
     async fn ao_skill_get(&self, params: Parameters<SkillGetInput>) -> Result<CallToolResult, McpError> {
@@ -471,14 +481,19 @@ impl AoMcpServer {
         let (path, outcome) = write_project_skill_yaml(Path::new(&project_root), &definition, overwrite)
             .map_err(|err| McpError::invalid_params(err.to_string(), None))?;
 
+        let mut result = json!({
+            "name": name,
+            "path": path.to_string_lossy(),
+            "source": "project",
+            "outcome": skill_write_outcome_str(outcome),
+        });
+        let warnings = definition_warning_strings(&definition);
+        if !warnings.is_empty() {
+            result.as_object_mut().unwrap().insert("warnings".to_string(), json!(warnings));
+        }
         Ok(CallToolResult::structured(json!({
             "tool": "animus.skill.create",
-            "result": {
-                "name": name,
-                "path": path.to_string_lossy(),
-                "source": "project",
-                "outcome": skill_write_outcome_str(outcome),
-            }
+            "result": result,
         })))
     }
 
@@ -562,14 +577,19 @@ impl AoMcpServer {
         let (path, outcome) = write_project_skill_yaml(Path::new(&project_root), &definition, true)
             .map_err(|err| McpError::invalid_params(err.to_string(), None))?;
 
+        let mut result = json!({
+            "name": name,
+            "path": path.to_string_lossy(),
+            "source": "project",
+            "outcome": skill_write_outcome_str(outcome),
+        });
+        let warnings = definition_warning_strings(&definition);
+        if !warnings.is_empty() {
+            result.as_object_mut().unwrap().insert("warnings".to_string(), json!(warnings));
+        }
         Ok(CallToolResult::structured(json!({
             "tool": "animus.skill.update",
-            "result": {
-                "name": name,
-                "path": path.to_string_lossy(),
-                "source": "project",
-                "outcome": skill_write_outcome_str(outcome),
-            }
+            "result": result,
         })))
     }
 }
@@ -914,6 +934,53 @@ mod skill_tool_tests {
             let detail = skill.get("source_detail").expect("source_detail");
             assert_eq!(detail.get("host").and_then(Value::as_str), Some("claude-code"));
         }
+    }
+
+    #[tokio::test]
+    async fn skill_get_surfaces_warnings_for_inert_activation_tool() {
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let mut input = create_input("typo-activation", "desc", "body");
+        input.activation = Some(SkillActivationInput { tools: vec!["claud".to_string()], models: Vec::new() });
+        let created = server.ao_skill_create(Parameters(input)).await.expect("create skill");
+        let create_payload = data(&created);
+        let create_warnings = create_payload.get("warnings").and_then(Value::as_array).expect("create warnings");
+        assert!(
+            create_warnings.iter().any(|w| w.as_str().is_some_and(|s| s.contains("'claud' is not a built-in tool id"))),
+            "create should surface the inert activation tool: {create_warnings:?}"
+        );
+
+        let got = server
+            .ao_skill_get(Parameters(SkillGetInput { project_root: None, name: "typo-activation".to_string() }))
+            .await
+            .expect("get skill");
+        let payload = data(&got);
+        let warnings = payload.get("warnings").and_then(Value::as_array).expect("get warnings");
+        assert!(
+            warnings.iter().any(|w| w.as_str().is_some_and(|s| s.contains("activation.tools[0]"))),
+            "get should surface the inert activation tool: {warnings:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn skill_get_omits_warnings_for_clean_definition() {
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let mut input = create_input("clean-activation", "desc", "body");
+        input.activation =
+            Some(SkillActivationInput { tools: vec!["claude".to_string(), "codex".to_string()], models: Vec::new() });
+        let created = server.ao_skill_create(Parameters(input)).await.expect("create skill");
+        assert!(data(&created).get("warnings").is_none(), "clean definition must not carry warnings");
+
+        let got = server
+            .ao_skill_get(Parameters(SkillGetInput { project_root: None, name: "clean-activation".to_string() }))
+            .await
+            .expect("get skill");
+        assert!(data(&got).get("warnings").is_none(), "clean definition must not carry warnings");
     }
 
     #[tokio::test]

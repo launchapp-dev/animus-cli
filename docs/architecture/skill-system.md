@@ -130,6 +130,57 @@ Each child directory of a host root that contains a `SKILL.md` file is treated
 as one skill. Direct `*.md` files at the root are also accepted (the filename
 stem becomes the skill name when frontmatter omits `name`).
 
+## Runtime enforcement and the model hierarchy
+
+Which component actually honors each `SkillDefinition` field depends on the
+execution path:
+
+### Workflow phases (the `workflow_runner` plugin)
+
+The reference runner (`launchapp-dev/animus-workflow-runner-default` v0.4.2+)
+enforces every structural field when a skill activates for a phase:
+
+- `prompt.*` — composed into the phase prompt (`render_phase_prompt_with_ctx_overrides`).
+- `tool_policy`, `mcp_servers` — merged into the runtime contract's MCP wiring.
+- `model` (`preferred`/`fallback`) and `adapters.<tool>.model` — feed phase
+  target resolution. The effective model hierarchy on the workflow path is:
+  explicit run overrides (`--model` / `--tool`) > `phase.runtime.model`
+  (workflow YAML / agent runtime config) > skill model (adapter `model` wins
+  over `preferred`, which wins over `fallback`) > phase-routing / agent
+  profile defaults > compiled defaults in `protocol::model_routing`.
+- `timeout_secs` — fallback phase timeout: explicit phase timeout > skill
+  `timeout_secs` > `phase.runtime.timeout_secs`.
+- `capabilities` — override the phase's `PhaseCapabilities`
+  (`apply_skill_capability_overrides`); unknown capability keys fail
+  validation at load time.
+- `extra_args`, `env`, `codex_config_overrides` — injected into the runtime
+  contract's `/cli/launch/args` and `/cli/launch/env`, which travel to the
+  provider plugin on `AgentRunRequest.runtime_contract`.
+
+### Ad-hoc runs (`animus chat` / agent MCP scope resolution)
+
+The kernel's ad-hoc path consumes only `mcp_servers` and `tool_policy`
+(profile ∪ skill ∪ `--mcp-server`). Skill `model`, `timeout_secs`,
+`capabilities`, `extra_args`, `env`, and `codex_config_overrides` do not
+apply to ad-hoc chat turns — declare those expectations on the agent profile
+or pass explicit flags instead.
+
+### Activation matching and inert tool ids
+
+`activation.tools` and `adapters.<tool>` match the runtime tool id with a
+literal case-insensitive comparison of the declared value (untrimmed). On
+the workflow path runtime tool ids are canonical (`claude`, `codex`,
+`gemini`, `opencode`, `oai-runner` — see `protocol::KNOWN_TOOL_IDS`). A typo
+(`claud`) or a whitespace-padded value (`' claude '`) therefore never
+matches, and an alias (`minimax`, `open-code`) never matches on workflow
+phases (ad-hoc runs pass `--tool` through verbatim, where a literal alias
+can still match). `skill_definition_warnings` in
+`crates/orchestrator-config/src/skill_definition.rs` detects these inert
+declarations; the warnings (never errors — existing definitions keep
+loading) surface through `animus skill info`, `animus skill list`, and the
+`animus.skill.get` / `animus.skill.create` / `animus.skill.update` MCP
+tools.
+
 ## Vendor namespace `animus:`
 
 `MarkdownSkillFrontmatter` parses these fields by default:

@@ -232,8 +232,8 @@ animus
 ├── skill                    Search, install, update, uninstall, and publish versioned skills
 │   ├── search               Search skills across built-in, user, project, and registry sources
 │   ├── install              Install a skill with deterministic resolution
-│   ├── list                 List all available skills (built-in, user, project, and installed)
-│   ├── info                 Show details of a resolved skill definition (alias: `show`)
+│   ├── list                 List all available skills; definition rows carry a non-fatal `warnings` array when inert tool-id declarations are detected
+│   ├── info                 Show details of a resolved skill definition (alias: `show`); includes the same non-fatal `warnings` array
 │   ├── update               Re-resolve one or all installed skills
 │   ├── uninstall            Remove an installed skill's materialized files and registry/lock entries (supports --source and --dry-run)
 │   ├── publish              Publish a new skill version into the registry catalog
