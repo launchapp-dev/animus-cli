@@ -199,6 +199,13 @@ Skills:
 { "name": "code-review" }    // animus.skill.get
 ```
 
+`animus.skill.get` (and `animus.skill.create` / `animus.skill.update`) include
+a non-fatal `warnings` array when the definition declares an
+`activation.tools` or `adapters` entry that is not a built-in tool id
+(`claude`, `codex`, `gemini`, `opencode`, `oai-runner`) — unless a custom CLI
+tool with that exact id is configured, such an entry never matches at
+runtime, so the skill would silently never activate for it.
+
 Plugins:
 
 ```json

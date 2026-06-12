@@ -82,6 +82,16 @@ impl ModelRoutingComplexity {
     }
 }
 
+/// The canonical provider tool ids the runtime routes to. Every tool id
+/// reaching skill activation matching, phase target planning, and provider
+/// plugin resolution is one of these after [`normalize_tool_id`].
+pub const KNOWN_TOOL_IDS: &[&str] = &["claude", "codex", "gemini", "opencode", "oai-runner"];
+
+/// Returns true when `tool_id` normalizes to one of [`KNOWN_TOOL_IDS`].
+pub fn is_known_tool_id(tool_id: &str) -> bool {
+    KNOWN_TOOL_IDS.contains(&normalize_tool_id(tool_id).as_str())
+}
+
 pub fn normalize_tool_id(tool_id: &str) -> String {
     match tool_id.trim().to_ascii_lowercase().as_str() {
         "open-code" => "opencode".to_string(),
