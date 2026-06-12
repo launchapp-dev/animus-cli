@@ -415,7 +415,7 @@ fn handle_plugin_trust_list(args: PluginTrustListArgs) -> Result<()> {
         println!("No trusted orgs recorded.");
         return Ok(());
     }
-    println!("{:<28} {:<9} {:<18} {:<25} {}", "ORG", "STATE", "DECIDED-BY", "TRUSTED-AT", "REVOKED-AT");
+    println!("{:<28} {:<9} {:<18} {:<25} REVOKED-AT", "ORG", "STATE", "DECIDED-BY", "TRUSTED-AT");
     for row in &rows {
         let org = row["org"].as_str().unwrap_or("");
         let state = row["state"].as_str().unwrap_or("");
@@ -2559,7 +2559,7 @@ fn plugin_list_warning_lines(warnings: &[PluginWarningRow], verbose: bool) -> Ve
     for warning in warnings {
         // Collapse only the stale not-found entries; an existing binary whose
         // manifest probe failed is a real load error and stays per-entry.
-        if matches!(&*warning.source, "explicit_config" | "project_local")
+        if matches!(warning.source, "explicit_config" | "project_local")
             && warning.reason.starts_with("configured binary not found")
         {
             stale_config += 1;
@@ -2915,7 +2915,7 @@ pub(super) fn project_scope_installed_names(project_root: &Path) -> BTreeSet<Str
     let binaries_key = serde_yaml::Value::String("binaries".to_string());
     if let Ok(config) = load_plugins_yaml(&project_plugins_registry_path(project_root)) {
         for table in [&config.plugins, &config.providers] {
-            for (key, value) in table.iter() {
+            for (key, value) in table {
                 let serde_yaml::Value::String(name) = key else { continue };
                 let recorded_path = match value {
                     serde_yaml::Value::String(path) => Some(PathBuf::from(path)),
@@ -2964,7 +2964,7 @@ fn project_registry_claimed_names(project_root: &Path) -> BTreeSet<String> {
     };
     let binaries_key = serde_yaml::Value::String("binaries".to_string());
     for table in [&config.plugins, &config.providers] {
-        for (key, value) in table.iter() {
+        for (key, value) in table {
             if let serde_yaml::Value::String(name) = key {
                 names.insert(name.clone());
             }
@@ -5260,11 +5260,11 @@ mod tests {
             warning_row("animus-provider-broken", "project_local"),
         ];
         let lines = plugin_list_warning_lines(&warnings, false);
-        // One per-entry line for the non-explicit_config tier + one summary.
-        assert_eq!(lines.len(), 2, "{lines:?}");
-        assert!(lines.iter().any(|l| l.contains("animus-provider-broken")), "{lines:?}");
+        // Stale not-found entries collapse across BOTH registry tiers
+        // (explicit_config + project_local) into a single summary line.
+        assert_eq!(lines.len(), 1, "{lines:?}");
         let summary = lines.iter().find(|l| l.contains("stale plugins.yaml entries")).expect("summary line");
-        assert!(summary.contains("2 configured plugin binaries not found"), "{summary}");
+        assert!(summary.contains("3 configured plugin binaries not found"), "{summary}");
         assert!(summary.contains("animus plugin uninstall"), "summary must name the prune remedy: {summary}");
     }
 
