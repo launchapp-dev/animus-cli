@@ -162,11 +162,8 @@ Inspection and control:
 { "id": "wf-abc123" }                       // animus.workflow.get
 { "status": "running", "limit": 10 }       // animus.workflow.list
 { "id": "wf-abc123" }                       // pause / resume / cancel / decisions
-{ "workflow_id": "wf-abc123", "phase_id": "po-review" } // phase.approve
+{ "workflow_id": "wf-abc123", "phase_id": "po-review" } // phase.approve / phase.reject
 ```
-
-The CLI also exposes `animus workflow phase reject`, but the built-in MCP
-surface currently exposes only `animus.workflow.phase.approve`.
 
 ## Daemon and Queue Operations
 
