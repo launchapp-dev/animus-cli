@@ -104,7 +104,12 @@ animus
 │   ├── agents               List daemon-managed agents
 │   ├── config               Update daemon automation configuration
 │   ├── preflight            Report plugin preflight status (which required plugins are installed, which are missing, and the fix commands)
-│   └── metrics              Print daemon observability metrics (counters, gauges, histograms)
+│   └── metrics              Print daemon observability metrics (counters, gauges, histograms); subcommands manage opt-in anonymous usage telemetry (v0.6)
+│       ├── status           Show telemetry enabled flag, install_id, pending event count, last-send timestamp
+│       ├── enable           Opt in to anonymous metrics (skips the first-run prompt re-show)
+│       ├── disable          Opt out and drop any buffered events
+│       ├── flush            Force-send buffered events to the configured endpoint (debug)
+│       └── cleanup          Sweep all scopes for orphaned/oversized flushing snapshots + oversized buffers
 │
 ├── agent                    Run and inspect agent executions
 │   ├── list                 List configured agent profiles
@@ -333,13 +338,6 @@ animus
 │   └── update               Check for, download, and atomically install a newer `animus` release
 │
 ├── update                   Top-level alias for `animus self update` (`--check / --yes / --channel`)
-│
-├── metrics                  Manage opt-in anonymous usage telemetry (v0.5.4)
-│   ├── status               Show enabled flag, install_id, pending event count, last-send timestamp
-│   ├── enable               Opt in to anonymous metrics (skips the first-run prompt re-show)
-│   ├── disable              Opt out and drop any buffered events
-│   ├── flush                Force-send buffered events to the configured endpoint (debug)
-│   └── cleanup              Sweep all scopes for orphaned/oversized flushing snapshots + oversized buffers
 │
 ├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
 │   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders

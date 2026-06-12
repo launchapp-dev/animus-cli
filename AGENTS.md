@@ -155,7 +155,6 @@ Visible top-level commands:
 - `flavor`
 - `self`
 - `update`
-- `metrics`
 - `cost`
 - `auth`
 - `events`

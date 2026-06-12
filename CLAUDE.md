@@ -205,6 +205,11 @@ all subject ops route through the `SubjectRouter` to installed
 `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` to skip subject discovery
 entirely.
 
+Removed in v0.6: the top-level `animus metrics` group — telemetry
+controls (`status`, `enable`, `disable`, `flush`, `cleanup`) folded into
+`animus daemon metrics` as subcommands, with bare `animus daemon metrics`
+keeping the live-counters display. No aliases.
+
 Removed in v0.5.x: the `animus model` group (use `animus doctor --check
 cli_tools` / `--check api_keys` and the agent-runtime config files) and
 the `animus runner` group (`runner health` was absorbed into

@@ -720,7 +720,10 @@ pub(crate) async fn handle_daemon(
         }
         DaemonCommand::Config(args) => handle_daemon_config(args, project_root, json),
         DaemonCommand::Preflight(args) => handle_daemon_preflight(args, project_root, json).await,
-        DaemonCommand::Metrics(args) => handle_daemon_metrics(args, project_root, json).await,
+        DaemonCommand::Metrics(args) => match args.command {
+            Some(subcommand) => crate::services::operations::handle_metrics(subcommand, project_root, json).await,
+            None => handle_daemon_metrics(args.display, project_root, json).await,
+        },
     }
 }
 

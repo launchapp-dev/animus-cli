@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **BREAKING**: `animus daemon metrics` is now a subcommand group. Bare
+  `animus daemon metrics` keeps the live observability display (counters,
+  gauges, histograms; `--watch / --interval-secs / --pretty` unchanged),
+  and the opt-in anonymous usage telemetry controls moved under it as
+  `animus daemon metrics {status, enable, disable, flush, cleanup}`.
+
+### Removed
+
+- **BREAKING**: the top-level `animus metrics` command group. Its five
+  telemetry verbs live under `animus daemon metrics` now; there are no
+  aliases (v0.4 removal precedent). The `metrics` value also left the
+  telemetry `command_group` tag enum — `animus daemon metrics ...`
+  invocations record as `daemon`.
+
 ## [0.5.13] - 2026-06-11
 
 **Human-in-the-loop agents, MCP pass-down on every provider, an event-driven

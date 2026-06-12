@@ -1,8 +1,8 @@
 //! Opt-in anonymous usage metrics.
 //!
 //! Telemetry surface for Animus. Disabled by default; enabled only after the
-//! user explicitly opts in via the first-run prompt (or `animus metrics
-//! enable`). Emits counter-only events with bounded tag enums — no free-form
+//! user explicitly opts in via the first-run prompt (or `animus daemon
+//! metrics enable`). Emits counter-only events with bounded tag enums — no free-form
 //! strings, no file paths, no repo/branch identifiers, no prompts, no
 //! credentials reach the payload. The whole feature is short-circuited by
 //! `ANIMUS_METRICS_DISABLE=1`.
