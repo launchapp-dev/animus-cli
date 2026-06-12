@@ -9,16 +9,23 @@ pub use crate::daemon::RequirementType;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TaskStatus {
+    /// Created but not yet prioritised for execution; also aliased as "todo".
     #[serde(alias = "todo")]
     Backlog,
+    /// Ready to be picked up by the next available workflow run.
     Ready,
+    /// A workflow is actively running for this task; also aliased as "in_progress" / "inprogress".
     #[serde(alias = "in_progress", alias = "inprogress")]
     InProgress,
+    /// Execution stopped because a dependency or human decision is required.
     Blocked,
+    /// Intentionally paused; work can resume when the hold is lifted; also aliased as "on_hold" / "onhold".
     #[serde(alias = "on_hold", alias = "onhold")]
     OnHold,
+    /// All work completed successfully; terminal state; also aliased as "completed".
     #[serde(alias = "completed")]
     Done,
+    /// Explicitly abandoned; no further execution will be attempted; terminal state.
     Cancelled,
 }
 
@@ -1183,12 +1190,19 @@ pub struct AgentHandoffResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WorkflowStatus {
+    /// Created or queued; no phase has started yet.
     Pending,
+    /// At least one phase is actively executing.
     Running,
+    /// Execution suspended, waiting for a human decision or interaction answer.
     Paused,
+    /// All phases finished successfully; terminal state.
     Completed,
+    /// A phase or post-success hook returned a non-recoverable error; terminal state.
     Failed,
+    /// A phase escalated to human review and the workflow is awaiting resolution; terminal state.
     Escalated,
+    /// Explicitly cancelled by the operator or an approval deny; terminal state.
     Cancelled,
 }
 

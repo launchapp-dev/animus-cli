@@ -222,4 +222,46 @@ Use Animus commands or Animus MCP tools instead.
 | `~/.claude/skills/<name>/SKILL.md` | Agent-host (Claude Code) skill probe — prompt-text-only trust |
 | `~/.codex/skills/<name>/SKILL.md` | Agent-host (Codex) skill probe — prompt-text-only trust |
 
+## Registry Systems
+
+Animus maintains three independent registries — for skills, packs, and plugins. Each tracks a different kind of installable artifact and lives at a different path. They are separate because their lifecycles, trust models, and resolution rules differ.
+
+### Skill registry
+
+| File | Purpose |
+|---|---|
+| `~/.animus/<repo-scope>/state/skills-registry.v1.json` | Catalog of installed skill versions for this project scope; written by `animus skill install` and `animus skill publish`. |
+| `~/.animus/<repo-scope>/state/skills-lock.v1.json` | Integrity lock for the installed skill versions; pins the resolved version set and prevents silent drift. |
+
+The skill registry is per-project-scope. Each project independently tracks which skill versions are installed and which registries (source URLs) are configured. `animus skill list` and `animus skill show` read from this registry.
+
+### Pack registry (selection state)
+
+| File | Purpose |
+|---|---|
+| `~/.animus/<repo-scope>/state/pack-selection.v1.json` | Per-project pack pin and enablement state: which packs are active, which are disabled, version overrides. |
+| `~/.animus/packs/<pack-id>/<version>/` | Machine-wide installed pack content (materialized from a `pack.toml` bundle). |
+| `~/.animus/state/pack-marketplaces.v1.json` | Machine-wide list of registered marketplace registries and their last-sync timestamps. |
+| `~/.animus/marketplace-cache/<registry-id>/` | Local git clone of a marketplace registry; contains `.claude-plugin/marketplace.json` catalog. |
+
+Pack installation is machine-wide (binary content lands in `~/.animus/packs/`). Activation is per-project (recorded in `pack-selection.v1.json` under the repo-scoped runtime root). This means the same installed pack version can be active for one project and disabled for another.
+
+### Plugin registry
+
+| File | Purpose |
+|---|---|
+| `~/.animus/plugins.yaml` | Machine-wide canonical plugin registry: names, binary paths, manifest metadata, and install-time integrity info. Written by `animus plugin install`. |
+| `.animus/plugins.yaml` | Project-local plugin registry overlay; written by `animus plugin install --project`. Project-local entries shadow same-named global entries. |
+| `~/.animus/plugins/<name>` | Installed plugin binary (or symlink). Discovery scans this directory at startup. |
+| `.animus/plugins/<name>` | Project-local plugin binary; discovered at higher precedence than the machine-wide install dir. |
+| `.animus/plugins.lock` | Project-local plugin integrity lockfile; committable so a repo can pin its plugin set. Falls back to `~/.animus/plugins.lock` when absent. |
+
+The plugin registry is consulted at daemon start and by `animus plugin list` / `animus plugin status`. Unlike packs, plugins are not versioned through the Animus registry — binary updates happen by reinstalling from the source URL or local path.
+
+### Why three separate registries
+
+- **Lifecycle**: skills are versioned text artifacts; packs are versioned file bundles; plugins are opaque binaries. Each needs different integrity and resolution semantics.
+- **Scope**: skill and pack state is per-project-scope (so two projects can pin different versions); plugin state is machine-wide (a binary is shared by all daemons on the machine).
+- **Trust model**: plugin binaries are highest-trust (they run as child processes); pack content is medium-trust (YAML executed by the workflow runner); skill prompts are lower-trust (injected text only, and agent-host probes are further sandboxed to prompt-text-only).
+
 See also: [Configuration](configuration.md), [State Management](../concepts/state-management.md), [Project Setup](../getting-started/project-setup.md).

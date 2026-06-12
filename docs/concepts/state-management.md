@@ -74,6 +74,75 @@ Approved mutation surfaces:
 - Animus MCP tools such as `animus.subject.update`
 - pack commands such as `animus pack pin`
 
+## Moving to a new machine
+
+Use `animus state export` and `animus state import` to migrate a project's
+runtime state to a new machine.
+
+### Export
+
+```sh
+animus state export --out my-project.tar.zst
+```
+
+The archive contains, by default:
+
+- `state/` — workflows, tasks, requirements, history, errors, pack-selection, etc.
+- `chat/` — conversation continuity records.
+- `docs/` — generated planning artifacts (`product-vision.md`, etc.).
+- `secrets/index.json` — the _names_ of secrets registered for this project.
+- `~/.animus/principals.yaml` — the RBAC principal list (if it exists).
+
+Excluded by default (use `--include-runs` / `--include-artifacts` to add):
+
+- `runs/` and `artifacts/` — potentially large per-run execution state.
+- `daemon/` runtime files (`daemon.lock`, `daemon.log`, `control.sock`, etc.).
+- `config/` — compiled workflow and agent-runtime config (regenerated on first run).
+- `.project-root`, `.git-origin` — machine-local paths and credentials in the
+  remote URL; both are re-created automatically.
+
+**SECRETS ARE DELIBERATELY EXCLUDED.** The archive never contains actual secret
+values. Values live in the OS keychain (`animus:<repo-scope>` service entries),
+which is local to each machine. The `secrets/index.json` file in the archive
+records only the _key names_ that were registered on the source machine — use it
+as a checklist to re-enter values on the new machine:
+
+```sh
+# On the new machine, after importing:
+animus secret list          # see which KEYs are expected
+animus secret set LINEAR_API_TOKEN
+animus secret set ANTHROPIC_API_KEY
+# or bulk-import from a temporary .env file:
+animus secret import-env --file keys.env
+```
+
+### Import
+
+```sh
+animus state import my-project.tar.zst
+```
+
+Flags:
+
+- `--yes` — allow overwriting an existing non-empty scope directory. A safety
+  snapshot is taken to `~/.animus/<scope>/.backup-pre-import-<ts>/` before
+  any files are replaced.
+- `--into-project <PATH>` — re-scope the archive into a different project root.
+  The new scope id is computed from the given path so you can restore onto a
+  repo checked out at a different location.
+- `--yes-overwrite-principals` — explicit opt-in to overwrite an existing
+  `~/.animus/principals.yaml` when the archived copy differs. `--yes` alone
+  never touches RBAC config; you must pass this flag separately. This is
+  intentional: principals govern who can act on all projects on the machine, so
+  overwriting them silently on a shared host would be dangerous.
+
+### Keychain scope mapping
+
+Keychain entries are stored under `animus:<repo-scope>` (see [Secrets](../reference/secrets.md)
+for the full layout). When you `--into-project` to a different root, the repo
+scope changes and the old keychain entries are not automatically re-keyed. You
+must re-enter secrets under the new scope with `animus secret set` after import.
+
 ## Repository Scope
 
 The repo scope uses the canonical project path to derive a stable identifier:

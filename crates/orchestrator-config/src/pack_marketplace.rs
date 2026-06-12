@@ -225,6 +225,102 @@ pub struct MarketplaceSearchResult {
     pub source: Option<serde_json::Value>,
 }
 
+/// The result returned by [`register_pack_in_registry`].
+#[derive(Debug)]
+pub struct PackPublishResult {
+    /// Name of the pack entry added to the catalog.
+    pub name: String,
+    /// Git URL registered as the pack's source.
+    pub url: String,
+    /// Registry identifier the pack was registered in.
+    pub registry_id: String,
+    /// Filesystem path to the local registry clone containing the updated catalog.
+    pub registry_clone_path: PathBuf,
+    /// Whether this was an update to an existing catalog entry (`true`) or a new entry (`false`).
+    pub updated_existing: bool,
+}
+
+/// Register a pack in a locally cached marketplace registry clone.
+///
+/// Validates that:
+/// - the registry is known and synced (local clone exists),
+/// - the `name` does not already appear with the same `url` (duplicate-safe).
+///
+/// Then adds (or updates) the catalog entry in
+/// `<cache>/<registry_id>/.claude-plugin/marketplace.json` and returns a
+/// [`PackPublishResult`] that carries the clone path so the caller can print
+/// the git commit + push instructions.
+///
+/// This function does **not** run git — printing and running `git commit`/`git push`
+/// is the responsibility of the caller.
+pub fn register_pack_in_registry(
+    registry_id: &str,
+    name: &str,
+    url: &str,
+    description: Option<&str>,
+    category: Option<&str>,
+) -> Result<PackPublishResult> {
+    let state = load_marketplace_state()?;
+    if !state.registries.iter().any(|r| r.id == registry_id) {
+        return Err(anyhow!(
+            "registry '{}' not found; add it first with `animus pack registry add --id {} --url <URL>`",
+            registry_id,
+            registry_id
+        ));
+    }
+    let clone_path = marketplace_cache_dir().join(registry_id);
+    if !clone_path.exists() {
+        return Err(anyhow!(
+            "registry '{}' has not been synced; run `animus pack registry sync --id {}`",
+            registry_id,
+            registry_id
+        ));
+    }
+    let manifest_path = clone_path.join(".claude-plugin").join("marketplace.json");
+    let mut manifest: MarketplaceManifest = if manifest_path.exists() {
+        let content = fs::read_to_string(&manifest_path)
+            .with_context(|| format!("failed to read {}", manifest_path.display()))?;
+        serde_json::from_str(&content).with_context(|| format!("failed to parse {}", manifest_path.display()))?
+    } else {
+        fs::create_dir_all(manifest_path.parent().unwrap())
+            .with_context(|| format!("failed to create {}", manifest_path.parent().unwrap().display()))?;
+        MarketplaceManifest {
+            schema: None,
+            name: registry_id.to_string(),
+            description: String::new(),
+            plugins: Vec::new(),
+        }
+    };
+
+    let existing_pos = manifest.plugins.iter().position(|p| p.name.eq_ignore_ascii_case(name));
+    let source = serde_json::json!({ "url": url });
+    let entry = MarketplacePackEntry {
+        name: name.to_string(),
+        description: description.map(str::to_string),
+        version: None,
+        category: category.map(str::to_string),
+        source: Some(source),
+    };
+    let updated_existing = existing_pos.is_some();
+    if let Some(pos) = existing_pos {
+        manifest.plugins[pos] = entry;
+    } else {
+        manifest.plugins.push(entry);
+    }
+
+    let updated =
+        serde_json::to_string_pretty(&manifest).with_context(|| "failed to serialize updated marketplace.json")?;
+    fs::write(&manifest_path, updated).with_context(|| format!("failed to write {}", manifest_path.display()))?;
+
+    Ok(PackPublishResult {
+        name: name.to_string(),
+        url: url.to_string(),
+        registry_id: registry_id.to_string(),
+        registry_clone_path: clone_path,
+        updated_existing,
+    })
+}
+
 pub fn resolve_marketplace_pack_url(registry_id: &str, pack_name: &str) -> Result<String> {
     let manifest = load_marketplace_manifest(registry_id)?
         .ok_or_else(|| anyhow!("registry '{}' not synced or has no manifest", registry_id))?;

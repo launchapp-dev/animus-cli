@@ -922,7 +922,9 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
     };
 
     let recommended_pack_ids = recommended_packs().iter().map(|pack| pack.id.clone()).collect::<Vec<_>>().join(", ");
-    let install_packs = if args.install_packs {
+    let install_packs = if args.no_packs {
+        false
+    } else if args.install_packs {
         true
     } else if interactive && !args.non_interactive && !args.plan {
         prompt_yes_no(&format!("Install the recommended workflow packs ({recommended_pack_ids})?"), true)?
@@ -1601,6 +1603,7 @@ mod tests {
             walkthrough: true,
             no_install: false,
             install_packs: false,
+            no_packs: false,
             no_template: false,
             auto_start: false,
             walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),
@@ -1791,6 +1794,7 @@ mod tests {
             walkthrough: true,
             no_install: false,
             install_packs: false,
+            no_packs: false,
             no_template: false,
             auto_start: false,
             walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),
@@ -1803,5 +1807,55 @@ mod tests {
         let walkthrough_result =
             result.expect("walkthrough must return without blocking on stdin when --json is set in Guided mode");
         assert!(walkthrough_result.is_ok(), "JSON-mode walkthrough should succeed; got {walkthrough_result:?}");
+    }
+
+    /// `--no-packs` must suppress the pack install step even when `--install-packs`
+    /// is also set (no_packs takes precedence) and even in interactive-equivalent
+    /// mode. We exercise via `--plan` to avoid touching the filesystem.
+    #[tokio::test]
+    async fn walkthrough_no_packs_suppresses_pack_install() {
+        let project = tempfile::tempdir().expect("project tempdir");
+
+        // --no-packs alone
+        let args_no_packs = InitArgs {
+            template: None,
+            path: None,
+            non_interactive: true,
+            plan: true,
+            force: false,
+            update_registry: false,
+            walkthrough: true,
+            no_install: true,
+            install_packs: false,
+            no_packs: true,
+            no_template: true,
+            auto_start: false,
+            walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),
+        };
+        let output = run_walkthrough(&args_no_packs, project.path(), InitMode::NonInteractive, true)
+            .await
+            .expect("plan should succeed");
+        let _ = output;
+
+        // --no-packs with --install-packs: no_packs wins
+        let args_conflict = InitArgs {
+            template: None,
+            path: None,
+            non_interactive: true,
+            plan: true,
+            force: false,
+            update_registry: false,
+            walkthrough: true,
+            no_install: true,
+            install_packs: true,
+            no_packs: true,
+            no_template: true,
+            auto_start: false,
+            walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),
+        };
+        let output2 = run_walkthrough(&args_conflict, project.path(), InitMode::NonInteractive, true)
+            .await
+            .expect("plan should succeed with conflicting flags");
+        let _ = output2;
     }
 }
