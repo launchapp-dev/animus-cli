@@ -13,6 +13,10 @@ path = "src/main.rs"
 name = "animus-mcp-proxy"
 path = "src/bin/animus_mcp_proxy.rs"
 
+[[bin]]
+name = "animus-hook"
+path = "src/bin/animus_hook.rs"
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive", "env"] }
