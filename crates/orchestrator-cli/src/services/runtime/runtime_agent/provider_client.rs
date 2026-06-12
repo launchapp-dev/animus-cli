@@ -139,6 +139,18 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
     // `--permission-prompt-tool mcp__animus__animus_agent_request_approval`;
     // others inject a system-prompt instruction block) — the kernel only
     // sets the flag.
+    //
+    // Composition with `permission_mode` (verified, not a conflict): the two
+    // are ORTHOGONAL layers and BOTH apply when set on one profile.
+    // `permission_mode` is the transport-level guard — it rides the typed
+    // `SessionRequest.permission_mode` above and maps to the provider CLI's
+    // own permission flag, deciding whether the provider acts autonomously or
+    // escalates at all. `approval_policy` is the kernel inbox layer — its
+    // presence here flips `extras.approvals=true` so escalations that DO reach
+    // the kernel are routed through `animus.agent.request_approval`, where
+    // `ApprovalPolicy::evaluate` then auto-allows/denies/asks (auto_deny wins).
+    // Neither overrides the other; they compose. See
+    // `docs/reference/agent-runtime-config.md` and `docs/guides/agents.md`.
     if args.approvals || profile_has_approval_policy(&project_root_path, args.agent.as_deref()) {
         extras.insert("approvals".to_string(), Value::Bool(true));
     }
@@ -980,6 +992,54 @@ agents:
             request.extras.pointer("/approvals").and_then(Value::as_bool),
             Some(true),
             "an --agent profile with an approval_policy must set extras.approvals"
+        );
+    }
+
+    #[test]
+    fn agent_run_permission_mode_and_approval_policy_compose_independently() {
+        // `permission_mode` and `approval_policy` on the SAME profile are two
+        // orthogonal layers and must BOTH take effect — they compose, neither
+        // overrides the other. `permission_mode` is the transport-level guard
+        // (rides the typed SessionRequest.permission_mode → provider's own
+        // permission flag); `approval_policy` is the kernel inbox layer (its
+        // mere presence flips extras.approvals=true so the provider routes
+        // escalations through animus.agent.request_approval, where the policy
+        // then auto-allows/denies/asks). This test pins that both signals
+        // survive on one request.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+        std::fs::create_dir_all(root.join(".animus")).unwrap();
+        std::fs::write(
+            root.join(".animus").join("workflows.yaml"),
+            r#"
+agents:
+  guarded:
+    description: "Both-layer agent"
+    permission_mode: plan
+    approval_policy:
+      default: ask
+      auto_deny: ["git.push*"]
+"#,
+        )
+        .unwrap();
+
+        let mut args = base_args(&root_str);
+        args.agent = Some("guarded".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+
+        // Transport-level guard: permission_mode reaches the typed field.
+        assert_eq!(
+            request.permission_mode.as_deref(),
+            Some("plan"),
+            "the profile's permission_mode must ride the transport-level guard"
+        );
+        // Kernel inbox layer: approval_policy presence flips extras.approvals.
+        assert_eq!(
+            request.extras.pointer("/approvals").and_then(Value::as_bool),
+            Some(true),
+            "the profile's approval_policy must enable kernel-mediated approvals; they compose, not conflict; extras: {}",
+            request.extras
         );
     }
 

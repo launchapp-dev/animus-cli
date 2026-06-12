@@ -268,6 +268,29 @@ A value outside the union of known modes prints a stderr warning but still
 passes through unchanged, so future provider modes work without an Animus
 release.
 
+### `permission_mode` and `approval_policy` compose
+
+A profile may set BOTH `permission_mode` and `approval_policy`; they are two
+orthogonal layers and BOTH take effect — neither overrides the other:
+
+- **`permission_mode` is the transport-level guard.** It rides the typed
+  `SessionRequest.permission_mode` and maps to the provider CLI's own
+  permission flag (the table above), deciding whether the provider acts
+  autonomously or escalates a sensitive action at all.
+- **`approval_policy` is the kernel inbox layer.** Its mere presence on the
+  resolved profile flips `extras.approvals = true`, which makes the provider
+  route escalations through `animus.agent.request_approval`. When such a
+  request reaches the kernel, `ApprovalPolicy::evaluate` auto-allows /
+  auto-denies / asks (auto_deny wins, matched against `tool_name` when
+  present, else `action`).
+
+In effect `permission_mode` governs whether the provider asks, and
+`approval_policy` governs what happens to the asks that reach the kernel —
+they compose rather than conflict. (Independently, an explicit
+`--permission-mode` flag still wins over the profile's `permission_mode`, and
+the `--approvals` flag forces kernel-mediated approvals even when no
+`approval_policy` is declared.)
+
 ## Human-in-the-Loop Questions and Approvals
 
 Agents that hit an ambiguity or a sensitive action mid-run can park on a human

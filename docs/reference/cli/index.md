@@ -615,7 +615,13 @@ now applies on both ad-hoc paths (matching workflow phases):
   to every turn attempt. A skill with launch-affecting fields (`extra_args` /
   `codex_config_overrides` / `env`) forces the full-history replay path
   instead of native session resume, so the launch flags apply to every
-  turn's provider process consistently.
+  turn's provider process consistently. `animus agent run` deliberately has
+  no analogous replay-forcing: it is single-shot, so it rebuilds the launch
+  graft from the real prompt on every invocation — there is no native-resume
+  seam to poison. Even `agent run`'s one continuation channel
+  (`--context-json '{"session_id": ...}'`) forwards the freshly-grafted
+  `runtime_contract` alongside the `session_id`, so the launch flags still
+  apply. The asymmetry between the two paths is therefore correct, not a gap.
 
 | Flag | Description |
 |---|---|
