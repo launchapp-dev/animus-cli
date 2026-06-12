@@ -481,6 +481,17 @@ fn subject_batch_tools_are_registered_and_discoverable() {
 }
 
 #[test]
+fn mcp_parity_tools_are_registered_and_discoverable() {
+    let live = live_builtin_tool_names();
+    // The three surface-completeness tools added for MCP/CLI parity. The
+    // registry-wide search test already proves exact-name discovery; these
+    // explicit pins make a rename break loudly here too.
+    assert!(live.contains("animus.workflow.phase.reject"), "phase.reject registered");
+    assert!(live.contains("animus.cost.decisions"), "cost.decisions registered");
+    assert!(live.contains("animus.daemon.observe"), "daemon.observe registered");
+}
+
+#[test]
 fn mcp_reference_table_matches_live_builtin_tools() {
     let documented = documented_reference_tool_names();
     let live = live_builtin_tool_names();

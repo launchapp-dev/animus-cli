@@ -151,4 +151,15 @@ impl AoMcpServer {
         let args = build_daemon_config_set_args(&input);
         self.run_tool("animus.daemon.config-set", args, input.project_root).await
     }
+
+    #[tool(
+        name = "animus.daemon.observe",
+        description = "Observe daemon activity via the routing front-door. Purpose: Get a merged, chronological window of daemon events + logs (or route to a single surface) for monitoring and debugging. Works offline (reads scoped event/log history; the daemon need not be running). This is the non-streaming view — it always returns and never follows live. Prerequisites: None. Example: {} (data-source matrix + recent tail), {\"since\": \"2h\"} (merged window), {\"source\": \"events\", \"workflow_id\": \"wf-abc123\", \"limit\": 50}. Sequencing: Use animus.daemon.events or animus.daemon.logs for a single surface, or animus.daemon.status for liveness.",
+        input_schema = ao_schema_for_type::<DaemonObserveInput>()
+    )]
+    async fn ao_daemon_observe(&self, params: Parameters<DaemonObserveInput>) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = build_daemon_observe_args(&input);
+        self.run_tool("animus.daemon.observe", args, input.project_root).await
+    }
 }

@@ -54,6 +54,26 @@ pub(super) struct DaemonConfigInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
+pub(super) struct DaemonObserveInput {
+    /// Recent window (e.g. `15m`, `2h`, `1d`): merge daemon events + logs
+    /// chronologically. Omit for the bare data-source matrix + recent tail.
+    #[serde(default)]
+    pub(super) since: Option<String>,
+    /// Route to a specific existing surface: `logs` | `events` | `stream` |
+    /// `workflow`. Omit to merge events + logs.
+    #[serde(default)]
+    pub(super) source: Option<String>,
+    /// Scope to a workflow ID/ref where the underlying surface supports it.
+    #[serde(default)]
+    pub(super) workflow_id: Option<String>,
+    /// Number of recent merged lines to show. Defaults to the CLI default (20).
+    #[serde(default)]
+    pub(super) limit: Option<usize>,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub(super) struct DaemonConfigSetInput {
     #[serde(default)]
     pub(super) auto_run_ready: Option<bool>,

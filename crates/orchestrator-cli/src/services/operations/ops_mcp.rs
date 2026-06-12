@@ -36,6 +36,8 @@ mod ao_exec;
 mod common_types;
 #[path = "ops_mcp/compaction.rs"]
 mod compaction;
+#[path = "ops_mcp/cost_tools.rs"]
+mod cost_tools;
 #[path = "ops_mcp/daemon.rs"]
 mod daemon;
 #[path = "ops_mcp/daemon_inproc.rs"]
@@ -110,7 +112,8 @@ use common_types::*;
 use compaction::compact_json_str;
 use compaction::compact_json_text;
 use daemon::{
-    build_daemon_config_set_args, build_daemon_events_poll_result, build_daemon_logs_result, build_daemon_start_args,
+    build_daemon_config_set_args, build_daemon_events_poll_result, build_daemon_logs_result, build_daemon_observe_args,
+    build_daemon_start_args,
 };
 #[cfg(test)]
 use daemon::{daemon_events_poll_limit, resolve_daemon_events_project_root};
@@ -283,6 +286,7 @@ fn new_ao_mcp_server_with_options(
     pinned_workflow_id: Option<String>,
 ) -> AoMcpServer {
     let mut tool_router = AoMcpServer::daemon_tool_router()
+        + AoMcpServer::cost_tool_router()
         + AoMcpServer::queue_tool_router()
         + AoMcpServer::agent_tool_router()
         + AoMcpServer::output_tool_router()

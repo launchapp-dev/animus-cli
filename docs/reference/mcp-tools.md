@@ -1,11 +1,16 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 83 built-in tools across daemon, queue, agent, output,
+registers 86 built-in tools across daemon, cost, queue, agent, output,
 workflow, plugin, skill, subject, logs, tool-discovery, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
 and returning structured results.
+
+That headline 86 counts the full management-mode surface. A default
+agent-injected server (`animus mcp serve` without `--management`) exposes 84:
+the two `animus.interactions.*` management tools are gated behind
+`--management` so an agent can never list or answer its own pending approvals.
 
 The same server also exposes 6 built-in resources: 3 current `animus://`
 resources plus 3 legacy `ao://` aliases retained for v0.3 back-compat.
@@ -115,7 +120,7 @@ approval gate stays human-only.
 
 ---
 
-## Daemon Management (11 tools)
+## Daemon Management (12 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -130,6 +135,15 @@ approval gate stays human-only.
 | `animus.daemon.logs` | Read recent daemon log entries | `limit`, `search`, `project_root` |
 | `animus.daemon.config` | Read current daemon automation settings | `project_root` |
 | `animus.daemon.config-set` | Update daemon runtime settings and notification config | `auto_run_ready`, `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
+| `animus.daemon.observe` | Routing front-door over the existing observability surfaces: returns the merged, chronological window of daemon events + logs (or routes to a single `source`). Non-streaming — always returns and never follows live. Works offline (reads scoped event/log history; the daemon need not be running) | `since`, `source` (`logs`/`events`/`stream`/`workflow`), `workflow_id`, `limit`, `project_root` |
+
+---
+
+## Cost & Budget (1 tool)
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `animus.cost.decisions` | List recorded budget-cap breaches from the scoped breach log. Works offline (reads the scoped breach log; the daemon need not be running) | `since`, `project_root` |
 
 ---
 
@@ -168,9 +182,9 @@ bounded fetch for recent entries, not a live stream.
 
 ---
 
-## Workflow Operations (16 tools)
+## Workflow Operations (17 tools)
 
-### Runtime & Inspection Tools (11)
+### Runtime & Inspection Tools (12)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
@@ -185,10 +199,7 @@ bounded fetch for recent entries, not a live stream.
 | `animus.workflow.decisions` | List decisions made during workflow execution | `id`, `limit`, `offset`, `max_tokens`, `project_root` |
 | `animus.workflow.checkpoints.list` | List saved workflow state checkpoints | `id`, `limit`, `offset`, `max_tokens`, `project_root` |
 | `animus.workflow.phase.approve` | Approve a gated workflow phase | `workflow_id`, `phase_id` (alias: `phase`), `feedback` (alias: `note`), `project_root` |
-
-`animus workflow phase reject` exists in the CLI, but there is currently no
-matching built-in MCP tool. MCP callers can approve pending gates, but gate
-rejection remains a CLI-only action.
+| `animus.workflow.phase.reject` | Reject a gated workflow phase (mirror of approve, on the decline path). Requires a pending gate phase; `reason` (the rejection note) is required | `workflow_id`, `phase_id` (alias: `phase`), `reason` (alias: `note`/`feedback`), `project_root` |
 
 ### Definition Tools (5)
 
