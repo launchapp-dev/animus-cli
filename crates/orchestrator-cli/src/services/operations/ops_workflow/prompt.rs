@@ -14,8 +14,36 @@ use uuid::Uuid;
 use crate::{print_value, WorkflowPromptRenderArgs};
 
 use ::animus_runtime_shared::{
-    ensure_execution_cwd, render_phase_prompt, PhasePromptInputs, PhaseRenderParams, RenderedPhasePrompt,
+    apply_phase_skills_preview, apply_skill_capability_overrides, config_context::RuntimeConfigContext,
+    ensure_execution_cwd, phase_skills_resolution, render_phase_prompt_with_ctx_overrides, PhasePromptInputs,
+    PhaseRenderParams, RenderedPhasePrompt,
 };
+
+/// Render a phase prompt the way the workflow runner will see it, including
+/// the phase's resolved skill contributions. Preview semantics: activation
+/// gating uses the phase/profile tool+model overrides when configured; when
+/// no tool is known yet, only ungated skills apply.
+fn render_phase_prompt_with_skills(
+    project_root: &str,
+    params: &PhaseRenderParams<'_>,
+    inputs: PhasePromptInputs,
+) -> RenderedPhasePrompt {
+    let ctx = RuntimeConfigContext::load(project_root);
+    let resolution = phase_skills_resolution(None, project_root, &ctx, params.phase_id);
+    let profile = ctx
+        .phase_agent_id(params.phase_id)
+        .and_then(|agent_id| ctx.agent_runtime_config.agent_profile(&agent_id).cloned());
+    let tool =
+        ctx.phase_tool_override(params.phase_id).or_else(|| profile.as_ref().and_then(|profile| profile.tool.clone()));
+    let model = ctx
+        .phase_model_override(params.phase_id)
+        .or_else(|| profile.as_ref().and_then(|profile| profile.model.clone()));
+    let applied = apply_phase_skills_preview(&resolution, tool.as_deref(), model.as_deref());
+    let capabilities_override = (!applied.application.capabilities.is_empty()).then(|| {
+        apply_skill_capability_overrides(ctx.phase_capabilities(params.phase_id), &applied.application.capabilities)
+    });
+    render_phase_prompt_with_ctx_overrides(&ctx, params, inputs, capabilities_override, applied.skill_result())
+}
 
 #[derive(Debug, Clone, Serialize)]
 struct PromptRenderOutput {
@@ -95,7 +123,8 @@ async fn render_existing_workflow_prompts(
                 dispatch_input: context.input.as_ref().map(Value::to_string),
                 schedule_input: schedule_prompt_input(&context.subject, context.input.as_ref()),
             };
-            let rendered = render_phase_prompt(
+            let rendered = render_phase_prompt_with_skills(
+                project_root,
                 &PhaseRenderParams {
                     project_root,
                     execution_cwd: &context.execution_cwd,
@@ -140,7 +169,8 @@ async fn render_ad_hoc_prompts(
                 dispatch_input: context.input.as_ref().map(Value::to_string),
                 schedule_input: schedule_prompt_input(&context.subject, context.input.as_ref()),
             };
-            let rendered = render_phase_prompt(
+            let rendered = render_phase_prompt_with_skills(
+                project_root,
                 &PhaseRenderParams {
                     project_root,
                     execution_cwd: &context.execution_cwd,

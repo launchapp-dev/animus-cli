@@ -329,6 +329,16 @@ best-effort — notifier failures never block or fail the interaction.
   any server with an `oauth:` block is routed through `animus-mcp-proxy`
   instead of exposing a bearer token directly. See the per-agent MCP server
   section in the [CLI Command Surface](../reference/cli/index.md).
+- Workflow phase agents receive skills the same way: the union of the phase's
+  `skills:` list and the executing agent profile's `skills:` is resolved
+  daemon-side at dispatch (same scoped sources and trust rules as `--skill`)
+  and shipped to the workflow runner, which applies activation gating against
+  the selected tool/model and injects prompt fragments, tool policy, and
+  skill-declared MCP servers into the phase contract. Missing skill names
+  warn and are recorded on phase metadata (`requested_skills` /
+  `resolved_skills` / `applied_skills`) instead of failing the run. See the
+  phases section of the
+  [Workflow YAML reference](../reference/workflow-yaml.md#phases).
 
 See also: [MCP Tools Reference](../reference/mcp-tools.md),
 [CLI Command Surface](../reference/cli/index.md), and
