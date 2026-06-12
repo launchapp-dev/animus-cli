@@ -913,6 +913,7 @@ animus plugin install --url https://example.com/plugin --sha256 a1b2c3d4...
 | `--force` | Overwrite an existing installed plugin with the same name |
 | `--skip-manifest-check` | Skip running `--manifest` against the installed binary to verify it (use sparingly) |
 | `--plugin-dir <PATH>` | Override the plugin install directory. Takes precedence over `$ANIMUS_PLUGIN_DIR`. Defaults to `~/.animus/plugins/` |
+| `--project` | Install into the **project-local** plugin root instead of the global one: binary → `<project>/.animus/plugins/`, registry → `<project>/.animus/plugins.yaml`, lockfile → `<project>/.animus/plugins.lock`. Project-local installs shadow a global install of the same name during discovery. Signature/TOFU verification is identical to global installs. Mutually exclusive with `--plugin-dir`. See [Configuration › Project vs global plugin installs](../configuration.md#project-vs-global-plugin-installs) |
 | `--signature-policy <strict\|warn\|disabled>` | Signature enforcement mode. `strict` fails closed, `warn` logs and proceeds, and `disabled` skips verification |
 | `--allow-unsigned` | Convenience alias for `--signature-policy warn`; mutually exclusive with `--signature-policy` and `--require-signature` |
 | `--require-signature` | Legacy alias for `--signature-policy strict` |
@@ -1071,13 +1072,35 @@ before handshake instead of proceeding with a partially initialized process.
 | `animus plugin info` | `--name <NAME>`, `--include-system-path` |
 | `animus plugin call` | `--name <NAME>`, `--method <METHOD>`, `--params <JSON>`, `--include-system-path` |
 | `animus plugin ping` | `--name <NAME>`, `--include-system-path` |
-| `animus plugin uninstall` | `--name <NAME>`, `--plugin-dir <PATH>` |
+| `animus plugin uninstall` | `--name <NAME>`, `--plugin-dir <PATH>`, `--project` (project-local root; mutually exclusive with `--plugin-dir`) |
 
 Default discovery order (no `--include-system-path`):
-`~/.animus/plugins.yaml` (or the legacy `~/.config/animus/plugins.yaml` only
-when the new registry is absent) → `.animus/plugins/` → global install dir
-(`$ANIMUS_PLUGIN_DIR` when set, otherwise `~/.animus/plugins/`) →
-`$ANIMUS_PLUGIN_PATH`. With `--include-system-path`, `$PATH` is appended.
+project-local tier (`.animus/plugins/` dir scan, then the
+`.animus/plugins.yaml` project registry) → `~/.animus/plugins.yaml` (or the
+legacy `~/.config/animus/plugins.yaml` only when the new registry is absent)
+→ global install dir (`$ANIMUS_PLUGIN_DIR` when set, otherwise
+`~/.animus/plugins/`) → `$ANIMUS_PLUGIN_PATH`. With `--include-system-path`,
+`$PATH` is appended. The project-local tier wins name collisions, so a
+project-scoped install shadows both registry-recorded and global installs of
+the same name.
+
+`animus plugin list` reports each row's install scope in the `SCOPE` column
+(`project` or `global`; the same `scope` field appears in the local JSON
+output). When a project-local install hides a same-named global binary, the
+hidden global row is surfaced in the `shadowed` array (text mode prints
+`note: global install of '<name>' at <global path> is shadowed by the
+project install at <project path>`). Caveat: when the daemon is running,
+`animus plugin list --json` round-trips through the daemon's control-wire
+`PluginListResponse`, which does not yet carry `scope`/`shadowed` — the
+discovered set is identical (project installs still win collisions), only
+the envelope shape differs. Text mode and the daemon-down JSON path always
+use the richer local shape.
+
+Project-scoped installs are discovered through two project-local channels:
+the `<project>/.animus/plugins/` dir scan (which matches `animus-plugin-*` /
+`animus-provider-*` file names) and the project registry
+(`<project>/.animus/plugins.yaml`), which resolves every other name —
+official plugins like `animus-subject-default` or custom `--name` values.
 
 `animus plugin list --json` returns a top-level `warnings` array when a configured
 plugin failed its `--manifest` probe (binary missing, exited non-zero, returned
@@ -1117,7 +1140,7 @@ as of v0.5.8 — its source of truth is the bundled
 |---|---|
 | `animus plugin search [QUERY]` | `--kind <KIND>`, `--tag <TAG>` (repeatable), `--org <ORG>`, `--stability <STABILITY>`, `--registry-url <URL>`, `--no-cache`, `--offline`, `--json` |
 | `animus plugin browse` | `--kind <KIND>`, `--installed`, `--available`, `--registry-url <URL>`, `--no-cache`, `--offline`, `--json` |
-| `animus plugin update` | `--all` \| `--kind <KIND>` \| `--name <NAME>` (exactly one required), `--check`, `--yes`, `--tag <TAG>` (only with `--name`), `--force`, `--restart-daemon`, `--json` |
+| `animus plugin update` | `--all` \| `--kind <KIND>` \| `--name <NAME>` (exactly one required), `--check`, `--yes`, `--tag <TAG>` (only with `--name`), `--force`, `--restart-daemon`, `--project` (operate on the project-local registry + install root), `--json` |
 | `animus plugin outdated` | `--exit-code`, `--registry-url <URL>`, `--no-cache`, `--offline`, `--json` |
 
 Registry fetch resilience: a registry GET retries twice with short backoff on
@@ -1142,7 +1165,15 @@ fetch and stale-cache fallback both fail), the command still compares against
 the pins alone and reports `latest` as unknown (`registry_reachable: false`
 plus `registry_error` in the JSON envelope). The command is informational and
 always exits 0 — pass `--exit-code` to exit non-zero when at least one plugin
-is outdated, for CI gates.
+is outdated, for CI gates. Project-local installs recorded in
+`<project>/.animus/plugins.yaml` are included automatically; every row carries
+a `scope` field (`global` or `project`, also shown as the `Scope` column in
+text mode).
+
+`animus plugin update --project` reads the installed set from the
+project-local registry (`<project>/.animus/plugins.yaml`) and reinstalls
+matching plugins in place under the project scope; without the flag only the
+global registry is considered.
 
 `--check` (or the legacy `--dry-run` alias) prints the diff and exits without
 writing anything. `--yes` skips the confirmation prompt. `--force` reinstalls
@@ -1167,6 +1198,16 @@ to `~/.animus/plugins.lock`.
 |---|---|
 | `animus plugin lock list` | `--lockfile <PATH>`, `--json` |
 | `animus plugin lock verify` | `--lockfile <PATH>`, `--plugin-dir <PATH>`, `--json` |
+
+`animus plugin lock verify` sweeps **both** lockfile roots by default: the
+global `~/.animus/plugins.lock` (entries hashed against the global install
+dir) and the project `<project>/.animus/plugins.lock` (entries hashed against
+`<project>/.animus/plugins/` first, falling back to the global dir for
+entries recorded by pre-`--project` installs). Each result entry carries a
+`scope` (`global` / `project` / `explicit`) and the lockfile path it came
+from; the envelope's `lockfiles` array lists every root swept. Passing
+`--lockfile <PATH>` restricts the sweep to that single file (legacy
+behavior). Any mismatch or missing binary in either root exits non-zero.
 
 ### `animus plugin doctor` (v0.5.7)
 

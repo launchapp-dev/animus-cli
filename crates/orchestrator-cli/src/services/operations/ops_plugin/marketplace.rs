@@ -370,6 +370,10 @@ pub(crate) struct PluginUpdateRequest {
     pub(crate) check: bool,
     pub(crate) force: bool,
     pub(crate) project_root: Option<String>,
+    /// When `true`, operate on the project-local plugin root: the installed
+    /// set is read from `<project_root>/.animus/plugins.yaml` and updates
+    /// reinstall under the project scope. Requires `project_root`.
+    pub(crate) project: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -620,7 +624,18 @@ pub(crate) async fn run_plugin_update(req: PluginUpdateRequest) -> Result<Plugin
         return Err(invalid_input_error("--tag <TAG> is only valid with --name <NAME>"));
     }
 
-    let installed = read_installed_index().context("failed to read installed plugin registry")?;
+    let installed = if req.project {
+        let root = req
+            .project_root
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| invalid_input_error("--project requires a resolvable project root"))?;
+        read_installed_index_at(&orchestrator_plugin_host::project_plugins_registry_path(std::path::Path::new(root)))
+            .context("failed to read project-local installed plugin registry")?
+    } else {
+        read_installed_index().context("failed to read installed plugin registry")?
+    };
     let pins = load_recommended_pins()?;
 
     if let PluginUpdateSelector::Name(_) = &req.selector {
@@ -696,6 +711,7 @@ pub(crate) async fn run_plugin_update(req: PluginUpdateRequest) -> Result<Plugin
             allow_org: if is_curated_pin { vec!["launchapp-dev".to_string()] } else { Vec::new() },
             yes: is_curated_pin,
             allow_shadow_builtin: is_curated_pin,
+            project: req.project,
             ..Default::default()
         };
 
@@ -807,6 +823,7 @@ pub(crate) async fn handle_plugin_update(args: PluginUpdateArgs, project_root: &
         check: true,
         force: args.force,
         project_root: Some(project_root.to_string()),
+        project: args.project,
     })
     .await?;
 
@@ -862,6 +879,7 @@ pub(crate) async fn handle_plugin_update(args: PluginUpdateArgs, project_root: &
         check: false,
         force: args.force,
         project_root: Some(project_root.to_string()),
+        project: args.project,
     })
     .await?;
 
@@ -973,6 +991,10 @@ pub(crate) struct PluginOutdatedRequest {
     pub(crate) registry_url: String,
     pub(crate) no_cache: bool,
     pub(crate) offline: bool,
+    /// When set, project-local installs recorded in
+    /// `<project_root>/.animus/plugins.yaml` are included in the drift
+    /// report alongside the global registry (rows carry `scope: project`).
+    pub(crate) project_root: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -988,6 +1010,9 @@ pub(crate) struct PluginOutdatedRow {
     pub(crate) status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) note: Option<String>,
+    /// Install scope the row came from: `global` (`~/.animus/plugins.yaml`)
+    /// or `project` (`<project>/.animus/plugins.yaml`).
+    pub(crate) scope: &'static str,
 }
 
 #[derive(Debug, Serialize)]
@@ -1042,6 +1067,7 @@ fn build_outdated_rows(
     installed: &BTreeMap<String, InstalledPlugin>,
     pins: &RecommendedPins,
     registry: Option<&PluginRegistryIndex>,
+    scope: &'static str,
 ) -> Vec<PluginOutdatedRow> {
     let mut rows: Vec<PluginOutdatedRow> = Vec::with_capacity(installed.len());
     for entry in installed.values() {
@@ -1059,6 +1085,7 @@ fn build_outdated_rows(
                 latest_tag: None,
                 status: "local",
                 note: Some(note),
+                scope,
             });
             continue;
         }
@@ -1079,6 +1106,7 @@ fn build_outdated_rows(
             latest_tag,
             status,
             note,
+            scope,
         });
     }
     rows
@@ -1091,6 +1119,13 @@ pub(crate) async fn run_plugin_outdated(req: PluginOutdatedRequest) -> Result<Pl
         req.registry_url.clone()
     };
     let installed = read_installed_index().context("failed to read installed plugin registry")?;
+    let project_installed = match req.project_root.as_deref().map(str::trim).filter(|root| !root.is_empty()) {
+        Some(root) => read_installed_index_at(&orchestrator_plugin_host::project_plugins_registry_path(
+            std::path::Path::new(root),
+        ))
+        .context("failed to read project-local installed plugin registry")?,
+        None => BTreeMap::new(),
+    };
     let pins = load_recommended_pins()?;
 
     // Registry fetch is best-effort: drift against the recommended pins is
@@ -1103,7 +1138,8 @@ pub(crate) async fn run_plugin_outdated(req: PluginOutdatedRequest) -> Result<Pl
         Err(err) => (None, Some(format!("{err:#}"))),
     };
 
-    let rows = build_outdated_rows(&installed, &pins, registry.as_ref());
+    let mut rows = build_outdated_rows(&installed, &pins, registry.as_ref(), "global");
+    rows.extend(build_outdated_rows(&project_installed, &pins, registry.as_ref(), "project"));
     let outdated = rows.iter().filter(|r| r.status == "outdated").count();
     Ok(PluginOutdatedOutput {
         registry_url,
@@ -1115,12 +1151,17 @@ pub(crate) async fn run_plugin_outdated(req: PluginOutdatedRequest) -> Result<Pl
     })
 }
 
-pub(crate) async fn handle_plugin_outdated(args: PluginOutdatedArgs, root_json: bool) -> Result<()> {
+pub(crate) async fn handle_plugin_outdated(
+    args: PluginOutdatedArgs,
+    project_root: &str,
+    root_json: bool,
+) -> Result<()> {
     let json = args.json || root_json;
     let output = run_plugin_outdated(PluginOutdatedRequest {
         registry_url: args.registry_url,
         no_cache: args.no_cache,
         offline: args.offline,
+        project_root: Some(project_root.to_string()),
     })
     .await?;
 
@@ -1130,7 +1171,10 @@ pub(crate) async fn handle_plugin_outdated(args: PluginOutdatedArgs, root_json: 
         if output.rows.is_empty() {
             println!("no installed plugins found");
         } else {
-            println!("{:<34} {:<12} {:<12} {:<12} Status", "Plugin", "Installed", "Recommended", "Latest");
+            println!(
+                "{:<34} {:<8} {:<12} {:<12} {:<12} Status",
+                "Plugin", "Scope", "Installed", "Recommended", "Latest"
+            );
             for row in &output.rows {
                 let installed = row.installed_tag.as_deref().unwrap_or("--");
                 let recommended = row.recommended_tag.as_deref().unwrap_or("--");
@@ -1139,7 +1183,10 @@ pub(crate) async fn handle_plugin_outdated(args: PluginOutdatedArgs, root_json: 
                     Some(note) => format!("{} ({note})", row.status),
                     None => row.status.to_string(),
                 };
-                println!("{:<34} {:<12} {:<12} {:<12} {}", row.name, installed, recommended, latest, status);
+                println!(
+                    "{:<34} {:<8} {:<12} {:<12} {:<12} {}",
+                    row.name, row.scope, installed, recommended, latest, status
+                );
             }
             println!();
             println!("{} of {} installed plugin(s) outdated", output.outdated, output.considered);
@@ -1175,7 +1222,12 @@ pub(crate) struct InstalledPlugin {
 /// Load the installed-plugin registry as a `name → InstalledPlugin` map.
 /// Tolerates a missing file (returns empty).
 pub(crate) fn read_installed_index() -> Result<BTreeMap<String, InstalledPlugin>> {
-    let path = pick_registry_path();
+    read_installed_index_at(&pick_registry_path())
+}
+
+/// Like [`read_installed_index`], but against an explicit registry path —
+/// used for the project-local `<project>/.animus/plugins.yaml` registry.
+pub(crate) fn read_installed_index_at(path: &std::path::Path) -> Result<BTreeMap<String, InstalledPlugin>> {
     if !path.exists() {
         return Ok(BTreeMap::new());
     }
@@ -2069,7 +2121,7 @@ mod tests {
     fn outdated_rows_offline_compare_against_pins_alone() {
         let installed = fixture_installed();
         let pins = fixture_pins();
-        let rows = build_outdated_rows(&installed, &pins, None);
+        let rows = build_outdated_rows(&installed, &pins, None, "global");
         assert_eq!(rows.len(), installed.len());
         let by_name = |n: &str| rows.iter().find(|r| r.name == n).unwrap();
 
@@ -2111,7 +2163,7 @@ mod tests {
                 install_hint: None,
             }],
         };
-        let rows = build_outdated_rows(&installed, &pins, Some(&registry));
+        let rows = build_outdated_rows(&installed, &pins, Some(&registry), "global");
         assert_eq!(rows.len(), 1);
         // Matches the pin (v0.2.2) but the registry has v0.5.0 → outdated.
         assert_eq!(rows[0].status, "outdated");
@@ -2234,6 +2286,7 @@ mod tests {
             check: true,
             force: false,
             project_root: None,
+            project: false,
         };
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let err = rt.block_on(run_plugin_update(req)).unwrap_err();

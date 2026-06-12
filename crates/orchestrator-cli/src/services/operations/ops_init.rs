@@ -987,6 +987,12 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
     // `~/.animus/plugins.lock` fallback. Without this, `animus plugin lock
     // list/verify` after init misses the walkthrough's installed entries.
     std::fs::create_dir_all(project_root.join(".animus"))?;
+    // Keep project-local plugin BINARIES (`.animus/plugins/`) out of version
+    // control while leaving `.animus/plugins.lock` committable — committing
+    // the lockfile is how a repo pins its own plugin set.
+    if let Err(err) = super::ops_plugin::ensure_project_plugins_gitignore(project_root) {
+        tracing::warn!(%err, "failed to write .animus/.gitignore during init");
+    }
 
     let plugin_step = if install_plugins {
         run_install_defaults_subprocess(project_root, json).await

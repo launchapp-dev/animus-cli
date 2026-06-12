@@ -156,6 +156,7 @@ impl PluginRouting for PluginRoutingImpl {
             // must inspect via CLI and re-run with `--force-rewrite-lockfile`.
             force_rewrite_lockfile: false,
             as_kind: None,
+            project: false,
         };
         let output = run_plugin_install(install_req).await.map_err(internal)?;
         let plugin_kind = output.manifest.as_ref().map(|m| m.plugin_kind.clone()).unwrap_or_default();
@@ -186,6 +187,7 @@ impl PluginRouting for PluginRoutingImpl {
             name: request.name,
             plugin_dir: None,
             project_root: Some(self.project_root_str()),
+            project: false,
         })
         .map_err(internal)?;
         Ok(Unit::default())
@@ -300,6 +302,7 @@ impl PluginRouting for PluginRoutingImpl {
             // a control-routed update touches `.animus/plugins.lock` instead
             // of silently falling back to `~/.animus/plugins.lock`.
             project_root: Some(self.project_root_str()),
+            project: false,
         };
         let output = run_plugin_update(req).await.map_err(internal)?;
         let updates = output

@@ -331,6 +331,15 @@ fn schema_compatible(version: &str) -> bool {
     major(version) == major(LOCKFILE_SCHEMA_VERSION)
 }
 
+/// Returns the project-local lockfile path
+/// (`<project_root>/.animus/plugins.lock`). Used by `animus plugin install
+/// --project` and the both-roots `plugin lock verify` sweep. Unlike
+/// [`PluginLockfile::default_path`] this never falls back to the global
+/// lockfile — the caller has explicitly chosen the project scope.
+pub fn project_lockfile_path(project_root: &Path) -> PathBuf {
+    project_root.join(".animus").join("plugins.lock")
+}
+
 /// Returns `~/.animus/plugins.lock`. Falls back to `.animus/plugins.lock`
 /// in the cwd when `$HOME` is unset.
 pub fn global_lockfile_path() -> PathBuf {

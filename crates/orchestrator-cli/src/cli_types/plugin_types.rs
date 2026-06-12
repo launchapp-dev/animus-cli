@@ -377,6 +377,12 @@ pub(crate) struct PluginUpdateArgs {
     /// usually wants to schedule the restart themselves.
     #[arg(long, default_value_t = false)]
     pub(crate) restart_daemon: bool,
+    /// Operate on the project-local plugin root
+    /// (`<project>/.animus/plugins/`) instead of the global one: the
+    /// installed set is read from `<project>/.animus/plugins.yaml` and
+    /// updates are reinstalled in place under the project scope.
+    #[arg(long, default_value_t = false)]
+    pub(crate) project: bool,
 }
 
 #[derive(Debug, Args)]
@@ -469,6 +475,14 @@ pub(crate) struct PluginInstallArgs {
     /// `$ANIMUS_PLUGIN_DIR`. Defaults to `~/.animus/plugins/`.
     #[arg(long, value_name = "PATH")]
     pub(crate) plugin_dir: Option<String>,
+    /// Install into the project-local plugin root instead of the global
+    /// one: binary -> `<project>/.animus/plugins/`, registry ->
+    /// `<project>/.animus/plugins.yaml`, lockfile ->
+    /// `<project>/.animus/plugins.lock`. Project-local installs shadow a
+    /// global install of the same name during discovery. Mutually
+    /// exclusive with `--plugin-dir`.
+    #[arg(long, default_value_t = false, conflicts_with = "plugin_dir")]
+    pub(crate) project: bool,
     /// Signature enforcement mode. `strict` refuses installs whose cosign
     /// keyless bundle is missing, invalid, or signed by an identity outside
     /// the trusted-publisher list. `warn` (the current default) logs the
@@ -549,6 +563,12 @@ pub(crate) struct PluginUninstallArgs {
     /// `$ANIMUS_PLUGIN_DIR`. Defaults to `~/.animus/plugins/`.
     #[arg(long, value_name = "PATH")]
     pub(crate) plugin_dir: Option<String>,
+    /// Uninstall from the project-local plugin root
+    /// (`<project>/.animus/plugins/` + `<project>/.animus/plugins.yaml` +
+    /// `<project>/.animus/plugins.lock`) instead of the global one.
+    /// Mutually exclusive with `--plugin-dir`.
+    #[arg(long, default_value_t = false, conflicts_with = "plugin_dir")]
+    pub(crate) project: bool,
 }
 
 #[derive(Debug, Args)]

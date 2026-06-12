@@ -130,6 +130,42 @@ Entries written by pre-v0.5.7 installers parse cleanly; consumers treat
 the missing fields as `installed_kind == native_kind`. See
 [Plugin kind translator (v0.5.7)](../architecture/plugin-kind-translator-v0.5.7.md).
 
+### Project vs global plugin installs
+
+`animus plugin install` supports two install scopes; each scope owns a
+matching (install dir, registry, lockfile) triple:
+
+| | Global (default) | Project (`--project`) |
+|---|---|---|
+| Binaries | `~/.animus/plugins/` (or `$ANIMUS_PLUGIN_DIR` / `--plugin-dir`) | `<project>/.animus/plugins/` |
+| Registry | `~/.animus/plugins.yaml` | `<project>/.animus/plugins.yaml` |
+| Lockfile | `~/.animus/plugins.lock` (project lockfile preferred when `.animus/` exists) | `<project>/.animus/plugins.lock` |
+
+`--project` is mutually exclusive with `--plugin-dir`, and the same flag
+exists on `animus plugin uninstall` and `animus plugin update`. Project
+installs run the identical integrity pipeline as global ones: sha256
+verification, cosign signature policy, publisher TOFU, and lockfile
+fail-closed checks.
+
+**Shadowing rule.** Discovery scans the project-local
+`<project>/.animus/plugins/` tier FIRST, so on a name collision the
+project-local install wins over both a registry-recorded global install and
+a bare binary in the global install dir. `animus plugin list` marks each row
+with its `scope` (`project` / `global`) and surfaces hidden global binaries
+in a `shadowed` array. The per-project plugin scope file
+(`.animus/plugin-scope.yaml`) filters project-installed plugins exactly as it
+does global ones — an allowlist that omits a project-installed plugin
+excludes it from discovery.
+
+**Version control.** Project plugin BINARIES should not be committed —
+`animus init` and `animus plugin install --project` write a
+`.animus/.gitignore` covering `plugins/`. The project lockfile
+(`.animus/plugins.lock`) SHOULD be committed: that is how a repository pins
+its own plugin set, and `animus plugin lock verify` (which sweeps both the
+global and project lockfile roots by default) turns the committed lock into
+a CI tamper/drift gate. The project registry (`.animus/plugins.yaml`) is
+also safe to commit; it carries install provenance, not secrets.
+
 ## Repo-Scoped Runtime Config
 
 Animus stores mutable project runtime config under `~/.animus/<repo-scope>/`.

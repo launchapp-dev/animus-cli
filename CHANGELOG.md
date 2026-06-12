@@ -71,6 +71,30 @@ All notable changes to this project will be documented in this file.
   with installed/missing status. Additive compat: packs WITHOUT the section
   keep loading on older animus versions; packs USING it require this version
   (pair with `compatibility.animus_core = ">=0.5.14"`).
+- First-class **project-scoped plugin installation**: `animus plugin install
+  --project` (and the same flag on `uninstall` and `update`) targets the
+  project-local triple — binary `<project>/.animus/plugins/`, registry
+  `<project>/.animus/plugins.yaml`, lockfile `<project>/.animus/plugins.lock`
+  — with the identical sha256 / cosign / TOFU / fail-closed-lockfile
+  pipeline as global installs. `--project` conflicts with `--plugin-dir`.
+  Project entries flow into `animus plugin list` (new `SCOPE` column +
+  `scope` JSON field), `plugin status` (via discovery), `plugin outdated`
+  (rows carry `scope: global|project`; the project registry is merged in),
+  `plugin update --project`, and `plugin lock verify`, which now sweeps BOTH
+  lockfile roots by default (global entries against the global dir, project
+  entries against the project dir with a global-dir fallback for legacy
+  entries). Discovery gains a project-registry tier
+  (`<project>/.animus/plugins.yaml`) so official names outside the
+  dir-scanned `animus-plugin-*`/`animus-provider-*` prefixes (e.g.
+  `animus-subject-default`, `animus-queue-default`) resolve when installed
+  project-scoped. Discovery precedence fix: the project-local tier now also
+  outranks the explicit registry yaml (which every global install writes),
+  so a project install truly shadows a same-named global install; the hidden
+  global binary is surfaced in `plugin list` as a `shadowed` entry
+  (`shadowed by project install`). `animus init` and project-scoped installs
+  write a `.animus/.gitignore` covering `plugins/` so binaries stay out of
+  version control while the committable project lockfile pins the repo's
+  plugin set. See `docs/reference/configuration.md#project-vs-global-plugin-installs`.
 - `animus plugin install-defaults --flavor <name>` (default: `default`):
   the flavor manifest (`flavors/<name>.toml`, with a binary-bundled fallback
   for `default`) is now the source of truth for the install plan. Everything
