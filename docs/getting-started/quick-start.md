@@ -29,9 +29,16 @@ animus init --walkthrough --non-interactive --install-packs
 ## 1. Install Plugins
 
 ```bash
-animus plugin install-defaults --include-subjects --include-transports
+animus plugin install-defaults
 animus daemon preflight
 ```
+
+One command is enough: `install-defaults` reads the default flavor manifest
+(`flavors/default.toml`, bundled in the binary) and installs everything it
+marks `required` — provider, subject backends, transport, workflow runner,
+and queue — which covers every daemon-preflight role. Add
+`--include-recommended` for the full curated bundle (extra providers, the web
+UI, the GraphQL transport, more subject backends).
 
 ## 2. Prepare the Repository
 

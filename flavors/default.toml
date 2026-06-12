@@ -8,10 +8,11 @@ description = "Curated bundle for solo founders and small studios running a port
 required = ["launchapp-dev/animus-provider-claude"]
 recommended = ["launchapp-dev/animus-provider-codex", "launchapp-dev/animus-provider-ollama"]
 
+# Both subject backends are required: daemon preflight refuses to start
+# unless `subject_kind:task` AND `subject_kind:requirement` are covered.
 [subjects]
-required = ["launchapp-dev/animus-subject-default"]
+required = ["launchapp-dev/animus-subject-default", "launchapp-dev/animus-subject-requirements"]
 recommended = [
-    "launchapp-dev/animus-subject-requirements",
     "launchapp-dev/animus-subject-linear",
     "launchapp-dev/animus-subject-sqlite",
     "launchapp-dev/animus-subject-markdown",

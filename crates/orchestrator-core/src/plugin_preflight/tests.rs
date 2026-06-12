@@ -356,6 +356,49 @@ fn flavor_manifest_error_leads_rendered_message_and_suppresses_install_advice() 
 }
 
 #[test]
+fn multiple_missing_roles_render_one_composed_flavor_fix_command() {
+    let missing_role = |role: &str| super::MissingPlugin {
+        role: role.to_string(),
+        fix_command: format!("animus plugin install launchapp-dev/animus-{role}@v0.1.0"),
+    };
+    let result = super::PreflightResult {
+        satisfied: Vec::new(),
+        missing: vec![missing_role("queue"), missing_role("workflow_runner")],
+        auto_installed: Vec::new(),
+        flavor_manifest_error: None,
+    };
+
+    let message = result.render_missing_message();
+    assert!(
+        message.contains("animus plugin install-defaults --flavor default --yes"),
+        "multiple missing roles must surface ONE composed manifest-driven fix. got: {message}"
+    );
+    assert!(
+        message.contains("role `queue`") && message.contains("role `workflow_runner`"),
+        "per-role detail must still be listed. got: {message}"
+    );
+}
+
+#[test]
+fn single_missing_role_keeps_per_role_fix_without_composed_command() {
+    let result = super::PreflightResult {
+        satisfied: Vec::new(),
+        missing: vec![super::MissingPlugin {
+            role: "queue".to_string(),
+            fix_command: "animus plugin install launchapp-dev/animus-queue-default@v0.3.0".to_string(),
+        }],
+        auto_installed: Vec::new(),
+        flavor_manifest_error: None,
+    };
+
+    let message = result.render_missing_message();
+    assert!(
+        !message.contains("install-defaults --flavor"),
+        "one missing role has a precise per-role fix; the composed command would be noise. got: {message}"
+    );
+}
+
+#[test]
 fn missing_roles_without_flavor_error_keep_install_advice_template() {
     let result = super::PreflightResult {
         satisfied: Vec::new(),

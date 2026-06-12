@@ -4,7 +4,40 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- `animus plugin install-defaults --flavor <name>` (default: `default`):
+  the flavor manifest (`flavors/<name>.toml`, with a binary-bundled fallback
+  for `default`) is now the source of truth for the install plan. Everything
+  the manifest marks `required` installs in one command — provider, subject
+  backends (task + requirement), transport, workflow runner, and queue —
+  covering every daemon-preflight role, so the canonical first run no longer
+  needs a second `--include-subjects` pass. New `--include-recommended` flag
+  installs the manifest's `recommended` set (extra providers, web UI, GraphQL
+  transport, more subject backends). Unknown flavor names error instead of
+  silently falling back.
+
 ### Changed
+
+- `animus flavor install` is now manifest-driven: it delegates to
+  `animus plugin install-defaults --flavor <name>` instead of hard-coding
+  `--include-subjects --include-transports`, and gains
+  `--include-recommended`. `animus flavor current` drift and the install plan
+  now share one required-set function (`FlavorManifest::required_plugins`),
+  so they cannot disagree.
+- `flavors/default.toml`: `animus-subject-requirements` moved from
+  `subjects.recommended` to `subjects.required` — daemon preflight requires
+  the `subject_kind:requirement` role, so it belongs in the required set.
+- `animus plugin install-defaults` without flags now installs the flavor's
+  required set (claude provider, subject-default, subject-requirements,
+  transport-http, workflow-runner-default, queue-default) instead of all five
+  providers; recommended providers install via `--include-recommended`. The
+  legacy `--include-subjects` / `--include-transports` flags keep working and
+  add the recommended slice of those sections.
+- Daemon/`daemon preflight` failure output is composition-aware: when more
+  than one required role is missing, the message also prints the single
+  composed fix (`animus plugin install-defaults --flavor default --yes`)
+  alongside the per-role install commands.
 
 - **BREAKING:** `animus daemon start` now always starts the daemon as a
   detached background process. Previously it silently fell through to the

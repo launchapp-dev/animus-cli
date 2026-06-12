@@ -101,28 +101,53 @@ impl FlavorManifest {
         Ok(())
     }
 
+    /// Role-tagged view over every plugin section in the manifest, in
+    /// install order. This is the ONE shared definition of "what roles a
+    /// flavor declares" — `animus plugin install-defaults --flavor`,
+    /// `animus flavor install`, and the `animus flavor current` drift
+    /// report all walk these sections, so the install plan and the drift
+    /// report can never disagree.
+    pub fn role_sections(&self) -> [(&'static str, &FlavorRoleSection); 9] {
+        [
+            ("workflow_runner", &self.workflow_runner),
+            ("queue", &self.queue),
+            ("providers", &self.providers),
+            ("subjects", &self.subjects),
+            ("transports", &self.transports),
+            ("ui", &self.ui),
+            ("triggers", &self.triggers),
+            ("durable_store", &self.durable_store),
+            ("memory_store", &self.memory_store),
+        ]
+    }
+
+    /// Every `(role, slug)` pair the manifest marks `required`. This is
+    /// the canonical install set for `animus plugin install-defaults
+    /// --flavor <name>` / `animus flavor install` and the comparison set
+    /// for the `animus flavor current` drift report.
+    pub fn required_plugins(&self) -> Vec<(&'static str, String)> {
+        self.role_sections()
+            .into_iter()
+            .flat_map(|(role, section)| section.required.iter().map(move |slug| (role, slug.clone())))
+            .collect()
+    }
+
+    /// Every `(role, slug)` pair the manifest marks `recommended`.
+    /// Installed when the operator passes `--include-recommended`.
+    pub fn recommended_plugins(&self) -> Vec<(&'static str, String)> {
+        self.role_sections()
+            .into_iter()
+            .flat_map(|(role, section)| section.recommended.iter().map(move |slug| (role, slug.clone())))
+            .collect()
+    }
+
     /// Collect every plugin slug declared in this manifest under the
     /// `workflow_runner`, `queue`, `providers`, `subjects`, `transports`,
     /// `ui`, `triggers`, `durable_store`, and `memory_store` sections.
-    /// Used by `animus flavor install` and by `plugin install-defaults`
-    /// to assemble the install plan.
     pub fn all_plugin_slugs(&self, include_recommended: bool) -> Vec<String> {
-        let mut out = Vec::new();
-        for section in [
-            &self.workflow_runner,
-            &self.queue,
-            &self.providers,
-            &self.subjects,
-            &self.transports,
-            &self.ui,
-            &self.triggers,
-            &self.durable_store,
-            &self.memory_store,
-        ] {
-            out.extend(section.required.iter().cloned());
-            if include_recommended {
-                out.extend(section.recommended.iter().cloned());
-            }
+        let mut out: Vec<String> = self.required_plugins().into_iter().map(|(_, slug)| slug).collect();
+        if include_recommended {
+            out.extend(self.recommended_plugins().into_iter().map(|(_, slug)| slug));
         }
         out
     }
@@ -289,5 +314,52 @@ recommended = ["launchapp-dev/animus-provider-codex"]
 
         let with_recommended = manifest.all_plugin_slugs(true);
         assert!(with_recommended.contains(&"launchapp-dev/animus-provider-codex".to_string()));
+    }
+
+    #[test]
+    fn required_plugins_tags_each_slug_with_its_role() {
+        let manifest: FlavorManifest = toml::from_str(SAMPLE).unwrap();
+        let required = manifest.required_plugins();
+        assert!(required.contains(&("workflow_runner", "launchapp-dev/animus-workflow-runner-default".to_string())));
+        assert!(required.contains(&("queue", "launchapp-dev/animus-queue-default".to_string())));
+        assert!(required.contains(&("providers", "launchapp-dev/animus-provider-claude".to_string())));
+        assert!(
+            !required.iter().any(|(_, slug)| slug.contains("codex")),
+            "recommended slugs must not leak into the required set"
+        );
+        let recommended = manifest.recommended_plugins();
+        assert_eq!(recommended, vec![("providers", "launchapp-dev/animus-provider-codex".to_string())]);
+    }
+
+    #[test]
+    fn bundled_default_flavor_required_set_covers_daemon_preflight_roles() {
+        // The canonical first run is `animus plugin install-defaults` (or
+        // `animus flavor install`) followed by `animus daemon start`. The
+        // bundled manifest's REQUIRED set must therefore cover every
+        // daemon-preflight role: at_least_one_provider, subject_kind:task,
+        // subject_kind:requirement, workflow_runner, and queue.
+        let manifest: FlavorManifest = toml::from_str(BUNDLED_DEFAULT_FLAVOR).unwrap();
+        manifest.validate().unwrap();
+        let required = manifest.required_plugins();
+        let has = |needle: &str| required.iter().any(|(_, slug)| slug.contains(needle));
+        assert!(has("animus-provider-"), "required set must include a provider");
+        assert!(has("animus-subject-default"), "required set must cover subject_kind:task");
+        assert!(has("animus-subject-requirements"), "required set must cover subject_kind:requirement");
+        assert!(has("animus-workflow-runner-default"), "required set must include the workflow runner");
+        assert!(has("animus-queue-default"), "required set must include the queue plugin");
+    }
+
+    #[test]
+    fn bundled_fallback_loads_when_no_manifest_on_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = load_flavor_in(tmp.path(), DEFAULT_FLAVOR_ID)
+            .expect("bundled fallback must parse")
+            .expect("default flavor must resolve from the bundled manifest");
+        assert_eq!(manifest.id, DEFAULT_FLAVOR_ID);
+        assert!(!manifest.required_plugins().is_empty());
+        assert!(
+            load_flavor_in(tmp.path(), "nonexistent-flavor").expect("load must not error").is_none(),
+            "non-default flavors have no bundled fallback"
+        );
     }
 }

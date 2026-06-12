@@ -182,6 +182,14 @@ impl PreflightResult {
         for missing in &self.missing {
             out.push_str(&format!("  - role `{}` unsatisfied; fix: `{}`\n", missing.role, missing.fix_command));
         }
+        if self.missing.len() > 1 {
+            // Composed fix: the default flavor's REQUIRED set covers every
+            // daemon-preflight role, so one manifest-driven install
+            // resolves all of the above instead of N per-role commands.
+            out.push_str(
+                "Fix all missing roles with one command: `animus plugin install-defaults --flavor default --yes`\n",
+            );
+        }
         out.push_str(
             "Re-run with `--auto-install` to install defaults, or run `animus plugin install <repo>@<tag>` manually.\n",
         );
