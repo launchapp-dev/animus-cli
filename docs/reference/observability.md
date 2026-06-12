@@ -258,6 +258,50 @@ Subscribe a notifier connector to these via the persisted
 `docs/reference/configuration.md` for how `notification_config` is stored
 and which env vars are forwarded to notifier plugins.
 
+## The forensic chain: debugging a failed run
+
+Every workflow execution leaves a connected trail:
+**status → history (`run_id`) → output read → output decisions → cost workflow.**
+Each link hands you the identifier the next command needs.
+
+1. **`animus status`** — spot the failure. The unified dashboard surfaces
+   failed/blocked workflows and tasks.
+2. **`animus history search --status failed --since 7d`** — find the
+   execution record. Records carry `task_id`, `workflow_id`, and `run_id`
+   (the latest per-phase agent run, resolved from the session checkpoints
+   under `~/.animus/<repo-scope>/runs/<workflow_id>/phases/`). `--since`
+   takes durations (`7d`, `12h`, `30m`); the RFC3339
+   `--started-after`/`--started-before` flags still work.
+3. **`animus output read --run-id <run_id>`** — read the run's event
+   payloads (`events.jsonl`). If you only have the workflow id, pass
+   `--workflow-id <workflow_id>` instead and the latest run is resolved
+   for you (clear error when no run is recorded or when the latest is
+   ambiguous). `animus output jsonl --run-id <run_id>` aggregates all
+   JSONL streams for the run.
+4. **`animus output decisions --run-id <run_id>`** — read the per-run LLM
+   decision log (`~/.animus/<repo-scope>/runs/<run_id>/decisions.jsonl`):
+   session header (provider/model), prompts, tool calls and results,
+   errors, and the final exit event. This is the agent's decision-relevant
+   event stream, distinct from
+   `animus workflow decisions --id <workflow_id>`, which shows the
+   phase-advance verdicts (advance/skip/rework) recorded on workflow
+   state. Budget-cap breach records land in the scoped
+   `~/.animus/<repo-scope>/decisions.jsonl` written by the cost layer.
+5. **`animus cost workflow <workflow_id>`** — per-phase token/cost
+   breakdown for the same execution.
+
+A complete walkthrough:
+
+```bash
+animus status                                  # 1. something failed
+animus history search --status failed --since 24h --json
+#   → {"workflow_id":"wf-...","run_id":"run-...", ...}
+animus output read --run-id run-...            # 2. what the run emitted
+animus output decisions --run-id run-...       # 3. what the agent decided
+animus workflow decisions --id wf-...          # 4. why phases advanced/reworked
+animus cost workflow wf-...                    # 5. what it cost
+```
+
 ## Quick recipes
 
 ### "Is the daemon healthy right now?"

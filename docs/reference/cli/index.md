@@ -160,7 +160,7 @@ animus
 ├── workflow                 Run and control workflow execution
 │   ├── list                 List workflows
 │   ├── get                  Get workflow details
-│   ├── decisions            Show workflow decisions
+│   ├── decisions            Show phase-advance decision history recorded on workflow state (advance/skip/rework verdicts). For the per-run LLM decision log, use `animus output decisions`
 │   ├── checkpoints
 │   │   ├── list             List checkpoints for a workflow
 │   │   ├── get              Get a specific checkpoint for a workflow
@@ -199,11 +199,11 @@ animus
 │   ├── prompt
 │   │   └── render           Render workflow phase prompt text and prompt sections
 │
-├── history                  Inspect and search execution history
+├── history                  Inspect and search execution history (records carry `run_id` when resolvable, pivoting into `animus output read --run-id`)
 │   ├── task                 List history records for a task
 │   ├── get                  Get a history record by id
 │   ├── recent               List recent history records
-│   ├── search               Search history records
+│   ├── search               Search history records (`--since 7d|12h|30m` relative window, or RFC3339 `--started-after`/`--started-before`; `--since` conflicts with `--started-after`)
 │   └── cleanup              Remove old history records
 │
 ├── git                      Manage Git repositories and worktrees
@@ -287,13 +287,14 @@ animus
 │
 ├── status                   Show a unified project status dashboard
 ├── output                   Inspect run output and artifacts
-│   ├── read                 Read run event payloads
+│   ├── read                 Read run event payloads (`--run-id`, or `--workflow-id` to resolve the latest run recorded for that workflow; clear error when none or ambiguous)
 │   ├── phase-outputs        Read persisted workflow phase outputs
 │   ├── artifacts            List artifacts for an execution id
 │   ├── download             Download an artifact payload
 │   ├── jsonl                Read aggregated JSONL output streams for a run
 │   ├── monitor              Inspect run output with optional task/phase filtering
-│   └── cli                  Infer CLI provider details from run output
+│   ├── cli                  Infer CLI provider details from run output
+│   └── decisions            Read the per-run LLM decision log (`runs/<run_id>/decisions.jsonl`: session header, prompts, tool calls/results, errors) by `--run-id` or `--workflow-id`. Distinct from `workflow decisions`, which shows phase-advance decision history stored on workflow state
 │
 ├── mcp                      Run the Animus MCP service endpoint
 │   ├── serve                Start the MCP server in the current process. --management also exposes the animus.interactions.* inbox tools (off by default so agent-injected servers cannot answer their own approvals); --agent-id <ID> pins the identity used by the blocking ask/request_approval tools; --workflow-id <ID> pins the workflow context and flips their default wait mode to suspend (env fallback: ANIMUS_MCP_WORKFLOW_ID)

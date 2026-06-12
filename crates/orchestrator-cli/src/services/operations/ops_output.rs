@@ -1,6 +1,8 @@
 use crate::cli_types::OutputCommand;
 use crate::{ensure_safe_run_id, not_found_error, print_value, run_dir};
 use animus_runtime_shared::phase_output::{phase_output_dir, PersistedPhaseOutput};
+use animus_runtime_shared::phase_session;
+use animus_runtime_shared::recording::ReplaySource;
 use anyhow::{Context, Result};
 use protocol::RunId;
 use serde::{Deserialize, Serialize};
@@ -37,6 +39,90 @@ fn run_dir_candidates(project_root: &str, run_id: &str) -> Vec<PathBuf> {
 pub(crate) fn resolve_run_dir_for_lookup(project_root: &str, run_id: &str) -> Result<Option<PathBuf>> {
     ensure_safe_run_id(run_id)?;
     Ok(run_dir_candidates(project_root, run_id).into_iter().find(|path| path.exists()))
+}
+
+/// All `(run_id, started_at)` pairs recorded for a workflow via the
+/// per-phase session checkpoints at `runs/<workflow_id>/phases/*.session.json`
+/// (the canonical `(workflow_id, phase_id, run_id)` source — the same files
+/// the cost scanner correlates on).
+fn collect_workflow_run_candidates(project_root: &str, workflow_id: &str) -> Result<Vec<(String, String)>> {
+    let mut candidates = Vec::new();
+    let Some(workflow_run_dir) = resolve_run_dir_for_lookup(project_root, workflow_id)? else {
+        return Ok(candidates);
+    };
+    let phases_dir = workflow_run_dir.join("phases");
+    if !phases_dir.is_dir() {
+        return Ok(candidates);
+    }
+    for entry in fs::read_dir(&phases_dir).with_context(|| format!("read phases dir {}", phases_dir.display()))? {
+        let path = entry?.path();
+        if !path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.ends_with(".session.json")) {
+            continue;
+        }
+        if let Ok(Some(checkpoint)) = phase_session::read_path(&path) {
+            candidates.push((checkpoint.run_id, checkpoint.started_at));
+        }
+    }
+    Ok(candidates)
+}
+
+/// Resolve the latest run id recorded for `workflow_id`. Errors when no run
+/// is recorded or when the latest start time is shared by multiple distinct
+/// run ids (ambiguous — the caller must pass --run-id explicitly).
+pub(crate) fn resolve_latest_run_id_for_workflow(project_root: &str, workflow_id: &str) -> Result<String> {
+    let candidates = collect_workflow_run_candidates(project_root, workflow_id)?;
+    if candidates.is_empty() {
+        // Legacy naming fallback: runs created before session checkpoints
+        // used `wf-<workflow_id>-<phase>-...` (scanned by mtime) or the bare
+        // `wf-<workflow_id>` run dir name directly.
+        if let Some((run_id, _)) =
+            super::ops_mcp::output_tail_resolution::resolve_latest_workflow_run_dir(project_root, workflow_id)?
+        {
+            return Ok(run_id);
+        }
+        let legacy_run_id = format!("wf-{workflow_id}");
+        if resolve_run_dir_for_lookup(project_root, &legacy_run_id)?.is_some() {
+            return Ok(legacy_run_id);
+        }
+        return Err(not_found_error(format!(
+            "no runs recorded for workflow {workflow_id}; pass --run-id explicitly if you know the run id"
+        )));
+    }
+    let parse_started =
+        |value: &str| chrono::DateTime::parse_from_rfc3339(value).map(|ts| ts.with_timezone(&chrono::Utc)).ok();
+    let latest_key = candidates
+        .iter()
+        .map(|(_, started_at)| (parse_started(started_at), started_at.clone()))
+        .max()
+        .expect("candidates is non-empty");
+    let mut latest_run_ids: Vec<&str> = candidates
+        .iter()
+        .filter(|(_, started_at)| (parse_started(started_at), started_at.clone()) == latest_key)
+        .map(|(run_id, _)| run_id.as_str())
+        .collect();
+    latest_run_ids.sort_unstable();
+    latest_run_ids.dedup();
+    match latest_run_ids.as_slice() {
+        [run_id] => Ok((*run_id).to_string()),
+        many => anyhow::bail!(
+            "ambiguous latest run for workflow {workflow_id}: multiple runs share started_at ({}); pass --run-id explicitly",
+            many.join(", ")
+        ),
+    }
+}
+
+/// Best-effort variant for enrichment paths (history hydration): swallows
+/// not-found/ambiguity instead of failing the whole listing.
+pub(crate) fn try_latest_run_id_for_workflow(project_root: &str, workflow_id: &str) -> Option<String> {
+    resolve_latest_run_id_for_workflow(project_root, workflow_id).ok()
+}
+
+fn resolve_run_id_arg(project_root: &str, run_id: Option<String>, workflow_id: Option<String>) -> Result<String> {
+    match (run_id, workflow_id) {
+        (Some(run_id), _) => Ok(run_id),
+        (None, Some(workflow_id)) => resolve_latest_run_id_for_workflow(project_root, &workflow_id),
+        (None, None) => anyhow::bail!("either --run-id or --workflow-id is required"),
+    }
 }
 
 fn extract_timestamp_hint(line: &str) -> Option<String> {
@@ -191,8 +277,9 @@ pub(crate) fn get_phase_outputs(
 pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         OutputCommand::Read(args) => {
-            let run_dir = resolve_run_dir_for_lookup(project_root, &args.run_id)?
-                .ok_or_else(|| not_found_error(format!("run directory not found for {}", args.run_id)))?;
+            let run_id = resolve_run_id_arg(project_root, args.run_id, args.workflow_id)?;
+            let run_dir = resolve_run_dir_for_lookup(project_root, &run_id)?
+                .ok_or_else(|| not_found_error(format!("run directory not found for {run_id}")))?;
             let events_path = run_dir.join("events.jsonl");
             if !events_path.exists() {
                 return print_value(Vec::<Value>::new(), json);
@@ -271,7 +358,37 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
                 json,
             )
         }
+        OutputCommand::Decisions(args) => {
+            let run_id = resolve_run_id_arg(project_root, args.run_id, args.workflow_id)?;
+            print_value(decision_log_view(project_root, &run_id)?, json)
+        }
     }
+}
+
+/// Read `runs/<run_id>/decisions.jsonl` via the recording module's
+/// [`ReplaySource`] reader and shape it for CLI output.
+pub(crate) fn decision_log_view(project_root: &str, run_id: &str) -> Result<Value> {
+    let run_dir = resolve_run_dir_for_lookup(project_root, run_id)?
+        .ok_or_else(|| not_found_error(format!("run directory not found for {run_id}")))?;
+    let decisions_path = run_dir.join("decisions.jsonl");
+    if !decisions_path.exists() {
+        return Err(not_found_error(format!(
+            "no decision log for run {run_id} (expected {}); decision recording starts with the first agent event of a run",
+            decisions_path.display()
+        )));
+    }
+    let source = ReplaySource::open(&decisions_path)?;
+    let truncated_tail = source.truncated_tail();
+    let provider_id = source.provider_id().map(ToOwned::to_owned);
+    let events = source.drain();
+    Ok(serde_json::json!({
+        "run_id": run_id,
+        "path": decisions_path.display().to_string(),
+        "provider_id": provider_id,
+        "truncated_tail": truncated_tail,
+        "event_count": events.len(),
+        "events": events,
+    }))
 }
 
 #[cfg(test)]
@@ -578,6 +695,128 @@ mod tests {
                 handle_output(command, "/tmp/project", true).await.expect_err("unsafe download ids should be rejected");
             assert!(err.to_string().contains("unsafe path segments"), "{execution_id}/{artifact_id}: {err}");
         }
+    }
+
+    fn write_session_checkpoint(
+        project_root: &Path,
+        workflow_id: &str,
+        phase_id: &str,
+        run_id: &str,
+        started_at: &str,
+    ) {
+        let workflow_run_dir = run_dir(project_root.to_string_lossy().as_ref(), &RunId(workflow_id.to_string()), None);
+        let phases_dir = workflow_run_dir.join("phases");
+        std::fs::create_dir_all(&phases_dir).expect("phases dir should be created");
+        let checkpoint = serde_json::json!({
+            "workflow_id": workflow_id,
+            "phase_id": phase_id,
+            "provider": "claude",
+            "run_id": run_id,
+            "status": "completed",
+            "started_at": started_at,
+        });
+        std::fs::write(phases_dir.join(format!("{phase_id}.session.json")), checkpoint.to_string())
+            .expect("checkpoint should be written");
+    }
+
+    #[test]
+    fn latest_run_id_resolution_found_ambiguous_and_none() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let root = project_root.to_string_lossy().to_string();
+
+        // None: no runs recorded at all.
+        let err = resolve_latest_run_id_for_workflow(&root, "wf-none").expect_err("no runs must error");
+        assert!(err.to_string().contains("no runs recorded for workflow wf-none"), "{err}");
+        assert!(try_latest_run_id_for_workflow(&root, "wf-none").is_none());
+
+        // Found: two phases; the later started_at wins.
+        write_session_checkpoint(&project_root, "wf-found", "implementation", "run-early", "2026-06-01T00:00:00Z");
+        write_session_checkpoint(&project_root, "wf-found", "review", "run-late", "2026-06-02T00:00:00Z");
+        assert_eq!(resolve_latest_run_id_for_workflow(&root, "wf-found").expect("latest run"), "run-late");
+        assert_eq!(try_latest_run_id_for_workflow(&root, "wf-found").as_deref(), Some("run-late"));
+
+        // Two phases sharing the same run id at the same instant are NOT
+        // ambiguous (one agent run can serve multiple checkpoints).
+        write_session_checkpoint(&project_root, "wf-shared", "a", "run-one", "2026-06-03T00:00:00Z");
+        write_session_checkpoint(&project_root, "wf-shared", "b", "run-one", "2026-06-03T00:00:00Z");
+        assert_eq!(resolve_latest_run_id_for_workflow(&root, "wf-shared").expect("shared run"), "run-one");
+
+        // Ambiguous: distinct run ids share the latest started_at.
+        write_session_checkpoint(&project_root, "wf-ambig", "a", "run-a", "2026-06-04T00:00:00Z");
+        write_session_checkpoint(&project_root, "wf-ambig", "b", "run-b", "2026-06-04T00:00:00Z");
+        let err = resolve_latest_run_id_for_workflow(&root, "wf-ambig").expect_err("tie must be ambiguous");
+        let message = err.to_string();
+        assert!(message.contains("ambiguous latest run"), "{message}");
+        assert!(message.contains("run-a") && message.contains("run-b"), "{message}");
+        assert!(try_latest_run_id_for_workflow(&root, "wf-ambig").is_none());
+    }
+
+    #[test]
+    fn latest_run_id_resolution_falls_back_to_legacy_wf_prefixed_run_dir() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let root = project_root.to_string_lossy().to_string();
+
+        let legacy_dir = run_dir(&root, &RunId("wf-legacy-flow".to_string()), None);
+        std::fs::create_dir_all(&legacy_dir).expect("legacy run dir should be created");
+        assert_eq!(resolve_latest_run_id_for_workflow(&root, "legacy-flow").expect("legacy run"), "wf-legacy-flow");
+
+        // Phase-suffixed legacy run dirs (`wf-<workflow_id>-<phase>-...`)
+        // resolve too, preferring the one with run output.
+        let suffixed_dir = run_dir(&root, &RunId("wf-old-flow-implementation-abc123".to_string()), None);
+        std::fs::create_dir_all(&suffixed_dir).expect("suffixed legacy run dir should be created");
+        std::fs::write(suffixed_dir.join("events.jsonl"), "{}\n").expect("events should be written");
+        let empty_dir = run_dir(&root, &RunId("wf-old-flow-review-def456".to_string()), None);
+        std::fs::create_dir_all(&empty_dir).expect("empty legacy run dir should be created");
+        assert_eq!(
+            resolve_latest_run_id_for_workflow(&root, "old-flow").expect("suffixed legacy run"),
+            "wf-old-flow-implementation-abc123"
+        );
+    }
+
+    #[test]
+    fn decision_log_view_reads_fixture_decisions_jsonl() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir should be created");
+        let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("project dir should be created");
+        let root = project_root.to_string_lossy().to_string();
+        let run_id = "run-decisions-fixture";
+
+        let canonical_dir = run_dir(&root, &RunId(run_id.to_string()), None);
+        std::fs::create_dir_all(&canonical_dir).expect("run dir should be created");
+        let fixture = concat!(
+            "{\"kind\":\"metadata\",\"timestamp_ms\":1,\"payload\":{\"kind\":\"session_header\",\"provider_id\":\"claude\",\"model_id\":\"claude-sonnet\"}}\n",
+            "{\"kind\":\"prompt\",\"timestamp_ms\":2,\"model_id\":\"claude-sonnet\",\"prompt\":\"fix the bug\",\"runtime_contract\":null}\n",
+            "{\"kind\":\"tool_call\",\"timestamp_ms\":3,\"name\":\"Bash\",\"args\":{\"command\":\"cargo test\"}}\n",
+            "{\"kind\":\"finished\",\"timestamp_ms\":4,\"exit_code\":0}\n",
+        );
+        std::fs::write(canonical_dir.join("decisions.jsonl"), fixture).expect("fixture should be written");
+
+        let view = decision_log_view(&root, run_id).expect("decision log should load");
+        assert_eq!(view.get("run_id").and_then(Value::as_str), Some(run_id));
+        assert_eq!(view.get("provider_id").and_then(Value::as_str), Some("claude"));
+        assert_eq!(view.get("truncated_tail").and_then(Value::as_bool), Some(false));
+        assert_eq!(view.get("event_count").and_then(Value::as_u64), Some(4));
+        let events = view.get("events").and_then(Value::as_array).expect("events array");
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].get("kind").and_then(Value::as_str), Some("metadata"));
+        assert_eq!(events[2].get("name").and_then(Value::as_str), Some("Bash"));
+        assert_eq!(events[3].get("kind").and_then(Value::as_str), Some("finished"));
+
+        // Missing decision log is a clear not-found error.
+        let other_run_dir = run_dir(&root, &RunId("run-without-decisions".to_string()), None);
+        std::fs::create_dir_all(&other_run_dir).expect("run dir should be created");
+        let err = decision_log_view(&root, "run-without-decisions").expect_err("missing log must error");
+        assert!(err.to_string().contains("no decision log for run run-without-decisions"), "{err}");
     }
 
     #[test]

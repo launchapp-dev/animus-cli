@@ -16,12 +16,28 @@ pub(crate) enum OutputCommand {
     Monitor(OutputMonitorArgs),
     /// Infer CLI provider details from run output.
     Cli(OutputCliArgs),
+    /// Read the per-run LLM decision log (decisions.jsonl).
+    Decisions(OutputDecisionsArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct OutputRunArgs {
+    /// Run id to read. Mutually exclusive with --workflow-id.
+    #[arg(long, required_unless_present = "workflow_id", conflicts_with = "workflow_id")]
+    pub(crate) run_id: Option<String>,
+    /// Resolve the latest run id recorded for this workflow, then read it.
     #[arg(long)]
-    pub(crate) run_id: String,
+    pub(crate) workflow_id: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct OutputDecisionsArgs {
+    /// Run id whose decision log to read. Mutually exclusive with --workflow-id.
+    #[arg(long, required_unless_present = "workflow_id", conflicts_with = "workflow_id")]
+    pub(crate) run_id: Option<String>,
+    /// Resolve the latest run id recorded for this workflow, then read its decision log.
+    #[arg(long)]
+    pub(crate) workflow_id: Option<String>,
 }
 
 #[derive(Debug, Args)]

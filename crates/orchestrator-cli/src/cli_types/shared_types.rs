@@ -47,6 +47,12 @@ pub(crate) fn parse_duration_secs_default_days(value: &str) -> Result<u64, Strin
     parse_duration_secs(value, 86_400)
 }
 
+/// clap value parser for `--since`-style window flags: bare numbers mean
+/// seconds, unit suffixes s/m/h/d are accepted (e.g. `90`, `30m`, `7d`).
+pub(crate) fn parse_duration_secs_default_seconds(value: &str) -> Result<u64, String> {
+    parse_duration_secs(value, 1)
+}
+
 pub(crate) fn parse_positive_usize(value: &str) -> Result<usize, String> {
     let parsed = value.parse::<usize>().map_err(|_| "must be a whole number".to_string())?;
     if parsed == 0 {
