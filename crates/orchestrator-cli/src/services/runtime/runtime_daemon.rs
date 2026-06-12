@@ -166,8 +166,50 @@ pub(crate) async fn handle_daemon_status_command(project_root: &str, json: bool)
     print_value(status, json)
 }
 
+/// Budget-enforcement health slice: `{enabled, last_sweep_at}` plus a
+/// breach rollup, computed from scoped state on disk. `daemon health` uses
+/// the recency-window breach summary (it does not load workflow records, so
+/// it cannot compute the paused/active split — see
+/// [`crate::services::cost::breach_summary`]).
+#[derive(serde::Serialize)]
+struct BudgetHealthSlice {
+    enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_sweep_at: Option<String>,
+    breaches: crate::services::cost::BudgetBreachSummary,
+}
+
+fn budget_health_slice(project_root: &str) -> BudgetHealthSlice {
+    let path = Path::new(project_root);
+    let status = crate::services::cost::load_budget_enforcement_status(path);
+    let records = crate::services::cost::read_decision_records(path).unwrap_or_default();
+    BudgetHealthSlice {
+        enabled: status.as_ref().map(|s| s.enabled).unwrap_or_else(crate::services::cost::budget_enforcement_enabled),
+        last_sweep_at: status.map(|s| s.last_sweep_at.to_rfc3339()),
+        breaches: crate::services::cost::summarize_breaches(&records, None),
+    }
+}
+
+fn render_budget_health_human(slice: &BudgetHealthSlice) {
+    let last = slice.last_sweep_at.as_deref().unwrap_or("never");
+    println!("budget_enforcement: enabled={} last_sweep_at={last}", slice.enabled);
+    let breaches = &slice.breaches;
+    if breaches.recent_24h > 0 {
+        match breaches.worst_offender.as_ref() {
+            Some(offender) => println!(
+                "  breaches in last 24h: {} (worst: {} — {}; see `animus cost decisions`)",
+                breaches.recent_24h, offender.workflow_run_id, offender.summary
+            ),
+            None => println!("  breaches in last 24h: {} (see `animus cost decisions`)", breaches.recent_24h),
+        }
+    } else {
+        println!("  breaches in last 24h: 0");
+    }
+}
+
 pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool) -> Result<()> {
     let project_root_path = Path::new(project_root);
+    let budget = budget_health_slice(project_root);
     if let Some(client) = orchestrator_daemon_runtime::control::ControlClient::try_connect(project_root_path).await? {
         match client.daemon_health().await {
             Ok(response) => {
@@ -177,11 +219,14 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
                     let mut value = serde_json::to_value(&response)?;
                     if let Some(map) = value.as_object_mut() {
                         map.insert("healthy".to_string(), serde_json::Value::Bool(healthy));
+                        map.insert("budget_enforcement".to_string(), serde_json::to_value(&budget)?);
                     }
                     overlay_runtime_pause(&mut value, project_root);
                     return print_value(value, true);
                 }
-                return render_daemon_health_human(&response, healthy, pause);
+                render_daemon_health_human(&response, healthy, pause)?;
+                render_budget_health_human(&budget);
+                return Ok(());
             }
             Err(err) if orchestrator_daemon_runtime::control::is_method_unavailable(&err) => {
                 tracing::debug!(error = %err, "daemon/health wire unavailable; falling back to local");
@@ -199,8 +244,14 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
     }
     if !json {
         println!("{}", health_verdict_line(health.healthy, health.runtime_paused));
+        render_budget_health_human(&budget);
+        return print_value(health, json);
     }
-    print_value(health, json)
+    let mut value = serde_json::to_value(&health)?;
+    if let Some(map) = value.as_object_mut() {
+        map.insert("budget_enforcement".to_string(), serde_json::to_value(&budget)?);
+    }
+    print_value(value, json)
 }
 
 /// One-line health verdict rule (documented in `docs/reference/cli/index.md`):
@@ -1884,6 +1935,33 @@ mod tests {
     use orchestrator_logging::{Level, LogEntry};
     use protocol::test_utils::EnvVarGuard;
     use std::process::Command;
+
+    #[test]
+    fn budget_health_slice_defaults_when_no_sweep_recorded() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let state_root = tmp.path().join("scope");
+        std::fs::create_dir_all(&state_root).unwrap();
+        let _override = EnvVarGuard::set("ANIMUS_COST_STATE_ROOT", Some(state_root.to_string_lossy().as_ref()));
+        let _off = EnvVarGuard::set(crate::services::cost::DISABLE_BUDGET_ENFORCEMENT_ENV, None);
+        let project_root = tmp.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+
+        // No sweep file, no breach log → enabled-by-env, no last_sweep_at,
+        // zero breaches.
+        let slice = budget_health_slice(project_root.to_string_lossy().as_ref());
+        assert!(slice.enabled, "env-default enabled when no status file");
+        assert!(slice.last_sweep_at.is_none());
+        assert_eq!(slice.breaches.recent_24h, 0);
+        assert_eq!(slice.breaches.active, None, "daemon health uses the recency fallback (no paused-set)");
+
+        // After a recorded sweep the slice reflects the persisted enabled flag
+        // and timestamp.
+        crate::services::cost::save_budget_enforcement_status(&project_root, false).unwrap();
+        let slice = budget_health_slice(project_root.to_string_lossy().as_ref());
+        assert!(!slice.enabled, "persisted disabled flag wins over env default");
+        assert!(slice.last_sweep_at.is_some());
+    }
 
     #[test]
     fn read_autonomous_startup_log_tail_returns_last_nonempty_lines() {

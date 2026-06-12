@@ -4,6 +4,7 @@
 //! budget-cap sweep.
 
 pub(crate) mod aggregator;
+pub(crate) mod breach_summary;
 pub(crate) mod cap_check;
 pub(crate) mod enforcement;
 pub(crate) mod model_rates;
@@ -11,6 +12,8 @@ pub(crate) mod persistence;
 pub(crate) mod scanner;
 
 pub(crate) use aggregator::{CostState, PhaseCost, WorkflowCost};
+#[allow(unused_imports)]
+pub(crate) use breach_summary::{summarize_breaches, BudgetBreachSummary};
 pub(crate) use persistence::save_cost_state;
 pub(crate) use scanner::enforce_caps;
 
@@ -23,8 +26,22 @@ pub(crate) use aggregator::{
 pub(crate) use cap_check::{check_caps, CapCheckInputs};
 #[allow(unused_imports)]
 pub(crate) use persistence::{
-    append_decision_record, cost_state_path, decisions_log_path, load_cost_state, read_decision_records,
+    append_decision_record, budget_enforcement_status_path, cost_state_path, decisions_log_path,
+    load_budget_enforcement_status, load_cost_state, read_decision_records, save_budget_enforcement_status,
+    BudgetEnforcementStatus,
 };
+
+/// Env kill-switch: `ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT=1` skips the
+/// daemon's budget-enforcement housekeeping leg (the sweep still records its
+/// disabled state for `daemon health`). Requires a daemon restart to take
+/// effect, like the other plugin kill-switches.
+pub(crate) const DISABLE_BUDGET_ENFORCEMENT_ENV: &str = "ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT";
+
+/// `true` when the budget-enforcement leg is enabled (kill-switch unset or
+/// not a truthy `1`/`true`).
+pub(crate) fn budget_enforcement_enabled() -> bool {
+    !matches!(std::env::var(DISABLE_BUDGET_ENFORCEMENT_ENV).ok().as_deref(), Some("1") | Some("true"))
+}
 
 use std::path::Path;
 
@@ -78,6 +95,19 @@ mod tests {
     use protocol::test_utils::EnvVarGuard;
     use protocol::{AgentRunEvent, RunId, TokenUsage};
     use tempfile::TempDir;
+
+    #[test]
+    fn budget_enforcement_enabled_reads_kill_switch() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let _unset = EnvVarGuard::set(DISABLE_BUDGET_ENFORCEMENT_ENV, None);
+        assert!(budget_enforcement_enabled(), "unset → enabled");
+        let _on = EnvVarGuard::set(DISABLE_BUDGET_ENFORCEMENT_ENV, Some("1"));
+        assert!(!budget_enforcement_enabled(), "1 → disabled");
+        let _true = EnvVarGuard::set(DISABLE_BUDGET_ENFORCEMENT_ENV, Some("true"));
+        assert!(!budget_enforcement_enabled(), "true → disabled");
+        let _other = EnvVarGuard::set(DISABLE_BUDGET_ENFORCEMENT_ENV, Some("0"));
+        assert!(budget_enforcement_enabled(), "0 → enabled (only 1/true disable)");
+    }
 
     #[test]
     fn refresh_skips_archived_runs_and_keeps_history() {

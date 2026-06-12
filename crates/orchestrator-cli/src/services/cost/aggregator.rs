@@ -275,6 +275,26 @@ pub struct BudgetExceededRecord {
     pub observed_at: DateTime<Utc>,
 }
 
+impl BudgetExceededRecord {
+    /// One-line human cause for the breach, e.g.
+    /// `budget exceeded ($7.50 > $5.00 max_cost_usd)` for a workflow cap or
+    /// `phase impl budget exceeded (150000 > 100000 max_tokens)` for a phase
+    /// cap. Reused by the task pause annotation and the `status` /
+    /// `daemon health` breach renderers so the wording stays consistent.
+    pub fn breach_summary(&self) -> String {
+        let (actual, budget) = match self.limit_field {
+            BudgetLimitField::MaxCostUsd => (format!("${:.2}", self.actual), format!("${:.2}", self.budget)),
+            BudgetLimitField::MaxTokens => (format!("{}", self.actual as u64), format!("{}", self.budget as u64)),
+        };
+        match self.phase_id.as_deref() {
+            Some(phase_id) => {
+                format!("phase {phase_id} budget exceeded ({actual} > {budget} {})", self.limit_field.as_str())
+            }
+            None => format!("budget exceeded ({actual} > {budget} {})", self.limit_field.as_str()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum BudgetLimitKind {

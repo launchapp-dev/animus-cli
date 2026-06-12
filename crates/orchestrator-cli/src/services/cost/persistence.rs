@@ -17,6 +17,51 @@ use super::aggregator::{BudgetExceededRecord, CostState, COST_STATE_SCHEMA_ID};
 
 pub const COST_STATE_FILE_NAME: &str = "cost-state.v1.json";
 pub const DECISIONS_FILE_NAME: &str = "decisions.jsonl";
+pub const BUDGET_ENFORCEMENT_FILE_NAME: &str = "budget-enforcement.v1.json";
+pub const BUDGET_ENFORCEMENT_SCHEMA_ID: &str = "animus.budget-enforcement.v1";
+
+/// Last-known status of the daemon's budget-enforcement housekeeping leg,
+/// written by the sweep each heartbeat (even when the kill-switch skips the
+/// actual enforcement) so `daemon health` / `animus status` can report
+/// `{enabled, last_sweep_at}` without reading the daemon's process env.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BudgetEnforcementStatus {
+    pub schema: String,
+    /// `false` when `ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT=1` skipped the
+    /// enforcement leg on the most recent sweep.
+    pub enabled: bool,
+    /// RFC3339 timestamp of the most recent sweep (enabled or skipped).
+    pub last_sweep_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub fn budget_enforcement_status_path(project_root: &Path) -> PathBuf {
+    scoped_root(project_root).join(BUDGET_ENFORCEMENT_FILE_NAME)
+}
+
+/// Persist the budget-enforcement leg status (atomic write). Best-effort:
+/// the caller logs but does not fail the tick on a write error.
+pub fn save_budget_enforcement_status(project_root: &Path, enabled: bool) -> Result<()> {
+    let status = BudgetEnforcementStatus {
+        schema: BUDGET_ENFORCEMENT_SCHEMA_ID.to_string(),
+        enabled,
+        last_sweep_at: chrono::Utc::now(),
+    };
+    let path = budget_enforcement_status_path(project_root);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).with_context(|| format!("create budget-enforcement parent {}", parent.display()))?;
+    }
+    let serialized = serde_json::to_string_pretty(&status).context("serialize budget-enforcement status")?;
+    atomic_write(&path, serialized.as_bytes())
+        .with_context(|| format!("write budget-enforcement status {}", path.display()))
+}
+
+/// Read the persisted budget-enforcement leg status, or `None` when the
+/// daemon has not run a sweep yet (file absent / unreadable / malformed).
+pub fn load_budget_enforcement_status(project_root: &Path) -> Option<BudgetEnforcementStatus> {
+    let path = budget_enforcement_status_path(project_root);
+    let text = fs::read_to_string(&path).ok()?;
+    serde_json::from_str(text.trim()).ok()
+}
 
 /// `<scoped-root>` for the given project root, falling back to
 /// `<project_root>/.animus` when the repository scope cannot be
@@ -188,6 +233,22 @@ mod tests {
         let read_back = read_decision_records(&project_root).unwrap();
         assert_eq!(read_back.len(), 2);
         assert_eq!(read_back[0].workflow_run_id, "wf-x-1");
+    }
+
+    #[test]
+    fn budget_enforcement_status_round_trips() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let (_override_guard, project_root) = arrange_override(&tmp);
+        // No sweep yet → None.
+        assert!(load_budget_enforcement_status(&project_root).is_none());
+        save_budget_enforcement_status(&project_root, true).unwrap();
+        let loaded = load_budget_enforcement_status(&project_root).expect("status persisted");
+        assert!(loaded.enabled);
+        assert_eq!(loaded.schema, BUDGET_ENFORCEMENT_SCHEMA_ID);
+        // A later sweep can flip enabled → false (kill-switch engaged).
+        save_budget_enforcement_status(&project_root, false).unwrap();
+        assert!(!load_budget_enforcement_status(&project_root).unwrap().enabled);
     }
 
     #[test]

@@ -257,7 +257,7 @@ async fn enforce_on_exceed_action(
     match dispatch_workflow_event(
         hub.clone(),
         project_root,
-        WorkflowEvent::Pause { workflow_id: record.workflow_id.clone() },
+        WorkflowEvent::Pause { workflow_id: record.workflow_id.clone(), reason_detail: Some(record.breach_summary()) },
     )
     .await
     {

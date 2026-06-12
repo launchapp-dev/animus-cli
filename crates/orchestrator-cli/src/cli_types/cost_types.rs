@@ -79,11 +79,13 @@ pub(crate) enum CostTopBy {
     Cost,
     /// Rank model groups by total USD cost.
     Model,
+    /// Rank provider / tool groups by total USD cost.
+    Provider,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct CostTopArgs {
-    /// Rank by total tokens, total USD cost, or model group.
+    /// Rank by total tokens, total USD cost, or model/provider group.
     #[arg(long, value_enum, default_value_t = CostTopBy::Cost)]
     pub(crate) by: CostTopBy,
     /// Number of workflows to list.

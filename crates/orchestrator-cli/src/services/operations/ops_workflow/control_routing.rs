@@ -241,10 +241,13 @@ impl WorkflowRouting for WorkflowRoutingImpl {
 
     async fn workflow_pause(&self, request: WirePauseRequest) -> Result<Unit, ControlError> {
         let hub = self.hub()?;
-        let _ =
-            dispatch_workflow_event(hub, &self.project_root_str(), WorkflowEvent::Pause { workflow_id: request.id })
-                .await
-                .map_err(internal)?;
+        let _ = dispatch_workflow_event(
+            hub,
+            &self.project_root_str(),
+            WorkflowEvent::Pause { workflow_id: request.id, reason_detail: None },
+        )
+        .await
+        .map_err(internal)?;
         Ok(Unit::default())
     }
 

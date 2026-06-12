@@ -66,6 +66,20 @@ impl DefaultProjectTickServices for CliProjectTickServices {
     /// next heartbeat.
     async fn enforce_budget_caps(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<Vec<BudgetBreachEvent>> {
         let logger = self.logger.clone();
+        // Record the leg status every sweep — even when the kill-switch
+        // skips enforcement — so `daemon health` / `animus status` can show
+        // `budget_enforcement: {enabled, last_sweep_at}` without reading the
+        // daemon's process env. A persistence failure is non-fatal.
+        let enabled = crate::services::cost::budget_enforcement_enabled();
+        if let Err(error) = crate::services::cost::save_budget_enforcement_status(std::path::Path::new(root), enabled) {
+            self.logger.warn("budget", format!("failed to record budget-enforcement status: {error}")).emit();
+        }
+        if !enabled {
+            // Kill-switch active: skip the enforcement leg entirely (no
+            // scan, no pause, no notify). Logged once per sweep at debug
+            // cadence via the warn channel for operator visibility.
+            return Ok(Vec::new());
+        }
         let mut warn = |message: String| {
             logger.warn("budget", message).emit();
         };
@@ -416,6 +430,36 @@ mod tests {
             .await
             .expect("task should be created");
         (hub, task.id)
+    }
+
+    #[tokio::test]
+    async fn budget_kill_switch_skips_enforcement_leg_but_records_status() {
+        use super::CliProjectTickServices;
+        use crate::services::cost::DISABLE_BUDGET_ENFORCEMENT_ENV;
+        use orchestrator_daemon_runtime::DefaultProjectTickServices;
+
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let state_root = temp.path().join("scope");
+        std::fs::create_dir_all(&state_root).unwrap();
+        let _override = EnvVarGuard::set("ANIMUS_COST_STATE_ROOT", Some(state_root.to_string_lossy().as_ref()));
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+        let root = project_root.to_string_lossy().to_string();
+
+        let hub: Arc<dyn ServiceHub> = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let logger = Arc::new(orchestrator_logging::Logger::for_project(&project_root));
+        let mut services = CliProjectTickServices { logger };
+
+        let _off = EnvVarGuard::set(DISABLE_BUDGET_ENFORCEMENT_ENV, Some("1"));
+        let events = services.enforce_budget_caps(hub, &root).await.expect("leg should not error");
+        assert!(events.is_empty(), "kill-switch must skip the enforcement leg");
+
+        let status = crate::services::cost::load_budget_enforcement_status(&project_root)
+            .expect("status recorded even when skipped");
+        assert!(!status.enabled, "recorded status reflects the kill-switch");
+        drop(home);
     }
 
     #[tokio::test]

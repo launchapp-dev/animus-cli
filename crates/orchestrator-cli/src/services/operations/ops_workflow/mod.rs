@@ -579,7 +579,7 @@ pub(crate) async fn handle_workflow(
             let outcome = dispatch_workflow_event(
                 hub.clone(),
                 project_root,
-                WorkflowEvent::Pause { workflow_id: args.id.clone() },
+                WorkflowEvent::Pause { workflow_id: args.id.clone(), reason_detail: None },
             )
             .await?;
             let workflow = outcome.workflow.ok_or_else(|| anyhow!("workflow '{}' not found", args.id))?;

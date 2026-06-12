@@ -40,6 +40,21 @@ struct StatusDashboard {
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
+    budget: BudgetSlice,
+}
+
+/// Active budget-breach rollup for the dashboard. A breach is "active" when
+/// its `on_exceed` is `pause` and the breaching workflow is still paused —
+/// see `crate::services::cost::breach_summary` for the heuristic.
+#[derive(Debug, Clone, Serialize)]
+struct BudgetSlice {
+    available: bool,
+    enforcement_enabled: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_sweep_at: Option<String>,
+    breaches: crate::services::cost::BudgetBreachSummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -270,6 +285,10 @@ pub(crate) async fn handle_status(project_root: &str, failures: usize, json: boo
             workflows_error,
         ),
         ci: ci_slice,
+        budget: build_budget_slice(
+            project_root,
+            workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
+        ),
     };
 
     if json {
@@ -324,6 +343,35 @@ fn build_daemon_slice(health: Option<&DaemonHealth>, error: Option<String>) -> D
             runner_connected: false,
             runner_pid: None,
             error,
+        },
+    }
+}
+
+/// Build the budget slice from scoped state. When the active-workflow list
+/// is available, a breach counts as "active" only while its workflow is
+/// still paused (the resolution heuristic); otherwise the rollup falls back
+/// to a 24h recency window.
+fn build_budget_slice(project_root: &str, active_workflows: Option<&[WorkflowActivitySummary]>) -> BudgetSlice {
+    let path = Path::new(project_root);
+    let enforcement = crate::services::cost::load_budget_enforcement_status(path);
+    let (enforcement_enabled, last_sweep_at) = match enforcement {
+        Some(status) => (status.enabled, Some(status.last_sweep_at.to_rfc3339())),
+        None => (crate::services::cost::budget_enforcement_enabled(), None),
+    };
+    match crate::services::cost::read_decision_records(path) {
+        Ok(records) => {
+            let paused: Option<std::collections::HashSet<String>> = active_workflows.map(|workflows| {
+                workflows.iter().filter(|w| w.status == "paused").map(|w| w.workflow_id.clone()).collect()
+            });
+            let breaches = crate::services::cost::summarize_breaches(&records, paused.as_ref());
+            BudgetSlice { available: true, enforcement_enabled, last_sweep_at, breaches, error: None }
+        }
+        Err(error) => BudgetSlice {
+            available: false,
+            enforcement_enabled,
+            last_sweep_at,
+            breaches: crate::services::cost::summarize_breaches(&[], None),
+            error: Some(error.to_string()),
         },
     }
 }
@@ -893,6 +941,29 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
         let _ = writeln!(&mut output, "  reason: {reason}");
     }
     if let Some(error) = dashboard.ci.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let budget = &dashboard.budget;
+    let _ = writeln!(&mut output, "Budget");
+    let _ = writeln!(&mut output, "  enforcement_enabled: {}", budget.enforcement_enabled);
+    if let Some(last) = budget.last_sweep_at.as_deref() {
+        let _ = writeln!(&mut output, "  last_sweep_at: {last}");
+    }
+    match budget.breaches.active {
+        Some(active) => {
+            let _ = writeln!(&mut output, "  active_breaches: {active}");
+        }
+        None => {
+            let _ = writeln!(&mut output, "  breaches_last_24h: {}", budget.breaches.recent_24h);
+        }
+    }
+    if let Some(offender) = budget.breaches.worst_offender.as_ref() {
+        let _ = writeln!(&mut output, "  worst_offender: {} — {}", offender.workflow_run_id, offender.summary);
+        let _ = writeln!(&mut output, "  (see `animus cost decisions`)");
+    }
+    if let Some(error) = budget.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
 

@@ -324,7 +324,7 @@ animus
 ├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
 │   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders. `--by provider|model` groups in-window active-run spend by tool or model with token/USD totals and percentages
 │   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`. `--by provider|model|phase` regroups the same run's spend (rejected for archived runs, which lack per-phase detail)
-│   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`. `--by model` switches to a cross-run model leaderboard (token/USD totals + percentages)
+│   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`. `--by model` / `--by provider` switch to a cross-run model/provider leaderboard (token/USD totals + percentages). Grouped views print a one-line note when the `unknown` attribution bucket exceeds 20% of grouped cost
 │   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets (workflow-level totals; not split by provider/model)
 │   └── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
 │   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders

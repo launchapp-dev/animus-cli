@@ -11,12 +11,34 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum WorkflowEvent {
-    Pause { workflow_id: String },
-    Resume { workflow_id: String, feedback: Option<String> },
-    Cancel { workflow_id: String },
-    ApproveManualPhase { workflow_id: String, phase_id: String, note: Option<String> },
-    RejectManualPhase { workflow_id: String, phase_id: String, note: Option<String> },
-    StaleReset { task_id: String, reason: Option<String> },
+    /// Pause a workflow. `reason_detail` (when present) is appended to the
+    /// task's pause annotation as a human cause (e.g. a budget breach
+    /// summary), so `animus subject get` can show why it stalled.
+    Pause {
+        workflow_id: String,
+        reason_detail: Option<String>,
+    },
+    Resume {
+        workflow_id: String,
+        feedback: Option<String>,
+    },
+    Cancel {
+        workflow_id: String,
+    },
+    ApproveManualPhase {
+        workflow_id: String,
+        phase_id: String,
+        note: Option<String>,
+    },
+    RejectManualPhase {
+        workflow_id: String,
+        phase_id: String,
+        note: Option<String>,
+    },
+    StaleReset {
+        task_id: String,
+        reason: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -32,7 +54,7 @@ pub async fn dispatch_workflow_event(
     event: WorkflowEvent,
 ) -> Result<WorkflowEventOutcome> {
     match event {
-        WorkflowEvent::Pause { workflow_id } => {
+        WorkflowEvent::Pause { workflow_id, reason_detail } => {
             let workflow = hub.workflows().pause(&workflow_id).await?;
             // Annotate the task so `animus subject get` explains the stall.
             // Best-effort, and only when the pause actually landed: a no-op
@@ -41,7 +63,8 @@ pub async fn dispatch_workflow_event(
             let task = if let Some(task_id) =
                 (workflow.status == WorkflowStatus::Paused).then(|| workflow_task_id(&workflow)).flatten()
             {
-                let _ = project_task_workflow_paused(hub.clone(), &task_id, &workflow_id).await;
+                let _ =
+                    project_task_workflow_paused(hub.clone(), &task_id, &workflow_id, reason_detail.as_deref()).await;
                 hub.tasks().get(&task_id).await.ok()
             } else {
                 None
@@ -288,7 +311,7 @@ mod tests {
         let outcome = dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
             ".",
-            WorkflowEvent::Pause { workflow_id: workflow_id.clone() },
+            WorkflowEvent::Pause { workflow_id: workflow_id.clone(), reason_detail: None },
         )
         .await
         .expect("pause dispatch");
@@ -310,7 +333,7 @@ mod tests {
         dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
             ".",
-            WorkflowEvent::Pause { workflow_id: workflow_id.clone() },
+            WorkflowEvent::Pause { workflow_id: workflow_id.clone(), reason_detail: None },
         )
         .await
         .expect("pause dispatch");
@@ -361,9 +384,13 @@ mod tests {
         hub.tasks().replace(task).await.expect("seed failure reason");
         let workflow_id = start_workflow_for_task(&hub, "TASK-10").await;
 
-        dispatch_workflow_event(hub.clone() as Arc<dyn ServiceHub>, ".", WorkflowEvent::Pause { workflow_id })
-            .await
-            .expect("pause dispatch");
+        dispatch_workflow_event(
+            hub.clone() as Arc<dyn ServiceHub>,
+            ".",
+            WorkflowEvent::Pause { workflow_id, reason_detail: None },
+        )
+        .await
+        .expect("pause dispatch");
 
         let task = hub.tasks().get("TASK-10").await.expect("task");
         assert_eq!(
@@ -413,9 +440,13 @@ mod tests {
         let hub = Arc::new(InMemoryServiceHub::new());
         upsert_task(&hub, "TASK-6", TaskStatus::InProgress).await;
         let workflow_id = start_workflow_for_task(&hub, "TASK-6").await;
-        dispatch_workflow_event(hub.clone() as Arc<dyn ServiceHub>, ".", WorkflowEvent::Pause { workflow_id })
-            .await
-            .expect("pause dispatch");
+        dispatch_workflow_event(
+            hub.clone() as Arc<dyn ServiceHub>,
+            ".",
+            WorkflowEvent::Pause { workflow_id, reason_detail: None },
+        )
+        .await
+        .expect("pause dispatch");
 
         hub.tasks().set_status("TASK-6", TaskStatus::Ready, false).await.expect("reset to ready");
 
@@ -444,10 +475,13 @@ mod tests {
         let workflow_id = start_workflow_for_task(&hub, "TASK-8").await;
         complete_workflow(&hub, &workflow_id).await;
 
-        let outcome =
-            dispatch_workflow_event(hub.clone() as Arc<dyn ServiceHub>, ".", WorkflowEvent::Pause { workflow_id })
-                .await
-                .expect("pause dispatch");
+        let outcome = dispatch_workflow_event(
+            hub.clone() as Arc<dyn ServiceHub>,
+            ".",
+            WorkflowEvent::Pause { workflow_id, reason_detail: None },
+        )
+        .await
+        .expect("pause dispatch");
         assert_eq!(outcome.workflow.expect("workflow").status, WorkflowStatus::Completed, "pause is a no-op");
 
         let task = hub.tasks().get("TASK-8").await.expect("task");
