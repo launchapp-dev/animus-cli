@@ -1,9 +1,13 @@
+use orchestrator_config::skill_definition::{
+    apply_skill_for_execution, preview_skill_application, SkillApplicationResult,
+};
+use orchestrator_config::skill_resolution::ResolvedSkill;
 use orchestrator_core::{PhaseDecision, PhaseDecisionVerdict};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::phase_metadata::PhaseExecutionOutcome;
+use crate::phase_metadata::{PhaseExecutionMetadata, PhaseExecutionOutcome};
 
 const MAX_PRIOR_CONTEXT_CHARS: usize = 8000;
 
@@ -156,6 +160,101 @@ pub struct PersistedPhaseOutput {
     pub guardrail_violations: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requested_skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resolved_skills: Vec<PersistedPhaseSkill>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub applied_skills: Vec<PersistedPhaseSkill>,
+}
+
+/// Compact per-skill record persisted alongside a phase output so
+/// `animus output phase-outputs` can show that a skill actually took
+/// effect (name + source scope + which contribution kinds it made)
+/// without embedding the full `SkillDefinition` (prompt text and all)
+/// in every phase output file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersistedPhaseSkill {
+    pub name: String,
+    /// Source scope label, e.g. `project`, `user`, `installed`,
+    /// `built-in`, `agent-host:<host>/<scope>` (the `Display` form of
+    /// [`orchestrator_config::skill_scoping::SkillSourceOrigin`]).
+    pub source: String,
+    /// Contribution kinds the skill made (or would make, for resolved-but
+    /// -not-applied skills): `prompt`, `tool_policy`, `mcp_servers`,
+    /// `args`, `env`, `codex_config`, `model`, `timeout`, `capabilities`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contributions: Vec<String>,
+}
+
+/// Bucket a [`SkillApplicationResult`] into coarse contribution-kind
+/// labels for operator-facing views.
+pub fn skill_contribution_kinds(application: &SkillApplicationResult) -> Vec<String> {
+    let mut kinds = Vec::new();
+    if !application.system_prompt_fragments.is_empty()
+        || !application.prompt_prefixes.is_empty()
+        || !application.prompt_suffixes.is_empty()
+        || !application.directives.is_empty()
+    {
+        kinds.push("prompt".to_string());
+    }
+    if application.tool_policy.is_some() {
+        kinds.push("tool_policy".to_string());
+    }
+    if !application.mcp_servers.is_empty() {
+        kinds.push("mcp_servers".to_string());
+    }
+    if !application.extra_args.is_empty() {
+        kinds.push("args".to_string());
+    }
+    if !application.env.is_empty() {
+        kinds.push("env".to_string());
+    }
+    if !application.codex_config_overrides.is_empty() {
+        kinds.push("codex_config".to_string());
+    }
+    if application.model.is_some() {
+        kinds.push("model".to_string());
+    }
+    if application.timeout_secs.is_some() {
+        kinds.push("timeout".to_string());
+    }
+    if !application.capabilities.is_empty() {
+        kinds.push("capabilities".to_string());
+    }
+    kinds
+}
+
+fn persisted_phase_skill(
+    skill: &ResolvedSkill,
+    selected_tool: Option<&str>,
+    selected_model: Option<&str>,
+) -> PersistedPhaseSkill {
+    // Per-skill contributions: apply against the actually selected
+    // tool/model when known (matches what the runner injected); fall back
+    // to the activation-free preview so unconditional skills still report
+    // their kinds when no tool was recorded.
+    let application = match selected_tool {
+        Some(tool) => apply_skill_for_execution(&skill.definition, tool, selected_model),
+        None => preview_skill_application(&skill.definition),
+    };
+    PersistedPhaseSkill {
+        name: skill.definition.name.clone(),
+        source: skill.source.to_string(),
+        contributions: application.as_ref().map(skill_contribution_kinds).unwrap_or_default(),
+    }
+}
+
+/// Project the skill fields of a [`PhaseExecutionMetadata`] into the
+/// compact persisted form `(requested, resolved, applied)`.
+pub fn persisted_skills_from_metadata(
+    metadata: &PhaseExecutionMetadata,
+) -> (Vec<String>, Vec<PersistedPhaseSkill>, Vec<PersistedPhaseSkill>) {
+    let tool = metadata.selected_tool.as_deref();
+    let model = metadata.selected_model.as_deref();
+    let resolved = metadata.resolved_skills.iter().map(|skill| persisted_phase_skill(skill, tool, model)).collect();
+    let applied = metadata.applied_skills.iter().map(|skill| persisted_phase_skill(skill, tool, model)).collect();
+    (metadata.requested_skills.clone(), resolved, applied)
 }
 
 fn scoped_state_base(project_root: &str) -> PathBuf {
@@ -173,6 +272,23 @@ pub fn persist_phase_output(
     phase_id: &str,
     attempt: u32,
     outcome: &PhaseExecutionOutcome,
+) -> anyhow::Result<()> {
+    persist_phase_output_with_metadata(project_root, workflow_id, phase_id, attempt, outcome, None)
+}
+
+/// Like [`persist_phase_output`] but also records the skill fields of the
+/// phase's [`PhaseExecutionMetadata`] (requested / resolved / applied) in a
+/// compact form so `animus output phase-outputs` can show whether an
+/// attached skill actually took effect. Additive: runners pinned to older
+/// revisions keep calling [`persist_phase_output`] and simply persist no
+/// skill records.
+pub fn persist_phase_output_with_metadata(
+    project_root: &str,
+    workflow_id: &str,
+    phase_id: &str,
+    attempt: u32,
+    outcome: &PhaseExecutionOutcome,
+    metadata: Option<&PhaseExecutionMetadata>,
 ) -> anyhow::Result<()> {
     #[cfg(any(test, feature = "test-fault"))]
     test_fault::maybe_fail()?;
@@ -209,6 +325,8 @@ pub fn persist_phase_output(
             ),
         };
 
+    let (requested_skills, resolved_skills, applied_skills) =
+        metadata.map(persisted_skills_from_metadata).unwrap_or_default();
     let output = PersistedPhaseOutput {
         phase_id: phase_id.to_string(),
         completed_at: chrono::Utc::now().to_rfc3339(),
@@ -221,6 +339,9 @@ pub fn persist_phase_output(
         evidence,
         guardrail_violations,
         payload,
+        requested_skills,
+        resolved_skills,
+        applied_skills,
     };
 
     let payload = serde_json::to_string_pretty(&output)?;
@@ -588,6 +709,9 @@ mod tests {
                 target_phase: None,
                 guardrail_violations: vec![],
                 payload: None,
+                requested_skills: vec![],
+                resolved_skills: vec![],
+                applied_skills: vec![],
             },
             PersistedPhaseOutput {
                 phase_id: "implementation".to_string(),
@@ -601,6 +725,9 @@ mod tests {
                 target_phase: None,
                 guardrail_violations: vec![],
                 payload: None,
+                requested_skills: vec![],
+                resolved_skills: vec![],
+                applied_skills: vec![],
             },
         ];
         let result = format_prior_phase_outputs(&outputs);
@@ -753,6 +880,9 @@ mod tests {
                 target_phase: None,
                 guardrail_violations: vec![],
                 payload: None,
+                requested_skills: vec![],
+                resolved_skills: vec![],
+                applied_skills: vec![],
             },
             PersistedPhaseOutput {
                 phase_id: "recent".to_string(),
@@ -766,10 +896,77 @@ mod tests {
                 target_phase: None,
                 guardrail_violations: vec![],
                 payload: None,
+                requested_skills: vec![],
+                resolved_skills: vec![],
+                applied_skills: vec![],
             },
         ];
         let result = format_prior_phase_outputs(&outputs);
         assert!(result.len() <= MAX_PRIOR_CONTEXT_CHARS);
         assert!(result.contains("### recent (completed)"));
+    }
+
+    fn fixture_skill(name: &str, body: &str) -> ResolvedSkill {
+        let definition =
+            orchestrator_config::skill_definition::parse_skill_definition(&format!("name: {name}\n{body}"))
+                .expect("fixture skill yaml should parse");
+        ResolvedSkill { definition, source: orchestrator_config::skill_scoping::SkillSourceOrigin::Project }
+    }
+
+    fn fixture_metadata() -> PhaseExecutionMetadata {
+        PhaseExecutionMetadata {
+            phase_id: "code-review".to_string(),
+            phase_mode: "agent".to_string(),
+            phase_definition_hash: String::new(),
+            agent_runtime_config_hash: String::new(),
+            agent_runtime_schema: String::new(),
+            agent_runtime_version: 0,
+            agent_runtime_source: String::new(),
+            agent_id: None,
+            agent_profile_hash: None,
+            selected_tool: Some("claude".to_string()),
+            selected_model: None,
+            effective_capabilities: Default::default(),
+            requested_skills: Vec::new(),
+            resolved_skills: Vec::new(),
+            applied_skills: Vec::new(),
+            skill_application: None,
+        }
+    }
+
+    #[test]
+    fn skill_contribution_kinds_buckets_application_fields() {
+        let mut application = SkillApplicationResult::default();
+        assert!(skill_contribution_kinds(&application).is_empty());
+        application.prompt_prefixes.push("prefix".to_string());
+        application.mcp_servers.push("context7".to_string());
+        application.env.insert("KEY".to_string(), "value".to_string());
+        application.extra_args.push("--flag".to_string());
+        assert_eq!(skill_contribution_kinds(&application), vec!["prompt", "mcp_servers", "args", "env"]);
+    }
+
+    #[test]
+    fn persisted_skills_from_metadata_records_scope_and_contributions() {
+        let mut metadata = fixture_metadata();
+        metadata.requested_skills = vec!["review-checklist".to_string(), "ghost".to_string()];
+        let checklist = fixture_skill(
+            "review-checklist",
+            "prompt:\n  prefix: check things\ntool_policy:\n  allow:\n    - task.*\n",
+        );
+        let codex_only = fixture_skill("codex-only", "activation:\n  tools: [codex]\nprompt:\n  prefix: codex\n");
+        metadata.resolved_skills = vec![checklist.clone(), codex_only];
+        metadata.applied_skills = vec![checklist];
+
+        let (requested, resolved, applied) = persisted_skills_from_metadata(&metadata);
+        assert_eq!(requested, vec!["review-checklist", "ghost"]);
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].name, "review-checklist");
+        assert_eq!(applied[0].source, "project");
+        assert_eq!(applied[0].contributions, vec!["prompt", "tool_policy"]);
+        // Activation-gated skill whose activation does not match the
+        // selected tool resolves with no contribution kinds.
+        assert_eq!(resolved[1].name, "codex-only");
+        assert!(resolved[1].contributions.is_empty());
     }
 }

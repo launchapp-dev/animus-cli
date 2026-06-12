@@ -255,7 +255,7 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
 /// path, and a one-line explanation of where the real knob lives. Warnings
 /// never affect `valid` / `compiled` — existing configs keep compiling.
 fn unenforced_warnings_payload(project_root: &str) -> Vec<Value> {
-    orchestrator_core::unenforced_project_yaml_warnings(Path::new(project_root))
+    let mut warnings: Vec<Value> = orchestrator_core::unenforced_project_yaml_warnings(Path::new(project_root))
         .into_iter()
         .map(|warning| {
             serde_json::json!({
@@ -264,7 +264,23 @@ fn unenforced_warnings_payload(project_root: &str) -> Vec<Value> {
                 "message": warning.to_string(),
             })
         })
-        .collect()
+        .collect();
+    // Explicit `skills:` declarations that do not resolve against the
+    // project's skill sources (typo'd or not-yet-installed names). Same
+    // never-fails-validation posture as the unenforced-field warnings.
+    warnings.extend(
+        orchestrator_core::missing_project_skill_reference_warnings(Path::new(project_root)).into_iter().map(
+            |warning| {
+                serde_json::json!({
+                    "field": warning.field,
+                    "source": warning.source,
+                    "skill": warning.skill,
+                    "message": warning.to_string(),
+                })
+            },
+        ),
+    );
+    warnings
 }
 
 /// CLI surface for `animus workflow config reload`. Runs the same

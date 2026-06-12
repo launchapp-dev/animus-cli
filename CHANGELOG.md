@@ -6,6 +6,27 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Skill application is now VERIFIABLE end to end. `animus output
+  phase-outputs` grew a human-readable per-phase view (verdict, reason,
+  commit summary) with a Skills block showing requested vs applied
+  (source scope + contribution kinds: prompt / tool_policy / mcp_servers /
+  args / env / codex_config / model / timeout / capabilities) vs missing
+  (not found — check `animus skill list`) skills; `--json` keeps the
+  raw envelope and now carries compact persisted skill records.
+  `PersistedPhaseOutput` gained optional `requested_skills` /
+  `resolved_skills` / `applied_skills` fields (old outputs deserialize
+  unchanged; skill-less outputs serialize byte-identically), populated via
+  the new `persist_phase_output_with_metadata` once the out-of-tree
+  `animus-workflow-runner-default` pin bumps to pass its
+  `PhaseExecutionMetadata` through. Typo'd skill names also stopped being
+  a silent no-op at authoring time: explicit workflow-YAML `skills:`
+  declarations (`phases.<id>.skills`, `agents.<id>.skills`) that do not
+  resolve against the project's skill sources WARN (never error) on the
+  compile stderr and in the `warnings` array of `animus workflow config
+  validate` / `compile`; implicit builtin agent-profile defaults (pack
+  names absent until the pack installs) are exempt, matching the runtime's
+  explicit/implicit split.
+
 - `animus plugin install-defaults --flavor <name>` (default: `default`):
   the flavor manifest (`flavors/<name>.toml`, with a binary-bundled fallback
   for `default`) is now the source of truth for the install plan. Everything
