@@ -1,6 +1,6 @@
 use super::{
-    push_opt, SubjectCreateInput, SubjectGetInput, SubjectListInput, SubjectNextInput, SubjectStatusInput,
-    SubjectUpdateInput,
+    push_opt, SubjectBatchCreateItem, SubjectBatchUpdateItem, SubjectCreateInput, SubjectGetInput, SubjectListInput,
+    SubjectNextInput, SubjectStatusInput, SubjectUpdateInput, MAX_BATCH_SIZE,
 };
 
 pub(super) fn build_subject_list_args(input: &SubjectListInput) -> Vec<String> {
@@ -59,6 +59,73 @@ pub(super) fn build_subject_update_args(input: &SubjectUpdateInput) -> Vec<Strin
         args.push(input.labels.join(","));
     }
     args
+}
+
+pub(super) fn build_subject_batch_create_item_args(kind: &str, item: &SubjectBatchCreateItem) -> Vec<String> {
+    build_subject_create_args(&SubjectCreateInput {
+        kind: kind.to_string(),
+        title: item.title.clone(),
+        status: item.status.clone(),
+        priority: item.priority.clone(),
+        labels: item.labels.clone(),
+        body: item.body.clone(),
+        project_root: None,
+    })
+}
+
+pub(super) fn build_subject_batch_update_item_args(kind: &str, item: &SubjectBatchUpdateItem) -> Vec<String> {
+    build_subject_update_args(&SubjectUpdateInput {
+        kind: kind.to_string(),
+        id: item.id.clone(),
+        status: item.status.clone(),
+        priority: item.priority.clone(),
+        labels: item.labels.clone(),
+        project_root: None,
+    })
+}
+
+fn validate_batch_shape<T>(tool_name: &str, kind: &str, items: &[T]) -> Result<(), String> {
+    if kind.trim().is_empty() {
+        return Err(format!("{tool_name}: kind must not be empty"));
+    }
+    if items.is_empty() {
+        return Err(format!("{tool_name}: items must not be empty"));
+    }
+    if items.len() > MAX_BATCH_SIZE {
+        return Err(format!("{tool_name}: items count {} exceeds maximum {MAX_BATCH_SIZE}", items.len()));
+    }
+    Ok(())
+}
+
+pub(super) fn validate_subject_batch_create_input(
+    tool_name: &str,
+    kind: &str,
+    items: &[SubjectBatchCreateItem],
+) -> Result<(), String> {
+    validate_batch_shape(tool_name, kind, items)?;
+    for (i, item) in items.iter().enumerate() {
+        if item.title.trim().is_empty() {
+            return Err(format!("{tool_name}: item[{i}].title must not be empty"));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn validate_subject_batch_update_input(
+    tool_name: &str,
+    kind: &str,
+    items: &[SubjectBatchUpdateItem],
+) -> Result<(), String> {
+    validate_batch_shape(tool_name, kind, items)?;
+    for (i, item) in items.iter().enumerate() {
+        if item.id.trim().is_empty() {
+            return Err(format!("{tool_name}: item[{i}].id must not be empty"));
+        }
+        if item.status.is_none() && item.priority.is_none() && item.labels.is_empty() {
+            return Err(format!("{tool_name}: item[{i}] requires at least one of status / priority / labels"));
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn build_subject_next_args(input: &SubjectNextInput) -> Vec<String> {

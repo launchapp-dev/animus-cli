@@ -58,6 +58,42 @@ pub(crate) fn internal_error(message: impl Into<String>) -> anyhow::Error {
     CliError::new(CliErrorKind::Internal, message).into()
 }
 
+/// Structured remediation payload for "a required plugin is not installed"
+/// failures. Carried under `error.details.remediation` in the
+/// `animus.cli.v1` envelope so machine callers (notably the MCP server's
+/// tool-error payloads) can surface the exact install command without
+/// scraping the human-readable message.
+pub(crate) fn missing_plugin_remediation(
+    install_command: impl Into<String>,
+    next_step: impl Into<String>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "missing_plugin",
+        "install_command": install_command.into(),
+        "next_step": next_step.into(),
+    })
+}
+
+/// Structured remediation payload for "this command needs a running daemon"
+/// failures.
+pub(crate) fn daemon_not_running_remediation() -> serde_json::Value {
+    serde_json::json!({
+        "kind": "daemon_not_running",
+        "next_step": "animus daemon start",
+    })
+}
+
+/// Build a typed [`CliError`] that carries a structured `remediation`
+/// object in its details. The human-readable `message` is unchanged from
+/// what the plain constructors would produce — this only adds structure.
+pub(crate) fn error_with_remediation(
+    kind: CliErrorKind,
+    message: impl Into<String>,
+    remediation: serde_json::Value,
+) -> anyhow::Error {
+    CliError::new(kind, message).with_details(serde_json::json!({ "remediation": remediation })).into()
+}
+
 pub(crate) fn classify_cli_error_kind(err: &anyhow::Error) -> CliErrorKind {
     for source in err.chain() {
         if let Some(cli_error) = source.downcast_ref::<CliError>() {
@@ -122,6 +158,26 @@ mod tests {
             .into();
         let details = extract_cli_error_details(&err).expect("details should be present");
         assert_eq!(details.get("startup_log_tail").and_then(serde_json::Value::as_str), Some("error: panic"));
+    }
+
+    #[test]
+    fn error_with_remediation_keeps_kind_and_carries_structured_payload() {
+        let err = error_with_remediation(
+            CliErrorKind::Unavailable,
+            "no subject backend mounted",
+            missing_plugin_remediation("animus plugin install-defaults --include-subjects", "Install, then retry."),
+        );
+        assert_eq!(classify_cli_error_kind(&err), CliErrorKind::Unavailable);
+        let details = extract_cli_error_details(&err).expect("details present");
+        assert_eq!(details.pointer("/remediation/kind").and_then(serde_json::Value::as_str), Some("missing_plugin"));
+        assert_eq!(
+            details.pointer("/remediation/install_command").and_then(serde_json::Value::as_str),
+            Some("animus plugin install-defaults --include-subjects")
+        );
+
+        let daemon = daemon_not_running_remediation();
+        assert_eq!(daemon.get("kind").and_then(serde_json::Value::as_str), Some("daemon_not_running"));
+        assert_eq!(daemon.get("next_step").and_then(serde_json::Value::as_str), Some("animus daemon start"));
     }
 
     #[test]

@@ -29,5 +29,6 @@ pub use plugin_supervisor::{
     SupervisorConfig, SupervisorError,
 };
 pub use session_backend_resolver::{
-    canonical_tool_alias, is_reserved_provider_tool, SessionBackendResolver, RESERVED_PROVIDER_TOOLS,
+    canonical_tool_alias, is_reserved_provider_tool, provider_install_command, SessionBackendResolver,
+    RESERVED_PROVIDER_TOOLS,
 };

@@ -50,6 +50,50 @@ pub(super) struct SubjectUpdateInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct SubjectBatchCreateItem {
+    pub(super) title: String,
+    #[serde(default)]
+    pub(super) status: Option<String>,
+    #[serde(default)]
+    pub(super) priority: Option<String>,
+    #[serde(default)]
+    pub(super) labels: Vec<String>,
+    #[serde(default)]
+    pub(super) body: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct SubjectBatchCreateInput {
+    pub(super) kind: String,
+    pub(super) items: Vec<SubjectBatchCreateItem>,
+    #[serde(default)]
+    pub(super) on_error: OnError,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct SubjectBatchUpdateItem {
+    pub(super) id: String,
+    #[serde(default)]
+    pub(super) status: Option<String>,
+    #[serde(default)]
+    pub(super) priority: Option<String>,
+    #[serde(default)]
+    pub(super) labels: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct SubjectBatchUpdateInput {
+    pub(super) kind: String,
+    pub(super) items: Vec<SubjectBatchUpdateItem>,
+    #[serde(default)]
+    pub(super) on_error: OnError,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct SubjectNextInput {
     pub(super) kind: String,
     #[serde(default)]

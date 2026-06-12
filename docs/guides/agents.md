@@ -7,13 +7,13 @@ For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.m
 
 ## Overview
 
-Animus currently exposes **81 built-in MCP tools** across these families:
+Animus currently exposes **83 built-in MCP tools** across these families:
 
 | Group | Tools | Purpose |
 |---|---:|---|
 | `animus.agent.*` | 12 | Agent profiles, runs, memory, agent messaging, and blocking human-in-the-loop questions/approvals |
 | `animus.daemon.*` | 11 | Daemon lifecycle, health, events, and config |
-| `animus.subject.*` | 6 | Task, requirement, and external subject backends |
+| `animus.subject.*` | 8 | Task, requirement, and external subject backends, including bulk create/update |
 | `animus.workflow.*` | 16 | Workflow execution, control, and definition inspection |
 | `animus.queue.*` | 7 | Dispatch queue inspection and mutation |
 | `animus.output.*` | 6 | Run output, artifacts, JSONL, and live monitoring |
@@ -25,7 +25,7 @@ Animus currently exposes **81 built-in MCP tools** across these families:
 | `animus.tools.*` | 2 | Tool discovery over the live registry: ranked keyword search plus a grouped one-line catalog |
 
 **Tool discovery.** When you are unsure which tool fits an intent — or your
-context budget is too tight to carry all 81 schemas — start with
+context budget is too tight to carry all 83 schemas — start with
 `animus.tools.search` (e.g. `{"query": "pause workflow"}`). It searches the
 server's live registry (tool names, descriptions, and parameter names), ranks
 matches (name hits outrank description hits outrank parameter hits; an exact
@@ -101,6 +101,34 @@ ready subject:
 
 ```json
 { "kind": "task" }
+```
+
+Bulk operations mirror `animus.workflow.run-multiple`: pass up to 100 items
+and an `on_error` policy (`"stop"` is the default — remaining items are
+skipped after the first failure; `"continue"` processes every item). Results
+come back as an `animus.mcp.batch.result.v1` envelope with per-item outcomes,
+so one bad item never corrupts its neighbors.
+
+```json
+// animus.subject.batch-create
+{
+  "kind": "task",
+  "items": [
+    { "title": "Fix login redirect", "priority": "p1", "labels": ["bug"] },
+    { "title": "Add retry tests" }
+  ],
+  "on_error": "continue"
+}
+
+// animus.subject.batch-update
+{
+  "kind": "task",
+  "items": [
+    { "id": "task:TASK-001", "status": "ready" },
+    { "id": "task:TASK-002", "priority": "p0" }
+  ],
+  "on_error": "stop"
+}
 ```
 
 ## Workflow Operations
@@ -311,6 +339,16 @@ Each event carries a one-line `summary` and a ready-to-run `answer_command`.
 When the daemon is running with notifier plugins installed, a per-tick
 watcher fans fresh interaction events out to them (Slack / Telegram / HTTP)
 best-effort — notifier failures never block or fail the interaction.
+
+## Error Remediation
+
+Tool failures return a structured payload with the wrapped CLI `error`,
+`exit_code`, and `stderr`. For the determinate failure classes the payload
+also carries a machine-actionable `remediation` object — `missing_plugin`
+(with the exact `install_command` to run), `daemon_not_running` (with
+`next_step: "animus daemon start"`), or `invalid_input` (with a `help` hint).
+Act on `remediation` first when present; see the
+[remediation schema](../reference/mcp-tools.md#error-remediation) for details.
 
 ## Recommended Flow
 

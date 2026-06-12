@@ -243,6 +243,243 @@ fn validate_workflow_run_multiple_rejects_over_max() {
     assert!(err.contains("exceeds maximum"), "expected max-size error, got: {err}");
 }
 
+fn batch_create_item(title: &str) -> SubjectBatchCreateItem {
+    SubjectBatchCreateItem { title: title.to_string(), status: None, priority: None, labels: Vec::new(), body: None }
+}
+
+fn batch_update_item(id: &str, status: Option<&str>) -> SubjectBatchUpdateItem {
+    SubjectBatchUpdateItem {
+        id: id.to_string(),
+        status: status.map(str::to_string),
+        priority: None,
+        labels: Vec::new(),
+    }
+}
+
+#[test]
+fn validate_subject_batch_create_rejects_empty_items_and_kind() {
+    let err = validate_subject_batch_create_input("animus.subject.batch-create", "task", &[]).unwrap_err();
+    assert!(err.contains("items must not be empty"), "got: {err}");
+    let err = validate_subject_batch_create_input("animus.subject.batch-create", "  ", &[batch_create_item("a")])
+        .unwrap_err();
+    assert!(err.contains("kind must not be empty"), "got: {err}");
+}
+
+#[test]
+fn validate_subject_batch_create_rejects_empty_title_and_over_cap() {
+    let items = vec![batch_create_item("ok"), batch_create_item("  ")];
+    let err = validate_subject_batch_create_input("animus.subject.batch-create", "task", &items).unwrap_err();
+    assert!(err.contains("item[1].title must not be empty"), "got: {err}");
+
+    let items: Vec<SubjectBatchCreateItem> =
+        (0..=MAX_BATCH_SIZE).map(|i| batch_create_item(&format!("t{i}"))).collect();
+    let err = validate_subject_batch_create_input("animus.subject.batch-create", "task", &items).unwrap_err();
+    assert!(err.contains("exceeds maximum"), "got: {err}");
+}
+
+#[test]
+fn validate_subject_batch_update_rejects_empty_id_noop_patch_and_over_cap() {
+    let err = validate_subject_batch_update_input("animus.subject.batch-update", "task", &[]).unwrap_err();
+    assert!(err.contains("items must not be empty"), "got: {err}");
+
+    let items = vec![batch_update_item(" ", Some("ready"))];
+    let err = validate_subject_batch_update_input("animus.subject.batch-update", "task", &items).unwrap_err();
+    assert!(err.contains("item[0].id must not be empty"), "got: {err}");
+
+    let items = vec![batch_update_item("TASK-1", None)];
+    let err = validate_subject_batch_update_input("animus.subject.batch-update", "task", &items).unwrap_err();
+    assert!(err.contains("requires at least one of status / priority / labels"), "got: {err}");
+
+    let items: Vec<SubjectBatchUpdateItem> =
+        (0..=MAX_BATCH_SIZE).map(|i| batch_update_item(&format!("TASK-{i}"), Some("ready"))).collect();
+    let err = validate_subject_batch_update_input("animus.subject.batch-update", "task", &items).unwrap_err();
+    assert!(err.contains("exceeds maximum"), "got: {err}");
+}
+
+#[test]
+fn validate_subject_batch_inputs_accept_valid_items() {
+    let creates = vec![batch_create_item("Fix login"), batch_create_item("Add tests")];
+    assert!(validate_subject_batch_create_input("animus.subject.batch-create", "task", &creates).is_ok());
+    let updates = vec![batch_update_item("TASK-1", Some("ready"))];
+    assert!(validate_subject_batch_update_input("animus.subject.batch-update", "task", &updates).is_ok());
+}
+
+#[test]
+fn build_subject_batch_item_args_route_through_single_item_builders() {
+    let mut item = batch_create_item("Fix login");
+    item.priority = Some("p1".to_string());
+    item.labels = vec!["bug".to_string(), "auth".to_string()];
+    let args = build_subject_batch_create_item_args("task", &item);
+    assert_eq!(
+        args,
+        vec![
+            "subject".to_string(),
+            "create".to_string(),
+            "--kind".to_string(),
+            "task".to_string(),
+            "--title".to_string(),
+            "Fix login".to_string(),
+            "--priority".to_string(),
+            "p1".to_string(),
+            "--labels".to_string(),
+            "bug,auth".to_string(),
+        ]
+    );
+
+    let item = batch_update_item("TASK-9", Some("ready"));
+    let args = build_subject_batch_update_item_args("task", &item);
+    assert_eq!(
+        args,
+        vec![
+            "subject".to_string(),
+            "update".to_string(),
+            "--kind".to_string(),
+            "task".to_string(),
+            "--id".to_string(),
+            "TASK-9".to_string(),
+            "--status".to_string(),
+            "ready".to_string(),
+        ]
+    );
+}
+
+fn batch_exec_item(target_id: &str) -> BatchItemExec {
+    BatchItemExec {
+        target_id: target_id.to_string(),
+        command: format!("subject create --title {target_id}"),
+        args: vec!["subject".to_string(), "create".to_string(), "--title".to_string(), target_id.to_string()],
+    }
+}
+
+fn batch_success_result(title: &str) -> CliExecutionResult {
+    CliExecutionResult {
+        command: "animus".to_string(),
+        args: vec!["--json".to_string()],
+        requested_args: vec!["subject".to_string(), "create".to_string()],
+        project_root: "/tmp/project".to_string(),
+        exit_code: 0,
+        success: true,
+        stdout: String::new(),
+        stderr: String::new(),
+        stdout_json: Some(json!({
+            "schema": CLI_SCHEMA_ID,
+            "ok": true,
+            "data": { "result": { "title": title } }
+        })),
+        stderr_json: None,
+    }
+}
+
+fn batch_failure_result(message: &str) -> CliExecutionResult {
+    let mut result = sample_cli_failure_result();
+    result.exit_code = 2;
+    result.stderr = message.to_string();
+    result.stderr_json = Some(json!({
+        "schema": CLI_SCHEMA_ID,
+        "ok": false,
+        "error": { "code": "invalid_input", "message": message, "exit_code": 2 }
+    }));
+    result
+}
+
+/// Drive the batch loop with a fake executor: every item succeeds.
+#[tokio::test]
+async fn run_batch_items_happy_path_reports_all_success() {
+    let items = vec![batch_exec_item("A"), batch_exec_item("B")];
+    let result =
+        super::exec::run_batch_items("animus.subject.batch-create", items, &OnError::Stop, |args| async move {
+            let title = args.last().cloned().unwrap_or_default();
+            Ok(batch_success_result(&title))
+        })
+        .await;
+
+    assert_eq!(result.get("schema").and_then(Value::as_str), Some(BATCH_RESULT_SCHEMA));
+    assert_eq!(result.pointer("/summary/requested").and_then(Value::as_u64), Some(2));
+    assert_eq!(result.pointer("/summary/succeeded").and_then(Value::as_u64), Some(2));
+    assert_eq!(result.pointer("/summary/failed").and_then(Value::as_u64), Some(0));
+    assert_eq!(result.pointer("/summary/completed").and_then(Value::as_bool), Some(true));
+    assert_eq!(result.pointer("/results/0/status").and_then(Value::as_str), Some("success"));
+    assert_eq!(result.pointer("/results/1/result/result/title").and_then(Value::as_str), Some("B"));
+}
+
+/// on_error=stop: the failing item halts the batch; later items are marked
+/// skipped and the executor is never invoked for them.
+#[tokio::test]
+async fn run_batch_items_stop_mode_skips_after_first_failure_without_executing() {
+    let items = vec![batch_exec_item("A"), batch_exec_item("BAD"), batch_exec_item("C")];
+    let executed = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let executed_in = executed.clone();
+    let result = super::exec::run_batch_items("animus.subject.batch-create", items, &OnError::Stop, move |args| {
+        let executed_in = executed_in.clone();
+        async move {
+            let title = args.last().cloned().unwrap_or_default();
+            executed_in.lock().expect("lock").push(title.clone());
+            if title == "BAD" {
+                Ok(batch_failure_result("--title must not be empty"))
+            } else {
+                Ok(batch_success_result(&title))
+            }
+        }
+    })
+    .await;
+
+    assert_eq!(*executed.lock().expect("lock"), vec!["A".to_string(), "BAD".to_string()], "C must never execute");
+    assert_eq!(result.pointer("/summary/executed").and_then(Value::as_u64), Some(2));
+    assert_eq!(result.pointer("/summary/succeeded").and_then(Value::as_u64), Some(1));
+    assert_eq!(result.pointer("/summary/failed").and_then(Value::as_u64), Some(1));
+    assert_eq!(result.pointer("/summary/skipped").and_then(Value::as_u64), Some(1));
+    assert_eq!(result.pointer("/results/1/status").and_then(Value::as_str), Some("failed"));
+    assert_eq!(result.pointer("/results/2/status").and_then(Value::as_str), Some("skipped"));
+    assert_eq!(result.pointer("/results/2/reason").and_then(Value::as_str), Some("stopped after earlier failure"));
+}
+
+/// on_error=continue: a mid-batch failure is isolated — every other item
+/// still runs and succeeds, and the failed item carries the structured
+/// error (remediation included) without poisoning its neighbors.
+#[tokio::test]
+async fn run_batch_items_continue_mode_isolates_per_item_failures() {
+    let items = vec![batch_exec_item("A"), batch_exec_item("BAD"), batch_exec_item("C")];
+    let result =
+        super::exec::run_batch_items("animus.subject.batch-update", items, &OnError::Continue, |args| async move {
+            let title = args.last().cloned().unwrap_or_default();
+            if title == "BAD" {
+                Ok(batch_failure_result("--id must not be empty"))
+            } else {
+                Ok(batch_success_result(&title))
+            }
+        })
+        .await;
+
+    assert_eq!(result.get("on_error").and_then(Value::as_str), Some("continue"));
+    assert_eq!(result.pointer("/summary/executed").and_then(Value::as_u64), Some(3));
+    assert_eq!(result.pointer("/summary/succeeded").and_then(Value::as_u64), Some(2));
+    assert_eq!(result.pointer("/summary/failed").and_then(Value::as_u64), Some(1));
+    assert_eq!(result.pointer("/summary/skipped").and_then(Value::as_u64), Some(0));
+    assert_eq!(result.pointer("/summary/completed").and_then(Value::as_bool), Some(false));
+    assert_eq!(result.pointer("/results/0/status").and_then(Value::as_str), Some("success"));
+    assert_eq!(result.pointer("/results/1/status").and_then(Value::as_str), Some("failed"));
+    assert_eq!(
+        result.pointer("/results/1/error/error/message").and_then(Value::as_str),
+        Some("--id must not be empty")
+    );
+    assert_eq!(
+        result.pointer("/results/1/error/remediation/kind").and_then(Value::as_str),
+        Some("invalid_input"),
+        "per-item errors carry the remediation payload"
+    );
+    assert_eq!(result.pointer("/results/2/status").and_then(Value::as_str), Some("success"));
+}
+
+#[test]
+fn subject_batch_tools_are_registered_and_discoverable() {
+    let live = live_builtin_tool_names();
+    assert!(live.contains("animus.subject.batch-create"), "batch-create registered");
+    assert!(live.contains("animus.subject.batch-update"), "batch-update registered");
+    // The registry-wide search test (`every_registered_tool_is_searchable_by_
+    // its_exact_name`) already proves exact-name discovery; this pins the two
+    // batch tools explicitly so a rename breaks loudly here too.
+}
+
 #[test]
 fn mcp_reference_table_matches_live_builtin_tools() {
     let documented = documented_reference_tool_names();

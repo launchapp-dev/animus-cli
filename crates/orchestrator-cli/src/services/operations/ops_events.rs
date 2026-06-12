@@ -13,8 +13,8 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 
 use crate::cli_types::{EventsCommand, EventsTailArgs};
+use crate::invalid_input_error;
 use crate::shared::print_value;
-use crate::{invalid_input_error, unavailable_error};
 
 pub(crate) async fn handle_events(command: EventsCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
@@ -32,8 +32,10 @@ async fn handle_events_tail(args: EventsTailArgs, project_root: &str) -> Result<
     let client = match ControlClient::try_connect(project_root_path).await? {
         Some(client) => client,
         None => {
-            return Err(unavailable_error(
-                "animus events tail requires a running daemon (control socket not found). Start one with: animus daemon start"
+            return Err(crate::error_with_remediation(
+                crate::CliErrorKind::Unavailable,
+                "animus events tail requires a running daemon (control socket not found). Start one with: animus daemon start",
+                crate::daemon_not_running_remediation(),
             ));
         }
     };

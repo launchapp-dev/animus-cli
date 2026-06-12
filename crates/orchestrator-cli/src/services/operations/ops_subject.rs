@@ -241,9 +241,14 @@ fn classify_subject_rpc_error(method: &str, rpc_error: &animus_plugin_protocol::
     // serve the kind — that's a missing/unreachable plugin, not a missing
     // subject.
     if lower.contains("no subject backend") {
-        return unavailable_error(format!(
-            "{message}; install one with `animus plugin install-defaults --include-subjects`"
-        ));
+        return crate::error_with_remediation(
+            crate::CliErrorKind::Unavailable,
+            format!("{message}; install one with `animus plugin install-defaults --include-subjects`"),
+            crate::missing_plugin_remediation(
+                "animus plugin install-defaults --include-subjects",
+                "Install a subject_backend plugin that serves this kind, then retry.",
+            ),
+        );
     }
     if rpc_error.code == error_codes::INVALID_PARAMS {
         return invalid_input_error(message);
@@ -320,6 +325,26 @@ mod tests {
         );
         assert!(message.contains("install-defaults --include-subjects"), "error carries install hint: {message}");
         assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::Unavailable);
+    }
+
+    #[test]
+    fn classify_subject_rpc_error_missing_backend_carries_structured_remediation() {
+        use animus_plugin_protocol::RpcError;
+        let rpc_error = RpcError {
+            code: error_codes::INTERNAL_ERROR,
+            message: "no subject backend mounted for kind 'task'".into(),
+            data: None,
+        };
+        let err = classify_subject_rpc_error("task/list", &rpc_error);
+        assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::Unavailable, "kind unchanged");
+        assert!(err.to_string().contains("install one with `animus plugin install-defaults --include-subjects`"));
+        let details = crate::extract_cli_error_details(&err).expect("structured remediation details");
+        assert_eq!(details.pointer("/remediation/kind").and_then(serde_json::Value::as_str), Some("missing_plugin"));
+        assert_eq!(
+            details.pointer("/remediation/install_command").and_then(serde_json::Value::as_str),
+            Some("animus plugin install-defaults --include-subjects")
+        );
+        assert!(details.pointer("/remediation/next_step").and_then(serde_json::Value::as_str).is_some());
     }
 
     #[test]

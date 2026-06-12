@@ -105,17 +105,26 @@ impl Default for SessionBackendResolver {
     }
 }
 
-/// Build the actionable error message returned when a provider plugin is not
-/// installed for the requested tool.
-fn missing_provider_message(tool: &str) -> String {
+/// The exact `animus plugin install ...` command that fixes a missing
+/// provider plugin for `tool`. Public so callers (e.g. the CLI's error
+/// envelopes) can carry the command as structured data instead of scraping
+/// it back out of [`missing_provider_message`]'s human-readable text.
+pub fn provider_install_command(tool: &str) -> String {
     let canonical = canonical_tool_alias(tool);
     let install_target = if is_reserved_provider_tool(&canonical) {
         format!("launchapp-dev/animus-provider-{canonical}")
     } else {
         format!("<publisher>/animus-provider-{canonical}")
     };
+    format!("animus plugin install {install_target} --allow-shadow-builtin")
+}
+
+/// Build the actionable error message returned when a provider plugin is not
+/// installed for the requested tool.
+fn missing_provider_message(tool: &str) -> String {
+    let install_command = provider_install_command(tool);
     format!(
-        "Provider plugin '{tool}' not installed. Install with:\n  animus plugin install {install_target} --allow-shadow-builtin\nOr run: animus plugin install-defaults"
+        "Provider plugin '{tool}' not installed. Install with:\n  {install_command}\nOr run: animus plugin install-defaults"
     )
 }
 
@@ -158,6 +167,27 @@ mod tests {
             Ok(backend) => backend,
             Err(err) => panic!("plugin should resolve for tool '{tool}': {err}"),
         }
+    }
+
+    #[test]
+    fn provider_install_command_matches_the_message_text() {
+        assert_eq!(
+            super::provider_install_command("claude"),
+            "animus plugin install launchapp-dev/animus-provider-claude --allow-shadow-builtin"
+        );
+        assert_eq!(
+            super::provider_install_command("custom-tool"),
+            "animus plugin install <publisher>/animus-provider-custom-tool --allow-shadow-builtin"
+        );
+        // Legacy aliases normalize to the canonical plugin target.
+        assert_eq!(
+            super::provider_install_command("oai-runner"),
+            "animus plugin install launchapp-dev/animus-provider-oai --allow-shadow-builtin"
+        );
+        // The human-readable message embeds the same command verbatim.
+        let resolver = SessionBackendResolver::new();
+        let msg = expect_resolve_err(&resolver, "claude");
+        assert!(msg.contains(&super::provider_install_command("claude")), "actual: {msg}");
     }
 
     #[test]
