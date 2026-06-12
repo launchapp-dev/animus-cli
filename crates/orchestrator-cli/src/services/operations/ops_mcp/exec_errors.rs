@@ -30,6 +30,53 @@ fn pick_envelope_error(result: &CliExecutionResult) -> Option<Value> {
     envelope.get("error").cloned().or_else(|| envelope.get("data").cloned())
 }
 
+/// Derive a machine-actionable `remediation` object from the CLI's
+/// `animus.cli.v1` error body, for the determinate failure classes.
+///
+/// Priority order:
+///
+/// 1. Structured pass-through: typed CLI errors built with
+///    `error_with_remediation` carry `error.details.remediation` (e.g. the
+///    missing-plugin constructors in `ops_subject` / `ops_queue` and the
+///    missing-provider path in `provider_client`). That object is hoisted
+///    verbatim — no message scraping.
+/// 2. `code == "invalid_input"` (exit 2): the CLI's message is the hint —
+///    surface it as `{kind: "invalid_input", help: <message>}`.
+/// 3. `code == "unavailable"` (exit 5) whose message names the
+///    daemon-not-running condition: `{kind: "daemon_not_running",
+///    next_step: "animus daemon start"}`. The match is intentionally
+///    narrow (the deterministic phrases our daemon/events constructors
+///    emit) so unrelated unavailable errors don't get a misleading fix.
+fn remediation_for_error(error: &Value) -> Option<Value> {
+    if let Some(remediation) = error.pointer("/details/remediation") {
+        if remediation.is_object() {
+            return Some(remediation.clone());
+        }
+    }
+    let code = error.get("code").and_then(Value::as_str)?;
+    let message = error.get("message").and_then(Value::as_str).unwrap_or_default();
+    match code {
+        "invalid_input" => Some(json!({ "kind": "invalid_input", "help": message })),
+        "unavailable" if mentions_daemon_not_running(message) => {
+            Some(json!({ "kind": "daemon_not_running", "next_step": "animus daemon start" }))
+        }
+        _ => None,
+    }
+}
+
+fn mentions_daemon_not_running(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    lower.contains("requires a running daemon")
+        || lower.contains("daemon is not running")
+        || lower.contains("animus daemon start")
+}
+
+fn attach_remediation(payload: &mut Value) {
+    if let Some(remediation) = payload.get("error").and_then(remediation_for_error) {
+        payload["remediation"] = remediation;
+    }
+}
+
 pub(super) fn build_tool_error_payload(tool_name: &str, result: &CliExecutionResult) -> Value {
     let mut payload = json!({ "tool": tool_name, "exit_code": result.exit_code });
     if let Some(error) = pick_envelope_error(result) {
@@ -39,6 +86,7 @@ pub(super) fn build_tool_error_payload(tool_name: &str, result: &CliExecutionRes
     if !stderr.is_empty() {
         payload["stderr"] = json!(stderr);
     }
+    attach_remediation(&mut payload);
     payload
 }
 
@@ -51,6 +99,7 @@ pub(super) fn batch_item_error_from_result(result: &CliExecutionResult) -> Value
     if !stderr.is_empty() {
         payload["stderr"] = json!(stderr);
     }
+    attach_remediation(&mut payload);
     payload
 }
 
@@ -123,6 +172,139 @@ mod tests {
         );
         let payload = build_tool_error_payload("animus.task.get", &result);
         assert_eq!(payload.pointer("/error/message").and_then(Value::as_str), Some("stdout-error"));
+    }
+
+    /// Missing-plugin failures: a typed CLI error built with
+    /// `error_with_remediation` carries `error.details.remediation` in the
+    /// stderr envelope — the MCP payload must hoist it verbatim, install
+    /// command included, with no message scraping.
+    #[test]
+    fn build_tool_error_payload_hoists_structured_missing_plugin_remediation() {
+        let result = failure_with_envelopes(
+            None,
+            Some(json!({
+                "schema": CLI_SCHEMA_ID,
+                "ok": false,
+                "error": {
+                    "code": "unavailable",
+                    "message": "subject call 'task/list' failed (-32001): no subject backend mounted for kind 'task'; install one with `animus plugin install-defaults --include-subjects`",
+                    "exit_code": 5,
+                    "details": {
+                        "remediation": {
+                            "kind": "missing_plugin",
+                            "install_command": "animus plugin install-defaults --include-subjects",
+                            "next_step": "Install a subject_backend plugin that serves this kind, then retry.",
+                        }
+                    }
+                }
+            })),
+            "subject call failed",
+        );
+        let payload = build_tool_error_payload("animus.subject.list", &result);
+        assert_eq!(payload.pointer("/remediation/kind").and_then(Value::as_str), Some("missing_plugin"));
+        assert_eq!(
+            payload.pointer("/remediation/install_command").and_then(Value::as_str),
+            Some("animus plugin install-defaults --include-subjects")
+        );
+        assert!(
+            payload.pointer("/remediation/next_step").and_then(Value::as_str).is_some(),
+            "missing_plugin remediation carries a next_step"
+        );
+    }
+
+    /// Daemon-not-running failures: an `unavailable` error whose message
+    /// names the condition gets the `daemon_not_running` remediation even
+    /// without structured details.
+    #[test]
+    fn build_tool_error_payload_classifies_daemon_not_running() {
+        let result = failure_with_envelopes(
+            None,
+            Some(json!({
+                "schema": CLI_SCHEMA_ID,
+                "ok": false,
+                "error": {
+                    "code": "unavailable",
+                    "message": "animus events tail requires a running daemon (control socket not found). Start one with: animus daemon start",
+                    "exit_code": 5,
+                }
+            })),
+            "daemon down",
+        );
+        let payload = build_tool_error_payload("animus.daemon.events", &result);
+        assert_eq!(payload.pointer("/remediation/kind").and_then(Value::as_str), Some("daemon_not_running"));
+        assert_eq!(payload.pointer("/remediation/next_step").and_then(Value::as_str), Some("animus daemon start"));
+    }
+
+    /// Invalid-input failures (exit 2): the CLI's message is the hint line —
+    /// surface it as `help` so agents can self-correct the call.
+    #[test]
+    fn build_tool_error_payload_classifies_invalid_input() {
+        let result = failure_with_envelopes(
+            None,
+            Some(json!({
+                "schema": CLI_SCHEMA_ID,
+                "ok": false,
+                "error": {
+                    "code": "invalid_input",
+                    "message": "subject update requires at least one of --status / --priority / --labels",
+                    "exit_code": 2,
+                }
+            })),
+            "bad input",
+        );
+        let payload = build_tool_error_payload("animus.subject.update", &result);
+        assert_eq!(payload.pointer("/remediation/kind").and_then(Value::as_str), Some("invalid_input"));
+        assert_eq!(
+            payload.pointer("/remediation/help").and_then(Value::as_str),
+            Some("subject update requires at least one of --status / --priority / --labels")
+        );
+    }
+
+    /// Indeterminate failures must NOT get a remediation guess — an
+    /// internal error with no structured details stays remediation-free.
+    #[test]
+    fn build_tool_error_payload_omits_remediation_for_indeterminate_errors() {
+        let result = failure_with_envelopes(
+            None,
+            Some(json!({
+                "schema": CLI_SCHEMA_ID,
+                "ok": false,
+                "error": { "code": "internal", "message": "store corrupted", "exit_code": 1 }
+            })),
+            "boom",
+        );
+        let payload = build_tool_error_payload("animus.subject.get", &result);
+        assert!(payload.get("remediation").is_none(), "no remediation for indeterminate errors: {payload}");
+
+        // An unrelated unavailable error (no daemon phrasing) also stays bare.
+        let result = failure_with_envelopes(
+            None,
+            Some(json!({
+                "schema": CLI_SCHEMA_ID,
+                "ok": false,
+                "error": { "code": "unavailable", "message": "request timed out", "exit_code": 5 }
+            })),
+            "timeout",
+        );
+        let payload = build_tool_error_payload("animus.subject.get", &result);
+        assert!(payload.get("remediation").is_none(), "no daemon guess for generic unavailable: {payload}");
+    }
+
+    /// Batch items share the remediation contract with single-tool payloads.
+    #[test]
+    fn batch_item_error_from_result_carries_remediation() {
+        let result = failure_with_envelopes(
+            None,
+            Some(json!({
+                "schema": CLI_SCHEMA_ID,
+                "ok": false,
+                "error": { "code": "invalid_input", "message": "--title must not be empty", "exit_code": 2 }
+            })),
+            "bad item",
+        );
+        let payload = batch_item_error_from_result(&result);
+        assert_eq!(payload.pointer("/remediation/kind").and_then(Value::as_str), Some("invalid_input"));
+        assert_eq!(payload.pointer("/remediation/help").and_then(Value::as_str), Some("--title must not be empty"));
     }
 
     /// Batch helper shares the same envelope-picking contract — make sure a

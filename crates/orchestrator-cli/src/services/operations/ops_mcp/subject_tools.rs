@@ -51,6 +51,64 @@ impl AoMcpServer {
     }
 
     #[tool(
+        name = "animus.subject.batch-create",
+        description = "Create multiple subjects of one kind in a single call. Purpose: Bulk-seed tasks/requirements without one MCP round-trip per item. Prerequisites: A write-capable subject_backend plugin for the kind must be installed. Example: {\"kind\": \"task\", \"items\": [{\"title\": \"Fix login\"}, {\"title\": \"Add tests\", \"priority\": \"p1\"}], \"on_error\": \"continue\"}. Items are dispatched one at a time in order; on_error=stop (default) marks remaining items skipped after the first failure, on_error=continue processes every item. Maximum 100 items per call. Returns an animus.mcp.batch.result.v1 envelope with per-item results. Sequencing: Use animus.subject.list afterwards to confirm.",
+        input_schema = ao_schema_for_type::<SubjectBatchCreateInput>()
+    )]
+    async fn ao_subject_batch_create(
+        &self,
+        params: Parameters<SubjectBatchCreateInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        if let Err(msg) = validate_subject_batch_create_input("animus.subject.batch-create", &input.kind, &input.items)
+        {
+            return Ok(CallToolResult::structured_error(json!({
+                "tool": "animus.subject.batch-create",
+                "error": msg,
+            })));
+        }
+        let items: Vec<BatchItemExec> = input
+            .items
+            .iter()
+            .map(|item| {
+                let args = build_subject_batch_create_item_args(&input.kind, item);
+                let command = args.join(" ");
+                BatchItemExec { target_id: item.title.clone(), command, args }
+            })
+            .collect();
+        self.run_batch_tool("animus.subject.batch-create", items, &input.on_error, input.project_root).await
+    }
+
+    #[tool(
+        name = "animus.subject.batch-update",
+        description = "Apply patches to multiple subjects of one kind in a single call. Purpose: Bulk-mutate status, priority, or labels without one MCP round-trip per item. Prerequisites: Subjects must exist; each item needs at least one of status / priority / labels. Example: {\"kind\": \"task\", \"items\": [{\"id\": \"TASK-1\", \"status\": \"ready\"}, {\"id\": \"TASK-2\", \"priority\": \"p0\"}], \"on_error\": \"stop\"}. Items are dispatched one at a time in order; on_error=stop (default) marks remaining items skipped after the first failure, on_error=continue processes every item. Maximum 100 items per call. Returns an animus.mcp.batch.result.v1 envelope with per-item results. Sequencing: Use animus.subject.get afterwards to confirm.",
+        input_schema = ao_schema_for_type::<SubjectBatchUpdateInput>()
+    )]
+    async fn ao_subject_batch_update(
+        &self,
+        params: Parameters<SubjectBatchUpdateInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        if let Err(msg) = validate_subject_batch_update_input("animus.subject.batch-update", &input.kind, &input.items)
+        {
+            return Ok(CallToolResult::structured_error(json!({
+                "tool": "animus.subject.batch-update",
+                "error": msg,
+            })));
+        }
+        let items: Vec<BatchItemExec> = input
+            .items
+            .iter()
+            .map(|item| {
+                let args = build_subject_batch_update_item_args(&input.kind, item);
+                let command = args.join(" ");
+                BatchItemExec { target_id: item.id.clone(), command, args }
+            })
+            .collect();
+        self.run_batch_tool("animus.subject.batch-update", items, &input.on_error, input.project_root).await
+    }
+
+    #[tool(
         name = "animus.subject.next",
         description = "Return the highest-priority Ready subject for the given kind. Purpose: Pick the next subject to dispatch. Prerequisites: Backend must implement <kind>/next. Example: {\"kind\": \"task\"}. Returns null when no eligible subject exists. Sequencing: Use animus.subject.status to mark in_progress before working on it.",
         input_schema = ao_schema_for_type::<SubjectNextInput>()

@@ -62,9 +62,19 @@ async fn resolve_enqueue_dispatch(
 }
 
 fn queue_plugin_required(operation: &str) -> anyhow::Error {
-    anyhow!(
-        "no queue plugin installed - `animus queue {operation}` requires the `queue` plugin role. \
-         Run `animus plugin install-defaults` (or install `launchapp-dev/animus-queue-default`) and retry."
+    // Same human-readable text as the previous bare `anyhow!` constructor
+    // (which classified as Internal via the message fallback) — this only
+    // adds the structured remediation payload for machine callers.
+    crate::error_with_remediation(
+        CliErrorKind::Internal,
+        format!(
+            "no queue plugin installed - `animus queue {operation}` requires the `queue` plugin role. \
+             Run `animus plugin install-defaults` (or install `launchapp-dev/animus-queue-default`) and retry."
+        ),
+        crate::missing_plugin_remediation(
+            "animus plugin install-defaults",
+            "Install the queue plugin (launchapp-dev/animus-queue-default), then retry.",
+        ),
     )
 }
 
@@ -530,6 +540,21 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn queue_plugin_required_keeps_message_and_kind_but_adds_structured_remediation() {
+        let err = queue_plugin_required("list");
+        let message = err.to_string();
+        assert!(message.contains("no queue plugin installed"), "human text preserved: {message}");
+        assert!(message.contains("animus plugin install-defaults"), "human text preserved: {message}");
+        assert_eq!(crate::classify_cli_error_kind(&err), CliErrorKind::Internal, "kind unchanged");
+        let details = crate::extract_cli_error_details(&err).expect("structured remediation details");
+        assert_eq!(details.pointer("/remediation/kind").and_then(serde_json::Value::as_str), Some("missing_plugin"));
+        assert_eq!(
+            details.pointer("/remediation/install_command").and_then(serde_json::Value::as_str),
+            Some("animus plugin install-defaults")
+        );
+    }
 
     #[tokio::test]
     async fn resolve_enqueue_dispatch_missing_subject_shows_actionable_error() {

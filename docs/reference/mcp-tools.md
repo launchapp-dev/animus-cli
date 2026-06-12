@@ -1,7 +1,7 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 81 built-in tools across daemon, queue, agent, output,
+registers 83 built-in tools across daemon, queue, agent, output,
 workflow, plugin, skill, subject, logs, tool-discovery, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
@@ -133,7 +133,7 @@ approval gate stays human-only.
 
 ---
 
-## Subject Operations (6 tools)
+## Subject Operations (8 tools)
 
 The subject surface replaces the per-domain `animus.task.*` and
 `animus.requirements.*` tool families removed in v0.4.4. Set `kind` to `task`,
@@ -148,6 +148,8 @@ plugin (e.g. `linear`, `jira`, `github-issue`).
 | `animus.subject.update` | Update a subject through the active `subject_backend` plugin | `kind`, `id`, `priority`, `status`, `labels[]`, `project_root` |
 | `animus.subject.next` | Return the highest-priority Ready subject for the given kind | `kind`, `project_root` |
 | `animus.subject.status` | Set the status of a subject by id through the active `subject_backend` | `kind`, `id`, `status`, `project_root` |
+| `animus.subject.batch-create` | Create up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`title`, `status`, `priority`, `labels[]`, `body`), `on_error`, `project_root` |
+| `animus.subject.batch-update` | Patch up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`id`, `status`, `priority`, `labels[]`), `on_error`, `project_root` |
 
 ---
 
@@ -341,16 +343,58 @@ List responses are wrapped in a guard envelope (`animus.mcp.list.result.v1`) tha
 
 ## Batch Tool Behavior
 
-`animus.workflow.run-multiple` accepts an `on_error` parameter:
+The batch tools — `animus.workflow.run-multiple`,
+`animus.subject.batch-create`, and `animus.subject.batch-update` — dispatch
+their items one at a time through the same code paths as the matching
+single-item tools (no new backend protocol), and accept an `on_error`
+parameter:
 
 | Value | Behavior |
 |---|---|
 | `"continue"` | Process all items regardless of failures |
-| `"stop"` | Stop processing after the first failure; remaining items are marked `"skipped"` |
+| `"stop"` (default) | Stop processing after the first failure; remaining items are marked `"skipped"` and never execute |
 
 Batch responses use the `animus.mcp.batch.result.v1` schema with a summary of
-succeeded/failed/skipped counts and per-item results.
+succeeded/failed/skipped counts and per-item results. Failed items carry the
+same structured `error` (and, when determinate, `remediation`) payload as
+single-tool errors; one item failing never corrupts its neighbors' results.
 
-Maximum batch size is 100 items per call.
+Maximum batch size is 100 items per call; larger requests are rejected with a
+clear `exceeds maximum` error before any item executes.
+
+## Error Remediation
+
+When a tool fails, the structured error payload carries the wrapped CLI
+error (`error`), the process `exit_code`, and raw `stderr`. For determinate
+failure classes it also carries a machine-actionable `remediation` object:
+
+```json
+{
+  "tool": "animus.subject.list",
+  "exit_code": 5,
+  "error": { "code": "unavailable", "message": "...", "exit_code": 5 },
+  "stderr": "...",
+  "remediation": {
+    "kind": "missing_plugin",
+    "install_command": "animus plugin install-defaults --include-subjects",
+    "next_step": "Install a subject_backend plugin that serves this kind, then retry."
+  }
+}
+```
+
+| `remediation.kind` | When | Fields |
+|---|---|---|
+| `missing_plugin` | A required plugin is not installed (subject backend for the kind, provider plugin for the tool, queue plugin) | `install_command` — the exact `animus plugin install ...` command; `next_step` — what to do after installing |
+| `daemon_not_running` | The command needs a running daemon (`unavailable` from events/daemon surfaces) | `next_step` — always `animus daemon start` |
+| `invalid_input` | The CLI rejected the arguments (exit code 2) | `help` — the CLI's hint describing the accepted input |
+
+`missing_plugin` remediations are threaded as structured data from the CLI's
+typed error constructors (`error.details.remediation` in the `animus.cli.v1`
+envelope) — the install command is never scraped out of the human-readable
+message. Indeterminate failures (e.g. `internal` errors) carry no
+`remediation` field; absence means "no known mechanical fix".
+
+Batch item errors (`results[].error`) carry the same `remediation` field
+under the same rules.
 
 See also: [JSON Envelope Contract](json-envelope.md), [CLI Command Surface](cli/index.md).

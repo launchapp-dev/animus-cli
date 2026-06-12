@@ -129,8 +129,9 @@ use output_inputs::*;
 use queue_command_args::{build_queue_enqueue_args, build_queue_reorder_args, build_queue_subject_args};
 use queue_inputs::*;
 use subject_command_args::{
-    build_subject_create_args, build_subject_get_args, build_subject_list_args, build_subject_next_args,
-    build_subject_status_args, build_subject_update_args,
+    build_subject_batch_create_item_args, build_subject_batch_update_item_args, build_subject_create_args,
+    build_subject_get_args, build_subject_list_args, build_subject_next_args, build_subject_status_args,
+    build_subject_update_args, validate_subject_batch_create_input, validate_subject_batch_update_input,
 };
 use subject_inputs::*;
 use workflow_command_args::{

@@ -274,8 +274,25 @@ pub(crate) fn warn_unknown_permission_mode(mode: &str) {
 }
 
 /// Start a session through the resolver for the supplied request.
+///
+/// A missing provider plugin is surfaced as a typed error carrying a
+/// structured `remediation` payload (with the exact install command from
+/// `provider_install_command`) so machine callers don't have to scrape the
+/// human-readable message. The message text matches the plain resolver
+/// error path exactly.
 pub(crate) async fn start_session(project_root: &Path, request: SessionRequest) -> Result<SessionRun> {
     let resolver = resolver_for(project_root);
+    if let Err(err) = resolver.resolve(&request) {
+        let install_command = orchestrator_plugin_host::session::provider_install_command(&request.tool);
+        return Err(crate::error_with_remediation(
+            crate::CliErrorKind::Internal,
+            format!("provider session failed: {err}"),
+            crate::missing_plugin_remediation(
+                install_command,
+                "Install the provider plugin for this tool, then re-run the agent command.",
+            ),
+        ));
+    }
     resolver.start_session(request).await.map_err(|err| anyhow!("provider session failed: {err}"))
 }
 
@@ -437,6 +454,38 @@ mod tests {
             mcp_server: Vec::new(),
             no_animus_mcp: false,
         }
+    }
+
+    #[tokio::test]
+    async fn start_session_missing_provider_carries_structured_remediation() {
+        // A tool name no plugin can ever register keeps this hermetic even
+        // on machines with real provider plugins installed/discoverable.
+        let tool = "definitely-not-a-real-provider-zz9";
+        let tmp = tempfile::tempdir().unwrap();
+        let request = SessionRequest {
+            tool: tool.to_string(),
+            model: String::new(),
+            prompt: "hello".to_string(),
+            cwd: tmp.path().to_path_buf(),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: serde_json::json!({}),
+        };
+        let err = start_session(tmp.path(), request).await.expect_err("missing provider must error");
+        let message = err.to_string();
+        assert!(message.contains("provider session failed"), "human text preserved: {message}");
+        assert!(message.contains("not installed"), "human text preserved: {message}");
+        let details = crate::extract_cli_error_details(&err).expect("structured remediation details");
+        assert_eq!(details.pointer("/remediation/kind").and_then(Value::as_str), Some("missing_plugin"));
+        let install_command =
+            details.pointer("/remediation/install_command").and_then(Value::as_str).expect("install command present");
+        assert!(
+            install_command.contains(&format!("animus plugin install <publisher>/animus-provider-{tool}")),
+            "install command is structured, not scraped: {install_command}"
+        );
     }
 
     #[test]
