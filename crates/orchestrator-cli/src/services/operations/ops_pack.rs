@@ -6,15 +6,15 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_config::{
     add_marketplace_registry, check_pack_runtime_requirements, clone_marketplace_pack, load_marketplace_state,
     load_pack_inventory, load_pack_manifest, load_pack_selection_state, machine_installed_packs_dir,
-    project_pack_overrides_dir, remove_marketplace_registry, save_pack_selection_state, search_marketplace_packs,
-    sync_all_registries, sync_registry, LoadedPackManifest, PackDependency, PackInventory, PackInventoryEntry,
-    PackPluginRequirement, PackRegistrySource, PackSelectionEntry, PackSelectionSource,
+    project_pack_overrides_dir, register_pack_in_registry, remove_marketplace_registry, save_pack_selection_state,
+    search_marketplace_packs, sync_all_registries, sync_registry, LoadedPackManifest, PackDependency, PackInventory,
+    PackInventoryEntry, PackPluginRequirement, PackRegistrySource, PackSelectionEntry, PackSelectionSource,
 };
 use serde::Serialize;
 
 use crate::{
     conflict_error, invalid_input_error, not_found_error, print_ok, print_value, PackCommand, PackInspectArgs,
-    PackPinArgs, PackRegistryCommand, PackUninstallArgs,
+    PackPinArgs, PackPublishArgs, PackRegistryCommand, PackUninstallArgs,
 };
 
 #[derive(Debug, Serialize)]
@@ -1171,6 +1171,7 @@ pub(crate) async fn handle_pack(command: PackCommand, project_root: &str, json: 
         }
         PackCommand::Pin(args) => handle_pin(project_root, args, json),
         PackCommand::Uninstall(args) => handle_uninstall(project_root, args, json),
+        PackCommand::Publish(args) => handle_publish(args, json),
     }
 }
 
@@ -1474,6 +1475,53 @@ fn handle_pin(project_root: &Path, args: PackPinArgs, json: bool) -> Result<()> 
 
     print_ok(if selection.enabled { "pack pin updated" } else { "pack disabled for project" }, false);
     Ok(())
+}
+
+fn handle_publish(args: PackPublishArgs, json: bool) -> Result<()> {
+    let pack_dir = args.path.as_deref().map(Path::new).unwrap_or(Path::new("."));
+    let manifest = load_pack_manifest(pack_dir)
+        .map_err(|err| invalid_input_error(format!("failed to load pack.toml from '{}': {err}", pack_dir.display())))?;
+    let name = manifest.manifest.id.trim().to_string();
+    if name.is_empty() {
+        return Err(invalid_input_error("pack manifest `id` must not be empty"));
+    }
+    let url = args.url.trim();
+    if url.is_empty() {
+        return Err(invalid_input_error("--url must not be empty"));
+    }
+    let description = manifest.manifest.description.trim().to_string();
+    let description = if description.is_empty() { None } else { Some(description.as_str()) };
+    let result = register_pack_in_registry(&args.registry, &name, url, description, args.category.as_deref())?;
+    let clone_path_str = result.registry_clone_path.display().to_string();
+    let action = if result.updated_existing { "updated" } else { "added" };
+    if json {
+        print_value(
+            serde_json::json!({
+                "pack": name,
+                "url": result.url,
+                "registry": result.registry_id,
+                "action": action,
+                "registry_clone_path": clone_path_str,
+                "next_steps": [
+                    format!("cd {clone_path_str}"),
+                    format!("git add .claude-plugin/marketplace.json"),
+                    format!("git commit -m 'publish {name}'"),
+                    "git push".to_string(),
+                ],
+            }),
+            true,
+        )
+    } else {
+        eprintln!("{action} pack '{name}' in registry '{}' catalog", result.registry_id);
+        eprintln!("registry clone: {clone_path_str}");
+        eprintln!();
+        eprintln!("To publish, commit and push the catalog update:");
+        eprintln!("  cd {clone_path_str}");
+        eprintln!("  git add .claude-plugin/marketplace.json");
+        eprintln!("  git commit -m 'publish {name}'");
+        eprintln!("  git push");
+        Ok(())
+    }
 }
 
 fn handle_registry(command: PackRegistryCommand, json: bool) -> Result<()> {
@@ -2349,5 +2397,18 @@ exports = ["{pack_id}/standard"]
             parse_source(Some("project-override")).expect("source should parse"),
             Some(PackRegistrySource::ProjectOverride)
         );
+    }
+
+    #[test]
+    fn register_pack_in_registry_errors_on_unknown_registry() {
+        let err = orchestrator_config::register_pack_in_registry(
+            "no-such-registry",
+            "my.pack",
+            "https://github.com/example/my-pack.git",
+            None,
+            None,
+        )
+        .expect_err("unknown registry should error");
+        assert!(err.to_string().contains("no-such-registry"), "error mentions registry id: {err}");
     }
 }

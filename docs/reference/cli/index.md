@@ -255,6 +255,7 @@ animus
 │   ├── pin                  Pin a pack version/source or toggle enablement for this project
 │   ├── uninstall            Remove an installed pack (all versions or --version) plus its project selection entry; refuses while project workflow YAML references the pack unless --force (supports --dry-run)
 │   ├── search               Search packs across marketplace registries
+│   ├── publish              Register a pack in a locally cached marketplace registry clone and print git commit/push instructions (does not push automatically)
 │   └── registry
 │       ├── add              Add a marketplace registry (git URL)
 │       ├── remove           Remove a marketplace registry

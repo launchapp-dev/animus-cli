@@ -50,6 +50,11 @@ pub(crate) struct InitArgs {
     )]
     pub(crate) install_packs: bool,
     #[arg(
+        long = "no-packs",
+        help = "Walkthrough only: skip the recommended-pack install prompt entirely, even in interactive mode. Takes precedence over --install-packs."
+    )]
+    pub(crate) no_packs: bool,
+    #[arg(
         long = "no-template",
         help = "Walkthrough only: skip copying the hello-world workflow template into .animus/workflows/."
     )]

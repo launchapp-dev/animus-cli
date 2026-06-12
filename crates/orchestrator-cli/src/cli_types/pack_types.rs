@@ -14,6 +14,8 @@ pub(crate) enum PackCommand {
     Uninstall(PackUninstallArgs),
     /// Search packs across marketplace registries.
     Search(PackSearchArgs),
+    /// Register a pack in a local marketplace registry clone and print git push instructions.
+    Publish(PackPublishArgs),
     /// Manage marketplace registries for remote pack discovery and installation.
     Registry {
         #[command(subcommand)]
@@ -125,6 +127,25 @@ pub(crate) struct PackUninstallArgs {
     pub(crate) force: bool,
     #[arg(long, default_value_t = false, help = "Print what would be removed without modifying anything.")]
     pub(crate) dry_run: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PackPublishArgs {
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Local pack directory containing pack.toml. Defaults to the current directory."
+    )]
+    pub(crate) path: Option<String>,
+    #[arg(
+        long,
+        help = "Marketplace registry identifier to publish to. Must already be added via `animus pack registry add`."
+    )]
+    pub(crate) registry: String,
+    #[arg(long, help = "Git URL of the pack's own repository. Used as the pack's source.url in the catalog entry.")]
+    pub(crate) url: String,
+    #[arg(long, help = "Optional pack category (e.g. 'productivity', 'devops').")]
+    pub(crate) category: Option<String>,
 }
 
 #[derive(Debug, Args)]

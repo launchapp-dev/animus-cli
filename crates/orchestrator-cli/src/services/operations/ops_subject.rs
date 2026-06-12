@@ -34,7 +34,7 @@ pub(crate) async fn handle_subject(command: SubjectCommand, project_root: &str, 
 }
 
 async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root)?;
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let mut filter = serde_json::Map::new();
     filter.insert("kind".to_string(), json!([kind]));
     if let Some(status) = args.status.as_deref() {
@@ -48,7 +48,7 @@ async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bo
 }
 
 async fn handle_subject_get(args: SubjectGetArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root)?;
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let id = args.id.trim();
     if id.is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
@@ -58,7 +58,7 @@ async fn handle_subject_get(args: SubjectGetArgs, project_root: &str, json: bool
 }
 
 async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root)?;
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let title = args.title.trim();
     if title.is_empty() {
         return Err(invalid_input_error("--title must not be empty"));
@@ -82,7 +82,7 @@ async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json
 }
 
 async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root)?;
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let id = args.id.trim();
     if id.is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
@@ -105,12 +105,12 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
 }
 
 async fn handle_subject_next(args: SubjectNextArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root)?;
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     dispatch(&kind, "next", None, project_root, json).await
 }
 
 async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root)?;
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let id = args.id.trim();
     if id.is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
@@ -192,7 +192,7 @@ fn describe_cleared_block_flags(before: &Value, after: &Value) -> Option<String>
 }
 
 async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root)?;
+    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let id = args.id.trim();
     if id.is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
@@ -220,9 +220,12 @@ async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json
 /// 2. `default_subject_kind` from `.animus/config.json`.
 /// 3. Error: ask the user to pass `--kind` or set `default_subject_kind`.
 ///
+/// When the config default is used and `json` is false, a one-line hint is
+/// printed to stderr so the user knows which kind was silently selected.
+///
 /// The resolved kind is returned as an owned `String` so callers don't
 /// have to keep `args` alive across the dispatch await.
-fn resolve_kind(raw: Option<&str>, project_root: &str) -> Result<String> {
+fn resolve_kind(raw: Option<&str>, project_root: &str, json: bool) -> Result<String> {
     if let Some(value) = raw {
         return validate_kind(value).map(|s| s.to_string());
     }
@@ -236,7 +239,15 @@ fn resolve_kind(raw: Option<&str>, project_root: &str) -> Result<String> {
             Some(trimmed)
         }
     }) {
-        Some(default) => validate_kind(default).map(|s| s.to_string()),
+        Some(default) => {
+            let kind = validate_kind(default).map(|s| s.to_string())?;
+            if !json {
+                eprintln!(
+                    "(using default kind '{kind}'; pass --kind or set default_subject_kind in .animus/config.json)"
+                );
+            }
+            Ok(kind)
+        }
         None => Err(invalid_input_error(
             "no subject kind supplied. Pass `--kind <kind>` or set `default_subject_kind` in .animus/config.json. \
              Run `animus plugin list` to see installed subject_backend kinds.",
@@ -349,7 +360,7 @@ mod tests {
     fn resolve_kind_prefers_explicit_arg() {
         let tmp = tempfile::tempdir().expect("tmp");
         let project_root = tmp.path().to_str().expect("utf-8");
-        let resolved = resolve_kind(Some("issue"), project_root).expect("resolves");
+        let resolved = resolve_kind(Some("issue"), project_root, false).expect("resolves");
         assert_eq!(resolved, "issue");
     }
 
@@ -359,7 +370,7 @@ mod tests {
         let project_root = tmp.path().to_str().expect("utf-8");
         // Default `Config::load_or_default` writes `default_subject_kind: "task"`.
         let _ = Config::load_or_default(project_root).expect("seed config");
-        let resolved = resolve_kind(None, project_root).expect("resolves from default");
+        let resolved = resolve_kind(None, project_root, true).expect("resolves from default");
         assert_eq!(resolved, "task");
     }
 
@@ -372,13 +383,27 @@ mod tests {
         fs::create_dir_all(&animus_dir).expect("create .animus");
         fs::write(animus_dir.join("config.json"), serde_json::json!({ "agent_runner_token": null }).to_string())
             .expect("seed config");
-        let err = resolve_kind(None, project_root.to_str().expect("utf-8"))
+        let err = resolve_kind(None, project_root.to_str().expect("utf-8"), false)
             .expect_err("must error when no default and no flag");
         let message = err.to_string();
         assert!(
             message.contains("--kind") || message.contains("default_subject_kind"),
             "error names the missing input: {message}"
         );
+    }
+
+    #[test]
+    fn resolve_kind_emits_hint_in_human_mode_when_using_config_default() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let project_root = tmp.path().to_str().expect("utf-8");
+        let _ = Config::load_or_default(project_root).expect("seed config");
+        // json=true must not emit hint (no panic, just silently returns the kind)
+        let resolved_json = resolve_kind(None, project_root, true).expect("resolves in json mode");
+        assert_eq!(resolved_json, "task");
+        // json=false resolves the same kind; the eprintln is a side-effect we can't
+        // assert on without capturing stderr, but we confirm resolution is correct.
+        let resolved_human = resolve_kind(None, project_root, false).expect("resolves in human mode");
+        assert_eq!(resolved_human, "task");
     }
 
     #[tokio::test]
@@ -499,7 +524,7 @@ mod tests {
         for err in [
             validate_kind("").expect_err("empty kind"),
             validate_kind("task/list").expect_err("slash kind"),
-            resolve_kind(Some(""), "/tmp/does-not-matter").expect_err("empty explicit kind"),
+            resolve_kind(Some(""), "/tmp/does-not-matter", false).expect_err("empty explicit kind"),
         ] {
             assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::InvalidInput, "{err}");
         }

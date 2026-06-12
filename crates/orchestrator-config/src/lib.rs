@@ -39,8 +39,9 @@ pub use pack_config::{
 };
 pub use pack_marketplace::{
     add_marketplace_registry, clone_marketplace_pack, get_github_token, load_marketplace_state, parse_github_url,
-    remove_marketplace_registry, search_marketplace_packs, sync_all_registries, sync_github_registry, sync_registry,
-    GitHubUrlType, MarketplaceEntry, MarketplaceSearchResult, MarketplaceState,
+    register_pack_in_registry, remove_marketplace_registry, search_marketplace_packs, sync_all_registries,
+    sync_github_registry, sync_registry, GitHubUrlType, MarketplaceEntry, MarketplaceSearchResult, MarketplaceState,
+    PackPublishResult,
 };
 pub use pack_registry::{
     ensure_pack_execution_requirements, load_pack_agent_runtime_overlay, load_pack_inventory,

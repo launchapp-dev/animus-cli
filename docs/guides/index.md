@@ -25,6 +25,7 @@ Practical walkthroughs for day-to-day Animus operations.
 
 ## Extending Animus
 
+- **[Extending Animus](extending-animus.md)** -- Decision guide: skill vs pack vs plugin, comparison matrix, quick-reference commands.
 - **[Plugin Author Guide](plugin-author-guide.md)** -- Write providers, subject backends, trigger backends, and transports. Stdio JSON-RPC contract, scaffolding, testing with `animus-plugin-testkit`, cosign signing, and publishing.
 - **[Full System Architecture](../architecture/full-system-architecture.md)** -- End-to-end architecture across crates, processes, state, daemon, runners, plugins, control surfaces, and verification.
 - **[Plugin System Architecture](../architecture/plugin-system.md)** -- Discovery, install state, wire protocol, hosting, security, and runtime plugin paths.

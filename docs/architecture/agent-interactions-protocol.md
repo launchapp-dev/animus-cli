@@ -142,6 +142,50 @@ HTTP). Payload: kind, agent, action/question summary, and the answer command
 (`animus agent interactions answer <id> --allow`). Answered/expired transitions
 emit `interaction_resolved`.
 
+## Approval gates: what goes where today
+
+Two separate gate mechanisms exist in Animus. Understanding which to use:
+
+### `animus approval` — destructive git operations
+
+`animus approval` gates _operator-initiated_ destructive git operations:
+
+| Operation | Gate |
+|---|---|
+| `animus git push --force` | `animus approval request --operation-type force_push` |
+| `animus git worktree remove` | `animus approval request --operation-type remove_worktree` |
+| `animus git worktree prune` | `animus approval request --operation-type prune_worktrees` |
+| Hard reset, clean untracked | `--operation-type hard_reset / clean_untracked` |
+
+The caller requests an approval record, a human responds via
+`animus approval respond --request-id <ID> --approved`, then passes
+`--confirmation-id <ID>` back to the destructive command. Records are stored in
+the project-local git-confirmations store; they are _not_ agent inbox interactions.
+
+### `animus agent interactions` — agent human-in-the-loop
+
+Agents (spawned `claude` / `codex` / `gemini` / `opencode` sessions) use the
+kernel MCP tools `animus.agent.ask` and `animus.agent.request_approval` to
+pause and ask a human mid-run. These land in the **agent interactions inbox**:
+
+```sh
+animus agent interactions list
+animus agent interactions answer <ID> --allow          # approval
+animus agent interactions answer <ID> --deny --message "too risky"
+animus agent interactions answer <ID> --text "Use the v2 API"  # question
+```
+
+This store is completely separate from `animus approval`. The two surfaces
+do not share records.
+
+### RBAC note
+
+The `--as <PRINCIPAL>` flag is honored today on all approval and secret
+mutation surfaces for _audit attribution_ — the declared principal is written
+to the audit log. Enforcement (rejecting operations from principals that lack
+the required role) is planned for v0.6. Until then the flag is honor-system:
+a caller can declare any principal. This is documented behavior, not a bug.
+
 ## Rollout sequencing
 
 1. Kernel Layer 1 (block mode) + `permission_mode` exposure — in flight.
