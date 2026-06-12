@@ -159,8 +159,8 @@ excludes it from discovery.
 
 **Active flavor (`active_flavor:`).** `.animus/plugin-scope.yaml` also carries
 an optional `active_flavor:` key recording which flavor the project opted
-into. It is written by a successful `animus plugin install-defaults --flavor
-<name>` / `animus flavor install <name>` (a `default` selection is omitted,
+into. It is written by a successful `animus plugin install-defaults --flavor <name>`
+/ `animus flavor install <name>` (a `default` selection is omitted,
 keeping the common-case file clean). The daemon's flavor-only scope resolver
 and `animus plugin list` / `animus plugin scope show` read it back, so a
 non-default flavor's plugins are admitted by `flavor-only` scoped discovery
