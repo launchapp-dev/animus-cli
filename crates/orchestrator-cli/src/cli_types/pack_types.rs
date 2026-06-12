@@ -75,6 +75,20 @@ pub(crate) struct PackInstallArgs {
     pub(crate) force: bool,
     #[arg(long, default_value_t = false, help = "Activate the installed pack for this project immediately.")]
     pub(crate) activate: bool,
+    #[arg(long, default_value_t = false, help = "Skip installing the pack's declared pack dependencies.")]
+    pub(crate) no_deps: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Install missing required plugins declared via [[requires_plugins]] without prompting."
+    )]
+    pub(crate) install_plugins: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Resolve and print the dependency closure and required plugins without installing anything."
+    )]
+    pub(crate) dry_run: bool,
 }
 
 #[derive(Debug, Args)]

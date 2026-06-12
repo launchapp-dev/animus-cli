@@ -505,13 +505,13 @@ fn default_install_manifest() -> serde_json::Value {
 
 /// One recommended pack pin from `config/default-install.json`.
 #[derive(Debug, Clone, serde::Deserialize)]
-struct RecommendedPackPin {
-    id: String,
-    repo: String,
-    tag: String,
+pub(crate) struct RecommendedPackPin {
+    pub(crate) id: String,
+    pub(crate) repo: String,
+    pub(crate) tag: String,
 }
 
-fn recommended_packs() -> Vec<RecommendedPackPin> {
+pub(crate) fn recommended_packs() -> Vec<RecommendedPackPin> {
     #[derive(serde::Deserialize)]
     struct Manifest {
         #[serde(default)]
@@ -545,7 +545,7 @@ impl RecommendedPackStep {
     }
 }
 
-fn manual_pack_install_command(pack: &RecommendedPackPin) -> String {
+pub(crate) fn manual_pack_install_command(pack: &RecommendedPackPin) -> String {
     let dir_name = pack.repo.rsplit('/').next().unwrap_or(pack.id.as_str());
     format!(
         "git clone --depth 1 --branch {tag} https://github.com/{repo}.git /tmp/{dir} && animus pack install --path /tmp/{dir} --activate",
@@ -559,7 +559,7 @@ fn manual_pack_install_command(pack: &RecommendedPackPin) -> String {
 /// this shallow-clones the pinned GitHub release tag; the
 /// `ANIMUS_INIT_PACK_SOURCE_DIR` env var overrides the source with
 /// `<dir>/<pack-id>` for offline installs and tests.
-fn resolve_recommended_pack_source(pack: &RecommendedPackPin, scratch: &Path) -> Result<PathBuf> {
+pub(crate) fn resolve_recommended_pack_source(pack: &RecommendedPackPin, scratch: &Path) -> Result<PathBuf> {
     if let Ok(source_dir) = std::env::var("ANIMUS_INIT_PACK_SOURCE_DIR") {
         let candidate = PathBuf::from(source_dir).join(&pack.id);
         if !candidate.is_dir() {

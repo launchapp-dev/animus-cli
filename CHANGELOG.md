@@ -26,7 +26,27 @@ All notable changes to this project will be documented in this file.
   validate` / `compile`; implicit builtin agent-profile defaults (pack
   names absent until the pack installs) are exempt, matching the runtime's
   explicit/implicit split.
-
+- Pack dependencies are now real: `animus pack install` resolves and installs
+  the pack's declared non-optional `[[dependencies]]` after the requested pack
+  (semver-aware skip of already-installed versions, recursion into deps of
+  deps capped at depth 5 with cycle detection, same source-resolution path as
+  the parent — `ANIMUS_INIT_PACK_SOURCE_DIR` offline override, marketplace
+  registry, or the pinned `default-install.json` GitHub release). Optional
+  dependencies print as suggestions; a failing dependency never aborts the
+  parent install and surfaces the manual install command. New flags:
+  `--no-deps` skips dependency resolution, `--dry-run` prints the full
+  dependency closure (and plugin requirements) without installing.
+- New `[[requires_plugins]]` pack-manifest section (`repo`, optional `tag`,
+  informational `role`, `optional`, `reason`): packs can declare the Animus
+  plugins their workflows need. `animus pack install` checks each entry
+  against the installed-plugin registry; missing required plugins prompt for
+  install in an interactive terminal (default yes), install non-interactively
+  with `--install-plugins`, and otherwise print the exact
+  `animus plugin install <repo>@<tag>` commands — never silent.
+  `animus pack info` now reports both pack dependencies and required plugins
+  with installed/missing status. Additive compat: packs WITHOUT the section
+  keep loading on older animus versions; packs USING it require this version
+  (pair with `compatibility.animus_core = ">=0.5.14"`).
 - `animus plugin install-defaults --flavor <name>` (default: `default`):
   the flavor manifest (`flavors/<name>.toml`, with a binary-bundled fallback
   for `default`) is now the source of truth for the install plan. Everything

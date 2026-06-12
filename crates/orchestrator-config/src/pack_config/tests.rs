@@ -222,6 +222,77 @@ fn load_pack_manifest_rejects_missing_workflows_root() {
     assert!(error.to_string().contains("workflows.root points to missing path"));
 }
 
+#[test]
+fn parse_pack_manifest_accepts_requires_plugins_section() {
+    let with_plugins = format!(
+        "{}\n{}",
+        valid_manifest_toml(),
+        r#"
+[[requires_plugins]]
+repo = "launchapp-dev/animus-subject-linear"
+tag = "v0.2.0"
+role = "subject_backend:linear"
+reason = "Linear-backed subjects power the triage workflows."
+
+[[requires_plugins]]
+repo = "launchapp-dev/animus-provider-claude"
+optional = true
+"#
+    );
+    let manifest = parse_pack_manifest(&with_plugins).expect("manifest with requires_plugins should parse");
+    assert_eq!(manifest.requires_plugins.len(), 2);
+    assert_eq!(manifest.requires_plugins[0].repo, "launchapp-dev/animus-subject-linear");
+    assert_eq!(manifest.requires_plugins[0].tag.as_deref(), Some("v0.2.0"));
+    assert_eq!(manifest.requires_plugins[0].role.as_deref(), Some("subject_backend:linear"));
+    assert!(!manifest.requires_plugins[0].optional);
+    assert!(manifest.requires_plugins[1].optional);
+}
+
+#[test]
+fn parse_pack_manifest_without_requires_plugins_stays_back_compatible() {
+    // Manifests written before the requires_plugins section must keep loading
+    // unchanged (empty vec), and serializing them must not emit the section.
+    let manifest = parse_pack_manifest(valid_manifest_toml()).expect("old manifest should parse");
+    assert!(manifest.requires_plugins.is_empty());
+    let serialized = toml::to_string(&manifest).expect("serialize manifest");
+    assert!(!serialized.contains("requires_plugins"), "empty requires_plugins must not round-trip into TOML");
+}
+
+#[test]
+fn validate_pack_manifest_rejects_bad_requires_plugins() {
+    let mut manifest: PackManifest = toml::from_str(valid_manifest_toml()).expect("deserialize manifest");
+    manifest.requires_plugins = vec![
+        super::PackPluginRequirement {
+            repo: "not-a-slug".to_string(),
+            tag: None,
+            role: None,
+            optional: false,
+            reason: None,
+        },
+        super::PackPluginRequirement {
+            repo: "launchapp-dev/animus-subject-linear".to_string(),
+            tag: Some("  ".to_string()),
+            role: None,
+            optional: false,
+            reason: None,
+        },
+        super::PackPluginRequirement {
+            repo: "Launchapp-Dev/animus-subject-linear".to_string(),
+            tag: None,
+            role: None,
+            optional: false,
+            reason: Some(" ".to_string()),
+        },
+    ];
+
+    let error = validate_pack_manifest(&manifest).expect_err("bad requires_plugins should fail");
+    let message = error.to_string();
+    assert!(message.contains("must be an OWNER/REPO slug"));
+    assert!(message.contains(".tag must not be empty"));
+    assert!(message.contains("duplicate repo"));
+    assert!(message.contains(".reason must not be empty"));
+}
+
 #[cfg(unix)]
 fn write_probe_script(path: &std::path::Path, output: &str) {
     use std::os::unix::fs::PermissionsExt;

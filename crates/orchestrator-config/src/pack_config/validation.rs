@@ -5,8 +5,8 @@ use anyhow::{anyhow, Result};
 use semver::{Version, VersionReq};
 
 use super::types::{
-    PackDependency, PackManifest, PackMcp, PackNativeModule, PackRuntimeRequirement, PackSchedules, PackSecrets,
-    PackSkills, PackSubjects, PACK_MANIFEST_SCHEMA_ID,
+    PackDependency, PackManifest, PackMcp, PackNativeModule, PackPluginRequirement, PackRuntimeRequirement,
+    PackSchedules, PackSecrets, PackSkills, PackSubjects, PACK_MANIFEST_SCHEMA_ID,
 };
 
 pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
@@ -61,6 +61,7 @@ pub fn validate_pack_manifest(manifest: &PackManifest) -> Result<()> {
     }
 
     validate_dependencies(&manifest.id, &manifest.dependencies, &mut errors);
+    validate_requires_plugins(&manifest.requires_plugins, &mut errors);
     validate_permissions(&manifest.permissions.tools, "permissions.tools", false, true, &mut errors);
     validate_permissions(&manifest.permissions.mcp_namespaces, "permissions.mcp_namespaces", true, false, &mut errors);
     validate_secrets(&manifest.secrets, &mut errors);
@@ -293,6 +294,61 @@ fn validate_dependencies(pack_id: &str, dependencies: &[PackDependency], errors:
             }
         }
     }
+}
+
+fn validate_requires_plugins(requirements: &[PackPluginRequirement], errors: &mut Vec<String>) {
+    let mut seen = BTreeSet::new();
+
+    for requirement in requirements {
+        let repo = requirement.repo.trim();
+        if repo.is_empty() {
+            errors.push("requires_plugins.repo must not be empty".to_string());
+            continue;
+        }
+        if !is_repo_slug(repo) {
+            errors.push(format!(
+                "requires_plugins.repo '{}' must be an OWNER/REPO slug (e.g. 'launchapp-dev/animus-subject-linear')",
+                repo
+            ));
+        }
+        let normalized = repo.to_ascii_lowercase();
+        if !seen.insert(normalized) {
+            errors.push(format!("requires_plugins contains duplicate repo '{}'", repo));
+        }
+
+        if let Some(tag) = requirement.tag.as_deref() {
+            let trimmed = tag.trim();
+            if trimmed.is_empty() {
+                errors.push(format!("requires_plugins['{}'].tag must not be empty when provided", repo));
+            } else if trimmed.contains(char::is_whitespace) {
+                errors.push(format!("requires_plugins['{}'].tag '{}' must not contain whitespace", repo, trimmed));
+            }
+        }
+
+        if let Some(role) = requirement.role.as_deref() {
+            if role.trim().is_empty() {
+                errors.push(format!("requires_plugins['{}'].role must not be empty when provided", repo));
+            }
+        }
+
+        if let Some(reason) = requirement.reason.as_deref() {
+            if reason.trim().is_empty() {
+                errors.push(format!("requires_plugins['{}'].reason must not be empty when provided", repo));
+            }
+        }
+    }
+}
+
+fn is_repo_slug(value: &str) -> bool {
+    let mut parts = value.split('/');
+    let (Some(owner), Some(repo), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    let segment_ok = |segment: &str| {
+        !segment.is_empty()
+            && segment.chars().all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.')
+    };
+    segment_ok(owner) && segment_ok(repo)
 }
 
 fn validate_permissions(
