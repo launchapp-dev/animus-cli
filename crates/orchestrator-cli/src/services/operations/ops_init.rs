@@ -1832,10 +1832,10 @@ mod tests {
             auto_start: false,
             walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),
         };
-        let output = run_walkthrough(&args_no_packs, project.path(), InitMode::NonInteractive, true)
+        run_walkthrough(&args_no_packs, project.path(), InitMode::NonInteractive, true)
             .await
             .expect("plan should succeed");
-        let _ = output;
+        ();
 
         // --no-packs with --install-packs: no_packs wins
         let args_conflict = InitArgs {
@@ -1853,9 +1853,9 @@ mod tests {
             auto_start: false,
             walkthrough_template: HELLO_WORLD_TEMPLATE_NAME.to_string(),
         };
-        let output2 = run_walkthrough(&args_conflict, project.path(), InitMode::NonInteractive, true)
+        run_walkthrough(&args_conflict, project.path(), InitMode::NonInteractive, true)
             .await
             .expect("plan should succeed with conflicting flags");
-        let _ = output2;
+        ();
     }
 }

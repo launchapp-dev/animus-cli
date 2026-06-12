@@ -508,6 +508,101 @@ required = ["acme/animus-provider-enterprise"]
         assert!(scope.flavor_manifest_error.is_none());
     }
 
+    // ===== F2: cross-crate scope-ladder drift guard =====
+    //
+    // The stale-active-flavor → default → bundled-default fail-closed
+    // fallback is implemented TWICE — once in this crate
+    // (`resolve_scope_for_project`) and once in `orchestrator-plugin-host`
+    // (`PluginScope::load_for_project`) — because plugin-host must not
+    // depend on orchestrator-core's flavor loader. A refactor to share one
+    // ladder is therefore impossible; instead these tests run BOTH ladders
+    // against the same fixtures and assert identical admit sets + modes, so
+    // the duplication can never silently drift.
+
+    /// Read the canonical `flavors/default.toml` from the workspace root so
+    /// fixtures use the SAME manifest both crates embed via `include_str!`.
+    /// Reading the real file (rather than a literal copy) is itself the
+    /// byte-identity guard: if either crate's embedded copy diverged from
+    /// this file, its bundled-default admit set would no longer match the
+    /// admit set this on-disk manifest produces, and the assertions below
+    /// would fail.
+    fn canonical_default_flavor() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../flavors/default.toml");
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()))
+    }
+
+    fn assert_ladders_agree(project_root: &Path, label: &str) {
+        let daemon_scope = resolve_scope_for_project(project_root);
+        let host_scope = PluginScope::load_for_project(project_root).expect("plugin-host ladder must not error");
+        assert_eq!(daemon_scope.mode, host_scope.mode, "[{label}] daemon-runtime and plugin-host scope MODES drifted");
+        assert_eq!(
+            daemon_scope.effective_admit_set(),
+            host_scope.effective_admit_set(),
+            "[{label}] daemon-runtime and plugin-host ADMIT SETS drifted"
+        );
+    }
+
+    fn write_default_flavor(root: &Path) {
+        let flavors = root.join("flavors");
+        std::fs::create_dir_all(&flavors).expect("mkdir flavors");
+        std::fs::write(flavors.join("default.toml"), canonical_default_flavor()).expect("write default flavor");
+    }
+
+    fn write_scope_file(root: &Path, body: &str) {
+        let animus = root.join(".animus");
+        std::fs::create_dir_all(&animus).expect("mkdir .animus");
+        std::fs::write(animus.join("plugin-scope.yaml"), body).expect("write scope file");
+    }
+
+    #[test]
+    fn scope_ladders_agree_no_scope_file() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_default_flavor(temp.path());
+        assert_ladders_agree(temp.path(), "no-scope-file");
+    }
+
+    #[test]
+    fn scope_ladders_agree_persisted_valid_flavor() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_default_flavor(temp.path());
+        // `default` is persisted AND present on disk — the common valid case.
+        write_scope_file(temp.path(), "schema: animus.plugin-scope.v1\nmode: flavor-only\nactive_flavor: default\n");
+        assert_ladders_agree(temp.path(), "persisted-valid-flavor");
+    }
+
+    #[test]
+    fn scope_ladders_agree_persisted_stale_flavor_falls_back_to_default() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_default_flavor(temp.path());
+        // Persist a non-default flavor whose `flavors/enterprise.toml` is
+        // absent: BOTH ladders must fall back to the default flavor's admit
+        // set rather than fail-closing to empty.
+        write_scope_file(temp.path(), "schema: animus.plugin-scope.v1\nmode: flavor-only\nactive_flavor: enterprise\n");
+        assert_ladders_agree(temp.path(), "persisted-stale-flavor");
+    }
+
+    #[test]
+    fn scope_ladders_agree_stale_flavor_bundled_default_fallback() {
+        // No `flavors/default.toml` on disk at all, but an explicit
+        // `mode: flavor-only` + stale active flavor. Both ladders must reach
+        // for their binary-bundled default manifest and resolve the SAME
+        // admit set — this is the direct byte-identity guard on the two
+        // embedded `flavors/default.toml` copies.
+        let temp = tempfile::tempdir().expect("tempdir");
+        write_scope_file(temp.path(), "schema: animus.plugin-scope.v1\nmode: flavor-only\nactive_flavor: enterprise\n");
+        let daemon_scope = resolve_scope_for_project(temp.path());
+        let host_scope = PluginScope::load_for_project(temp.path()).expect("plugin-host ladder must not error");
+        assert!(
+            !daemon_scope.effective_admit_set().is_empty(),
+            "bundled-default fallback must produce a non-empty admit set"
+        );
+        assert_eq!(
+            daemon_scope.effective_admit_set(),
+            host_scope.effective_admit_set(),
+            "bundled-default admit sets drifted — an embedded flavors/default.toml copy diverged",
+        );
+    }
+
     #[test]
     fn explicit_scope_file_mode_override_does_not_gate_on_broken_flavor() {
         let temp = tempfile::tempdir().expect("tempdir");

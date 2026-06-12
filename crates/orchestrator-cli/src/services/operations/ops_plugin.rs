@@ -415,7 +415,7 @@ fn handle_plugin_trust_list(args: PluginTrustListArgs) -> Result<()> {
         println!("No trusted orgs recorded.");
         return Ok(());
     }
-    println!("{:<28} {:<9} {:<18} {:<25} {}", "ORG", "STATE", "DECIDED-BY", "TRUSTED-AT", "REVOKED-AT");
+    println!("{:<28} {:<9} {:<18} {:<25} REVOKED-AT", "ORG", "STATE", "DECIDED-BY", "TRUSTED-AT");
     for row in &rows {
         let org = row["org"].as_str().unwrap_or("");
         let state = row["state"].as_str().unwrap_or("");
@@ -1102,6 +1102,10 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
             // lockfile so the re-exposed global plugin keeps its alias +
             // integrity claim while the global lockfile stays the
             // cross-project record (codex P2 rounds 10-12).
+            // No-op unless a same-named GLOBAL lock entry actually exists:
+            // `find` returns None for every name when there is nothing to
+            // un-shadow (the common case — most project uninstalls have no
+            // global twin), so `changed` stays as the project-removal set.
             if let Ok(global_lock) = PluginLockfile::load_or_empty(&global_lockfile_path()) {
                 for name in &binary_names {
                     if let Some(global_entry) = global_lock.find(name) {
@@ -2511,14 +2515,70 @@ async fn handle_plugin_list(args: PluginListArgs, project_root: &str, json: bool
         return print_value(output, true);
     }
 
-    for warning in &output.warnings {
-        eprintln!(
-            "warning: plugin '{}' was discovered ({}) but could not be loaded: {} ({})",
-            warning.name, warning.source, warning.reason, warning.path
-        );
-    }
+    render_plugin_list_warnings(&output.warnings, args.verbose);
 
     print_plugin_list_table(&output, project_root)
+}
+
+/// Stream `plugin list` discovery warnings to stderr.
+///
+/// Stale `explicit_config` entries (a `plugins.yaml` key whose binary
+/// vanished) used to print one `warning: ...` line apiece, burying the
+/// shadowed-install notes below the table under a wall of repetition. Those
+/// are collapsed to a single summary line that points at the prune remedy
+/// (`animus plugin uninstall <name>`, which drops the registry key; see also
+/// `animus doctor --check plugins` for a per-entry report). Warnings from
+/// other discovery tiers (a genuinely broken installed plugin) still print
+/// per-line — they each name a distinct, individually-actionable fault.
+///
+/// `--verbose` restores the full per-entry detail for every tier, and the
+/// `--json` envelope always carries the complete `warnings` array regardless
+/// of this rendering.
+fn render_plugin_list_warnings(warnings: &[PluginWarningRow], verbose: bool) {
+    for line in plugin_list_warning_lines(warnings, verbose) {
+        eprintln!("{line}");
+    }
+}
+
+/// Build the operator-facing warning lines for `plugin list` (pure so it is
+/// unit-testable). See [`render_plugin_list_warnings`] for the policy: in the
+/// non-verbose path stale `explicit_config` entries collapse to one summary
+/// line; every other tier keeps a per-entry line.
+fn plugin_list_warning_lines(warnings: &[PluginWarningRow], verbose: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    if verbose {
+        for warning in warnings {
+            lines.push(format!(
+                "warning: plugin '{}' was discovered ({}) but could not be loaded: {} ({})",
+                warning.name, warning.source, warning.reason, warning.path
+            ));
+        }
+        return lines;
+    }
+    let mut stale_config = 0usize;
+    for warning in warnings {
+        // Collapse only the stale not-found entries; an existing binary whose
+        // manifest probe failed is a real load error and stays per-entry.
+        if matches!(warning.source, "explicit_config" | "project_local")
+            && warning.reason.starts_with("configured binary not found")
+        {
+            stale_config += 1;
+            continue;
+        }
+        lines.push(format!(
+            "warning: plugin '{}' was discovered ({}) but could not be loaded: {} ({})",
+            warning.name, warning.source, warning.reason, warning.path
+        ));
+    }
+    if stale_config > 0 {
+        let noun = if stale_config == 1 { "binary" } else { "binaries" };
+        lines.push(format!(
+            "warning: {stale_config} configured plugin {noun} not found \
+             (stale plugins.yaml entries); run `animus plugin uninstall <name>` to prune, \
+             or `animus doctor --check plugins` / `animus plugin list --verbose` for detail",
+        ));
+    }
+    lines
 }
 
 /// Render `plugin list` results as a table with source-of-truth columns:
@@ -2838,6 +2898,59 @@ fn project_scope_claims_name(project_root: &Path, plugin_name: &str) -> bool {
     project_registry_claimed_names(project_root).contains(plugin_name)
 }
 
+/// Every plugin/binary name a project-scoped install of `project_root`
+/// claims: the basenames present in `<project>/.animus/plugins/` UNIONED
+/// with every name the project registry (`<project>/.animus/plugins.yaml`)
+/// records. This is the project-scope counterpart to a scan of the global
+/// [`plugin_install_dir`]; drift / inventory callers that only look at the
+/// global dir miss `--project` installs entirely. Empty when neither the
+/// project install dir nor the registry exists or is readable.
+pub(super) fn project_scope_installed_names(project_root: &Path) -> BTreeSet<String> {
+    let install_dir = project_plugin_install_dir(project_root);
+    let mut names = BTreeSet::new();
+    // A registry-claimed name counts as installed only while its recorded
+    // binary (or the default project install path) still exists — a stale
+    // registry entry whose binary was deleted must not satisfy flavor drift.
+    let path_key = serde_yaml::Value::String("binary".to_string());
+    let binaries_key = serde_yaml::Value::String("binaries".to_string());
+    if let Ok(config) = load_plugins_yaml(&project_plugins_registry_path(project_root)) {
+        for table in [&config.plugins, &config.providers] {
+            for (key, value) in table {
+                let serde_yaml::Value::String(name) = key else { continue };
+                let recorded_path = match value {
+                    serde_yaml::Value::String(path) => Some(PathBuf::from(path)),
+                    serde_yaml::Value::Mapping(entry) => {
+                        entry.get(&path_key).and_then(|v| v.as_str()).map(PathBuf::from)
+                    }
+                    _ => None,
+                };
+                let present = recorded_path.map(|p| p.exists()).unwrap_or(false) || install_dir.join(name).exists();
+                if !present {
+                    continue;
+                }
+                names.insert(name.clone());
+                if let serde_yaml::Value::Mapping(entry) = value {
+                    if let Some(serde_yaml::Value::Sequence(seq)) = entry.get(&binaries_key) {
+                        for item in seq {
+                            if let serde_yaml::Value::String(secondary) = item {
+                                names.insert(secondary.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Ok(iter) = std::fs::read_dir(install_dir) {
+        for entry in iter.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
 /// Every binary name the project registry claims: the table keys of
 /// `<project>/.animus/plugins.yaml` PLUS any secondary names recorded in an
 /// entry's `binaries:` list (multi-binary release installs write one lock
@@ -2851,7 +2964,7 @@ fn project_registry_claimed_names(project_root: &Path) -> BTreeSet<String> {
     };
     let binaries_key = serde_yaml::Value::String("binaries".to_string());
     for table in [&config.plugins, &config.providers] {
-        for (key, value) in table.iter() {
+        for (key, value) in table {
             if let serde_yaml::Value::String(name) = key {
                 names.insert(name.clone());
             }
@@ -5128,6 +5241,50 @@ mod tests {
             browser_download_url: format!("https://example.test/{name}"),
             digest: None,
         }
+    }
+
+    fn warning_row(name: &str, source: &'static str) -> PluginWarningRow {
+        PluginWarningRow {
+            name: name.to_string(),
+            source,
+            path: format!("/gone/{name}"),
+            reason: "configured binary not found: /tmp/missing".to_string(),
+        }
+    }
+
+    #[test]
+    fn stale_explicit_config_warnings_collapse_to_one_summary_line() {
+        let warnings = vec![
+            warning_row("animus-subject-default", "explicit_config"),
+            warning_row("animus-subject-requirements", "explicit_config"),
+            warning_row("animus-provider-broken", "project_local"),
+        ];
+        let lines = plugin_list_warning_lines(&warnings, false);
+        // Stale not-found entries collapse across BOTH registry tiers
+        // (explicit_config + project_local) into a single summary line.
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        let summary = lines.iter().find(|l| l.contains("stale plugins.yaml entries")).expect("summary line");
+        assert!(summary.contains("3 configured plugin binaries not found"), "{summary}");
+        assert!(summary.contains("animus plugin uninstall"), "summary must name the prune remedy: {summary}");
+    }
+
+    #[test]
+    fn single_stale_entry_uses_singular_noun() {
+        let warnings = vec![warning_row("animus-subject-default", "explicit_config")];
+        let lines = plugin_list_warning_lines(&warnings, false);
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].contains("1 configured plugin binary not found"), "{}", lines[0]);
+    }
+
+    #[test]
+    fn verbose_keeps_one_line_per_warning() {
+        let warnings = vec![
+            warning_row("animus-subject-default", "explicit_config"),
+            warning_row("animus-subject-requirements", "explicit_config"),
+        ];
+        let lines = plugin_list_warning_lines(&warnings, true);
+        assert_eq!(lines.len(), 2, "verbose prints one line per stale entry: {lines:?}");
+        assert!(lines.iter().all(|l| l.contains("could not be loaded")), "{lines:?}");
     }
 
     #[test]

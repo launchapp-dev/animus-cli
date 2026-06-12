@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- `animus flavor current` now counts project-scoped (`animus plugin install
+  --project`) installs as satisfied. Previously its drift report scanned only
+  the global plugin install dir, so a required plugin installed `--project`
+  showed `[missing]` even though discovery, `animus plugin list`, and `animus
+  plugin outdated` all saw it. The drift scan now unions the project install
+  dir + project registry into the installed set.
+- `animus plugin list` collapses repeated "stale `plugins.yaml` entry" warnings
+  (configured binaries whose path vanished) into a single summary line that
+  names the prune remedy (`animus plugin uninstall <name>`), instead of
+  printing one warning per entry and burying the shadowed-install notes below
+  the table. Warnings from other discovery tiers still print per-line. The new
+  `animus plugin list --verbose` flag restores the full per-entry detail, and
+  `--json` always carries the complete `warnings` array.
+
+### Internal
+
+- Added a cross-crate drift guard (`orchestrator-daemon-runtime`) asserting the
+  stale-active-flavor → default → bundled-default scope-resolution ladder
+  produces identical admit sets in both `orchestrator-plugin-host`
+  (`PluginScope::load_for_project`) and the daemon-runtime
+  (`resolve_scope_for_project`) implementations — the two ladders are
+  duplicated by a real crate-dependency constraint and can no longer silently
+  drift, including their two embedded `flavors/default.toml` copies.
+
 ## [0.5.14] - 2026-06-12
 
 **The 9.5 campaign release: budgets that enforce, skills that supercharge any
