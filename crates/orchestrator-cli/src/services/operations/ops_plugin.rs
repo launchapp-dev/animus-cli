@@ -40,8 +40,8 @@ use sha2::{Digest, Sha256};
 use crate::{
     invalid_input_error, not_found_error, print_value, unavailable_error, PluginCallArgs, PluginCommand,
     PluginDoctorArgs, PluginInfoArgs, PluginInstallArgs, PluginInstallDefaultsArgs, PluginListArgs, PluginLockCommand,
-    PluginLockListArgs, PluginLockVerifyArgs, PluginPingArgs, PluginRenameArgs, PluginScaffoldCommand,
-    PluginScopeCommand, PluginUninstallArgs,
+    PluginLockListArgs, PluginLockVerifyArgs, PluginPingArgs, PluginRenameArgs, PluginRevokeTrustArgs,
+    PluginScaffoldCommand, PluginScopeCommand, PluginTrustCommand, PluginTrustListArgs, PluginUninstallArgs,
 };
 
 #[derive(Debug, Serialize)]
@@ -155,6 +155,24 @@ pub(crate) struct PluginInstallOutput {
     /// Install scope: `global` (the historical default) or `project`
     /// (`--project`, landing under `<project_root>/.animus/`).
     pub(crate) scope: &'static str,
+    /// TOFU trust provenance for the org that admitted this install. Answers
+    /// "when did we trust this org, and why?" from the install/list JSON.
+    /// Absent for non-release installs (`--path` / `--url`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) org_trust: Option<OrgTrustAudit>,
+}
+
+/// Per-install record of which TOFU trust grant admitted the plugin's org.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct OrgTrustAudit {
+    /// GitHub owner/org the plugin was installed from.
+    pub(crate) org: String,
+    /// RFC3339 timestamp of when the org was trusted (absent for built-in).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) trusted_at: Option<String>,
+    /// How the trust decision was made: `interactive-prompt` | `yes` |
+    /// `allow-org` | `built-in`.
+    pub(crate) decided_by: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -344,7 +362,109 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
                 scope::handle_plugin_scope_reset(args, project_root).await
             }
         },
+        PluginCommand::Trust(cmd) => match cmd {
+            PluginTrustCommand::List(mut args) => {
+                args.json = args.json || json;
+                handle_plugin_trust_list(args)
+            }
+        },
+        PluginCommand::RevokeTrust(mut args) => {
+            args.json = args.json || json;
+            handle_plugin_revoke_trust(args, project_root)
+        }
     }
+}
+
+/// `animus plugin trust list` — render the TOFU org allowlist (current +
+/// revoked tombstones) with timestamps and how each grant was decided.
+fn handle_plugin_trust_list(args: PluginTrustListArgs) -> Result<()> {
+    let config = load_trusted_orgs()?;
+    let mut rows: Vec<serde_json::Value> = Vec::new();
+    // Built-in orgs always show first as permanent trust anchors.
+    for builtin in BUILTIN_TRUSTED_ORGS {
+        rows.push(serde_json::json!({
+            "org": builtin,
+            "state": "trusted",
+            "decided_by": TrustDecision::BuiltIn.as_str(),
+            "trusted_at": serde_json::Value::Null,
+            "revoked_at": serde_json::Value::Null,
+            "first_plugin": serde_json::Value::Null,
+            "builtin": true,
+        }));
+    }
+    for record in config.records() {
+        rows.push(serde_json::json!({
+            "org": record.org,
+            "state": if record.is_active() { "trusted" } else { "revoked" },
+            "decided_by": record.decided_by.map(|d| d.as_str().to_string()),
+            "trusted_at": record.trusted_at,
+            "revoked_at": record.revoked_at,
+            "first_plugin": record.first_plugin,
+            "builtin": false,
+        }));
+    }
+
+    if args.json {
+        return print_value(
+            serde_json::json!({ "trusted_orgs": rows, "path": trusted_orgs_path().display().to_string() }),
+            true,
+        );
+    }
+
+    if rows.is_empty() {
+        println!("No trusted orgs recorded.");
+        return Ok(());
+    }
+    println!("{:<28} {:<9} {:<18} {:<25} {}", "ORG", "STATE", "DECIDED-BY", "TRUSTED-AT", "REVOKED-AT");
+    for row in &rows {
+        let org = row["org"].as_str().unwrap_or("");
+        let state = row["state"].as_str().unwrap_or("");
+        let decided = row["decided_by"].as_str().unwrap_or("-");
+        let trusted_at = row["trusted_at"].as_str().unwrap_or("-");
+        let revoked_at = row["revoked_at"].as_str().unwrap_or("-");
+        println!("{org:<28} {state:<9} {decided:<18} {trusted_at:<25} {revoked_at}");
+    }
+    println!("\ntrusted-orgs.yaml: {}", trusted_orgs_path().display());
+    Ok(())
+}
+
+/// `animus plugin revoke-trust <ORG>` — tombstone the org's trust grant.
+fn handle_plugin_revoke_trust(args: PluginRevokeTrustArgs, project_root: &str) -> Result<()> {
+    let record = revoke_trusted_org(&args.org)?;
+    if let Some(scoped) = protocol::repository_scope::scoped_state_root(std::path::Path::new(project_root)) {
+        let audit = Audit::at_scoped_root(&scoped);
+        audit.log_event(AuditEvent::new(
+            AuditActor::User,
+            AuditEventKind::TrustOrgRevoked,
+            serde_json::json!({
+                "org": record.org,
+                "revoked_at": record.revoked_at,
+                "previously_trusted_at": record.trusted_at,
+                "decided_by": record.decided_by.map(|d| d.as_str().to_string()),
+            }),
+        ));
+    }
+    if args.json {
+        return print_value(
+            serde_json::json!({
+                "revoked": record.org,
+                "revoked_at": record.revoked_at,
+                "previously_trusted_at": record.trusted_at,
+                "decided_by": record.decided_by.map(|d| d.as_str().to_string()),
+                "path": trusted_orgs_path().display().to_string(),
+            }),
+            true,
+        );
+    } else {
+        println!(
+            "Revoked trust for '{}'. A tombstone (revoked_at={}) was recorded in {}.",
+            record.org,
+            record.revoked_at.as_deref().unwrap_or("-"),
+            trusted_orgs_path().display()
+        );
+        println!("Future installs from '{}' will re-prompt for trust.", record.org);
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize)]
@@ -1280,9 +1400,10 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         }
     }
 
+    let mut org_trust_decision: Option<TrustDecision> = None;
     if provenance.source_kind == Some("release") {
         if let Some(owner) = provenance.owner.as_deref() {
-            enforce_org_trust(owner, &req)?;
+            org_trust_decision = enforce_org_trust(owner, &req)?;
         }
     }
 
@@ -1626,19 +1747,51 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     table.insert(serde_yaml::Value::String(plugin_name.clone()), serde_yaml::Value::Mapping(entry));
     save_plugins_yaml(&yaml_path, &config)?;
 
-    // TOFU: persist trust for the org we just installed from. Pre-trusted orgs
-    // and orgs the user explicitly listed via `--allow-org` get written to
+    // TOFU: persist trust for the org we just installed from with rich audit
+    // metadata (trusted_at / decided_by / first_plugin). Pre-trusted orgs and
+    // orgs the user explicitly listed via `--allow-org` get written to
     // `~/.animus/trusted-orgs.yaml` so a follow-up install skips the prompt.
+    let first_plugin_slug = match (provenance.owner.as_deref(), provenance.repo.as_deref()) {
+        (Some(o), Some(r)) => Some(format!("{o}/{r}")),
+        _ => None,
+    };
     if let Some(owner) = provenance.owner.as_deref() {
-        if let Err(error) = add_trusted_org(owner) {
-            tracing::warn!(owner, %error, "failed to persist trusted org after install");
+        // `enforce_org_trust` returns the decision when a fresh grant happened;
+        // when `None`, the org was already trusted and we leave its record as-is.
+        if let Some(decision) = org_trust_decision {
+            if let Err(error) = add_trusted_org(owner, decision, first_plugin_slug.as_deref()) {
+                tracing::warn!(owner, %error, "failed to persist trusted org after install");
+            }
         }
     }
     for explicit in &req.allow_org {
-        if let Err(error) = add_trusted_org(explicit) {
+        // Only attribute `first_plugin` when the pre-trusted org actually owns
+        // the plugin being installed; an unrelated `--allow-org` entry was not
+        // "first triggered" by this install.
+        let attributed = match provenance.owner.as_deref() {
+            Some(owner) if owner.eq_ignore_ascii_case(explicit) => first_plugin_slug.as_deref(),
+            _ => None,
+        };
+        if let Err(error) = add_trusted_org(explicit, TrustDecision::AllowOrg, attributed) {
             tracing::warn!(org = %explicit, %error, "failed to persist --allow-org");
         }
     }
+
+    // Surface the resolved org-trust provenance (org + trusted_at + decided_by)
+    // so the install JSON envelope can answer "when did we trust this org?".
+    let org_trust_audit: Option<OrgTrustAudit> =
+        provenance.owner.as_deref().and_then(|owner| match trusted_org_record(owner) {
+            Ok(Some(record)) => Some(OrgTrustAudit {
+                org: record.org,
+                trusted_at: record.trusted_at,
+                decided_by: record.decided_by.map(|d| d.as_str().to_string()).unwrap_or_else(|| "unknown".to_string()),
+            }),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(owner, %error, "failed to read trusted-org record for install audit");
+                None
+            }
+        });
 
     let sha256_verified = match provenance.sha256_verified {
         Some(verified) => verified,
@@ -1793,6 +1946,11 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
                     "force": req.force,
                     "source_kind": provenance.source_kind.unwrap_or("unknown"),
                     "binaries": installed_binary_names.clone(),
+                    "org_trust": org_trust_audit.as_ref().map(|t| serde_json::json!({
+                        "org": t.org,
+                        "trusted_at": t.trusted_at,
+                        "decided_by": t.decided_by,
+                    })),
                 }),
             ));
             match &signature_detail {
@@ -1900,6 +2058,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         assigned_kind,
         native_kind: native_kind_for_lock,
         scope: scope_paths.scope,
+        org_trust: org_trust_audit,
     })
 }
 
@@ -3839,13 +3998,111 @@ fn trusted_orgs_path() -> PathBuf {
 }
 
 /// Built-in trusted orgs. Pre-populated with `launchapp-dev` so a fresh
-/// install gets a safe default for the canonical animus plugins.
+/// install gets a safe default for the canonical animus plugins. The built-in
+/// org cannot be revoked via `animus plugin revoke-trust`.
 const BUILTIN_TRUSTED_ORGS: &[&str] = &["launchapp-dev"];
+
+/// How a TOFU trust decision was made. Recorded per-entry in
+/// `trusted-orgs.yaml` so the audit trail explains why an org is trusted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+enum TrustDecision {
+    /// Operator typed `yes` at the interactive TOFU prompt.
+    InteractivePrompt,
+    /// `--yes` / `--force` auto-confirmed the prompt non-interactively.
+    Yes,
+    /// Pre-trusted via `--allow-org <OWNER>`.
+    AllowOrg,
+    /// Ships in `BUILTIN_TRUSTED_ORGS` (never persisted, surfaced in listings).
+    BuiltIn,
+}
+
+impl TrustDecision {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::InteractivePrompt => "interactive-prompt",
+            Self::Yes => "yes",
+            Self::AllowOrg => "allow-org",
+            Self::BuiltIn => "built-in",
+        }
+    }
+}
+
+/// A single trusted-org audit record. New entries always serialize the rich
+/// shape; the loader still accepts the legacy bare-string format for
+/// back-compat (see [`OrgEntry`]).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct TrustedOrgRecord {
+    /// GitHub owner/org slug.
+    org: String,
+    /// RFC3339 timestamp of when trust was first granted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trusted_at: Option<String>,
+    /// How the trust decision was made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    decided_by: Option<TrustDecision>,
+    /// The `owner/repo` whose install first triggered the trust prompt.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    first_plugin: Option<String>,
+    /// RFC3339 timestamp of revocation. When `Some`, the org is NOT trusted —
+    /// the record survives as a tombstone so re-trusting re-prompts and the
+    /// audit trail is preserved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revoked_at: Option<String>,
+}
+
+impl TrustedOrgRecord {
+    fn is_active(&self) -> bool {
+        self.revoked_at.is_none()
+    }
+}
+
+/// On-disk entry: either the legacy bare string (`- some-org`) or the rich
+/// record. Untagged so serde tries the map shape first, then the string.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+enum OrgEntry {
+    Rich(TrustedOrgRecord),
+    Legacy(String),
+}
+
+impl OrgEntry {
+    fn into_record(self) -> TrustedOrgRecord {
+        match self {
+            Self::Rich(r) => r,
+            Self::Legacy(org) => {
+                TrustedOrgRecord { org, trusted_at: None, decided_by: None, first_plugin: None, revoked_at: None }
+            }
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 struct TrustedOrgsConfig {
     #[serde(default)]
-    trusted_orgs: Vec<String>,
+    trusted_orgs: Vec<OrgEntry>,
+}
+
+impl TrustedOrgsConfig {
+    /// Normalize on-disk entries into rich records.
+    fn records(&self) -> Vec<TrustedOrgRecord> {
+        self.trusted_orgs.iter().cloned().map(OrgEntry::into_record).collect()
+    }
+
+    /// Find the index of the (first) entry for `owner`, case-insensitive.
+    fn position(&self, owner: &str) -> Option<usize> {
+        self.trusted_orgs.iter().position(|e| {
+            let org = match e {
+                OrgEntry::Rich(r) => r.org.as_str(),
+                OrgEntry::Legacy(s) => s.as_str(),
+            };
+            org.eq_ignore_ascii_case(owner)
+        })
+    }
+}
+
+fn now_rfc3339() -> String {
+    chrono::Utc::now().to_rfc3339()
 }
 
 fn load_trusted_orgs() -> Result<TrustedOrgsConfig> {
@@ -3869,46 +4126,109 @@ fn save_trusted_orgs(config: &TrustedOrgsConfig) -> Result<()> {
     std::fs::write(&path, serialized).with_context(|| format!("failed to write {}", path.display()))
 }
 
-/// Append `owner` to the trusted-orgs allowlist on disk. Idempotent.
-fn add_trusted_org(owner: &str) -> Result<()> {
+/// Record trust for `owner` on disk with rich audit metadata. Idempotent for
+/// already-active entries; re-grants a previously revoked org by clearing its
+/// tombstone and stamping a fresh decision. Built-in orgs are never persisted.
+fn add_trusted_org(owner: &str, decision: TrustDecision, first_plugin: Option<&str>) -> Result<()> {
     let trimmed = owner.trim();
     if trimmed.is_empty() {
-        return Ok(());
-    }
-    let mut config = load_trusted_orgs()?;
-    let already_known: BTreeSet<String> = config.trusted_orgs.iter().map(|o| o.to_ascii_lowercase()).collect();
-    if already_known.contains(&trimmed.to_ascii_lowercase()) {
         return Ok(());
     }
     if BUILTIN_TRUSTED_ORGS.iter().any(|o| o.eq_ignore_ascii_case(trimmed)) {
         return Ok(());
     }
-    config.trusted_orgs.push(trimmed.to_string());
+    let mut config = load_trusted_orgs()?;
+    let fresh = TrustedOrgRecord {
+        org: trimmed.to_string(),
+        trusted_at: Some(now_rfc3339()),
+        decided_by: Some(decision),
+        first_plugin: first_plugin.map(str::to_string),
+        revoked_at: None,
+    };
+    match config.position(trimmed) {
+        Some(idx) => {
+            // Upgrade legacy bare-string entries to rich records and clear any
+            // tombstone (re-trust). Preserve the existing record otherwise so a
+            // benign repeat install doesn't churn the timestamp.
+            let existing = config.trusted_orgs[idx].clone().into_record();
+            if existing.is_active() && existing.trusted_at.is_some() {
+                return Ok(());
+            }
+            config.trusted_orgs[idx] = OrgEntry::Rich(fresh);
+        }
+        None => config.trusted_orgs.push(OrgEntry::Rich(fresh)),
+    }
     save_trusted_orgs(&config)
 }
 
-fn org_is_trusted(owner: &str) -> Result<bool> {
+/// Remove trust for `owner`, recording a tombstone (`revoked_at`) so the audit
+/// trail survives and a re-trust re-prompts. Built-in orgs cannot be revoked.
+/// Returns the revoked record on success.
+fn revoke_trusted_org(owner: &str) -> Result<TrustedOrgRecord> {
+    let trimmed = owner.trim();
+    if trimmed.is_empty() {
+        return Err(invalid_input_error("organization name cannot be empty"));
+    }
+    if BUILTIN_TRUSTED_ORGS.iter().any(|o| o.eq_ignore_ascii_case(trimmed)) {
+        return Err(invalid_input_error(format!(
+            "'{trimmed}' is a built-in trusted org and cannot be revoked. It is the trust anchor for the \
+             canonical Animus plugins; revoking it would break `animus plugin install-defaults`."
+        )));
+    }
+    let mut config = load_trusted_orgs()?;
+    let Some(idx) = config.position(trimmed) else {
+        return Err(invalid_input_error(format!(
+            "org '{trimmed}' is not in the trusted-orgs allowlist; nothing to revoke"
+        )));
+    };
+    let mut record = config.trusted_orgs[idx].clone().into_record();
+    if !record.is_active() {
+        return Err(invalid_input_error(format!("org '{trimmed}' is already revoked")));
+    }
+    record.revoked_at = Some(now_rfc3339());
+    config.trusted_orgs[idx] = OrgEntry::Rich(record.clone());
+    save_trusted_orgs(&config)?;
+    Ok(record)
+}
+
+/// Returns `Some(record)` describing the active trust grant for `owner`, or
+/// `None` when the org is untrusted (never seen, or tombstoned).
+fn trusted_org_record(owner: &str) -> Result<Option<TrustedOrgRecord>> {
     if BUILTIN_TRUSTED_ORGS.iter().any(|o| o.eq_ignore_ascii_case(owner)) {
-        return Ok(true);
+        return Ok(Some(TrustedOrgRecord {
+            org: owner.to_string(),
+            trusted_at: None,
+            decided_by: Some(TrustDecision::BuiltIn),
+            first_plugin: None,
+            revoked_at: None,
+        }));
     }
     let config = load_trusted_orgs()?;
-    Ok(config.trusted_orgs.iter().any(|o| o.eq_ignore_ascii_case(owner)))
+    Ok(config.records().into_iter().find(|r| r.org.eq_ignore_ascii_case(owner) && r.is_active()))
+}
+
+fn org_is_trusted(owner: &str) -> Result<bool> {
+    Ok(trusted_org_record(owner)?.is_some())
 }
 
 /// Implements the trust-on-first-use prompt for installs from public-repo
-/// sources. Pre-trusted orgs (`launchapp-dev` plus anything in
+/// sources. Pre-trusted orgs (`launchapp-dev` plus anything active in
 /// `~/.animus/trusted-orgs.yaml`) skip the prompt entirely. Operators can
 /// pre-trust additional orgs via `--allow-org`, or auto-confirm via `--yes`.
-fn enforce_org_trust(owner: &str, req: &PluginInstallRequest) -> Result<()> {
+///
+/// Returns the [`TrustDecision`] that admitted the install so the caller can
+/// persist it and surface it in the install audit line. `None` means the org
+/// was already trusted (no fresh decision to record).
+fn enforce_org_trust(owner: &str, req: &PluginInstallRequest) -> Result<Option<TrustDecision>> {
     if req.allow_org.iter().any(|o| o.eq_ignore_ascii_case(owner)) {
-        return Ok(());
+        return Ok(Some(TrustDecision::AllowOrg));
     }
     if org_is_trusted(owner)? {
-        return Ok(());
+        return Ok(None);
     }
     if req.yes || req.force {
         tracing::warn!(owner, "installing plugin from untrusted org (--yes / --force); recording trust on first use");
-        return Ok(());
+        return Ok(Some(TrustDecision::Yes));
     }
     if !std::io::stdin().is_terminal() {
         return Err(invalid_input_error(format!(
@@ -3928,7 +4248,7 @@ fn enforce_org_trust(owner: &str, req: &PluginInstallRequest) -> Result<()> {
     std::io::stdin().read_line(&mut answer).with_context(|| "failed to read TOFU response from stdin")?;
     let normalized = answer.trim().to_ascii_lowercase();
     if normalized == "yes" || normalized == "y" {
-        Ok(())
+        Ok(Some(TrustDecision::InteractivePrompt))
     } else {
         Err(invalid_input_error(format!("user declined to trust org '{owner}'; aborting install")))
     }
@@ -5827,17 +6147,144 @@ name = "same"
             "ANIMUS_TRUSTED_ORGS",
             Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
         );
-        add_trusted_org("first-org").expect("add 1st");
-        add_trusted_org("first-org").expect("idempotent 2nd");
-        add_trusted_org("second-org").expect("add 2nd");
+        add_trusted_org("first-org", TrustDecision::InteractivePrompt, Some("first-org/animus-foo")).expect("add 1st");
+        add_trusted_org("first-org", TrustDecision::Yes, None).expect("idempotent 2nd");
+        add_trusted_org("second-org", TrustDecision::AllowOrg, None).expect("add 2nd");
         let cfg = load_trusted_orgs().expect("load");
-        assert_eq!(cfg.trusted_orgs.len(), 2);
-        assert!(cfg.trusted_orgs.contains(&"first-org".to_string()));
-        assert!(cfg.trusted_orgs.contains(&"second-org".to_string()));
+        let records = cfg.records();
+        assert_eq!(records.len(), 2);
+        let first = records.iter().find(|r| r.org == "first-org").expect("first-org present");
+        // Idempotent: the second add did NOT churn the original decision/timestamp.
+        assert_eq!(first.decided_by, Some(TrustDecision::InteractivePrompt));
+        assert!(first.trusted_at.is_some(), "rich record carries trusted_at");
+        assert_eq!(first.first_plugin.as_deref(), Some("first-org/animus-foo"));
+        assert!(records.iter().any(|r| r.org == "second-org"));
         // Pre-trusted built-ins never get written.
-        add_trusted_org("launchapp-dev").expect("builtin add is no-op");
+        add_trusted_org("launchapp-dev", TrustDecision::Yes, None).expect("builtin add is no-op");
         let cfg2 = load_trusted_orgs().expect("reload");
-        assert_eq!(cfg2.trusted_orgs.len(), 2, "launchapp-dev must not be appended to trusted-orgs.yaml");
+        assert_eq!(cfg2.records().len(), 2, "launchapp-dev must not be appended to trusted-orgs.yaml");
+    }
+
+    #[test]
+    fn load_trusted_orgs_accepts_legacy_bare_string_format() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let trusted_orgs_yaml = temp.path().join("trusted-orgs.yaml");
+        let _env = protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_TRUSTED_ORGS",
+            Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
+        );
+        // Old format: bare string list.
+        std::fs::write(&trusted_orgs_yaml, "trusted_orgs:\n  - legacy-org\n  - another-legacy\n").unwrap();
+        let cfg = load_trusted_orgs().expect("legacy format must load");
+        let records = cfg.records();
+        assert_eq!(records.len(), 2);
+        assert!(records.iter().all(|r| r.is_active()), "legacy entries are active (no tombstone)");
+        assert!(records.iter().all(|r| r.trusted_at.is_none()), "legacy entries carry no timestamp");
+        assert!(org_is_trusted("legacy-org").expect("trusted lookup"));
+        assert!(org_is_trusted("ANOTHER-LEGACY").expect("case-insensitive"));
+    }
+
+    #[test]
+    fn new_entries_carry_rich_metadata_and_serialize() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let trusted_orgs_yaml = temp.path().join("trusted-orgs.yaml");
+        let _env = protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_TRUSTED_ORGS",
+            Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
+        );
+        add_trusted_org("rich-org", TrustDecision::InteractivePrompt, Some("rich-org/animus-bar")).expect("add");
+        // On-disk YAML must carry the rich fields.
+        let raw = std::fs::read_to_string(&trusted_orgs_yaml).expect("read back");
+        assert!(raw.contains("rich-org"), "org persisted: {raw}");
+        assert!(raw.contains("trusted_at"), "trusted_at persisted: {raw}");
+        assert!(raw.contains("interactive-prompt"), "decided_by persisted: {raw}");
+        assert!(raw.contains("animus-bar"), "first_plugin persisted: {raw}");
+        let record = trusted_org_record("rich-org").expect("lookup").expect("active record");
+        assert_eq!(record.decided_by, Some(TrustDecision::InteractivePrompt));
+        assert_eq!(record.first_plugin.as_deref(), Some("rich-org/animus-bar"));
+    }
+
+    #[test]
+    fn revoke_records_tombstone_and_reprompts() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let trusted_orgs_yaml = temp.path().join("trusted-orgs.yaml");
+        let _env = protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_TRUSTED_ORGS",
+            Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
+        );
+        add_trusted_org("tmp-org", TrustDecision::Yes, None).expect("add");
+        assert!(org_is_trusted("tmp-org").expect("trusted before revoke"));
+
+        let revoked = revoke_trusted_org("tmp-org").expect("revoke");
+        assert!(revoked.revoked_at.is_some(), "tombstone carries revoked_at");
+        // Org is no longer trusted, so a fresh install must re-prompt.
+        assert!(!org_is_trusted("tmp-org").expect("untrusted after revoke"));
+
+        // Tombstone survives in the store (audit trail preserved).
+        let cfg = load_trusted_orgs().expect("reload");
+        let records = cfg.records();
+        let tombstone = records.iter().find(|r| r.org == "tmp-org").expect("tombstone present");
+        assert!(!tombstone.is_active(), "tombstone is inactive");
+
+        // Double-revoke errors.
+        assert!(revoke_trusted_org("tmp-org").is_err(), "already-revoked must error");
+
+        // Re-trusting clears the tombstone with a fresh decision.
+        add_trusted_org("tmp-org", TrustDecision::InteractivePrompt, Some("tmp-org/animus-baz")).expect("re-trust");
+        let record = trusted_org_record("tmp-org").expect("lookup").expect("active again");
+        assert_eq!(record.decided_by, Some(TrustDecision::InteractivePrompt));
+        assert!(record.revoked_at.is_none(), "re-trust clears tombstone");
+    }
+
+    #[test]
+    fn revoke_builtin_org_is_refused() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let trusted_orgs_yaml = temp.path().join("trusted-orgs.yaml");
+        let _env = protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_TRUSTED_ORGS",
+            Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
+        );
+        let err = revoke_trusted_org("launchapp-dev").expect_err("built-in must not be revocable");
+        assert!(format!("{err}").contains("built-in"), "unexpected error: {err}");
+        // launchapp-dev stays trusted.
+        assert!(org_is_trusted("launchapp-dev").expect("still trusted"));
+    }
+
+    #[test]
+    fn revoke_unknown_org_errors() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let trusted_orgs_yaml = temp.path().join("trusted-orgs.yaml");
+        let _env = protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_TRUSTED_ORGS",
+            Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
+        );
+        let err = revoke_trusted_org("never-seen").expect_err("unknown org must error");
+        assert!(format!("{err}").contains("not in the trusted-orgs allowlist"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn enforce_org_trust_returns_decision_for_fresh_grant() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let trusted_orgs_yaml = temp.path().join("trusted-orgs.yaml");
+        let _env = protocol::test_utils::EnvVarGuard::set(
+            "ANIMUS_TRUSTED_ORGS",
+            Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
+        );
+        // --yes path returns the Yes decision.
+        let req = PluginInstallRequest { yes: true, ..Default::default() };
+        assert_eq!(enforce_org_trust("fresh-org", &req).expect("ok"), Some(TrustDecision::Yes));
+        // --allow-org path returns AllowOrg.
+        let req2 = PluginInstallRequest { allow_org: vec!["friend-org".into()], ..Default::default() };
+        assert_eq!(enforce_org_trust("friend-org", &req2).expect("ok"), Some(TrustDecision::AllowOrg));
+        // launchapp-dev (built-in, already trusted) -> None (no fresh grant).
+        let req3 = PluginInstallRequest::default();
+        assert_eq!(enforce_org_trust("launchapp-dev", &req3).expect("ok"), None);
     }
 
     #[test]

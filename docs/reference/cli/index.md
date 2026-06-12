@@ -281,10 +281,13 @@ animus
 │   ├── cache                Inspect or wipe the on-disk plugin manifest cache (`~/.animus/cache/manifests/`) that backs the v0.5.9 discovery speed-up (v0.5.9)
 │   │   ├── clear            Remove every cached manifest entry; discovery repopulates on next call
 │   │   └── list             List cached entries with sha256, size, and mtime
-│   └── scope                Per-project plugin scope (`.animus/plugin-scope.yaml`). Lets a project opt into a subset of the globally installed plugin set so discovery, preflight, and the plugin-status registry iterate just the project's relevant plugins (v0.5.9)
-│       ├── show             Print the effective scope (mode + resolved admit-set) for the current project
-│       ├── set              Write `.animus/plugin-scope.yaml` with the supplied mode + allow/extras/require sets
-│       └── reset            Delete `.animus/plugin-scope.yaml` and fall back to the default scope
+│   ├── scope                Per-project plugin scope (`.animus/plugin-scope.yaml`). Lets a project opt into a subset of the globally installed plugin set so discovery, preflight, and the plugin-status registry iterate just the project's relevant plugins (v0.5.9)
+│   │   ├── show             Print the effective scope (mode + resolved admit-set) for the current project
+│   │   ├── set              Write `.animus/plugin-scope.yaml` with the supplied mode + allow/extras/require sets
+│   │   └── reset            Delete `.animus/plugin-scope.yaml` and fall back to the default scope
+│   ├── trust                Inspect the TOFU org allowlist (`~/.animus/trusted-orgs.yaml`)
+│   │   └── list             List trusted orgs (current + revoked tombstones) with `trusted_at`/`revoked_at` and how each grant was decided
+│   └── revoke-trust         Revoke trust for a GitHub org (tombstones `revoked_at` so re-installs re-prompt); the built-in `launchapp-dev` org cannot be revoked
 │
 ├── status                   Show a unified project status dashboard. `--failures N` sets how many recent workflow failures to list (default 3; applies to both human and JSON output)
 ├── output                   Inspect run output and artifacts

@@ -217,10 +217,68 @@ release source also consults a separate allowlist at
 `~/.animus/trusted-orgs.yaml`. Installing from an org not in this list
 prompts the operator at the TTY (non-suppressible) or fails non-interactively.
 
-Built-in trusted orgs: `launchapp-dev`.
+Built-in trusted orgs: `launchapp-dev` (the trust anchor for the canonical
+Animus plugins — it cannot be revoked).
 
 See [`docs/architecture/plugin-signing.md`](../architecture/plugin-signing.md#trusted-orgs-tofu)
-for full details.
+for the threat model.
+
+### Trust lifecycle: trust → audit → revoke → re-trust
+
+The TOFU store is **audited**. Each trust grant is persisted as a rich
+record rather than a bare org name:
+
+| Field          | Meaning                                                                        |
+| -------------- | ------------------------------------------------------------------------------ |
+| `org`          | GitHub owner/org slug.                                                          |
+| `trusted_at`   | RFC3339 timestamp of when trust was first granted.                             |
+| `decided_by`   | `interactive-prompt` (typed `yes`), `yes` (`--yes`/`--force`), `allow-org` (`--allow-org`), or `built-in`. |
+| `first_plugin` | The `owner/repo` whose install first triggered the prompt.                     |
+| `revoked_at`   | RFC3339 timestamp of revocation. Present only on tombstones (see below).        |
+
+**Back-compat:** the loader still reads the legacy bare-string format
+(`trusted_orgs: [- some-org]`). Legacy entries load as active records with
+no timestamps; the next grant rewrites them in the rich shape.
+
+1. **Trust.** On the first install from an unknown org, Animus prompts at
+   the TTY (or fails non-interactively, directing you to `--allow-org` /
+   `--yes`). Accepting writes a rich record with `trusted_at` +
+   `decided_by` + `first_plugin`. Subsequent installs from the same org
+   skip the prompt.
+
+2. **Audit.** Inspect the store with:
+
+   ```bash
+   animus plugin trust list          # current + revoked, with timestamps
+   animus plugin trust list --json
+   ```
+
+   Each successful release-source install also stamps an `org_trust`
+   block (`org` + `trusted_at` + `decided_by`) into the install JSON
+   envelope and the `plugin_install` audit line, so you can answer "when
+   did we trust this org?" from the install record itself.
+
+3. **Revoke.** Remove an org's trust:
+
+   ```bash
+   animus plugin revoke-trust evil-org
+   ```
+
+   This does **not** delete the record — it stamps a `revoked_at`
+   tombstone. The tombstone keeps the audit trail intact and ensures the
+   next install from that org re-prompts (a deleted record would silently
+   re-trust on the next `--yes`). Revoking emits a `trust_org_revoked`
+   audit event. The built-in `launchapp-dev` org cannot be revoked.
+
+4. **Re-trust.** Installing from a tombstoned org re-runs the TOFU prompt.
+   Accepting clears the `revoked_at` tombstone and stamps a fresh
+   `trusted_at` / `decided_by`, so the record reflects the most recent
+   decision while the prior revocation remains in the audit log stream.
+
+> **v0.6 note.** TOFU remains warn-by-default in this release; the default
+> does not flip to required-signature/strict enforcement until v0.6. TOFU
+> is a convenience trust ledger, not a cryptographic trust anchor — cosign
+> keyless verification (above) is the authenticity control.
 
 ## Manifest name vs repo basename
 
@@ -240,7 +298,7 @@ in-tree backend.
 | File                                  | Purpose                                                                          |
 | ------------------------------------- | -------------------------------------------------------------------------------- |
 | `~/.animus/trusted-signers.yaml`      | Optional glob allowlist for cosign cert identities. **Missing / empty = permissive** (any keyless signature whose cert chain validates is accepted, regardless of owner). Populate this file to scope the trust set down. |
-| `~/.animus/trusted-orgs.yaml`         | TOFU allowlist of GitHub orgs the operator has accepted (orthogonal to cosign trust).            |
+| `~/.animus/trusted-orgs.yaml`         | TOFU allowlist of GitHub orgs the operator has accepted (orthogonal to cosign trust). Rich per-entry records carry `trusted_at` / `decided_by` / `first_plugin`, plus `revoked_at` tombstones. Legacy bare-string entries still load. See [Trust lifecycle](#trust-lifecycle-trust--audit--revoke--re-trust). |
 | `~/.animus/plugins.yaml`              | Installed-plugin registry. Records `signature_status` per entry.                 |
 | `.animus/plugins.lock` (project) or `~/.animus/plugins.lock` (global) | Append-only integrity ledger pinning `sha256(artifact)` + `sha256(signature_bundle)` for every installed plugin. Project-local takes precedence when `<project_root>/.animus/` exists. |
 
