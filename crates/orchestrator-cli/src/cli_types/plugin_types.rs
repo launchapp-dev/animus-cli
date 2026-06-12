@@ -87,6 +87,40 @@ pub(crate) enum PluginCommand {
     /// `~/.animus/plugins/`.
     #[command(subcommand)]
     Scope(PluginScopeCommand),
+    /// Inspect the trust-on-first-use (TOFU) org allowlist
+    /// (`~/.animus/trusted-orgs.yaml`). Shows currently-trusted orgs and
+    /// revoked tombstones with their `trusted_at` / `revoked_at` timestamps
+    /// and how each grant was decided.
+    #[command(subcommand)]
+    Trust(PluginTrustCommand),
+    /// Revoke trust for a GitHub org so future installs from it re-prompt.
+    /// Records a `revoked_at` tombstone in `~/.animus/trusted-orgs.yaml` so
+    /// the audit trail survives. The built-in `launchapp-dev` org cannot be
+    /// revoked.
+    RevokeTrust(PluginRevokeTrustArgs),
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum PluginTrustCommand {
+    /// List trusted orgs (current + revoked tombstones) with timestamps and
+    /// how each trust decision was made.
+    List(PluginTrustListArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginTrustListArgs {
+    /// Emit `animus.cli.v1` JSON instead of a table.
+    #[arg(long)]
+    pub(crate) json: bool,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginRevokeTrustArgs {
+    /// GitHub org/owner to revoke.
+    pub(crate) org: String,
+    /// Emit `animus.cli.v1` JSON instead of human output.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Subcommand)]

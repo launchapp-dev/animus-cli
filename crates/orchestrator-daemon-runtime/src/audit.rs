@@ -99,6 +99,7 @@ pub enum AuditEventKind {
     SignatureInvalid,
     TrustKeyAdded,
     TrustPublisherAdded,
+    TrustOrgRevoked,
     PolicyOverride,
     LockfileMismatch,
 }
@@ -114,6 +115,7 @@ impl AuditEventKind {
             Self::SignatureInvalid => "signature_invalid",
             Self::TrustKeyAdded => "trust_key_added",
             Self::TrustPublisherAdded => "trust_publisher_added",
+            Self::TrustOrgRevoked => "trust_org_revoked",
             Self::PolicyOverride => "policy_override",
             Self::LockfileMismatch => "lockfile_mismatch",
         }
@@ -416,6 +418,7 @@ mod tests {
         assert_eq!(AuditEventKind::SignatureInvalid.as_str(), "signature_invalid");
         assert_eq!(AuditEventKind::TrustKeyAdded.as_str(), "trust_key_added");
         assert_eq!(AuditEventKind::TrustPublisherAdded.as_str(), "trust_publisher_added");
+        assert_eq!(AuditEventKind::TrustOrgRevoked.as_str(), "trust_org_revoked");
         assert_eq!(AuditEventKind::PolicyOverride.as_str(), "policy_override");
         assert_eq!(AuditEventKind::LockfileMismatch.as_str(), "lockfile_mismatch");
     }

@@ -6,6 +6,25 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Audited trust-on-first-use (TOFU) for plugin installs. The trusted-orgs
+  store (`~/.animus/trusted-orgs.yaml`, `$ANIMUS_TRUSTED_ORGS`) now records
+  per-entry audit metadata: `trusted_at` (RFC3339), `decided_by`
+  (`interactive-prompt` | `yes` | `allow-org` | `built-in`), and
+  `first_plugin` (the `owner/repo` whose install first triggered the
+  prompt). The loader still accepts the legacy bare-string format for
+  back-compat; new grants always write the rich record.
+- `animus plugin revoke-trust <ORG>` removes an org from the TOFU
+  allowlist and records a `revoked_at` tombstone so re-trusting re-prompts
+  while the audit trail survives. The built-in `launchapp-dev` anchor
+  cannot be revoked (errors with an explanation). Emits a
+  `trust_org_revoked` audit event.
+- `animus plugin trust list` (`--json`) shows current and revoked orgs
+  with their `trusted_at` / `revoked_at` timestamps and how each grant was
+  decided.
+- Successful release-source installs now surface an `org_trust` block
+  (`org` + `trusted_at` + `decided_by`) in the install JSON envelope and
+  the `plugin_install` audit line, so `plugin install --json` can answer
+  "when did we trust this org?".
 - Cost attribution by provider and model. Per-phase cost records now
   carry a `provider` (sourced from the phase session checkpoint) and a
   `model` (already captured from run metadata events), so operators can
