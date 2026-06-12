@@ -6,13 +6,36 @@ All notable changes to this project will be documented in this file.
 
 ## [0.5.13] - 2026-06-11
 
-**Event-driven scheduler, truthful config, typed exit codes, and a much
-smaller kernel.** The daemon now wakes on events instead of polling, the CLI
-stops accepting knobs it ignores, scripts get meaningful exit codes, and two
-whole command groups plus every never-executed policy field are gone.
+**Human-in-the-loop agents, MCP pass-down on every provider, an event-driven
+scheduler, and two deep bugfix waves.** Agents can now ask questions and
+request approvals mid-run (blocking or suspend-and-resume), per-agent MCP
+servers reach all four providers on every run path, the daemon wakes on
+events instead of polling, and ~60 verified bugs were fixed across the
+workflow engine, config compiler, plugin host, and OAuth broker.
 
 ### Added
 
+- Agent interactions (human-in-the-loop): blocking `animus.agent.ask` and
+  `animus.agent.request_approval` MCP tools with per-agent `approval_policy`
+  (`auto_allow`/`auto_deny` globs + default), an `animus agent interactions`
+  inbox, management-gated `animus.interactions.*` tools (`animus mcp serve
+  --management`), and notifier push on escalations. Workflow phases use
+  suspend/resume: the tool suspends, the workflow pauses, and answering
+  resumes the provider session with the decision as feedback. With protocol
+  v0.1.13.5, claude enforces approvals natively via
+  `--permission-prompt-tool`; codex/gemini/opencode get a prompt preamble.
+  Design: docs/architecture/agent-interactions-protocol.md.
+- Per-agent MCP pass-down to the providers themselves: the resolved server
+  set rides the provider RPC as `extras.mcp_servers` for `animus agent run`
+  and `animus chat` on all four providers (protocol v0.1.13.4 transports),
+  and on the workflow path via workflow-runner v0.4.3. Secret-bearing
+  servers (all OAuth flows) are rewritten to `animus-mcp-proxy` stdio
+  entries — tokens never reach CLI configs or argv.
+- `permission_mode`: agent-profile field, phase `runtime:` override
+  (phase > profile), and `--permission-mode` on `animus agent run` /
+  `animus chat send`; forwarded to claude/codex/gemini native flags.
+- `animus mcp serve` gains `--agent-id` / `--workflow-id` identity pins and
+  `--management` (inbox tools agent-injected servers cannot access).
 - Event-driven scheduler: `daemon/nudge` control message (sent fire-and-forget
   by subject/queue write paths), cron-deadline wakes (schedules fire on time
   instead of on the next tick), and completion wakes. `--interval-secs` is now
@@ -55,7 +78,17 @@ whole command groups plus every never-executed policy field are gone.
   `provider_plugins_healthy` + per-provider install state); `animus doctor`
   absorbs orphaned-CLI-process detection (`--fix` prunes dead tracker entries
   only; live PIDs get a manual suggestion).
-- gemini/opencode registry pins bumped to v0.2.6 (protocol v0.1.13.5).
+- Provider/runner default-install pins: claude v0.2.7, codex v0.2.8,
+  gemini/opencode v0.2.6 (all on protocol v0.1.13.5), workflow-runner v0.4.3
+  (first cosign-signed runner release; `animus plugin install` verifies it).
+- `animus daemon events` is one-shot by default; `--follow` (bare,
+  `=true`/`false`) opts into streaming. Previously follow defaulted on, so
+  scripted `daemon events --limit N` never exited.
+- Explicit queue entries (`animus queue enqueue`) drain even when
+  `daemon.auto_run_ready` is false — the flag now gates only ready-task
+  auto-dispatch.
+- `animus output artifacts`/`download` read the scoped runtime artifacts
+  root (`~/.animus/<scope>/artifacts/`) first, project-local legacy second.
 
 ### Removed
 
@@ -74,6 +107,47 @@ whole command groups plus every never-executed policy field are gone.
 
 ### Fixed
 
+- Workflow execution: async `animus workflow run` and `workflow resume` now
+  spawn a real detached workflow_runner (previously they bootstrapped a
+  Running record nothing executed; the reconciler zombie-cancelled it ~90s
+  later and set the task Cancelled). Resumed workflows register a pid guard
+  so the orphan reconciler leaves them alone; manually-claimed in-progress
+  tasks are no longer re-blocked every tick (`status_changed_at`-aware
+  reconciliation); in-progress tasks with no workflow self-heal to Ready.
+- Secrets: `workflow phases upsert` round-trips unresolved sources — resolved
+  env/keychain/`${secret.*}` values can no longer land in committable
+  generated overlays; keychain-resolved values are redacted from parse
+  diagnostics; `${...}` inside YAML comments is no longer interpolated.
+- Lifecycle engine: all ~20 remaining state-machine `.expect()` panic sites
+  fail gracefully (merge-conflict + phase-approve no longer panics the
+  daemon); custom state machines are validated for executor-required
+  transitions; the duplicate-workflow guard actually works on the file hub.
+- Triggers/schedules: file-watcher events survive failed spawns (baseline no
+  longer advances on dispatch failure); fresh schedules fire via a
+  horizon-bounded catch-up instead of requiring a tick inside the exact cron
+  minute; the first file appearing under a watch dispatches.
+- Concurrency: agent memory/message appends, OAuth token refresh, chat
+  sends (per-conversation), and plugin lockfile saves are cross-process
+  locked; SQLite multi-entity mutations are transactional; checkpoint
+  numbering is collision-safe.
+- OAuth: `invalid_grant` evicts the cached refresh chain and retries the env
+  seed in the same call; re-minted seeds bypass stale caches (value-hash
+  fingerprints); corrupt keychain credentials degrade to unauthenticated
+  instead of bricking `animus mcp auth status`/`logout`.
+- Plugin host: a request racing reader teardown can no longer hang a daemon
+  dispatch task forever; subject routing has a response deadline; broken
+  `flavors/default.toml` fails closed loudly and consistently across
+  `plugin list`, `daemon preflight` (exit 2, `--auto-install` withheld), and
+  daemon startup.
+- Repository scope: clones on unmounted volumes no longer get their state
+  adopted by same-origin siblings (mount-aware reclaim heuristic +
+  fast-path ownership validation) — ends silent cross-clone workflow.db
+  sharing.
+- Observability: `daemon events --follow` and `daemon stream` no longer lose
+  records across log rotation (dev/ino cursor drains the rotated file
+  first); `chat list`/`search` skip stray directories instead of failing;
+  a chat stream ending without a terminal event is an error, not a
+  silently-successful empty turn.
 - `init` template prompt no longer hangs on non-TTY stdin (and detects EOF).
 - Stale help text (hardcoded version markers, internal jargon) and misleading
   config docs: `.animus/config.json` is self-update config only; daemon
