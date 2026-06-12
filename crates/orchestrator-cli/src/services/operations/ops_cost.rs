@@ -1015,6 +1015,9 @@ mod tests {
         assert_eq!(phase.model.as_deref(), Some("claude-sonnet-4-6"));
         assert!(phase.provider.is_none());
         assert_eq!(phase.attempts, 1, "default attempts back-fills to 1");
+    }
+
+    #[test]
     fn decisions_view_filters_by_since_window() {
         use crate::services::cost::{
             BudgetExceededRecord, BudgetLimitField, BudgetLimitKind, BUDGET_EXCEEDED_SCHEMA_ID,
