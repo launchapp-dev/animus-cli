@@ -237,7 +237,7 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
         Command::Pack { command } => services::operations::handle_pack(command, &project_root, cli.json).await,
         Command::Plugin { command } => services::operations::handle_plugin(command, &project_root, cli.json).await,
-        Command::Status => services::operations::handle_status(&project_root, cli.json).await,
+        Command::Status { failures } => services::operations::handle_status(&project_root, failures, cli.json).await,
         Command::Daemon { command: DaemonCommand::Status } => {
             services::runtime::handle_daemon_status_command(&project_root, cli.json).await
         }
@@ -300,7 +300,7 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Web { command } => {
                     services::operations::handle_web(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Status | Command::Version => {
+                Command::Status { .. } | Command::Version => {
                     unreachable!("command handled before runtime initialization")
                 }
                 Command::Init(_)
@@ -388,7 +388,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Skill { .. } => CommandGroup::Skill,
         Command::Pack { .. } => CommandGroup::Pack,
         Command::Plugin { .. } => CommandGroup::Plugin,
-        Command::Status => CommandGroup::Status,
+        Command::Status { .. } => CommandGroup::Status,
         Command::Output { .. } => CommandGroup::Output,
         Command::Mcp { .. } => CommandGroup::Mcp,
         Command::Web { .. } => CommandGroup::Web,

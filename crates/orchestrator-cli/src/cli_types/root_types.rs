@@ -101,7 +101,12 @@ pub(crate) enum Command {
         command: PluginCommand,
     },
     /// Show a unified project status dashboard.
-    Status,
+    Status {
+        /// Number of recent workflow failures to list in the human view
+        /// (JSON carries the same count). Defaults to 3.
+        #[arg(long, value_name = "N", default_value_t = 3)]
+        failures: usize,
+    },
     /// Inspect run output and artifacts.
     Output {
         #[command(subcommand)]

@@ -17,7 +17,6 @@ use crate::print_value;
 
 const STATUS_SCHEMA: &str = "animus.status.v1";
 const RECENT_COMPLETIONS_LIMIT: usize = 5;
-const RECENT_FAILURES_LIMIT: usize = 3;
 const CI_PROVIDER_GITHUB: &str = "github";
 const GH_RUN_LIST_FIELDS: &str =
     "databaseId,displayTitle,name,workflowName,status,conclusion,event,headBranch,headSha,createdAt,updatedAt,url";
@@ -222,11 +221,11 @@ struct GhRunListEntry {
     url: Option<String>,
 }
 
-pub(crate) async fn handle_status(project_root: &str, json: bool) -> Result<()> {
+pub(crate) async fn handle_status(project_root: &str, failures: usize, json: bool) -> Result<()> {
     let (daemon_result, task_stats_result, workflow_snapshot_result, recent_completions_result, ci_slice) = tokio::join!(
         load_daemon_health_snapshot(Path::new(project_root)),
         collect_task_statistics(project_root),
-        collect_workflow_status_snapshot(project_root),
+        collect_workflow_status_snapshot(project_root, failures),
         collect_recent_completions(project_root),
         collect_ci_status(project_root),
     );
@@ -467,9 +466,9 @@ fn build_recent_failures_slice(failures: Option<&[RecentFailureEntry]>, error: O
     }
 }
 
-async fn collect_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSnapshot> {
+async fn collect_workflow_status_snapshot(project_root: &str, failures: usize) -> Result<WorkflowStatusSnapshot> {
     let project_root = project_root.to_string();
-    tokio::task::spawn_blocking(move || load_workflow_status_snapshot(project_root.as_str()))
+    tokio::task::spawn_blocking(move || load_workflow_status_snapshot(project_root.as_str(), failures))
         .await
         .map_err(|error| anyhow!("failed to collect workflow status snapshot: {error}"))?
 }
@@ -528,10 +527,10 @@ fn load_task_titles(project_root: &str, task_ids: &[String]) -> Result<HashMap<S
     Ok(titles)
 }
 
-fn load_workflow_status_snapshot(project_root: &str) -> Result<WorkflowStatusSnapshot> {
+fn load_workflow_status_snapshot(project_root: &str, failures_limit: usize) -> Result<WorkflowStatusSnapshot> {
     Ok(WorkflowStatusSnapshot {
         active_workflows: load_active_workflow_summaries(Path::new(project_root))?,
-        recent_failures: load_recent_failed_workflow_summaries(Path::new(project_root), RECENT_FAILURES_LIMIT)?
+        recent_failures: load_recent_failed_workflow_summaries(Path::new(project_root), failures_limit)?
             .into_iter()
             .map(|entry| RecentFailureEntry {
                 workflow_id: entry.workflow_id,

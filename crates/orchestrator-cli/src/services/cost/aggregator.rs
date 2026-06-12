@@ -37,6 +37,13 @@ pub struct PhaseCost {
     pub cost_usd: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Provider / tool that drove this phase, e.g. `claude`, `codex`,
+    /// `gemini`. Sourced from the phase session checkpoint's `provider`
+    /// field. `None` on legacy cost-state records written before
+    /// attribution was captured; those roll up under an "unknown"
+    /// bucket in the breakdown views.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider: Option<String>,
     /// Number of times the phase entered this aggregator. Rework
     /// attempts that reset the phase counter advance this number.
     #[serde(default = "default_attempts")]
@@ -127,6 +134,9 @@ impl WorkflowCost {
         if let Some(model) = delta.model.as_ref() {
             phase.model = Some(model.clone());
         }
+        if let Some(provider) = delta.provider.as_ref() {
+            phase.provider = Some(provider.clone());
+        }
         if phase.attempts == 0 {
             phase.attempts = 1;
         }
@@ -177,6 +187,7 @@ pub struct MetadataDelta {
     pub cache_write_tokens: u64,
     pub cost_usd: f64,
     pub model: Option<String>,
+    pub provider: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -311,6 +322,7 @@ mod tests {
                 cache_write_tokens: 0,
                 cost_usd: 0.012,
                 model: Some("claude-sonnet-4-6".to_string()),
+                provider: Some("claude".to_string()),
             },
         );
         wf.record_metadata(
@@ -324,6 +336,7 @@ mod tests {
                 cache_write_tokens: 0,
                 cost_usd: 0.003,
                 model: Some("claude-sonnet-4-6".to_string()),
+                provider: Some("claude".to_string()),
             },
         );
         wf.record_metadata(
@@ -337,6 +350,7 @@ mod tests {
                 cache_write_tokens: 0,
                 cost_usd: 0.001,
                 model: Some("claude-haiku-4".to_string()),
+                provider: Some("claude".to_string()),
             },
         );
         let phase_impl = wf.phases.get("impl").unwrap();
@@ -344,6 +358,29 @@ mod tests {
         assert_eq!(phase_impl.total_tokens(), 110 + 220 + 55);
         assert!((wf.total_cost_usd - 0.016).abs() < 1e-9);
         assert_eq!(wf.total_tokens, (110 + 220 + 55) + (50 + 30));
+    }
+
+    #[test]
+    fn record_metadata_folds_provider_attribution_onto_phase() {
+        let started = dt("2026-06-01T00:00:00Z");
+        let mut wf = WorkflowCost::new("flow", started);
+        wf.record_metadata(
+            "impl",
+            started,
+            MetadataDelta {
+                input_tokens: 10,
+                output_tokens: 10,
+                reasoning_tokens: 0,
+                cache_read_tokens: 0,
+                cache_write_tokens: 0,
+                cost_usd: 0.01,
+                model: Some("claude-sonnet-4-6".to_string()),
+                provider: Some("claude".to_string()),
+            },
+        );
+        let phase = wf.phases.get("impl").unwrap();
+        assert_eq!(phase.provider.as_deref(), Some("claude"));
+        assert_eq!(phase.model.as_deref(), Some("claude-sonnet-4-6"));
     }
 
     #[test]
@@ -361,6 +398,7 @@ mod tests {
                 cache_write_tokens: 0,
                 cost_usd: 0.05,
                 model: None,
+                provider: None,
             },
         );
         assert_eq!(wf.total_tokens, 10_000);
@@ -380,6 +418,7 @@ mod tests {
                 cache_write_tokens: 0,
                 cost_usd: 0.001,
                 model: None,
+                provider: None,
             },
         );
         let phase = wf.phases.get("impl").unwrap();

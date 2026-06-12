@@ -392,7 +392,14 @@ mod tests {
     #[test]
     fn parses_top_level_status_command() {
         let cli = Cli::try_parse_from(["animus", "status"]).expect("status command should parse");
-        assert!(matches!(cli.command, Command::Status));
+        assert!(matches!(cli.command, Command::Status { failures: 3 }));
+    }
+
+    #[test]
+    fn parses_status_failures_flag() {
+        let cli =
+            Cli::try_parse_from(["animus", "status", "--failures", "10"]).expect("status --failures should parse");
+        assert!(matches!(cli.command, Command::Status { failures: 10 }));
     }
 
     #[test]

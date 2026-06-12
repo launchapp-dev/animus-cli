@@ -40,6 +40,10 @@ struct RunMapping {
     workflow_id: String,
     phase_id: String,
     run_id: String,
+    /// Provider / tool recorded in the phase session checkpoint
+    /// (`provider` field). `None` for legacy `wf-`-prefixed runs that
+    /// have no checkpoint.
+    provider: Option<String>,
 }
 
 pub fn runs_root(project_root: &Path) -> PathBuf {
@@ -166,6 +170,7 @@ pub fn scan_runs(project_root: &Path) -> Result<CostState> {
                         workflow_id: workflow_id.to_string(),
                         phase_id: FALLBACK_PHASE_ID.to_string(),
                         run_id: dir_name.clone(),
+                        provider: None,
                     }
                 } else {
                     // Not a workflow run; skip.
@@ -218,8 +223,17 @@ fn collect_session_mappings(runs_dir: &Path) -> Result<HashMap<String, RunMappin
             let workflow_id = value.get("workflow_id").and_then(Value::as_str).map(ToOwned::to_owned);
             let phase_id = value.get("phase_id").and_then(Value::as_str).map(ToOwned::to_owned);
             let run_id = value.get("run_id").and_then(Value::as_str).map(ToOwned::to_owned);
+            // `provider` is the tool that drove the phase (claude / codex /
+            // gemini / ...). Empty strings are treated as missing so the
+            // breakdown views bucket them under "unknown" rather than "".
+            let provider = value
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|provider| !provider.is_empty())
+                .map(ToOwned::to_owned);
             if let (Some(workflow_id), Some(phase_id), Some(run_id)) = (workflow_id, phase_id, run_id) {
-                out.insert(run_id.clone(), RunMapping { workflow_id, phase_id, run_id });
+                out.insert(run_id.clone(), RunMapping { workflow_id, phase_id, run_id, provider });
             }
         }
     }
@@ -299,6 +313,7 @@ fn fold_events_for_run(mapping: &RunMapping, events_path: &Path, state: &mut Cos
                     }
                 }
                 delta.model = event_model;
+                delta.provider = mapping.provider.clone();
                 pending.entry(mapping.phase_id.clone()).and_modify(|d| merge_delta(d, &delta)).or_insert(delta);
                 observed = true;
                 last_observed_at = extract_timestamp(&raw_event, "timestamp").or(last_observed_at);
@@ -366,6 +381,9 @@ fn merge_delta(into: &mut MetadataDelta, from: &MetadataDelta) {
     into.cost_usd += from.cost_usd;
     if from.model.is_some() {
         into.model = from.model.clone();
+    }
+    if from.provider.is_some() {
+        into.provider = from.provider.clone();
     }
 }
 
@@ -447,6 +465,63 @@ mod tests {
         assert_eq!(phase.tokens_input, 1_000);
         assert_eq!(phase.total_tokens(), 1_000 + 2_000 + 500);
         assert!((phase.cost_usd - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn scan_captures_provider_attribution_from_session_checkpoint() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let (_override_guard, project_root) = arrange_override(&tmp);
+        let scoped = super::super::persistence::scoped_root(&project_root);
+        write_session_checkpoint(&scoped, "flow", "impl", "run-attr");
+        let run_dir = scoped.join("runs").join("run-attr");
+        // Hand-construct so we can attach a sidecar `model_id` alongside
+        // the provider sourced from the checkpoint (`"test"`).
+        fs::create_dir_all(&run_dir).unwrap();
+        let mut event_value = serde_json::to_value(&AgentRunEvent::Metadata {
+            run_id: RunId("run-attr".to_string()),
+            cost: Some(0.5),
+            tokens: Some(TokenUsage { input: 100, output: 100, reasoning: None, cache_read: None, cache_write: None }),
+        })
+        .unwrap();
+        event_value
+            .as_object_mut()
+            .unwrap()
+            .insert("model_id".to_string(), Value::String("claude-sonnet-4-6".to_string()));
+        fs::write(run_dir.join("events.jsonl"), format!("{}\n", serde_json::to_string(&event_value).unwrap())).unwrap();
+
+        let state = scan_runs(&project_root).unwrap();
+        let wf = state.workflows.get("flow").expect("workflow tracked");
+        let phase = wf.phases.get("impl").expect("phase tracked");
+        assert_eq!(phase.provider.as_deref(), Some("test"), "provider sourced from checkpoint");
+        assert_eq!(phase.model.as_deref(), Some("claude-sonnet-4-6"), "model sourced from event sidecar");
+    }
+
+    #[test]
+    fn scan_leaves_provider_unset_for_legacy_runs_without_checkpoint() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let (_override_guard, project_root) = arrange_override(&tmp);
+        let scoped = super::super::persistence::scoped_root(&project_root);
+        let run_dir = scoped.join("runs").join("wf-legacy-attr");
+        write_events(
+            &run_dir,
+            &[AgentRunEvent::Metadata {
+                run_id: RunId("wf-legacy-attr".to_string()),
+                cost: Some(0.01),
+                tokens: Some(TokenUsage {
+                    input: 10,
+                    output: 10,
+                    reasoning: None,
+                    cache_read: None,
+                    cache_write: None,
+                }),
+            }],
+        );
+        let state = scan_runs(&project_root).unwrap();
+        let wf = state.workflows.get("legacy-attr").expect("legacy workflow tracked");
+        let phase = wf.phases.get(FALLBACK_PHASE_ID).expect("fallback phase tracked");
+        assert!(phase.provider.is_none(), "legacy runs without a checkpoint carry no provider attribution");
     }
 
     #[test]
@@ -672,6 +747,7 @@ workflows:
                 cache_write_tokens: 0,
                 cost_usd: 0.0,
                 model: None,
+                provider: None,
             },
         );
         state.workflows.insert("flow".to_string(), wf);

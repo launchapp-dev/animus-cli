@@ -286,7 +286,7 @@ animus
 │       ├── set              Write `.animus/plugin-scope.yaml` with the supplied mode + allow/extras/require sets
 │       └── reset            Delete `.animus/plugin-scope.yaml` and fall back to the default scope
 │
-├── status                   Show a unified project status dashboard
+├── status                   Show a unified project status dashboard. `--failures N` sets how many recent workflow failures to list (default 3; applies to both human and JSON output)
 ├── output                   Inspect run output and artifacts
 │   ├── read                 Read run event payloads (`--run-id`, or `--workflow-id` to resolve the latest run recorded for that workflow; clear error when none or ambiguous)
 │   ├── phase-outputs        Read persisted workflow phase outputs. Human view renders one block per phase (verdict, reason, commit) plus a Skills section — requested vs applied (with source scope and contribution kinds) vs missing — so an attached skill is verifiably applied, never a silent no-op; `--json` carries the raw outputs incl. the persisted skill records
@@ -341,10 +341,10 @@ animus
 ├── update                   Top-level alias for `animus self update` (`--check / --yes / --channel`)
 │
 ├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
-│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders
-│   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`
-│   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`
-│   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets
+│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders. `--by provider|model` groups in-window active-run spend by tool or model with token/USD totals and percentages
+│   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`. `--by provider|model|phase` regroups the same run's spend (rejected for archived runs, which lack per-phase detail)
+│   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`. `--by model` switches to a cross-run model leaderboard (token/USD totals + percentages)
+│   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets (workflow-level totals; not split by provider/model)
 │   └── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
 │
 ├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)
