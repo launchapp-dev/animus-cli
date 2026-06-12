@@ -220,6 +220,71 @@ Project-scoped durable memory:
 { "agent_id": "implementation", "prefix": "decision:" }
 ```
 
+### Multi-phase coordination: implementation agent leaves findings for the review agent
+
+Memory and messaging only pay off when agents are coached to use them and the
+profiles declare the capability. A phase agent whose profile enables `memory`
+or `communication` gets a short coaching paragraph appended to its prompt (the
+"Coordination tools" section), plus recent memory/messages loaded into context
+automatically. Phases without the capability get neither — no prompt bloat.
+
+Worked example: the implementation phase records a decision the review phase
+must honor, and pings the reviewer on a shared channel.
+
+```yaml
+# .animus/workflows.yaml
+agents:
+  implementation:
+    capabilities: { memory: true }
+    memory:
+      enabled: true
+      max_entries: 200        # FIFO cap; oldest entries trim on append
+    communication:
+      enabled: true
+      channels: [engineering]
+    mcp_servers: [animus]     # exposes animus.agent.message.send to the agent
+  review:
+    capabilities: { memory: true }
+    memory: { enabled: true }
+    communication:
+      enabled: true
+      channels: [engineering]
+    mcp_servers: [animus]
+
+agent_channels:
+  engineering:
+    participants: [implementation, review]
+```
+
+During the implementation phase the agent calls (memory via the injected
+memory MCP server, which exposes `animus.memory.*`; messaging via the full
+`animus` server):
+
+```json
+{ "agent_id": "implementation", "text": "decision: kept the legacy column for back-compat; do not flag the duplicate index as dead", "source": "phase:implementation" }  // animus.memory.append
+{ "channel": "engineering", "from": "implementation", "to": "review", "text": "Heads up: intentional duplicate index, see memory decision." }  // animus.agent.message.send
+```
+
+When the review phase runs next, its prompt already carries the channel
+message (the reviewer is a participant and the named recipient), so it knows
+to look for the rationale. Memory is per-agent: the automatic prompt
+injection only surfaces an agent's *own* recent entries, so the reviewer does
+not see `implementation` memory automatically — it fetches it explicitly with
+`animus.memory.get` `{ "agent_id": "implementation" }`. Meanwhile any later
+phase run by the `implementation` profile sees the decision in its own prompt
+without a lookup. Equivalent CLI form for scripts or manual handoff:
+
+```bash
+animus agent memory append --agent implementation \
+  --text "decision: kept the legacy column for back-compat" --source phase:implementation
+animus agent message send --channel engineering --from implementation --to review \
+  --text "Heads up: intentional duplicate index, see memory decision."
+```
+
+Each successful append/clear/send emits a single `agent-memory-updated` or
+`agent-message-sent` record to `animus daemon events`, so operators can watch
+coordination without reading the store. Reads (`get`/`list`) emit nothing.
+
 Skills:
 
 ```json
@@ -371,8 +436,19 @@ Act on `remediation` first when present; see the
   MCP surface.
 - `animus.plugin.*` now includes both installed-plugin tools and marketplace
   discovery tools.
-- `animus.memory.*` is always exposed from the top-level MCP server; injected
-  workflow agents only see it when their profile enables memory capability.
+- Two memory families exist and are NOT interchangeable. `animus.memory.*`
+  (4 tools) is an **any-agent-id document store** — you pass `agent_id`
+  explicitly and can read or write any agent's memory. It serves external
+  clients AND is the family the injected memory sidecar actually exposes to a
+  memory-capable workflow agent (`capabilities.memory: true` injects
+  `animus mcp memory`, whose tools are `animus.memory.*` only). The
+  `animus.agent.memory.*` wrappers (3 tools) validate the agent profile and
+  live **only on the full `animus` MCP server** — a phase agent sees them only
+  when its profile lists `animus` in `mcp_servers`. From inside a phase,
+  record findings with `animus.memory.append` and your own `agent_id`; from an
+  operator/dashboard client, use `animus.memory.*` to inspect or seed another
+  agent's memory. See
+  [MCP Tools — memory families](../reference/mcp-tools.md) for the full split.
 - Ad-hoc agents (`animus chat send`, `animus agent run`) now receive the MCP
   servers their selected profile/skill declares, resolved by name against the
   project's `mcp_servers` map — a trading agent gets the trading servers, a

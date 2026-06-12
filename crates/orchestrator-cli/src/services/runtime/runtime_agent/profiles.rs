@@ -1,7 +1,9 @@
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
-use serde_json::json;
+use orchestrator_core::agent_runtime_config::AgentProfile;
+use orchestrator_daemon_runtime::DaemonEventLog;
+use serde_json::{json, Value};
 
 use crate::{
     print_value, AgentGetArgs, AgentMemoryAppendArgs, AgentMemoryClearArgs, AgentMemoryGetArgs, AgentMessageListArgs,
@@ -9,13 +11,30 @@ use crate::{
 };
 
 fn ensure_agent_exists(project_root: &str, agent_id: &str) -> Result<()> {
+    load_agent_profile(project_root, agent_id).map(|_| ())
+}
+
+fn load_agent_profile(project_root: &str, agent_id: &str) -> Result<AgentProfile> {
     let config =
         orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root))?
             .config;
-    if config.agent_profile(agent_id).is_none() {
-        return Err(anyhow!("unknown agent profile '{}'", agent_id));
-    }
-    Ok(())
+    config.agent_profile(agent_id).cloned().ok_or_else(|| anyhow!("unknown agent profile '{}'", agent_id))
+}
+
+// Best-effort observability tee into the daemon event log, mirroring
+// `emit_interaction_event`: the log is a plain jsonl file under the global
+// Animus state dir, so emission works without a running daemon, and a failure
+// never blocks the memory/message mutation that triggered it. The daemon's
+// event watcher and notifier plugins fan `agent-memory-updated` /
+// `agent-message-sent` records out so operators can watch cross-phase
+// coordination via `animus daemon events`. Emitted exactly once per
+// successful store mutation — never on the read paths — so there is no event
+// storm.
+pub(crate) fn emit_agent_coordination_event(event_type: &str, project_root: &str, data: Value) {
+    let canonical_root = crate::services::runtime::canonicalize_lossy(project_root);
+    let mut seq = 0;
+    let event = DaemonEventLog::next_event(&mut seq, event_type, Some(canonical_root), data);
+    let _ = DaemonEventLog::append(&event);
 }
 
 pub(super) fn handle_agent_list(project_root: &str, json_output: bool) -> Result<()> {
@@ -70,9 +89,23 @@ pub(super) fn handle_agent_memory_append(
     project_root: &str,
     json_output: bool,
 ) -> Result<()> {
-    ensure_agent_exists(project_root, &args.agent)?;
-    let memory =
-        animus_runtime_shared::append_agent_memory(project_root, &args.agent, &args.text, args.source.as_deref())?;
+    let profile = load_agent_profile(project_root, &args.agent)?;
+    let memory = animus_runtime_shared::append_agent_memory_capped(
+        project_root,
+        &args.agent,
+        &args.text,
+        args.source.as_deref(),
+        profile.memory.max_entries,
+    )?;
+    emit_agent_coordination_event(
+        "agent-memory-updated",
+        project_root,
+        json!({
+            "agent_id": args.agent,
+            "operation": "append",
+            "entry_count": memory.entries.len(),
+        }),
+    );
     print_value(memory, json_output)
 }
 
@@ -83,6 +116,15 @@ pub(super) fn handle_agent_memory_clear(
 ) -> Result<()> {
     ensure_agent_exists(project_root, &args.agent)?;
     let memory = animus_runtime_shared::clear_agent_memory(project_root, &args.agent)?;
+    emit_agent_coordination_event(
+        "agent-memory-updated",
+        project_root,
+        json!({
+            "agent_id": args.agent,
+            "operation": "clear",
+            "entry_count": memory.entries.len(),
+        }),
+    );
     print_value(memory, json_output)
 }
 
@@ -150,5 +192,17 @@ pub(super) fn handle_agent_message_send(
         args.workflow_id.as_deref(),
         args.phase_id.as_deref(),
     )?;
+    emit_agent_coordination_event(
+        "agent-message-sent",
+        project_root,
+        json!({
+            "message_id": message.id,
+            "channel": message.channel,
+            "from_agent": message.from_agent,
+            "to_agent": message.to_agent,
+            "workflow_id": message.workflow_id,
+            "phase_id": message.phase_id,
+        }),
+    );
     print_value(message, json_output)
 }

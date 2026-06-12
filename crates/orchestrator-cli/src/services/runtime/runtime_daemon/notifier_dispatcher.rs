@@ -29,6 +29,13 @@ pub struct NotifierLifecycleEvent {
 /// not by the daemon itself, so a per-tick watcher tails the log for them.
 pub const INTERACTION_EVENT_TYPES: [&str; 3] = ["interaction_created", "interaction_answered", "interaction_expired"];
 
+/// Agent coordination events fanned out to notifier plugins alongside the
+/// interaction lifecycle. Written by the CLI `agent memory|message` handlers
+/// and the `animus.memory.*` MCP tools (see
+/// `runtime_agent::profiles::emit_agent_coordination_event`), once per
+/// successful store mutation.
+pub const COORDINATION_EVENT_TYPES: [&str; 2] = ["agent-memory-updated", "agent-message-sent"];
+
 /// Per-tick watcher that turns the daemon event log into a stream of fresh
 /// interaction events. The first scan primes the watcher with history and
 /// returns nothing — daemon start must not replay old interactions into
@@ -45,7 +52,9 @@ impl InteractionEventWatcher {
     pub fn unseen_interaction_events(&mut self, records: Vec<DaemonEventRecord>) -> Vec<DaemonEventRecord> {
         let mut fresh = Vec::new();
         for record in records {
-            if !INTERACTION_EVENT_TYPES.contains(&record.event_type.as_str()) {
+            if !INTERACTION_EVENT_TYPES.contains(&record.event_type.as_str())
+                && !COORDINATION_EVENT_TYPES.contains(&record.event_type.as_str())
+            {
                 continue;
             }
             if self.seen.insert(record.id.clone()) && self.primed {
@@ -395,5 +404,22 @@ mod interaction_event_watcher_tests {
         let again = watcher
             .unseen_interaction_events(vec![record("b", "interaction_created"), record("c", "interaction_answered")]);
         assert!(again.is_empty(), "already-dispatched events must not repeat");
+    }
+
+    #[test]
+    fn coordination_events_pass_the_watcher_filter_exactly_once() {
+        let mut watcher = InteractionEventWatcher::default();
+        let _ = watcher.unseen_interaction_events(vec![record("seed", "interaction_created")]);
+
+        let fresh = watcher.unseen_interaction_events(vec![
+            record("m1", "agent-memory-updated"),
+            record("m2", "agent-message-sent"),
+            record("x", "health"),
+        ]);
+        let ids: Vec<&str> = fresh.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["m1", "m2"], "coordination events fan out to notifiers");
+
+        let again = watcher.unseen_interaction_events(vec![record("m1", "agent-memory-updated")]);
+        assert!(again.is_empty(), "coordination events dispatch exactly once");
     }
 }

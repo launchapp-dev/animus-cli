@@ -915,12 +915,13 @@ impl DaemonRunHooks for DefaultDaemonRunHost {
             return Ok(());
         };
         // Interaction lifecycle events (interaction_created / answered /
-        // expired) are appended to the daemon event log by the MCP serve and
-        // CLI answer processes, not by the daemon, so they never pass through
-        // emit_daemon_event_with_notifications. Tail the log each tick and
-        // fan fresh ones out to notifier plugins (best-effort: a read failure
-        // only skips this tick). The watcher's priming scan swallows history
-        // so daemon start does not replay old interactions.
+        // expired) and agent coordination events (agent-memory-updated /
+        // agent-message-sent) are appended to the daemon event log by the MCP
+        // serve and CLI processes, not by the daemon, so they never pass
+        // through emit_daemon_event_with_notifications. Tail the log each
+        // tick and fan fresh ones out to notifier plugins (best-effort: a
+        // read failure only skips this tick). The watcher's priming scan
+        // swallows history so daemon start does not replay old events.
         match DaemonEventLog::read_records(Some(1000), Some(project_root)) {
             Ok(records) => {
                 for record in self.interaction_watcher.unseen_interaction_events(records) {

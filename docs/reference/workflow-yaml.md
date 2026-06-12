@@ -288,6 +288,8 @@ agents:
       enabled: true
       scope: project
       max_context_chars: 6000
+      max_entries: 200           # Optional. FIFO cap; oldest entries trim on
+                                 # append. Omitted ⇒ default 200. Must be > 0.
       write_policy: explicit
     communication:               # Optional. Project-scoped channel access.
       enabled: true
