@@ -157,6 +157,47 @@ enforces every structural field when a skill activates for a phase:
   contract's `/cli/launch/args` and `/cli/launch/env`, which travel to the
   provider plugin on `AgentRunRequest.runtime_contract`.
 
+### Verifying a skill applied
+
+Skill application on the workflow path is observable, not a black box. The
+runner records the phase's skill resolution on `PhaseExecutionMetadata`
+(`requested_skills` / `resolved_skills` / `applied_skills` /
+`skill_application`) and persists a compact projection of it with the phase
+output. To check that a skill you attached actually took effect:
+
+```text
+$ animus output phase-outputs --workflow-id wf-123
+
+Workflow: wf-123
+
+Phase: code-review
+  completed: 2026-06-12T01:02:03Z
+  verdict:   advance (confidence 0.90)
+  Skills:
+    requested: review-checklist, security-audit
+    applied:   review-checklist (project)  [prompt, tool_policy]
+    missing:   security-audit  (not found — check `animus skill list`)
+```
+
+- `applied` lines show the skill's source scope (`project` / `user` /
+  `installed` / `built-in` / `agent-host:<host>/<scope>`) and which
+  contribution kinds it made (`prompt`, `tool_policy`, `mcp_servers`,
+  `args`, `env`, `codex_config`, `model`, `timeout`, `capabilities`).
+- `resolved … (not applied)` lines mark skills whose `activation` did not
+  match the tool/model the runner actually selected.
+- `missing` lines mark requested names that never resolved — a typo or a
+  not-yet-installed skill. `--json` carries the raw metadata.
+
+Typos also surface before any run: explicit `skills:` declarations in
+workflow YAML (`phases.<id>.skills`, `agents.<id>.skills`) that do not
+resolve against the project's skill sources warn (never error) at
+compile/validate time — on the compile stderr and in the `warnings` array
+of `animus workflow config validate`. Implicit skill references coming
+from builtin agent-profile defaults (pack-provided names like the
+`animus.core-skills` set) are exempt, matching the runtime's
+explicit/implicit split (`RequestedPhaseSkills.implicit`): they are
+legitimately absent until the pack is installed.
+
 ### Ad-hoc runs (`animus chat` / agent MCP scope resolution)
 
 The kernel's ad-hoc path consumes only `mcp_servers` and `tool_policy`

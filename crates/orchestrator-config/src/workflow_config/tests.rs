@@ -4406,3 +4406,159 @@ mod unenforced_field_warnings {
         assert!(warnings.iter().any(|w| w.field == "daemon.max_task_retries" && w.source.ends_with("extra.yaml")));
     }
 }
+#[test]
+fn missing_skill_yaml_warnings_fire_for_explicit_unresolved_declarations() {
+    let yaml = r#"
+phases:
+  code-review:
+    mode: agent
+    skills:
+      - review-checklist
+      - security-audit
+agents:
+  reviewer:
+    system_prompt: Review prompt
+    skills:
+      - review-checklist
+      - ghost-skill
+workflows:
+  - id: review-flow
+    name: Review Flow
+    phases:
+      - code-review
+"#;
+    let resolves = |name: &str| name == "review-checklist";
+    let warnings = super::validation::missing_skill_yaml_warnings(yaml, ".animus/workflows.yaml", &resolves);
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert_eq!(warnings[0].field, "phases.code-review.skills");
+    assert_eq!(warnings[0].skill, "security-audit");
+    assert_eq!(warnings[1].field, "agents.reviewer.skills");
+    assert_eq!(warnings[1].skill, "ghost-skill");
+    let message = warnings[0].to_string();
+    assert!(message.contains("phases.code-review.skills"), "{message}");
+    assert!(message.contains("security-audit"), "{message}");
+    assert!(message.contains("animus skill list"), "{message}");
+}
+
+#[test]
+fn missing_skill_yaml_warnings_skip_resolvable_and_undeclared_skills() {
+    // No `skills:` declarations at all (implicit builtin/persona profile
+    // skill defaults never appear in project YAML) -> no warnings.
+    let yaml_without_skills = r#"
+workflows:
+  - id: plain
+    name: Plain
+    phases:
+      - implementation
+"#;
+    let resolves_nothing = |_name: &str| false;
+    assert!(super::validation::missing_skill_yaml_warnings(yaml_without_skills, "workflows.yaml", &resolves_nothing)
+        .is_empty());
+
+    // Every declared name resolves -> no warnings.
+    let yaml_with_skills = r#"
+phases:
+  review:
+    mode: agent
+    skills:
+      - present-skill
+"#;
+    let resolves_all = |_name: &str| true;
+    assert!(
+        super::validation::missing_skill_yaml_warnings(yaml_with_skills, "workflows.yaml", &resolves_all).is_empty()
+    );
+
+    // Unparseable YAML yields no warnings (parse errors surface elsewhere).
+    assert!(
+        super::validation::missing_skill_yaml_warnings(": not yaml [", "workflows.yaml", &resolves_nothing).is_empty()
+    );
+}
+
+#[test]
+fn project_skill_reference_warnings_resolve_against_scoped_skill_sources() {
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let temp = tempfile::tempdir().expect("tempdir");
+    // Pin HOME so user-scope skill discovery never reads the real home dir.
+    let _home_guard = EnvVarGuard::set("HOME", temp.path());
+
+    let skills_dir = temp.path().join(".animus").join("config").join("skill_definitions");
+    fs::create_dir_all(&skills_dir).expect("create project skills dir");
+    fs::write(
+        skills_dir.join("installed-skill.yaml"),
+        r#"
+name: installed-skill
+description: Present fixture skill
+"#,
+    )
+    .expect("write project skill");
+
+    let ao_dir = temp.path().join(".animus");
+    fs::write(
+        ao_dir.join("workflows.yaml"),
+        r#"
+phase_catalog:
+  review:
+    label: Review
+    category: verification
+phases:
+  review:
+    mode: agent
+    skills:
+      - installed-skill
+      - tpyoed-skill
+workflows:
+  - id: review-flow
+    name: Review Flow
+    phases:
+      - review
+"#,
+    )
+    .expect("write workflow yaml");
+
+    let warnings = super::validation::missing_project_skill_reference_warnings(temp.path());
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert_eq!(warnings[0].field, "phases.review.skills");
+    assert_eq!(warnings[0].skill, "tpyoed-skill");
+    assert!(warnings[0].source.ends_with("workflows.yaml"), "{}", warnings[0].source);
+
+    // Validation itself stays green: missing skills warn, never error.
+    let config = compile_yaml_workflow_files(temp.path()).expect("compile should succeed").expect("config");
+    validate_workflow_config(&config).expect("missing skill must not fail validation");
+}
+
+#[test]
+fn skill_reference_warnings_honor_env_interpolation_in_skill_names() {
+    let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _home_guard = EnvVarGuard::set("HOME", temp.path());
+
+    let skills_dir = temp.path().join(".animus").join("config").join("skill_definitions");
+    fs::create_dir_all(&skills_dir).expect("create project skills dir");
+    fs::write(skills_dir.join("review-checklist.yaml"), "name: review-checklist\ndescription: fixture\n")
+        .expect("write project skill");
+
+    let ao_dir = temp.path().join(".animus");
+    fs::write(
+        ao_dir.join("workflows.yaml"),
+        r#"
+phases:
+  review:
+    mode: agent
+    skills:
+      - "${REVIEW_SKILL_FIXTURE:-review-checklist}"
+      - "${UNSET_SKILL_FIXTURE_VAR}"
+workflows:
+  - id: review-flow
+    name: Review Flow
+    phases:
+      - review
+"#,
+    )
+    .expect("write workflow yaml");
+
+    // The default-fallback form interpolates to an existing skill (no
+    // warning); the unresolvable required form fails interpolation, so the
+    // raw placeholder is skipped rather than reported as a missing skill.
+    let warnings = super::validation::missing_project_skill_reference_warnings(temp.path());
+    assert!(warnings.is_empty(), "{warnings:?}");
+}

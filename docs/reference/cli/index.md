@@ -289,7 +289,7 @@ animus
 ├── status                   Show a unified project status dashboard
 ├── output                   Inspect run output and artifacts
 │   ├── read                 Read run event payloads (`--run-id`, or `--workflow-id` to resolve the latest run recorded for that workflow; clear error when none or ambiguous)
-│   ├── phase-outputs        Read persisted workflow phase outputs
+│   ├── phase-outputs        Read persisted workflow phase outputs. Human view renders one block per phase (verdict, reason, commit) plus a Skills section — requested vs applied (with source scope and contribution kinds) vs missing — so an attached skill is verifiably applied, never a silent no-op; `--json` carries the raw outputs incl. the persisted skill records
 │   ├── artifacts            List artifacts for an execution id
 │   ├── download             Download an artifact payload
 │   ├── jsonl                Read aggregated JSONL output streams for a run

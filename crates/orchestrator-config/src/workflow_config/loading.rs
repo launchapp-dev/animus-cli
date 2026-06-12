@@ -105,6 +105,13 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
             }
         }
 
+        // Explicit `skills:` declarations that don't resolve against the
+        // project's skill sources warn (never error): a typo'd skill name
+        // must not be a silent no-op. Cold-compile path only, matching the
+        // unenforced-field warnings emitted inside the compiler.
+        for warning in super::validation::missing_skill_reference_warnings_for_sources(project_root, &yaml_sources) {
+            eprintln!("warning: {warning}");
+        }
         if let Some(yaml_config) = super::compile_yaml_sources_with_base(&config, &yaml_sources)? {
             config = merge_yaml_into_config(config, yaml_config);
             let single_file = project_root.join(".animus").join("workflows.yaml");

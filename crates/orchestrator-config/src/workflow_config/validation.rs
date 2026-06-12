@@ -1284,3 +1284,131 @@ pub fn unenforced_project_yaml_warnings(project_root: &Path) -> Vec<UnenforcedFi
         .flat_map(|(path, content)| unenforced_yaml_field_warnings(content, &path.display().to_string()))
         .collect()
 }
+
+// ---------------------------------------------------------------------------
+// Explicit skill-reference warnings
+// ---------------------------------------------------------------------------
+
+/// A structured warning for an EXPLICIT workflow-YAML skill declaration
+/// (`phases.<id>.skills` or `agents.<id>.skills`) that does not resolve
+/// against the project's skill sources. Warnings never fail compile or
+/// validation — at runtime a missing skill is recorded on phase metadata
+/// instead of failing the run, but a typo'd name must not be a silent
+/// no-op at authoring time.
+///
+/// Only raw-YAML declarations are scanned, which is exactly the
+/// explicit/implicit split the runtime's `RequestedPhaseSkills.implicit`
+/// uses: builtin persona profiles that reference pack-provided skills
+/// (e.g. `animus.core-skills` names) never appear in project YAML, so
+/// they get no warning here even when the pack is not installed yet.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SkillReferenceWarning {
+    /// Dotted path of the declaration, e.g. `phases.code-review.skills`.
+    pub field: String,
+    /// Source file the declaration came from.
+    pub source: String,
+    /// The skill name that failed to resolve.
+    pub skill: String,
+}
+
+impl std::fmt::Display for SkillReferenceWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: `{}` references skill '{}' which does not resolve against this project's skill sources (project / user / installed) — check `animus skill list`, or create it with `animus skill create`",
+            self.source, self.field, self.skill
+        )
+    }
+}
+
+/// Collect `(field_path, skill_name)` pairs for every explicit `skills:`
+/// entry under top-level `phases:` and `agents:` mappings of one raw YAML
+/// document.
+fn collect_explicit_yaml_skill_declarations(doc: &serde_yaml::Value) -> Vec<(String, String)> {
+    let mut declarations = Vec::new();
+    for block in ["phases", "agents"] {
+        let Some(entries) = yaml_mapping_get(doc, block).and_then(serde_yaml::Value::as_mapping) else {
+            continue;
+        };
+        for (entry_id, definition) in entries {
+            let Some(entry_id) = entry_id.as_str() else {
+                continue;
+            };
+            let Some(skills) = yaml_mapping_get(definition, "skills").and_then(serde_yaml::Value::as_sequence) else {
+                continue;
+            };
+            for skill in skills {
+                if let Some(name) = skill.as_str().map(str::trim).filter(|name| !name.is_empty()) {
+                    declarations.push((format!("{block}.{entry_id}.skills"), name.to_string()));
+                }
+            }
+        }
+    }
+    declarations
+}
+
+/// Scan one raw YAML source for explicit skill declarations that do not
+/// resolve via `skill_resolves`. Unparseable YAML yields no warnings —
+/// the compile pipeline reports parse errors with proper diagnostics.
+pub fn missing_skill_yaml_warnings(
+    yaml: &str,
+    source_label: &str,
+    skill_resolves: &dyn Fn(&str) -> bool,
+) -> Vec<SkillReferenceWarning> {
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml) else {
+        return Vec::new();
+    };
+    collect_explicit_yaml_skill_declarations(&doc)
+        .into_iter()
+        // Skip names that still carry an uninterpolated `${...}`
+        // placeholder — they cannot be checked statically and the
+        // compiler owns unset-var diagnostics.
+        .filter(|(_, skill)| !skill.contains("${"))
+        .filter(|(_, skill)| !skill_resolves(skill))
+        .map(|(field, skill)| SkillReferenceWarning { field, source: source_label.to_string(), skill })
+        .collect()
+}
+
+/// Resolve explicit skill declarations in the given YAML sources against
+/// the same scoped skill-source chain the runtime uses
+/// (`load_skill_sources`: agent-host < installed < user < project).
+/// Best-effort: when the source chain cannot be loaded no warnings are
+/// produced — a degraded environment must not turn into compile noise.
+pub fn missing_skill_reference_warnings_for_sources(
+    project_root: &Path,
+    yaml_sources: &[(std::path::PathBuf, String)],
+) -> Vec<SkillReferenceWarning> {
+    if yaml_sources.is_empty() {
+        return Vec::new();
+    }
+    let Ok(sources) = crate::skill_scoping::load_skill_sources(project_root, None) else {
+        return Vec::new();
+    };
+    // Mirrors `skill_resolution::resolve_skill` lookup: exact name match
+    // against any source in the chain (priority order is irrelevant for
+    // existence).
+    let skill_resolves = |name: &str| sources.iter().any(|source| source.skills.contains_key(name));
+    yaml_sources
+        .iter()
+        .flat_map(|(path, content)| {
+            let source_label = path.display().to_string();
+            // The real compiler interpolates `${VAR}` before parsing, so
+            // lint the interpolated content when interpolation succeeds.
+            // On failure (unset required var — the compiler owns that
+            // diagnostic) fall back to the raw content; any names that
+            // still carry a `${` placeholder are skipped below.
+            let interpolated = super::env_interp::interpolate_env(content, &source_label).ok();
+            missing_skill_yaml_warnings(interpolated.as_deref().unwrap_or(content), &source_label, &skill_resolves)
+        })
+        .collect()
+}
+
+/// Scan every workflow YAML source of a project for explicit skill
+/// declarations that do not resolve. Read errors are ignored — the
+/// compile pipeline owns IO diagnostics.
+pub fn missing_project_skill_reference_warnings(project_root: &Path) -> Vec<SkillReferenceWarning> {
+    let Ok(yaml_sources) = super::yaml_compiler::collect_project_yaml_workflow_sources(project_root) else {
+        return Vec::new();
+    };
+    missing_skill_reference_warnings_for_sources(project_root, &yaml_sources)
+}

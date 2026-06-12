@@ -29,9 +29,11 @@ pub use resolution::{
 };
 pub use types::*;
 pub use validation::{
-    unenforced_project_yaml_warnings, unenforced_yaml_field_warnings, validate_workflow_and_runtime_configs,
-    validate_workflow_and_runtime_configs_with_project_root, validate_workflow_config,
-    validate_workflow_config_with_project_root, UnenforcedFieldWarning,
+    missing_project_skill_reference_warnings, missing_skill_reference_warnings_for_sources,
+    missing_skill_yaml_warnings, unenforced_project_yaml_warnings, unenforced_yaml_field_warnings,
+    validate_workflow_and_runtime_configs, validate_workflow_and_runtime_configs_with_project_root,
+    validate_workflow_config, validate_workflow_config_with_project_root, SkillReferenceWarning,
+    UnenforcedFieldWarning,
 };
 pub(crate) use yaml_compiler::{
     collect_project_yaml_workflow_sources, compile_yaml_sources_confined_to_pack, compile_yaml_sources_with_base,

@@ -1,6 +1,6 @@
 use crate::cli_types::OutputCommand;
 use crate::{ensure_safe_run_id, not_found_error, print_value, run_dir};
-use animus_runtime_shared::phase_output::{phase_output_dir, PersistedPhaseOutput};
+use animus_runtime_shared::phase_output::{phase_output_dir, PersistedPhaseOutput, PersistedPhaseSkill};
 use animus_runtime_shared::phase_session;
 use animus_runtime_shared::recording::ReplaySource;
 use anyhow::{Context, Result};
@@ -289,14 +289,22 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
                 content.lines().filter_map(|line| serde_json::from_str::<Value>(line).ok()).collect();
             print_value(events, json)
         }
-        OutputCommand::PhaseOutputs(args) => print_value(
-            serde_json::json!({
-                "workflow_id": args.workflow_id,
-                "phase_id": args.phase_id,
-                "outputs": get_phase_outputs(project_root, &args.workflow_id, args.phase_id.as_deref())?,
-            }),
-            json,
-        ),
+        OutputCommand::PhaseOutputs(args) => {
+            let outputs = get_phase_outputs(project_root, &args.workflow_id, args.phase_id.as_deref())?;
+            if json {
+                print_value(
+                    serde_json::json!({
+                        "workflow_id": args.workflow_id,
+                        "phase_id": args.phase_id,
+                        "outputs": outputs,
+                    }),
+                    json,
+                )
+            } else {
+                println!("{}", render_phase_outputs_human(&args.workflow_id, args.phase_id.as_deref(), &outputs));
+                Ok(())
+            }
+        }
         OutputCommand::Artifacts(args) => print_value(list_artifact_infos(project_root, &args.execution_id)?, json),
         OutputCommand::Download(args) => {
             ensure_safe_id_segment("execution id", &args.execution_id)?;
@@ -361,6 +369,93 @@ pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, js
         OutputCommand::Decisions(args) => {
             let run_id = resolve_run_id_arg(project_root, args.run_id, args.workflow_id)?;
             print_value(decision_log_view(project_root, &run_id)?, json)
+        }
+    }
+}
+
+/// Human view for `animus output phase-outputs`: one block per persisted
+/// phase output with verdict/reason summary plus a Skills section that
+/// makes skill application verifiable — which skills were requested,
+/// which applied (with source scope and contribution kinds), and which
+/// never resolved (typo'd or not installed). Raw payloads stay on the
+/// `--json` surface.
+pub(crate) fn render_phase_outputs_human(
+    workflow_id: &str,
+    phase_filter: Option<&str>,
+    outputs: &[PersistedPhaseOutput],
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    if outputs.is_empty() {
+        match phase_filter {
+            Some(phase_id) => {
+                lines.push(format!("No persisted output for phase '{phase_id}' of workflow {workflow_id}."))
+            }
+            None => lines.push(format!("No persisted phase outputs for workflow {workflow_id}.")),
+        }
+        lines.push("Re-run with --json for the raw envelope.".to_string());
+        return lines.join("\n");
+    }
+
+    lines.push(format!("Workflow: {workflow_id}"));
+    for output in outputs {
+        lines.push(String::new());
+        lines.push(format!("Phase: {}", output.phase_id));
+        lines.push(format!("  completed: {}", output.completed_at));
+        if let Some(verdict) = output.verdict.as_deref() {
+            match output.confidence {
+                Some(confidence) => lines.push(format!("  verdict:   {verdict} (confidence {confidence:.2})")),
+                None => lines.push(format!("  verdict:   {verdict}")),
+            }
+        }
+        if let Some(reason) = output.reason.as_deref().map(str::trim).filter(|reason| !reason.is_empty()) {
+            lines.push(format!("  reason:    {reason}"));
+        }
+        if let Some(commit) = output.commit_message.as_deref().map(str::trim).filter(|commit| !commit.is_empty()) {
+            lines.push(format!("  commit:    {commit}"));
+        }
+        render_phase_skills_block(output, &mut lines);
+    }
+    lines.push(String::new());
+    lines.push("Use --json for full payloads and the raw skill application record.".to_string());
+    lines.join("\n")
+}
+
+fn format_skill_line(skill: &PersistedPhaseSkill) -> String {
+    let mut line = format!("{} ({})", skill.name, skill.source);
+    if !skill.contributions.is_empty() {
+        line.push_str(&format!("  [{}]", skill.contributions.join(", ")));
+    }
+    line
+}
+
+fn render_phase_skills_block(output: &PersistedPhaseOutput, lines: &mut Vec<String>) {
+    if output.requested_skills.is_empty() && output.resolved_skills.is_empty() && output.applied_skills.is_empty() {
+        return;
+    }
+    lines.push("  Skills:".to_string());
+    if !output.requested_skills.is_empty() {
+        lines.push(format!("    requested: {}", output.requested_skills.join(", ")));
+    }
+    for skill in &output.applied_skills {
+        lines.push(format!("    applied:   {}", format_skill_line(skill)));
+    }
+    // Resolved but not applied: the skill exists, but its activation did
+    // not match the selected tool/model for this phase run.
+    for skill in &output.resolved_skills {
+        if output.applied_skills.iter().any(|applied| applied.name == skill.name) {
+            continue;
+        }
+        lines.push(format!(
+            "    resolved:  {}  (not applied — activation did not match the selected tool/model)",
+            format_skill_line(skill)
+        ));
+    }
+    // Requested but never resolved: typo'd name or skill not installed.
+    for name in &output.requested_skills {
+        let known = output.resolved_skills.iter().any(|skill| &skill.name == name)
+            || output.applied_skills.iter().any(|skill| &skill.name == name);
+        if !known {
+            lines.push(format!("    missing:   {name}  (not found — check `animus skill list`)"));
         }
     }
 }
@@ -846,6 +941,9 @@ mod tests {
                 "verdict": "advance",
                 "changed_files": ["src/lib.rs"]
             })),
+            requested_skills: Vec::new(),
+            resolved_skills: Vec::new(),
+            applied_skills: Vec::new(),
         };
         let unit_test = PersistedPhaseOutput {
             phase_id: "unit-test".to_string(),
@@ -863,6 +961,9 @@ mod tests {
                 "verdict": "rework",
                 "failure_category": "tests_failed"
             })),
+            requested_skills: Vec::new(),
+            resolved_skills: Vec::new(),
+            applied_skills: Vec::new(),
         };
         std::fs::write(
             output_dir.join("implementation.json"),
@@ -889,5 +990,99 @@ mod tests {
             unit_test_only[0].payload.as_ref().and_then(|value| value.get("failure_category")).and_then(Value::as_str),
             Some("tests_failed")
         );
+    }
+
+    fn phase_output_fixture(phase_id: &str) -> PersistedPhaseOutput {
+        PersistedPhaseOutput {
+            phase_id: phase_id.to_string(),
+            completed_at: "2026-06-11T00:00:00Z".to_string(),
+            verdict: Some("advance".to_string()),
+            confidence: Some(0.9),
+            reason: Some("Looks good".to_string()),
+            commit_message: None,
+            evidence: Vec::new(),
+            risk: None,
+            target_phase: None,
+            guardrail_violations: Vec::new(),
+            payload: None,
+            requested_skills: Vec::new(),
+            resolved_skills: Vec::new(),
+            applied_skills: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn render_phase_outputs_human_shows_applied_resolved_and_missing_skills() {
+        let mut output = phase_output_fixture("code-review");
+        output.requested_skills =
+            vec!["review-checklist".to_string(), "gemini-only".to_string(), "security-audit".to_string()];
+        output.applied_skills = vec![PersistedPhaseSkill {
+            name: "review-checklist".to_string(),
+            source: "project".to_string(),
+            contributions: vec!["prompt".to_string(), "tool_policy".to_string()],
+        }];
+        output.resolved_skills = vec![
+            PersistedPhaseSkill {
+                name: "review-checklist".to_string(),
+                source: "project".to_string(),
+                contributions: vec!["prompt".to_string(), "tool_policy".to_string()],
+            },
+            PersistedPhaseSkill {
+                name: "gemini-only".to_string(),
+                source: "user".to_string(),
+                contributions: vec!["prompt".to_string()],
+            },
+        ];
+
+        let rendered = render_phase_outputs_human("wf-skill-verify", None, &[output]);
+        assert!(rendered.contains("Workflow: wf-skill-verify"), "{rendered}");
+        assert!(rendered.contains("Phase: code-review"), "{rendered}");
+        assert!(rendered.contains("verdict:   advance (confidence 0.90)"), "{rendered}");
+        assert!(rendered.contains("requested: review-checklist, gemini-only, security-audit"), "{rendered}");
+        assert!(rendered.contains("applied:   review-checklist (project)  [prompt, tool_policy]"), "{rendered}");
+        assert!(
+            rendered.contains(
+                "resolved:  gemini-only (user)  [prompt]  (not applied \u{2014} activation did not match the selected tool/model)"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("missing:   security-audit  (not found \u{2014} check `animus skill list`)"),
+            "{rendered}"
+        );
+        // The applied skill must not also be listed as resolved-not-applied.
+        assert_eq!(rendered.matches("review-checklist (project)").count(), 1, "{rendered}");
+    }
+
+    #[test]
+    fn render_phase_outputs_human_omits_skills_block_when_no_skill_metadata() {
+        let rendered = render_phase_outputs_human("wf-plain", None, &[phase_output_fixture("implementation")]);
+        assert!(rendered.contains("Phase: implementation"), "{rendered}");
+        assert!(!rendered.contains("Skills:"), "{rendered}");
+        assert!(!rendered.contains("missing:"), "{rendered}");
+    }
+
+    #[test]
+    fn render_phase_outputs_human_reports_empty_outputs() {
+        let rendered = render_phase_outputs_human("wf-empty", None, &[]);
+        assert!(rendered.contains("No persisted phase outputs for workflow wf-empty."), "{rendered}");
+        let filtered = render_phase_outputs_human("wf-empty", Some("review"), &[]);
+        assert!(filtered.contains("No persisted output for phase 'review' of workflow wf-empty."), "{filtered}");
+    }
+
+    #[test]
+    fn phase_outputs_json_shape_is_unchanged_by_skill_fields() {
+        // Old persisted outputs (no skill fields) keep deserializing, and
+        // serialization keeps omitting the skill keys when empty so the
+        // `--json` envelope is byte-compatible for skill-less phases.
+        let legacy = r#"{"phase_id":"impl","completed_at":"2026-06-11T00:00:00Z","verdict":"advance"}"#;
+        let parsed: PersistedPhaseOutput = serde_json::from_str(legacy).expect("legacy output should deserialize");
+        assert!(parsed.requested_skills.is_empty());
+        assert!(parsed.resolved_skills.is_empty());
+        assert!(parsed.applied_skills.is_empty());
+        let serialized = serde_json::to_value(&parsed).expect("serialize");
+        assert!(serialized.get("requested_skills").is_none(), "{serialized}");
+        assert!(serialized.get("resolved_skills").is_none(), "{serialized}");
+        assert!(serialized.get("applied_skills").is_none(), "{serialized}");
     }
 }

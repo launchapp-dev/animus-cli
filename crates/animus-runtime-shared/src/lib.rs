@@ -58,9 +58,10 @@ pub use payload_traversal::{
 pub use phase_git::{commit_implementation_changes, ensure_git_identity, git_has_pending_changes, is_git_repo};
 pub use phase_metadata::{PhaseExecutionMetadata, PhaseExecutionOutcome, PhaseExecutionSignal};
 pub use phase_output::{
-    is_phase_completed, persist_phase_output, persist_resumed_phase_completion, phase_completion_marker_path,
-    phase_output_dir, read_persisted_decision, write_phase_completion_marker, PersistedDecisionReadError,
-    PersistedPhaseOutput, PhaseCompletionMarker,
+    is_phase_completed, persist_phase_output, persist_phase_output_with_metadata, persist_resumed_phase_completion,
+    persisted_skills_from_metadata, phase_completion_marker_path, phase_output_dir, read_persisted_decision,
+    skill_contribution_kinds, write_phase_completion_marker, PersistedDecisionReadError, PersistedPhaseOutput,
+    PersistedPhaseSkill, PhaseCompletionMarker,
 };
 pub use phase_prompt::{apply_skill_prompt_to_body, merge_skill_system_prompt, skill_directives_section};
 pub use phase_prompt::{
