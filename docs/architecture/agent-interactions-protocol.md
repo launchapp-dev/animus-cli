@@ -20,9 +20,16 @@ bypasses MCP.
 
 - **Store:** `~/.animus/<repo-scope>/interactions/` — one JSON record per
   interaction: `{ id, kind: question|approval, agent_id, workflow_id?, task_id?,
-  session_id?, created_at, payload, status: pending|answered|expired, answer?,
-  answered_at?, answered_by? }`. Cross-process flock'd read-modify-write, atomic
-  tmp+rename writes (same pattern as `agent_state.rs`).
+  created_at, question?, action?, options?, tool_name?, arguments?,
+  questions?: [{ question, header?, options: [{ label, description? }],
+  multi_select }], suggestions?, timeout_secs?, suspended, status:
+  pending|answered|expired, answer?, answer_message?, answers?:
+  { <question text>: <string | [string]> }, response?, updated_input?,
+  updated_permissions?, answered_at?, answered_by? }`. The structured fields
+  (`questions`/`answers`/`response`/`suggestions`/`updated_*`) are additive —
+  pre-existing records load unchanged; flat `question`/`options`/`answer` stay
+  for `animus.agent.ask` back-compat. Cross-process flock'd read-modify-write,
+  atomic tmp+rename writes (same pattern as `agent_state.rs`).
 - **MCP tools (agent-facing):**
   - `animus.agent.ask` — `{ agent_id, question, options?, timeout_secs?, wait? }`
   - `animus.agent.request_approval` — `{ agent_id, action, tool_name?, arguments?,
@@ -72,13 +79,71 @@ bypasses MCP.
   the runtime contract and `.mcp.json` env, so prompts don't need to teach agents
   their own identity.
 
+## Native channel — Claude Agent SDK permission-prompt-tool conformance
+
+When the claude transport wires `--permission-prompt-tool
+mcp__animus__animus_agent_request_approval` (Layer 2 below), the claude CLI
+invokes that MCP tool for **every** gated tool call — ordinary tool approvals
+AND the native `AskUserQuestion` clarifying-questions tool. The wire contract
+(verified against the claude CLI v2.1.175 binary and
+<https://code.claude.com/docs/en/agent-sdk/user-input>):
+
+- **Input to the tool:** `{ tool_name: string, input: object, tool_use_id?: string }`
+  — nothing else. No `agent_id`, no `action`. Identity comes from the server
+  pin (`animus mcp serve --agent-id` / `ANIMUS_MCP_AGENT_ID`); `action` is
+  derived as `use tool <tool_name>` when absent.
+- **Result the CLI parses:** the FIRST text content block of the tool result
+  must be a JSON string matching the SDK permission-result schema:
+  - allow: `{ "behavior": "allow", "updatedInput": <object, REQUIRED>,
+    "updatedPermissions"?: PermissionUpdate[] }`
+  - deny: `{ "behavior": "deny", "message": <string, REQUIRED>, "interrupt"?: bool }`
+  Unknown top-level keys are stripped (non-strict schema), so Animus keeps its
+  legacy `{ tool, result: { decision, source, message?, answered_by?, id? } }`
+  envelope alongside the SDK keys in the same JSON object — additive
+  back-compat for anything reading the old shape.
+- **Ordinary tool allow:** `updatedInput` MUST carry the original tool input
+  (pass-through) or an operator-modified replacement. The kernel stores the
+  original `input` on the interaction record (`arguments`) and echoes it back;
+  `animus agent interactions answer <id> --allow --updated-input '<json>'`
+  substitutes a modified input.
+- **AskUserQuestion:** `tool_name == "AskUserQuestion"` routes to a structured
+  **Question** record (`kind: question`, `questions[]` parsed from
+  `input.questions`, raw input preserved verbatim). It bypasses the approval
+  policy (questions are not approvals) and surfaces in the same inbox /
+  notifier flow as `animus.agent.ask`. The answer emits
+  `{ "behavior": "allow", "updatedInput": { questions: <original array>,
+  answers: { "<question text>": <label | [labels] | free text> },
+  response?: <freeform> } }`.
+- **Suggestions / remember:** an optional `suggestions` array
+  (SDK `PermissionUpdate[]`) in the prompt-tool input is stored on the record
+  and rendered by `show`. Answering `--allow --remember` echoes the
+  `localSettings`-destination subset back as `updatedPermissions` (the SDK
+  "Approve and remember" flow). There is no permission-rule engine in the
+  kernel — this is a pure echo.
+- **Block mode vs SDK pending:** the SDK `canUseTool` callback may stay
+  pending indefinitely; Animus's block mode parks the prompt-tool call with a
+  timeout (default 600s, max 3600s) and **denies on timeout** (fail closed;
+  questions deny with a proceed-on-best-judgment message).
+- **Suspend replaces SDK `defer`:** in suspend mode (workflow-pinned server)
+  a native prompt-tool call cannot return `pending` — the CLI only understands
+  `behavior: allow|deny`. The kernel answers `behavior: "deny"` with the
+  end-your-turn instruction in `message`, suspends the record, and pauses the
+  workflow. **Suspend-mode native questions resume via session feedback, not
+  via the original tool result**: the answer path resumes the provider session
+  with feedback text carrying the per-question answers
+  ("The user answered your questions:\n- \"Q\": label …") or the freeform
+  response ("The user responded to your questions: …"). Voluntary
+  (agent-initiated) suspend calls keep the `{ status: "pending", … }` payload.
+
 ## Layer 2 — transport wiring (animus-session-backend, v0.1.13.5)
 
 1. **claude:** when the request carries `extras.approvals: true` (kernel sets it
    when the agent profile has an `approval_policy` or `--approvals` is passed),
    the transport adds `--permission-prompt-tool
    mcp__animus__animus_agent_request_approval`. Every native permission decision
-   then routes through the kernel tool — enforced, not voluntary.
+   then routes through the kernel tool — enforced, not voluntary. The transport
+   wires the tool NAME only; the request/response contract above is implemented
+   entirely in the kernel tool.
 2. **codex / gemini / opencode:** no exec-mode approval hook. Wiring is
    `permission_mode` mapping (already shipped) plus system-prompt injection: when
    approvals are enabled the kernel appends an instruction block directing the
@@ -193,9 +258,19 @@ pause and ask a human mid-run. These land in the **agent interactions inbox**:
 ```sh
 animus agent interactions list
 animus agent interactions answer <ID> --allow          # approval
+animus agent interactions answer <ID> --allow --remember               # + echo localSettings suggestions
+animus agent interactions answer <ID> --allow --updated-input '{"command":"rm -rf build/sandbox"}'
 animus agent interactions answer <ID> --deny --message "too risky"
 animus agent interactions answer <ID> --text "Use the v2 API"  # question
+animus agent interactions answer <ID> --select "Format=Summary" \
+  --select "2=Introduction,Conclusion" --text "keep it short"   # structured (AskUserQuestion)
 ```
+
+For structured questions, `--select` takes the question text, its `header`,
+or its 1-based index on the left of `=`; comma-separate labels (or repeat
+`--select` for the same question) for multi-select. Bare `--text` maps to the
+single question's answer on one-question records and to the freeform
+`response` on multi-question records.
 
 This store is completely separate from `animus approval`. The two surfaces
 do not share records.

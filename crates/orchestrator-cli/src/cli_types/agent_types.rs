@@ -67,6 +67,27 @@ pub(crate) struct AgentInteractionsAnswerArgs {
     pub(crate) deny: bool,
     #[arg(long, value_name = "TEXT", help = "Optional message returned to the agent alongside the decision.")]
     pub(crate) message: Option<String>,
+    #[arg(
+        long,
+        value_name = "QUESTION=LABEL",
+        conflicts_with_all = ["allow", "deny"],
+        help = "Answer a structured question: \"<question text|header|1-based index>=<label[,label...]>\". Repeat for multiple questions; comma-separate labels for multi-select."
+    )]
+    pub(crate) select: Vec<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        requires = "allow",
+        help = "Echo the request's localSettings-destination permission suggestions back as updatedPermissions (allowed approvals only)."
+    )]
+    pub(crate) remember: bool,
+    #[arg(
+        long = "updated-input",
+        value_name = "JSON",
+        requires = "allow",
+        help = "Operator-modified tool input (JSON) echoed as updatedInput on an allowed approval."
+    )]
+    pub(crate) updated_input: Option<String>,
     #[arg(long = "by", value_name = "NAME", help = "Who answered. Defaults to 'human'.")]
     pub(crate) answered_by: Option<String>,
 }
