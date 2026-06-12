@@ -42,13 +42,13 @@
       },
       {
         "repo": "launchapp-dev/animus-provider-oai-agent",
-        "tag": "v0.1.4"
+        "tag": "v0.1.5"
       }
     ],
     "subjects": [
       {
         "repo": "launchapp-dev/animus-subject-default",
-        "tag": "v0.1.4"
+        "tag": "v0.1.5"
       },
       {
         "repo": "launchapp-dev/animus-subject-requirements",
