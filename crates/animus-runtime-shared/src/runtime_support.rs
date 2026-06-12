@@ -215,7 +215,17 @@ fn inject_cli_extra_args(
     phase_runtime_settings: Option<&WorkflowPhaseRuntimeSettings>,
 ) {
     let extra_args = resolved_phase_extra_args(tool_id, phase_runtime_settings);
-    if extra_args.is_empty() {
+    inject_cli_extra_args_list(runtime_contract, &extra_args);
+}
+
+/// Insert a literal list of extra CLI args into `/cli/launch/args`, just
+/// before the trailing prompt argument — the same placement the workflow
+/// phase path uses. Shared core for the workflow `extra_args` setting and
+/// the ad-hoc skill `extra_args` wiring. Empty/whitespace entries are
+/// skipped; a contract without a launch block is left untouched.
+pub fn inject_cli_extra_args_list(runtime_contract: &mut Value, extra_args: &[String]) {
+    let cleaned: Vec<&str> = extra_args.iter().map(|arg| arg.trim()).filter(|arg| !arg.is_empty()).collect();
+    if cleaned.is_empty() {
         return;
     }
 
@@ -224,8 +234,8 @@ fn inject_cli_extra_args(
     };
 
     let insert_at = launch_prompt_insert_index(args);
-    for (offset, extra_arg) in extra_args.into_iter().enumerate() {
-        args.insert(insert_at + offset, Value::String(extra_arg));
+    for (offset, extra_arg) in cleaned.into_iter().enumerate() {
+        args.insert(insert_at + offset, Value::String(extra_arg.to_string()));
     }
 }
 
@@ -263,6 +273,30 @@ fn inject_codex_extra_config_overrides(
 
     if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
         for (key, value_expr) in overrides {
+            ensure_codex_config_override(args, &key, &value_expr);
+        }
+    }
+}
+
+/// Apply raw `key=value` codex `-c` config-override entries to
+/// `/cli/launch/args`, replacing an existing `-c key=...` pair when present
+/// (same upsert semantics as the workflow phase path). No-op for non-codex
+/// tools, unparseable entries, or a contract without a launch block. Shared
+/// core for the workflow `codex_config_overrides` setting and the ad-hoc
+/// skill `codex_config_overrides` wiring.
+pub fn inject_codex_config_overrides_list(runtime_contract: &mut Value, tool_id: &str, overrides: &[String]) {
+    if !tool_id.eq_ignore_ascii_case("codex") {
+        return;
+    }
+
+    let parsed: Vec<(String, String)> =
+        overrides.iter().filter_map(|entry| parse_codex_override_entry(entry)).collect();
+    if parsed.is_empty() {
+        return;
+    }
+
+    if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
+        for (key, value_expr) in parsed {
             ensure_codex_config_override(args, &key, &value_expr);
         }
     }
@@ -393,5 +427,75 @@ mod phase_runtime_settings_tests {
             serde_json::from_value(serde_json::json!({ "model": "claude-sonnet-4-6" }))
                 .expect("legacy block deserializes");
         assert!(settings.permission_mode.is_none());
+    }
+}
+
+#[cfg(test)]
+mod skill_launch_injection_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn contract_with_launch(args: &[&str]) -> Value {
+        json!({
+            "cli": {
+                "name": "codex",
+                "launch": {
+                    "command": "codex",
+                    "args": args.iter().map(|a| Value::String((*a).to_string())).collect::<Vec<_>>(),
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn extra_args_list_inserts_before_the_trailing_prompt() {
+        let mut contract = contract_with_launch(&["exec", "--json", "the prompt"]);
+        inject_cli_extra_args_list(&mut contract, &["--alpha".to_string(), "--beta".to_string()]);
+        let args: Vec<&str> = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(args, vec!["exec", "--json", "--alpha", "--beta", "the prompt"]);
+    }
+
+    #[test]
+    fn extra_args_list_skips_blank_entries_and_missing_launch() {
+        let mut contract = contract_with_launch(&["exec", "p"]);
+        inject_cli_extra_args_list(&mut contract, &["  ".to_string()]);
+        assert_eq!(contract.pointer("/cli/launch/args").and_then(Value::as_array).unwrap().len(), 2);
+
+        // No launch block — must not panic or insert anything.
+        let mut bare = json!({ "cli": { "name": "codex" } });
+        inject_cli_extra_args_list(&mut bare, &["--alpha".to_string()]);
+        assert!(bare.pointer("/cli/launch").is_none());
+    }
+
+    #[test]
+    fn codex_overrides_list_upserts_config_pairs_for_codex_only() {
+        let mut contract = contract_with_launch(&["exec", "-c", "approval_policy=\"never\"", "p"]);
+        inject_codex_config_overrides_list(
+            &mut contract,
+            "codex",
+            &["approval_policy=\"on-request\"".to_string(), "model_reasoning_effort=\"high\"".to_string()],
+        );
+        let args: Vec<&str> = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        // Existing approval_policy pair is REPLACED, new override prepended at exec index.
+        assert!(args.contains(&"approval_policy=\"on-request\""), "{args:?}");
+        assert!(!args.contains(&"approval_policy=\"never\""), "{args:?}");
+        assert!(args.contains(&"model_reasoning_effort=\"high\""), "{args:?}");
+
+        // Non-codex tool: untouched.
+        let mut claude = contract_with_launch(&["--print", "p"]);
+        inject_codex_config_overrides_list(&mut claude, "claude", &["approval_policy=\"never\"".to_string()]);
+        assert_eq!(claude.pointer("/cli/launch/args").and_then(Value::as_array).unwrap().len(), 2);
     }
 }

@@ -4,6 +4,29 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Skills now apply FULLY on the ad-hoc paths (`animus agent run` and
+  `animus chat send`), not just their MCP servers + tool policy. The
+  selected `--skill`'s prompt `prefix`/`suffix`/`directives` wrap the
+  outgoing prompt and `prompt.system` rides the session `system_prompt`
+  (an explicit `--context-json system_prompt` comes first); `extra_args`
+  and `codex_config_overrides` are grafted onto the runtime contract's
+  `cli.launch` block — the same mechanism workflow phases use — and skill
+  `env` rides the session request env; the skill's `model` preference and
+  `timeout_secs` apply when no explicit value is given. Precedence for
+  every field:
+  explicit CLI flags / context-json > skill > defaults; a caller-supplied
+  `--runtime-contract-json` disables skill application entirely. On
+  `animus chat send` the skill binds once per send invocation and applies
+  per turn; launch-affecting skills force full-history replay instead of
+  native session resume so launch flags reach every turn's provider
+  process. New shared helpers in `animus-runtime-shared`
+  (`apply_skill_prompt_to_body`, `merge_skill_system_prompt`,
+  `skill_directives_section`, `inject_cli_extra_args_list`,
+  `inject_codex_config_overrides_list`) back both the workflow and ad-hoc
+  paths.
+
 ### Changed
 
 - **BREAKING:** `animus daemon start` now always starts the daemon as a

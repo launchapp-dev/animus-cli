@@ -339,6 +339,20 @@ best-effort — notifier failures never block or fail the interaction.
   any server with an `oauth:` block is routed through `animus-mcp-proxy`
   instead of exposing a bearer token directly. See the per-agent MCP server
   section in the [CLI Command Surface](../reference/cli/index.md).
+- Skills now apply FULLY on the ad-hoc paths (`animus agent run` and
+  `animus chat send`), not just their MCP servers + tool policy: the
+  `--skill`'s prompt prefix/suffix/directives wrap the prompt, its
+  `prompt.system` fragments ride the session's `system_prompt` (an explicit
+  `--context-json system_prompt` comes first), and its `extra_args`, `env`,
+  and `codex_config_overrides` are forwarded the same way workflow phases
+  forward them (its `model` preference and `timeout_secs` apply when no
+  explicit value is given). Precedence: explicit CLI flags / context-json > skill >
+  defaults; a caller-supplied `--runtime-contract-json` disables skill
+  application entirely. On `animus chat send` the skill binds once per send
+  invocation; launch-affecting skills force full-history replay instead of
+  native resume so the flags apply to every turn's provider process. See the
+  ad-hoc skill application section in the
+  [CLI Command Surface](../reference/cli/index.md).
 
 See also: [MCP Tools Reference](../reference/mcp-tools.md),
 [CLI Command Surface](../reference/cli/index.md), and

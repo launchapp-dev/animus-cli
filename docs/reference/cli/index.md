@@ -570,10 +570,39 @@ passed. Each name is resolved against the project's `mcp_servers` map
 `animus` resolves to the built-in `animus mcp serve` stdio surface. OAuth
 servers are routed through `animus-mcp-proxy`, the same as workflow runs.
 
+Beyond MCP servers and tool policy, the selected `--skill`'s FULL application
+now applies on both ad-hoc paths (matching workflow phases):
+
+- **Prompt fragments** — `prompt.prefix`, `prompt.directives`, and
+  `prompt.suffix` wrap the outgoing prompt (prefixes, a `Skill directives:`
+  section, the body, suffixes — the same ordering as workflow phases).
+  `prompt.system` rides the provider session's `system_prompt`; an explicit
+  `--context-json '{"system_prompt": ...}'` value comes FIRST, then the
+  skill's fragments.
+- **`extra_args` / `codex_config_overrides`** — grafted onto the runtime
+  contract's `cli.launch` block (the same mechanism workflow phases use);
+  codex config overrides are codex-only. An explicit `--permission-mode` and
+  codex `--reasoning-effort` are re-applied onto the grafted launch so CLI
+  flags keep winning over the skill.
+- **`env`** — rides the session request's env (and the grafted launch env).
+  The plugin host still gates forwarded env against the provider plugin's
+  manifest `env_required`, same as the workflow launch-env channel.
+- **`model` preference / `timeout_secs`** — used when no explicit
+  `--model` / `--timeout-secs` (or context-json value) is given.
+- Precedence everywhere: explicit CLI flag / context-json value > skill >
+  defaults. A caller-supplied `--runtime-contract-json` (or a
+  `runtime_contract` key in `--context-json`) disables skill application
+  entirely — a hand-built contract is the full-override channel.
+- On `animus chat send`, the skill binds once per send invocation and applies
+  to every turn attempt. A skill with launch-affecting fields (`extra_args` /
+  `codex_config_overrides` / `env`) forces the full-history replay path
+  instead of native session resume, so the launch flags apply to every
+  turn's provider process consistently.
+
 | Flag | Description |
 |---|---|
 | `--agent <AGENT_ID>` | Select an agent profile; the run receives that profile's declared `mcp_servers`. On `animus agent run` this is applied only when no `--runtime-contract-json` (or `runtime_contract` in `--context-json`) was supplied — a caller-supplied contract is never clobbered. |
-| `--skill <SKILL>` | Select a skill; its declared `mcp_servers` are unioned into the resolved set. An unknown skill name is an error. |
+| `--skill <SKILL>` | Select a skill; its declared `mcp_servers` are unioned into the resolved set, and its full application (prompt fragments, `extra_args`, `env`, `codex_config_overrides`) applies to the run as described above. An unknown skill name is an error. |
 | `--mcp-server <NAME>` | Add an MCP server by name (repeatable). The name must exist in the project's `mcp_servers` map, or `animus` for the built-in surface; an unknown name is an error. |
 | `--no-animus-mcp` | Drop the built-in `animus` server from the resolved set. |
 
