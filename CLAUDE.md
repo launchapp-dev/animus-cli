@@ -175,7 +175,7 @@ Visible top-level command groups currently include:
 
 Hidden but implemented: none currently. The former hidden
 `animus git confirm {request, respond, outcome}` alias was removed in the
-v0.6 alias retirement — `animus approval` is the only surface. The
+v0.5.14 alias retirement — `animus approval` is the only surface. The
 pre-convergence verb aliases (`pack inspect`, `skill show`,
 `flavor describe`, `output run`, `project load`), the `-i` short flag on
 `workflow resume`, and the `--force` alias for `--yes` on
@@ -215,7 +215,7 @@ all subject ops route through the `SubjectRouter` to installed
 `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` to skip subject discovery
 entirely.
 
-Removed in v0.6: the top-level `animus metrics` group — telemetry
+Removed in v0.5.14: the top-level `animus metrics` group — telemetry
 controls (`status`, `enable`, `disable`, `flush`, `cleanup`) folded into
 `animus daemon metrics` as subcommands, with bare `animus daemon metrics`
 keeping the live-counters display. No aliases.

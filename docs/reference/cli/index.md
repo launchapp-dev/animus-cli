@@ -61,7 +61,7 @@ The command surface converges on a small set of conventions:
   `info` is the detail-view verb across groups (`plugin info`, `pack info`,
   `skill info`, `flavor info`). The pre-convergence verbs (`pack inspect`,
   `skill show`, `flavor describe`, `output run`, `project load`) were
-  retired in v0.6 — only the primary names parse.
+  retired in v0.5.14 — only the primary names parse.
 - **Confirmation**: destructive verbs are dry-run by default and take `--yes`
   to apply (`workflow prune --yes`, `subject delete --yes`, `queue drop --all
   --yes`). `--force` is reserved for overriding a *safety check* (overwrite an
@@ -103,7 +103,7 @@ animus
 │   ├── agents               List daemon-managed agents
 │   ├── config               Update daemon automation configuration
 │   ├── preflight            Report plugin preflight status (which required plugins are installed, which are missing, and the fix commands)
-│   └── metrics              Print daemon observability metrics (counters, gauges, histograms); subcommands manage opt-in anonymous usage telemetry (v0.6)
+│   └── metrics              Print daemon observability metrics (counters, gauges, histograms); subcommands manage opt-in anonymous usage telemetry (v0.5.14)
 │       ├── status           Show telemetry enabled flag, install_id, pending event count, last-send timestamp
 │       ├── enable           Opt in to anonymous metrics (skips the first-run prompt re-show)
 │       ├── disable          Opt out and drop any buffered events
@@ -655,7 +655,7 @@ raise mid-run via `animus.agent.request_approval` are answered with
 `animus agent interactions answer <ID> --allow|--deny`, not here.
 
 The former `animus git confirm {request, respond, outcome}` alias was
-removed in v0.6 — `animus approval` is the only surface.
+removed in v0.5.14 — `animus approval` is the only surface.
 
 ### `animus queue hold` / `release` / `drop` (bulk subject operations)
 

@@ -27,7 +27,7 @@ animus daemon metrics --watch --interval-secs 1
 control socket. There is no on-disk fallback because counters reset on
 daemon restart.
 
-As of v0.6, `animus daemon metrics` also carries the opt-in anonymous usage
+As of v0.5.14, `animus daemon metrics` also carries the opt-in anonymous usage
 telemetry controls as subcommands — `status`, `enable`, `disable`, `flush`,
 and `cleanup` (formerly the top-level `animus metrics` group, removed with
 no aliases). Bare `animus daemon metrics` keeps the snapshot display above.
