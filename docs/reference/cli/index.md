@@ -272,7 +272,7 @@ animus
 │   ├── search               Search the public Animus plugin registry by substring + filters
 │   ├── browse               Browse the public Animus plugin registry, grouped by kind
 │   ├── update               Update one or all installed release-source plugins to the latest tag
-│   ├── install-defaults     Install the standard set of provider plugins from public GitHub releases (claude, codex, gemini, opencode, oai). Skips plugins that are already installed. Optional flags pull in additional default plugins
+│   ├── install-defaults     Install every plugin the flavor manifest (`--flavor <name>`, default `default`) marks `required` from public GitHub releases. `--include-recommended` adds the recommended set. Skips plugins that are already installed
 │   ├── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`). The lockfile records sha256 + version for every installed plugin so an `install --force` or tampered-binary scenario is visible to operators
 │   │   ├── list             List every entry currently recorded in the plugin lockfile
 │   │   └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
@@ -332,7 +332,7 @@ animus
 │   ├── list                 List available flavor manifests on disk
 │   ├── current              Show the active flavor and drift against the manifest
 │   ├── info                 Print a parsed flavor manifest (TOML by default, JSON via `--json`)
-│   └── install              Install the named flavor (`default` only in v0.5); equivalent to `animus plugin install-defaults --include-subjects --include-transports` plus the default `workflow_runner` and `queue` plugins
+│   └── install              Install every plugin the named flavor's manifest marks `required` (delegates to `animus plugin install-defaults --flavor <name>`); `--include-recommended` adds the recommended set
 │
 ├── self                     Manage the `animus` binary itself — check for and install updates
 │   └── update               Check for, download, and atomically install a newer `animus` release
@@ -465,7 +465,7 @@ Exit code matrix:
 | Code | Meaning |
 |---|---|
 | 0 | All required roles satisfied. |
-| 2 | At least one required role is missing. The error envelope's `message` carries the `animus plugin install ...` fix. CI scripts and `&&` chains can rely on this. |
+| 2 | At least one required role is missing. The error envelope's `message` carries the `animus plugin install ...` fix per role; when more than one role is missing it also prints the one composed fix (`animus plugin install-defaults --flavor default --yes`). CI scripts and `&&` chains can rely on this. |
 | 1 | Transient plugin discovery failure (broken install index, IO error, etc.). Distinct from "ran successfully and found gaps". |
 
 Broken flavor manifest: when `flavors/default.toml` exists on disk but fails
@@ -886,23 +886,27 @@ animus flavor info --name default --json
 animus flavor current
 animus flavor current --json
 
-# Install the flavor. v0.5 only supports `default`; refuses other names
-# per the "One flavor at launch" discipline rule.
+# Install the flavor: every plugin the manifest marks `required`.
 animus flavor install            # uses `default`
 animus flavor install default
+animus flavor install --include-recommended   # required + recommended
 ```
 
-`animus flavor install` is equivalent to
-`animus plugin install-defaults --include-subjects --include-transports`.
-That install path always includes the base provider set plus the default
-`workflow_runner` and `queue` plugins, then layers on the subject and
-transport plugins behind the explicit `--include-*` flags. It installs every
-required plugin slug the manifest declares whose curated tag is pinned in
+`animus flavor install <name>` delegates to
+`animus plugin install-defaults --flavor <name>`: the flavor manifest is the
+source of truth for the install plan. Everything the manifest marks
+`required` installs (providers, subject backends, transports,
+`workflow_runner`, `queue`); `--include-recommended` adds the `recommended`
+set (extra providers, web UI, triggers, ...). The required set covers every
+daemon-preflight role, so `animus flavor install` followed by
+`animus daemon start` works without a second install command. Tags come from
+the curated pins in
 [`crates/orchestrator-core/src/plugin_registry.rs`](../../../crates/orchestrator-core/src/plugin_registry.rs).
 Slugs the manifest declares but the constants table hasn't pinned yet (e.g.
 `animus-provider-ollama`, `animus-trigger-cron`) emit a warning and are
 skipped — the manifest is forward-looking; the constants table is the
-authoritative tag pin.
+authoritative tag pin. `animus flavor current` reports drift against the
+exact same required set.
 
 The loader probes for `flavors/<name>.toml` in this order:
 
@@ -914,39 +918,51 @@ JSON output uses the `animus.flavor.cli.v1` envelope.
 
 ### `animus plugin install-defaults`
 
-Bulk-install the standard provider plugin set in one shot. The base plan now
-also includes the default `workflow_runner` and `queue` plugins required by
-daemon preflight. Each repo runs through the same install pipeline as
-`animus plugin install`, so signature checks, manifest probes, and the
-`launchapp-dev` org allowlist are preserved.
+Manifest-driven bulk install. The flavor manifest named by `--flavor`
+(default: `default`, read from `flavors/<name>.toml` with a binary-bundled
+fallback for `default`) is the source of truth: every plugin the manifest
+marks `required` installs — providers, subject backends, transports,
+`workflow_runner`, and `queue` — which covers every daemon-preflight role in
+one command. `--include-recommended` adds the manifest's `recommended` set.
+Each repo runs through the same install pipeline as `animus plugin install`,
+so signature checks, manifest probes, and the `launchapp-dev` org allowlist
+are preserved.
 
-When `flavors/default.toml` is present, the install plan is sourced from the
-manifest's `[providers]`, `[subjects]`, `[transports]`, `[workflow_runner]`,
-and `[queue]` sections (plus optional `[ui]` and recommended add-ons gated by
-`--include-*` flags). When the manifest is absent, the hardcoded
-`DEFAULT_PROVIDER_PLUGINS / DEFAULT_WORKFLOW_RUNNER_PLUGINS /
-DEFAULT_QUEUE_PLUGINS / DEFAULT_SUBJECT_PLUGINS /
-DEFAULT_TRANSPORT_PLUGINS` tables remain the fallback.
+Unknown flavor names (no `flavors/<name>.toml` on disk) error out. Only when
+`flavors/default.toml` exists but fails to load does the command fall back to
+the hardcoded `DEFAULT_PROVIDER_PLUGINS / DEFAULT_WORKFLOW_RUNNER_PLUGINS /
+DEFAULT_QUEUE_PLUGINS / ...` tables (with an error log naming the broken
+manifest).
 
 ```bash
-# Install the base defaults: 5 providers + workflow_runner + queue
+# Install the default flavor's required set: provider-claude,
+# subject-default, subject-requirements, transport-http,
+# workflow-runner-default, queue-default
 animus plugin install-defaults
+
+# Required + recommended (extra providers, subjects, graphql, web UI, ...)
+animus plugin install-defaults --include-recommended
+
+# Install another flavor manifest from flavors/<name>.toml
+animus plugin install-defaults --flavor <name>
 
 # Add the OAI-agent plugin
 animus plugin install-defaults --include-oai-agent
 
-# Add the default subject_backend plugins (default, requirements, linear, sqlite, markdown)
+# Back-compat: add just the recommended subject_backend plugins
 animus plugin install-defaults --include-subjects
 ```
 
 | Flag | Description |
 |---|---|
+| `--flavor <NAME>` | Flavor manifest that drives the install plan (default: `default`). Reads `flavors/<NAME>.toml` (`$ANIMUS_FLAVORS_DIR` override); the `default` flavor falls back to the manifest bundled in the binary |
+| `--include-recommended` | Also install every plugin the manifest marks `recommended` |
 | `--plugin-dir <PATH>` | Override the plugin install directory. Same semantics as `animus plugin install --plugin-dir` |
 | `--force` | Reinstall plugins that are already present (default: skip with a warning) |
 | `--yes` | Auto-confirm the trust-on-first-use prompt for the `launchapp-dev` org |
 | `--include-oai-agent` | Also install `animus-provider-oai-agent` (curated tag in `orchestrator-core::plugin_registry::DEFAULT_OAI_AGENT_PLUGINS`) |
-| `--include-subjects` | Also install the default subject_backend plugins (`subject-default`, `subject-requirements`, `subject-linear`, `subject-sqlite`, `subject-markdown`) |
-| `--include-transports` | Also install the default transport_backend + web_ui plugins (`transport-http`, `transport-graphql`, `web-ui`) that back `animus web` |
+| `--include-subjects` | Back-compat: also install the flavor's *recommended* subject_backend plugins (`subject-linear`, `subject-sqlite`, `subject-markdown`, ...). The required subject backends always install |
+| `--include-transports` | Back-compat: also install the flavor's *recommended* transport + web_ui plugins (`transport-graphql`, `web-ui`) that back `animus web`. The required `transport-http` always installs |
 | `--json` | Emit per-plugin results + summary as JSON |
 | `--force-rewrite-lockfile` | Discard an unparseable / schema-incompatible `plugins.lock` and rebuild a fresh lockfile for the batch. Without this flag the batch fails closed up front, *before* the per-target skip loop runs, so an all-skipped run cannot mask a corrupt lockfile. Same security caveat as `animus plugin install --force-rewrite-lockfile` |
 

@@ -8,8 +8,8 @@ pub(crate) enum FlavorCommand {
     Current(FlavorCurrentArgs),
     /// Print a parsed flavor manifest (TOML or JSON via --json).
     Info(FlavorDescribeArgs),
-    /// Install the named flavor (equivalent to `animus plugin install-defaults
-    /// --include-subjects --include-transports`).
+    /// Install the named flavor: every plugin its manifest marks `required`
+    /// (delegates to `animus plugin install-defaults --flavor <name>`).
     Install(FlavorInstallArgs),
 }
 
@@ -38,4 +38,7 @@ pub(crate) struct FlavorInstallArgs {
     /// Suppress install confirmation prompts.
     #[arg(long, default_value_t = false)]
     pub(crate) yes: bool,
+    /// Also install every plugin the flavor manifest marks `recommended`.
+    #[arg(long, default_value_t = false)]
+    pub(crate) include_recommended: bool,
 }

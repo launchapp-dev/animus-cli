@@ -7,9 +7,11 @@ if you are upgrading from an earlier v0.4.x.
 
 > **Since v0.4.12, the first-run flow is plugin-first.** The daemon no longer ships with
 > bundled providers, workflow runners, queues, or subject backends. After installing the `animus`
-> binary you must run `animus plugin install-defaults --include-subjects --include-transports`
-> once before `animus daemon start` will boot. The command is idempotent and
-> the plugins live in `~/.animus/plugins/` (shared across projects).
+> binary you must run `animus plugin install-defaults` once before
+> `animus daemon start` will boot — it installs everything the default flavor
+> manifest marks `required`, which covers every daemon-preflight role. The
+> command is idempotent and the plugins live in `~/.animus/plugins/` (shared
+> across projects).
 
 ## Fast Path: Upstream Installer
 
@@ -17,7 +19,7 @@ Use the installer published from `launchapp-dev/animus-cli`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
-animus plugin install-defaults --include-subjects --include-transports
+animus plugin install-defaults
 ```
 
 Options:
@@ -115,20 +117,28 @@ log sinks all install as out-of-tree plugins from public GitHub repos.
 **Recommended (one command):**
 
 ```bash
-animus plugin install-defaults --include-subjects --include-transports
+animus plugin install-defaults
 ```
 
-This installs the curated defaults from
-`crates/orchestrator-core/src/plugin_registry.rs`:
+This reads the default flavor manifest (`flavors/default.toml`, bundled in
+the binary) and installs everything it marks `required`, with curated tag
+pins from `crates/orchestrator-core/src/plugin_registry.rs`:
 
-- 5 providers (`animus-provider-claude`, `animus-provider-codex`, `animus-provider-gemini`, `animus-provider-opencode`, `animus-provider-oai`) — daemon requires at least one
+- 1 provider (`animus-provider-claude`) — daemon requires at least one
+- 2 subject backends (`animus-subject-default` for `kind=task`, `animus-subject-requirements` for `kind=requirement`) — daemon preflight requires both kinds
+- 1 transport (`animus-transport-http`)
 - 1 workflow runner (`animus-workflow-runner-default`) — daemon preflight requires it
 - 1 queue plugin (`animus-queue-default`) — daemon preflight requires it
-- 5 subject backends (`animus-subject-default`, `animus-subject-requirements`, `animus-subject-linear`, `animus-subject-sqlite`, `animus-subject-markdown`) — daemon requires `default` for `kind=task` and `requirements` for `kind=requirement`
-- 3 transport + UI plugins (`animus-transport-http`, `animus-transport-graphql`, `animus-web-ui`) — required for `animus web serve`
 
-Add `--include-oai-agent` to also install `animus-provider-oai-agent`
-(OpenAI Responses API agent loop, separate from the chat completions provider).
+Add `--include-recommended` for the manifest's recommended set: extra
+providers (`animus-provider-codex`, ...), more subject backends
+(`animus-subject-linear`, `animus-subject-sqlite`, `animus-subject-markdown`),
+plus `animus-transport-graphql` and `animus-web-ui` (required for
+`animus web serve`). Add `--include-oai-agent` to also install
+`animus-provider-oai-agent` (OpenAI Responses API agent loop, separate from
+the chat completions provider). The legacy `--include-subjects` /
+`--include-transports` flags still work and add just those recommended
+slices.
 
 **Or install individually:**
 

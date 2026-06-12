@@ -391,16 +391,30 @@ pub(crate) struct PluginInstallDefaultsArgs {
     /// Auto-confirm the trust-on-first-use prompt for the launchapp-dev org.
     #[arg(long, default_value_t = false)]
     pub(crate) yes: bool,
+    /// Flavor manifest that drives the install plan. Reads
+    /// `flavors/<NAME>.toml` (with `ANIMUS_FLAVORS_DIR` override); the
+    /// `default` flavor falls back to the manifest bundled in the binary.
+    /// Every plugin the manifest marks `required` is installed.
+    #[arg(long, value_name = "NAME", default_value = "default")]
+    pub(crate) flavor: String,
+    /// Also install every plugin the flavor manifest marks `recommended`
+    /// (extra providers, subject backends, transports, web UI, triggers).
+    #[arg(long, default_value_t = false)]
+    pub(crate) include_recommended: bool,
     /// Also install `animus-provider-oai-agent` (curated tag in
     /// `orchestrator-core::plugin_registry::DEFAULT_OAI_AGENT_PLUGINS`).
     #[arg(long, default_value_t = false)]
     pub(crate) include_oai_agent: bool,
-    /// Also install the default subject_backend plugins (subject-default,
-    /// subject-requirements, subject-linear, subject-sqlite, subject-markdown).
+    /// Back-compat: also install the flavor's recommended subject_backend
+    /// plugins (subject-linear, subject-sqlite, subject-markdown, ...).
+    /// The required subject backends always install; this only adds the
+    /// recommended slice. Subsumed by `--include-recommended`.
     #[arg(long, default_value_t = false)]
     pub(crate) include_subjects: bool,
-    /// Also install the default transport_backend + web_ui plugins
-    /// (transport-http, transport-graphql, web-ui) that back `animus web`.
+    /// Back-compat: also install the flavor's recommended transport +
+    /// web_ui plugins (transport-graphql, web-ui) that back `animus web`.
+    /// The required transports always install; this only adds the
+    /// recommended slice. Subsumed by `--include-recommended`.
     #[arg(long, default_value_t = false)]
     pub(crate) include_transports: bool,
     /// Emit results as JSON.

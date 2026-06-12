@@ -428,59 +428,92 @@ struct InstallDefaultsOutput {
     summary: InstallDefaultsSummary,
 }
 
-/// Wave 3: assemble the `(slug, tag)` install list. When
-/// `flavors/default.toml` is present on disk, the manifest is the source
-/// of truth for *which* slugs to install — tags still come from the
-/// curated constants in `orchestrator_core::plugin_registry`. Slugs the
-/// manifest declares that the curated registry hasn't pinned yet (e.g.
-/// `animus-provider-ollama`, `animus-trigger-cron`) emit a warning and
-/// are skipped: the manifest is a forward-looking declaration; the
-/// constants table is the authoritative pin.
+/// Assemble the `(slug, tag)` install list from the flavor manifest named
+/// by `--flavor` (default: `default`). The manifest is the source of
+/// truth for *which* slugs to install: everything marked `required`
+/// always installs; `--include-recommended` adds the full `recommended`
+/// set; the legacy `--include-subjects` / `--include-transports` flags
+/// add the recommended slice of just those sections (back-compat). Tags
+/// still come from the curated constants in
+/// `orchestrator_core::plugin_registry`. Slugs the manifest declares that
+/// the curated registry hasn't pinned yet (e.g. `animus-provider-ollama`,
+/// `animus-trigger-cron`) emit a warning and are skipped: the manifest is
+/// a forward-looking declaration; the constants table is the
+/// authoritative pin.
 ///
-/// When no flavor manifest is found, the legacy hardcoded
-/// `DEFAULT_PROVIDER_PLUGINS + ...` tables are used directly.
-fn build_install_defaults_targets(args: &PluginInstallDefaultsArgs, project_root: &str) -> Vec<(String, String)> {
-    use orchestrator_core::flavor::{load_flavor_in, locate_flavor_manifest_in};
+/// The `default` flavor always resolves (binary-bundled manifest
+/// fallback). Other flavor names must exist on disk as
+/// `flavors/<name>.toml` or the command errors. Only when the default
+/// manifest is present but unreadable do the legacy hardcoded
+/// `DEFAULT_PROVIDER_PLUGINS + ...` tables kick in, with an error log.
+fn build_install_defaults_targets(
+    args: &PluginInstallDefaultsArgs,
+    project_root: &str,
+) -> Result<Vec<(String, String)>> {
+    use orchestrator_core::flavor::load_flavor_in;
     use orchestrator_core::resolve_tag_for_slug;
     use orchestrator_core::DEFAULT_FLAVOR_ID;
 
-    // Codex P2: when a `flavors/default.toml` file IS present but fails
-    // to parse or validate, silently falling back to the hardcoded
-    // tables would hide schema drift or a bad `$ANIMUS_FLAVORS_DIR`
-    // override. Probe for presence first; if found, surface load errors
-    // via `tracing::error!` then still fall back so the daemon stays
-    // usable.
     let project_root_path = std::path::Path::new(project_root);
-    let manifest_present = locate_flavor_manifest_in(project_root_path, DEFAULT_FLAVOR_ID).is_some();
-    let load_result = load_flavor_in(project_root_path, DEFAULT_FLAVOR_ID);
-    if manifest_present {
-        if let Err(error) = &load_result {
+    let manifest = match load_flavor_in(project_root_path, &args.flavor) {
+        Ok(Some(manifest)) => Some(manifest),
+        Ok(None) => {
+            anyhow::bail!(
+                "flavor '{}' not found; expected a manifest at <repo>/flavors/{}.toml (or under $ANIMUS_FLAVORS_DIR)",
+                args.flavor,
+                args.flavor
+            );
+        }
+        Err(error) if args.flavor == DEFAULT_FLAVOR_ID => {
+            // Codex P2: when `flavors/default.toml` is present but fails to
+            // parse or validate, silently falling back to the hardcoded
+            // tables would hide schema drift or a bad `$ANIMUS_FLAVORS_DIR`
+            // override. Surface the load error via `tracing::error!` then
+            // still fall back so the install path stays usable.
             tracing::error!(
                 flavor = DEFAULT_FLAVOR_ID,
                 error = %error,
                 "flavor manifest present on disk but failed to load; falling back to hardcoded plugin defaults"
             );
+            None
         }
-    }
-    if let Ok(Some(manifest)) = load_result {
-        let mut slugs: Vec<String> = Vec::new();
-        slugs.extend(manifest.workflow_runner.required.iter().cloned());
-        slugs.extend(manifest.queue.required.iter().cloned());
-        slugs.extend(manifest.providers.required.iter().cloned());
-        slugs.extend(manifest.providers.recommended.iter().cloned());
+        Err(error) => {
+            return Err(error.context(format!("failed to load flavor manifest '{}'", args.flavor)));
+        }
+    };
+
+    if let Some(manifest) = manifest {
+        // TODO(codex-p2): runtime flavor-only scoping
+        // (`resolve_flavor_plugins` in daemon-runtime) still resolves the
+        // admit set from `flavors/default.toml` only. Installing a
+        // non-default flavor works, but its plugins can be filtered out of
+        // scoped discovery until the scope resolver learns about the
+        // active flavor. Warn so operators are not surprised; the proper
+        // fix is persisting the selected flavor for scope resolution.
+        if args.flavor != DEFAULT_FLAVOR_ID {
+            tracing::warn!(
+                flavor = %args.flavor,
+                "installing a non-default flavor: project flavor-only plugin scoping still resolves \
+                 against flavors/default.toml, so these plugins may be filtered out of scoped discovery"
+            );
+        }
+        // The manifest's REQUIRED set is the canonical install plan — the
+        // same set `animus flavor current` reports drift against.
+        let mut slugs: Vec<String> = manifest.required_plugins().into_iter().map(|(_, slug)| slug).collect();
+        if args.include_recommended {
+            slugs.extend(manifest.recommended_plugins().into_iter().map(|(_, slug)| slug));
+        }
+        if args.include_subjects {
+            slugs.extend(manifest.subjects.recommended.iter().cloned());
+        }
+        if args.include_transports {
+            slugs.extend(manifest.transports.recommended.iter().cloned());
+            slugs.extend(manifest.ui.recommended.iter().cloned());
+        }
         if args.include_oai_agent {
             for (slug, _) in DEFAULT_OAI_AGENT_PLUGIN {
                 slugs.push((*slug).to_string());
             }
-        }
-        if args.include_subjects {
-            slugs.extend(manifest.subjects.required.iter().cloned());
-            slugs.extend(manifest.subjects.recommended.iter().cloned());
-        }
-        if args.include_transports {
-            slugs.extend(manifest.transports.required.iter().cloned());
-            slugs.extend(manifest.transports.recommended.iter().cloned());
-            slugs.extend(manifest.ui.recommended.iter().cloned());
         }
         let mut targets: Vec<(String, String)> = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -498,7 +531,7 @@ fn build_install_defaults_targets(args: &PluginInstallDefaultsArgs, project_root
                 }
             }
         }
-        return targets;
+        return Ok(targets);
     }
 
     let mut targets: Vec<(String, String)> =
@@ -506,7 +539,7 @@ fn build_install_defaults_targets(args: &PluginInstallDefaultsArgs, project_root
     // v0.5: workflow_runner + queue plugins are required by daemon preflight
     // and ship as part of the curated default flavor. Install unconditionally
     // so `animus plugin install-defaults` actually unblocks `animus daemon
-    // start` on the no-flavor-manifest path.
+    // start` on the broken-manifest fallback path.
     for (s, t) in DEFAULT_WORKFLOW_RUNNER_PLUGINS {
         targets.push(((*s).to_string(), (*t).to_string()));
     }
@@ -518,21 +551,21 @@ fn build_install_defaults_targets(args: &PluginInstallDefaultsArgs, project_root
             targets.push(((*s).to_string(), (*t).to_string()));
         }
     }
-    if args.include_subjects {
+    if args.include_subjects || args.include_recommended {
         for (s, t) in DEFAULT_SUBJECT_PLUGINS {
             targets.push(((*s).to_string(), (*t).to_string()));
         }
     }
-    if args.include_transports {
+    if args.include_transports || args.include_recommended {
         for (s, t) in DEFAULT_TRANSPORT_PLUGINS {
             targets.push(((*s).to_string(), (*t).to_string()));
         }
     }
-    targets
+    Ok(targets)
 }
 
 async fn handle_plugin_install_defaults(args: PluginInstallDefaultsArgs, project_root: &str) -> Result<()> {
-    let mut targets: Vec<(String, String)> = build_install_defaults_targets(&args, project_root);
+    let mut targets: Vec<(String, String)> = build_install_defaults_targets(&args, project_root)?;
 
     let install_dir = install_root(args.plugin_dir.as_deref())?;
 
@@ -5616,24 +5649,17 @@ trusted_signers:
             Some(install_dir.to_str().expect("install dir utf-8")),
         );
 
-        // Pre-create the install-dir entries for every default plugin so the
-        // per-target loop skips them all. (`include_*` flags stay false, so
-        // only the provider plugins matter here.) Also pre-create the v0.5
-        // workflow_runner + queue plugin directories: the bundled flavor
-        // manifest (loaded from the binary via include_str! after
-        // Wave 3 codex R6 [P2]) declares them as required, so they show
-        // up in the targets list even when no `flavors/` directory is on
-        // disk under the tempdir.
-        for (slug, _tag) in DEFAULT_PROVIDER_PLUGINS {
-            let basename = slug.rsplit('/').next().unwrap_or(slug);
-            std::fs::write(install_dir.join(basename), b"placeholder").unwrap();
-        }
-        for (slug, _tag) in orchestrator_core::DEFAULT_WORKFLOW_RUNNER_PLUGINS {
-            let basename = slug.rsplit('/').next().unwrap_or(slug);
-            std::fs::write(install_dir.join(basename), b"placeholder").unwrap();
-        }
-        for (slug, _tag) in orchestrator_core::DEFAULT_QUEUE_PLUGINS {
-            let basename = slug.rsplit('/').next().unwrap_or(slug);
+        // Pre-create the install-dir entries for every plugin the bundled
+        // default flavor manifest (loaded from the binary via include_str!
+        // after Wave 3 codex R6 [P2]) marks `required`, so the per-target
+        // loop skips them all even when no `flavors/` directory is on disk
+        // under the tempdir. This is the exact required set the
+        // manifest-driven install resolves.
+        let bundled = orchestrator_core::flavor::load_flavor_in(&project_root, "default")
+            .expect("bundled default flavor must parse")
+            .expect("bundled default flavor must resolve");
+        for (_role, slug) in bundled.required_plugins() {
+            let basename = slug.rsplit('/').next().unwrap_or(&slug);
             std::fs::write(install_dir.join(basename), b"placeholder").unwrap();
         }
 
@@ -5648,6 +5674,8 @@ trusted_signers:
             plugin_dir: Some(install_dir.to_string_lossy().to_string()),
             force: false,
             yes: true,
+            flavor: "default".to_string(),
+            include_recommended: false,
             include_oai_agent: false,
             include_subjects: false,
             include_transports: false,
@@ -5665,6 +5693,159 @@ trusted_signers:
         let reparsed = PluginLockfile::load_or_empty(&lock_path)
             .expect("rewritten lockfile must parse cleanly under the current schema");
         assert!(reparsed.plugins.is_empty(), "rewritten lockfile must start empty");
+    }
+
+    fn install_defaults_args(flavor: &str) -> PluginInstallDefaultsArgs {
+        PluginInstallDefaultsArgs {
+            plugin_dir: None,
+            force: false,
+            yes: true,
+            flavor: flavor.to_string(),
+            include_recommended: false,
+            include_oai_agent: false,
+            include_subjects: false,
+            include_transports: false,
+            json: true,
+            force_rewrite_lockfile: false,
+        }
+    }
+
+    /// Write a flavor manifest under `<root>/flavors/<name>.toml` for
+    /// manifest-resolution tests. Slugs reference curated-pinned plugins so
+    /// `resolve_tag_for_slug` keeps them in the target list.
+    fn write_test_flavor(root: &std::path::Path, name: &str, body: &str) {
+        let dir = root.join("flavors");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.toml")), body).unwrap();
+    }
+
+    const TEST_FLAVOR_TOML: &str = r#"
+schema = "animus.flavor.v1"
+id = "default"
+version = "0.5.0"
+title = "Test Flavor"
+description = "Manifest-resolution test fixture."
+
+[providers]
+required = ["launchapp-dev/animus-provider-claude"]
+recommended = ["launchapp-dev/animus-provider-codex", "launchapp-dev/animus-provider-ollama"]
+
+[subjects]
+required = ["launchapp-dev/animus-subject-default", "launchapp-dev/animus-subject-requirements"]
+recommended = ["launchapp-dev/animus-subject-linear"]
+
+[transports]
+required = ["launchapp-dev/animus-transport-http"]
+recommended = ["launchapp-dev/animus-transport-graphql"]
+
+[ui]
+recommended = ["launchapp-dev/animus-web-ui"]
+
+[workflow_runner]
+required = ["launchapp-dev/animus-workflow-runner-default"]
+
+[queue]
+required = ["launchapp-dev/animus-queue-default"]
+"#;
+
+    fn target_slugs(targets: &[(String, String)]) -> Vec<&str> {
+        targets.iter().map(|(slug, _)| slug.as_str()).collect()
+    }
+
+    #[test]
+    fn install_defaults_targets_install_everything_the_manifest_marks_required() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_flavor(tmp.path(), "default", TEST_FLAVOR_TOML);
+        let args = install_defaults_args("default");
+        let targets = build_install_defaults_targets(&args, &tmp.path().to_string_lossy()).unwrap();
+        let slugs = target_slugs(&targets);
+        for required in [
+            "launchapp-dev/animus-provider-claude",
+            "launchapp-dev/animus-subject-default",
+            "launchapp-dev/animus-subject-requirements",
+            "launchapp-dev/animus-transport-http",
+            "launchapp-dev/animus-workflow-runner-default",
+            "launchapp-dev/animus-queue-default",
+        ] {
+            assert!(slugs.contains(&required), "required slug {required} missing from {slugs:?}");
+        }
+        assert!(
+            !slugs.iter().any(|s| s.contains("codex") || s.contains("linear") || s.contains("graphql")),
+            "recommended slugs must not install without --include-recommended: {slugs:?}"
+        );
+        assert!(
+            targets.iter().all(|(_, tag)| tag.starts_with('v')),
+            "every target must carry a curated tag pin: {targets:?}"
+        );
+    }
+
+    #[test]
+    fn install_defaults_targets_include_recommended_adds_recommended_and_skips_unpinned() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_flavor(tmp.path(), "default", TEST_FLAVOR_TOML);
+        let mut args = install_defaults_args("default");
+        args.include_recommended = true;
+        let targets = build_install_defaults_targets(&args, &tmp.path().to_string_lossy()).unwrap();
+        let slugs = target_slugs(&targets);
+        assert!(slugs.contains(&"launchapp-dev/animus-provider-codex"), "got: {slugs:?}");
+        assert!(slugs.contains(&"launchapp-dev/animus-subject-linear"), "got: {slugs:?}");
+        assert!(slugs.contains(&"launchapp-dev/animus-transport-graphql"), "got: {slugs:?}");
+        assert!(slugs.contains(&"launchapp-dev/animus-web-ui"), "got: {slugs:?}");
+        assert!(
+            !slugs.contains(&"launchapp-dev/animus-provider-ollama"),
+            "slugs without a curated tag pin must be skipped with a warning: {slugs:?}"
+        );
+    }
+
+    #[test]
+    fn install_defaults_targets_back_compat_include_flags_add_recommended_slices() {
+        let tmp = tempfile::tempdir().unwrap();
+        write_test_flavor(tmp.path(), "default", TEST_FLAVOR_TOML);
+        let mut args = install_defaults_args("default");
+        args.include_subjects = true;
+        args.include_transports = true;
+        let targets = build_install_defaults_targets(&args, &tmp.path().to_string_lossy()).unwrap();
+        let slugs = target_slugs(&targets);
+        assert!(slugs.contains(&"launchapp-dev/animus-subject-linear"), "got: {slugs:?}");
+        assert!(slugs.contains(&"launchapp-dev/animus-transport-graphql"), "got: {slugs:?}");
+        assert!(slugs.contains(&"launchapp-dev/animus-web-ui"), "got: {slugs:?}");
+        assert!(
+            !slugs.contains(&"launchapp-dev/animus-provider-codex"),
+            "--include-subjects/--include-transports must not pull in recommended providers: {slugs:?}"
+        );
+        let unique: std::collections::HashSet<&str> = slugs.iter().copied().collect();
+        assert_eq!(unique.len(), slugs.len(), "targets must be deduplicated: {slugs:?}");
+    }
+
+    #[test]
+    fn install_defaults_targets_unknown_flavor_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let args = install_defaults_args("does-not-exist");
+        let err = build_install_defaults_targets(&args, &tmp.path().to_string_lossy())
+            .expect_err("unknown flavor must error, not silently fall back");
+        assert!(err.to_string().contains("does-not-exist"), "error must name the flavor: {err}");
+    }
+
+    #[test]
+    fn install_defaults_targets_bundled_default_manifest_covers_daemon_preflight() {
+        // No `flavors/` directory anywhere under the temp project root:
+        // the binary-bundled default manifest must resolve and its
+        // required set must cover every daemon-preflight role so the
+        // canonical first run (`install-defaults` then `daemon start`)
+        // works without a second command.
+        let tmp = tempfile::tempdir().unwrap();
+        let args = install_defaults_args("default");
+        let targets = build_install_defaults_targets(&args, &tmp.path().to_string_lossy()).unwrap();
+        let slugs = target_slugs(&targets);
+        for required in [
+            "launchapp-dev/animus-provider-claude",
+            "launchapp-dev/animus-subject-default",
+            "launchapp-dev/animus-subject-requirements",
+            "launchapp-dev/animus-workflow-runner-default",
+            "launchapp-dev/animus-queue-default",
+        ] {
+            assert!(slugs.contains(&required), "bundled required slug {required} missing from {slugs:?}");
+        }
     }
 
     // Regression guard for codex review round-2 P2: a concurrent install

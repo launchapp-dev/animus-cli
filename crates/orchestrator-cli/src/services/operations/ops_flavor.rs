@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use orchestrator_core::flavor::{
-    list_available_flavor_names, load_flavor_in, locate_flavor_manifest_in, FlavorManifest, DEFAULT_FLAVOR_ID,
+    list_available_flavor_names, load_flavor_in, locate_flavor_manifest_in, FlavorManifest,
 };
 use serde::Serialize;
 
@@ -155,10 +155,11 @@ fn handle_flavor_describe(args: FlavorDescribeArgs, project_root: &str, json: bo
 }
 
 async fn handle_flavor_install(args: FlavorInstallArgs, project_root: &str, json: bool) -> Result<()> {
-    // For v0.5, `animus flavor install` is documented as equivalent to
-    // `animus plugin install-defaults --include-subjects --include-transports`
-    // (see brief Step 6). We synthesize a `PluginInstallDefaultsArgs` and
-    // delegate.
+    // `animus flavor install <name>` delegates to the manifest-driven
+    // `animus plugin install-defaults --flavor <name>` path: everything
+    // the manifest marks `required` installs; `--include-recommended`
+    // adds the recommended set. One code path, one required-set
+    // definition (`FlavorManifest::required_plugins`).
     use crate::cli_types::PluginCommand;
     use crate::cli_types::PluginInstallDefaultsArgs;
     use crate::services::operations::handle_plugin;
@@ -166,12 +167,6 @@ async fn handle_flavor_install(args: FlavorInstallArgs, project_root: &str, json
     // loader inside `install-defaults` will do the same work for the
     // resolved targets, but failing-fast here gives a clearer error
     // message when an unknown flavor name is passed.
-    if args.name != DEFAULT_FLAVOR_ID {
-        anyhow::bail!(
-            "flavor '{}' is not shipped in v0.5 (only 'default' is supported per discipline rule 'One flavor at launch')",
-            args.name
-        );
-    }
     if load_flavor_in(std::path::Path::new(project_root), &args.name)?.is_none() {
         anyhow::bail!(
             "flavor manifest '{}' not found on disk; expected at <repo>/flavors/{}.toml",
@@ -183,9 +178,11 @@ async fn handle_flavor_install(args: FlavorInstallArgs, project_root: &str, json
         json,
         force: args.force,
         yes: args.yes,
+        flavor: args.name.clone(),
+        include_recommended: args.include_recommended,
         include_oai_agent: false,
-        include_subjects: true,
-        include_transports: true,
+        include_subjects: false,
+        include_transports: false,
         plugin_dir: None,
         force_rewrite_lockfile: false,
     };
@@ -200,7 +197,11 @@ async fn handle_flavor_install(args: FlavorInstallArgs, project_root: &str, json
 /// Compare the set of installed plugins on disk against the manifest's
 /// declared plugins.  v0.5: a slug is considered "installed" iff the
 /// plugin install directory contains a directory whose name matches the
-/// repo basename.
+/// repo basename. The comparison set is
+/// [`FlavorManifest::required_plugins`] — the exact same required-set
+/// function that drives `animus plugin install-defaults --flavor` /
+/// `animus flavor install`, so the drift report and the install plan
+/// cannot disagree.
 fn compute_drift(_project_root: &str, manifest: &FlavorManifest) -> Result<Vec<FlavorDriftEntry>> {
     let install_dir = orchestrator_plugin_host::plugin_install_dir();
     let installed_basenames: std::collections::HashSet<String> = std::fs::read_dir(&install_dir)
@@ -208,25 +209,62 @@ fn compute_drift(_project_root: &str, manifest: &FlavorManifest) -> Result<Vec<F
         .unwrap_or_default();
 
     let mut entries = Vec::new();
-    for (role, section) in [
-        ("workflow_runner", &manifest.workflow_runner),
-        ("queue", &manifest.queue),
-        ("providers", &manifest.providers),
-        ("subjects", &manifest.subjects),
-        ("transports", &manifest.transports),
-        ("ui", &manifest.ui),
-        ("triggers", &manifest.triggers),
-        ("durable_store", &manifest.durable_store),
-        ("memory_store", &manifest.memory_store),
-    ] {
-        for slug in &section.required {
-            let basename = slug.rsplit('/').next().unwrap_or(slug).to_string();
-            entries.push(FlavorDriftEntry {
-                plugin: slug.clone(),
-                role,
-                installed: installed_basenames.contains(&basename),
-            });
-        }
+    for (role, slug) in manifest.required_plugins() {
+        let basename = slug.rsplit('/').next().unwrap_or(&slug).to_string();
+        entries.push(FlavorDriftEntry {
+            plugin: slug.clone(),
+            role,
+            installed: installed_basenames.contains(&basename),
+        });
     }
     Ok(entries)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `animus flavor current` (drift) and `animus flavor install` /
+    /// `animus plugin install-defaults --flavor` must agree on what the
+    /// flavor requires. Both sides call
+    /// [`FlavorManifest::required_plugins`]; this guard asserts the drift
+    /// report's `(plugin, role)` set is exactly that shared required set.
+    #[test]
+    fn drift_report_compares_against_the_shared_required_set() {
+        let manifest: FlavorManifest = toml::from_str(
+            r#"
+schema = "animus.flavor.v1"
+id = "default"
+version = "0.5.0"
+title = "Test"
+description = "Drift fixture."
+
+[providers]
+required = ["launchapp-dev/animus-provider-claude"]
+recommended = ["launchapp-dev/animus-provider-codex"]
+
+[subjects]
+required = ["launchapp-dev/animus-subject-default", "launchapp-dev/animus-subject-requirements"]
+
+[workflow_runner]
+required = ["launchapp-dev/animus-workflow-runner-default"]
+
+[queue]
+required = ["launchapp-dev/animus-queue-default"]
+"#,
+        )
+        .unwrap();
+
+        let drift = compute_drift("/nonexistent-project-root", &manifest).unwrap();
+        let drift_pairs: Vec<(&str, String)> = drift.iter().map(|e| (e.role, e.plugin.clone())).collect();
+        assert_eq!(
+            drift_pairs,
+            manifest.required_plugins(),
+            "flavor-current drift set must equal FlavorManifest::required_plugins (one shared function)"
+        );
+        assert!(
+            !drift.iter().any(|e| e.plugin.contains("codex")),
+            "recommended plugins are not part of the drift comparison set"
+        );
+    }
 }

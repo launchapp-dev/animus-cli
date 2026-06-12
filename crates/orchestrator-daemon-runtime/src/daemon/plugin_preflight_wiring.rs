@@ -218,16 +218,14 @@ fn resolve_flavor_plugins(project_root: &Path) -> (BTreeSet<String>, bool, Optio
     };
     match load_flavor_in(project_root, DEFAULT_FLAVOR_ID) {
         Ok(Some(manifest)) => {
-            // Include `recommended` plugins as well: the v0.5 default
-            // flavor lists e.g. `animus-subject-requirements` under
-            // `subjects.recommended`, but daemon preflight still
-            // requires the `subject_kind:requirement` role to be
-            // covered. A strict `required`-only admit set would filter
-            // the installed recommended backend out of scoped discovery
-            // and leave preflight reporting the role as missing despite
-            // a working install. Recommended plugins are part of the
-            // flavor's curated bundle (see `animus plugin install-defaults
-            // --include-subjects`), so admitting them is the right
+            // Include `recommended` plugins as well: operators who opted
+            // into the recommended set (`animus plugin install-defaults
+            // --include-recommended`) must not have those installed
+            // plugins filtered out of scoped discovery. A strict
+            // `required`-only admit set would leave e.g. an installed
+            // `animus-subject-linear` invisible despite a working
+            // install. Recommended plugins are part of the flavor's
+            // curated bundle, so admitting them is the right
             // default-deny tradeoff.
             let set: BTreeSet<String> =
                 manifest.all_plugin_slugs(true).into_iter().map(|s| normalize_flavor_slug(&s)).collect();
