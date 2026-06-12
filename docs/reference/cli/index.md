@@ -89,10 +89,10 @@ aliases of each other.
 animus
 ├── version                  Show installed animus version
 ├── daemon                   Manage daemon lifecycle and automation settings
-│   ├── start                Start the daemon in detached/background mode
-│   ├── run                  Run the daemon in the current foreground process
+│   ├── start                Start the daemon as a detached background process (always detaches as of v0.6)
+│   ├── run                  Run the daemon in the current foreground process (dev/debug)
 │   ├── stop                 Stop the running daemon
-│   ├── restart              Stop the running daemon (graceful), then start it again with the supplied start flags
+│   ├── restart              Stop the running daemon (graceful), then start it again detached with the supplied start flags
 │   ├── status               Show daemon runtime status
 │   ├── health               Show daemon health diagnostics
 │   ├── pause                Pause daemon scheduling
@@ -383,6 +383,26 @@ The full flag set lives in `crates/orchestrator-cli/src/cli_types/`. This sectio
 documents flags that were added or hardened in v0.4.0 and that callers most often
 need to script against.
 
+### `animus daemon start` vs `animus daemon run`
+
+As of v0.6 the two verbs have a fixed, non-overlapping split:
+
+- `animus daemon start` **always** spawns the daemon as a detached background
+  process and returns immediately. The success output reports the daemon
+  `pid` and the background `log_path` (`~/.animus/<repo-scope>/daemon/daemon.log`).
+  Starting while a daemon is already running is idempotent: it reports the
+  running pid instead of failing.
+- `animus daemon run` **always** runs the daemon in the current foreground
+  process. This is the dev/debug verb; use Ctrl-C to stop. `--once` runs a
+  single scheduler tick and exits.
+
+The legacy `--autonomous` flag is a deprecated, hidden no-op: detached mode
+is now the default and only behavior of `daemon start`, so
+`animus daemon start --autonomous` behaves identically to
+`animus daemon start`. Before v0.6, `daemon start` without `--autonomous`
+silently fell through to the foreground `run` path — that fallthrough was
+removed.
+
 ### `animus daemon start` / `animus daemon run` (plugin preflight)
 
 The daemon runs a plugin preflight on every startup. Default posture is
@@ -418,11 +438,11 @@ heartbeat period even under a burst of event wakes. See
 ### `animus daemon restart`
 
 Stops the running daemon (graceful shutdown, same path as `animus daemon
-stop`), then starts it again. If the daemon is not running, it just starts.
-Accepts every flag `animus daemon start` accepts (`--autonomous`,
-`--auto-install`, `--skip-preflight`, scheduler overrides, ...) — the start
-flags are taken from the restart invocation, not recovered from the previous
-run, so pass `--autonomous` to restart into detached/background mode.
+stop`), then starts it again detached — same default as `animus daemon
+start`. If the daemon is not running, it just starts. Accepts every flag
+`animus daemon start` accepts (`--auto-install`, `--skip-preflight`,
+scheduler overrides, ...) — the start flags are taken from the restart
+invocation, not recovered from the previous run.
 
 | Flag | Description |
 |---|---|

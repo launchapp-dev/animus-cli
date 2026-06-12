@@ -99,13 +99,13 @@ Fix:
 
 ```bash
 animus plugin install-defaults --include-subjects --include-transports
-animus daemon start --autonomous
+animus daemon start
 ```
 
 Or in one shot:
 
 ```bash
-animus daemon start --autonomous --auto-install
+animus daemon start --auto-install
 ```
 
 ### Plugin disabled by supervisor
@@ -134,7 +134,7 @@ Fix path:
 
 ```bash
 animus daemon stop
-animus daemon start --autonomous
+animus daemon start
 ```
 
 ### Workflow blocked
@@ -242,7 +242,7 @@ deprecated and a no-op.
 ### Enable JSON logs
 
 ```bash
-ANIMUS_LOG_FORMAT=json animus daemon start --autonomous
+ANIMUS_LOG_FORMAT=json animus daemon start
 ```
 
 Structured logs ship to `logs/events.jsonl` under the scoped state root.
@@ -326,7 +326,7 @@ animus daemon stop                                  # quiesce writers
 tar czf "$DEST/project-animus.tar.gz" -C /path/to/project .animus
 tar czf "$DEST/scoped-state.tar.gz" -C ~/.animus "$SCOPE"
 tar czf "$DEST/plugins.tar.gz" -C ~/.animus plugins plugins.yaml trusted-signers.yaml 2>/dev/null
-animus daemon start --autonomous
+animus daemon start
 ```
 
 ### Restore
@@ -336,7 +336,7 @@ animus daemon stop
 tar xzf project-animus.tar.gz -C /path/to/project
 tar xzf scoped-state.tar.gz -C ~/.animus
 tar xzf plugins.tar.gz -C ~/.animus
-animus daemon start --autonomous --auto-install     # re-installs plugins if any missing
+animus daemon start --auto-install     # re-installs plugins if any missing
 animus daemon preflight                             # verify
 animus daemon health                                # verify
 ```
@@ -357,7 +357,7 @@ animus daemon stop
 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 animus plugin install-defaults --include-subjects --include-transports
 animus daemon preflight
-animus daemon start --autonomous
+animus daemon start
 ```
 
 For routine plugin updates:
@@ -413,7 +413,7 @@ If `~/.animus/<scope>/state/` is corrupt (rare):
 ```bash
 animus daemon stop
 mv ~/.animus/<scope>/state ~/.animus/<scope>/state.broken-$(date +%s)
-animus daemon start --autonomous            # daemon rebuilds compiled config
+animus daemon start            # daemon rebuilds compiled config
 animus daemon preflight                     # verify
 ```
 
@@ -432,7 +432,7 @@ or uninstall it:
 ```bash
 animus daemon stop
 animus plugin uninstall --name <plugin-name>
-animus daemon start --autonomous
+animus daemon start
 ```
 
 Any phase that targets the removed provider will Block with a hard error pointing at the
@@ -442,13 +442,13 @@ in-tree implementation.
 To disable subject discovery entirely:
 
 ```bash
-ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1 animus daemon start --autonomous
+ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1 animus daemon start
 ```
 
 To skip the trigger supervisor:
 
 ```bash
-ANIMUS_DAEMON_DISABLE_TRIGGERS=1 animus daemon start --autonomous
+ANIMUS_DAEMON_DISABLE_TRIGGERS=1 animus daemon start
 ```
 
 All three kill switches require a daemon restart to take effect and to
@@ -464,7 +464,7 @@ After any non-trivial change (upgrade, plugin install, env update):
 animus --version
 animus plugin list
 animus daemon preflight
-animus daemon start --autonomous
+animus daemon start
 animus daemon health
 animus subject list --kind task
 animus workflow list --limit 5

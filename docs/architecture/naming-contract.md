@@ -20,7 +20,7 @@ Every public surface uses the `animus` name:
 | Surface | Convention | Examples |
 |---|---|---|
 | CLI binary | `animus` | `animus subject next --kind task`, `animus workflow run`, `animus daemon start` |
-| Daemon binary | `animus` (subcommand today; `animusd` reserved) | `animus daemon start --autonomous` |
+| Daemon binary | `animus` (subcommand today; `animusd` reserved) | `animus daemon start` |
 | MCP tool namespace | `animus.*` | `animus.subject.create`, `animus.workflow.run`, `animus.plugin.call` |
 | Environment variables | `ANIMUS_*` | `ANIMUS_CONFIG_DIR`, `ANIMUS_PLUGIN_PATH`, `ANIMUS_DEBUG` |
 | Project-local config dir | `.animus/` | `.animus/config.json`, `.animus/workflows.yaml`, `.animus/plugins/` |

@@ -60,14 +60,14 @@ animus subject create --kind task \
 
 ```bash
 animus subject status --kind task --id task:TASK-001 --status ready
-animus daemon start --autonomous
+animus daemon start
 ```
 
 If your environment is incomplete and you want the daemon to fix missing
 plugins on startup, including the required `workflow_runner` / `queue` roles:
 
 ```bash
-animus daemon start --autonomous --auto-install
+animus daemon start --auto-install
 ```
 
 ## 5. Inspect Progress

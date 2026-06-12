@@ -119,7 +119,7 @@ approval gate stays human-only.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `auto_run_ready`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `skip_runner`, `autonomous`, `auto_install`, `skip_preflight`, `project_root` |
+| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `auto_run_ready`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `skip_runner`, `autonomous` (deprecated no-op; the daemon always starts detached), `auto_install`, `skip_preflight`, `project_root` |
 | `animus.daemon.stop` | Stop the daemon gracefully | `project_root` |
 | `animus.daemon.status` | Check if daemon is running and view basic state | `project_root` |
 | `animus.daemon.health` | Get detailed health metrics (active agents, queue, capacity) | `project_root` |

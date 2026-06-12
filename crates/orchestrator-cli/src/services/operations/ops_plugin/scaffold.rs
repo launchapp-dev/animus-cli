@@ -569,7 +569,7 @@ Restart the daemon to pick up the workflow file change:
 
 ```bash
 animus daemon stop
-animus daemon start --autonomous
+animus daemon start
 ```
 
 ## Debugging

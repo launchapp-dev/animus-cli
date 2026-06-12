@@ -11,7 +11,7 @@ flowchart TB
     --> REQ["animus subject create --kind requirement"]
     --> TASK["animus subject create --kind task"]
     --> READY["animus subject status --kind task --status ready"]
-    --> DAEMON["animus daemon start --autonomous"]
+    --> DAEMON["animus daemon start"]
 
     DAEMON --> LOOP{"Ready subject in queue?"}
     LOOP -->|"yes"| WORKFLOW["Spawn workflow runner"]
@@ -45,7 +45,7 @@ animus subject status --kind task --id task:TASK-001 --status ready
 ### 3. Start the daemon
 
 ```bash
-animus daemon start --autonomous
+animus daemon start
 ```
 
 ### 4. Monitor progress

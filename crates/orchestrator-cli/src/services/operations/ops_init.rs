@@ -1233,7 +1233,7 @@ async fn run_daemon_start_subprocess(project_root: &Path, json: bool) -> Walkthr
     // actionable preflight error rather than boot in a degraded
     // state. `--auto-install` keeps the safety net so any leftover
     // gaps still get filled before the daemon comes up.
-    cmd.args(["daemon", "start", "--autonomous", "--auto-install"]);
+    cmd.args(["daemon", "start", "--auto-install"]);
     cmd.stdin(Stdio::null());
     if json {
         cmd.stdout(Stdio::piped());
@@ -1331,7 +1331,7 @@ fn build_next_steps(
         ));
     }
     if !daemon_step.requested {
-        steps.push("Start the daemon when ready: `animus daemon start --autonomous`".to_string());
+        steps.push("Start the daemon when ready: `animus daemon start`".to_string());
     } else if daemon_step.exit_code != Some(0) {
         steps.push("Daemon start exited non-zero. Check `animus daemon status` and `animus logs tail`.".to_string());
     }

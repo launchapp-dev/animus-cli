@@ -25,7 +25,7 @@ fn read_notification_config_from_pm_config(pm_config: &serde_json::Value) -> ser
 
 use crate::{
     print_ok, print_value, DaemonCommand, DaemonConfigArgs, DaemonEventsArgs, DaemonMetricsArgs, DaemonPreflightArgs,
-    DaemonRestartArgs, DaemonRunArgs, DaemonStartArgs, DaemonStopArgs, DaemonStreamArgs,
+    DaemonRestartArgs, DaemonStartArgs, DaemonStopArgs, DaemonStreamArgs,
 };
 
 mod control_routing;
@@ -728,52 +728,44 @@ async fn handle_daemon_start(args: DaemonStartArgs, project_root: &str, json: bo
     if !json {
         let _ = crate::services::metrics::maybe_prompt_first_run(std::path::Path::new(project_root));
     }
+    // `--autonomous` is a deprecated no-op as of v0.6: `daemon start` always
+    // detaches into the background. `daemon run` is the foreground verb.
+    let _ = args.autonomous;
+    let log_path = autonomous_daemon_log_path(project_root);
     if let Some(existing_pid) = get_daemon_pid(project_root)? {
         if is_process_alive(existing_pid) {
-            if args.autonomous {
-                let _ = set_runtime_paused(project_root, false);
-                return print_value(
-                    serde_json::json!({
-                        "message": "daemon already running",
-                        "autonomous": true,
-                        "daemon_pid": existing_pid,
-                    }),
-                    json,
-                );
-            }
-            return Err(anyhow!(
-                "autonomous daemon is already running (pid {}); stop it before non-autonomous start",
-                existing_pid
-            ));
+            let _ = set_runtime_paused(project_root, false);
+            return print_value(
+                serde_json::json!({
+                    "message": "daemon already running",
+                    "autonomous": true,
+                    "detached": true,
+                    "daemon_pid": existing_pid,
+                    "log_path": log_path.display().to_string(),
+                }),
+                json,
+            );
         }
         let _ = set_daemon_pid(project_root, None);
     }
 
-    if args.autonomous {
-        let daemon_pid = start_autonomous_daemon(project_root, &args).await?;
+    let daemon_pid = start_autonomous_daemon(project_root, &args).await?;
+    if json {
         return print_value(
             serde_json::json!({
-                "message": "daemon started",
+                "message": "daemon started in background",
                 "autonomous": true,
+                "detached": true,
                 "daemon_pid": daemon_pid,
+                "log_path": log_path.display().to_string(),
             }),
             json,
         );
     }
-
-    let _ = set_daemon_pid(project_root, None);
-    handle_daemon_run(
-        DaemonRunArgs {
-            scheduler: args.scheduler,
-            skip_runner: args.skip_runner,
-            once: false,
-            auto_install: args.auto_install,
-            skip_preflight: args.skip_preflight,
-        },
-        project_root,
-        json,
-    )
-    .await
+    println!("daemon started in background (pid {daemon_pid})");
+    println!("logs: {}", log_path.display());
+    println!("note: `animus daemon start` now always detaches; use `animus daemon run` to stay in the foreground.");
+    Ok(())
 }
 
 async fn start_autonomous_daemon(project_root: &str, args: &DaemonStartArgs) -> Result<u32> {

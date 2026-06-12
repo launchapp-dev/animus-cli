@@ -26,7 +26,7 @@ animus plugin install-defaults --include-subjects --include-transports
 # (or `animus plugin update` to bump installed plugins to their latest tags)
 
 # 6. Start the daemon
-animus daemon start --autonomous
+animus daemon start
 
 # 7. Sanity check
 animus daemon health
@@ -66,7 +66,7 @@ It exits non-zero if any required role is unsatisfied, which is handy for script
 if ! animus daemon preflight --json | jq -e '.summary.status == "ok"' >/dev/null; then
   animus plugin install-defaults --include-subjects --include-transports
 fi
-animus daemon start --autonomous
+animus daemon start
 ```
 
 JSON envelope is `animus.daemon.preflight.v1`.
@@ -116,7 +116,7 @@ general shape is:
 ```bash
 animus daemon stop
 ANIMUS_VERSION=v0.4.<previous> curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
-animus daemon start --autonomous
+animus daemon start
 ```
 
 Installed plugins under `~/.animus/plugins/` are not removed by an `animus`

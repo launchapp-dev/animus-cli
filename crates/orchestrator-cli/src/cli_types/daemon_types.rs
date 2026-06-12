@@ -4,14 +4,15 @@ use super::{parse_positive_u64, parse_positive_usize, LogArgs};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum DaemonCommand {
-    /// Start the daemon in detached/background mode.
+    /// Start the daemon as a detached background process.
     Start(DaemonStartArgs),
-    /// Run the daemon in the current foreground process.
+    /// Run the daemon in the current foreground process (dev/debug).
     Run(DaemonRunArgs),
     /// Stop the running daemon.
     Stop(DaemonStopArgs),
-    /// Stop the running daemon (graceful), then start it again with the
-    /// supplied start flags. Starts the daemon even when it is not running.
+    /// Stop the running daemon (graceful), then start it again detached
+    /// with the supplied start flags. Starts the daemon even when it is
+    /// not running.
     Restart(DaemonRestartArgs),
     /// Show daemon runtime status.
     Status,
@@ -113,7 +114,12 @@ pub(crate) struct DaemonStartArgs {
     pub(crate) scheduler: DaemonSchedulerArgs,
     #[arg(long, default_value_t = false, help = "Do not auto-start the runner process.")]
     pub(crate) skip_runner: bool,
-    #[arg(long, default_value_t = false, help = "Run daemon in detached/background mode.")]
+    #[arg(
+        long,
+        hide = true,
+        default_value_t = false,
+        help = "Deprecated no-op: detached/background mode is now the default for `daemon start`. Use `daemon run` for foreground."
+    )]
     pub(crate) autonomous: bool,
     #[arg(
         long,
@@ -131,8 +137,9 @@ pub(crate) struct DaemonStartArgs {
 
 impl DaemonStartArgs {
     /// Start flags used when the restart is initiated programmatically
-    /// (e.g. `animus plugin update --restart-daemon`): detached/background
-    /// mode with every scheduler override left to persisted config.
+    /// (e.g. `animus plugin update --restart-daemon`): every scheduler
+    /// override left to persisted config. `daemon start` always detaches,
+    /// so no detach flag is needed.
     pub(crate) fn detached_defaults() -> Self {
         Self {
             scheduler: DaemonSchedulerArgs {
@@ -147,7 +154,7 @@ impl DaemonStartArgs {
                 phase_timeout_secs: None,
             },
             skip_runner: false,
-            autonomous: true,
+            autonomous: false,
             auto_install: false,
             skip_preflight: false,
         }
