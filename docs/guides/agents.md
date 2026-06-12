@@ -364,9 +364,16 @@ answer without any protocol changes — the round-trip is an MCP tool call
 against the same injected `animus` server:
 
 ```json
-{ "agent_id": "swe", "question": "Migrate in place or copy table?", "options": ["in place", "copy"] }  // animus.agent.ask
+{ "agent_id": "swe", "question": "Migrate in place or copy table?", "options": ["in place", "copy"] }  // animus.agent.ask (flat)
+{ "agent_id": "swe", "questions": [{ "question": "Which sections?", "header": "Sections", "options": [{ "label": "Intro" }, { "label": "Conclusion" }], "multi_select": true }] }  // animus.agent.ask (structured)
 { "agent_id": "swe", "action": "git push --force to main", "tool_name": "git.push" }                   // animus.agent.request_approval
 ```
+
+The structured `questions[]` form (multi-question, multi-select, described
+options) gives codex/gemini/opencode the same expressiveness claude has via its
+native AskUserQuestion channel; the answer returns as
+`{ answers: { "<question>": "<label | [labels] | text>" }, response?, answer }`,
+where `answer` is a readable join kept for back-compat.
 
 Both tools write a pending interaction under
 `~/.animus/REPO_SCOPE/interactions/` and wait in one of two modes, selected

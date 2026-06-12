@@ -263,16 +263,22 @@ pub fn create_question_interaction(
     Ok(record)
 }
 
-/// Create a structured-question interaction from a native SDK
-/// `AskUserQuestion` prompt-tool call. `raw_input` is the verbatim tool
-/// input (preserved on `arguments` so the answer path can echo the original
-/// `questions` array — including fields we do not model, like `preview` —
-/// back in `updatedInput`).
+/// Create a structured-question interaction. Used by both the native SDK
+/// `AskUserQuestion` prompt-tool path (`tool_name = Some("AskUserQuestion")`,
+/// `raw_input` = the verbatim tool input preserved on `arguments` so the
+/// answer path can echo the original `questions` array — including fields we
+/// do not model, like `preview` — back in `updatedInput`) and the
+/// `animus.agent.ask` `questions[]` parity path (`tool_name = None`,
+/// `raw_input` synthesized from the questions). `tool_name = Some("AskUserQuestion")`
+/// is the marker that an answer must follow the SDK `behavior/updatedInput`
+/// contract; `ask`-originated structured questions answer with the plain
+/// `{ answers, response }` shape instead.
 #[allow(clippy::too_many_arguments)]
-pub fn create_native_question_interaction(
+pub fn create_structured_question_interaction(
     project_root: &str,
     agent_id: &str,
     questions: Vec<InteractionQuestion>,
+    tool_name: Option<&str>,
     raw_input: Value,
     suggestions: Option<Value>,
     timeout_secs: Option<u64>,
@@ -298,7 +304,7 @@ pub fn create_native_question_interaction(
         question: Some(flat_question),
         action: None,
         options: Vec::new(),
-        tool_name: Some("AskUserQuestion".to_string()),
+        tool_name: normalize_opt(tool_name),
         arguments: Some(raw_input),
         questions,
         suggestions,
@@ -316,6 +322,33 @@ pub fn create_native_question_interaction(
     };
     write_interaction_atomic(&interaction_path(project_root, &record.id), &record)?;
     Ok(record)
+}
+
+/// Native SDK `AskUserQuestion` prompt-tool path: a thin wrapper over
+/// [`create_structured_question_interaction`] that pins
+/// `tool_name = "AskUserQuestion"` (the SDK-contract marker).
+#[allow(clippy::too_many_arguments)]
+pub fn create_native_question_interaction(
+    project_root: &str,
+    agent_id: &str,
+    questions: Vec<InteractionQuestion>,
+    raw_input: Value,
+    suggestions: Option<Value>,
+    timeout_secs: Option<u64>,
+    workflow_id: Option<&str>,
+    task_id: Option<&str>,
+) -> Result<InteractionRecord> {
+    create_structured_question_interaction(
+        project_root,
+        agent_id,
+        questions,
+        Some("AskUserQuestion"),
+        raw_input,
+        suggestions,
+        timeout_secs,
+        workflow_id,
+        task_id,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
