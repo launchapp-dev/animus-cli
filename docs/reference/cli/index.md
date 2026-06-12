@@ -686,6 +686,13 @@ answer still succeeds and the output carries a `workflow_resume.guidance`
 field with the exact `animus workflow resume <id>` command to run. All
 subcommands support `--json` with the standard `animus.cli.v1` envelope.
 
+When the claude transport wires `animus.agent.request_approval` as the CLI's
+`--permission-prompt-tool`, native tool approvals and `AskUserQuestion`
+clarifying questions land in this same inbox. Native `AskUserQuestion`
+records carry structured `questions[]`; `show` renders them readably
+(numbered questions with options) and `answer` resolves them with `--select`
+and/or `--text`.
+
 ```bash
 animus agent interactions list                # pending only
 animus agent interactions list --all          # include answered + expired
@@ -693,15 +700,23 @@ animus agent interactions show <ID>
 animus agent interactions answer <ID> --text "use the copy table"   # question
 animus agent interactions answer <ID> --allow                       # approval
 animus agent interactions answer <ID> --deny --message "too risky"  # approval
+animus agent interactions answer <ID> --allow --remember            # echo localSettings suggestions
+animus agent interactions answer <ID> --allow --updated-input '{"command":"rm -rf build/sandbox"}'
+animus agent interactions answer <ID> \
+  --select "Format=Summary" --select "2=Introduction,Conclusion" \
+  --text "keep it short"                      # structured (AskUserQuestion)
 ```
 
 | Flag | Description |
 |---|---|
 | `--all` | (`list`) Include answered and expired interactions; default lists pending only |
 | `--agent <AGENT_ID>` | (`list`) Filter by the requesting agent profile id |
-| `--text <TEXT>` | (`answer`) Answer text for a question interaction |
+| `--text <TEXT>` | (`answer`) Answer text for a question interaction. On structured records: maps to the single question's answer (one-question records) or to the freeform `response` (multi-question records, or when `--select` is also given) |
+| `--select <QUESTION=LABEL>` | (`answer`) Answer one structured question: left side is the question text, its header, or its 1-based index; comma-separate labels (or repeat `--select` for the same question) for multi-select. Repeatable |
 | `--allow` / `--deny` | (`answer`) Decision for an approval interaction; exactly one is required |
 | `--message <TEXT>` | (`answer`) Optional message returned to the agent alongside the decision |
+| `--remember` | (`answer`, with `--allow`) Echo the request's localSettings-destination permission suggestions back as `updatedPermissions` |
+| `--updated-input <JSON>` | (`answer`, with `--allow`) Operator-modified tool input echoed as `updatedInput` instead of the original |
 | `--by <NAME>` | (`answer`) Who answered; defaults to `human` |
 
 Answering emits an `interaction_answered` record to the daemon event log

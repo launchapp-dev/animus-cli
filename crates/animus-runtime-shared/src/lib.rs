@@ -47,9 +47,10 @@ pub use evals::{
     EVAL_RESULT_SCHEMA_ID,
 };
 pub use interactions::{
-    answer_interaction, create_approval_interaction, create_question_interaction, expire_interaction,
-    list_interactions, load_interaction, mark_interaction_suspended, InteractionKind, InteractionRecord,
-    InteractionStatus, INTERACTION_ANSWER_ALLOW, INTERACTION_ANSWER_DENY,
+    answer_interaction, apply_interaction_answer, create_approval_interaction, create_native_question_interaction,
+    create_question_interaction, expire_interaction, list_interactions, load_interaction, mark_interaction_suspended,
+    parse_sdk_questions, InteractionAnswer, InteractionKind, InteractionQuestion, InteractionQuestionOption,
+    InteractionRecord, InteractionStatus, INTERACTION_ANSWER_ALLOW, INTERACTION_ANSWER_DENY,
 };
 pub use ipc::*;
 pub use payload_traversal::{

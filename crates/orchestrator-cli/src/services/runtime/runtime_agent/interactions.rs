@@ -1,10 +1,13 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 
-use animus_runtime_shared::{InteractionKind, InteractionRecord, InteractionStatus};
+use animus_runtime_shared::{
+    InteractionAnswer, InteractionKind, InteractionQuestion, InteractionRecord, InteractionStatus,
+};
 use orchestrator_core::{services::ServiceHub, FileServiceHub, WorkflowStatus};
 use orchestrator_daemon_runtime::DaemonEventLog;
 
@@ -28,6 +31,9 @@ pub(crate) fn interaction_summary(record: &InteractionRecord) -> String {
 /// notifier payload is advisory, not an auto-approve).
 pub(crate) fn interaction_answer_command(record: &InteractionRecord) -> String {
     match record.kind {
+        InteractionKind::Question if !record.questions.is_empty() => {
+            format!("animus agent interactions answer {} --select \"1=<label>\" [--text \"<note>\"]", record.id)
+        }
         InteractionKind::Question => {
             format!("animus agent interactions answer {} --text \"<answer>\"", record.id)
         }
@@ -75,6 +81,36 @@ pub(super) fn handle_agent_interactions_list(
     print_value(json!({ "count": interactions.len(), "interactions": interactions }), json_output)
 }
 
+/// Human-readable rendering of a structured-question record for the
+/// non-JSON `animus agent interactions show` output.
+pub(crate) fn render_structured_questions(record: &InteractionRecord) -> String {
+    let mut lines = Vec::new();
+    for (index, question) in record.questions.iter().enumerate() {
+        let header = question.header.as_deref().map(|header| format!(" [{header}]")).unwrap_or_default();
+        let multi = if question.multi_select { " (multi-select)" } else { "" };
+        lines.push(format!("{}.{} {}{}", index + 1, header, question.question, multi));
+        for option in &question.options {
+            match option.description.as_deref() {
+                Some(description) => lines.push(format!("   - {} — {}", option.label, description)),
+                None => lines.push(format!("   - {}", option.label)),
+            }
+        }
+        if let Some(value) = record.answers.as_ref().and_then(|answers| answers.get(&question.question)) {
+            lines.push(format!("   answer: {}", render_answer_value(value)));
+        }
+    }
+    if let Some(response) = record.response.as_deref() {
+        lines.push(format!("response: {response}"));
+    }
+    if record.suggestions.is_some() {
+        lines.push("permission suggestions attached (answer with --remember to echo localSettings rules)".to_string());
+    }
+    if record.status == InteractionStatus::Pending {
+        lines.push(format!("answer with: {}", interaction_answer_command(record)));
+    }
+    lines.join("\n")
+}
+
 pub(super) fn handle_agent_interactions_show(
     args: AgentInteractionsShowArgs,
     project_root: &str,
@@ -82,7 +118,138 @@ pub(super) fn handle_agent_interactions_show(
 ) -> Result<()> {
     let record = animus_runtime_shared::load_interaction(project_root, &args.id)?
         .ok_or_else(|| anyhow!("no interaction with id '{}'", args.id))?;
+    if !json_output && !record.questions.is_empty() {
+        println!("{}\n", render_structured_questions(&record));
+    }
     print_value(record, json_output)
+}
+
+/// Answer inputs shared by the CLI inbox and the management-gated
+/// `animus.interactions.answer` MCP tool.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct AnswerOptions {
+    pub text: Option<String>,
+    pub allow: bool,
+    pub deny: bool,
+    pub message: Option<String>,
+    pub answered_by: Option<String>,
+    /// CLI-style structured selections: `"<question|header|1-based index>=<label[,label...]>"`.
+    pub selects: Vec<String>,
+    /// Direct structured answers (MCP path), keyed by exact question text.
+    pub answers: Option<BTreeMap<String, Value>>,
+    /// Freeform reply not tied to a specific question.
+    pub response: Option<String>,
+    /// Echo the record's localSettings-destination permission suggestions
+    /// back as `updatedPermissions` (allowed approvals only).
+    pub remember: bool,
+    /// Operator-modified tool input echoed as `updatedInput` (allowed
+    /// approvals only).
+    pub updated_input: Option<Value>,
+    /// Explicit `updatedPermissions` payload; wins over `remember`.
+    pub updated_permissions: Option<Value>,
+}
+
+fn render_answer_value(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Array(items) => items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", "),
+        other => other.to_string(),
+    }
+}
+
+/// Resolve one `--select "<question-or-index>=<label[,label...]>"` spec
+/// against the record's structured questions.
+fn resolve_select(questions: &[InteractionQuestion], spec: &str) -> Result<(String, Vec<String>)> {
+    let (selector, labels_raw) = spec
+        .split_once('=')
+        .ok_or_else(|| anyhow!("--select expects \"<question-or-index>=<label[,label...]>\" (got '{spec}')"))?;
+    let selector = selector.trim();
+    let labels: Vec<String> =
+        labels_raw.split(',').map(str::trim).filter(|label| !label.is_empty()).map(ToOwned::to_owned).collect();
+    anyhow::ensure!(!labels.is_empty(), "--select '{spec}' has no label after '='");
+    anyhow::ensure!(!selector.is_empty(), "--select '{spec}' has no question before '='");
+
+    let question = if let Ok(index) = selector.parse::<usize>() {
+        questions
+            .get(index.checked_sub(1).ok_or_else(|| anyhow!("--select question index is 1-based (got 0)"))?)
+            .ok_or_else(|| anyhow!("--select question index {index} is out of range (1..={})", questions.len()))?
+    } else {
+        questions
+            .iter()
+            .find(|candidate| candidate.question == selector)
+            .or_else(|| questions.iter().find(|candidate| candidate.question.eq_ignore_ascii_case(selector)))
+            .or_else(|| {
+                questions.iter().find(|candidate| {
+                    candidate.header.as_deref().is_some_and(|header| header.eq_ignore_ascii_case(selector))
+                })
+            })
+            .ok_or_else(|| anyhow!("--select '{selector}' matches no question text, header, or index"))?
+    };
+    Ok((question.question.clone(), labels))
+}
+
+/// Build the structured `answers` map from CLI `--select` specs plus any
+/// direct `answers` (MCP path), applying the `--text` mapping rules:
+/// single-question records map bare text to that question's answer;
+/// multi-question records route bare text to the freeform `response`.
+fn structured_answer_inputs(
+    record: &InteractionRecord,
+    opts: &AnswerOptions,
+) -> Result<(BTreeMap<String, Value>, Option<String>)> {
+    let mut answers = opts.answers.clone().unwrap_or_default();
+    for spec in &opts.selects {
+        let (question, labels) = resolve_select(&record.questions, spec)?;
+        let merged: Vec<String> = match answers.remove(&question) {
+            Some(Value::String(existing)) => std::iter::once(existing).chain(labels).collect(),
+            Some(Value::Array(existing)) => {
+                existing.into_iter().filter_map(|item| item.as_str().map(ToOwned::to_owned)).chain(labels).collect()
+            }
+            _ => labels,
+        };
+        let value = if merged.len() == 1 {
+            Value::String(merged.into_iter().next().unwrap_or_default())
+        } else {
+            json!(merged)
+        };
+        answers.insert(question, value);
+    }
+    let mut response = opts.response.clone().map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    let text = opts.text.as_deref().map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned);
+    if let Some(text) = text {
+        if answers.is_empty() && response.is_none() && record.questions.len() == 1 {
+            answers.insert(record.questions[0].question.clone(), Value::String(text));
+        } else if response.is_none() {
+            response = Some(text);
+        }
+    }
+    Ok((answers, response))
+}
+
+/// Flat back-compat `answer` summary for a structured answer.
+fn structured_answer_summary(answers: &BTreeMap<String, Value>, response: Option<&str>) -> String {
+    let mut parts: Vec<String> =
+        answers.iter().map(|(question, value)| format!("{question}: {}", render_answer_value(value))).collect();
+    if let Some(response) = response {
+        parts.push(if parts.is_empty() { response.to_string() } else { format!("note: {response}") });
+    }
+    parts.join("; ")
+}
+
+/// Permission suggestions to persist when the answer asks to remember the
+/// decision: the localSettings-destination subset of the record's stored
+/// suggestions (mirrors the SDK "Approve and remember" flow).
+fn remembered_permissions(suggestions: Option<&Value>) -> Option<Value> {
+    let filtered: Vec<Value> = suggestions?
+        .as_array()?
+        .iter()
+        .filter(|entry| entry.get("destination").and_then(Value::as_str) == Some("localSettings"))
+        .cloned()
+        .collect();
+    if filtered.is_empty() {
+        None
+    } else {
+        Some(Value::Array(filtered))
+    }
 }
 
 pub(super) async fn handle_agent_interactions_answer(
@@ -90,14 +257,27 @@ pub(super) async fn handle_agent_interactions_answer(
     project_root: &str,
     json_output: bool,
 ) -> Result<()> {
+    let updated_input = args
+        .updated_input
+        .as_deref()
+        .map(|raw| {
+            serde_json::from_str::<Value>(raw).map_err(|err| anyhow!("--updated-input is not valid JSON: {err}"))
+        })
+        .transpose()?;
     let (record, workflow_resume) = answer_interaction_op_with_resume(
         project_root,
         &args.id,
-        args.text.as_deref(),
-        args.allow,
-        args.deny,
-        args.message.as_deref(),
-        args.answered_by.as_deref(),
+        AnswerOptions {
+            text: args.text,
+            allow: args.allow,
+            deny: args.deny,
+            message: args.message,
+            answered_by: args.answered_by,
+            selects: args.select,
+            remember: args.remember,
+            updated_input,
+            ..AnswerOptions::default()
+        },
     )
     .await?;
     let mut payload = serde_json::to_value(&record)?;
@@ -107,34 +287,80 @@ pub(super) async fn handle_agent_interactions_answer(
     print_value(payload, json_output)
 }
 
-pub(crate) fn answer_interaction_op(
-    project_root: &str,
-    id: &str,
-    text: Option<&str>,
-    allow: bool,
-    deny: bool,
-    message: Option<&str>,
-    answered_by: Option<&str>,
-) -> Result<InteractionRecord> {
+pub(crate) fn answer_interaction_op(project_root: &str, id: &str, opts: &AnswerOptions) -> Result<InteractionRecord> {
     let record = animus_runtime_shared::load_interaction(project_root, id)?
         .ok_or_else(|| anyhow!("no interaction with id '{}'", id))?;
     let answer = match record.kind {
+        InteractionKind::Question if !record.questions.is_empty() => {
+            if opts.allow || opts.deny {
+                return Err(anyhow!("interaction '{}' is a structured question; answer it with --select/--text", id));
+            }
+            let (answers, response) = structured_answer_inputs(&record, opts)?;
+            if answers.is_empty() && response.is_none() {
+                return Err(anyhow!("a structured question answer requires --select and/or --text"));
+            }
+            let summary = structured_answer_summary(&answers, response.as_deref());
+            let answered = animus_runtime_shared::apply_interaction_answer(
+                project_root,
+                id,
+                InteractionAnswer {
+                    answer: summary,
+                    message: opts.message.clone(),
+                    answered_by: opts.answered_by.clone(),
+                    answers: Some(answers).filter(|map| !map.is_empty()),
+                    response,
+                    updated_input: None,
+                    updated_permissions: None,
+                },
+            )?;
+            emit_interaction_event("interaction_answered", project_root, &answered);
+            return Ok(answered);
+        }
         InteractionKind::Question => {
-            if allow || deny {
+            if opts.allow || opts.deny {
                 return Err(anyhow!("interaction '{}' is a question; answer it with --text", id));
             }
-            text.map(str::trim)
+            if !opts.selects.is_empty() {
+                return Err(anyhow!("interaction '{}' has no structured questions; answer it with --text", id));
+            }
+            opts.text
+                .as_deref()
+                .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| anyhow!("a question answer requires --text"))?
                 .to_string()
         }
-        InteractionKind::Approval => match (allow, deny) {
+        InteractionKind::Approval => match (opts.allow, opts.deny) {
             (true, false) => animus_runtime_shared::INTERACTION_ANSWER_ALLOW.to_string(),
             (false, true) => animus_runtime_shared::INTERACTION_ANSWER_DENY.to_string(),
             _ => return Err(anyhow!("an approval answer requires exactly one of --allow or --deny")),
         },
     };
-    let answered = animus_runtime_shared::answer_interaction(project_root, id, &answer, message, answered_by)?;
+    let is_allow = record.kind == InteractionKind::Approval && opts.allow;
+    let updated_permissions = if is_allow {
+        opts.updated_permissions.clone().or_else(|| {
+            if opts.remember {
+                remembered_permissions(record.suggestions.as_ref())
+            } else {
+                None
+            }
+        })
+    } else {
+        None
+    };
+    let answered = animus_runtime_shared::apply_interaction_answer(
+        project_root,
+        id,
+        InteractionAnswer {
+            answer,
+            message: opts.message.clone(),
+            answered_by: opts.answered_by.clone(),
+            answers: None,
+            response: None,
+            updated_input: if is_allow { opts.updated_input.clone() } else { None },
+            updated_permissions,
+        },
+    )?;
     emit_interaction_event("interaction_answered", project_root, &answered);
     Ok(answered)
 }
@@ -145,17 +371,12 @@ pub(crate) fn answer_interaction_op(
 // decision as feedback. Resume failures never fail the answer; they come
 // back in the second tuple slot with the exact `animus workflow resume`
 // command as guidance.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn answer_interaction_op_with_resume(
     project_root: &str,
     id: &str,
-    text: Option<&str>,
-    allow: bool,
-    deny: bool,
-    message: Option<&str>,
-    answered_by: Option<&str>,
+    opts: AnswerOptions,
 ) -> Result<(InteractionRecord, Option<Value>)> {
-    let record = answer_interaction_op(project_root, id, text, allow, deny, message, answered_by)?;
+    let record = answer_interaction_op(project_root, id, &opts)?;
     let workflow_resume = resume_workflow_for_answered_interaction(project_root, &record).await;
     Ok((record, workflow_resume))
 }
@@ -164,6 +385,30 @@ pub(crate) async fn answer_interaction_op_with_resume(
 /// decision to the resumed provider session.
 pub(crate) fn resume_feedback_for_interaction(record: &InteractionRecord) -> String {
     match record.kind {
+        // Structured (native AskUserQuestion) records resume via session
+        // feedback, not via the original prompt-tool result — the CLI
+        // process that asked is gone. Carry the per-question answers
+        // explicitly so the resumed session can act on them.
+        InteractionKind::Question if !record.questions.is_empty() => {
+            let mut lines = Vec::new();
+            let answers = record.answers.clone().unwrap_or_default();
+            if answers.is_empty() {
+                if let Some(response) = record.response.as_deref() {
+                    return format!("The user responded to your questions: {response}. Continue.");
+                }
+            }
+            lines.push("The user answered your questions:".to_string());
+            for question in &record.questions {
+                if let Some(value) = answers.get(&question.question) {
+                    lines.push(format!("- \"{}\": {}", question.question, render_answer_value(value)));
+                }
+            }
+            if let Some(response) = record.response.as_deref() {
+                lines.push(format!("Additional note from the user: {response}"));
+            }
+            lines.push("Continue.".to_string());
+            lines.join("\n")
+        }
         InteractionKind::Question => format!(
             "Answer to your question \"{}\": {}. Continue.",
             record.question.as_deref().unwrap_or(""),
@@ -314,11 +559,19 @@ mod tests {
             None,
         )
         .expect("create question");
-        let err = answer_interaction_op(&project_root, &question.id, None, true, false, None, None)
-            .expect_err("question with --allow");
+        let err = answer_interaction_op(
+            &project_root,
+            &question.id,
+            &AnswerOptions { allow: true, ..AnswerOptions::default() },
+        )
+        .expect_err("question with --allow");
         assert!(err.to_string().contains("--text"));
-        let answered = answer_interaction_op(&project_root, &question.id, Some("main"), false, false, None, None)
-            .expect("answer question");
+        let answered = answer_interaction_op(
+            &project_root,
+            &question.id,
+            &AnswerOptions { text: Some("main".to_string()), ..AnswerOptions::default() },
+        )
+        .expect("answer question");
         assert_eq!(answered.status, InteractionStatus::Answered);
         assert_eq!(answered.answer.as_deref(), Some("main"));
 
@@ -331,17 +584,188 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .expect("create approval");
-        let err = answer_interaction_op(&project_root, &approval.id, None, false, false, None, None)
+        let err = answer_interaction_op(&project_root, &approval.id, &AnswerOptions::default())
             .expect_err("approval without decision");
         assert!(err.to_string().contains("--allow or --deny"));
-        let denied =
-            answer_interaction_op(&project_root, &approval.id, None, false, true, Some("not now"), Some("sami"))
-                .expect("deny approval");
+        let denied = answer_interaction_op(
+            &project_root,
+            &approval.id,
+            &AnswerOptions {
+                deny: true,
+                message: Some("not now".to_string()),
+                answered_by: Some("sami".to_string()),
+                ..AnswerOptions::default()
+            },
+        )
+        .expect("deny approval");
         assert_eq!(denied.answer.as_deref(), Some("deny"));
         assert_eq!(denied.answer_message.as_deref(), Some("not now"));
         assert_eq!(denied.answered_by.as_deref(), Some("sami"));
+    }
+
+    #[test]
+    fn structured_question_select_and_text_mapping() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let project = tempfile::tempdir().expect("project tempdir");
+        let project_root = project.path().to_string_lossy().to_string();
+
+        let raw_input = serde_json::json!({
+            "questions": [
+                {
+                    "question": "How should I format the output?",
+                    "header": "Format",
+                    "options": [{ "label": "Summary" }, { "label": "Detailed" }],
+                    "multiSelect": false
+                },
+                {
+                    "question": "Which sections should I include?",
+                    "header": "Sections",
+                    "options": [{ "label": "Introduction" }, { "label": "Conclusion" }],
+                    "multiSelect": true
+                }
+            ]
+        });
+        let questions = animus_runtime_shared::parse_sdk_questions(&raw_input).expect("parse questions");
+
+        // Selects by header, by index, multi-label, plus a freeform note.
+        let record = animus_runtime_shared::create_native_question_interaction(
+            &project_root,
+            "swe",
+            questions.clone(),
+            raw_input.clone(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("create structured question");
+        let answered = answer_interaction_op(
+            &project_root,
+            &record.id,
+            &AnswerOptions {
+                selects: vec!["Format=Summary".to_string(), "2=Introduction,Conclusion".to_string()],
+                text: Some("Keep it short".to_string()),
+                ..AnswerOptions::default()
+            },
+        )
+        .expect("structured answer");
+        let answers = answered.answers.clone().expect("answers stored");
+        assert_eq!(answers.get("How should I format the output?"), Some(&Value::String("Summary".to_string())));
+        assert_eq!(
+            answers.get("Which sections should I include?"),
+            Some(&serde_json::json!(["Introduction", "Conclusion"]))
+        );
+        assert_eq!(answered.response.as_deref(), Some("Keep it short"));
+        assert!(answered.answer.as_deref().is_some_and(|summary| summary.contains("Summary")));
+
+        // Single-question record: bare --text maps to that question's answer.
+        let single_input = serde_json::json!({
+            "questions": [{ "question": "Proceed?", "options": [{ "label": "Yes" }, { "label": "No" }] }]
+        });
+        let single_questions = animus_runtime_shared::parse_sdk_questions(&single_input).expect("parse single");
+        let single = animus_runtime_shared::create_native_question_interaction(
+            &project_root,
+            "swe",
+            single_questions,
+            single_input,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("create single question");
+        let answered = answer_interaction_op(
+            &project_root,
+            &single.id,
+            &AnswerOptions { text: Some("use jquery".to_string()), ..AnswerOptions::default() },
+        )
+        .expect("bare text on single question");
+        assert_eq!(answered.answers.clone().expect("answers")["Proceed?"], Value::String("use jquery".to_string()));
+        assert!(answered.response.is_none());
+
+        // Multi-question record: bare --text becomes the freeform response.
+        let record = animus_runtime_shared::create_native_question_interaction(
+            &project_root,
+            "swe",
+            questions,
+            raw_input,
+            None,
+            None,
+            None,
+            None,
+        )
+        .expect("create second structured question");
+        let answered = answer_interaction_op(
+            &project_root,
+            &record.id,
+            &AnswerOptions { text: Some("just do whatever is fastest".to_string()), ..AnswerOptions::default() },
+        )
+        .expect("bare text on multi-question");
+        assert!(answered.answers.is_none());
+        assert_eq!(answered.response.as_deref(), Some("just do whatever is fastest"));
+    }
+
+    #[test]
+    fn structured_question_select_errors() {
+        let raw_input = serde_json::json!({
+            "questions": [
+                { "question": "Proceed?", "header": "Go", "options": [{ "label": "Yes" }, { "label": "No" }] }
+            ]
+        });
+        let questions = animus_runtime_shared::parse_sdk_questions(&raw_input).expect("parse questions");
+        assert!(resolve_select(&questions, "Proceed?=Yes").is_ok());
+        assert!(resolve_select(&questions, "go=Yes").is_ok(), "header match is case-insensitive");
+        assert!(resolve_select(&questions, "1=Yes").is_ok());
+        assert!(resolve_select(&questions, "2=Yes").is_err(), "index out of range");
+        assert!(resolve_select(&questions, "0=Yes").is_err(), "index is 1-based");
+        assert!(resolve_select(&questions, "Nope?=Yes").is_err(), "unknown question");
+        assert!(resolve_select(&questions, "Proceed?=").is_err(), "missing label");
+        assert!(resolve_select(&questions, "Proceed?").is_err(), "missing '='");
+    }
+
+    #[test]
+    fn approval_answer_remember_echoes_local_settings_suggestions() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let project = tempfile::tempdir().expect("project tempdir");
+        let project_root = project.path().to_string_lossy().to_string();
+
+        let suggestions = serde_json::json!([
+            { "type": "addRules", "behavior": "allow", "destination": "localSettings" },
+            { "type": "addRules", "behavior": "allow", "destination": "session" }
+        ]);
+        let approval = animus_runtime_shared::create_approval_interaction(
+            &project_root,
+            "swe",
+            "run migration",
+            Some("Bash"),
+            Some(serde_json::json!({ "command": "migrate" })),
+            Some(suggestions.clone()),
+            None,
+            None,
+            None,
+        )
+        .expect("create approval");
+
+        let answered = answer_interaction_op(
+            &project_root,
+            &approval.id,
+            &AnswerOptions {
+                allow: true,
+                remember: true,
+                updated_input: Some(serde_json::json!({ "command": "migrate --safe" })),
+                ..AnswerOptions::default()
+            },
+        )
+        .expect("allow with remember");
+        assert_eq!(answered.updated_input, Some(serde_json::json!({ "command": "migrate --safe" })));
+        assert_eq!(answered.updated_permissions, Some(serde_json::json!([suggestions[0].clone()])));
     }
 
     #[test]
@@ -358,11 +782,17 @@ mod tests {
             options: Vec::new(),
             tool_name: None,
             arguments: None,
+            questions: Vec::new(),
+            suggestions: None,
             timeout_secs: None,
             suspended: false,
             status: InteractionStatus::Answered,
             answer: Some("copy table".to_string()),
             answer_message: None,
+            answers: None,
+            response: None,
+            updated_input: None,
+            updated_permissions: None,
             answered_at: None,
             answered_by: Some("sami".to_string()),
         };
@@ -386,6 +816,58 @@ mod tests {
     }
 
     #[test]
+    fn resume_feedback_carries_structured_answers() {
+        let raw_input = serde_json::json!({
+            "questions": [
+                { "question": "Format?", "header": "Format", "options": [{ "label": "Summary" }], "multiSelect": false },
+                { "question": "Sections?", "header": "Sections", "options": [{ "label": "Intro" }], "multiSelect": true }
+            ]
+        });
+        let questions = animus_runtime_shared::parse_sdk_questions(&raw_input).expect("parse questions");
+        let mut answers = BTreeMap::new();
+        answers.insert("Format?".to_string(), Value::String("Summary".to_string()));
+        answers.insert("Sections?".to_string(), serde_json::json!(["Intro", "Conclusion"]));
+        let mut record = animus_runtime_shared::InteractionRecord {
+            id: "q-3".to_string(),
+            kind: InteractionKind::Question,
+            agent_id: "swe".to_string(),
+            workflow_id: Some("wf-1".to_string()),
+            task_id: None,
+            created_at: "2026-06-11T00:00:00Z".to_string(),
+            question: Some("Format? | Sections?".to_string()),
+            action: None,
+            options: Vec::new(),
+            tool_name: Some("AskUserQuestion".to_string()),
+            arguments: Some(raw_input),
+            questions,
+            suggestions: None,
+            timeout_secs: None,
+            suspended: true,
+            status: InteractionStatus::Answered,
+            answer: Some("Format?: Summary; Sections?: Intro, Conclusion".to_string()),
+            answer_message: None,
+            answers: Some(answers),
+            response: Some("Keep it short".to_string()),
+            updated_input: None,
+            updated_permissions: None,
+            answered_at: None,
+            answered_by: Some("sami".to_string()),
+        };
+        let feedback = resume_feedback_for_interaction(&record);
+        assert!(feedback.contains("The user answered your questions:"), "{feedback}");
+        assert!(feedback.contains("- \"Format?\": Summary"), "{feedback}");
+        assert!(feedback.contains("- \"Sections?\": Intro, Conclusion"), "{feedback}");
+        assert!(feedback.contains("Additional note from the user: Keep it short"), "{feedback}");
+        assert!(feedback.ends_with("Continue."), "{feedback}");
+
+        // Response-only answers render the SDK "The user responded" form.
+        record.answers = None;
+        record.response = Some("just ship it".to_string());
+        let feedback = resume_feedback_for_interaction(&record);
+        assert_eq!(feedback, "The user responded to your questions: just ship it. Continue.");
+    }
+
+    #[test]
     fn interaction_event_payload_carries_summary_and_answer_command() {
         let record = animus_runtime_shared::InteractionRecord {
             id: "q-2".to_string(),
@@ -399,11 +881,17 @@ mod tests {
             options: Vec::new(),
             tool_name: None,
             arguments: None,
+            questions: Vec::new(),
+            suggestions: None,
             timeout_secs: None,
             suspended: false,
             status: InteractionStatus::Pending,
             answer: None,
             answer_message: None,
+            answers: None,
+            response: None,
+            updated_input: None,
+            updated_permissions: None,
             answered_at: None,
             answered_by: None,
         };
@@ -490,6 +978,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
                     Some(&workflow.id),
                     None,
                 )
@@ -499,11 +988,12 @@ mod tests {
                 let (record, resume) = answer_interaction_op_with_resume(
                     &project_root,
                     &approval.id,
-                    None,
-                    true,
-                    false,
-                    Some("go ahead"),
-                    Some("sami"),
+                    AnswerOptions {
+                        allow: true,
+                        message: Some("go ahead".to_string()),
+                        answered_by: Some("sami".to_string()),
+                        ..AnswerOptions::default()
+                    },
                 )
                 .await
                 .expect("answer must succeed even when the resume spawn fails");
@@ -557,11 +1047,7 @@ mod tests {
                 let (record, resume) = answer_interaction_op_with_resume(
                     &project_root,
                     &block_mode.id,
-                    Some("yes"),
-                    false,
-                    false,
-                    None,
-                    None,
+                    AnswerOptions { text: Some("yes".to_string()), ..AnswerOptions::default() },
                 )
                 .await
                 .expect("answer succeeds");
@@ -585,11 +1071,7 @@ mod tests {
                 let (record, resume) = answer_interaction_op_with_resume(
                     &project_root,
                     &suspended.id,
-                    Some("yes"),
-                    false,
-                    false,
-                    None,
-                    None,
+                    AnswerOptions { text: Some("yes".to_string()), ..AnswerOptions::default() },
                 )
                 .await
                 .expect("answer succeeds");

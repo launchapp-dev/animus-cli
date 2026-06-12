@@ -1,10 +1,11 @@
 use super::*;
 use crate::services::runtime::runtime_agent::interactions::{
     answer_interaction_op_with_resume, emit_interaction_event, pause_workflow_for_suspended_interaction,
-    resume_workflow_for_answered_interaction,
+    resume_workflow_for_answered_interaction, AnswerOptions,
 };
-use animus_runtime_shared::{InteractionRecord, InteractionStatus};
+use animus_runtime_shared::{InteractionKind, InteractionRecord, InteractionStatus};
 use orchestrator_config::agent_runtime_config::ApprovalPolicyDecision;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 const DEFAULT_INTERACTION_TIMEOUT_SECS: u64 = 600;
@@ -84,14 +85,33 @@ pub(super) struct AgentAskInput {
     pub(super) wait: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+// The input accepts BOTH shapes:
+// - Voluntary agent escalations: { agent_id, action, tool_name?, arguments?, ... }
+// - The claude CLI's `--permission-prompt-tool` contract, which invokes this
+//   tool with exactly { tool_name, input, tool_use_id? } for every gated tool
+//   call (including the native `AskUserQuestion` tool). For that shape the
+//   identity comes from the server pin and `action` is derived.
+#[derive(Debug, Clone, Default, Deserialize, Serialize, JsonSchema)]
 pub(super) struct AgentRequestApprovalInput {
-    pub(super) agent_id: String,
-    pub(super) action: String,
+    #[serde(default)]
+    pub(super) agent_id: Option<String>,
+    #[serde(default)]
+    pub(super) action: Option<String>,
     #[serde(default)]
     pub(super) tool_name: Option<String>,
+    /// The gated tool's input as passed by the SDK permission-prompt-tool
+    /// contract; echoed back verbatim as `updatedInput` on allow.
+    #[serde(default)]
+    pub(super) input: Option<Value>,
+    /// The SDK's tool-use request id (accepted for contract completeness).
+    #[serde(default)]
+    pub(super) tool_use_id: Option<String>,
     #[serde(default)]
     pub(super) arguments: Option<Value>,
+    /// Optional SDK `PermissionUpdate[]` suggestions; stored on the record and
+    /// echoed back as `updatedPermissions` when answered with remember.
+    #[serde(default)]
+    pub(super) suggestions: Option<Value>,
     #[serde(default)]
     pub(super) timeout_secs: Option<u64>,
     #[serde(default)]
@@ -107,7 +127,7 @@ impl AoMcpServer {
     // (`animus mcp serve --agent-id <id>`, set by the host that injects the
     // server) wins, then the `ANIMUS_MCP_AGENT_ID` env pin, then — only when
     // neither pin is present — the untrusted payload `agent_id`.
-    fn bound_agent_id(&self, payload_agent_id: &str) -> String {
+    fn bound_agent_id(&self, payload_agent_id: Option<&str>) -> String {
         self.pinned_agent_id
             .clone()
             .or_else(|| {
@@ -116,7 +136,10 @@ impl AoMcpServer {
                     .map(|value| value.trim().to_string())
                     .filter(|value| !value.is_empty())
             })
-            .unwrap_or_else(|| payload_agent_id.trim().to_string())
+            .or_else(|| payload_agent_id.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned))
+            // Native prompt-tool calls carry no agent identity at all; fall
+            // back to a generic id so the record is still attributable.
+            .unwrap_or_else(|| "agent".to_string())
     }
 
     // Workflow pin for the blocking interaction tools: the CLI pin
@@ -146,10 +169,18 @@ impl AoMcpServer {
 // untrusted block-mode payload workflow_id can never trigger a resume),
 // pause the bound workflow (best-effort), and hand the agent a pending
 // payload telling it to end its turn.
+//
+// `native` marks calls arriving through the claude CLI's
+// `--permission-prompt-tool` contract: the CLI only understands
+// `behavior: allow|deny` JSON, so the suspend response is emitted as a deny
+// whose message carries the end-your-turn instruction (suspend replaces the
+// SDK `defer` decision; the session resumes with the answer as feedback, not
+// via this tool result).
 async fn suspend_pending_response(
     tool_name: &str,
     project_root: &str,
     record: &InteractionRecord,
+    native: bool,
 ) -> Result<CallToolResult, McpError> {
     let record = match animus_runtime_shared::mark_interaction_suspended(project_root, &record.id) {
         Ok(updated) => updated,
@@ -178,7 +209,102 @@ async fn suspend_pending_response(
     if let (Value::Object(map), Some(resume)) = (&mut payload, late_resume) {
         map.insert("workflow_resume".to_string(), resume);
     }
+    if native {
+        let message = format!(
+            "{SUSPEND_INSTRUCTION} Interaction {} is pending in the Animus inbox; the session resumes with the \
+             human's answer delivered as feedback.",
+            record.id
+        );
+        return Ok(CallToolResult::structured(merge_sdk_fields(tool_name, payload, sdk_deny_fields(&message))));
+    }
     structured_ok(tool_name, payload)
+}
+
+// --- SDK permission-prompt-tool response shapes -------------------------
+//
+// The claude CLI parses the FIRST text content block of this tool's result
+// as JSON and validates it against the SDK permission-result schema:
+//   { "behavior": "allow", "updatedInput": { ... }, "updatedPermissions"?: [...] }
+//   { "behavior": "deny", "message": "..." , "interrupt"?: bool }
+// (verified against claude CLI v2.1.175; unknown keys are stripped, so the
+// legacy `{ tool, result: { decision, ... } }` envelope rides alongside).
+// `CallToolResult::structured` serializes the payload into exactly one text
+// block, which is what the CLI requires.
+
+/// Merge the SDK top-level fields into the legacy `{ tool, result }` envelope.
+fn merge_sdk_fields(tool_name: &str, legacy_result: Value, sdk_fields: Value) -> Value {
+    let mut payload = json!({ "tool": tool_name, "result": legacy_result });
+    if let (Value::Object(map), Value::Object(fields)) = (&mut payload, sdk_fields) {
+        for (key, value) in fields {
+            map.insert(key, value);
+        }
+    }
+    payload
+}
+
+fn sdk_allow_fields(updated_input: Value, updated_permissions: Option<Value>) -> Value {
+    let mut fields = json!({ "behavior": "allow", "updatedInput": updated_input });
+    if let (Value::Object(map), Some(permissions)) = (&mut fields, updated_permissions) {
+        map.insert("updatedPermissions".to_string(), permissions);
+    }
+    fields
+}
+
+fn sdk_deny_fields(message: &str) -> Value {
+    json!({ "behavior": "deny", "message": message })
+}
+
+/// SDK `updatedInput` for an answered native `AskUserQuestion` interaction:
+/// `{ questions: <original array>, answers: { <question text>: <label | [labels] | free text> }, response? }`.
+fn ask_user_question_updated_input(record: &InteractionRecord) -> Value {
+    let questions = record
+        .arguments
+        .as_ref()
+        .and_then(|arguments| arguments.get("questions"))
+        .cloned()
+        .unwrap_or_else(|| serde_json::to_value(&record.questions).unwrap_or_else(|_| json!([])));
+    let mut updated = json!({
+        "questions": questions,
+        "answers": record.answers.clone().unwrap_or_default(),
+    });
+    if let (Value::Object(map), Some(response)) = (&mut updated, record.response.as_deref()) {
+        map.insert("response".to_string(), json!(response));
+    }
+    updated
+}
+
+/// Build the full response payload for an answered interaction parked on by
+/// the blocking `animus.agent.request_approval` tool.
+fn sdk_answered_payload(tool_name: &str, record: &InteractionRecord) -> Value {
+    if record.kind == InteractionKind::Question && !record.questions.is_empty() {
+        let legacy = json!({
+            "id": record.id,
+            "answer": record.answer,
+            "answers": record.answers,
+            "response": record.response,
+            "answered_by": record.answered_by,
+            "source": "human",
+        });
+        return merge_sdk_fields(tool_name, legacy, sdk_allow_fields(ask_user_question_updated_input(record), None));
+    }
+    let legacy = json!({
+        "id": record.id,
+        "decision": record.answer,
+        "message": record.answer_message,
+        "answered_by": record.answered_by,
+        "source": "human",
+    });
+    if record.answer.as_deref() == Some(animus_runtime_shared::INTERACTION_ANSWER_ALLOW) {
+        let updated_input =
+            record.updated_input.clone().or_else(|| record.arguments.clone()).unwrap_or_else(|| json!({}));
+        merge_sdk_fields(tool_name, legacy, sdk_allow_fields(updated_input, record.updated_permissions.clone()))
+    } else {
+        let message = record
+            .answer_message
+            .clone()
+            .unwrap_or_else(|| format!("denied by {}", record.answered_by.as_deref().unwrap_or("human")));
+        merge_sdk_fields(tool_name, legacy, sdk_deny_fields(&message))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
@@ -204,6 +330,26 @@ pub(super) struct InteractionsAnswerInput {
     pub(super) message: Option<String>,
     #[serde(default)]
     pub(super) answered_by: Option<String>,
+    /// Structured per-question answers for native AskUserQuestion records,
+    /// keyed by exact question text (string, or array of labels for
+    /// multi-select).
+    #[serde(default)]
+    pub(super) answers: Option<BTreeMap<String, Value>>,
+    /// Freeform reply that is not an answer to any specific question.
+    #[serde(default)]
+    pub(super) response: Option<String>,
+    /// Operator-modified tool input echoed as `updatedInput` on an allowed
+    /// approval (defaults to the original input).
+    #[serde(default)]
+    pub(super) updated_input: Option<Value>,
+    /// Explicit SDK `PermissionUpdate[]` echoed as `updatedPermissions` on an
+    /// allowed approval; wins over `remember`.
+    #[serde(default)]
+    pub(super) updated_permissions: Option<Value>,
+    /// Echo the record's localSettings-destination permission suggestions
+    /// back as `updatedPermissions` (allowed approvals only).
+    #[serde(default)]
+    pub(super) remember: Option<bool>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
@@ -281,7 +427,7 @@ impl AoMcpServer {
     async fn ao_agent_ask(&self, params: Parameters<AgentAskInput>) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let project_root = self.default_project_root.clone();
-        let agent_id = self.bound_agent_id(&input.agent_id);
+        let agent_id = self.bound_agent_id(Some(&input.agent_id));
         let workflow_pinned = self.workflow_pin().is_some();
         let workflow_id = self.bound_workflow_id(input.workflow_id.as_deref());
         let wait_mode = resolve_wait_mode(workflow_pinned, input.wait.as_deref(), "animus.agent.ask");
@@ -302,7 +448,7 @@ impl AoMcpServer {
         emit_interaction_event("interaction_created", &project_root, &created);
 
         if wait_mode == InteractionWaitMode::Suspend {
-            return suspend_pending_response("animus.agent.ask", &project_root, &created).await;
+            return suspend_pending_response("animus.agent.ask", &project_root, &created, false).await;
         }
 
         match wait_for_answer(&project_root, &created.id, timeout_secs).await {
@@ -334,24 +480,90 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.agent.request_approval",
-        description = "Request human approval for a sensitive action and WAIT for the decision (block-mode timeout denies — fail closed). Purpose: Gate dangerous operations behind a human decision; the agent profile's approval_policy can auto-allow or auto-deny without escalating (auto_deny patterns win, matched against tool_name when present, else action, with `*` glob semantics). Always operates on the server's own project scope; the policy profile comes from agent_id, which is ignored when the server pins ANIMUS_MCP_AGENT_ID. Wait modes: \"block\" parks the call until decided or timeout (default for ad-hoc runs); \"suspend\" returns { status: \"pending\", interaction_id, instruction } immediately after the policy check, pauses the bound workflow, and the session resumes with the decision (default when the server pins a workflow via --workflow-id / ANIMUS_MCP_WORKFLOW_ID; suspend->block override allowed, block->suspend is ignored). Params: agent_id, action (human-readable description), optional tool_name, arguments, timeout_secs (default 600, max 3600), workflow_id (ignored when the server pins a workflow), task_id, wait. Returns: { decision: \"allow\"|\"deny\", message?, answered_by?, source: \"policy\"|\"human\"|\"timeout\" }, or the pending payload in suspend mode. Example: {\"agent_id\": \"swe\", \"action\": \"git push --force to main\", \"tool_name\": \"git.push\"}.",
+        description = "Request human approval for a sensitive action and WAIT for the decision (block-mode timeout denies — fail closed). Purpose: Gate dangerous operations behind a human decision; the agent profile's approval_policy can auto-allow or auto-deny without escalating (auto_deny patterns win, matched against tool_name when present, else action, with `*` glob semantics). Also serves as the claude CLI's --permission-prompt-tool: the CLI invokes it with { tool_name, input, tool_use_id } for every gated tool call, and the result's text content is the SDK permission payload — { behavior: \"allow\", updatedInput: <original or modified input>, updatedPermissions? } or { behavior: \"deny\", message } — with the legacy { tool, result: { decision, source, ... } } envelope alongside. When tool_name is \"AskUserQuestion\" the input's questions[] become a structured Question interaction in the inbox, and the allow response carries updatedInput { questions, answers: { <question text>: <label | [labels] | free text> }, response? }. Always operates on the server's own project scope; the policy profile comes from agent_id, which is ignored when the server pins ANIMUS_MCP_AGENT_ID. Wait modes: \"block\" parks the call until decided or timeout (default for ad-hoc runs); \"suspend\" pauses the bound workflow and returns immediately — { status: \"pending\", interaction_id, instruction } for voluntary calls, behavior \"deny\" with the end-your-turn instruction for native prompt-tool calls (the session resumes with the answer as feedback; default when the server pins a workflow via --workflow-id / ANIMUS_MCP_WORKFLOW_ID; suspend->block override allowed, block->suspend is ignored). Params: agent_id, action (derived from tool_name when omitted), tool_name, input (SDK contract) or arguments, tool_use_id, suggestions (SDK PermissionUpdate[]), timeout_secs (default 600, max 3600), workflow_id (ignored when the server pins a workflow), task_id, wait. Example: {\"agent_id\": \"swe\", \"action\": \"git push --force to main\", \"tool_name\": \"git.push\"}.",
         input_schema = ao_schema_for_type::<AgentRequestApprovalInput>()
     )]
     async fn ao_agent_request_approval(
         &self,
         params: Parameters<AgentRequestApprovalInput>,
     ) -> Result<CallToolResult, McpError> {
+        const TOOL: &str = "animus.agent.request_approval";
         let input = params.0;
-        let agent_id = self.bound_agent_id(&input.agent_id);
-        if agent_id.is_empty() {
-            return structured_err("animus.agent.request_approval", "agent_id must not be empty".to_string());
-        }
-        let action = input.action.trim().to_string();
-        if action.is_empty() {
-            return structured_err("animus.agent.request_approval", "action must not be empty".to_string());
-        }
+        let agent_id = self.bound_agent_id(input.agent_id.as_deref());
         let project_root = self.default_project_root.clone();
         let tool_name = normalize_non_empty(input.tool_name);
+        // Native = invoked by the claude CLI as its --permission-prompt-tool
+        // ({ tool_name, input, tool_use_id }); the response must follow the
+        // SDK behavior:allow/deny contract even for suspend.
+        let native = input.input.is_some();
+        // The gated tool's original input: the SDK `input` key wins, the
+        // voluntary `arguments` key is the fallback. Echoed as `updatedInput`
+        // on allow (pass-through), so it is stored on the record.
+        let original_input = input.input.or(input.arguments);
+
+        let workflow_pinned = self.workflow_pin().is_some();
+        let workflow_id = self.bound_workflow_id(input.workflow_id.as_deref());
+        let wait_mode = resolve_wait_mode(workflow_pinned, input.wait.as_deref(), TOOL);
+        let timeout_secs = effective_timeout_secs(input.timeout_secs);
+
+        // Native AskUserQuestion calls are clarifying questions, not
+        // approvals: parse the structured questions, surface them in the
+        // inbox as a Question record, and answer with the SDK
+        // `{ questions, answers, response? }` updatedInput shape. The
+        // approval policy never applies here (there is nothing to allow or
+        // deny — only answers to collect).
+        if tool_name.as_deref() == Some("AskUserQuestion") {
+            let raw_input = original_input.unwrap_or_else(|| json!({}));
+            let questions = match animus_runtime_shared::parse_sdk_questions(&raw_input) {
+                Ok(questions) => questions,
+                Err(err) => return structured_err(TOOL, err.to_string()),
+            };
+            let created = match animus_runtime_shared::create_native_question_interaction(
+                &project_root,
+                &agent_id,
+                questions,
+                raw_input,
+                input.suggestions,
+                Some(timeout_secs),
+                workflow_id.as_deref(),
+                input.task_id.as_deref(),
+            ) {
+                Ok(record) => record,
+                Err(err) => return structured_err(TOOL, err.to_string()),
+            };
+            emit_interaction_event("interaction_created", &project_root, &created);
+
+            if wait_mode == InteractionWaitMode::Suspend {
+                return suspend_pending_response(TOOL, &project_root, &created, native).await;
+            }
+            return match wait_for_answer(&project_root, &created.id, timeout_secs).await {
+                InteractionWait::Answered(record) => {
+                    Ok(CallToolResult::structured(sdk_answered_payload(TOOL, &record)))
+                }
+                InteractionWait::TimedOut => {
+                    if let Ok(Some(expired)) = animus_runtime_shared::load_interaction(&project_root, &created.id) {
+                        emit_interaction_event("interaction_expired", &project_root, &expired);
+                    }
+                    let message = format!(
+                        "no human answered within {timeout_secs}s. Proceed with your best judgment, state the assumption you made, and continue."
+                    );
+                    Ok(CallToolResult::structured(merge_sdk_fields(
+                        TOOL,
+                        json!({ "id": created.id, "source": "timeout", "message": message, "timed_out": true }),
+                        sdk_deny_fields(&message),
+                    )))
+                }
+                InteractionWait::Lost(message) => structured_err(TOOL, message),
+            };
+        }
+
+        let action = match normalize_non_empty(input.action) {
+            Some(action) => action,
+            None => match tool_name.as_deref() {
+                Some(tool) => format!("use tool {tool}"),
+                None => return structured_err(TOOL, "action (or tool_name) must not be empty".to_string()),
+            },
+        };
 
         let runtime_config = orchestrator_core::agent_runtime_config::load_agent_runtime_config_or_default(
             std::path::Path::new(&project_root),
@@ -362,74 +574,60 @@ impl AoMcpServer {
             let subject = tool_name.as_deref().unwrap_or(&action);
             match policy.evaluate(subject) {
                 ApprovalPolicyDecision::Allow => {
-                    return structured_ok(
-                        "animus.agent.request_approval",
+                    return Ok(CallToolResult::structured(merge_sdk_fields(
+                        TOOL,
                         json!({ "decision": "allow", "source": "policy" }),
-                    );
+                        sdk_allow_fields(original_input.unwrap_or_else(|| json!({})), None),
+                    )));
                 }
                 ApprovalPolicyDecision::Deny => {
-                    return structured_ok(
-                        "animus.agent.request_approval",
-                        json!({
-                            "decision": "deny",
-                            "source": "policy",
-                            "message": "denied by the agent profile's approval_policy",
-                        }),
-                    );
+                    let message = "denied by the agent profile's approval_policy";
+                    return Ok(CallToolResult::structured(merge_sdk_fields(
+                        TOOL,
+                        json!({ "decision": "deny", "source": "policy", "message": message }),
+                        sdk_deny_fields(message),
+                    )));
                 }
                 ApprovalPolicyDecision::Ask => {}
             }
         }
 
-        let workflow_pinned = self.workflow_pin().is_some();
-        let workflow_id = self.bound_workflow_id(input.workflow_id.as_deref());
-        let wait_mode = resolve_wait_mode(workflow_pinned, input.wait.as_deref(), "animus.agent.request_approval");
-        let timeout_secs = effective_timeout_secs(input.timeout_secs);
         let created = match animus_runtime_shared::create_approval_interaction(
             &project_root,
             &agent_id,
             &action,
             tool_name.as_deref(),
-            input.arguments,
+            original_input,
+            input.suggestions,
             Some(timeout_secs),
             workflow_id.as_deref(),
             input.task_id.as_deref(),
         ) {
             Ok(record) => record,
-            Err(err) => return structured_err("animus.agent.request_approval", err.to_string()),
+            Err(err) => return structured_err(TOOL, err.to_string()),
         };
         emit_interaction_event("interaction_created", &project_root, &created);
 
         if wait_mode == InteractionWaitMode::Suspend {
-            return suspend_pending_response("animus.agent.request_approval", &project_root, &created).await;
+            return suspend_pending_response(TOOL, &project_root, &created, native).await;
         }
 
         match wait_for_answer(&project_root, &created.id, timeout_secs).await {
-            InteractionWait::Answered(record) => structured_ok(
-                "animus.agent.request_approval",
-                json!({
-                    "id": record.id,
-                    "decision": record.answer,
-                    "message": record.answer_message,
-                    "answered_by": record.answered_by,
-                    "source": "human",
-                }),
-            ),
+            InteractionWait::Answered(record) => Ok(CallToolResult::structured(sdk_answered_payload(TOOL, &record))),
             InteractionWait::TimedOut => {
                 if let Ok(Some(expired)) = animus_runtime_shared::load_interaction(&project_root, &created.id) {
                     emit_interaction_event("interaction_expired", &project_root, &expired);
                 }
-                structured_ok(
-                    "animus.agent.request_approval",
-                    json!({
-                        "id": created.id,
-                        "decision": "deny",
-                        "source": "timeout",
-                        "message": format!("no human decided within {timeout_secs}s; denied (fail closed). Do not perform the action."),
-                    }),
-                )
+                let message = format!(
+                    "no human decided within {timeout_secs}s; denied (fail closed). Do not perform the action."
+                );
+                Ok(CallToolResult::structured(merge_sdk_fields(
+                    TOOL,
+                    json!({ "id": created.id, "decision": "deny", "source": "timeout", "message": message }),
+                    sdk_deny_fields(&message),
+                )))
             }
-            InteractionWait::Lost(message) => structured_err("animus.agent.request_approval", message),
+            InteractionWait::Lost(message) => structured_err(TOOL, message),
         }
     }
 }
@@ -475,7 +673,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.interactions.answer",
-        description = "Answer a pending interaction (non-blocking; unblocks the agent parked on it). Purpose: Resolve a question with `text`, or an approval with `decision` (\"allow\" or \"deny\") plus optional `message`. Exactly one answered_by wins a race; later answers fail with a not-pending error. When the record carries a workflow_id and that workflow is suspended, the answer triggers the detached-runner resume with the decision as feedback; a resume failure never fails the answer and surfaces a `workflow_resume.guidance` command instead. Params: id, text?, decision?, message?, answered_by? (default \"human\"), project_root. Returns: the updated interaction record (plus `workflow_resume` when a resume was attempted). Example question: {\"id\": \"<uuid>\", \"text\": \"use the copy-table migration\"}. Example approval: {\"id\": \"<uuid>\", \"decision\": \"deny\", \"message\": \"too risky\"}.",
+        description = "Answer a pending interaction (non-blocking; unblocks the agent parked on it). Purpose: Resolve a question with `text`, a structured (AskUserQuestion) question with `answers` keyed by exact question text (string, or array of labels for multi-select) and/or a freeform `response`, or an approval with `decision` (\"allow\" or \"deny\") plus optional `message`. Allowed approvals may carry `updated_input` (operator-modified tool input echoed as updatedInput), explicit `updated_permissions`, or `remember: true` (echoes the record's localSettings-destination suggestions as updatedPermissions). Exactly one answered_by wins a race; later answers fail with a not-pending error. When the record carries a workflow_id and that workflow is suspended, the answer triggers the detached-runner resume with the decision as feedback; a resume failure never fails the answer and surfaces a `workflow_resume.guidance` command instead. Params: id, text?, decision?, message?, answers?, response?, updated_input?, updated_permissions?, remember?, answered_by? (default \"human\"), project_root. Returns: the updated interaction record (plus `workflow_resume` when a resume was attempted). Example question: {\"id\": \"<uuid>\", \"text\": \"use the copy-table migration\"}. Example structured: {\"id\": \"<uuid>\", \"answers\": {\"Which sections?\": [\"Intro\", \"Conclusion\"]}}. Example approval: {\"id\": \"<uuid>\", \"decision\": \"deny\", \"message\": \"too risky\"}.",
         input_schema = ao_schema_for_type::<InteractionsAnswerInput>()
     )]
     async fn ao_interactions_answer(
@@ -499,11 +697,19 @@ impl AoMcpServer {
         match answer_interaction_op_with_resume(
             &project_root,
             &input.id,
-            input.text.as_deref(),
-            allow,
-            deny,
-            input.message.as_deref(),
-            input.answered_by.as_deref(),
+            AnswerOptions {
+                text: input.text,
+                allow,
+                deny,
+                message: input.message,
+                answered_by: input.answered_by,
+                selects: Vec::new(),
+                answers: input.answers,
+                response: input.response,
+                remember: input.remember.unwrap_or(false),
+                updated_input: input.updated_input,
+                updated_permissions: input.updated_permissions,
+            },
         )
         .await
         {
@@ -720,10 +926,13 @@ phases:
 
             let allowed = server
                 .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
-                    agent_id: "swe".to_string(),
-                    action: "run the test suite".to_string(),
+                    agent_id: Some("swe".to_string()),
+                    action: Some("run the test suite".to_string()),
                     tool_name: Some("cargo test".to_string()),
                     arguments: None,
+                    input: None,
+                    tool_use_id: None,
+                    suggestions: None,
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
@@ -737,10 +946,13 @@ phases:
 
             let denied = server
                 .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
-                    agent_id: "swe".to_string(),
-                    action: "force push".to_string(),
+                    agent_id: Some("swe".to_string()),
+                    action: Some("force push".to_string()),
                     tool_name: Some("git.push --force".to_string()),
                     arguments: None,
+                    input: None,
+                    tool_use_id: None,
+                    suggestions: None,
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
@@ -754,10 +966,13 @@ phases:
 
             let default_denied = server
                 .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
-                    agent_id: "swe".to_string(),
-                    action: "anything else".to_string(),
+                    agent_id: Some("swe".to_string()),
+                    action: Some("anything else".to_string()),
                     tool_name: None,
                     arguments: None,
+                    input: None,
+                    tool_use_id: None,
+                    suggestions: None,
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
@@ -808,10 +1023,13 @@ phases:
 
                 let result = server
                     .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
-                        agent_id: "permissive".to_string(),
-                        action: "delete everything".to_string(),
+                        agent_id: Some("permissive".to_string()),
+                        action: Some("delete everything".to_string()),
                         tool_name: None,
                         arguments: None,
+                        input: None,
+                        tool_use_id: None,
+                        suggestions: None,
                         timeout_secs: Some(1),
                         workflow_id: None,
                         task_id: None,
@@ -864,10 +1082,13 @@ phases:
 
                 let result = server
                     .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
-                        agent_id: "permissive".to_string(),
-                        action: "delete everything".to_string(),
+                        agent_id: Some("permissive".to_string()),
+                        action: Some("delete everything".to_string()),
                         tool_name: None,
                         arguments: None,
+                        input: None,
+                        tool_use_id: None,
+                        suggestions: None,
                         timeout_secs: Some(1),
                         workflow_id: None,
                         task_id: None,
@@ -895,10 +1116,13 @@ phases:
 
             let result = server
                 .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
-                    agent_id: "swe".to_string(),
-                    action: "drop the production database".to_string(),
+                    agent_id: Some("swe".to_string()),
+                    action: Some("drop the production database".to_string()),
                     tool_name: Some("Bash".to_string()),
                     arguments: Some(serde_json::json!({ "command": "dropdb prod" })),
+                    input: None,
+                    tool_use_id: None,
+                    suggestions: None,
                     timeout_secs: Some(1),
                     workflow_id: None,
                     task_id: None,
@@ -934,6 +1158,11 @@ phases:
                                 decision: Some("allow".to_string()),
                                 message: Some("go ahead".to_string()),
                                 answered_by: Some("sami".to_string()),
+                                answers: None,
+                                response: None,
+                                updated_input: None,
+                                updated_permissions: None,
+                                remember: None,
                                 project_root: Some(answer_root.clone()),
                             }))
                             .await
@@ -947,10 +1176,13 @@ phases:
 
             let result = server
                 .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
-                    agent_id: "swe".to_string(),
-                    action: "rotate the API keys".to_string(),
+                    agent_id: Some("swe".to_string()),
+                    action: Some("rotate the API keys".to_string()),
                     tool_name: None,
                     arguments: None,
+                    input: None,
+                    tool_use_id: None,
+                    suggestions: None,
                     timeout_secs: Some(10),
                     workflow_id: None,
                     task_id: None,
@@ -1006,6 +1238,11 @@ phases:
                     decision: Some("maybe".to_string()),
                     message: None,
                     answered_by: None,
+                    answers: None,
+                    response: None,
+                    updated_input: None,
+                    updated_permissions: None,
+                    remember: None,
                     project_root: None,
                 }))
                 .await
@@ -1019,6 +1256,11 @@ phases:
                     decision: None,
                     message: None,
                     answered_by: None,
+                    answers: None,
+                    response: None,
+                    updated_input: None,
+                    updated_permissions: None,
+                    remember: None,
                     project_root: None,
                 }))
                 .await
@@ -1126,10 +1368,13 @@ phases:
 
                 let result = server
                     .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
-                        agent_id: "swe".to_string(),
-                        action: "rotate the API keys".to_string(),
+                        agent_id: Some("swe".to_string()),
+                        action: Some("rotate the API keys".to_string()),
                         tool_name: None,
                         arguments: None,
+                        input: None,
+                        tool_use_id: None,
+                        suggestions: None,
                         timeout_secs: Some(600),
                         workflow_id: None,
                         task_id: None,
@@ -1205,6 +1450,424 @@ phases:
         });
     }
 
+    /// Parse the SDK permission payload exactly as the claude CLI does:
+    /// take the FIRST text content block of the tool result and JSON-parse
+    /// its text (verified against claude CLI v2.1.175).
+    fn sdk_text_payload(result: &rmcp::model::CallToolResult) -> Value {
+        assert_eq!(result.content.len(), 1, "SDK contract requires a single text content block");
+        let text = result.content[0].raw.as_text().expect("first content block must be text").text.clone();
+        serde_json::from_str(&text).expect("content text must be valid JSON")
+    }
+
+    // Golden conformance: a native prompt-tool approval ({tool_name, input,
+    // tool_use_id}) answered allow must emit exactly
+    // {"behavior":"allow","updatedInput":<original input>} at the top level
+    // of the single text block, with the legacy envelope alongside.
+    #[test]
+    fn native_approval_allow_emits_sdk_contract_with_input_passthrough() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+            let original_input = serde_json::json!({ "command": "rm -rf build", "timeout": 5000 });
+
+            let answer_root = project_root.clone();
+            let answerer = tokio::spawn(async move {
+                loop {
+                    let pending =
+                        animus_runtime_shared::list_interactions(&answer_root, false, None).expect("list pending");
+                    if let Some(record) = pending.first() {
+                        animus_runtime_shared::answer_interaction(
+                            &answer_root,
+                            &record.id,
+                            "allow",
+                            None,
+                            Some("sami"),
+                        )
+                        .expect("answer allow");
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+
+            let result = server
+                .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                    tool_name: Some("Bash".to_string()),
+                    input: Some(original_input.clone()),
+                    tool_use_id: Some("toolu_123".to_string()),
+                    timeout_secs: Some(10),
+                    ..AgentRequestApprovalInput::default()
+                }))
+                .await
+                .expect("approval should not error");
+            answerer.await.expect("answerer task");
+            assert_ne!(result.is_error, Some(true));
+
+            let payload = sdk_text_payload(&result);
+            assert_eq!(payload.pointer("/behavior").and_then(Value::as_str), Some("allow"));
+            assert_eq!(
+                payload.pointer("/updatedInput"),
+                Some(&original_input),
+                "allow must pass the original input through"
+            );
+            assert!(payload.pointer("/updatedPermissions").is_none());
+            // Legacy envelope rides alongside (unknown keys are stripped by
+            // the CLI's schema).
+            assert_eq!(payload.pointer("/result/decision").and_then(Value::as_str), Some("allow"));
+            assert_eq!(payload.pointer("/result/source").and_then(Value::as_str), Some("human"));
+            assert_eq!(payload.pointer("/tool").and_then(Value::as_str), Some("animus.agent.request_approval"));
+        });
+    }
+
+    // Golden conformance: deny answers and block-mode timeouts must emit
+    // {"behavior":"deny","message":<string>}.
+    #[test]
+    fn native_approval_deny_and_timeout_emit_sdk_deny() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+
+            // Timeout path (fail closed).
+            let result = server
+                .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                    tool_name: Some("Bash".to_string()),
+                    input: Some(serde_json::json!({ "command": "dropdb prod" })),
+                    timeout_secs: Some(1),
+                    ..AgentRequestApprovalInput::default()
+                }))
+                .await
+                .expect("approval should not error");
+            assert_ne!(result.is_error, Some(true), "timeout deny is a structured success payload");
+            let payload = sdk_text_payload(&result);
+            assert_eq!(payload.pointer("/behavior").and_then(Value::as_str), Some("deny"));
+            assert!(payload.pointer("/message").and_then(Value::as_str).is_some_and(|m| m.contains("fail closed")));
+            assert_eq!(payload.pointer("/result/source").and_then(Value::as_str), Some("timeout"));
+
+            // Human deny path.
+            let answer_root = project_root.clone();
+            let answerer = tokio::spawn(async move {
+                loop {
+                    let pending =
+                        animus_runtime_shared::list_interactions(&answer_root, false, None).expect("list pending");
+                    if let Some(record) = pending.first() {
+                        animus_runtime_shared::answer_interaction(
+                            &answer_root,
+                            &record.id,
+                            "deny",
+                            Some("too risky"),
+                            Some("sami"),
+                        )
+                        .expect("answer deny");
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+            let result = server
+                .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                    tool_name: Some("Bash".to_string()),
+                    input: Some(serde_json::json!({ "command": "dropdb prod" })),
+                    timeout_secs: Some(10),
+                    ..AgentRequestApprovalInput::default()
+                }))
+                .await
+                .expect("approval should not error");
+            answerer.await.expect("answerer task");
+            let payload = sdk_text_payload(&result);
+            assert_eq!(payload.pointer("/behavior").and_then(Value::as_str), Some("deny"));
+            assert_eq!(payload.pointer("/message").and_then(Value::as_str), Some("too risky"));
+            assert!(payload.pointer("/updatedInput").is_none(), "deny carries no updatedInput");
+        });
+    }
+
+    // Golden conformance: a native AskUserQuestion call surfaces a structured
+    // Question record (with notifier events) and the answer emits
+    // {"behavior":"allow","updatedInput":{questions:<original>,answers:{...},response?}}.
+    #[test]
+    fn native_ask_user_question_round_trips_sdk_answer_shape() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+            let raw_input = serde_json::json!({
+                "questions": [
+                    {
+                        "question": "How should I format the output?",
+                        "header": "Format",
+                        "options": [
+                            { "label": "Summary", "description": "Brief overview" },
+                            { "label": "Detailed", "description": "Full explanation" }
+                        ],
+                        "multiSelect": false
+                    },
+                    {
+                        "question": "Which sections should I include?",
+                        "header": "Sections",
+                        "options": [{ "label": "Introduction" }, { "label": "Conclusion" }],
+                        "multiSelect": true
+                    }
+                ]
+            });
+
+            let answer_root = project_root.clone();
+            let answer_server = server.clone();
+            let answerer = tokio::spawn(async move {
+                loop {
+                    let pending =
+                        animus_runtime_shared::list_interactions(&answer_root, false, None).expect("list pending");
+                    if let Some(record) = pending.first() {
+                        assert_eq!(record.kind, animus_runtime_shared::InteractionKind::Question);
+                        assert_eq!(record.questions.len(), 2, "structured questions parsed onto the record");
+                        let mut answers = std::collections::BTreeMap::new();
+                        answers.insert(
+                            "How should I format the output?".to_string(),
+                            Value::String("Summary".to_string()),
+                        );
+                        answers.insert(
+                            "Which sections should I include?".to_string(),
+                            serde_json::json!(["Introduction", "Conclusion"]),
+                        );
+                        let result = answer_server
+                            .ao_interactions_answer(Parameters(InteractionsAnswerInput {
+                                id: record.id.clone(),
+                                text: None,
+                                decision: None,
+                                message: None,
+                                answered_by: Some("sami".to_string()),
+                                answers: Some(answers),
+                                response: Some("Keep it short".to_string()),
+                                updated_input: None,
+                                updated_permissions: None,
+                                remember: None,
+                                project_root: Some(answer_root.clone()),
+                            }))
+                            .await
+                            .expect("answer should not error");
+                        assert_ne!(result.is_error, Some(true), "structured answer must succeed: {result:?}");
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+
+            let result = server
+                .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                    tool_name: Some("AskUserQuestion".to_string()),
+                    input: Some(raw_input.clone()),
+                    tool_use_id: Some("toolu_456".to_string()),
+                    timeout_secs: Some(10),
+                    ..AgentRequestApprovalInput::default()
+                }))
+                .await
+                .expect("question should not error");
+            answerer.await.expect("answerer task");
+            assert_ne!(result.is_error, Some(true));
+
+            let payload = sdk_text_payload(&result);
+            assert_eq!(payload.pointer("/behavior").and_then(Value::as_str), Some("allow"));
+            assert_eq!(
+                payload.pointer("/updatedInput/questions"),
+                raw_input.pointer("/questions"),
+                "updatedInput.questions must be the original array"
+            );
+            assert_eq!(
+                payload.pointer("/updatedInput/answers/How should I format the output?").and_then(Value::as_str),
+                Some("Summary")
+            );
+            assert_eq!(
+                payload.pointer("/updatedInput/answers/Which sections should I include?"),
+                Some(&serde_json::json!(["Introduction", "Conclusion"]))
+            );
+            assert_eq!(payload.pointer("/updatedInput/response").and_then(Value::as_str), Some("Keep it short"));
+
+            // The native question fired the notifier event flow like any
+            // other interaction.
+            let events = orchestrator_daemon_runtime::DaemonEventLog::read_records(None, None).expect("read events");
+            assert!(
+                events.iter().any(|event| event.event_type == "interaction_created"),
+                "interaction_created event must fire for native questions"
+            );
+            assert!(
+                events.iter().any(|event| event.event_type == "interaction_answered"),
+                "interaction_answered event must fire for native questions"
+            );
+        });
+    }
+
+    // Policy auto-allow on a native call must still satisfy the SDK contract
+    // (updatedInput passthrough), not just the legacy decision payload.
+    #[test]
+    fn native_policy_allow_passes_input_through() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            std::fs::create_dir_all(project.path().join(".animus")).expect("create .animus");
+            std::fs::write(
+                project.path().join(".animus").join("workflows.yaml"),
+                r#"
+agents:
+  swe:
+    system_prompt: Build the change.
+    approval_policy:
+      auto_allow: ["Bash"]
+      default: deny
+phases:
+  impl:
+    mode: agent
+    agent: swe
+"#,
+            )
+            .expect("write workflows.yaml");
+            let server = new_ao_mcp_server_with_options(&project_root, false, Some("swe".to_string()), None);
+            let original_input = serde_json::json!({ "command": "cargo test" });
+
+            let result = server
+                .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                    tool_name: Some("Bash".to_string()),
+                    input: Some(original_input.clone()),
+                    timeout_secs: Some(1),
+                    ..AgentRequestApprovalInput::default()
+                }))
+                .await
+                .expect("approval should not error");
+            let payload = sdk_text_payload(&result);
+            assert_eq!(payload.pointer("/behavior").and_then(Value::as_str), Some("allow"));
+            assert_eq!(payload.pointer("/updatedInput"), Some(&original_input));
+            assert_eq!(payload.pointer("/result/source").and_then(Value::as_str), Some("policy"));
+
+            // Policy default-deny on another tool emits the SDK deny shape.
+            let denied = server
+                .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                    tool_name: Some("WebFetch".to_string()),
+                    input: Some(serde_json::json!({ "url": "https://example.com" })),
+                    timeout_secs: Some(1),
+                    ..AgentRequestApprovalInput::default()
+                }))
+                .await
+                .expect("approval should not error");
+            let payload = sdk_text_payload(&denied);
+            assert_eq!(payload.pointer("/behavior").and_then(Value::as_str), Some("deny"));
+            assert!(payload.pointer("/message").and_then(Value::as_str).is_some());
+        });
+    }
+
+    // Suggestions passthrough: stored on the record, echoed back as
+    // updatedPermissions when the allow answer asks to remember, and an
+    // operator-modified updated_input replaces the passthrough input.
+    #[test]
+    fn native_approval_remember_echoes_suggestions_and_updated_input() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server(&project_root);
+            let suggestions = serde_json::json!([
+                { "type": "addRules", "behavior": "allow", "destination": "localSettings" },
+                { "type": "addRules", "behavior": "allow", "destination": "session" }
+            ]);
+            let local_settings_only = serde_json::json!([suggestions[0].clone()]);
+
+            let answer_root = project_root.clone();
+            let answer_server = server.clone();
+            let answerer = tokio::spawn(async move {
+                loop {
+                    let pending =
+                        animus_runtime_shared::list_interactions(&answer_root, false, None).expect("list pending");
+                    if let Some(record) = pending.first() {
+                        let result = answer_server
+                            .ao_interactions_answer(Parameters(InteractionsAnswerInput {
+                                id: record.id.clone(),
+                                text: None,
+                                decision: Some("allow".to_string()),
+                                message: None,
+                                answered_by: Some("sami".to_string()),
+                                answers: None,
+                                response: None,
+                                updated_input: Some(serde_json::json!({ "command": "rm -rf build/sandbox" })),
+                                updated_permissions: None,
+                                remember: Some(true),
+                                project_root: Some(answer_root.clone()),
+                            }))
+                            .await
+                            .expect("answer should not error");
+                        assert_ne!(result.is_error, Some(true));
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            });
+
+            let result = server
+                .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                    tool_name: Some("Bash".to_string()),
+                    input: Some(serde_json::json!({ "command": "rm -rf build" })),
+                    suggestions: Some(suggestions.clone()),
+                    timeout_secs: Some(10),
+                    ..AgentRequestApprovalInput::default()
+                }))
+                .await
+                .expect("approval should not error");
+            answerer.await.expect("answerer task");
+
+            let payload = sdk_text_payload(&result);
+            assert_eq!(payload.pointer("/behavior").and_then(Value::as_str), Some("allow"));
+            assert_eq!(
+                payload.pointer("/updatedInput"),
+                Some(&serde_json::json!({ "command": "rm -rf build/sandbox" }))
+            );
+            assert_eq!(
+                payload.pointer("/updatedPermissions"),
+                Some(&local_settings_only),
+                "remember echoes only the localSettings-destination suggestions"
+            );
+        });
+    }
+
+    // Native suspend mode cannot return a pending payload (the CLI only
+    // understands behavior allow|deny), so it denies with the end-your-turn
+    // instruction; the record is suspended for the feedback-based resume.
+    #[test]
+    fn native_suspend_returns_sdk_deny_with_instruction() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_ao_mcp_server_with_options(&project_root, false, None, Some("wf-native".to_string()));
+
+            let result = server
+                .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
+                    tool_name: Some("AskUserQuestion".to_string()),
+                    input: Some(serde_json::json!({
+                        "questions": [{ "question": "Proceed?", "options": [{ "label": "Yes" }, { "label": "No" }] }]
+                    })),
+                    timeout_secs: Some(600),
+                    ..AgentRequestApprovalInput::default()
+                }))
+                .await
+                .expect("question should not error");
+            assert_ne!(result.is_error, Some(true));
+            let payload = sdk_text_payload(&result);
+            assert_eq!(payload.pointer("/behavior").and_then(Value::as_str), Some("deny"));
+            assert!(payload
+                .pointer("/message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| message.contains("end") && message.contains("turn")));
+            assert_eq!(payload.pointer("/result/status").and_then(Value::as_str), Some("pending"));
+
+            let interaction_id = payload
+                .pointer("/result/interaction_id")
+                .and_then(Value::as_str)
+                .expect("interaction_id in legacy payload")
+                .to_string();
+            let record = animus_runtime_shared::load_interaction(&project_root, &interaction_id)
+                .expect("load")
+                .expect("record exists");
+            assert!(record.suspended, "native suspend records resume via feedback");
+            assert_eq!(record.status, InteractionStatus::Pending);
+            assert_eq!(record.kind, animus_runtime_shared::InteractionKind::Question);
+        });
+    }
+
     // Mark->pause race (codex round-2 P2): an answer that lands before the
     // suspend path finishes pausing skipped its own resume, so the suspend
     // path must detect the answered record after pausing and run the resume
@@ -1233,8 +1896,9 @@ phases:
             animus_runtime_shared::answer_interaction(&project_root, &created.id, "yes", None, Some("sami"))
                 .expect("racing answer");
 
-            let result =
-                suspend_pending_response("animus.agent.ask", &project_root, &created).await.expect("suspend response");
+            let result = suspend_pending_response("animus.agent.ask", &project_root, &created, false)
+                .await
+                .expect("suspend response");
             let payload = data(&result);
             assert_eq!(payload.pointer("/workflow_paused").and_then(Value::as_bool), Some(true));
             let resume = payload.pointer("/workflow_resume").expect("late resume attempt reported");

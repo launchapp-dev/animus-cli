@@ -6,6 +6,44 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- `animus.agent.request_approval` now conforms to the Claude Agent SDK
+  permission-prompt-tool contract (verified against the claude CLI v2.1.175
+  parser and <https://code.claude.com/docs/en/agent-sdk/user-input>). The
+  claude transport wires this tool as `--permission-prompt-tool`, and the CLI
+  invokes it with `{ tool_name, input, tool_use_id }` for every gated tool
+  call — previously the tool rejected that input shape (required `agent_id` /
+  `action`) and answered with `{ decision, message?, source }`, which the CLI
+  cannot parse, so every native approval round-trip failed. Now:
+  - The input accepts the SDK shape additively (`input`, `tool_use_id`,
+    `suggestions`); identity comes from the server pin and `action` is derived
+    from `tool_name` when absent.
+  - Responses emit the exact SDK payload in the result's single text block —
+    `{ "behavior": "allow", "updatedInput": <original or operator-modified
+    input>, "updatedPermissions"? }` or `{ "behavior": "deny", "message" }` —
+    with the legacy `{ tool, result: { decision, source, … } }` envelope kept
+    alongside (the CLI's non-strict schema strips unknown keys).
+  - Native `AskUserQuestion` calls become structured Question records
+    (`questions[]` on the interaction record, additive serde — old records
+    load unchanged) that surface in the same inbox/notifier flow as
+    `animus.agent.ask`; the answer builds the SDK `updatedInput`
+    `{ questions: <original array>, answers: { <question text>: <label |
+    [labels] | free text> }, response? }`.
+  - `animus agent interactions answer` gains repeatable
+    `--select "<question|header|index>=<label[,label...]>"` for structured
+    questions (bare `--text` maps to the single question's answer or the
+    freeform `response`), plus `--remember` (echo localSettings-destination
+    suggestions as `updatedPermissions`) and `--updated-input <json>`
+    (operator-modified tool input) on allowed approvals; the management-gated
+    `animus.interactions.answer` MCP tool gains the same fields (`answers`,
+    `response`, `updated_input`, `updated_permissions`, `remember`). `show`
+    renders structured questions readably.
+  - Suspend mode on native prompt-tool calls answers `behavior: "deny"` with
+    the end-your-turn instruction (the CLI cannot park on a pending payload);
+    the workflow pauses and resumes via session feedback carrying the
+    per-question answers. Documented in
+    `docs/architecture/agent-interactions-protocol.md` (suspend replaces the
+    SDK `defer` decision; block-mode timeout deny vs the SDK's
+    pending-indefinitely callback).
 - `animus flavor current` now counts project-scoped (`animus plugin install
   --project`) installs as satisfied. Previously its drift report scanned only
   the global plugin install dir, so a required plugin installed `--project`
