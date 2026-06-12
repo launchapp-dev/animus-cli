@@ -267,6 +267,54 @@ keyed by `agent_id` under the repo-scoped runtime root.
 | `animus.memory.append` | Add a new memory entry. The entry receives a fresh uuid and timestamp. Returns the appended entry | `agent_id`, `text`, `source`, `project_root` |
 | `animus.memory.clear` | Delete a single entry by `entry_id`, or wipe all entries for the agent when `delete_all: true`. One of `entry_id` or `delete_all=true` is required | `agent_id`, `entry_id`, `delete_all`, `project_root` |
 
+### Two memory families: `animus.memory.*` vs `animus.agent.memory.*`
+
+There are two distinct memory tool families and they are NOT interchangeable.
+Pick by who you are and whose memory you are touching:
+
+- **`animus.memory.*` (4 tools, this section)** — an **any-agent-id document
+  store**. Every call takes `agent_id` explicitly, so one caller can read or
+  write the memory of *any* agent. This is BOTH the family external clients
+  use (dashboards, Claude Desktop, Cursor, operator scripts) AND the family a
+  memory-capable workflow agent actually receives: the sidecar injected for
+  `capabilities.memory: true` runs `animus mcp memory`, which exposes
+  `animus.memory.*` only. It also carries `list` (with `prefix` filtering) and
+  per-entry `entry_id` operations the agent family omits.
+- **`animus.agent.memory.*` (3 tools, see [Agent Control](#agent-control-12-tools))** — CLI-shaped
+  wrappers over `animus agent memory ...` (they validate that the agent
+  profile exists), exposed **only on the full `animus` MCP server**
+  (`animus mcp serve`). A workflow agent sees them only when its profile
+  explicitly lists the `animus` server in `mcp_servers` — they are NOT part of
+  the default injected-memory sidecar.
+
+Rule of thumb: **inside a phase, call `animus.memory.append` with your own
+`agent_id` (the phase prompt's coaching paragraph spells this out); use
+`animus.agent.memory.*` only when the full `animus` server is configured;
+from an operator or dashboard client, either works — `animus.memory.*` is the
+richer surface.** Both write to the same on-disk store keyed by `agent_id`
+under the repo-scoped runtime root, so a value appended by one family is
+visible to the other.
+
+### Retention (FIFO cap)
+
+Memory is bounded. Each append trims the document to at most
+`memory.max_entries` entries (set per agent profile in workflow YAML),
+dropping the **oldest** entries first (FIFO). When a profile omits the cap, the
+store applies a generous default of **200** entries so memory can never grow
+without bound. `memory.max_entries: 0` is rejected by config validation. There
+are no per-entry expiry timestamps — trimming is purely count-based FIFO.
+
+### Observability
+
+Each successful `append` or `clear` (single-entry delete or `delete_all`) emits
+exactly one `agent-memory-updated` record to the daemon event log
+(`animus daemon events`), carrying `{ agent_id, operation, entry_count }`.
+Agent messaging emits `agent-message-sent` likewise. Read paths
+(`get`/`list`) emit nothing, so watching coordination never produces an event
+storm. Emission is best-effort: a failed event write never fails the memory
+operation, and it works even without a running daemon (the event log is a
+plain JSONL file under the global Animus state dir).
+
 ### Memory tool exposure model
 
 The `animus.memory.*` tools are exposed in two places, with different gating:

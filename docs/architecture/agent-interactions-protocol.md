@@ -41,6 +41,16 @@ bypasses MCP.
     resumes when answered (Layer 4).
   - The kernel selects the default per run path; agents may override only from
     suspend→block, never block→suspend silently.
+- **Choosing block vs suspend:** use **block** when a human operator is sitting
+  at the terminal for the run (ad-hoc `animus agent run` / `animus chat`) and a
+  synchronous answer within the timeout is realistic — the call holds the
+  process open and resolves in place. Use **suspend** for asynchronous,
+  daemon-driven workflow phases where no one is watching live: the phase returns
+  immediately, the workflow pauses to its inbox, and answering later (via
+  `animus agent interactions answer` or a notifier-delivered link) resumes the
+  run with the decision threaded in as feedback — no pool slot or process stays
+  parked waiting. When in doubt for a workflow phase, prefer suspend; reserve
+  block for genuinely interactive sessions.
 - **Inbox:** `animus agent interactions list|show|answer <id>` (`--text` for
   questions, `--allow|--deny [--message]` for approvals), `animus.cli.v1` JSON
   envelopes. Non-blocking `animus.interactions.list` / `animus.interactions.answer`

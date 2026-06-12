@@ -65,6 +65,34 @@ fn document_to_json(document: &animus_runtime_shared::AgentMemoryDocument) -> Va
     })
 }
 
+// Resolve the FIFO retention cap for an agent id: when the project has a
+// configured profile for it, honor `memory.max_entries` so both MCP memory
+// families enforce the same bound; unknown agent ids (this is an
+// any-agent-id document store) fall back to `None`, which the store maps to
+// its generous default cap.
+fn profile_memory_cap(project_root: &str, agent_id: &str) -> Option<usize> {
+    orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root))
+        .ok()
+        .and_then(|loaded| loaded.config.agent_profile(agent_id).and_then(|profile| profile.memory.max_entries))
+}
+
+// Best-effort daemon-event tee for the `animus.memory.*` document-store
+// tools, mirroring the CLI `agent memory` handlers. Emitted once per
+// successful append/clear so `animus daemon events` and notifier plugins can
+// watch coordination; failures never fail the tool call.
+fn emit_memory_event(project_root: &str, agent_id: &str, operation: &str, entry_count: usize) {
+    use orchestrator_daemon_runtime::DaemonEventLog;
+    let canonical_root = crate::services::runtime::canonicalize_lossy(project_root);
+    let mut seq = 0;
+    let data = json!({
+        "agent_id": agent_id,
+        "operation": operation,
+        "entry_count": entry_count,
+    });
+    let event = DaemonEventLog::next_event(&mut seq, "agent-memory-updated", Some(canonical_root), data);
+    let _ = DaemonEventLog::append(&event);
+}
+
 fn structured_ok(tool_name: &str, data: Value) -> Result<CallToolResult, McpError> {
     Ok(CallToolResult::structured(json!({
         "tool": tool_name,
@@ -165,10 +193,17 @@ impl MemoryMcpServer {
             return structured_err("animus.memory.append", "agent_id must not be empty".to_string());
         }
         let project_root = memory_project_root(&self.default_project_root, input.project_root);
-        match animus_runtime_shared::append_agent_memory(&project_root, &agent_id, &input.text, input.source.as_deref())
-        {
+        let max_entries = profile_memory_cap(&project_root, &agent_id);
+        match animus_runtime_shared::append_agent_memory_capped(
+            &project_root,
+            &agent_id,
+            &input.text,
+            input.source.as_deref(),
+            max_entries,
+        ) {
             Ok(document) => {
                 let latest = document.entries.last().map(entry_to_json).unwrap_or(Value::Null);
+                emit_memory_event(&project_root, &document.agent_id, "append", document.entries.len());
                 let payload = serde_json::json!({
                     "agent_id": document.agent_id,
                     "updated_at": document.updated_at,
@@ -204,6 +239,7 @@ impl MemoryMcpServer {
         if delete_all {
             match animus_runtime_shared::clear_agent_memory(&project_root, &agent_id) {
                 Ok(document) => {
+                    emit_memory_event(&project_root, &document.agent_id, "clear", document.entries.len());
                     let payload = serde_json::json!({
                         "agent_id": document.agent_id,
                         "updated_at": document.updated_at,
@@ -218,6 +254,9 @@ impl MemoryMcpServer {
             let entry_id = entry_id.expect("entry_id checked above");
             match animus_runtime_shared::delete_agent_memory_entry(&project_root, &agent_id, &entry_id) {
                 Ok((document, removed)) => {
+                    if removed {
+                        emit_memory_event(&project_root, &document.agent_id, "clear", document.entries.len());
+                    }
                     let payload = serde_json::json!({
                         "agent_id": document.agent_id,
                         "updated_at": document.updated_at,
@@ -319,10 +358,17 @@ impl AoMcpServer {
             return structured_err("animus.memory.append", "agent_id must not be empty".to_string());
         }
         let project_root = memory_project_root(&self.default_project_root, input.project_root);
-        match animus_runtime_shared::append_agent_memory(&project_root, &agent_id, &input.text, input.source.as_deref())
-        {
+        let max_entries = profile_memory_cap(&project_root, &agent_id);
+        match animus_runtime_shared::append_agent_memory_capped(
+            &project_root,
+            &agent_id,
+            &input.text,
+            input.source.as_deref(),
+            max_entries,
+        ) {
             Ok(document) => {
                 let latest = document.entries.last().map(entry_to_json).unwrap_or(Value::Null);
+                emit_memory_event(&project_root, &document.agent_id, "append", document.entries.len());
                 let payload = serde_json::json!({
                     "agent_id": document.agent_id,
                     "updated_at": document.updated_at,
@@ -358,6 +404,7 @@ impl AoMcpServer {
         if delete_all {
             match animus_runtime_shared::clear_agent_memory(&project_root, &agent_id) {
                 Ok(document) => {
+                    emit_memory_event(&project_root, &document.agent_id, "clear", document.entries.len());
                     let payload = serde_json::json!({
                         "agent_id": document.agent_id,
                         "updated_at": document.updated_at,
@@ -372,6 +419,9 @@ impl AoMcpServer {
             let entry_id = entry_id.expect("entry_id checked above");
             match animus_runtime_shared::delete_agent_memory_entry(&project_root, &agent_id, &entry_id) {
                 Ok((document, removed)) => {
+                    if removed {
+                        emit_memory_event(&project_root, &document.agent_id, "clear", document.entries.len());
+                    }
                     let payload = serde_json::json!({
                         "agent_id": document.agent_id,
                         "updated_at": document.updated_at,
@@ -620,6 +670,88 @@ mod memory_tool_tests {
                 .await
                 .expect("list after clear");
             assert_eq!(data(&after).pointer("/count").and_then(Value::as_u64), Some(0));
+        });
+    }
+
+    // Read every `agent-memory-updated` record from the daemon events log
+    // under the currently-pinned HOME. Used to prove emission happens exactly
+    // once per store mutation (no storm).
+    fn memory_events() -> Vec<Value> {
+        let path = protocol::daemon_events_log_path();
+        let Ok(contents) = std::fs::read_to_string(&path) else {
+            return Vec::new();
+        };
+        contents
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|record| record.pointer("/event_type").and_then(Value::as_str) == Some("agent-memory-updated"))
+            .collect()
+    }
+
+    #[test]
+    fn memory_append_and_clear_each_emit_exactly_one_daemon_event() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_memory_mcp_server(&project_root);
+
+            // One append → exactly one append event.
+            server
+                .ao_memory_append(Parameters(MemoryAppendInput {
+                    agent_id: "architect".to_string(),
+                    text: "Prefer explicit contracts.".to_string(),
+                    source: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("append");
+            let after_append = memory_events();
+            assert_eq!(after_append.len(), 1, "append emits exactly one event, got {after_append:?}");
+            assert_eq!(after_append[0].pointer("/data/operation").and_then(Value::as_str), Some("append"));
+            assert_eq!(after_append[0].pointer("/data/entry_count").and_then(Value::as_u64), Some(1));
+
+            // One clear-all → one more event (total two).
+            server
+                .ao_memory_clear(Parameters(MemoryClearInput {
+                    agent_id: "architect".to_string(),
+                    entry_id: None,
+                    delete_all: Some(true),
+                    project_root: None,
+                }))
+                .await
+                .expect("clear");
+            let after_clear = memory_events();
+            assert_eq!(after_clear.len(), 2, "clear emits exactly one more event, got {after_clear:?}");
+            assert_eq!(after_clear[1].pointer("/data/operation").and_then(Value::as_str), Some("clear"));
+            assert_eq!(after_clear[1].pointer("/data/entry_count").and_then(Value::as_u64), Some(0));
+        });
+    }
+
+    #[test]
+    fn memory_get_and_list_emit_no_events() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            let server = new_memory_mcp_server(&project_root);
+
+            server
+                .ao_memory_get(Parameters(MemoryGetInput {
+                    agent_id: "architect".to_string(),
+                    entry_id: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("get");
+            server
+                .ao_memory_list(Parameters(MemoryListInput {
+                    agent_id: "architect".to_string(),
+                    prefix: None,
+                    limit: None,
+                    project_root: None,
+                }))
+                .await
+                .expect("list");
+            assert!(memory_events().is_empty(), "read paths must not emit coordination events");
         });
     }
 

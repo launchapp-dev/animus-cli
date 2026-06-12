@@ -349,6 +349,8 @@ pub struct AgentMcpServerConfig {
 /// - `memory` — when `true`, the daemon injects the project-scoped memory MCP server
 ///   (`animus.memory.*` tools) into the agent's runtime contract so the spawned CLI can read and
 ///   write its own memory document. When `false` or absent, the memory MCP server is omitted.
+///   Retention is bounded by [`AgentMemoryConfig::max_entries`] (FIFO, default
+///   [`DEFAULT_AGENT_MEMORY_MAX_ENTRIES`]).
 /// - `planning`, `queue_management`, `scheduling` — surfaced on engineering-manager personas
 ///   for prompt rendering and dispatch heuristics.
 /// - `requirements_authoring`, `acceptance_validation` — product-owner persona signals.
@@ -402,9 +404,22 @@ pub struct AgentMemoryConfig {
     pub scope: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_chars: Option<usize>,
+    /// FIFO retention cap on stored memory entries. When set, an append that
+    /// would push the document past this many entries trims the oldest
+    /// entries first (front of the vector). `None` falls back to
+    /// [`DEFAULT_AGENT_MEMORY_MAX_ENTRIES`] at the store layer so memory can
+    /// never grow unbounded. A value of `0` is rejected by config validation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_entries: Option<usize>,
     #[serde(default)]
     pub write_policy: AgentMemoryWritePolicy,
 }
+
+/// Default FIFO retention cap applied by the agent-memory store when an agent
+/// profile does not set [`AgentMemoryConfig::max_entries`]. Generous enough
+/// that ordinary multi-phase coordination never trims, while still bounding
+/// unbounded growth across long-lived projects.
+pub const DEFAULT_AGENT_MEMORY_MAX_ENTRIES: usize = 200;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 pub struct AgentCommunicationConfig {
@@ -2568,6 +2583,9 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
         }
         if profile.memory.max_context_chars == Some(0) {
             return Err(anyhow!("agents['{}'].memory.max_context_chars must be greater than 0", agent_id));
+        }
+        if profile.memory.max_entries == Some(0) {
+            return Err(anyhow!("agents['{}'].memory.max_entries must be greater than 0", agent_id));
         }
 
         if profile.communication.max_context_chars == Some(0) {
@@ -5000,6 +5018,34 @@ agents:
         assert!(base.capabilities.is_empty(), "explicit empty capabilities must clear the base map");
         assert!(base.fallback_models.is_empty(), "explicit empty fallback_models must clear the base list");
         assert_eq!(base.description, "base description", "absent overlay fields must inherit the base value");
+    }
+
+    #[test]
+    fn memory_max_entries_round_trips_through_profile() {
+        let profile: AgentProfile = serde_json::from_value(serde_json::json!({
+            "memory": { "enabled": true, "max_entries": 50 }
+        }))
+        .expect("profile with memory.max_entries");
+        assert_eq!(profile.memory.max_entries, Some(50));
+
+        // Re-serialize and confirm the field survives the round trip.
+        let reserialized = serde_json::to_value(&profile).expect("serialize profile");
+        assert_eq!(reserialized.pointer("/memory/max_entries").and_then(Value::as_u64), Some(50));
+
+        // Absent → None, so the store applies its default cap.
+        let bare: AgentProfile = serde_json::from_value(serde_json::json!({ "memory": { "enabled": true } }))
+            .expect("profile without max_entries");
+        assert_eq!(bare.memory.max_entries, None);
+    }
+
+    #[test]
+    fn memory_max_entries_zero_is_rejected_by_validation() {
+        let mut config = builtin_agent_runtime_config();
+        let profile = config.agents.get_mut("default").expect("profile exists");
+        profile.memory.max_entries = Some(0);
+        let err = validate_agent_runtime_config(&config).expect_err("max_entries: 0 must fail validation");
+        let msg = format!("{:#}", err);
+        assert!(msg.contains("max_entries"), "error names the offending field: {msg}");
     }
 
     #[test]

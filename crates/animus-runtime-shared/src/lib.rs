@@ -37,8 +37,8 @@ pub mod workflow_helpers;
 pub mod workflow_merge_recovery;
 
 pub use agent_state::{
-    append_agent_memory, clear_agent_memory, delete_agent_memory_entry, list_agent_messages, load_agent_memory,
-    send_agent_message, AgentMemoryDocument, AgentMemoryEntry, AgentMessage,
+    append_agent_memory, append_agent_memory_capped, clear_agent_memory, delete_agent_memory_entry,
+    list_agent_messages, load_agent_memory, send_agent_message, AgentMemoryDocument, AgentMemoryEntry, AgentMessage,
 };
 pub use ensure_execution_cwd::ensure_execution_cwd;
 pub use evals::llm_judge_runner::{JudgeError, JudgeRequest, JudgeResponse};

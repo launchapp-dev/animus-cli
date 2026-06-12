@@ -147,8 +147,31 @@ pub fn append_agent_memory(
     text: &str,
     source: Option<&str>,
 ) -> Result<AgentMemoryDocument> {
+    append_agent_memory_capped(project_root, agent_id, text, source, None)
+}
+
+/// Append a memory entry, then trim the document to at most `max_entries`
+/// entries by dropping the OLDEST entries first (FIFO). When `max_entries`
+/// is `None` the store applies
+/// [`orchestrator_config::DEFAULT_AGENT_MEMORY_MAX_ENTRIES`] so memory can
+/// never grow without bound, even for callers that don't thread a profile
+/// cap through. A `Some(0)` cap is treated as the default rather than an
+/// instant wipe — config validation already rejects `max_entries: 0`, and
+/// silently erasing every entry on append would be a footgun.
+pub fn append_agent_memory_capped(
+    project_root: &str,
+    agent_id: &str,
+    text: &str,
+    source: Option<&str>,
+    max_entries: Option<usize>,
+) -> Result<AgentMemoryDocument> {
     let trimmed = text.trim();
     anyhow::ensure!(!trimmed.is_empty(), "memory text must not be empty");
+
+    let cap = match max_entries {
+        Some(0) | None => orchestrator_config::DEFAULT_AGENT_MEMORY_MAX_ENTRIES,
+        Some(value) => value,
+    };
 
     let path = agent_memory_path(project_root, agent_id);
     with_state_file_lock(&path, || {
@@ -160,6 +183,13 @@ pub fn append_agent_memory(
             text: trimmed.to_string(),
             source: source.map(str::trim).filter(|value| !value.is_empty()).map(ToOwned::to_owned),
         });
+        // FIFO trim: keep the newest `cap` entries, drop the oldest from the
+        // front. Cheap `drain` on the rare overflow path; a steady-state
+        // append never trims because the document already sits at the cap.
+        if document.entries.len() > cap {
+            let overflow = document.entries.len() - cap;
+            document.entries.drain(0..overflow);
+        }
         document.updated_at = Some(now);
         write_json_atomic(&path, &document)?;
         Ok(document)
@@ -296,6 +326,53 @@ mod tests {
 
         let cleared = clear_agent_memory(&project_root, "architect").expect("clear memory");
         assert!(cleared.entries.is_empty());
+    }
+
+    #[test]
+    fn memory_append_capped_trims_oldest_entries_fifo() {
+        let _serial = crate::test_env::scoped_state_serializer();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_root = tmp.path().to_string_lossy();
+
+        // Cap of 3: appending five entries keeps only the three newest, with
+        // the two oldest dropped from the front.
+        for index in 0..5 {
+            append_agent_memory_capped(&project_root, "architect", &format!("entry-{index}"), None, Some(3))
+                .expect("append capped");
+        }
+        let loaded = load_agent_memory(&project_root, "architect").expect("load memory");
+        let texts: Vec<&str> = loaded.entries.iter().map(|entry| entry.text.as_str()).collect();
+        assert_eq!(texts, vec!["entry-2", "entry-3", "entry-4"], "FIFO keeps newest, drops oldest");
+    }
+
+    #[test]
+    fn memory_append_capped_zero_falls_back_to_default_not_wipe() {
+        let _serial = crate::test_env::scoped_state_serializer();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_root = tmp.path().to_string_lossy();
+
+        // Some(0) must NOT wipe the document on append; it falls back to the
+        // generous default cap so entries survive.
+        append_agent_memory_capped(&project_root, "architect", "keep-me", None, Some(0)).expect("append");
+        let loaded = load_agent_memory(&project_root, "architect").expect("load memory");
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries[0].text, "keep-me");
+    }
+
+    #[test]
+    fn memory_append_default_cap_bounds_growth() {
+        let _serial = crate::test_env::scoped_state_serializer();
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let project_root = tmp.path().to_string_lossy();
+
+        let cap = orchestrator_config::DEFAULT_AGENT_MEMORY_MAX_ENTRIES;
+        for index in 0..(cap + 5) {
+            append_agent_memory(&project_root, "architect", &format!("e-{index}"), None).expect("append");
+        }
+        let loaded = load_agent_memory(&project_root, "architect").expect("load memory");
+        assert_eq!(loaded.entries.len(), cap, "default cap bounds total entries");
+        // Oldest five were trimmed; the newest entry is preserved.
+        assert_eq!(loaded.entries.last().map(|e| e.text.as_str()), Some(format!("e-{}", cap + 4).as_str()));
     }
 
     #[test]

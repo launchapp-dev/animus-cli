@@ -291,6 +291,9 @@ pub fn render_phase_prompt_with_ctx_overrides(
         if let Some(message_context) = render_agent_message_context(project_root, agent_id, profile, ctx) {
             prompt_sections.push(message_context);
         }
+        if let Some(coaching) = render_agent_coordination_coaching(agent_id, profile) {
+            prompt_sections.push(coaching);
+        }
     }
     prompt_sections.push(phase_prompt);
     if let Some(skill_result) = skill_result {
@@ -474,6 +477,56 @@ fn render_agent_identity_context(agent_id: Option<&str>, profile: &AgentProfile)
         }
     }
     (!lines.is_empty()).then(|| format!("Agent identity:\n{}", lines.join("\n")))
+}
+
+/// Append a SHORT coaching paragraph telling the agent the coordination tools
+/// exist and when to reach for them — but ONLY when the agent's profile
+/// actually carries the capability, so phases without memory/messaging stay
+/// free of prompt bloat. Memory coaching is gated on the same condition that
+/// injects the memory MCP server (`agent_memory_capability_enabled`, i.e.
+/// `capabilities.memory: true`) — NOT on `memory.enabled`, which only surfaces
+/// read-only memory context. Coaching an agent to call `animus.memory.append`
+/// when no memory tool is injected would point it at an unavailable tool.
+/// Messaging coaching gates on `communication.enabled` with at least one
+/// channel; it names the `animus.agent.message.send` MCP tool only when the
+/// profile's `mcp_servers` actually includes the full `animus` server (the
+/// only surface that exposes it), and falls back to the equivalent CLI
+/// command otherwise. Returns `None` when neither capability is on.
+fn render_agent_coordination_coaching(agent_id: &str, profile: &AgentProfile) -> Option<String> {
+    let memory_on = orchestrator_config::agent_memory_capability_enabled(profile);
+    let messaging_on = profile.communication.enabled
+        && profile.communication.channels.iter().any(|channel| !channel.trim().is_empty());
+    if !memory_on && !messaging_on {
+        return None;
+    }
+
+    let mut lines = vec!["Coordination tools:".to_string()];
+    if memory_on {
+        lines.push(format!(
+            "- If your findings should influence later phases, append them to your durable memory via the `animus.memory.append` MCP tool (`agent_id` = `{agent_id}`; the full `animus mcp serve` surface exposes the same store as `animus.agent.memory.append`). Memory is per-agent: later phases run by this same agent profile see recent entries in their prompt automatically, but other agents do not — hand off to a different agent via a channel message instead. Oldest entries are trimmed FIFO once the cap is reached."
+        ));
+    }
+    if messaging_on {
+        let channels = profile
+            .communication
+            .channels
+            .iter()
+            .map(|channel| channel.trim())
+            .filter(|channel| !channel.is_empty())
+            .map(|channel| format!("`{channel}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let has_animus_server = profile.mcp_servers.iter().any(|server| server.trim().eq_ignore_ascii_case("animus"));
+        let send_surface = if has_animus_server {
+            "the `animus.agent.message.send` MCP tool".to_string()
+        } else {
+            format!("the `animus agent message send --channel <channel> --from {agent_id}` CLI command")
+        };
+        lines.push(format!(
+            "- To hand off to a named agent, send a message on one of your channels ({channels}) via {send_surface}; recent channel messages are surfaced in the recipient's prompt."
+        ));
+    }
+    Some(lines.join("\n"))
 }
 
 fn render_agent_memory_context(project_root: &str, agent_id: &str, profile: &AgentProfile) -> Option<String> {
@@ -758,9 +811,112 @@ pub fn phase_result_kind_for_ctx(ctx: &RuntimeConfigContext, phase_id: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_skill_prompt_to_body, merge_skill_system_prompt, phase_action_rule, skill_directives_section,
-        SkillApplicationResult,
+        apply_skill_prompt_to_body, merge_skill_system_prompt, phase_action_rule, render_agent_coordination_coaching,
+        skill_directives_section, SkillApplicationResult,
     };
+    use orchestrator_config::{AgentCommunicationConfig, AgentMemoryConfig, AgentProfile};
+
+    // Memory coaching gates on the `memory` capability flag (the one that
+    // actually injects the memory MCP server), not on `memory.enabled`.
+    fn profile_with_memory_capability() -> AgentProfile {
+        let mut profile =
+            AgentProfile { memory: AgentMemoryConfig { enabled: true, ..Default::default() }, ..Default::default() };
+        profile.capabilities.insert("memory".to_string(), true);
+        profile
+    }
+
+    #[test]
+    fn coaching_absent_when_no_capability_is_on() {
+        let profile = AgentProfile::default();
+        assert!(
+            render_agent_coordination_coaching("architect", &profile).is_none(),
+            "no memory/messaging capability must add no coaching paragraph (no prompt bloat)"
+        );
+    }
+
+    #[test]
+    fn coaching_absent_when_memory_enabled_but_capability_off() {
+        // `memory.enabled: true` surfaces read-only memory context but injects
+        // no memory tool, so coaching must stay silent to avoid pointing the
+        // agent at an unavailable `animus.memory.append`.
+        let profile =
+            AgentProfile { memory: AgentMemoryConfig { enabled: true, ..Default::default() }, ..Default::default() };
+        assert!(
+            render_agent_coordination_coaching("architect", &profile).is_none(),
+            "memory.enabled without the memory capability must not coach a missing tool"
+        );
+    }
+
+    #[test]
+    fn coaching_mentions_memory_only_when_memory_enabled() {
+        let profile = profile_with_memory_capability();
+        let coaching = render_agent_coordination_coaching("architect", &profile).expect("memory coaching present");
+        assert!(
+            coaching.contains("`animus.memory.append`"),
+            "primary tool is animus.memory.append — the one the injected memory MCP server actually exposes"
+        );
+        assert!(coaching.contains("animus.agent.memory.append"), "full-serve equivalent also named");
+        assert!(coaching.contains("architect"), "agent id threaded into coaching");
+        assert!(!coaching.contains("animus.agent.message.send"), "no messaging line without channels");
+    }
+
+    #[test]
+    fn coaching_mentions_messaging_only_when_channels_present() {
+        // communication enabled but with no usable channel → no messaging line.
+        let enabled_no_channel = AgentProfile {
+            communication: AgentCommunicationConfig {
+                enabled: true,
+                channels: vec!["   ".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        assert!(
+            render_agent_coordination_coaching("architect", &enabled_no_channel).is_none(),
+            "blank channel does not count as messaging capability"
+        );
+
+        // Without the full `animus` MCP server, coaching must point at the
+        // CLI command — the animus.agent.message.send tool is not injected.
+        let profile = AgentProfile {
+            communication: AgentCommunicationConfig {
+                enabled: true,
+                channels: vec!["engineering".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let coaching = render_agent_coordination_coaching("architect", &profile).expect("messaging coaching present");
+        assert!(!coaching.contains("animus.agent.message.send"), "MCP tool not named without the animus server");
+        assert!(coaching.contains("animus agent message send"), "CLI fallback named instead");
+        assert!(coaching.contains("`engineering`"), "channel named in coaching");
+        assert!(!coaching.contains("animus.agent.memory.append"), "no memory line when memory disabled");
+
+        // With the full `animus` server configured, the MCP tool is named.
+        let mut with_server = AgentProfile {
+            communication: AgentCommunicationConfig {
+                enabled: true,
+                channels: vec!["engineering".to_string()],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        with_server.mcp_servers = vec!["animus".to_string()];
+        let coaching =
+            render_agent_coordination_coaching("architect", &with_server).expect("messaging coaching present");
+        assert!(coaching.contains("animus.agent.message.send"), "MCP tool named when the animus server is configured");
+    }
+
+    #[test]
+    fn coaching_combines_both_capabilities() {
+        let mut profile = profile_with_memory_capability();
+        profile.communication =
+            AgentCommunicationConfig { enabled: true, channels: vec!["engineering".to_string()], ..Default::default() };
+        profile.mcp_servers = vec!["animus".to_string()];
+        let coaching = render_agent_coordination_coaching("architect", &profile).expect("coaching present");
+        assert!(coaching.contains("animus.agent.memory.append"));
+        assert!(coaching.contains("animus.agent.message.send"));
+    }
 
     #[test]
     fn mutating_state_phases_are_not_rendered_as_strictly_read_only() {
