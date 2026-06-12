@@ -1133,8 +1133,6 @@ enum UnenforcedDetector {
     DaemonKey(&'static [&'static str]),
     /// Any `phases.<id>.evals:` block.
     PhaseEvals,
-    /// Any workflow-level or rich-phase-entry `budget:` block.
-    Budgets,
 }
 
 struct UnenforcedRule {
@@ -1185,10 +1183,10 @@ const UNENFORCED_RULES: &[UnenforcedRule] = &[
         detector: UnenforcedDetector::PhaseEvals,
         explanation: "evals parse and validate but are not yet executed by the workflow runner — phases advance regardless of this gate (enforcement lands with a future animus-workflow-runner-default release)",
     },
-    UnenforcedRule {
-        detector: UnenforcedDetector::Budgets,
-        explanation: "budget caps are only evaluated when `animus cost` is run manually; the daemon does not enforce max_tokens / max_cost_usd during workflow execution yet",
-    },
+    // NOTE: `budget:` blocks were removed from this registry when daemon-side
+    // enforcement landed (housekeeping-cadence cap sweep). Enforcement still
+    // requires a running daemon; that caveat is documented in
+    // `docs/reference/workflow-yaml.md#budget` instead of warned about here.
 ];
 
 fn yaml_mapping_get<'a>(value: &'a serde_yaml::Value, key: &str) -> Option<&'a serde_yaml::Value> {
@@ -1220,38 +1218,6 @@ fn detect_phase_evals(doc: &serde_yaml::Value, explanation: &str, out: &mut Vec<
     }
 }
 
-fn detect_budgets(doc: &serde_yaml::Value, explanation: &str, out: &mut Vec<(String, String)>) {
-    let Some(workflows) = yaml_mapping_get(doc, "workflows").and_then(serde_yaml::Value::as_sequence) else {
-        return;
-    };
-    for (index, workflow) in workflows.iter().enumerate() {
-        let workflow_label = yaml_mapping_get(workflow, "id")
-            .and_then(serde_yaml::Value::as_str)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("[{index}]"));
-        if yaml_mapping_get(workflow, "budget").is_some_and(|budget| !budget.is_null()) {
-            out.push((format!("workflows.{workflow_label}.budget"), explanation.to_string()));
-        }
-        let Some(entries) = yaml_mapping_get(workflow, "phases").and_then(serde_yaml::Value::as_sequence) else {
-            continue;
-        };
-        for entry in entries {
-            // Rich phase entries are single-key maps `{ <phase_id>: { ... } }`.
-            let Some(map) = entry.as_mapping() else {
-                continue;
-            };
-            for (phase_id, config) in map {
-                let Some(phase_id) = phase_id.as_str() else {
-                    continue;
-                };
-                if yaml_mapping_get(config, "budget").is_some_and(|budget| !budget.is_null()) {
-                    out.push((format!("workflows.{workflow_label}.phases.{phase_id}.budget"), explanation.to_string()));
-                }
-            }
-        }
-    }
-}
-
 /// Scan one raw YAML source for declared-but-unenforced fields. Returns one
 /// warning per declaration. Unparseable YAML yields no warnings — the
 /// compile pipeline reports parse errors with proper diagnostics.
@@ -1264,7 +1230,6 @@ pub fn unenforced_yaml_field_warnings(yaml: &str, source_label: &str) -> Vec<Une
         match rule.detector {
             UnenforcedDetector::DaemonKey(keys) => detect_daemon_keys(&doc, keys, rule.explanation, &mut hits),
             UnenforcedDetector::PhaseEvals => detect_phase_evals(&doc, rule.explanation, &mut hits),
-            UnenforcedDetector::Budgets => detect_budgets(&doc, rule.explanation, &mut hits),
         }
     }
     hits.into_iter()

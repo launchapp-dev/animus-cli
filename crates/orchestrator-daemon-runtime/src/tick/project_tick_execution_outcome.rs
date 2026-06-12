@@ -1,6 +1,6 @@
 use animus_runtime_shared::PhaseExecutionEvent;
 
-use crate::{DispatchWorkflowStartSummary, WorkflowFailureEvent};
+use crate::{BudgetBreachEvent, DispatchWorkflowStartSummary, WorkflowFailureEvent};
 
 #[derive(Debug, Clone, Default)]
 pub struct ProjectTickExecutionOutcome {
@@ -14,4 +14,5 @@ pub struct ProjectTickExecutionOutcome {
     pub failed_workflow_phases: usize,
     pub phase_execution_events: Vec<PhaseExecutionEvent>,
     pub workflow_failures: Vec<WorkflowFailureEvent>,
+    pub budget_breaches: Vec<BudgetBreachEvent>,
 }

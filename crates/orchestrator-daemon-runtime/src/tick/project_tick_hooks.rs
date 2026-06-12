@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 use crate::{
-    CompletedProcessReconciliation, DaemonRuntimeOptions, DispatchWorkflowStartSummary, ProjectTickSnapshot,
-    ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
+    BudgetBreachEvent, CompletedProcessReconciliation, DaemonRuntimeOptions, DispatchWorkflowStartSummary,
+    ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput, TickBudget,
 };
 
 #[async_trait::async_trait(?Send)]
@@ -46,6 +46,15 @@ pub trait ProjectTickHooks {
 
     async fn cleanup_stale_workflows(&mut self, _root: &str, _max_age_hours: u64) -> Result<usize> {
         Ok(0)
+    }
+
+    /// Evaluate declared workflow/phase budget caps against observed spend
+    /// and act on any newly crossed cap (record + pause). Runs on the
+    /// housekeeping cadence only — never per-nudge — because it rescans run
+    /// state on disk. Returns one event per breach enforced THIS sweep so
+    /// the run host can notify exactly once per breach. Default is a no-op.
+    async fn enforce_budget_caps(&mut self, _root: &str) -> Result<Vec<BudgetBreachEvent>> {
+        Ok(Vec::new())
     }
 
     /// Dispatch work into free pool headroom. `limit` caps auto-dispatched

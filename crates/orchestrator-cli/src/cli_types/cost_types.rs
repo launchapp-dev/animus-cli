@@ -12,6 +12,15 @@ pub(crate) enum CostCommand {
     Trends(CostTrendsArgs),
     /// Show token + USD spend for a single chat conversation (v0.5.10).
     Conversation(CostConversationArgs),
+    /// List recorded budget-cap breaches from the scoped breach log.
+    Decisions(CostDecisionsArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct CostDecisionsArgs {
+    /// Only show breaches observed inside this window. Accepts `30m`, `12h`, `7d`, `2w`.
+    #[arg(long, value_name = "DURATION")]
+    pub(crate) since: Option<String>,
 }
 
 #[derive(Debug, Args)]

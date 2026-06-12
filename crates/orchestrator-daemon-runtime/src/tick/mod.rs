@@ -1,3 +1,4 @@
+mod budget_breach_event;
 mod project_tick_context;
 mod project_tick_execution_outcome;
 mod project_tick_hooks;
@@ -11,6 +12,7 @@ mod project_tick_time;
 mod run_project_tick;
 mod tick_summary_builder;
 
+pub use budget_breach_event::BudgetBreachEvent;
 pub use project_tick_context::ProjectTickContext;
 pub use project_tick_execution_outcome::ProjectTickExecutionOutcome;
 pub use project_tick_hooks::ProjectTickHooks;

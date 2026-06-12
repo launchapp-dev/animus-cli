@@ -2,7 +2,7 @@ use animus_runtime_shared::PhaseExecutionEvent;
 use orchestrator_core::{OrchestratorTask, RequirementItem};
 use serde_json::Value;
 
-use crate::{DispatchWorkflowStart, WorkflowFailureEvent};
+use crate::{BudgetBreachEvent, DispatchWorkflowStart, WorkflowFailureEvent};
 
 #[derive(Debug, Clone)]
 pub struct ProjectTickSummaryInput {
@@ -22,4 +22,5 @@ pub struct ProjectTickSummaryInput {
     pub failed_workflow_phases: usize,
     pub phase_execution_events: Vec<PhaseExecutionEvent>,
     pub workflow_failures: Vec<WorkflowFailureEvent>,
+    pub budget_breaches: Vec<BudgetBreachEvent>,
 }

@@ -327,6 +327,12 @@ animus
 │   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`. `--by model` switches to a cross-run model leaderboard (token/USD totals + percentages)
 │   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets (workflow-level totals; not split by provider/model)
 │   └── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
+│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders
+│   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`
+│   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`
+│   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets
+│   ├── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
+│   └── decisions            List recorded budget-cap breaches from the scoped breach log; `--since <DURATION>` filters the window
 │
 ├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)
 │   └── whoami               Print the currently resolved principal (id + kind + peer OS user)

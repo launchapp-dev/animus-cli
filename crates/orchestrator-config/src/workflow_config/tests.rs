@@ -4363,12 +4363,11 @@ mod unenforced_field_warnings {
     }
 
     #[test]
-    fn workflow_and_phase_budgets_are_flagged() {
+    fn budgets_are_no_longer_flagged_as_unenforced() {
+        // Daemon-side enforcement landed: declaring `budget:` must not emit a
+        // declared-but-unenforced warning anymore.
         let yaml = "workflows:\n  - id: flow\n    name: Flow\n    budget:\n      max_cost_usd: 5.0\n    phases:\n      - exploration:\n          budget:\n            max_tokens: 1000\n      - impl\n      - workflow_ref: sub-flow\n";
-        let fields = fields(yaml);
-        assert!(fields.iter().any(|f| f == "workflows.flow.budget"), "{fields:?}");
-        assert!(fields.iter().any(|f| f == "workflows.flow.phases.exploration.budget"), "{fields:?}");
-        assert_eq!(fields.len(), 2, "{fields:?}");
+        assert!(fields(yaml).is_empty(), "{:?}", fields(yaml));
     }
 
     #[test]

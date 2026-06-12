@@ -65,10 +65,10 @@ pub use subject_dispatch::{
     SubjectPluginDispatch, SUBJECT_PLUGINS_DISABLE_ENV,
 };
 pub use tick::{
-    default_slim_project_tick_driver, run_project_tick, run_project_tick_at, DefaultProjectTickServices,
-    DefaultSlimProjectTickDriver, ProjectTickContext, ProjectTickExecutionOutcome, ProjectTickHooks, ProjectTickPlan,
-    ProjectTickPreparation, ProjectTickRunMode, ProjectTickSnapshot, ProjectTickSummary, ProjectTickSummaryInput,
-    ProjectTickTime, TaskStateChangeEvent, TickSummaryBuilder,
+    default_slim_project_tick_driver, run_project_tick, run_project_tick_at, BudgetBreachEvent,
+    DefaultProjectTickServices, DefaultSlimProjectTickDriver, ProjectTickContext, ProjectTickExecutionOutcome,
+    ProjectTickHooks, ProjectTickPlan, ProjectTickPreparation, ProjectTickRunMode, ProjectTickSnapshot,
+    ProjectTickSummary, ProjectTickSummaryInput, ProjectTickTime, TaskStateChangeEvent, TickSummaryBuilder,
 };
 
 #[cfg(test)]
