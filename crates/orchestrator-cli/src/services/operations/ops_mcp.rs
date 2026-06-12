@@ -92,6 +92,8 @@ mod subject_command_args;
 mod subject_inputs;
 #[path = "ops_mcp/subject_tools.rs"]
 mod subject_tools;
+#[path = "ops_mcp/tool_discovery_tools.rs"]
+mod tool_discovery_tools;
 #[path = "ops_mcp/workflow_command_args.rs"]
 mod workflow_command_args;
 #[path = "ops_mcp/workflow_definition_tools.rs"]
@@ -291,7 +293,8 @@ fn new_ao_mcp_server_with_options(
         + AoMcpServer::subject_tool_router()
         + AoMcpServer::logs_tool_router()
         + AoMcpServer::memory_tool_router_for_ao()
-        + AoMcpServer::interaction_tool_router();
+        + AoMcpServer::interaction_tool_router()
+        + AoMcpServer::tool_discovery_tool_router();
     if management {
         tool_router += AoMcpServer::interaction_management_tool_router();
     }

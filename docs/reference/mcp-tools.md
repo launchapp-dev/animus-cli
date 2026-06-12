@@ -1,8 +1,8 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 79 built-in tools across daemon, queue, agent, output,
-workflow, plugin, skill, subject, logs, and top-level memory families. These
+registers 81 built-in tools across daemon, queue, agent, output,
+workflow, plugin, skill, subject, logs, tool-discovery, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
 and returning structured results.
@@ -309,6 +309,21 @@ Discovery order: `~/.animus/plugins.yaml` (or the legacy
 otherwise `~/.animus/plugins/`) → `$ANIMUS_PLUGIN_PATH` → `$PATH`
 (`animus-provider-*` / `animus-plugin-*` prefixes; `$PATH` opt-in via
 `--include-system-path`).
+
+---
+
+## Tool Discovery (2 tools)
+
+Meta-tools over the server's own live tool registry. Agents with tight context
+budgets can discover which `animus.*` tool fits an intent instead of carrying
+every schema. Results always reflect the serving instance's registry — new
+tools become searchable automatically, and the management-gated
+`animus.interactions.*` tools only appear when serving with `--management`.
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `animus.tools.search` | Search the live tool registry by intent keywords. Keywords match tool names, descriptions, and parameter names; results are ranked (name hits outrank description hits outrank parameter hits, and an exact tool-name query always ranks first) and each match carries a compact parameter summary (name, type, required, one-line description). | `query`, `limit` (default 8, max 50) |
+| `animus.tools.list` | List every registered tool grouped by family with a one-line summary each — a compact catalog with no input schemas. | (none) |
 
 ---
 
