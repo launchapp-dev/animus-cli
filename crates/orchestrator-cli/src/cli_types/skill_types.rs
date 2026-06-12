@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SkillCommand {
+    /// Author a new skill definition at project (default) or user scope.
+    Create(SkillCreateArgs),
     /// Search skills across built-in, user, project, and registry sources.
     Search(SkillSearchArgs),
     /// Install a skill with deterministic resolution.
@@ -56,6 +58,35 @@ pub(crate) struct SkillRegistryAddArgs {
 pub(crate) struct SkillRegistryRemoveArgs {
     #[arg(long, help = "Registry identifier to remove.")]
     pub(crate) id: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SkillCreateArgs {
+    #[arg(long, help = "Skill slug: lowercase ASCII letters/digits plus '-'/'_', no path separators.")]
+    pub(crate) name: String,
+    #[arg(long, help = "Human-readable description shown in list/search.")]
+    pub(crate) description: String,
+    #[arg(long, conflicts_with = "prompt_file", help = "Skill instruction body (stored as prompt.system).")]
+    pub(crate) prompt: Option<String>,
+    #[arg(long, help = "Read the skill instruction body from a file instead of --prompt.")]
+    pub(crate) prompt_file: Option<PathBuf>,
+    #[arg(
+        long,
+        help = "Optional category: implementation, testing, review, research, documentation, operations, planning."
+    )]
+    pub(crate) category: Option<String>,
+    #[arg(long, value_delimiter = ',', help = "Optional discovery tags (comma-separated or repeated).")]
+    pub(crate) tags: Vec<String>,
+    #[arg(
+        long,
+        conflicts_with = "user",
+        help = "Write to the project scope at .animus/config/skill_definitions/ (default)."
+    )]
+    pub(crate) project: bool,
+    #[arg(long, help = "Write to the user scope at ~/.animus/config/skill_definitions/ (shared across projects).")]
+    pub(crate) user: bool,
+    #[arg(long, default_value_t = false, help = "Overwrite an existing skill definition at the same scope.")]
+    pub(crate) force: bool,
 }
 
 #[derive(Debug, Args)]

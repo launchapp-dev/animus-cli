@@ -6,8 +6,8 @@ use orchestrator_config::skill_definition::{
 };
 use orchestrator_config::skill_resolution::{list_available_skills, resolve_skill};
 use orchestrator_config::skill_scoping::{
-    load_skill_sources, validate_skill_slug, write_project_skill_yaml, AgentHostScope, SkillSourceOrigin,
-    SkillWriteOutcome,
+    load_skill_sources, parse_skill_category_label, validate_skill_slug, write_skill_yaml, AgentHostScope,
+    SkillSourceOrigin, SkillWriteOutcome, SkillWriteScope,
 };
 use orchestrator_config::AgentToolPolicy;
 use rmcp::model::CallToolResult;
@@ -80,8 +80,14 @@ pub(super) struct SkillCreateInput {
     #[serde(default)]
     project_root: Option<String>,
     /// Skill slug: lowercase ASCII letters/digits plus `-`/`_`, no path
-    /// separators. Becomes the file name `.animus/config/skill_definitions/<name>.yaml`.
+    /// separators. Becomes the file name `<skill_definitions dir>/<name>.yaml`.
     name: String,
+    /// Authoring scope: "project" (default) writes to
+    /// `.animus/config/skill_definitions/`, "user" writes to
+    /// `~/.animus/config/skill_definitions/`. Project shadows user on name
+    /// collision.
+    #[serde(default)]
+    scope: Option<String>,
     /// Human-readable description shown in `list`/`search`.
     description: String,
     /// The skill's instruction body. Stored as `prompt.system`.
@@ -90,7 +96,7 @@ pub(super) struct SkillCreateInput {
     #[serde(default)]
     tags: Vec<String>,
     /// Optional tool allow/deny policy. Trusted because this is a
-    /// project-scoped skill.
+    /// project- or user-scoped skill authored locally.
     #[serde(default)]
     tool_policy: Option<SkillToolPolicyInput>,
     /// Optional preferred model id (e.g. "claude-sonnet-4-6").
@@ -118,8 +124,12 @@ pub(super) struct SkillCreateInput {
 pub(super) struct SkillUpdateInput {
     #[serde(default)]
     project_root: Option<String>,
-    /// Slug of the existing PROJECT-scoped skill to patch.
+    /// Slug of the existing project- or user-scoped skill to patch.
     name: String,
+    /// Scope to patch at: "project" or "user". Optional when the skill exists
+    /// at only one of the two scopes; REQUIRED when it exists at both.
+    #[serde(default)]
+    scope: Option<String>,
     /// New description (replaces existing when supplied).
     #[serde(default)]
     description: Option<String>,
@@ -149,16 +159,26 @@ pub(super) struct SkillUpdateInput {
 const DEFAULT_SKILL_SEARCH_LIMIT: usize = 50;
 
 fn parse_skill_category(raw: &str) -> Result<SkillCategory, McpError> {
-    serde_json::from_value::<SkillCategory>(json!(raw.trim().to_ascii_lowercase())).map_err(|_| {
-        McpError::invalid_params(
-            format!(
-                "unknown category '{}': expected one of implementation, testing, review, research, documentation, operations, planning",
-                raw.trim()
-            ),
-            None,
-        )
-    })
+    parse_skill_category_label(raw).map_err(|err| McpError::invalid_params(err.to_string(), None))
 }
+
+/// Parse the optional authoring `scope` param: "project" or "user".
+/// Returns `None` when the caller did not specify a scope.
+fn parse_skill_write_scope(raw: Option<&str>) -> Result<Option<SkillWriteScope>, McpError> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "project" => Ok(Some(SkillWriteScope::Project)),
+        "user" => Ok(Some(SkillWriteScope::User)),
+        other => {
+            Err(McpError::invalid_params(format!("unknown scope '{other}': expected \"project\" or \"user\""), None))
+        }
+    }
+}
+
+const PROJECT_SHADOWS_USER_NOTE: &str =
+    "project-scoped skills shadow user-scoped skills with the same name during resolution";
 
 impl From<SkillActivationInput> for SkillActivation {
     fn from(input: SkillActivationInput) -> Self {
@@ -410,13 +430,14 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.skill.create",
-        description = "Author a PROJECT-scoped Animus skill. Writes a full-fidelity SkillDefinition as YAML to <project_root>/.animus/config/skill_definitions/<name>.yaml (the project YAML tier that resolution reads at highest priority). `name` must be a slug (lowercase ASCII letters/digits plus '-'/'_', no path separators); `description` and `prompt` are required. Optional: tags, tool_policy {allow,deny}, model, mcp_servers, category, activation {tools,models}, capabilities. Refuses to overwrite an existing skill unless `overwrite` is true. The written file is re-parsed to guarantee it round-trips, so a malformed skill is never left on disk. Project-scope only — structural fields (tool_policy, mcp_servers) are trusted because the skill is project-local. The new skill is immediately discoverable via animus.skill.list / animus.skill.search.",
+        description = "Author an Animus skill at project or user scope. `scope: \"project\"` (default) writes a full-fidelity SkillDefinition as YAML to <project_root>/.animus/config/skill_definitions/<name>.yaml (the tier resolution reads at highest priority); `scope: \"user\"` writes to ~/.animus/config/skill_definitions/<name>.yaml so the skill is available across every project. Project shadows user on name collision. `name` must be a slug (lowercase ASCII letters/digits plus '-'/'_', no path separators); `description` and `prompt` are required. Optional: tags, tool_policy {allow,deny}, model, mcp_servers, category, activation {tools,models}, capabilities. Refuses to overwrite an existing skill at the same scope unless `overwrite` is true. The written file is re-parsed to guarantee it round-trips, so a malformed skill is never left on disk. Structural fields (tool_policy, mcp_servers) are trusted because the skill is authored locally. The new skill is immediately discoverable via animus.skill.list / animus.skill.search.",
         input_schema = ao_schema_for_type::<SkillCreateInput>()
     )]
     async fn ao_skill_create(&self, params: Parameters<SkillCreateInput>) -> Result<CallToolResult, McpError> {
         let SkillCreateInput {
             project_root,
             name,
+            scope,
             description,
             prompt,
             tags,
@@ -429,6 +450,7 @@ impl AoMcpServer {
             overwrite,
         } = params.0;
         let project_root = self.skill_project_root(project_root);
+        let scope = parse_skill_write_scope(scope.as_deref())?.unwrap_or(SkillWriteScope::Project);
 
         let name = validate_skill_slug(&name).map_err(|err| McpError::invalid_params(err.to_string(), None))?;
         let description = description.trim().to_string();
@@ -468,7 +490,7 @@ impl AoMcpServer {
             tags: tags.into_iter().filter(|value| !value.trim().is_empty()).collect(),
         };
 
-        let (path, outcome) = write_project_skill_yaml(Path::new(&project_root), &definition, overwrite)
+        let (path, outcome) = write_skill_yaml(Path::new(&project_root), scope, &definition, overwrite)
             .map_err(|err| McpError::invalid_params(err.to_string(), None))?;
 
         Ok(CallToolResult::structured(json!({
@@ -476,21 +498,24 @@ impl AoMcpServer {
             "result": {
                 "name": name,
                 "path": path.to_string_lossy(),
-                "source": "project",
+                "source": scope.to_string(),
+                "scope": scope.to_string(),
                 "outcome": skill_write_outcome_str(outcome),
+                "note": PROJECT_SHADOWS_USER_NOTE,
             }
         })))
     }
 
     #[tool(
         name = "animus.skill.update",
-        description = "Patch an existing PROJECT-scoped skill at .animus/config/skill_definitions/<name>.yaml. Only the supplied fields change; every other field is preserved from the existing definition. Patchable: description, prompt, tags, tool_policy {allow,deny}, model, mcp_servers, category, capabilities. Fails if the named skill does not resolve to a PROJECT source (use animus.skill.create for new skills; user/pack/agent-host skills are not editable via MCP). The rewritten file is re-parsed to guarantee it round-trips.",
+        description = "Patch an existing project- or user-scoped skill (.animus/config/skill_definitions/<name>.yaml or ~/.animus/config/skill_definitions/<name>.yaml). Only the supplied fields change; every other field is preserved from the existing definition. Patchable: description, prompt, tags, tool_policy {allow,deny}, model, mcp_servers, category, capabilities. Scope rule: when `scope` is omitted the skill is patched at the single scope where it exists; if it exists at BOTH project and user scope the call fails and you must pass `scope: \"project\"` or `scope: \"user\"` explicitly. Fails if the named skill only resolves to an installed/pack/agent-host source (use animus.skill.create for new skills; those sources are not editable via MCP). The rewritten file is re-parsed to guarantee it round-trips.",
         input_schema = ao_schema_for_type::<SkillUpdateInput>()
     )]
     async fn ao_skill_update(&self, params: Parameters<SkillUpdateInput>) -> Result<CallToolResult, McpError> {
         let SkillUpdateInput {
             project_root,
             name,
+            scope,
             description,
             prompt,
             tags,
@@ -501,24 +526,47 @@ impl AoMcpServer {
             capabilities,
         } = params.0;
         let project_root = self.skill_project_root(project_root);
+        let requested_scope = parse_skill_write_scope(scope.as_deref())?;
         let name = validate_skill_slug(&name).map_err(|err| McpError::invalid_params(err.to_string(), None))?;
 
         let sources = load_skill_sources(Path::new(&project_root), None)
             .map_err(|err| McpError::internal_error(format!("failed to load skill sources: {err}"), None))?;
-        let resolved = resolve_skill(&name, &sources)
-            .map_err(|err| McpError::invalid_params(format!("skill '{}' not found: {}", name, err), None))?;
-        if !matches!(resolved.source, SkillSourceOrigin::Project) {
-            return Err(McpError::invalid_params(
-                format!(
-                    "skill '{}' resolves to a {} source; only project-scoped skills can be updated via MCP",
-                    name,
-                    source_tag(&resolved.source)
-                ),
-                None,
-            ));
-        }
+        let definition_at = |origin: SkillSourceOrigin| {
+            sources.iter().filter(|source| source.origin == origin).find_map(|source| source.skills.get(&name)).cloned()
+        };
+        let project_definition = definition_at(SkillSourceOrigin::Project);
+        let user_definition = definition_at(SkillSourceOrigin::User);
 
-        let mut definition = resolved.definition;
+        let (scope, definition) = match (requested_scope, project_definition, user_definition) {
+            (Some(SkillWriteScope::Project), Some(definition), _) => (SkillWriteScope::Project, definition),
+            (Some(SkillWriteScope::User), _, Some(definition)) => (SkillWriteScope::User, definition),
+            (Some(requested), _, _) => {
+                return Err(McpError::invalid_params(format!("skill '{name}' not found at {requested} scope"), None));
+            }
+            (None, Some(definition), None) => (SkillWriteScope::Project, definition),
+            (None, None, Some(definition)) => (SkillWriteScope::User, definition),
+            (None, Some(_), Some(_)) => {
+                return Err(McpError::invalid_params(
+                    format!(
+                        "skill '{name}' exists at both project and user scope; pass scope=\"project\" or scope=\"user\" to disambiguate"
+                    ),
+                    None,
+                ));
+            }
+            (None, None, None) => {
+                let message = match resolve_skill(&name, &sources) {
+                    Ok(resolved) => format!(
+                        "skill '{}' resolves to a {} source; only project-scoped or user-scoped skills can be updated via MCP",
+                        name,
+                        source_tag(&resolved.source)
+                    ),
+                    Err(err) => format!("skill '{name}' not found: {err}"),
+                };
+                return Err(McpError::invalid_params(message, None));
+            }
+        };
+
+        let mut definition = definition;
 
         if let Some(description) = description {
             let trimmed = description.trim().to_string();
@@ -559,7 +607,7 @@ impl AoMcpServer {
             definition.capabilities = capabilities;
         }
 
-        let (path, outcome) = write_project_skill_yaml(Path::new(&project_root), &definition, true)
+        let (path, outcome) = write_skill_yaml(Path::new(&project_root), scope, &definition, true)
             .map_err(|err| McpError::invalid_params(err.to_string(), None))?;
 
         Ok(CallToolResult::structured(json!({
@@ -567,8 +615,10 @@ impl AoMcpServer {
             "result": {
                 "name": name,
                 "path": path.to_string_lossy(),
-                "source": "project",
+                "source": scope.to_string(),
+                "scope": scope.to_string(),
                 "outcome": skill_write_outcome_str(outcome),
+                "note": PROJECT_SHADOWS_USER_NOTE,
             }
         })))
     }
@@ -576,6 +626,12 @@ impl AoMcpServer {
 
 #[cfg(test)]
 mod skill_tool_tests {
+    // Tests that pin HOME hold `crate::test_env_lock()` across tool `.await`s
+    // on purpose: each test runs on its own single-threaded tokio runtime, so
+    // the std mutex cannot deadlock, and the env mutation must stay serialized
+    // for the whole test body.
+    #![allow(clippy::await_holding_lock)]
+
     use super::super::new_ao_mcp_server;
     use super::*;
     use protocol::test_utils::EnvVarGuard;
@@ -629,6 +685,7 @@ mod skill_tool_tests {
         SkillCreateInput {
             project_root: None,
             name: name.to_string(),
+            scope: None,
             description: description.to_string(),
             prompt: prompt.to_string(),
             tags: Vec::new(),
@@ -646,6 +703,7 @@ mod skill_tool_tests {
         SkillUpdateInput {
             project_root: None,
             name: name.to_string(),
+            scope: None,
             description: None,
             prompt: None,
             tags: None,
@@ -809,6 +867,115 @@ mod skill_tool_tests {
         assert_eq!(resolved.definition.prompt.system.as_deref(), Some("original body"));
         assert_eq!(resolved.definition.tags, vec!["keep"]);
         assert_eq!(resolved.definition.model.preferred.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    #[tokio::test]
+    async fn skill_create_default_scope_is_project_and_user_scope_lands_in_home() {
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let (home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let default_result =
+            server.ao_skill_create(Parameters(create_input("default-scope", "desc", "body"))).await.expect("create");
+        let default_payload = data(&default_result);
+        assert_eq!(default_payload.get("scope").and_then(Value::as_str), Some("project"));
+        let default_path = default_payload.get("path").and_then(Value::as_str).expect("path");
+        assert!(default_path.starts_with(project.path().to_str().unwrap()), "project scope writes under project root");
+
+        let mut user_input = create_input("user-scope", "desc", "body");
+        user_input.scope = Some("user".to_string());
+        let user_result = server.ao_skill_create(Parameters(user_input)).await.expect("create user-scoped");
+        let user_payload = data(&user_result);
+        assert_eq!(user_payload.get("scope").and_then(Value::as_str), Some("user"));
+        assert_eq!(user_payload.get("source").and_then(Value::as_str), Some("user"));
+        assert!(
+            user_payload.get("note").and_then(Value::as_str).is_some_and(|note| note.contains("shadow")),
+            "user-scope create should remind about project-shadows-user"
+        );
+        let user_path = user_payload.get("path").and_then(Value::as_str).expect("path");
+        let expected = home.path().join(".animus").join("config").join("skill_definitions").join("user-scope.yaml");
+        assert_eq!(std::path::Path::new(user_path), expected, "user scope must write to the dir the loader reads");
+        assert!(expected.exists());
+
+        let sources = load_skill_sources(project.path(), None).expect("load sources");
+        let resolved = resolve_skill("user-scope", &sources).expect("resolve user-scoped skill");
+        assert!(matches!(resolved.source, SkillSourceOrigin::User));
+    }
+
+    #[tokio::test]
+    async fn skill_create_rejects_unknown_scope() {
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let mut input = create_input("scoped", "desc", "body");
+        input.scope = Some("global".to_string());
+        let err = server.ao_skill_create(Parameters(input)).await.expect_err("unknown scope rejected");
+        assert!(err.message.contains("unknown scope 'global'"), "got: {}", err.message);
+    }
+
+    #[tokio::test]
+    async fn skill_update_requires_explicit_scope_when_skill_exists_at_both() {
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        server
+            .ao_skill_create(Parameters(create_input("both", "project desc", "project body")))
+            .await
+            .expect("create project");
+        let mut user_input = create_input("both", "user desc", "user body");
+        user_input.scope = Some("user".to_string());
+        server.ao_skill_create(Parameters(user_input)).await.expect("create user");
+
+        // Ambiguous: exists at both scopes, no scope supplied.
+        let mut ambiguous = update_input("both");
+        ambiguous.description = Some("patched".to_string());
+        let err = server.ao_skill_update(Parameters(ambiguous)).await.expect_err("ambiguous update should fail");
+        assert!(err.message.contains("both project and user scope"), "got: {}", err.message);
+
+        // Explicit user scope patches the user file and leaves project intact.
+        let mut user_patch = update_input("both");
+        user_patch.scope = Some("user".to_string());
+        user_patch.description = Some("patched user".to_string());
+        let result = server.ao_skill_update(Parameters(user_patch)).await.expect("user-scoped update");
+        let payload = data(&result);
+        assert_eq!(payload.get("scope").and_then(Value::as_str), Some("user"));
+
+        let sources = load_skill_sources(project.path(), None).expect("load sources");
+        let resolved = resolve_skill("both", &sources).expect("resolve");
+        assert!(matches!(resolved.source, SkillSourceOrigin::Project), "project still shadows user");
+        assert_eq!(resolved.definition.description, "project desc");
+        let user_source = sources.iter().find(|s| matches!(s.origin, SkillSourceOrigin::User)).expect("user source");
+        assert_eq!(user_source.skills.get("both").map(|s| s.description.as_str()), Some("patched user"));
+    }
+
+    #[tokio::test]
+    async fn skill_update_infers_single_scope_and_rejects_missing_scope_target() {
+        let _lock = crate::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let (_home, _guard) = isolated_home();
+        let project = TempDir::new().expect("project tempdir");
+        let server = new_ao_mcp_server(&project_root_for(&project));
+
+        let mut user_input = create_input("user-only", "user desc", "user body");
+        user_input.scope = Some("user".to_string());
+        server.ao_skill_create(Parameters(user_input)).await.expect("create user");
+
+        // Scope omitted: exists only at user scope, so it is patched there.
+        let mut patch = update_input("user-only");
+        patch.description = Some("patched".to_string());
+        let result = server.ao_skill_update(Parameters(patch)).await.expect("update infers user scope");
+        assert_eq!(data(&result).get("scope").and_then(Value::as_str), Some("user"));
+
+        // Explicit project scope: no project-tier definition exists.
+        let mut wrong_scope = update_input("user-only");
+        wrong_scope.scope = Some("project".to_string());
+        wrong_scope.description = Some("nope".to_string());
+        let err = server.ao_skill_update(Parameters(wrong_scope)).await.expect_err("missing at project scope");
+        assert!(err.message.contains("not found at project scope"), "got: {}", err.message);
     }
 
     #[tokio::test]
