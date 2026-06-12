@@ -17,10 +17,8 @@ mod pack_types;
 mod plugin_types;
 mod queue_types;
 
-mod project_types;
 mod root_types;
 mod secret_types;
-mod self_types;
 mod shared_types;
 mod skill_types;
 mod state_types;
@@ -49,10 +47,8 @@ pub(crate) use pack_types::*;
 pub(crate) use plugin_types::*;
 pub(crate) use queue_types::*;
 
-pub(crate) use project_types::*;
 pub(crate) use root_types::*;
 pub(crate) use secret_types::*;
-pub(crate) use self_types::*;
 pub(crate) use shared_types::*;
 pub(crate) use skill_types::*;
 pub(crate) use state_types::*;
@@ -494,18 +490,69 @@ mod tests {
     }
 
     #[test]
-    fn parses_self_update_command() {
-        let cli = Cli::try_parse_from(["animus", "self", "update", "--check-only", "--prerelease"])
-            .expect("self update should parse");
-        match cli.command {
-            Command::SelfCmd { command: SelfCommand::Update(args) } => {
-                assert!(args.check_only);
-                assert!(args.prerelease);
-                assert!(!args.force);
-                assert!(!args.yes);
-            }
-            _ => panic!("expected self update command"),
+    fn rejects_removed_self_command_tree() {
+        for argv in [vec!["animus", "self"], vec!["animus", "self", "update"]] {
+            let error =
+                Cli::try_parse_from(argv.clone()).expect_err("the `self` group was folded into top-level `update`");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "argv {argv:?}");
         }
+    }
+
+    #[test]
+    fn top_level_update_accepts_force_and_prerelease_folded_from_self_update() {
+        let cli = Cli::try_parse_from(["animus", "update", "--force", "--prerelease", "--yes"])
+            .expect("update --force --prerelease should parse");
+        match cli.command {
+            Command::Update(args) => {
+                assert!(args.force);
+                assert!(args.prerelease);
+                assert!(args.yes);
+                assert!(!args.check);
+            }
+            _ => panic!("expected update command"),
+        }
+    }
+
+    #[test]
+    fn rejects_removed_project_command_tree() {
+        for argv in [vec!["animus", "project"], vec!["animus", "project", "list"], vec!["animus", "project", "create"]]
+        {
+            let error = Cli::try_parse_from(argv.clone()).expect_err("the `project` group was removed");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "argv {argv:?}");
+        }
+    }
+
+    #[test]
+    fn rejects_removed_git_verbs() {
+        for argv in [
+            vec!["animus", "git", "status"],
+            vec!["animus", "git", "commit"],
+            vec!["animus", "git", "push"],
+            vec!["animus", "git", "pull"],
+            vec!["animus", "git", "branches"],
+            vec!["animus", "git", "repo", "get"],
+            vec!["animus", "git", "repo", "init"],
+            vec!["animus", "git", "repo", "clone"],
+            vec!["animus", "git", "worktree", "create"],
+            vec!["animus", "git", "worktree", "get"],
+            vec!["animus", "git", "worktree", "remove"],
+            vec!["animus", "git", "worktree", "pull"],
+            vec!["animus", "git", "worktree", "push"],
+            vec!["animus", "git", "worktree", "sync"],
+            vec!["animus", "git", "worktree", "sync-status"],
+        ] {
+            let error = Cli::try_parse_from(argv.clone()).expect_err("removed git verb should reject");
+            assert_eq!(error.kind(), ErrorKind::InvalidSubcommand, "argv {argv:?}");
+        }
+    }
+
+    #[test]
+    fn keeps_supported_git_verbs() {
+        Cli::try_parse_from(["animus", "git", "repo", "list"]).expect("git repo list should parse");
+        Cli::try_parse_from(["animus", "git", "worktree", "list", "--repo", "current"])
+            .expect("git worktree list should parse");
+        Cli::try_parse_from(["animus", "git", "worktree", "prune", "--repo", "current"])
+            .expect("git worktree prune should parse");
     }
 
     #[test]
@@ -900,22 +947,6 @@ mod tests {
             }
             other => panic!("expected history search, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn project_set_active_is_primary_and_load_alias_is_retired() {
-        let cli = Cli::try_parse_from(["animus", "project", "set-active", "--id", "PRJ-1"])
-            .expect("project set-active should parse");
-        match cli.command {
-            Command::Project { command: ProjectCommand::SetActive(args) } => assert_eq!(args.id, "PRJ-1"),
-            other => panic!("expected project set-active, got {other:?}"),
-        }
-        let error = Cli::try_parse_from(["animus", "project", "load", "--id", "PRJ-1"])
-            .expect_err("project load was retired in v0.6 and must fail to parse");
-        assert_eq!(error.kind(), ErrorKind::InvalidSubcommand);
-        let help = subcommand_help(&["project"]);
-        assert!(help_lists_subcommand(&help, "set-active"), "project help must list `set-active`:\n{help}");
-        assert!(!help_lists_subcommand(&help, "load"), "project help must not list the retired `load` verb:\n{help}");
     }
 
     #[test]

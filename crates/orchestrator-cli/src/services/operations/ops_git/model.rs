@@ -25,16 +25,6 @@ pub(super) struct GitWorktreeInfoCli {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub(super) struct GitSyncStatusCli {
-    pub(super) worktree_name: String,
-    pub(super) clean: bool,
-    #[serde(default)]
-    pub(super) branch: Option<String>,
-    #[serde(default)]
-    pub(super) ahead_behind: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct GitConfirmationOutcomeCli {
     pub(super) success: bool,
     pub(super) message: String,

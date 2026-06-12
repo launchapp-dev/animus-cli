@@ -138,16 +138,6 @@ animus
 │   ├── export               Export a transcript (`--format markdown|json`, `--output <path>`)
 │   └── search               Grep conversation transcripts across the scope (`--limit`, `--case-sensitive`)
 │
-├── project                  Manage project registration and metadata
-│   ├── list                 List registered projects
-│   ├── active               Show the active project
-│   ├── get                  Get a project by id
-│   ├── create               Create a new project entry
-│   ├── set-active           Mark a project as active
-│   ├── rename               Rename a project
-│   ├── archive              Archive a project
-│   └── remove               Remove a project
-│
 ├── queue                    Inspect and mutate the daemon dispatch queue
 │   ├── list                 List queued dispatches
 │   ├── stats                Show queue statistics
@@ -206,27 +196,12 @@ animus
 │   ├── search               Search history records (`--since 7d|12h|30m` relative window, or RFC3339 `--started-after`/`--started-before`; `--since` conflicts with `--started-after`)
 │   └── cleanup              Remove old history records
 │
-├── git                      Manage Git repositories and worktrees
+├── git                      Inspect Git repositories and worktrees
 │   ├── repo
-│   │   ├── list             List registered repositories
-│   │   ├── get              Get details for one repository
-│   │   ├── init             Initialize and register a local repository
-│   │   └── clone            Clone and register a repository
-│   ├── branches             List repository branches
-│   ├── status               Show repository status
-│   ├── commit               Commit staged/untracked changes
-│   ├── push                 Push branch updates
-│   ├── pull                 Pull branch updates
+│   │   └── list             List registered repositories
 │   └── worktree
-│       ├── create           Create a repository worktree
 │       ├── list             List repository worktrees
-│       ├── get              Get one worktree by name
-│       ├── remove           Remove a worktree (approval required)
-│       ├── prune            Prune managed task worktrees for done/cancelled tasks
-│       ├── pull             Pull updates in a worktree
-│       ├── push             Push updates from a worktree
-│       ├── sync             Pull then push a worktree
-│       └── sync-status      Show synchronization status for a worktree
+│       └── prune            Prune managed task worktrees for done/cancelled tasks
 │
 ├── approval                 Manage approval records gating destructive operations (formerly `git confirm`)
 │   ├── request              Request an approval record for a destructive operation
@@ -335,10 +310,7 @@ animus
 │   ├── info                 Print a parsed flavor manifest (TOML by default, JSON via `--json`)
 │   └── install              Install every plugin the named flavor's manifest marks `required` (delegates to `animus plugin install-defaults --flavor <name>`); `--include-recommended` adds the recommended set
 │
-├── self                     Manage the `animus` binary itself — check for and install updates
-│   └── update               Check for, download, and atomically install a newer `animus` release
-│
-├── update                   Top-level alias for `animus self update` (`--check / --yes / --channel`)
+├── update                   Manage the `animus` binary itself — check for, download, and atomically install a newer release (`--check / --yes / --channel / --force / --prerelease`)
 │
 ├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
 │   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders. `--by provider|model` groups in-window active-run spend by tool or model with token/USD totals and percentages
@@ -678,21 +650,23 @@ Answering emits an `interaction_answered` record to the daemon event log
 
 ### `animus approval` (formerly `git confirm`)
 
-Manages the approval records that gate destructive git operations
-(`force_push`, `remove_worktree`, `prune_worktrees`, `remove_repo`,
-`hard_reset`, `clean_untracked`). Commands like `animus git push --force` and
-`animus git worktree remove` refuse to run until an approved record exists and
-its id is passed back via `--confirmation-id`.
+Manages the approval records that gate destructive git operations.
+`animus git worktree prune` refuses to run until an approved
+`prune_worktrees` record exists and its id is passed back via
+`--confirmation-id`. The record schema still accepts the legacy
+operation types (`force_push`, `remove_worktree`, `remove_repo`,
+`hard_reset`, `clean_untracked`) for plugins that perform their own git
+mutations.
 
 ```bash
-animus approval request --operation-type force_push --repo-name demo
+animus approval request --operation-type prune_worktrees --repo-name demo
 animus approval respond --request-id <ID> --approved [--comment <TEXT>]
-animus approval outcome --request-id <ID> --success --message "pushed"
+animus approval outcome --request-id <ID> --success --message "pruned"
 ```
 
 | Flag | Description |
 |---|---|
-| `--operation-type <TYPE>` | (`request`) Operation type, for example `force_push` or `remove_worktree` |
+| `--operation-type <TYPE>` | (`request`) Operation type, for example `prune_worktrees` |
 | `--repo-name <REPO>` | (`request`) Repository the approval applies to |
 | `--context-json <JSON>` | (`request`) Optional JSON context payload stored on the record |
 | `--request-id <ID>` | (`respond` / `outcome`) Approval request identifier |
@@ -1344,9 +1318,9 @@ animus-trigger-<name>/
   - .gitignore
 ```
 
-### `animus update` (v0.5.8)
+### `animus update`
 
-Top-level shorthand for the existing `animus self update` flow. Polls
+The canonical self-update command. Polls
 `launchapp-dev/animus-cli` GitHub releases, verifies the downloaded
 tarball against the `digest` field on the asset (or the sha256 sidecar
 inline in the release body, when present), and atomically swaps the
@@ -1359,17 +1333,19 @@ naming conventions, host allowlist, and rollback procedure.
 | `--check` | Print latest available + installed, exit without touching the binary. Exit 0 when an update is available, 1 when already current. |
 | `--yes` | Skip the interactive `[y/N]` confirmation (required under CI / when stdin is not a tty). |
 | `--channel <stable\|nightly>` | Release channel to poll. `stable` follows the latest non-prerelease release (default); `nightly` follows the most recent prerelease (mapped to `AutoUpdateChannel::Prerelease`). |
+| `--force` | Re-install the resolved release even when it matches the installed version (repairs a broken install). |
+| `--prerelease` | Consider prereleases regardless of the selected `--channel`. |
 | `--json` (global) | Emit the `animus.update.cli.v1` envelope: `{ schema, action: "up_to_date" \| "available" \| "installed", current, latest?, installed?, channel }`. |
 
-`animus self update` keeps its existing surface (`--check-only / --force
-/ --prerelease / --yes`) and is unchanged. The top-level command is a
-discoverability alias — both call the same `run_manual_update` flow.
+The former `animus self update` group was retired in v0.5.x — `animus
+update` is the only self-update surface, with `--check` replacing the old
+`--check-only` and `--force` / `--prerelease` folded in. No aliases.
 
 ## Summary
 
 | Metric | Count |
 |---|---|
-| Top-level commands | 23 |
-| Nested command entries (all levels) | 175 |
+| Top-level commands | 21 |
+| Nested command entries (all levels) | 151 |
 
 Counts exclude autogenerated `help` entries.

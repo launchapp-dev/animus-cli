@@ -24,16 +24,18 @@ struct UpdateOutput {
 
 pub(crate) async fn handle_update(args: UpdateArgs, project_root: &str, json: bool) -> Result<()> {
     let block = resolve_effective_config_block(project_root);
-    let channel = channel_from_arg(args.channel);
-    // The top-level `animus update --channel <c>` is an explicit user
-    // selection — it must beat both `auto_update.channel` in config and
-    // any `prerelease_override` boolean. Use `channel_override` so a
-    // `--channel stable` request never silently picks up a prerelease
-    // from a prerelease-configured project.
+    // `--prerelease` (folded in from the retired `self update`) forces the
+    // prerelease channel regardless of `--channel`, matching the documented
+    // "include prereleases regardless of channel" semantics. Otherwise the
+    // explicit `--channel <c>` selection wins. Either way we resolve to a
+    // concrete channel and pass it as `channel_override` so an
+    // `auto_update.channel` config block can never silently flip the user's
+    // explicit choice.
+    let channel = if args.prerelease { AutoUpdateChannel::Prerelease } else { channel_from_arg(args.channel) };
     let options = ManualUpdateOptions {
         check_only: args.check,
-        force: false,
-        prerelease_override: false,
+        force: args.force,
+        prerelease_override: args.prerelease,
         assume_yes: args.yes,
         channel_override: Some(channel),
     };

@@ -55,11 +55,6 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ChatCommand,
     },
-    /// Manage project registration and metadata.
-    Project {
-        #[command(subcommand)]
-        command: ProjectCommand,
-    },
     /// Inspect and mutate the daemon dispatch queue.
     Queue {
         #[command(subcommand)]
@@ -146,15 +141,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: FlavorCommand,
     },
-    /// Manage the `animus` binary itself — check for and install updates.
-    #[command(name = "self")]
-    SelfCmd {
-        #[command(subcommand)]
-        command: SelfCommand,
-    },
-    /// Check for and install a newer `animus` release in one step.
-    /// Thin top-level alias over `animus self update` with the simplified
-    /// `--check / --yes / --channel` surface.
+    /// Check for and install a newer `animus` release. Manages the
+    /// `animus` binary itself with the `--check / --yes / --channel /
+    /// --force / --prerelease` surface.
     Update(UpdateArgs),
     /// Inspect token + USD spend across workflow runs (v0.5.5).
     Cost {

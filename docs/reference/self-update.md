@@ -1,8 +1,10 @@
-# Self-update — `animus update` / `animus self update`
+# Self-update — `animus update`
 
-This page documents the binary self-update path used by both
-`animus update` (v0.5.8 top-level alias) and `animus self update`
-(the original, kept for back-compat).
+This page documents the binary self-update path used by `animus update`,
+the canonical self-update command. The former `animus self update` group
+was retired in v0.5.x with no aliases; `--check` replaces the old
+`--check-only`, and `--force` / `--prerelease` are folded into
+`animus update`.
 
 ## Source of truth
 

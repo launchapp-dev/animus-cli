@@ -258,7 +258,6 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Logs { command } => services::operations::handle_logs(command, &project_root, cli.json).await,
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
-        Command::SelfCmd { command } => services::operations::handle_self(command, &project_root, cli.json).await,
         Command::Update(args) => services::operations::handle_update(args, &project_root, cli.json).await,
         Command::Cost { command } => services::operations::handle_cost(command, &project_root, cli.json).await,
         Command::Chat { command } => services::runtime::handle_chat(command, &project_root, cli.json).await,
@@ -279,7 +278,6 @@ async fn run(cli: Cli) -> Result<()> {
                 Command::Agent { command } => {
                     services::runtime::handle_agent(command, hub.clone(), &project_root, cli.json).await
                 }
-                Command::Project { command } => services::runtime::handle_project(command, hub.clone(), cli.json).await,
                 Command::Queue { command } => {
                     services::operations::handle_queue(command, hub.clone(), &project_root, cli.json).await
                 }
@@ -310,7 +308,6 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Logs { .. }
                 | Command::Subject { .. }
                 | Command::Flavor { .. }
-                | Command::SelfCmd { .. }
                 | Command::Update(_)
                 | Command::Cost { .. }
                 | Command::Chat { .. }
@@ -334,7 +331,7 @@ fn spawn_startup_update_check(cli: &Cli) -> Option<StartupCheck> {
     if cli.json {
         return None;
     }
-    if matches!(cli.command, Command::SelfCmd { .. } | Command::Update(_) | Command::Version) {
+    if matches!(cli.command, Command::Update(_) | Command::Version) {
         return None;
     }
     let runtime_config = RuntimeConfig { project_root: cli.project_root.clone(), ..RuntimeConfig::default() };
@@ -357,8 +354,8 @@ fn spawn_startup_update_check(cli: &Cli) -> Option<StartupCheck> {
             Err(_) => {
                 // Network errors during a fire-and-forget check are silently
                 // suppressed — the subcommand the user actually asked for is
-                // what matters. Operators can run `animus self update
-                // --check-only` to surface failures.
+                // what matters. Operators can run `animus update --check`
+                // to surface failures.
             }
         }
     });
@@ -379,7 +376,6 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Daemon { .. } => CommandGroup::Daemon,
         Command::Agent { .. } => CommandGroup::Agent,
         Command::Chat { .. } => CommandGroup::Chat,
-        Command::Project { .. } => CommandGroup::Project,
         Command::Queue { .. } => CommandGroup::Queue,
         Command::Workflow { .. } => CommandGroup::Workflow,
         Command::History { .. } => CommandGroup::History,
@@ -398,8 +394,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Logs { .. } => CommandGroup::Logs,
         Command::Subject { .. } => CommandGroup::Subject,
         Command::Flavor { .. } => CommandGroup::Flavor,
-        Command::SelfCmd { .. } => CommandGroup::SelfUpdate,
-        Command::Update(_) => CommandGroup::SelfUpdate,
+        Command::Update(_) => CommandGroup::Update,
         Command::Cost { .. } => CommandGroup::Cost,
         Command::Auth { .. } => CommandGroup::Auth,
         Command::Events { .. } => CommandGroup::Events,

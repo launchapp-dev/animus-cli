@@ -27,7 +27,7 @@ Animus is a Rust-only agent orchestrator with:
 
 - the current Cargo workspace members under `crates/`, as defined in `Cargo.toml`
 - the CLI binary named `animus`
-- a visible CLI surface that includes `project` and `queue`
+- a visible CLI surface that includes `queue`, `subject`, and `workflow`
 - scoped runtime state under `~/.animus/<repo-scope>/`
 - project-local workflow YAML overlays under `.animus/workflows.yaml` or `.animus/workflows/*.yaml`
 - the web UI now ships as the standalone `launchapp-dev/animus-web-ui` plugin (paired with `animus-transport-http` + `animus-transport-graphql`); the old in-tree web stack is no longer part of the current Cargo workspace
@@ -168,9 +168,9 @@ Web UI:
 Visible top-level command groups currently include:
 
 - `daemon` (with `start`, `run`, `stop`, `status`, `preflight`, ...)
-- `agent`, `project`, `queue`, `workflow`, `subject`
+- `agent`, `queue`, `workflow`, `subject`
 - `history`, `git`, `approval`, `skill`
-- `status`, `output`, `mcp`, `web`, `init`, `doctor`
+- `status`, `output`, `mcp`, `web`, `init`, `doctor`, `update`
 - `pack`, `plugin` (with `install`, `install-defaults`, `list`, `info`, ...), `trigger`, `logs`, `flavor`
 
 Hidden but implemented: none currently. The former hidden
@@ -214,6 +214,24 @@ all subject ops route through the `SubjectRouter` to installed
 `kind=task` and `kind=requirement` surfaces routable. Use
 `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` to skip subject discovery
 entirely.
+
+Removed in v0.5.x (surface shrink, no aliases — same policy as the
+model/runner removals): the `animus project` command group (the project
+registry was a CLI-only facade with no daemon/workflow/MCP consumers — the
+daemon routes purely via git-root + repo-scope; the `ProjectServiceApi`
+trait, its impls, `project_shared`, and the `ServiceHub::projects()`
+method were deleted from `orchestrator-core`). The `animus self` group
+(its only verb was `self update`) folded into the canonical top-level
+`animus update` — `--check` replaces `--check-only`, and `--force` /
+`--prerelease` are folded in alongside `--yes` / `--channel`. The
+`animus git` group was trimmed to inspection-only: `git repo list`,
+`git worktree list`, and `git worktree prune` survive; `git repo
+{get,init,clone}`, `git branches`, `git status`, `git commit`, `git push`,
+`git pull`, and `git worktree {create,get,remove,pull,push,sync,sync-status}`
+were deleted (merge/PR/commit behavior lives in the out-of-tree workflow
+runner plugin via `post_success.merge`, not these in-tree handlers — there
+were never any `animus.git.*` MCP tools). `git worktree prune` keeps its
+`prune_worktrees` approval gate.
 
 Removed in v0.5.14: the top-level `animus metrics` group — telemetry
 controls (`status`, `enable`, `disable`, `flush`, `cleanup`) folded into
