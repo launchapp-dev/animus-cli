@@ -690,6 +690,8 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         // an EXPLICIT "uncapped" override (clamped to 0) so it overrides any
         // workflow-YAML `daemon.budget` cap instead of falling through to it.
         config["max_daily_usd"] = serde_json::json!(v.max(0.0));
+        updated = true;
+    }
     if let Some(v) = args.silent_threshold_mins {
         config["silent_threshold_mins"] = serde_json::json!(v);
         updated = true;

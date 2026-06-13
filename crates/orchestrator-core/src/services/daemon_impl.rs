@@ -427,6 +427,7 @@ impl DaemonServiceApi for InMemoryServiceHub {
             flavor: crate::flavor::load_flavor(crate::flavor::DEFAULT_FLAVOR_ID).ok().flatten().map(|m| m.id),
             runtime_paused: matches!(lock.daemon_status, DaemonStatus::Paused),
             paused_at: None,
+            degraded_reasons: Vec::new(),
         })
     }
 
@@ -644,6 +645,7 @@ impl DaemonServiceApi for FileServiceHub {
             flavor: active_flavor_for_project(&self.project_root),
             runtime_paused,
             paused_at,
+            degraded_reasons: degraded_reasons_for(&self.project_root, &status),
         };
         write_daemon_health_cache(&self.project_root, &value);
         Ok(value)
@@ -801,6 +803,7 @@ mod tests {
             flavor: None,
             runtime_paused: false,
             paused_at: None,
+            degraded_reasons: Vec::new(),
         }
     }
 
