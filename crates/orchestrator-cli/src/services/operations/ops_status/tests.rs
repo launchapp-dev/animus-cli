@@ -116,8 +116,12 @@ fn active_agent_assignments_are_limited_to_daemon_count() {
     assert_eq!(assignments[0].workflow_id, "WF-001");
 }
 
-fn silence_context_with(workflow_id: &str, last_output_at: DateTime<Utc>, threshold_secs: u64, now: DateTime<Utc>)
--> SilenceContext {
+fn silence_context_with(
+    workflow_id: &str,
+    last_output_at: DateTime<Utc>,
+    threshold_secs: u64,
+    now: DateTime<Utc>,
+) -> SilenceContext {
     let mut last = HashMap::new();
     last.insert(workflow_id.to_string(), last_output_at);
     SilenceContext { last_output_at: last, threshold_secs, now }

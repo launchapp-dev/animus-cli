@@ -679,12 +679,8 @@ fn build_active_agents_slice(
 ) -> ActiveAgentsSlice {
     let count = daemon_health.map(|health| health.active_agents).unwrap_or(0);
     let empty_titles = HashMap::new();
-    let assignments = active_agent_assignments(
-        count,
-        workflows.unwrap_or_default(),
-        task_titles.unwrap_or(&empty_titles),
-        silence,
-    );
+    let assignments =
+        active_agent_assignments(count, workflows.unwrap_or_default(), task_titles.unwrap_or(&empty_titles), silence);
     ActiveAgentsSlice { available: daemon_health.is_some(), count, assignments, error }
 }
 

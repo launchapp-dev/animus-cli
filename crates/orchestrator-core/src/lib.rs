@@ -34,8 +34,8 @@ pub use agent_runtime_config::{
 };
 pub use config::RuntimeConfig;
 pub use daemon_config::{
-    daemon_project_config_path, load_daemon_project_config, resolve_silent_threshold_mins,
-    write_daemon_project_config, DaemonProjectConfig, DAEMON_PROJECT_CONFIG_FILE_NAME, DEFAULT_SILENT_THRESHOLD_MINS,
+    daemon_project_config_path, load_daemon_project_config, resolve_silent_threshold_mins, write_daemon_project_config,
+    DaemonProjectConfig, DAEMON_PROJECT_CONFIG_FILE_NAME, DEFAULT_SILENT_THRESHOLD_MINS,
 };
 pub use daemon_tick_metrics::DaemonTickMetrics;
 pub use doctor::{DoctorCheck, DoctorCheckResult, DoctorCheckStatus, DoctorRemediation, DoctorReport};
