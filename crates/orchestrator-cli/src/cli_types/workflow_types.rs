@@ -223,7 +223,12 @@ pub(crate) struct WorkflowRunArgs {
         help = "Workflow definition name from project YAML or an installed pack (e.g. standard-workflow, hotfix-workflow, vendor.pack/review)."
     )]
     pub(crate) pipeline: Option<String>,
-    #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id to run the workflow for.")]
+    #[arg(
+        long,
+        value_name = "TASK_ID",
+        group = "subject",
+        help = "Task to run the workflow for. Accepts a bare id (TASK-001) or the qualified form (task:TASK-001)."
+    )]
     pub(crate) task_id: Option<String>,
     #[arg(long, value_name = "REQ_ID", group = "subject", help = "Requirement id to run the workflow for.")]
     pub(crate) requirement_id: Option<String>,

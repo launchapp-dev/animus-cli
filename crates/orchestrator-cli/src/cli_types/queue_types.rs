@@ -62,14 +62,14 @@ pub(crate) struct QueueSubjectArgs {
         value_name = "SUBJECT_ID",
         required_unless_present_any = ["subject_id", "all"],
         conflicts_with = "all",
-        help = "Queued subject identifiers (one or more)."
+        help = "Queued subject ids (one or more). Each accepts a bare id (TASK-001) or the qualified form (task:TASK-001)."
     )]
     pub(crate) subject_ids: Vec<String>,
     #[arg(
         long = "subject-id",
         value_name = "SUBJECT_ID",
         conflicts_with = "all",
-        help = "Queued subject identifier (flag form; may be combined with positional ids)."
+        help = "Queued subject id (flag form; may be combined with positional ids). Accepts bare or qualified form."
     )]
     pub(crate) subject_id: Option<String>,
     #[arg(

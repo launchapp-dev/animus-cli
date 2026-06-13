@@ -410,7 +410,12 @@ pub(crate) async fn handle_workflow(
                 print_value(pruned, json)
             }
         },
-        WorkflowCommand::Run(args) => {
+        WorkflowCommand::Run(mut args) => {
+            // Accept either a bare task id (`TASK-001`) or the `task:`-qualified
+            // form (`task:TASK-001`); the task store keys on the bare native id,
+            // so normalize at the CLI boundary. Only the `task:` qualifier is
+            // stripped so a foreign-kind qualifier is not silently rewritten.
+            args.task_id = args.task_id.map(|id| crate::bare_task_id(&id));
             let workflow_ref = args.pipeline.clone();
             if args.sync {
                 let execute_args = WorkflowExecuteArgs {
