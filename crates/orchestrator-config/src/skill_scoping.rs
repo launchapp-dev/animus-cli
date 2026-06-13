@@ -432,6 +432,7 @@ fn load_markdown_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, Sk
         .collect();
     candidates.sort();
 
+    let mut parse_failures = 0usize;
     for candidate in candidates {
         let path = markdown_skill_file_for_path(&candidate);
         if !path.is_file() {
@@ -442,13 +443,43 @@ fn load_markdown_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, Sk
             Ok(skill) => {
                 skills.insert(skill.name.clone(), skill);
             }
-            Err(error) => {
-                eprintln!("warning: could not parse markdown skill {}: {}", path.display(), error);
+            Err(_) => {
+                parse_failures += 1;
             }
         }
     }
 
+    // Other agent hosts (`~/.claude`, `~/.codex`, `~/.cursor`,
+    // `~/.config/opencode`) ship SKILL.md files in formats Animus does not
+    // parse. Emitting one `warning:` line per file sprayed ~12 lines across
+    // every compile/validate run. Aggregate to a single line per directory,
+    // and only warn the first time a given directory fails within this
+    // process (a single CLI command rescans the same agent-host dirs several
+    // times — once per overlay/validate/runtime load leg).
+    if parse_failures > 0 && mark_skill_parse_warning_emitted(dir) {
+        eprintln!(
+            "warning: {parse_failures} markdown skill{} in {} failed to parse (skipped)",
+            if parse_failures == 1 { "" } else { "s" },
+            dir.display(),
+        );
+    }
+
     Ok(skills)
+}
+
+/// Process-global set of agent-host skill directories that have already
+/// emitted a parse-failure warning. Returns `true` the first time a given
+/// directory is seen, `false` thereafter, so a single CLI command that
+/// rescans the same directory across several config-load legs warns once.
+fn mark_skill_parse_warning_emitted(dir: &Path) -> bool {
+    use std::sync::OnceLock;
+    static WARNED_DIRS: OnceLock<Mutex<BTreeSet<PathBuf>>> = OnceLock::new();
+    let set = WARNED_DIRS.get_or_init(|| Mutex::new(BTreeSet::new()));
+    let mut guard = match set.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    };
+    guard.insert(dir.to_path_buf())
 }
 
 pub fn markdown_skill_file_for_path(path: &Path) -> PathBuf {
@@ -1236,6 +1267,21 @@ Check behavior before style.
         assert_eq!(skill.name, "review");
         assert_eq!(skill.description, "Review guidance");
         assert!(skill.prompt.system.as_deref().is_some_and(|body| body.contains("Check behavior before style.")));
+    }
+
+    #[test]
+    fn test_load_markdown_skills_skips_unparseable_without_failing() {
+        let tmp = TempDir::new().unwrap();
+        // A valid skill alongside two foreign-format SKILL.md files that
+        // Animus cannot parse (no description, name validation fails). The
+        // unparseable entries must be skipped, not bubble up as an error,
+        // and the valid one must still load.
+        fs::write(tmp.path().join("good.md"), "---\ndescription: Good skill\n---\n\n# Good\n\nBody.\n").unwrap();
+        fs::write(tmp.path().join("bad-one.md"), "---\n  : [unbalanced\nfoo: : :\n---\n").unwrap();
+        fs::write(tmp.path().join("bad-two.md"), "---\n\tname: tab-indented\n: broken\n---\n").unwrap();
+
+        let skills = load_markdown_skills_from_directory(tmp.path()).expect("directory load must not error");
+        assert!(skills.contains_key("good"), "valid skill must load even when siblings fail");
     }
 
     #[test]

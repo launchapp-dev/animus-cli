@@ -465,8 +465,18 @@ workflows:
         target_branch: main
 "#;
     let err = parse_yaml_workflow_config(yaml).expect_err("invalid merge strategy should fail parsing");
-    let message = err.to_string();
-    assert!(message.contains("strategy must be one of"), "error should mention supported strategies: {}", message);
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("post_success.merge.strategy must be one of"),
+        "error should mention supported strategies on the post_success path: {}",
+        message
+    );
+    assert!(
+        message.contains("workflows['standard']"),
+        "error should name the offending workflow, not a nonexistent 'merge' phase: {}",
+        message
+    );
+    assert!(!message.contains("phases['merge']"), "error must not reference a phase named 'merge': {}", message);
 }
 
 #[test]
@@ -4133,6 +4143,41 @@ workflows:
     let msg = format!("{:#}", err);
     assert!(msg.contains("unknown field"), "expected unknown-field diagnostic, got: {msg}");
     assert!(msg.contains("did you mean `workflow_ref`"), "expected workflow_ref suggestion, got: {msg}");
+}
+
+#[test]
+fn diagnostic_caret_points_at_offending_list_entry_not_prior_valid_one() {
+    // A valid `- build` entry sits on the line before the broken
+    // `- workflow_reff:` entry. serde_yaml anchors the unknown-field error
+    // on the sequence start; the enrich pass must re-anchor the caret onto
+    // the line that actually declares the unknown field.
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "You are a SWE."
+workflows:
+- id: bad
+  phases:
+  - build
+  - workflow_reff: standard
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("typo must error");
+    let diag = err
+        .chain()
+        .find_map(|source| source.downcast_ref::<super::yaml_diagnostic::YamlDiagnostic>())
+        .expect("a YamlDiagnostic must be present in the chain");
+    let line = diag.line.expect("diagnostic must carry a line");
+    let offending_line = yaml.lines().nth(line.saturating_sub(1)).unwrap_or_default();
+    assert!(
+        offending_line.contains("workflow_reff"),
+        "caret must land on the broken `- workflow_reff:` entry, got line {line}: {offending_line:?}"
+    );
 }
 
 #[test]
