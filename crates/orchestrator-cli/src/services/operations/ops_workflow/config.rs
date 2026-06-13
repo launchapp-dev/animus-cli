@@ -590,27 +590,25 @@ mod tests {
     }
 
     #[test]
-    fn validate_payload_bad_merge_strategy_carries_rich_error() {
+    fn validate_payload_rejects_removed_post_success_merge() {
         let dir = tempdir().unwrap();
         let animus = dir.path().join(".animus");
         fs::create_dir_all(&animus).unwrap();
-        let yaml = "phases:\n  alpha:\n    mode: agent\n    agent_id: a\nagents:\n  a:\n    description: d\n    system_prompt: p\n    skills: []\nworkflows:\n  - id: ship\n    name: Ship\n    phases:\n      - alpha\n    post_success:\n      merge:\n        strategy: frobnicate\n        target_branch: main\n";
+        let yaml = "phases:\n  alpha:\n    mode: agent\n    agent_id: a\nagents:\n  a:\n    description: d\n    system_prompt: p\n    skills: []\nworkflows:\n  - id: ship\n    name: Ship\n    phases:\n      - alpha\n    post_success:\n      merge:\n        strategy: squash\n        target_branch: main\n";
         fs::write(animus.join("workflows.yaml"), yaml).unwrap();
         let project_root = dir.path().to_string_lossy().to_string();
 
         let value = validate_workflow_config_payload(&project_root);
-        assert_eq!(value["valid"], serde_json::json!(false), "bad strategy must fail: {value}");
+        assert_eq!(value["valid"], serde_json::json!(false), "post_success.merge must fail: {value}");
         let errors = value["errors"].as_array().expect("errors array");
         let first = &errors[0];
         let message = first["message"].as_str().unwrap_or_default();
+        let rendered = first["rendered"].as_str().unwrap_or_default();
         assert!(
-            message.contains("strategy must be one of")
-                || first["rendered"].as_str().unwrap_or_default().contains("strategy must be one of"),
-            "error must name supported strategies: {first}"
+            message.contains("`post_success.merge` was removed")
+                || rendered.contains("`post_success.merge` was removed"),
+            "error must mention the removal: {first}"
         );
-        // The misleading 'phases[merge]' path must be gone.
-        let blob = format!("{first}");
-        assert!(!blob.contains("phases['merge']"), "must not reference a phase named 'merge': {blob}");
 
         let human = render_validate_human(&value);
         assert!(human.contains("invalid:"), "human failure must summarize counts: {human}");

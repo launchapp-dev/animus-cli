@@ -544,21 +544,6 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
             }
         }
 
-        if let Some(post_success) = &workflow.post_success {
-            if let Some(merge) = &post_success.merge {
-                if merge.target_branch.trim().is_empty() {
-                    errors.push(format!(
-                        "workflow '{}' post_success.merge.target_branch must not be empty",
-                        workflow_ref
-                    ));
-                }
-
-                if !merge_strategy_is_valid(&merge.strategy) {
-                    errors.push(format!("workflow '{}' post_success.merge.strategy is not supported", workflow_ref));
-                }
-            }
-        }
-
         if let Some(budget) = workflow.budget.as_ref() {
             validate_budget_config(budget, &format!("workflow '{workflow_ref}' budget"), &mut errors);
         }
@@ -1170,19 +1155,19 @@ const UNENFORCED_RULES: &[UnenforcedRule] = &[
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_merge"]),
-        explanation: "this key was removed: the daemon has no merge/PR automation; configure merge behavior per workflow via `post_success.merge` (executed by the workflow runner plugin)",
+        explanation: "this key was removed: the daemon has no merge/PR automation; express commit/push/PR/merge as a command phase (a phase with a `command:` running `git`/`gh`)",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_pr"]),
-        explanation: "this key was removed: the daemon has no merge/PR automation; configure PR creation per workflow via `post_success.merge.create_pr` (executed by the workflow runner plugin)",
+        explanation: "this key was removed: the daemon has no merge/PR automation; express PR creation as a command phase (a phase with a `command:` running `gh pr create`)",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_commit_before_merge"]),
-        explanation: "this key was removed: the daemon has no merge/PR automation; merge behavior lives in `post_success.merge` on a workflow (executed by the workflow runner plugin)",
+        explanation: "this key was removed: the daemon has no merge/PR automation; express commit/merge as a command phase (a phase with a `command:` running `git`)",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_prune_worktrees"]),
-        explanation: "this key was removed: the daemon has no merge/PR automation; worktree cleanup lives in `post_success.merge.cleanup_worktree` on a workflow (executed by the workflow runner plugin)",
+        explanation: "this key was removed: the daemon has no merge/PR automation; express worktree cleanup as a command phase (a phase with a `command:` running `git worktree`)",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::PhaseEvals,

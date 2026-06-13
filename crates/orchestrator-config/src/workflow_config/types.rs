@@ -287,52 +287,11 @@ pub struct WorkflowDefinition {
     pub description: String,
     #[serde(default)]
     pub phases: Vec<WorkflowPhaseEntry>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub post_success: Option<PostSuccessConfig>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub variables: Vec<WorkflowVariable>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeConfig>,
     pub budget: Option<BudgetConfig>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-#[derive(Default)]
-pub enum MergeStrategy {
-    Squash,
-    #[default]
-    Merge,
-    Rebase,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MergeConfig {
-    #[serde(default)]
-    pub strategy: MergeStrategy,
-    #[serde(default = "default_target_branch")]
-    pub target_branch: String,
-    #[serde(default)]
-    pub create_pr: bool,
-    #[serde(default)]
-    pub cleanup_worktree: bool,
-}
-
-impl Default for MergeConfig {
-    fn default() -> Self {
-        Self {
-            strategy: MergeStrategy::default(),
-            target_branch: default_target_branch(),
-            create_pr: false,
-            cleanup_worktree: true,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct PostSuccessConfig {
-    #[serde(default)]
-    pub merge: Option<MergeConfig>,
 }
 
 impl WorkflowDefinition {
@@ -784,10 +743,6 @@ impl WebhookTriggerConfig {
     }
 }
 
-pub(crate) fn default_target_branch() -> String {
-    "main".to_string()
-}
-
 pub(crate) fn default_visible() -> bool {
     true
 }
@@ -806,10 +761,6 @@ pub(crate) fn phase_ui_definition(label: &str, description: &str, category: &str
         tags: tags.iter().map(|tag| tag.to_string()).collect(),
         visible: true,
     }
-}
-
-pub(crate) fn merge_strategy_is_valid(strategy: &MergeStrategy) -> bool {
-    matches!(strategy, MergeStrategy::Squash | MergeStrategy::Merge | MergeStrategy::Rebase)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -199,6 +199,14 @@ phase_catalog:
     - git
     - pr
     - automation
+  create-pr-main:
+    label: Create PR (main)
+    description: Push branch and create GitHub PR targeting main after successful implementation
+    category: operations
+    tags:
+    - git
+    - pr
+    - automation
   cleanup:
     label: Cleanup
     description: Delete build artifacts (target/) to free disk space
@@ -432,6 +440,26 @@ phases:
       fields:
         exit_code:
           type: integer
+  create-pr-main:
+    mode: command
+    directive: Create a GitHub PR from the current branch to main
+    command:
+      program: gh
+      args:
+      - pr
+      - create
+      - --fill
+      - --base
+      - main
+      cwd_mode: task_root
+      timeout_secs: 60
+      success_exit_codes:
+      - 0
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
   force-push:
     mode: command
     directive: Force push rebased branch
@@ -589,13 +617,9 @@ workflows:
   - triage
   - refine-requirements
   - workflow_ref: review-cycle
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: review-cycle
   name: Review Cycle
   description: Reusable implementation and verification loop with deterministic gates
@@ -651,13 +675,9 @@ workflows:
       on_verdict:
         rework:
           target: implementation
+  - push-branch
+  - create-pr-main
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: main
-      create_pr: true
-      cleanup_worktree: true
 - id: ao-task-complete
   name: AO Task Complete
   description: "Triage \u2192 Refine \u2192 Implement \u2192 Verify \u2192 PR"
@@ -665,13 +685,9 @@ workflows:
   - triage
   - refine-requirements
   - workflow_ref: review-cycle
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: gated
   name: Gated
   description: "Requirements \u2192 Implement \u2192 Verify \u2192 Push \u2192 PR"

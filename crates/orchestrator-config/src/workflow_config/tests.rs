@@ -30,14 +30,6 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
                 "code-review".to_string().into(),
                 "testing".to_string().into(),
             ],
-            post_success: Some(PostSuccessConfig {
-                merge: Some(MergeConfig {
-                    strategy: MergeStrategy::Merge,
-                    target_branch: "main".to_string(),
-                    create_pr: true,
-                    cleanup_worktree: true,
-                }),
-            }),
             variables: Vec::new(),
             worktree: None,
             budget: None,
@@ -55,14 +47,6 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
                 "code-review".to_string().into(),
                 "testing".to_string().into(),
             ],
-            post_success: Some(PostSuccessConfig {
-                merge: Some(MergeConfig {
-                    strategy: MergeStrategy::Merge,
-                    target_branch: "main".to_string(),
-                    create_pr: true,
-                    cleanup_worktree: true,
-                }),
-            }),
             variables: Vec::new(),
             worktree: None,
             budget: None,
@@ -451,7 +435,7 @@ workflows:
 }
 
 #[test]
-fn yaml_parses_post_success_merge_block() {
+fn yaml_rejects_removed_post_success_merge_block() {
     let yaml = r#"
 workflows:
   - id: standard
@@ -467,35 +451,10 @@ workflows:
         create_pr: true
         cleanup_worktree: false
 "#;
-    let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with post_success");
-    let standard = config.workflows.iter().find(|p| p.id == "standard").expect("workflow_ref");
-    let post_success = standard.post_success.as_ref().expect("post_success should be present");
-    let merge = post_success.merge.as_ref().expect("merge config should be present");
-    assert_eq!(merge.strategy, MergeStrategy::Rebase);
-    assert_eq!(merge.target_branch, "release");
-    assert!(merge.create_pr);
-    assert!(!merge.cleanup_worktree);
-}
-
-#[test]
-fn yaml_rejects_removed_auto_merge_in_post_success_merge() {
-    let yaml = r#"
-workflows:
-  - id: standard
-    name: Standard
-    phases:
-      - requirements
-      - implementation
-      - testing
-    post_success:
-      merge:
-        create_pr: true
-        auto_merge: true
-"#;
-    let err = parse_yaml_workflow_config(yaml).expect_err("auto_merge must be rejected");
+    let err = parse_yaml_workflow_config(yaml).expect_err("post_success.merge must be rejected");
     let message = format!("{err:#}");
-    assert!(message.contains("`auto_merge` was removed"), "unexpected error: {message}");
-    assert!(message.contains("create_pr: true"), "error should suggest create_pr: {message}");
+    assert!(message.contains("`post_success.merge` was removed"), "unexpected error: {message}");
+    assert!(message.contains("command phases"), "error should mention command phases: {message}");
 }
 
 #[test]
@@ -507,37 +466,7 @@ integrations:
     auto_merge: true
 "#;
     let err = parse_yaml_workflow_config(yaml).expect_err("auto_merge must be rejected");
-    assert!(format!("{err:#}").contains("`auto_merge` was removed"));
-}
-
-#[test]
-fn yaml_parses_invalid_merge_strategy() {
-    let yaml = r#"
-workflows:
-  - id: standard
-    name: Standard
-    phases:
-      - requirements
-      - implementation
-      - testing
-    post_success:
-      merge:
-        strategy: invalid
-        target_branch: main
-"#;
-    let err = parse_yaml_workflow_config(yaml).expect_err("invalid merge strategy should fail parsing");
-    let message = format!("{err:#}");
-    assert!(
-        message.contains("post_success.merge.strategy must be one of"),
-        "error should mention supported strategies on the post_success path: {}",
-        message
-    );
-    assert!(
-        message.contains("workflows['standard']"),
-        "error should name the offending workflow, not a nonexistent 'merge' phase: {}",
-        message
-    );
-    assert!(!message.contains("phases['merge']"), "error must not reference a phase named 'merge': {}", message);
+    assert!(format!("{err:#}").contains("`integrations.git.auto_merge` was removed"));
 }
 
 #[test]
@@ -812,7 +741,6 @@ fn make_pipeline(id: &str, phases: Vec<WorkflowPhaseEntry>) -> WorkflowDefinitio
         name: id.to_string(),
         description: String::new(),
         phases,
-        post_success: None,
         variables: Vec::new(),
         worktree: None,
         budget: None,
@@ -1049,7 +977,6 @@ fn resolve_phase_plan_expands_sub_pipelines() {
         name: "Review Cycle".into(),
         description: String::new(),
         phases: vec![WorkflowPhaseEntry::Simple("code-review".into()), WorkflowPhaseEntry::Simple("testing".into())],
-        post_success: None,
         variables: Vec::new(),
         worktree: None,
         budget: None,
@@ -1085,23 +1012,6 @@ fn validate_rejects_missing_sub_pipeline_reference() {
 }
 
 #[test]
-fn validate_rejects_empty_post_success_target_branch() {
-    let mut config = test_workflow_config_with_standard_pipeline();
-    let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
-    standard.post_success = Some(PostSuccessConfig {
-        merge: Some(MergeConfig { target_branch: "".to_string(), ..MergeConfig::default() }),
-    });
-
-    let err = validate_workflow_config(&config).expect_err("empty post_success target branch should be rejected");
-    let message = err.to_string();
-    assert!(
-        message.contains("post_success.merge.target_branch must not be empty"),
-        "error should mention post_success target branch validation: {}",
-        message
-    );
-}
-
-#[test]
 fn validate_rejects_circular_sub_pipeline() {
     let mut config = builtin_workflow_config();
     config.workflows = vec![
@@ -1110,7 +1020,6 @@ fn validate_rejects_circular_sub_pipeline() {
             name: "Standard".into(),
             description: String::new(),
             phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "review".into() })],
-            post_success: None,
             variables: Vec::new(),
             worktree: None,
             budget: None,
@@ -1120,7 +1029,6 @@ fn validate_rejects_circular_sub_pipeline() {
             name: "Review".into(),
             description: String::new(),
             phases: vec![WorkflowPhaseEntry::SubWorkflow(SubWorkflowRef { workflow_ref: "standard".into() })],
-            post_success: None,
             variables: Vec::new(),
             worktree: None,
             budget: None,
@@ -2332,7 +2240,6 @@ fn pipeline_variables_not_serialized_when_empty() {
         name: "Test".to_string(),
         description: String::new(),
         phases: Vec::new(),
-        post_success: None,
         variables: Vec::new(),
         worktree: None,
         budget: None,
@@ -2984,7 +2891,6 @@ fn worktree_and_secrets_serde_roundtrip_through_workflow_config() {
         name: "Standard".to_string(),
         description: String::new(),
         phases: vec!["implementation".to_string().into()],
-        post_success: None,
         variables: Vec::new(),
         worktree: Some(WorktreeConfig {
             mode: WorktreeMode::Skip,
@@ -3373,7 +3279,6 @@ fn validation_surfaces_malformed_trigger_configs() {
         name: "Flow".to_string(),
         description: String::new(),
         phases: vec!["implementation".to_string().into()],
-        post_success: None,
         variables: Vec::new(),
         worktree: None,
         budget: None,
@@ -3484,7 +3389,6 @@ fn workflow_with_budget(id: &str, budget: BudgetConfig) -> WorkflowDefinition {
         name: id.to_string(),
         description: String::new(),
         phases: vec![WorkflowPhaseEntry::Simple("requirements".to_string())],
-        post_success: None,
         variables: Vec::new(),
         worktree: None,
         budget: Some(budget),
