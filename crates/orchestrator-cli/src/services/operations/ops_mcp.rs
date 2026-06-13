@@ -496,6 +496,8 @@ async fn handle_mcp_auth(args: crate::McpAuthArgs, project_root: &str, cli_json:
             }
             let scopes = if dry.requested_scopes.is_empty() {
                 "(none — server default / minimal)".to_string()
+            } else if dry.scopes_auto_detected {
+                format!("{} (auto-detected from server metadata)", dry.requested_scopes.join(", "))
             } else {
                 dry.requested_scopes.join(", ")
             };

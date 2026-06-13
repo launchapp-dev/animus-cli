@@ -6,9 +6,19 @@
 //! injected explicitly — `OAuthState`'s constructors create their own internal
 //! managers and don't expose store injection. The protocol itself (discovery,
 //! DCR, PKCE, code exchange, refresh) is entirely rmcp's; this module only
-//! orchestrates: resolve least-privilege scopes → preview/confirm → discover →
-//! (dry-run stops here) → attach credential store → bind callback →
-//! register/configure → open browser → capture code → exchange → persist.
+//! orchestrates: discover -> resolve scopes (explicit, else auto-detect from
+//! the server's advertised `scopes_supported`) -> preview/confirm -> (dry-run
+//! stops here) -> attach credential store -> bind callback -> register/configure
+//! -> open browser -> capture code -> exchange -> persist.
+//!
+//! Scope resolution runs AFTER discovery because the auto-detect default reads
+//! the server's advertised `scopes_supported` from the discovery metadata,
+//! which only exists post-discovery. Consent is therefore also gated AFTER
+//! discovery, so the preview shows the user the ACTUAL scopes (including
+//! auto-detected ones) before the browser opens. Discovery is a read-only GET
+//! of public RFC 8414 / RFC 9728 metadata and consults no credentials, so
+//! performing it before the consent gate is a benign side effect: a consent
+//! "no" still touches no keychain and obtains no token.
 //!
 //! The keychain-backed credential store is attached only AFTER the
 //! consent/dry-run returns: constructing it materializes the OS-keychain token
@@ -46,10 +56,15 @@ pub struct AuthOutcome {
     pub server: String,
     pub principal: String,
     pub client_id: String,
-    /// Scopes the flow asked the authorization server for (least-privilege:
-    /// empty when none were configured, so the server applies its own
-    /// default). Surfaced so a caller can audit the request breadth.
+    /// Scopes the flow asked the authorization server for. Resolution order:
+    /// explicit `--scopes` > config `scopes:` > the server's advertised
+    /// `scopes_supported` (auto-detected). Empty only when the server
+    /// advertised no scopes and none were configured. Surfaced so a caller can
+    /// audit the request breadth.
     pub requested_scopes: Vec<String>,
+    /// True when `requested_scopes` were auto-detected from the server's
+    /// advertised `scopes_supported` (neither `--scopes` nor config set them).
+    pub scopes_auto_detected: bool,
     pub granted_scopes: Vec<String>,
     pub expires_at: Option<DateTime<Utc>>,
     /// True when the issued token bundle carries a refresh token (so the
@@ -92,6 +107,11 @@ pub struct AuthPreview {
     pub server: String,
     pub base_url: String,
     pub requested_scopes: Vec<String>,
+    /// True when `requested_scopes` were auto-detected from the server's
+    /// advertised `scopes_supported`. The preview marks them as such so the
+    /// user knows ALL advertised scopes were adopted and can narrow with
+    /// `--scopes`.
+    pub scopes_auto_detected: bool,
 }
 
 /// Result of `animus mcp auth <server> --dry-run`: discovery + scope
@@ -102,6 +122,9 @@ pub struct DryRunOutcome {
     pub server: String,
     pub base_url: String,
     pub requested_scopes: Vec<String>,
+    /// True when `requested_scopes` were auto-detected from the server's
+    /// advertised `scopes_supported` (neither `--scopes` nor config set them).
+    pub scopes_auto_detected: bool,
     /// True when the flow would run Dynamic Client Registration (no pinned
     /// `client_id` configured); false when a pinned id would be used.
     pub would_register_client: bool,
@@ -162,43 +185,93 @@ pub struct AuthStatus {
     pub servers: Vec<ServerAuthState>,
 }
 
-/// Resolve the scopes to request from the configured scope sources.
-///
-/// Precedence: CLI `--scopes` (`scopes_override`) > config `scopes:`. When
-/// neither is set, returns an EMPTY set.
-///
-/// Security: an empty result is deliberate least-privilege. We do NOT fall
-/// back to the server's full advertised `scopes_supported` set (rmcp's
-/// `select_scopes`), because that path surfaced an over-broad "all accounts"
-/// consent screen — the authorization server applies its own minimal default
-/// when we request nothing.
-///
-/// Known limitation (rmcp 1.7 API): rmcp's `select_scopes` blends THREE
-/// sources with no way to pick just one — (a) the `WWW-Authenticate` `scope`
-/// the server demanded in its initial 401 (the genuine "required" set), then
-/// (b)/(c) the full advertised `scopes_supported` from protected-resource and
-/// authorization-server metadata (the over-broad set). The required set (a) is
-/// stored in a PRIVATE field with no public accessor, so we cannot request
-/// "required only" without also pulling in the broad (b)/(c) fallback that
-/// caused the bug. We therefore default to empty (the safe choice) and require
-/// explicit `--scopes`/config `scopes:` for servers that demand specific
-/// scopes — the consent screen or a `403 insufficient_scope` from the proxy
-/// will name them. See `docs/reference/mcp-oauth.md#scope-posture`.
-fn resolve_requested_scopes(scopes_override: Option<&[String]>, config_scopes: &[String]) -> Vec<String> {
-    // TODO(codex-p2): if rmcp later exposes the WWW-Authenticate "required"
-    // scopes in isolation (separate from the full advertised set), default to
-    // requesting exactly those instead of empty, so required-scope servers work
-    // out of the box without losing least-privilege.
-    match scopes_override {
-        Some(s) if !s.is_empty() => s.to_vec(),
-        _ => config_scopes.to_vec(),
-    }
+/// The resolved scope request plus how it was determined.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedScopes {
+    scopes: Vec<String>,
+    /// True when `scopes` came from the server's advertised `scopes_supported`
+    /// (neither `--scopes` nor config `scopes:` was set).
+    auto_detected: bool,
 }
 
-/// Render the requested scopes for the consent preview.
-fn scopes_display(scopes: &[String]) -> String {
+/// The sentinel value (case-insensitive) for `--scopes` / config `scopes:` that
+/// forces an EMPTY scope request, opting out of auto-detection so the
+/// authorization server applies its own minimal default. Needed because an
+/// empty/omitted scope list is indistinguishable from "not configured" (and
+/// `OauthConfig.scopes` defaults to an empty `Vec`), so there would otherwise be
+/// no way to request zero scopes against a server that advertises an over-broad
+/// optional set.
+const SCOPES_NONE_SENTINEL: &str = "none";
+
+/// True when a scope list is the explicit "request nothing" sentinel: exactly
+/// one entry equal (case-insensitive) to [`SCOPES_NONE_SENTINEL`].
+fn is_none_sentinel(scopes: &[String]) -> bool {
+    scopes.len() == 1 && scopes[0].eq_ignore_ascii_case(SCOPES_NONE_SENTINEL)
+}
+
+/// Resolve the scopes to request.
+///
+/// Precedence:
+/// 1. CLI `--scopes` (`scopes_override`) — explicit, wins.
+/// 2. config `scopes:` — explicit.
+/// 3. the server's advertised `scopes_supported` from discovery metadata
+///    (`advertised_scopes`) — auto-detected, when neither explicit source set.
+/// 4. EMPTY when the server advertised no scopes either (server applies its own
+///    minimal default).
+///
+/// Opt-out: an explicit `--scopes none` (or config `scopes: [none]`),
+/// case-insensitive, forces an EMPTY request — skipping auto-detection — for a
+/// server that advertises broad optional scopes but accepts a bare (no-`scope`)
+/// authorize. This is the explicit way to keep the pre-auto-detect
+/// server-default behavior. The sentinel only matters at the highest source
+/// that sets it (override beats config), and is treated as "explicitly empty"
+/// (NOT auto-detected); it never falls through to the next tier.
+///
+/// Auto-detection (tier 3) exists because some authorization servers (e.g.
+/// Robinhood's MCP) REQUIRE a specific scope and FAIL the authorize step when
+/// an empty scope is requested. Their advertised `scopes_supported` names the
+/// scope(s) the server expects, so adopting the advertised set makes those
+/// servers work out of the box. Auto-detected results are clearly marked in the
+/// consent preview / dry-run / `--json` output so the user knows all advertised
+/// scopes were adopted and can narrow with `--scopes`. Explicit `--scopes` or
+/// config `scopes:` always override the advertised set.
+fn resolve_requested_scopes(
+    scopes_override: Option<&[String]>,
+    config_scopes: &[String],
+    advertised_scopes: &[String],
+) -> ResolvedScopes {
+    // A non-empty `--scopes` override wins. The `none` sentinel forces empty
+    // (explicit opt-out from auto-detection), otherwise the listed scopes are
+    // requested verbatim.
+    if let Some(s) = scopes_override {
+        if !s.is_empty() {
+            let scopes = if is_none_sentinel(s) { Vec::new() } else { s.to_vec() };
+            return ResolvedScopes { scopes, auto_detected: false };
+        }
+    }
+    // Config scopes are the next explicit source, with the same `none` opt-out.
+    if !config_scopes.is_empty() {
+        let scopes = if is_none_sentinel(config_scopes) { Vec::new() } else { config_scopes.to_vec() };
+        return ResolvedScopes { scopes, auto_detected: false };
+    }
+    // Neither explicit source set: auto-detect the advertised set if any.
+    if !advertised_scopes.is_empty() {
+        return ResolvedScopes { scopes: advertised_scopes.to_vec(), auto_detected: true };
+    }
+    // Nothing advertised either: request none (server applies its default).
+    ResolvedScopes { scopes: Vec::new(), auto_detected: false }
+}
+
+/// Render the requested scopes for the consent preview / dry-run output.
+///
+/// When `auto_detected` is set, the scopes were adopted from the server's
+/// advertised `scopes_supported` (not explicitly requested), so the rendering
+/// marks them as such for transparency.
+fn scopes_display(scopes: &[String], auto_detected: bool) -> String {
     if scopes.is_empty() {
         "(none — server default / minimal)".to_string()
+    } else if auto_detected {
+        format!("{} (auto-detected from server metadata)", scopes.join(", "))
     } else {
         scopes.join(", ")
     }
@@ -229,7 +302,10 @@ fn resolve_consent(preview: &AuthPreview, confirm: Confirm) -> ConfirmDecision {
         Confirm::Callback(cb) => cb(preview),
         Confirm::Interactive => {
             eprintln!("animus mcp auth: about to authorize '{}' ({})", preview.server, preview.base_url);
-            eprintln!("  requesting scopes: {}", scopes_display(&preview.requested_scopes));
+            eprintln!(
+                "  requesting scopes: {}",
+                scopes_display(&preview.requested_scopes, preview.scopes_auto_detected)
+            );
             eprint!("Open browser to authorize? [y/N] ");
             use std::io::Write;
             let _ = std::io::stderr().flush();
@@ -241,13 +317,18 @@ fn resolve_consent(preview: &AuthPreview, confirm: Confirm) -> ConfirmDecision {
 /// Run the interactive authorization-code flow for `server`.
 ///
 /// Resolves the server URL (config or `url_override`), discovers the auth
-/// server, resolves the least-privilege scope set, previews + confirms the
-/// request, binds a loopback callback, performs Dynamic Client Registration
-/// (or uses a pinned `client_id`), opens the browser, captures the redirect,
-/// exchanges the code, and persists tokens in the keychain.
+/// server, resolves the requested scope set, previews + confirms the request,
+/// binds a loopback callback, performs Dynamic Client Registration (or uses a
+/// pinned `client_id`), opens the browser, captures the redirect, exchanges the
+/// code, and persists tokens in the keychain.
 ///
-/// `scopes_override` (CLI `--scopes`) wins over the config's scope list. With
-/// neither set, NO scopes are requested (server default applies). With
+/// Scope precedence: `scopes_override` (CLI `--scopes`) > config `scopes:` >
+/// the server's advertised `scopes_supported` (auto-detected from discovery
+/// metadata) > empty (server default). Because the auto-detect tier reads
+/// discovery metadata, scope resolution AND the consent gate both run AFTER
+/// discovery, so the preview shows the user the actual (possibly auto-detected)
+/// scopes before the browser opens. Discovery is a read-only public-metadata
+/// GET, so a consent "no" still obtains no token and touches no keychain. With
 /// [`RunAuthOptions::dry_run`] set, returns [`AuthResult::DryRun`] after scope
 /// resolution without opening a browser or obtaining any token.
 pub async fn run_auth(project_root: &Path, server: &str, opts: RunAuthOptions<'_>) -> Result<AuthResult> {
@@ -255,35 +336,10 @@ pub async fn run_auth(project_root: &Path, server: &str, opts: RunAuthOptions<'_
     let RunAuthOptions { url_override, scopes_override, assume_yes, json, dry_run, confirm } = opts;
     let resolution = resolve_server_url(project_root, server, url_override)?;
 
-    // Least-privilege scope resolution: explicit `--scopes`/config win; with
-    // neither, request NOTHING and let the server apply its minimal default.
-    let scopes = resolve_requested_scopes(scopes_override, &resolution.scopes);
-    let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
-
     // A blank/whitespace-only client_id is treated as unset (→ DCR) so a
     // config typo doesn't skip registration with an empty id; validation also
     // rejects it up front.
     let pinned_client_id = resolution.client_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
-
-    // Preview + confirm BEFORE any network side effect or browser open, so a
-    // "no" aborts with ZERO side effects (no discovery, no callback bind, no
-    // browser). Default is No. Skipped under `--yes`/`--json`. A dry run is a
-    // read-only inspection and is never gated by consent — it stops before the
-    // browser regardless.
-    if !dry_run {
-        let preview = AuthPreview {
-            server: server.to_string(),
-            base_url: resolution.url.clone(),
-            requested_scopes: scopes.clone(),
-        };
-        let confirm = match confirm {
-            Confirm::Interactive if assume_yes || json => Confirm::AutoProceed,
-            other => other,
-        };
-        if resolve_consent(&preview, confirm) == ConfirmDecision::Deny {
-            return Err(anyhow!("authorization for `{server}` cancelled before opening the browser"));
-        }
-    }
 
     // The `AuthorizationManager` base URL is BOTH the OAuth `resource`
     // indicator (RFC 8707) and the discovery seed in rmcp 1.7. It is the
@@ -291,9 +347,15 @@ pub async fn run_auth(project_root: &Path, server: &str, opts: RunAuthOptions<'_
     // proxy will call; rmcp follows the protected-resource-metadata chain
     // (RFC 9728) to find the authorization server.
     //
-    // Credential-store construction is deferred until AFTER the dry-run /
-    // consent-deny returns: building it calls `scoped_state_root`, which
-    // creates `~/.animus/<repo-scope>` + marker files on disk. A read-only
+    // Discovery runs BEFORE scope resolution and the consent gate: the
+    // auto-detect default reads the server's advertised `scopes_supported`,
+    // which only exists post-discovery, and consent must preview the ACTUAL
+    // (possibly auto-detected) scopes. Discovery is a read-only GET of public
+    // RFC 8414 / RFC 9728 metadata and consults no credentials, so a consent
+    // "no" below still touches no keychain and obtains no token. The
+    // keychain-backed credential store is still constructed only AFTER the
+    // dry-run / consent-deny returns — building it calls `scoped_state_root`,
+    // which creates `~/.animus/<repo-scope>` + marker files; a read-only
     // dry-run (or an aborted login) must not mutate scoped state.
     let mut manager = AuthorizationManager::new(&resolution.url)
         .await
@@ -306,19 +368,64 @@ pub async fn run_auth(project_root: &Path, server: &str, opts: RunAuthOptions<'_
         .map_err(|err| anyhow!("OAuth discovery failed for `{server}` at {}: {err}", resolution.url))?;
     manager.set_metadata(metadata);
 
+    // The advertised scope set for auto-detection. `select_scopes(None, &[])`
+    // returns rmcp's highest-priority advertised set (SEP-835 order): the
+    // `WWW-Authenticate` `scope` from the initial 401 if any, else RFC 9728
+    // protected-resource-metadata `scopes_supported`, else RFC 8414
+    // authorization-server-metadata `scopes_supported` (plus `offline_access`
+    // when the AS advertises it). Passing `None` + EMPTY defaults means it never
+    // substitutes a caller fallback, so an empty return genuinely means the
+    // server advertised nothing. We read it via `select_scopes` rather than
+    // `metadata.scopes_supported` directly because the protected-resource (RFC
+    // 9728) and `WWW-Authenticate` scopes are populated during discovery into
+    // PRIVATE manager fields with no public accessor — reading only the AS
+    // metadata field would miss servers that advertise their required scope
+    // solely via protected-resource metadata. Must run AFTER `set_metadata` so
+    // the AS-metadata tier is visible.
+    let advertised_scopes = manager.select_scopes(None, &[]);
+
+    // Scope resolution (post-discovery): explicit `--scopes`/config win; with
+    // neither, auto-detect from the server's advertised scopes; with nothing
+    // advertised either, request NOTHING (server default).
+    let ResolvedScopes { scopes, auto_detected: scopes_auto_detected } =
+        resolve_requested_scopes(scopes_override, &resolution.scopes, &advertised_scopes);
+    let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
+
     // `--dry-run`: discovery has now validated the endpoint + auth-server
-    // metadata; report the resolved scopes and whether DCR would run WITHOUT
-    // binding the callback, registering a client, opening a browser, or
-    // exchanging any token. No credentials are obtained and the keychain-backed
-    // secret store is never constructed (so no token-store write happens).
+    // metadata and resolved the (possibly auto-detected) scopes; report them
+    // and whether DCR would run WITHOUT binding the callback, registering a
+    // client, opening a browser, or exchanging any token. No credentials are
+    // obtained and the keychain-backed secret store is never constructed (so no
+    // token-store write happens).
     if dry_run {
         return Ok(AuthResult::DryRun(DryRunOutcome {
             server: server.to_string(),
             base_url: resolution.url.clone(),
             requested_scopes: scopes.clone(),
+            scopes_auto_detected,
             would_register_client: pinned_client_id.is_none(),
             authorized: false,
         }));
+    }
+
+    // Preview + confirm before opening the browser. The preview shows the
+    // resolved (possibly auto-detected) scopes so a "no" aborts before the
+    // callback bind / browser open with no token obtained. Default is No.
+    // Skipped under `--yes`/`--json`.
+    {
+        let preview = AuthPreview {
+            server: server.to_string(),
+            base_url: resolution.url.clone(),
+            requested_scopes: scopes.clone(),
+            scopes_auto_detected,
+        };
+        let confirm = match confirm {
+            Confirm::Interactive if assume_yes || json => Confirm::AutoProceed,
+            other => other,
+        };
+        if resolve_consent(&preview, confirm) == ConfirmDecision::Deny {
+            return Err(anyhow!("authorization for `{server}` cancelled before opening the browser"));
+        }
     }
 
     // Past the read-only / abort paths: now it is safe to materialize scoped
@@ -408,6 +515,7 @@ pub async fn run_auth(project_root: &Path, server: &str, opts: RunAuthOptions<'_
         principal,
         client_id,
         requested_scopes: scopes,
+        scopes_auto_detected,
         granted_scopes,
         expires_at,
         has_refresh_token,
@@ -548,39 +656,110 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_scopes_configured_resolves_to_empty_least_privilege() {
-        // The bug fix: with neither --scopes nor config scopes, request NOTHING
-        // (server applies its default) instead of the full advertised set.
-        let resolved = resolve_requested_scopes(None, &[]);
-        assert!(resolved.is_empty(), "default scope set must be empty, got {resolved:?}");
+    fn no_scopes_anywhere_resolves_to_empty_least_privilege() {
+        // Neither --scopes, config, nor advertised → request NOTHING (server
+        // applies its own minimal default).
+        let resolved = resolve_requested_scopes(None, &[], &[]);
+        assert!(resolved.scopes.is_empty(), "default scope set must be empty, got {resolved:?}");
+        assert!(!resolved.auto_detected);
     }
 
     #[test]
-    fn config_scopes_used_when_no_override() {
+    fn advertised_scopes_auto_detected_when_no_explicit_source() {
+        // The fix: with neither --scopes nor config but the server advertises
+        // `scopes_supported`, adopt the advertised set and mark it auto-detected.
+        let advertised = vec!["internal".to_string()];
+        let resolved = resolve_requested_scopes(None, &[], &advertised);
+        assert_eq!(resolved.scopes, advertised);
+        assert!(resolved.auto_detected, "advertised scopes must be flagged auto-detected");
+    }
+
+    #[test]
+    fn config_scopes_used_when_no_override_and_override_advertised() {
         let config = vec!["read:account".to_string()];
-        let resolved = resolve_requested_scopes(None, &config);
-        assert_eq!(resolved, config);
+        let advertised = vec!["all_accounts".to_string(), "trade".to_string()];
+        let resolved = resolve_requested_scopes(None, &config, &advertised);
+        assert_eq!(resolved.scopes, config, "config must override the advertised set");
+        assert!(!resolved.auto_detected, "config scopes are explicit, not auto-detected");
     }
 
     #[test]
-    fn explicit_scopes_win_over_config_and_are_requested_as_is() {
+    fn explicit_scopes_win_over_config_and_advertised() {
         let config = vec!["read:account".to_string(), "trade".to_string()];
+        let advertised = vec!["all_accounts".to_string()];
         let override_scopes = vec!["a".to_string(), "b".to_string()];
-        let resolved = resolve_requested_scopes(Some(&override_scopes), &config);
-        assert_eq!(resolved, override_scopes);
+        let resolved = resolve_requested_scopes(Some(&override_scopes), &config, &advertised);
+        assert_eq!(resolved.scopes, override_scopes);
+        assert!(!resolved.auto_detected, "explicit --scopes are not auto-detected");
     }
 
     #[test]
     fn empty_explicit_override_falls_back_to_config() {
         let config = vec!["read:account".to_string()];
-        let resolved = resolve_requested_scopes(Some(&[]), &config);
-        assert_eq!(resolved, config);
+        let resolved = resolve_requested_scopes(Some(&[]), &config, &[]);
+        assert_eq!(resolved.scopes, config);
+        assert!(!resolved.auto_detected);
+    }
+
+    #[test]
+    fn empty_override_and_config_falls_back_to_advertised() {
+        let advertised = vec!["internal".to_string()];
+        let resolved = resolve_requested_scopes(Some(&[]), &[], &advertised);
+        assert_eq!(resolved.scopes, advertised);
+        assert!(resolved.auto_detected);
+    }
+
+    #[test]
+    fn scopes_none_sentinel_override_forces_empty_skipping_auto_detect() {
+        // `--scopes none` opts out: request NOTHING even though the server
+        // advertises scopes. Not flagged auto-detected.
+        let advertised = vec!["all_accounts".to_string()];
+        for sentinel in [vec!["none".to_string()], vec!["NONE".to_string()], vec!["None".to_string()]] {
+            let resolved = resolve_requested_scopes(Some(&sentinel), &[], &advertised);
+            assert!(resolved.scopes.is_empty(), "`--scopes {sentinel:?}` must force empty");
+            assert!(!resolved.auto_detected);
+        }
+    }
+
+    #[test]
+    fn scopes_none_sentinel_in_config_forces_empty() {
+        let advertised = vec!["all_accounts".to_string()];
+        let config = vec!["none".to_string()];
+        let resolved = resolve_requested_scopes(None, &config, &advertised);
+        assert!(resolved.scopes.is_empty(), "config `scopes: [none]` must force empty");
+        assert!(!resolved.auto_detected);
+    }
+
+    #[test]
+    fn scopes_none_only_triggers_as_sole_entry() {
+        // "none" alongside real scopes is treated as a literal scope name, not
+        // the opt-out sentinel.
+        let scopes = vec!["none".to_string(), "trade".to_string()];
+        let resolved = resolve_requested_scopes(Some(&scopes), &[], &["adv".to_string()]);
+        assert_eq!(resolved.scopes, scopes);
+        assert!(!resolved.auto_detected);
+    }
+
+    #[test]
+    fn override_none_sentinel_wins_over_config() {
+        // `--scopes none` opts out even when config sets real scopes.
+        let resolved =
+            resolve_requested_scopes(Some(&["none".to_string()]), &["read:account".to_string()], &["adv".to_string()]);
+        assert!(resolved.scopes.is_empty());
+        assert!(!resolved.auto_detected);
     }
 
     #[test]
     fn scopes_display_empty_is_minimal_label() {
-        assert_eq!(scopes_display(&[]), "(none — server default / minimal)");
-        assert_eq!(scopes_display(&["a".to_string(), "b".to_string()]), "a, b");
+        assert_eq!(scopes_display(&[], false), "(none — server default / minimal)");
+        assert_eq!(scopes_display(&["a".to_string(), "b".to_string()], false), "a, b");
+    }
+
+    #[test]
+    fn scopes_display_marks_auto_detected() {
+        assert_eq!(scopes_display(&["internal".to_string()], true), "internal (auto-detected from server metadata)");
+        // Empty advertised still renders the minimal label even if flagged.
+        assert_eq!(scopes_display(&[], true), "(none — server default / minimal)");
     }
 
     #[test]
@@ -589,6 +768,7 @@ mod tests {
             server: "robinhood-trading".to_string(),
             base_url: "https://agent.robinhood.com/mcp/trading".to_string(),
             requested_scopes: vec![],
+            scopes_auto_detected: false,
         };
         let decision = resolve_consent(&preview, Confirm::Callback(Box::new(|_| ConfirmDecision::Deny)));
         assert_eq!(decision, ConfirmDecision::Deny);
@@ -600,6 +780,7 @@ mod tests {
             server: "s".to_string(),
             base_url: "https://example.com".to_string(),
             requested_scopes: vec!["only-this".to_string()],
+            scopes_auto_detected: false,
         };
         let decision = resolve_consent(
             &preview,
@@ -637,6 +818,7 @@ mod tests {
             server: "s".to_string(),
             base_url: "https://example.com".to_string(),
             requested_scopes: vec![],
+            scopes_auto_detected: false,
         };
         assert_eq!(resolve_consent(&preview, Confirm::AutoProceed), ConfirmDecision::Proceed);
     }
