@@ -471,13 +471,17 @@ animus trigger       Manage event triggers (file_watcher, webhook, github_webhoo
 animus pack          Install, list, and update workflow packs
 animus plugin        Install, list, inspect, and scaffold stdio plugins
 animus skill         Install and inspect Animus skills
-animus project       Per-project config and scope helpers
 animus git           Worktree and branch helpers
 animus history       Inspect run history (includes phase + runtime error reports)
 animus init          Initialize a project from a template registry or local template
 animus mcp           Start Animus as an MCP server
 animus web           Launch installed web dashboard/transport plugins
 animus status        Project overview at a glance
+animus approval      Manage approvals for destructive operations
+animus auth          Inspect identity and permissions
+animus events        Stream workflow lifecycle events
+animus state         Export and import scoped runtime state
+animus secret        Manage project-scoped secrets in the OS keychain
 animus doctor        Health checks, auto-remediation, and troubleshooting
 ```
 
@@ -492,25 +496,28 @@ Run `animus --help` for the full surface.
 
 ## Architecture
 
-Animus v0.5 is a **kernel + flavors** architecture: a Rust workspace daemon kernel plus a curated bundle of out-of-tree plugins that ship workflow execution, queues, durable steps, and memory. The core crates:
+Animus v0.5 is a **kernel + flavors** architecture: a Rust workspace daemon
+kernel plus a curated bundle of out-of-tree plugins for providers, subject
+backends, workflow execution, queues, transports, and web UI. The current
+workspace members from `Cargo.toml` are:
 
-- `orchestrator-cli` — CLI commands and dispatch
-- `orchestrator-core` — services, state, and workflow lifecycle
-- `orchestrator-config` — workflow YAML scaffolding, loading, and compilation
-- `orchestrator-store` — persistence primitives
-- `protocol` — shared types and routing
-- `animus-runtime-shared` — workflow runtime modules consumed by both the daemon and the `workflow_runner` plugin (extracted in v0.5; published at [`launchapp-dev/animus-runtime-shared`](https://github.com/launchapp-dev/animus-runtime-shared))
-- `agent-runner` — LLM CLI process management, decision recording, and replay-from-log support
-- `orchestrator-session-host` — provider plugin session bridge
-- `oai-runner` — OpenAI-compatible runner
-- `orchestrator-daemon-runtime` — daemon scheduler, cron, event triggers, agent reattach socket back-channel
-- `orchestrator-providers` — provider integrations
-- `orchestrator-git-ops` — worktree and branch management
-- `orchestrator-notifications` — event streaming and notifications
-- `orchestrator-logging` — shared logging utilities
-- `orchestrator-plugin-host` / `animus-plugin-protocol` / `animus-plugin-runtime` — stdio plugin foundation
-- external [`launchapp-dev/animus-protocol`](https://github.com/launchapp-dev/animus-protocol) `v0.5.x` protocol crates — the four new plugin-kind protocol crates (`workflow_runner`, `queue`, `durable_store`, `memory_store`) plus the extended `animus-plugin-protocol`, the re-homed `animus-subject-protocol`, and the generic `animus-plugin-runtime` shell
-- `crates/orchestrator-web-server/` — legacy in-repo web-server directory retained outside the current Cargo workspace
+- `animus-plugin-protocol` — in-tree stdio plugin protocol types
+- `animus-plugin-runtime` — runtime helpers for plugin implementations
+- `protocol` — shared protocol, config, repository-scope, and CLI JSON envelope types
+- `orchestrator-daemon-runtime` — daemon queue, scheduling, subject dispatch, and runtime supervision
+- `orchestrator-logging` — shared tracing and log-file utilities
+- `orchestrator-plugin-host` — plugin discovery, install state, stdio host, and provider session bridge
+- `orchestrator-config` — workflow YAML loading, pack loading, scaffolding, and phase plan resolution
+- `orchestrator-core` — domain services, bootstrap, plugin registry, and state mutation APIs
+- `orchestrator-cli` — main `animus` binary, clap surface, MCP server, and CLI operations
+- `animus-runtime-shared` — shared workflow execution and runtime-contract helpers used by the daemon and external `workflow_runner` plugins
+- `animus-mcp-oauth` — OAuth authorization-code + PKCE helpers and the `animus-mcp-proxy` bridge for protected MCP servers
+
+Provider execution and the web stack are no longer in-tree crates. The
+OpenAI-compatible runner ships as the external
+[`launchapp-dev/animus-provider-oai-agent`](https://github.com/launchapp-dev/animus-provider-oai-agent)
+plugin, and `animus web` resolves external transport/UI plugins rather than an
+embedded web server.
 
 **v0.5 reference plugins** (install via `animus plugin install-defaults`):
 
@@ -578,10 +585,7 @@ curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scrip
 
 ```bash
 rm -f ~/.local/bin/animus \
-  ~/.local/bin/agent-runner \
-  ~/.local/bin/animus-oai-runner \
-  ~/.local/bin/animus-workflow-runner \
-  ~/.local/bin/ao-workflow-runner
+  ~/.local/bin/ao
 ```
 
 <br/>
