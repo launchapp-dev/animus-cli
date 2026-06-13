@@ -147,10 +147,75 @@ pub fn evaluate_caps(project_root: &Path, state: &CostState) -> Result<Vec<super
     Ok(breaches)
 }
 
+/// Half-open `[start, end)` UTC window used to attribute spend to the
+/// interval in which it was incurred (per-event timestamp filter), rather
+/// than rolling up a run's lifetime totals because it was merely *touched*
+/// inside the window.
+#[derive(Debug, Clone, Copy)]
+pub struct CostWindow {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+impl CostWindow {
+    fn contains(&self, ts: DateTime<Utc>) -> bool {
+        ts >= self.start && ts < self.end
+    }
+}
+
 /// Scan `<scoped-root>/runs/` for workflow runs and fold metadata
 /// events into a fresh [`CostState`]. Idempotent and side-effect free.
 pub fn scan_runs(project_root: &Path) -> Result<CostState> {
     scan_runs_skipping(project_root, &std::collections::HashSet::new())
+}
+
+/// Scan live run directories but fold only metadata events whose
+/// timestamp falls inside `window`. The resulting [`CostState`] carries
+/// in-window spend deltas, not lifetime totals — the answer to "what did
+/// this window cost". Per-event timestamps come from the `events.jsonl`
+/// frames the providers write. Side-effect free.
+pub fn scan_runs_in_window(project_root: &Path, window: CostWindow) -> Result<CostState> {
+    let mut state = CostState::default();
+    let runs_dir = runs_root(project_root);
+    if !runs_dir.exists() {
+        return Ok(state);
+    }
+    let run_lookup = collect_session_mappings(&runs_dir)?;
+    let entries = fs::read_dir(&runs_dir).with_context(|| format!("read runs root {}", runs_dir.display()))?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(dir_name) = entry.file_name().to_str().map(ToOwned::to_owned) else {
+            continue;
+        };
+        let events_path = path.join("events.jsonl");
+        if !events_path.exists() {
+            continue;
+        }
+        let mapping = match run_lookup.get(&dir_name).cloned() {
+            Some(mapping) => mapping,
+            None => {
+                if let Some(workflow_id) = dir_name.strip_prefix(WORKFLOW_RUN_PREFIX) {
+                    if workflow_id.is_empty() {
+                        continue;
+                    }
+                    RunMapping {
+                        workflow_id: workflow_id.to_string(),
+                        phase_id: FALLBACK_PHASE_ID.to_string(),
+                        run_id: dir_name.clone(),
+                        provider: None,
+                    }
+                } else {
+                    continue;
+                }
+            }
+        };
+        fold_events_for_run_windowed(&mapping, &events_path, &mut state, Some(window))?;
+    }
+    Ok(state)
 }
 
 /// [`scan_runs`], but skip run directories whose workflow run id is in
@@ -268,10 +333,26 @@ fn collect_session_mappings(runs_dir: &Path) -> Result<HashMap<String, RunMappin
 }
 
 fn fold_events_for_run(mapping: &RunMapping, events_path: &Path, state: &mut CostState) -> Result<bool> {
+    fold_events_for_run_windowed(mapping, events_path, state, None)
+}
+
+/// Fold a run's events into `state`. When `window` is `Some`, only
+/// metadata events whose timestamp falls inside the window contribute
+/// spend — the rollup then reflects in-window deltas instead of lifetime
+/// totals. `None` keeps the lifetime behavior.
+fn fold_events_for_run_windowed(
+    mapping: &RunMapping,
+    events_path: &Path,
+    state: &mut CostState,
+    window: Option<CostWindow>,
+) -> Result<bool> {
     let raw = fs::read_to_string(events_path).with_context(|| format!("read events log {}", events_path.display()))?;
     let mut observed = false;
     let mut started_at: Option<DateTime<Utc>> = None;
     let mut last_observed_at: Option<DateTime<Utc>> = None;
+    // Last timestamp seen on any frame, carried forward to place
+    // untimestamped metadata frames inside/outside the requested window.
+    let mut carry_ts: Option<DateTime<Utc>> = None;
     // A `Finished` / `Error` frame here marks the per-phase RUN as
     // terminal, NOT the workflow. We only carry the status forward
     // when we can be sure the workflow itself is done; for now that
@@ -292,8 +373,22 @@ fn fold_events_for_run(mapping: &RunMapping, events_path: &Path, state: &mut Cos
             Ok(value) => value,
             Err(_) => continue,
         };
+        let line_ts = extract_timestamp(&raw_event, "timestamp");
         if started_at.is_none() {
-            started_at = extract_timestamp(&raw_event, "timestamp");
+            started_at = line_ts;
+        }
+        // Carry the last-seen frame timestamp forward. `AgentRunEvent`
+        // frames that carry a timestamp today are `Started` (run start);
+        // `Metadata` frames carry none on the wire (see
+        // `animus_runtime_shared::ipc::persist_run_event`, which
+        // serializes the bare enum with no envelope timestamp). Window
+        // attribution for an untimestamped metadata frame therefore
+        // falls back to the most recent timestamped frame in the same
+        // run — i.e. the run's `Started` time — so a run that started
+        // outside the window is correctly excluded instead of always
+        // counting as in-window.
+        if let Some(ts) = line_ts {
+            carry_ts = Some(ts);
         }
         // Pull the model id from any sidecar field we have. Different
         // provider plugins use slightly different names; we accept the
@@ -320,6 +415,21 @@ fn fold_events_for_run(mapping: &RunMapping, events_path: &Path, state: &mut Cos
         };
         match event {
             AgentRunEvent::Metadata { cost, tokens, .. } => {
+                // Window attribution: skip events incurred outside the
+                // requested interval so the rollup is in-window spend,
+                // not lifetime totals of a merely-touched run. Metadata
+                // frames carry no timestamp of their own on the wire, so
+                // we place them by the most recent timestamped frame in
+                // the run (`carry_ts`, typically the `Started` frame).
+                // Frames we cannot place at all fall through as in-window
+                // (dropping silently would understate spend).
+                if let Some(window) = window {
+                    if let Some(ts) = extract_timestamp(&raw_event, "timestamp").or(carry_ts) {
+                        if !window.contains(ts) {
+                            continue;
+                        }
+                    }
+                }
                 let mut delta = MetadataDelta::default();
                 if let Some(tokens) = tokens {
                     delta.input_tokens = u64::from(tokens.input);
@@ -333,10 +443,12 @@ fn fold_events_for_run(mapping: &RunMapping, events_path: &Path, state: &mut Cos
                 if let Some(cost) = cost {
                     if cost.is_finite() {
                         delta.cost_usd = cost;
+                        delta.cost_usd_reported = cost;
                     }
                 } else if let Some(model_id) = event_model.as_deref() {
                     if let Some(estimated) = estimate_cost_usd(model_id, total_tokens) {
                         delta.cost_usd = estimated;
+                        delta.cost_usd_estimated = estimated;
                     }
                 }
                 delta.model = event_model;
@@ -406,6 +518,8 @@ fn merge_delta(into: &mut MetadataDelta, from: &MetadataDelta) {
     into.cache_read_tokens = into.cache_read_tokens.saturating_add(from.cache_read_tokens);
     into.cache_write_tokens = into.cache_write_tokens.saturating_add(from.cache_write_tokens);
     into.cost_usd += from.cost_usd;
+    into.cost_usd_reported += from.cost_usd_reported;
+    into.cost_usd_estimated += from.cost_usd_estimated;
     if from.model.is_some() {
         into.model = from.model.clone();
     }
@@ -736,6 +850,114 @@ mod tests {
     }
 
     #[test]
+    fn scan_in_window_folds_only_events_inside_the_window() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let (_override_guard, project_root) = arrange_override(&tmp);
+        let scoped = super::super::persistence::scoped_root(&project_root);
+        write_session_checkpoint(&scoped, "flow", "impl", "run-win");
+        let run_dir = scoped.join("runs").join("run-win");
+        fs::create_dir_all(&run_dir).unwrap();
+        // Two metadata frames with explicit timestamps: one inside the
+        // window, one before it. Hand-built so the `timestamp` field is
+        // present (AgentRunEvent::Metadata does not carry one).
+        let frame = |ts: &str, cost: f64| {
+            let mut value = serde_json::to_value(AgentRunEvent::Metadata {
+                run_id: RunId("run-win".to_string()),
+                cost: Some(cost),
+                tokens: Some(TokenUsage {
+                    input: 100,
+                    output: 100,
+                    reasoning: None,
+                    cache_read: None,
+                    cache_write: None,
+                }),
+            })
+            .unwrap();
+            value.as_object_mut().unwrap().insert("timestamp".to_string(), Value::String(ts.to_string()));
+            serde_json::to_string(&value).unwrap()
+        };
+        let body = format!("{}\n{}\n", frame("2026-06-01T00:00:00Z", 1.00), frame("2026-06-10T00:00:00Z", 0.25));
+        fs::write(run_dir.join("events.jsonl"), body).unwrap();
+
+        // Window covers only the second (later) frame.
+        let window = CostWindow {
+            start: DateTime::parse_from_rfc3339("2026-06-05T00:00:00Z").unwrap().with_timezone(&Utc),
+            end: DateTime::parse_from_rfc3339("2026-06-15T00:00:00Z").unwrap().with_timezone(&Utc),
+        };
+        let state = scan_runs_in_window(&project_root, window).unwrap();
+        let wf = state.workflows.get("flow").expect("workflow tracked");
+        assert!(
+            (wf.total_cost_usd - 0.25).abs() < 1e-9,
+            "only the in-window $0.25 frame counts, got {}",
+            wf.total_cost_usd
+        );
+
+        // The lifetime scan still sees both frames.
+        let lifetime = scan_runs(&project_root).unwrap();
+        let wf = lifetime.workflows.get("flow").expect("workflow tracked");
+        assert!((wf.total_cost_usd - 1.25).abs() < 1e-9, "lifetime sums both frames, got {}", wf.total_cost_usd);
+    }
+
+    #[test]
+    fn scan_marks_estimated_when_provider_omits_cost() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let (_override_guard, project_root) = arrange_override(&tmp);
+        let scoped = super::super::persistence::scoped_root(&project_root);
+        write_session_checkpoint(&scoped, "flow", "impl", "run-est");
+        let run_dir = scoped.join("runs").join("run-est");
+        fs::create_dir_all(&run_dir).unwrap();
+        let mut value = serde_json::to_value(AgentRunEvent::Metadata {
+            run_id: RunId("run-est".to_string()),
+            cost: None,
+            tokens: Some(TokenUsage {
+                input: 500_000,
+                output: 0,
+                reasoning: None,
+                cache_read: None,
+                cache_write: None,
+            }),
+        })
+        .unwrap();
+        value.as_object_mut().unwrap().insert("model_id".to_string(), Value::String("claude-sonnet-4-6".to_string()));
+        fs::write(run_dir.join("events.jsonl"), format!("{}\n", serde_json::to_string(&value).unwrap())).unwrap();
+
+        let state = scan_runs(&project_root).unwrap();
+        let phase = state.workflows.get("flow").unwrap().phases.get("impl").unwrap();
+        assert!((phase.estimated_usd() - 3.0).abs() < 1e-6, "estimate marked, got {}", phase.estimated_usd());
+        assert_eq!(phase.reported_usd(), 0.0, "no vendor cost was reported");
+    }
+
+    #[test]
+    fn scan_marks_reported_when_provider_supplies_cost() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = TempDir::new().unwrap();
+        let (_override_guard, project_root) = arrange_override(&tmp);
+        let scoped = super::super::persistence::scoped_root(&project_root);
+        write_session_checkpoint(&scoped, "flow", "impl", "run-rep");
+        let run_dir = scoped.join("runs").join("run-rep");
+        write_events(
+            &run_dir,
+            &[AgentRunEvent::Metadata {
+                run_id: RunId("run-rep".to_string()),
+                cost: Some(0.42),
+                tokens: Some(TokenUsage {
+                    input: 10,
+                    output: 10,
+                    reasoning: None,
+                    cache_read: None,
+                    cache_write: None,
+                }),
+            }],
+        );
+        let state = scan_runs(&project_root).unwrap();
+        let phase = state.workflows.get("flow").unwrap().phases.get("impl").unwrap();
+        assert!((phase.reported_usd() - 0.42).abs() < 1e-9);
+        assert_eq!(phase.estimated_usd(), 0.0);
+    }
+
+    #[test]
     fn enforce_caps_emits_decision_when_workflow_cap_is_crossed() {
         use super::super::aggregator::BudgetLimitKind;
         use chrono::Utc;
@@ -773,6 +995,8 @@ workflows:
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 cost_usd: 0.0,
+                cost_usd_reported: 0.0,
+                cost_usd_estimated: 0.0,
                 model: None,
                 provider: None,
             },

@@ -16,6 +16,8 @@ pub(crate) use aggregator::{CostState, PhaseCost, WorkflowCost};
 pub(crate) use breach_summary::{summarize_breaches, BudgetBreachSummary};
 pub(crate) use persistence::save_cost_state;
 pub(crate) use scanner::enforce_caps;
+#[allow(unused_imports)]
+pub(crate) use scanner::{scan_runs_in_window, CostWindow};
 
 #[allow(unused_imports)]
 pub(crate) use aggregator::{

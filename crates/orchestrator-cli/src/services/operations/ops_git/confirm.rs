@@ -52,7 +52,8 @@ pub(crate) fn handle_approval(command: ApprovalCommand, project_root: &str, json
                 .iter_mut()
                 .find(|request| request.id == args.request_id)
                 .ok_or_else(|| not_found_error(format!("confirmation request not found: {}", args.request_id)))?;
-            request.approved = Some(args.approved);
+            let approved_decision = args.approved()?;
+            request.approved = Some(approved_decision);
             request.comment = args.comment;
             request.user_id = args.user_id;
             request.responded_at = Some(Utc::now().to_rfc3339());

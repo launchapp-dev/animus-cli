@@ -352,6 +352,31 @@ animus workflow decisions --id wf-...          # 4. why phases advanced/reworked
 animus cost workflow wf-...                    # 5. what it cost
 ```
 
+## Window semantics and estimated cost
+
+`animus cost summary --since <dur>` reports the spend **incurred inside
+the window** by default — the per-event deltas folded from each run's
+`events.jsonl`, scoped to `[window_start, now]`. This answers "what did
+this week cost" honestly: a long-running workflow touched during the
+window contributes only the spend it incurred in the window, not its full
+lifetime total. Pass `--lifetime` to restore the legacy behavior, where
+any run touched in the window contributes its full lifetime spend.
+
+Archived `history` rows retain only workflow-level lifetime totals (no
+per-event detail), so they are attributed wholesale when their
+`finished_at` lands in the window, under both modes.
+
+Cost figures are split into **reported** (vendor-billed; the provider
+emitted a `cost` on its metadata frame) and **estimated** (inferred from
+the model rate table because the provider omitted `cost`). When any
+portion of a total is estimated, the text views print it as
+`~$X.XX (est.)` and the per-row views append `(est.)`, so an inferred
+number is never mistaken for a billed one. The `--json` views carry
+`reported_usd` and `estimated_usd` fields alongside `total_cost_usd`.
+
+Cost output clamps negative-zero / float drift to a clean `$0.00`; the
+spend line never shows `$-0.0000`.
+
 ## Cost attribution by provider and model
 
 Per-phase cost records carry a `(provider, model)` attribution captured

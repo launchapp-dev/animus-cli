@@ -1158,12 +1158,38 @@ mod tests {
             other => panic!("expected approval request, got {other:?}"),
         }
 
-        let respond = Cli::try_parse_from(["animus", "approval", "respond", "--request-id", "confirm-1", "--approved"])
+        let respond = Cli::try_parse_from(["animus", "approval", "respond", "--request-id", "confirm-1", "--approve"])
             .expect("approval respond should parse");
         match respond.command {
             Command::Approval { command: ApprovalCommand::Respond(args) } => {
                 assert_eq!(args.request_id, "confirm-1");
-                assert!(args.approved);
+                assert!(args.approve);
+                assert!(!args.reject);
+                assert!(args.approved().expect("--approve resolves"));
+            }
+            other => panic!("expected approval respond, got {other:?}"),
+        }
+
+        let reject = Cli::try_parse_from(["animus", "approval", "respond", "--request-id", "confirm-1", "--reject"])
+            .expect("approval respond --reject should parse");
+        match reject.command {
+            Command::Approval { command: ApprovalCommand::Respond(args) } => {
+                assert!(!args.approved().expect("--reject resolves"));
+            }
+            other => panic!("expected approval respond, got {other:?}"),
+        }
+
+        // --approve and --reject are mutually exclusive (clap group).
+        Cli::try_parse_from(["animus", "approval", "respond", "--request-id", "confirm-1", "--approve", "--reject"])
+            .expect_err("--approve and --reject must not be combinable");
+
+        // Neither flag: parses, but `approved()` errors rather than
+        // silently rejecting (the footgun this replaces).
+        let neither = Cli::try_parse_from(["animus", "approval", "respond", "--request-id", "confirm-1"])
+            .expect("respond without a decision still parses");
+        match neither.command {
+            Command::Approval { command: ApprovalCommand::Respond(args) } => {
+                assert!(args.approved().is_err(), "omitting the decision must error, not silently reject");
             }
             other => panic!("expected approval respond, got {other:?}"),
         }

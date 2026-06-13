@@ -18,8 +18,8 @@ use crate::cli_types::{
     CostTrendWindow, CostTrendsArgs, CostWorkflowArgs, CostWorkflowBy,
 };
 use crate::services::cost::{
-    aggregator::COST_STATE_SCHEMA_ID, enforce_caps, read_decision_records, refresh_cost_state, CostState, PhaseCost,
-    WorkflowCost,
+    aggregator::{clamp_cost, COST_STATE_SCHEMA_ID},
+    enforce_caps, read_decision_records, refresh_cost_state, CostState, PhaseCost, WorkflowCost,
 };
 use crate::services::runtime::runtime_chat::store::{ConversationStore, FileConversationStore};
 use crate::{invalid_input_error, not_found_error, print_value};
@@ -46,9 +46,35 @@ struct GroupedRow {
     key: String,
     total_tokens: u64,
     total_cost_usd: f64,
+    /// Vendor-reported portion of `total_cost_usd`.
+    #[serde(default)]
+    reported_usd: f64,
+    /// Table-estimated portion of `total_cost_usd`.
+    #[serde(default)]
+    estimated_usd: f64,
     /// Share of the grouped grand total cost, 0.0–100.0. Falls back to
     /// the token share when the grand total cost is zero.
     percent: f64,
+}
+
+/// One ungrouped attribution observation fed to [`group_rows`]: an
+/// optional key plus tokens and the reported / estimated cost split.
+struct GroupEntry<'a> {
+    key: Option<&'a str>,
+    tokens: u64,
+    reported: f64,
+    estimated: f64,
+}
+
+impl<'a> GroupEntry<'a> {
+    fn from_phase(key: Option<&'a str>, phase: &PhaseCost) -> Self {
+        GroupEntry {
+            key,
+            tokens: phase.total_tokens(),
+            reported: phase.reported_usd(),
+            estimated: phase.estimated_usd(),
+        }
+    }
 }
 
 /// Accumulate (tokens, cost) keyed by an attribution dimension, then
@@ -57,20 +83,22 @@ struct GroupedRow {
 /// legacy records still surface.
 fn group_rows<'a, I>(entries: I) -> Vec<GroupedRow>
 where
-    I: IntoIterator<Item = (Option<&'a str>, u64, f64)>,
+    I: IntoIterator<Item = GroupEntry<'a>>,
 {
-    let mut tally: BTreeMap<String, (u64, f64)> = BTreeMap::new();
-    for (key, tokens, cost) in entries {
-        let key = key.map(str::trim).filter(|k| !k.is_empty()).unwrap_or(UNKNOWN_GROUP).to_string();
-        let slot = tally.entry(key).or_insert((0, 0.0));
-        slot.0 = slot.0.saturating_add(tokens);
-        slot.1 += cost;
+    let mut tally: BTreeMap<String, (u64, f64, f64)> = BTreeMap::new();
+    for entry in entries {
+        let key = entry.key.map(str::trim).filter(|k| !k.is_empty()).unwrap_or(UNKNOWN_GROUP).to_string();
+        let slot = tally.entry(key).or_insert((0, 0.0, 0.0));
+        slot.0 = slot.0.saturating_add(entry.tokens);
+        slot.1 += entry.reported;
+        slot.2 += entry.estimated;
     }
-    let grand_cost: f64 = tally.values().map(|(_, cost)| *cost).sum();
-    let grand_tokens: u64 = tally.values().map(|(tokens, _)| *tokens).sum();
+    let grand_cost: f64 = tally.values().map(|(_, reported, estimated)| reported + estimated).sum();
+    let grand_tokens: u64 = tally.values().map(|(tokens, ..)| *tokens).sum();
     let mut rows: Vec<GroupedRow> = tally
         .into_iter()
-        .map(|(key, (tokens, cost))| {
+        .map(|(key, (tokens, reported, estimated))| {
+            let cost = reported + estimated;
             let percent = if grand_cost > 0.0 {
                 cost / grand_cost * 100.0
             } else if grand_tokens > 0 {
@@ -78,7 +106,14 @@ where
             } else {
                 0.0
             };
-            GroupedRow { key, total_tokens: tokens, total_cost_usd: cost, percent }
+            GroupedRow {
+                key,
+                total_tokens: tokens,
+                total_cost_usd: cost,
+                reported_usd: reported,
+                estimated_usd: estimated,
+                percent,
+            }
         })
         .collect();
     rows.sort_by(|a, b| {
@@ -97,10 +132,11 @@ fn render_grouped_rows(rows: &[GroupedRow], dimension: &str) {
         return;
     }
     for row in rows {
+        let est_mark = if clamp_cost(row.estimated_usd) > 0.0 { " (est.)" } else { "" };
         println!(
-            "  {:.<28} ${:>8.4}  {:>10} toks  {:>5.1}%",
+            "  {:.<28} ${:>8}  {:>10} toks  {:>5.1}%{est_mark}",
             truncate(&row.key, 27),
-            row.total_cost_usd,
+            fmt_usd(row.total_cost_usd),
             row.total_tokens,
             row.percent
         );
@@ -226,7 +262,10 @@ fn handle_conversation(project_path: &Path, args: CostConversationArgs, json: bo
         println!("animus cost — conversation {}", view.conversation_id);
         println!(
             "  spend:  ${:.4} across {} tokens ({} in / {} out)",
-            view.total_cost_usd, view.total_tokens, view.input_tokens, view.output_tokens
+            clamp_cost(view.total_cost_usd),
+            view.total_tokens,
+            view.input_tokens,
+            view.output_tokens
         );
         println!("  turns:  {} assistant turns with recorded usage", view.assistant_turns);
         Ok(())
@@ -298,7 +337,7 @@ fn handle_decisions(project_path: &Path, args: CostDecisionsArgs, json: bool) ->
         };
         let (actual, budget) = match record.limit_field {
             crate::services::cost::BudgetLimitField::MaxCostUsd => {
-                (format!("${:.4}", record.actual), format!("${:.4}", record.budget))
+                (format!("${:.4}", clamp_cost(record.actual)), format!("${:.4}", clamp_cost(record.budget)))
             }
             crate::services::cost::BudgetLimitField::MaxTokens => {
                 (format!("{} toks", record.actual as u64), format!("{} toks", record.budget as u64))
@@ -327,6 +366,13 @@ struct SummaryView {
     window_end: DateTime<Utc>,
     total_tokens: u64,
     total_cost_usd: f64,
+    /// Vendor-reported portion of `total_cost_usd`.
+    reported_usd: f64,
+    /// Table-estimated portion of `total_cost_usd` (provider omitted cost).
+    estimated_usd: f64,
+    /// `true` when the per-row totals are in-window spend deltas;
+    /// `false` under `--lifetime` (full lifetime totals for touched runs).
+    windowed: bool,
     active_workflows: usize,
     completed_workflows: usize,
     top_workflows: Vec<TopSpenderRow>,
@@ -338,15 +384,20 @@ struct TopSpenderRow {
     workflow_id: String,
     total_tokens: u64,
     total_cost_usd: f64,
+    #[serde(default)]
+    reported_usd: f64,
+    #[serde(default)]
+    estimated_usd: f64,
     status: String,
 }
 
-/// Summary semantics: `--since` filters which workflow rollups are
-/// included (a workflow is in scope if its `started_at` or
-/// `updated_at` falls inside the window), but the per-row token / USD
-/// totals are the workflow's lifetime spend, not in-window deltas.
-/// Per-event windowing would require keeping a time-series sidecar,
-/// which is out of scope for v0.5.5 (TODO(codex-p2)).
+/// Summary semantics: by default the per-row token / USD totals are the
+/// spend *incurred inside the window* (per-event deltas scanned from the
+/// run `events.jsonl`), so "what did this week cost" answers honestly.
+/// `--lifetime` restores the legacy behavior: any run touched in the
+/// window contributes its full lifetime spend. Archived history runs
+/// carry only lifetime totals (no per-event detail), so they are always
+/// attributed wholesale when their `finished_at` lands in the window.
 fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Result<()> {
     let state = refresh_state(project_path)?;
     let window = args.since.as_deref().unwrap_or("24h");
@@ -354,8 +405,33 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
     let now = Utc::now();
     let window_start = now - duration;
 
+    // Window-delta view: scan the live run events once more, folding only
+    // events inside [window_start, now]. This is the authoritative source
+    // for in-window live-workflow spend. Failure is non-fatal — fall back
+    // to lifetime totals so the summary still renders.
+    let windowed = !args.lifetime;
+    let window_state = if windowed {
+        match crate::services::cost::scan_runs_in_window(
+            project_path,
+            crate::services::cost::CostWindow { start: window_start, end: now },
+        ) {
+            Ok(state) => Some(state),
+            Err(error) => {
+                eprintln!("warning: failed to compute in-window spend ({error}); reporting lifetime totals");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     if let Some(by) = args.by {
-        return handle_summary_breakdown(&state, window, window_start, by, json);
+        // The grouped breakdown honors the same window semantics: when
+        // windowed, group from the in-window scan (per-event deltas);
+        // under `--lifetime` (or when the windowed scan failed), group
+        // from the lifetime state.
+        let breakdown_state = window_state.as_ref().filter(|_| windowed).unwrap_or(&state);
+        return handle_summary_breakdown(breakdown_state, window, window_start, by, json);
     }
 
     let mut active_count: usize = 0;
@@ -377,11 +453,26 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
             crate::services::cost::aggregator::WorkflowCostStatus::Running => active_count += 1,
             _ => completed += 1,
         }
+        // In-window spend is keyed by workflow_id in the windowed scan
+        // (the rollup aggregates per-phase runs under the workflow id),
+        // which matches the live-state `run_id` key here. When a run had
+        // no in-window activity it folds to zeroes rather than its
+        // lifetime totals.
+        let in_window = window_state.as_ref().and_then(|s| s.workflows.get(run_id));
+        let (total_tokens, total_cost_usd, reported_usd, estimated_usd) = match (windowed, in_window) {
+            (true, Some(w)) => (w.total_tokens, w.total_cost_usd, w.reported_usd(), w.estimated_usd()),
+            (true, None) => (0, 0.0, 0.0, 0.0),
+            (false, _) => {
+                (workflow.total_tokens, workflow.total_cost_usd, workflow.reported_usd(), workflow.estimated_usd())
+            }
+        };
         all_rows.push(TopSpenderRow {
             workflow_run_id: run_id.clone(),
             workflow_id: workflow.workflow_id.clone(),
-            total_tokens: workflow.total_tokens,
-            total_cost_usd: workflow.total_cost_usd,
+            total_tokens,
+            total_cost_usd,
+            reported_usd,
+            estimated_usd,
             status: format!("{:?}", workflow.status).to_lowercase(),
         });
     }
@@ -393,12 +484,18 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
                 workflow_id: history.workflow_id.clone(),
                 total_tokens: history.total_tokens,
                 total_cost_usd: history.total_cost_usd,
+                // Archived rows retain no reported/estimated split; treat
+                // as reported (conservative, non-alarming).
+                reported_usd: history.total_cost_usd,
+                estimated_usd: 0.0,
                 status: format!("{:?}", history.final_status).to_lowercase(),
             });
         }
     }
     let total_tokens: u64 = all_rows.iter().map(|row| row.total_tokens).sum();
     let total_cost_usd: f64 = all_rows.iter().map(|row| row.total_cost_usd).sum();
+    let reported_usd: f64 = all_rows.iter().map(|row| row.reported_usd).sum();
+    let estimated_usd: f64 = all_rows.iter().map(|row| row.estimated_usd).sum();
     all_rows.sort_by(|a, b| b.total_cost_usd.partial_cmp(&a.total_cost_usd).unwrap_or(std::cmp::Ordering::Equal));
     all_rows.truncate(args.top);
     let view = SummaryView {
@@ -409,6 +506,9 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
         window_end: now,
         total_tokens,
         total_cost_usd,
+        reported_usd,
+        estimated_usd,
+        windowed,
         active_workflows: active_count,
         completed_workflows: completed,
         top_workflows: all_rows,
@@ -447,7 +547,7 @@ fn handle_summary_breakdown(
     json: bool,
 ) -> Result<()> {
     let now = Utc::now();
-    let mut entries: Vec<(Option<&str>, u64, f64)> = Vec::new();
+    let mut entries: Vec<GroupEntry> = Vec::new();
     for workflow in state.workflows.values() {
         let last_seen = workflow.updated_at.unwrap_or(workflow.started_at);
         if last_seen < window_start && workflow.started_at < window_start {
@@ -458,7 +558,7 @@ fn handle_summary_breakdown(
                 CostSummaryBy::Provider => phase.provider.as_deref(),
                 CostSummaryBy::Model => phase.model.as_deref(),
             };
-            entries.push((key, phase.total_tokens(), phase.cost_usd));
+            entries.push(GroupEntry::from_phase(key, phase));
         }
     }
     let rows = group_rows(entries);
@@ -488,7 +588,12 @@ fn handle_summary_breakdown(
             view.window_start.format("%Y-%m-%d %H:%M UTC"),
             view.window_end.format("%Y-%m-%d %H:%M UTC")
         );
-        println!("  spend:  ${:.4} across {} tokens (active runs only)", view.total_cost_usd, view.total_tokens);
+        let estimated: f64 = view.rows.iter().map(|row| row.estimated_usd).sum();
+        println!(
+            "  spend:  {} across {} tokens (active runs only)",
+            fmt_total_with_estimate(view.total_cost_usd, estimated),
+            view.total_tokens
+        );
         println!();
         render_grouped_rows(&view.rows, view.by);
         print_unknown_attribution_hint(&view.rows, view.by);
@@ -503,10 +608,20 @@ fn print_summary_text(view: &SummaryView) {
         view.window_start.format("%Y-%m-%d %H:%M UTC"),
         view.window_end.format("%Y-%m-%d %H:%M UTC")
     );
+    let scope_note =
+        if view.windowed { "spend incurred in window" } else { "lifetime totals for runs touched in window" };
     println!(
-        "  spend:     ${:.4} across {} tokens (lifetime totals for runs touched in window)",
-        view.total_cost_usd, view.total_tokens
+        "  spend:     {} across {} tokens ({scope_note})",
+        fmt_total_with_estimate(view.total_cost_usd, view.estimated_usd),
+        view.total_tokens
     );
+    if clamp_cost(view.estimated_usd) > 0.0 {
+        println!(
+            "             reported ${:.4} / estimated ${:.4} (estimated = provider omitted vendor cost)",
+            clamp_cost(view.reported_usd),
+            clamp_cost(view.estimated_usd)
+        );
+    }
     println!("  workflows: {} active, {} completed in window", view.active_workflows, view.completed_workflows);
     if view.top_workflows.is_empty() {
         println!("  no workflow activity in window");
@@ -515,13 +630,35 @@ fn print_summary_text(view: &SummaryView) {
     println!();
     println!("  top {} by cost:", view.top_workflows.len());
     for row in &view.top_workflows {
+        let est_mark = if clamp_cost(row.estimated_usd) > 0.0 { " (est.)" } else { "" };
         println!(
-            "    {:.<48} ${:>8.4}  {:>10} toks  [{}]",
+            "    {:.<48} ${:>8}  {:>10} toks  [{}]{est_mark}",
             truncate(&row.workflow_run_id, 47),
-            row.total_cost_usd,
+            fmt_usd(row.total_cost_usd),
             row.total_tokens,
             row.status
         );
+    }
+}
+
+/// Format a USD amount to 4 decimals, clamping negative-zero / float
+/// drift to a clean `0.0000` so trust-sensitive cost output never shows
+/// `$-0.0000`. Returns the bare number (no `$`) for use inside aligned
+/// columns.
+fn fmt_usd(value: f64) -> String {
+    format!("{:.4}", clamp_cost(value))
+}
+
+/// Render a total USD figure with an estimation marker: when any portion
+/// of `total` was table-estimated (provider omitted a vendor cost), the
+/// number is prefixed `~` and suffixed `(est.)` so it is never mistaken
+/// for a vendor-billed amount.
+fn fmt_total_with_estimate(total: f64, estimated: f64) -> String {
+    let total = clamp_cost(total);
+    if clamp_cost(estimated) > 0.0 {
+        format!("~${total:.4} (est.)")
+    } else {
+        format!("${total:.4}")
     }
 }
 
@@ -540,6 +677,10 @@ struct WorkflowView<'a> {
     state_schema: &'static str,
     workflow_run_id: &'a str,
     workflow: &'a WorkflowCost,
+    /// Vendor-reported portion of the workflow's lifetime spend.
+    reported_usd: f64,
+    /// Table-estimated portion of the workflow's lifetime spend.
+    estimated_usd: f64,
     phases: Vec<PhaseRow<'a>>,
 }
 
@@ -571,7 +712,7 @@ fn handle_workflow_breakdown(
     by: CostWorkflowBy,
     json: bool,
 ) -> Result<()> {
-    let entries: Vec<(Option<&str>, u64, f64)> = workflow
+    let entries: Vec<GroupEntry> = workflow
         .phases
         .iter()
         .map(|(phase_id, cost)| {
@@ -580,7 +721,7 @@ fn handle_workflow_breakdown(
                 CostWorkflowBy::Model => cost.model.as_deref(),
                 CostWorkflowBy::Phase => Some(phase_id.as_str()),
             };
-            (key, cost.total_tokens(), cost.cost_usd)
+            GroupEntry::from_phase(key, cost)
         })
         .collect();
     let rows = group_rows(entries);
@@ -602,9 +743,14 @@ fn handle_workflow_breakdown(
     if json {
         print_value(&view, json)
     } else {
+        let estimated: f64 = view.rows.iter().map(|row| row.estimated_usd).sum();
         println!(
-            "workflow {} ({}) by {}: ${:.4} / {} tokens",
-            view.workflow_run_id, view.workflow_id, view.by, view.total_cost_usd, view.total_tokens
+            "workflow {} ({}) by {}: {} / {} tokens",
+            view.workflow_run_id,
+            view.workflow_id,
+            view.by,
+            fmt_total_with_estimate(view.total_cost_usd, estimated),
+            view.total_tokens
         );
         render_grouped_rows(&view.rows, view.by);
         print_unknown_attribution_hint(&view.rows, view.by);
@@ -628,26 +774,29 @@ fn handle_workflow(project_path: &Path, args: CostWorkflowArgs, json: bool) -> R
             state_schema: COST_STATE_SCHEMA_ID,
             workflow_run_id: &args.workflow_run_id,
             workflow,
+            reported_usd: workflow.reported_usd(),
+            estimated_usd: workflow.estimated_usd(),
             phases,
         };
         return if json {
             print_value(&view, json)
         } else {
             println!(
-                "workflow {} ({}): ${:.4} / {} tokens",
+                "workflow {} ({}): {} / {} tokens",
                 view.workflow_run_id,
                 view.workflow.workflow_id,
-                view.workflow.total_cost_usd,
+                fmt_total_with_estimate(view.workflow.total_cost_usd, view.estimated_usd),
                 view.workflow.total_tokens
             );
             if view.phases.is_empty() {
                 println!("  no phase activity yet");
             } else {
                 for row in &view.phases {
+                    let est_mark = if clamp_cost(row.cost.estimated_usd()) > 0.0 { " (est.)" } else { "" };
                     println!(
-                        "  {:<24} ${:>8.4}  {:>10} toks  attempt={}{}",
+                        "  {:<24} ${:>8}  {:>10} toks  attempt={}{}{est_mark}",
                         row.phase_id,
-                        row.cost.cost_usd,
+                        fmt_usd(row.cost.cost_usd),
                         row.total_tokens,
                         row.cost.attempts,
                         row.cost.model.as_deref().map(|m| format!(" model={m}")).unwrap_or_default()
@@ -685,7 +834,11 @@ fn handle_workflow(project_path: &Path, args: CostWorkflowArgs, json: bool) -> R
         } else {
             println!(
                 "workflow {} ({}): ${:.4} / {} tokens  [archived: {}]",
-                view.workflow_run_id, view.workflow_id, view.total_cost_usd, view.total_tokens, view.final_status
+                view.workflow_run_id,
+                view.workflow_id,
+                clamp_cost(view.total_cost_usd),
+                view.total_tokens,
+                view.final_status
             );
             println!("  archived workflows do not retain per-phase detail; use `cost top` for a leaderboard view");
             Ok(())
@@ -731,18 +884,24 @@ struct TopModelsView {
 /// archived history runs carry no model/provider detail and fold into the
 /// `unknown` bucket.
 fn top_grouped_rows(state: &CostState, dimension: &str) -> Vec<GroupedRow> {
-    let mut entries: Vec<(Option<&str>, u64, f64)> = Vec::new();
+    let mut entries: Vec<GroupEntry> = Vec::new();
     for workflow in state.workflows.values() {
         for phase in workflow.phases.values() {
             let key = match dimension {
                 "provider" => phase.provider.as_deref(),
                 _ => phase.model.as_deref(),
             };
-            entries.push((key, phase.total_tokens(), phase.cost_usd));
+            entries.push(GroupEntry::from_phase(key, phase));
         }
     }
     for history in &state.history {
-        entries.push((None, history.total_tokens, history.total_cost_usd));
+        // Archived rows carry no reported/estimated split; treat as reported.
+        entries.push(GroupEntry {
+            key: None,
+            tokens: history.total_tokens,
+            reported: history.total_cost_usd,
+            estimated: 0.0,
+        });
     }
     // Returns the FULL ranking; the caller truncates to `--limit` for display
     // but keeps the full set so the attribution hint sees a large `unknown`
@@ -790,6 +949,8 @@ fn handle_top(project_path: &Path, args: CostTopArgs, json: bool) -> Result<()> 
             workflow_id: workflow.workflow_id.clone(),
             total_tokens: workflow.total_tokens,
             total_cost_usd: workflow.total_cost_usd,
+            reported_usd: workflow.reported_usd(),
+            estimated_usd: workflow.estimated_usd(),
             status: format!("{:?}", workflow.status).to_lowercase(),
         })
         .collect();
@@ -799,6 +960,8 @@ fn handle_top(project_path: &Path, args: CostTopArgs, json: bool) -> Result<()> 
             workflow_id: history.workflow_id.clone(),
             total_tokens: history.total_tokens,
             total_cost_usd: history.total_cost_usd,
+            reported_usd: history.total_cost_usd,
+            estimated_usd: 0.0,
             status: format!("{:?}", history.final_status).to_lowercase(),
         });
     }
@@ -829,11 +992,12 @@ fn handle_top(project_path: &Path, args: CostTopArgs, json: bool) -> Result<()> 
             println!("  (no workflow activity recorded)");
         } else {
             for (idx, row) in view.rows.iter().enumerate() {
+                let est_mark = if clamp_cost(row.estimated_usd) > 0.0 { " (est.)" } else { "" };
                 println!(
-                    "  {:>2}. {:.<46} ${:>8.4}  {:>10} toks  [{}]",
+                    "  {:>2}. {:.<46} ${:>8}  {:>10} toks  [{}]{est_mark}",
                     idx + 1,
                     truncate(&row.workflow_run_id, 45),
-                    row.total_cost_usd,
+                    fmt_usd(row.total_cost_usd),
                     row.total_tokens,
                     row.status
                 );
@@ -905,8 +1069,11 @@ fn handle_trends(project_path: &Path, args: CostTrendsArgs, json: bool) -> Resul
         println!("animus cost trends — {} buckets (window={})", view.buckets.len(), view.window);
         for bucket in &view.buckets {
             println!(
-                "  {:<10} ${:>8.4}  {:>10} toks  ({} runs)",
-                bucket.label, bucket.total_cost_usd, bucket.total_tokens, bucket.workflow_runs
+                "  {:<10} ${:>8}  {:>10} toks  ({} runs)",
+                bucket.label,
+                fmt_usd(bucket.total_cost_usd),
+                bucket.total_tokens,
+                bucket.workflow_runs
             );
         }
         Ok(())
@@ -952,6 +1119,12 @@ fn parse_duration(input: &str) -> Result<Duration> {
 mod tests {
     use super::*;
     use crate::services::runtime::runtime_chat::store::{ChatMessage, ChatRole};
+
+    /// Test helper: build a [`GroupEntry`] from a `(key, tokens, cost)`
+    /// tuple, attributing the cost as fully reported.
+    fn ge(key: Option<&str>, tokens: u64, cost: f64) -> GroupEntry<'_> {
+        GroupEntry { key, tokens, reported: cost, estimated: 0.0 }
+    }
 
     fn assistant_turn(input: u32, output: u32, reasoning: Option<u32>, model: &str, cost: Option<f64>) -> ChatMessage {
         ChatMessage {
@@ -1036,7 +1209,8 @@ mod tests {
     #[test]
     fn group_rows_sums_and_computes_cost_percentages() {
         // claude: 200 tok / $0.75 ; gemini: 100 tok / $0.25 → 75% / 25%.
-        let rows = group_rows([(Some("claude"), 100, 0.50), (Some("claude"), 100, 0.25), (Some("gemini"), 100, 0.25)]);
+        let rows =
+            group_rows([ge(Some("claude"), 100, 0.50), ge(Some("claude"), 100, 0.25), ge(Some("gemini"), 100, 0.25)]);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].key, "claude");
         assert_eq!(rows[0].total_tokens, 200);
@@ -1048,7 +1222,7 @@ mod tests {
 
     #[test]
     fn group_rows_buckets_none_and_empty_under_unknown() {
-        let rows = group_rows([(None, 50, 0.10), (Some(""), 50, 0.10), (Some("  "), 0, 0.0)]);
+        let rows = group_rows([ge(None, 50, 0.10), ge(Some(""), 50, 0.10), ge(Some("  "), 0, 0.0)]);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].key, UNKNOWN_GROUP);
         assert_eq!(rows[0].total_tokens, 100);
@@ -1059,7 +1233,7 @@ mod tests {
     #[test]
     fn group_rows_falls_back_to_token_share_when_cost_is_zero() {
         // No USD reported anywhere → percentage uses token share.
-        let rows = group_rows([(Some("claude"), 300, 0.0), (Some("codex"), 100, 0.0)]);
+        let rows = group_rows([ge(Some("claude"), 300, 0.0), ge(Some("codex"), 100, 0.0)]);
         assert_eq!(rows[0].key, "claude");
         assert!((rows[0].percent - 75.0).abs() < 1e-6);
         assert!((rows[1].percent - 25.0).abs() < 1e-6);
@@ -1171,7 +1345,7 @@ mod tests {
     #[test]
     fn unknown_attribution_hint_fires_above_threshold() {
         // 30% unknown → above the 20% threshold.
-        let rows = group_rows([(Some("claude"), 700, 0.70), (None, 300, 0.30)]);
+        let rows = group_rows([ge(Some("claude"), 700, 0.70), ge(None, 300, 0.30)]);
         let percent = unknown_attribution_percent(&rows).unwrap();
         assert!((percent - 30.0).abs() < 1e-6);
         assert!(percent > UNKNOWN_ATTRIBUTION_HINT_THRESHOLD, "30% must trip the hint");
@@ -1180,7 +1354,7 @@ mod tests {
     #[test]
     fn unknown_attribution_hint_silent_at_or_below_threshold() {
         // Exactly 20% unknown → NOT strictly greater than the threshold.
-        let rows = group_rows([(Some("claude"), 800, 0.80), (None, 200, 0.20)]);
+        let rows = group_rows([ge(Some("claude"), 800, 0.80), ge(None, 200, 0.20)]);
         let percent = unknown_attribution_percent(&rows).unwrap();
         assert!((percent - 20.0).abs() < 1e-6);
         assert!(percent <= UNKNOWN_ATTRIBUTION_HINT_THRESHOLD, "20% must not trip the hint");
@@ -1188,7 +1362,7 @@ mod tests {
 
     #[test]
     fn unknown_attribution_percent_absent_when_fully_attributed() {
-        let rows = group_rows([(Some("claude"), 700, 0.70), (Some("gemini"), 300, 0.30)]);
+        let rows = group_rows([ge(Some("claude"), 700, 0.70), ge(Some("gemini"), 300, 0.30)]);
         assert!(unknown_attribution_percent(&rows).is_none(), "no unknown bucket → no hint");
     }
 
