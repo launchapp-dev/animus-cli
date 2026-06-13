@@ -77,6 +77,20 @@ impl CliHarness {
         self.expect_json_ok(args, output)
     }
 
+    /// Parse the stdout `animus.cli.v1` envelope without asserting the exit
+    /// code. Used by commands like `doctor` that emit a successful data
+    /// envelope on stdout but may still exit non-zero (gateable exit
+    /// contract) — returns the parsed payload alongside the exit code.
+    pub fn run_json_stdout_with_exit(&self, args: &[&str]) -> Result<(Value, i32)> {
+        let output = self.run_json_command(args)?;
+        let payload = parse_envelope_from_bytes(&output.stdout)
+            .with_context(|| format!("failed to parse json stdout from animus command: {}", args.join(" ")))?;
+        if payload.get("schema").and_then(Value::as_str) != Some(CLI_SCHEMA_ID) {
+            anyhow::bail!("unexpected schema for command {}: {}", args.join(" "), payload);
+        }
+        Ok((payload, output.status.code().unwrap_or(-1)))
+    }
+
     fn expect_json_ok(&self, args: &[&str], output: std::process::Output) -> Result<Value> {
         if !output.status.success() {
             anyhow::bail!(

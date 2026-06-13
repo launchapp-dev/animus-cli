@@ -36,31 +36,80 @@ pub(crate) fn run(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
         Err(_) => return out,
     };
 
+    // Collapse per-plugin "no .bundle" warnings into a single summary warn.
+    // On a default install (~7 plugins) every plugin lacks a co-located
+    // signature bundle, which previously emitted one warn per plugin — pure
+    // noise. We surface the count plus the two remediation paths instead.
+    let mut missing: Vec<String> = Vec::new();
+    let mut present = 0usize;
     for plugin in &discovered {
         let bundle_path: PathBuf = plugin.path.with_extension("bundle");
-        let id = format!("cosign_bundle_present.{}", sanitize(&plugin.name));
         if bundle_path.exists() {
-            out.push(
-                DiagnosticCheck::new(id, CATEGORY, CheckStatus::Pass, format!("Signature bundle: {}", plugin.name))
-                    .details(format!("bundle at {}", bundle_path.display())),
-            );
+            present += 1;
         } else {
+            missing.push(plugin.name.clone());
+        }
+    }
+
+    if missing.is_empty() {
+        if present > 0 {
             out.push(
-                DiagnosticCheck::new(id, CATEGORY, CheckStatus::Warn, format!("Signature bundle: {}", plugin.name))
-                    .current(format!("no .bundle at {}", bundle_path.display()))
-                    .expected("matching .bundle file next to plugin binary".to_string())
-                    .fix(CheckFix::command(
-                        "reinstall_plugin_signed",
-                        &format!("Reinstall {} so the install flow re-downloads its signature bundle.", plugin.name),
-                        &format!("animus plugin install {}@latest", plugin.name),
-                    )),
+                DiagnosticCheck::new("cosign_bundles_present", CATEGORY, CheckStatus::Pass, "Plugin signature bundles")
+                    .details(format!("all {present} installed plugin(s) have a co-located signature bundle")),
             );
         }
+    } else {
+        out.push(
+            DiagnosticCheck::new("cosign_bundles_present", CATEGORY, CheckStatus::Warn, "Plugin signature bundles")
+                .current(format!(
+                    "{} plugin(s) installed without signature bundles: {}",
+                    missing.len(),
+                    summarize_names(&missing),
+                ))
+                .expected("matching .bundle file next to each plugin binary".to_string())
+                .fix(CheckFix::manual(
+                    "reinstall_plugins_signed",
+                    &format!(
+                        "{} plugins installed without signature bundles; reinstall to fetch them \
+                         (`animus plugin install <repo>@latest`).",
+                        missing.len(),
+                    ),
+                )),
+        );
     }
 
     out
 }
 
-fn sanitize(name: &str) -> String {
-    name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
+fn summarize_names(names: &[String]) -> String {
+    if names.len() <= 3 {
+        names.join(", ")
+    } else {
+        format!("{}, … (+{} more)", names[..3].join(", "), names.len() - 3)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn summarize_lists_all_when_three_or_fewer() {
+        assert_eq!(summarize_names(&names(&["a", "b"])), "a, b");
+        assert_eq!(summarize_names(&names(&["a", "b", "c"])), "a, b, c");
+    }
+
+    #[test]
+    fn summarize_truncates_beyond_three() {
+        assert_eq!(summarize_names(&names(&["a", "b", "c", "d", "e"])), "a, b, c, … (+2 more)");
+    }
+
+    #[test]
+    fn summarize_empty_is_blank() {
+        assert_eq!(summarize_names(&[]), "");
+    }
 }

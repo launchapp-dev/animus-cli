@@ -92,6 +92,10 @@ pub(crate) async fn handle_doctor(project_root: &str, args: DoctorArgs, json: bo
     let summary = summarize(&checks);
     let doctor = DoctorReport::run_for_project(&project_root_path);
 
+    // Capture the failure count before `summary` is moved into the envelope
+    // so the exit-code decision below survives the move.
+    let failed = summary.failed;
+
     if json {
         let envelope = DoctorEnvelope { schema: DOCTOR_SCHEMA, summary, checks, doctor, fix: fix_section };
         print_value(envelope, true)?;
@@ -106,6 +110,21 @@ pub(crate) async fn handle_doctor(project_root: &str, args: DoctorArgs, json: bo
         } else {
             println!("\n{}/{} checks passed.", summary.passed, summary.total);
         }
+    }
+
+    // Gateable exit contract: any remaining `[fail]` after evaluation (and
+    // after `--fix` re-runs the checks) makes the whole command exit
+    // non-zero, so `animus doctor && <next>` can short-circuit. `[warn]`s
+    // stay exit-0 — degraded is not a gate failure. The full report (human or
+    // JSON envelope) has already been rendered above, so this is an
+    // *exit-only* error: the dispatcher sets the non-zero code (Unavailable →
+    // 5) but suppresses any second error envelope that would contradict the
+    // success output already on stdout.
+    if failed > 0 {
+        return Err(crate::exit_only_error(
+            crate::CliErrorKind::Unavailable,
+            format!("{failed} doctor check(s) failed; resolve the failures above or scope with `--check`/`--filter`"),
+        ));
     }
     Ok(())
 }
@@ -575,12 +594,14 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let _lock = lock();
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
-        // Should not panic, should not return error, should produce JSON
-        // envelope with at least the required-roles fail check.
+        // Should not panic and should produce a JSON envelope. An empty
+        // project trips the required-roles fail check, so the gateable exit
+        // contract now returns a typed Unavailable error (exit 5) rather than
+        // exit 0 — the report still rendered before the error.
         let args = DoctorArgs { fix: false, yes: false, filter: Vec::new(), check: Vec::new(), skip_subprocess: true };
-        handle_doctor(temp.path().to_string_lossy().as_ref(), args, true)
-            .await
-            .expect("doctor should run cleanly even with no daemon/plugins");
+        let result = handle_doctor(temp.path().to_string_lossy().as_ref(), args, true).await;
+        let err = result.expect_err("empty project has failing checks; doctor must signal non-zero exit");
+        assert_eq!(crate::shared::classify_exit_code(&err), 5, "failing doctor should map to Unavailable exit code");
     }
 
     #[tokio::test]
@@ -595,6 +616,8 @@ mod tests {
             check: Vec::new(),
             skip_subprocess: true,
         };
+        // Narrowing to `disk` keeps the required-roles fail out of scope, so
+        // the gateable exit contract reports success.
         handle_doctor(temp.path().to_string_lossy().as_ref(), args, true).await.expect("filter run ok");
     }
 
