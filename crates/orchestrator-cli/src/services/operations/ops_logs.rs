@@ -78,6 +78,9 @@ async fn handle_logs_tail(args: LogsTailArgs, project_root: &str, json: bool) ->
     if let Some(entries) =
         try_daemon_logs_via_control(project_root, level, &since_dt, args.plugin.as_deref(), limit).await?
     {
+        if entries.is_empty() && !json {
+            print_empty_logs_hint(&args.since, &args.level);
+        }
         return emit_wire_response(
             WireLogsTailResponse {
                 backend: backend_label,
@@ -96,6 +99,9 @@ async fn handle_logs_tail(args: LogsTailArgs, project_root: &str, json: bool) ->
         LogStorageDispatch::InTree { project_root: pr } => {
             let logger = Logger::for_project(pr);
             let entries = read_in_tree_entries(&logger, limit, level, since_ts.as_str(), args.plugin.as_deref());
+            if entries.is_empty() && !json {
+                print_empty_logs_hint(&args.since, &args.level);
+            }
             emit_response(
                 LogsTailResponse {
                     backend: "in_tree",
@@ -119,6 +125,9 @@ async fn handle_logs_tail(args: LogsTailArgs, project_root: &str, json: bool) ->
                      to route through the plugin.",
                     plugin.name
                 );
+                if entries.is_empty() {
+                    print_empty_logs_hint(&args.since, &args.level);
+                }
             }
             emit_response(
                 LogsTailResponse {
@@ -192,6 +201,16 @@ async fn try_daemon_logs_via_control(
         }
         Err(err) => Err(err),
     }
+}
+
+/// Print a stderr hint when a `logs tail` window returns no entries, so an
+/// empty result reads as "nothing matched your filters" rather than a silent
+/// success.
+fn print_empty_logs_hint(since: &str, level: &str) {
+    eprintln!(
+        "no log entries in the last {since} (default --since 1h, --level {level}); \
+         try --since 24h or --level debug"
+    );
 }
 
 fn emit_response(response: LogsTailResponse, json: bool) -> Result<()> {

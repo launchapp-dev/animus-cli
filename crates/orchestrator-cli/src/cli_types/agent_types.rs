@@ -237,7 +237,8 @@ pub(crate) struct AgentRunArgs {
         long,
         action = ArgAction::Set,
         default_value_t = true,
-        help = "Start the runner automatically when required."
+        hide = true,
+        help = "Deprecated no-op (the agent-runner sidecar was removed in v0.5.3; provider plugins handle CLI invocation)."
     )]
     pub(crate) start_runner: bool,
     #[arg(
@@ -268,7 +269,12 @@ pub(crate) struct AgentControlArgs {
     pub(crate) run_id: String,
     #[arg(long, value_enum, value_name = "ACTION", help = "Control action: pause, resume, or terminate.")]
     pub(crate) action: AgentControlActionArg,
-    #[arg(long, default_value_t = false, help = "Start the runner automatically when required.")]
+    #[arg(
+        long,
+        default_value_t = false,
+        hide = true,
+        help = "Deprecated no-op (the agent-runner sidecar was removed in v0.5.3; provider plugins handle CLI invocation)."
+    )]
     pub(crate) start_runner: bool,
 }
 
@@ -285,6 +291,11 @@ pub(crate) struct AgentStatusArgs {
     pub(crate) run_id: String,
     #[arg(long, value_name = "PATH", help = "Override the base directory used to read persisted run logs.")]
     pub(crate) jsonl_dir: Option<String>,
-    #[arg(long, default_value_t = false, help = "Start the runner automatically when required.")]
+    #[arg(
+        long,
+        default_value_t = false,
+        hide = true,
+        help = "Deprecated no-op (the agent-runner sidecar was removed in v0.5.3; provider plugins handle CLI invocation)."
+    )]
     pub(crate) start_runner: bool,
 }
