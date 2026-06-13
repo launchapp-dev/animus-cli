@@ -16,6 +16,8 @@ A workflow YAML file can contain any combination of these top-level sections:
 mcp_servers:     # MCP server definitions
 agents:          # Agent profile definitions
 agent_channels:  # Agent communication channel definitions
+models:          # Named model+tool registry entries (agents reference by name)
+phase_catalog:   # Phase UI metadata (label, description, category, tags)
 phases:          # Reusable phase execution definitions
 workflows:       # Named workflow pipelines
 schedules:       # Cron-driven workflow dispatch
@@ -589,36 +591,35 @@ Pipelines define named workflow sequences. Each pipeline is a `WorkflowDefinitio
 A pipeline is defined as a top-level key under `pipelines` (or directly as a workflow definition with `id`, `name`, `description`, `phases`, etc.):
 
 ```yaml
-# Defining workflows directly at the top level
-id: my-workflow
-name: My Workflow
-description: A workflow that does things
-phases:
-  - research
-  - implementation
-  - id: code-review
-    agent: po-reviewer
-    max_rework_attempts: 3
-    on_verdict:
-      rework:
-        target: implementation
-      advance:
-        target: testing
-      fail:
-        target: ""
-    skip_if:
-      - "task.type == 'hotfix'"
-  - testing
-post_success:
-  merge:
-    strategy: merge
-    target_branch: main
-    create_pr: true
-    auto_merge: false
-    cleanup_worktree: true
-variables:
-  - name: target_branch
-    default: main
+workflows:
+  - id: my-workflow
+    name: My Workflow
+    description: A workflow that does things
+    phases:
+      - research
+      - implementation
+      - code-review:
+          max_rework_attempts: 3
+          skip_if:
+            - "task.type == 'hotfix'"
+          on_verdict:
+            rework:
+              target: implementation
+            advance:
+              target: testing
+            fail:
+              target: ""
+      - testing
+    post_success:
+      merge:
+        strategy: merge
+        target_branch: main
+        create_pr: true
+        auto_merge: false
+        cleanup_worktree: true
+    variables:
+      - name: target_branch
+        default: main
 ```
 
 ### Workflow Definition Fields
@@ -701,49 +702,6 @@ reports against the same per-run rollup the budget enforcer reads. See
 [`docs/reference/configuration.md`](configuration.md) for runtime
 configuration including the per-model USD rate table.
 
-## triggers
-
-Event-driven entries that enqueue a workflow when an external event fires.
-Triggers live alongside `schedules:` at the top level of workflow YAML and
-are processed each daemon tick after the cron block.
-
-```yaml
-triggers:
-  - id: fswatch-default
-    type: plugin
-    workflow_ref: review-source-change
-    config:
-      trigger_id: fswatch-default
-      globs: [src/**/*.rs]
-      debounce_ms: 250
-```
-
-### Fields
-
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `id` | string | yes | Unique trigger id; must match what a `type: plugin` source emits on `trigger_id` |
-| `type` | enum | yes | One of `file_watcher`, `webhook`, `github_webhook`, `plugin` |
-| `workflow_ref` | string | yes | Workflow id to enqueue when the trigger fires |
-| `enabled` | bool | no | Default `true`. Set `false` to keep the trigger declared but quiet |
-| `config` | object | no | Type-specific configuration; forwarded opaquely to plugin triggers |
-| `input` | object | no | Static input merged into the spawned workflow run |
-
-### Trigger types
-
-| `type:` | What it is | When to use |
-|---|---|---|
-| `file_watcher` | Built-in glob watcher inside the project root | Simple filesystem fan-out under the project tree |
-| `webhook` | Built-in HTTP webhook listener | Inbound HTTP POSTs into the daemon's HTTP transport |
-| `github_webhook` | Built-in GitHub webhook listener with event-shape validation | GitHub pushes, PRs, issues |
-| `plugin` | External `trigger_backend` plugin | Anything else: Slack sockets, IDE hooks, custom adapters, cron, IMAP — anything that needs first-party process state |
-
-For `type: plugin`, the `config` block is forwarded opaquely on
-`trigger/watch`. The host does not validate its shape; each plugin
-documents its own schema. See
-[Authoring Trigger Plugins](../guides/authoring-trigger-plugins.md) for
-the protocol surface, daemon lifecycle, and how to scaffold a custom
-trigger with `animus plugin scaffold trigger <name>`.
 
 ## Phase Output Contracts
 
@@ -774,35 +732,38 @@ phases:
   - testing
 ```
 
-#### Rich (object with `id`)
+#### Rich (single-key map)
 
-An inline phase configuration with routing, rework limits, and conditional skipping:
+An inline phase override with routing, rework limits, budget caps, and conditional
+skipping. The YAML form is a **single-key map** whose key is the phase ID and
+whose value is the configuration block. An `id:` sibling key is not used and
+will cause a parse error — the phase id IS the map key.
 
 ```yaml
 phases:
-  - id: code-review
-    agent: po-reviewer
-    max_rework_attempts: 3
-    system_prompt_override: "Focus on security"
-    skip_if:
-      - "task.type == 'docs'"
-    on_verdict:
-      rework:
-        target: implementation
-      advance:
-        target: testing
-      fail:
-        target: ""
+  - code-review:
+      max_rework_attempts: 3
+      skip_if:
+        - "task.type == 'hotfix'"
+      on_verdict:
+        rework:
+          target: implementation
+        advance:
+          target: testing
+        fail:
+          target: ""
+      budget:
+        max_cost_usd: 2.00
+        on_exceed: pause
 ```
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `id` | string | yes | Phase definition ID to execute |
-| `agent` | string | no | Agent profile name to use for this phase |
+| `<phase-id>` (map key) | string | yes | Phase definition ID to execute — this IS the map key, not a sibling `id:` field |
 | `max_rework_attempts` | integer | no | Maximum rework loops before failing (default: 3) |
-| `system_prompt_override` | string | no | Override the agent's system prompt for this phase |
 | `skip_if` | string[] | no | Conditions under which to skip this phase |
 | `on_verdict` | map\<string, TransitionConfig\> | no | Routing rules keyed by verdict name |
+| `budget` | BudgetConfig | no | Phase-level cost ceiling (v0.5.5+) |
 
 #### SubWorkflow (object with `workflow_ref`)
 
@@ -930,15 +891,14 @@ phases:
   # Phase 2: Implement the solution
   - implementation
 
-  # Phase 3: Review with rework routing
-  - id: code-review
-    agent: po-reviewer
-    max_rework_attempts: 3
-    on_verdict:
-      rework:
-        target: implementation
-      advance:
-        target: testing
+  # Phase 3: Review with rework routing (rich entry: single-key map)
+  - code-review:
+      max_rework_attempts: 3
+      on_verdict:
+        rework:
+          target: implementation
+        advance:
+          target: testing
 
   # Phase 4: Run tests
   - testing
