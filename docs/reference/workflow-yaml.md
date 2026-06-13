@@ -623,12 +623,7 @@ workflows:
             fail:
               target: ""
       - testing
-    post_success:
-      merge:
-        strategy: merge
-        target_branch: main
-        create_pr: true
-        cleanup_worktree: true
+      - create-pr        # command phase running `gh pr create`
     variables:
       - name: target_branch
         default: main
@@ -642,7 +637,6 @@ workflows:
 | `name` | string | yes | Human-readable workflow name |
 | `description` | string | no | Workflow description |
 | `phases` | PhaseEntry[] | yes | Ordered list of phase entries |
-| `post_success` | PostSuccessConfig | no | Actions to perform after all phases succeed |
 | `variables` | Variable[] | no | Variables used by this workflow |
 | `budget` | BudgetConfig | no | Cost ceiling for the whole workflow run (v0.5.5+) |
 
@@ -820,33 +814,43 @@ Each transition has:
 | `target` | string | yes | Phase ID to transition to (empty string = terminate) |
 | `guard` | string | no | Optional guard condition for the transition |
 
-### post_success
+### Git operations are command phases
 
-Actions to perform after all phases complete successfully:
+> **`post_success.merge` was removed in v0.5.x.** Animus no longer performs git
+> operations (commit, push, PR, merge) as runner automation. A workflow YAML that
+> still sets a `post_success.merge` block — or `integrations.git.auto_merge` — is
+> rejected at parse time with an actionable error.
+
+Express commit, push, PR creation, and merge as ordinary **command phases**: a
+phase with a `command:` block that runs `git` or `gh`. They sequence in `phases:`
+like any other phase, run in the task worktree, and surface their exit code
+through the standard `output_contract`. Because they are real phases, they also
+get verdict routing, retries, and approval gates for free.
 
 ```yaml
-post_success:
-  merge:
-    strategy: merge            # merge, squash, or rebase (PR merge metadata)
-    target_branch: main        # Branch the PR targets
-    create_pr: true            # Open a pull request
-    cleanup_worktree: true     # Remove the worktree after the run
+phases:
+  create-pr:
+    mode: command
+    directive: Open a GitHub PR from the current branch
+    command:
+      program: gh
+      args: ["pr", "create", "--fill", "--base", "main"]
+      cwd_mode: task_root
+      timeout_secs: 60
+      success_exit_codes: [0]
+
+workflows:
+  - id: ship
+    name: Ship
+    phases:
+      - implementation
+      - testing
+      - create-pr      # command phase: `gh pr create`
 ```
 
-| Field | Type | Default | Description |
-|---|---|---|---|
-| `merge.strategy` | string | `"merge"` | Merge strategy metadata for the PR: `merge`, `squash`, or `rebase` |
-| `merge.target_branch` | string | `"main"` | Target branch the PR is opened against |
-| `merge.create_pr` | boolean | `false` | Whether to open a pull request |
-| `merge.cleanup_worktree` | boolean | `true` | Whether to remove the worktree after the run |
-
-> **`auto_merge` was removed in v0.5.x.** Animus no longer merges to `main`
-> autonomously — an agent with repo write access could flip `auto_merge: true`
-> in a hand-edited workflow overlay and self-authorize the most dangerous
-> autonomous action. Workflows may still open PRs via `create_pr: true`; a human
-> performs the final merge (or you run the merge as an explicit manual step). A
-> workflow YAML that still sets `auto_merge:` is rejected at parse time with an
-> actionable error.
+A human still performs the final merge of the PR (or you add an explicit
+`gh pr merge` command phase, gated by an approval if desired). See the
+[phases](#phases) reference for the full `command:` schema.
 
 ---
 
@@ -921,12 +925,8 @@ phases:
   # Phase 4: Run tests
   - testing
 
-post_success:
-  merge:
-    strategy: squash
-    target_branch: main
-    create_pr: true
-    cleanup_worktree: true
+  # Phase 5: Open a PR (command phase running `gh pr create`)
+  - create-pr
 
 variables:
   - name: target_branch
@@ -1243,9 +1243,9 @@ The daemon git/merge policy keys (`auto_merge`, `auto_pr`,
 `auto_commit_before_merge`, `auto_prune_worktrees`) were **removed in v0.5.x**
 along with their `animus daemon start` / `animus daemon run` /
 `animus daemon config` flags. Declaring them in YAML still compiles but emits a
-removed-key warning. Merge/PR behavior is configured per workflow via
-[`post_success.merge`](#post_success), which the workflow runner plugin
-executes after a successful run.
+removed-key warning. Animus no longer performs git operations as runner
+automation — express commit/push/PR/merge as
+[command phases](#git-operations-are-command-phases) instead.
 
 Setting the table's keys (`interval_secs`, `pool_size`, `max_task_retries`,
 `retry_cooldown_secs`) under `daemon:` in workflow YAML is harmless (the config

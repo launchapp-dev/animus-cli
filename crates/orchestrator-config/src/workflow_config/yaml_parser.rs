@@ -103,15 +103,6 @@ pub(super) fn parse_cwd_mode(value: &str) -> Result<CommandCwdMode> {
     }
 }
 
-pub(super) fn parse_merge_strategy(value: &str) -> Result<MergeStrategy> {
-    match value.to_ascii_lowercase().as_str() {
-        "squash" => Ok(MergeStrategy::Squash),
-        "merge" => Ok(MergeStrategy::Merge),
-        "rebase" => Ok(MergeStrategy::Rebase),
-        _ => Err(anyhow!("post_success.merge.strategy must be one of: squash, merge, rebase (got '{}')", value)),
-    }
-}
-
 // TODO(codex-p2): pack asset resolution does not yet rewrite
 // `evals.checks[].command` when it points at a pack-relative asset (e.g.
 // `assets/review-check.sh`). The current pack resolver only rewrites
@@ -270,27 +261,9 @@ pub(super) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> Ya
         name: Some(definition.name.clone()),
         description: Some(definition.description.clone()),
         phases: definition.phases.iter().map(workflow_phase_entry_to_yaml).collect(),
-        post_success: definition.post_success.clone().map(post_success_config_to_yaml),
         variables: definition.variables.clone(),
         worktree: definition.worktree.clone().map(YamlPhaseWorktree::Full),
         budget: definition.budget.clone(),
-    }
-}
-
-pub(super) fn post_success_config_to_yaml(config: PostSuccessConfig) -> YamlPostSuccessConfig {
-    YamlPostSuccessConfig { merge: config.merge.map(merge_config_to_yaml) }
-}
-
-pub(super) fn merge_config_to_yaml(config: MergeConfig) -> YamlMergeConfig {
-    YamlMergeConfig {
-        strategy: Some(match config.strategy {
-            MergeStrategy::Squash => "squash".to_string(),
-            MergeStrategy::Merge => "merge".to_string(),
-            MergeStrategy::Rebase => "rebase".to_string(),
-        }),
-        target_branch: config.target_branch,
-        create_pr: config.create_pr,
-        cleanup_worktree: config.cleanup_worktree,
     }
 }
 
@@ -390,14 +363,6 @@ pub(super) fn yaml_phase_entry_to_workflow_phase_entry(entry: YamlPhaseEntry) ->
 }
 
 pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition) -> Result<WorkflowDefinition> {
-    let post_success = match yaml.post_success {
-        Some(post_success) => Some(
-            yaml_post_success_to_post_success_config(post_success)
-                .with_context(|| format!("workflows['{}']", yaml.id))?,
-        ),
-        None => None,
-    };
-
     let phases = yaml.phases.into_iter().map(yaml_phase_entry_to_workflow_phase_entry).collect::<Result<Vec<_>>>()?;
     let worktree = yaml.worktree.map(WorktreeConfig::from_yaml).transpose()?;
     Ok(WorkflowDefinition {
@@ -405,27 +370,9 @@ pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition)
         name: yaml.name.unwrap_or_else(|| yaml.id.clone()),
         description: yaml.description.unwrap_or_default(),
         phases,
-        post_success,
         variables: yaml.variables,
         worktree,
         budget: yaml.budget,
-    })
-}
-
-pub(super) fn yaml_post_success_to_post_success_config(yaml: YamlPostSuccessConfig) -> Result<PostSuccessConfig> {
-    let merge = match yaml.merge {
-        Some(merge) => Some(yaml_merge_to_merge_config(merge)?),
-        None => None,
-    };
-    Ok(PostSuccessConfig { merge })
-}
-
-pub(super) fn yaml_merge_to_merge_config(yaml: YamlMergeConfig) -> Result<MergeConfig> {
-    Ok(MergeConfig {
-        strategy: yaml.strategy.as_deref().map(parse_merge_strategy).transpose()?.unwrap_or_default(),
-        target_branch: yaml.target_branch,
-        create_pr: yaml.create_pr,
-        cleanup_worktree: yaml.cleanup_worktree,
     })
 }
 
@@ -433,51 +380,58 @@ fn source_label(source_path: Option<&Path>) -> String {
     source_path.map(|p| p.display().to_string()).unwrap_or_else(|| "<in-memory>".to_string())
 }
 
-fn reject_removed_auto_merge(yaml_str: &str, source_path: Option<&Path>) -> Result<()> {
+fn reject_removed_post_success_merge(yaml_str: &str, source_path: Option<&Path>) -> Result<()> {
     let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml_str) else {
         return Ok(());
     };
 
-    let mut found = false;
+    let mut post_success_merge_found = false;
     if let Some(workflows) = doc.get("workflows").and_then(serde_yaml::Value::as_sequence) {
         for workflow in workflows {
-            if workflow
-                .get("post_success")
-                .and_then(|ps| ps.get("merge"))
-                .and_then(|merge| merge.get("auto_merge"))
-                .is_some()
-            {
-                found = true;
+            if workflow.get("post_success").and_then(|ps| ps.get("merge")).is_some() {
+                post_success_merge_found = true;
                 break;
             }
         }
     }
-    if !found
-        && doc
-            .get("integrations")
-            .and_then(|integrations| integrations.get("git"))
-            .and_then(|git| git.get("auto_merge"))
-            .is_some()
+
+    if post_success_merge_found {
+        let location = yaml_str
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.trim_start().starts_with("merge:"))
+            .or_else(|| yaml_str.lines().enumerate().find(|(_, line)| line.trim_start().starts_with("post_success:")))
+            .map(|(idx, _)| format!("{}:{}", source_label(source_path), idx + 1))
+            .unwrap_or_else(|| source_label(source_path));
+
+        return Err(anyhow!(
+            "`post_success.merge` was removed in v0.5.x ({location}): Animus no longer performs \
+             git operations as runner automation. Express commit/push/PR/merge as command phases \
+             (a phase with a `command:` running `git`/`gh`). See docs/reference/workflow-yaml.md."
+        ));
+    }
+
+    if doc
+        .get("integrations")
+        .and_then(|integrations| integrations.get("git"))
+        .and_then(|git| git.get("auto_merge"))
+        .is_some()
     {
-        found = true;
+        let location = yaml_str
+            .lines()
+            .enumerate()
+            .find(|(_, line)| line.trim_start().starts_with("auto_merge:"))
+            .map(|(idx, _)| format!("{}:{}", source_label(source_path), idx + 1))
+            .unwrap_or_else(|| source_label(source_path));
+
+        return Err(anyhow!(
+            "`integrations.git.auto_merge` was removed in v0.5.x ({location}): Animus no longer \
+             merges to main autonomously. Express commit/push/PR/merge as command phases (a phase \
+             with a `command:` running `git`/`gh`). See docs/reference/workflow-yaml.md."
+        ));
     }
 
-    if !found {
-        return Ok(());
-    }
-
-    let location = yaml_str
-        .lines()
-        .enumerate()
-        .find(|(_, line)| line.trim_start().starts_with("auto_merge:"))
-        .map(|(idx, _)| format!("{}:{}", source_label(source_path), idx + 1))
-        .unwrap_or_else(|| source_label(source_path));
-
-    Err(anyhow!(
-        "`auto_merge` was removed in v0.5.x ({location}): Animus no longer merges to main \
-         autonomously. Use `create_pr: true` under `post_success.merge` and merge the PR \
-         yourself, or run the merge as an explicit manual step."
-    ))
+    Ok(())
 }
 
 fn resolve_system_prompt_file_path(raw: &str, source_path: Option<&Path>) -> PathBuf {
@@ -992,7 +946,7 @@ fn parse_yaml_workflow_config_unredacted(
     pack_root: Option<&Path>,
     original: Option<&str>,
 ) -> Result<WorkflowConfig> {
-    reject_removed_auto_merge(yaml_str, source_path)?;
+    reject_removed_post_success_merge(yaml_str, source_path)?;
 
     let yaml_file: YamlWorkflowFile = match serde_yaml::from_str(yaml_str) {
         Ok(file) => file,

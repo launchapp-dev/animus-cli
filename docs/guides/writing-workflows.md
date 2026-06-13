@@ -267,11 +267,30 @@ workflows:
       - requirement-task-generation
 ```
 
-## Post-Success Hooks
+## Git Operations Are Command Phases
 
-Define what happens after a workflow completes successfully:
+Animus does not perform git operations (commit, push, PR, merge) as runner
+automation. The `post_success.merge` config block was **removed in v0.5.x** — a
+workflow that still sets `post_success.merge` (or `integrations.git.auto_merge`)
+is rejected at parse time.
+
+Express commit, push, PR creation, and merge as **command phases**: a phase with
+a `command:` block that runs `git` or `gh`. They run in the task worktree and
+sequence in `phases:` like any other phase, so they pick up verdict routing,
+retries, and approval gates for free.
 
 ```yaml
+phases:
+  create-pr:
+    mode: command
+    directive: "Open a GitHub PR from the current branch"
+    command:
+      program: gh
+      args: ["pr", "create", "--fill", "--base", "main"]
+      cwd_mode: task_root
+      timeout_secs: 60
+      success_exit_codes: [0]
+
 workflows:
   - id: full
     name: "Full Lifecycle"
@@ -291,26 +310,11 @@ workflows:
           on_verdict:
             rework:
               target: implementation
-    post_success:
-      merge:
-        strategy: squash
-        target_branch: main
-        create_pr: true
-        cleanup_worktree: true
+      - create-pr        # command phase running `gh pr create`
 ```
 
-Post-success options:
-
-| Field | Description |
-|-------|-------------|
-| `merge.strategy` | Merge strategy metadata for the PR: `squash`, `merge`, `rebase` |
-| `merge.target_branch` | Branch the PR targets |
-| `merge.create_pr` | Open a pull request |
-| `merge.cleanup_worktree` | Remove the task worktree after the run |
-
-> `auto_merge` was removed in v0.5.x — Animus no longer merges to `main`
-> autonomously. Open a PR with `create_pr: true` and merge it yourself. A
-> workflow that still sets `auto_merge:` is rejected at parse time.
+A human still performs the final merge of the PR (or you add an explicit
+`gh pr merge` command phase, gated by an approval if desired).
 
 ## Variables
 
@@ -382,12 +386,7 @@ workflows:
           on_verdict:
             rework:
               target: implement
-    post_success:
-      merge:
-        strategy: squash
-        target_branch: main
-        create_pr: true
-        cleanup_worktree: true
+      - create-pr        # command phase running `gh pr create`
 ```
 
 ## Tips

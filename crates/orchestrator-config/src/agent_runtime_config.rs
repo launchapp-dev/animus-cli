@@ -3233,7 +3233,6 @@ cli_tools:
             name: "Project Override Check".to_string(),
             description: String::new(),
             phases: vec!["pack-review".to_string().into()],
-            post_success: None,
             variables: Vec::new(),
             worktree: None,
             budget: None,

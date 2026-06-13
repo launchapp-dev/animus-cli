@@ -36,9 +36,9 @@ pub struct ProjectTemplatePack {
 
 /// The template `[daemon]` block. The daemon git/merge policy keys
 /// (`auto_merge`, `auto_pr`, `auto_commit_before_merge`) were removed in
-/// v0.5.x — merge/PR behavior lives in workflow `post_success.merge`
-/// (executed by the workflow runner plugin). Unknown keys are accepted and
-/// ignored so older templates keep loading.
+/// v0.5.x — express commit/push/PR/merge as command phases (a phase with a
+/// `command:` running `git`/`gh`). Unknown keys are accepted and ignored so
+/// older templates keep loading.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct ProjectTemplateDaemon {}
 

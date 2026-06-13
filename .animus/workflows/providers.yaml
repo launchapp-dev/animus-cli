@@ -149,13 +149,9 @@ workflows:
   - kimi-implementation:
       skip_if:
       - task_type == docs
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: standard-glm
   name: Standard (GLM)
   description: "Implement \u2192 Push \u2192 PR fast with GLM"
@@ -164,13 +160,9 @@ workflows:
   - glm-implementation:
       skip_if:
       - task_type == docs
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: standard-minimax
   name: Standard (MiniMax)
   description: "Implement \u2192 Push \u2192 PR fast with MiniMax"
@@ -179,13 +171,9 @@ workflows:
   - minimax-implementation:
       skip_if:
       - task_type == docs
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: standard-gemini
   name: Standard (Gemini)
   description: "Implement \u2192 Push \u2192 PR fast with Gemini"
@@ -194,13 +182,9 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: standard-opus
   name: Standard (Opus)
   description: "Implement \u2192 Push \u2192 PR fast with Opus"
@@ -209,37 +193,25 @@ workflows:
   - opus-implementation:
       skip_if:
       - task_type == docs
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: quick-fix-minimax
   name: Quick Fix (MiniMax)
   description: "Implement \u2192 Push \u2192 PR fast with MiniMax"
   phases:
   - minimax-implementation
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: quick-fix-glm
   name: Quick Fix (GLM)
   description: "Implement \u2192 Push \u2192 PR fast with GLM"
   phases:
   - glm-implementation
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: minimax-smoke-test
   name: MiniMax Smoke Test
   description: "Verify oai-runner \u2192 MiniMax API pipeline: file ops, tool use, Animus MCP connectivity"
@@ -258,13 +230,9 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
 - id: ui-ux-standard
   name: UI/UX Standard
   description: "Implement \u2192 Push \u2192 PR fast with Gemini for UI/UX"
@@ -273,10 +241,6 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
+  - push-branch
+  - create-pr
   - cleanup
-  post_success:
-    merge:
-      strategy: squash
-      target_branch: develop
-      create_pr: true
-      cleanup_worktree: true
