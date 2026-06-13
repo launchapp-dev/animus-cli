@@ -223,7 +223,13 @@ pub(crate) async fn handle_history(command: HistoryCommand, project_root: &str, 
         HistoryCommand::Recent(args) => {
             let mut candidates = collect_execution_candidates(project_root)?;
             candidates.truncate(args.limit.unwrap_or(100));
-            print_value(hydrate_candidates(project_root, candidates), json)
+            let records = hydrate_candidates(project_root, candidates);
+            if !json && records.is_empty() {
+                println!("no history records");
+                println!("  history is populated as workflows run; try `animus workflow run` first");
+                return Ok(());
+            }
+            print_value(records, json)
         }
         HistoryCommand::Search(args) => {
             // --since <DURATION> is a relative spelling of --started-after;

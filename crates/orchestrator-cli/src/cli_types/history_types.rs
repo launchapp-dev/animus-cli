@@ -26,6 +26,7 @@ pub(crate) struct HistoryTaskArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct HistoryRecentArgs {
+    /// Maximum number of recent records to return (default: 100).
     #[arg(long)]
     pub(crate) limit: Option<usize>,
 }

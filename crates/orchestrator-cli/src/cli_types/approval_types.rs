@@ -24,12 +24,32 @@ pub(crate) struct ApprovalRequestArgs {
 pub(crate) struct ApprovalRespondArgs {
     #[arg(long, value_name = "ID", help = "Approval request identifier.")]
     pub(crate) request_id: String,
-    #[arg(long, help = "Set to true to approve, false to reject.")]
-    pub(crate) approved: bool,
+    /// Approve the request. Mutually exclusive with `--reject`; exactly
+    /// one of the two is required (omitting both errors rather than
+    /// silently rejecting).
+    #[arg(long, group = "decision", help = "Approve the request.")]
+    pub(crate) approve: bool,
+    /// Reject the request. Mutually exclusive with `--approve`.
+    #[arg(long, group = "decision", help = "Reject the request.")]
+    pub(crate) reject: bool,
     #[arg(long, value_name = "TEXT", help = "Optional reviewer comment.")]
     pub(crate) comment: Option<String>,
     #[arg(long, value_name = "USER", help = "Reviewer user id.")]
     pub(crate) user_id: Option<String>,
+}
+
+impl ApprovalRespondArgs {
+    /// Resolve the approve/reject decision. Returns an error when neither
+    /// flag is given so an omitted decision can never silently reject.
+    pub(crate) fn approved(&self) -> anyhow::Result<bool> {
+        match (self.approve, self.reject) {
+            (true, false) => Ok(true),
+            (false, true) => Ok(false),
+            // clap's `group` already rejects (true, true); this guards
+            // the neither-given case with an actionable message.
+            _ => Err(crate::invalid_input_error("provide exactly one of --approve or --reject")),
+        }
+    }
 }
 
 #[derive(Debug, Args)]

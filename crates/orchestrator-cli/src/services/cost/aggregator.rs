@@ -35,6 +35,17 @@ pub struct PhaseCost {
     pub tokens_cache_write: u64,
     #[serde(default)]
     pub cost_usd: f64,
+    /// Portion of `cost_usd` that the provider reported directly (vendor
+    /// `cost` field on the metadata event). Defaults to `0.0` on legacy
+    /// records written before the reported/estimated split; in that case
+    /// the whole `cost_usd` is treated as reported by the renderers.
+    #[serde(default)]
+    pub cost_usd_reported: f64,
+    /// Portion of `cost_usd` that was estimated from the model rate table
+    /// because the provider omitted a `cost` field. A non-zero value marks
+    /// the row's spend as partly inferred, not vendor-billed.
+    #[serde(default)]
+    pub cost_usd_estimated: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Provider / tool that drove this phase, e.g. `claude`, `codex`,
@@ -60,6 +71,38 @@ fn default_attempts() -> u32 {
 impl PhaseCost {
     pub fn total_tokens(&self) -> u64 {
         self.tokens_input.saturating_add(self.tokens_output).saturating_add(self.tokens_reasoning)
+    }
+
+    /// Reported (vendor-billed) portion of this phase's spend. Legacy
+    /// records carry the whole `cost_usd` in neither split field; those
+    /// are treated as fully reported (the conservative, non-alarming
+    /// default — they predate the estimator wiring).
+    pub fn reported_usd(&self) -> f64 {
+        if self.cost_usd_reported == 0.0 && self.cost_usd_estimated == 0.0 {
+            self.cost_usd
+        } else {
+            self.cost_usd_reported
+        }
+    }
+
+    /// Estimated (table-inferred) portion of this phase's spend.
+    pub fn estimated_usd(&self) -> f64 {
+        if self.cost_usd_reported == 0.0 && self.cost_usd_estimated == 0.0 {
+            0.0
+        } else {
+            self.cost_usd_estimated
+        }
+    }
+}
+
+/// Clamp negative-zero (and tiny negative float drift) to a clean `0.0`
+/// so trust-sensitive cost output never prints `$-0.00`. Costs are
+/// non-negative by construction; any sub-cent negative is float noise.
+pub fn clamp_cost(value: f64) -> f64 {
+    if value <= 0.0 && value > -0.005 {
+        0.0
+    } else {
+        value
     }
 }
 
@@ -131,6 +174,8 @@ impl WorkflowCost {
         phase.tokens_cache_read = phase.tokens_cache_read.saturating_add(delta.cache_read_tokens);
         phase.tokens_cache_write = phase.tokens_cache_write.saturating_add(delta.cache_write_tokens);
         phase.cost_usd += delta.cost_usd;
+        phase.cost_usd_reported += delta.cost_usd_reported;
+        phase.cost_usd_estimated += delta.cost_usd_estimated;
         if let Some(model) = delta.model.as_ref() {
             phase.model = Some(model.clone());
         }
@@ -148,6 +193,16 @@ impl WorkflowCost {
         // tiny) and avoids drift if events are folded out of order.
         self.recompute_totals();
         (self.total_tokens, self.total_cost_usd, phase_tokens, phase_cost)
+    }
+
+    /// Vendor-reported portion of the workflow's lifetime spend.
+    pub fn reported_usd(&self) -> f64 {
+        self.phases.values().map(PhaseCost::reported_usd).sum()
+    }
+
+    /// Table-estimated portion of the workflow's lifetime spend.
+    pub fn estimated_usd(&self) -> f64 {
+        self.phases.values().map(PhaseCost::estimated_usd).sum()
     }
 
     pub fn recompute_totals(&mut self) {
@@ -171,6 +226,8 @@ impl WorkflowCost {
         phase.tokens_cache_read = 0;
         phase.tokens_cache_write = 0;
         phase.cost_usd = 0.0;
+        phase.cost_usd_reported = 0.0;
+        phase.cost_usd_estimated = 0.0;
         phase.attempts = phase.attempts.saturating_add(1);
         phase.reset_pending = true;
         self.recompute_totals();
@@ -186,6 +243,10 @@ pub struct MetadataDelta {
     pub cache_read_tokens: u64,
     pub cache_write_tokens: u64,
     pub cost_usd: f64,
+    /// Vendor-reported portion of `cost_usd` (provider emitted a `cost`).
+    pub cost_usd_reported: f64,
+    /// Table-estimated portion of `cost_usd` (provider omitted `cost`).
+    pub cost_usd_estimated: f64,
     pub model: Option<String>,
     pub provider: Option<String>,
 }
@@ -341,6 +402,8 @@ mod tests {
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 cost_usd: 0.012,
+                cost_usd_reported: 0.012,
+                cost_usd_estimated: 0.0,
                 model: Some("claude-sonnet-4-6".to_string()),
                 provider: Some("claude".to_string()),
             },
@@ -355,6 +418,8 @@ mod tests {
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 cost_usd: 0.003,
+                cost_usd_reported: 0.003,
+                cost_usd_estimated: 0.0,
                 model: Some("claude-sonnet-4-6".to_string()),
                 provider: Some("claude".to_string()),
             },
@@ -369,6 +434,8 @@ mod tests {
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 cost_usd: 0.001,
+                cost_usd_reported: 0.001,
+                cost_usd_estimated: 0.0,
                 model: Some("claude-haiku-4".to_string()),
                 provider: Some("claude".to_string()),
             },
@@ -394,6 +461,8 @@ mod tests {
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 cost_usd: 0.01,
+                cost_usd_reported: 0.01,
+                cost_usd_estimated: 0.0,
                 model: Some("claude-sonnet-4-6".to_string()),
                 provider: Some("claude".to_string()),
             },
@@ -417,6 +486,8 @@ mod tests {
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 cost_usd: 0.05,
+                cost_usd_reported: 0.05,
+                cost_usd_estimated: 0.0,
                 model: None,
                 provider: None,
             },
@@ -437,6 +508,8 @@ mod tests {
                 cache_read_tokens: 0,
                 cache_write_tokens: 0,
                 cost_usd: 0.001,
+                cost_usd_reported: 0.001,
+                cost_usd_estimated: 0.0,
                 model: None,
                 provider: None,
             },
@@ -444,6 +517,44 @@ mod tests {
         let phase = wf.phases.get("impl").unwrap();
         assert!(!phase.reset_pending);
         assert_eq!(phase.tokens_input, 100);
+    }
+
+    #[test]
+    fn clamp_cost_zeroes_negative_zero_and_drift() {
+        assert_eq!(clamp_cost(-0.0), 0.0);
+        assert_eq!(clamp_cost(-0.0000001), 0.0);
+        assert_eq!(clamp_cost(0.0), 0.0);
+        assert!((clamp_cost(1.2345) - 1.2345).abs() < 1e-12);
+        assert!(!format!("${:.4}", clamp_cost(-0.0)).contains('-'));
+    }
+
+    #[test]
+    fn reported_and_estimated_split_folds_per_phase() {
+        let started = dt("2026-06-01T00:00:00Z");
+        let mut wf = WorkflowCost::new("flow", started);
+        wf.record_metadata(
+            "impl",
+            started,
+            MetadataDelta { cost_usd: 0.20, cost_usd_reported: 0.20, ..Default::default() },
+        );
+        wf.record_metadata(
+            "impl",
+            started,
+            MetadataDelta { cost_usd: 0.05, cost_usd_estimated: 0.05, ..Default::default() },
+        );
+        let phase = wf.phases.get("impl").unwrap();
+        assert!((phase.reported_usd() - 0.20).abs() < 1e-9);
+        assert!((phase.estimated_usd() - 0.05).abs() < 1e-9);
+        assert!((wf.reported_usd() - 0.20).abs() < 1e-9);
+        assert!((wf.estimated_usd() - 0.05).abs() < 1e-9);
+    }
+
+    #[test]
+    fn legacy_phase_without_split_counts_as_fully_reported() {
+        let json = r#"{"tokens_input":10,"tokens_output":20,"cost_usd":0.50}"#;
+        let phase: PhaseCost = serde_json::from_str(json).unwrap();
+        assert!((phase.reported_usd() - 0.50).abs() < 1e-9, "legacy cost is treated as reported");
+        assert_eq!(phase.estimated_usd(), 0.0);
     }
 
     #[test]

@@ -50,6 +50,11 @@ pub(crate) struct CostSummaryArgs {
     /// Group totals by provider or model instead of the workflow leaderboard.
     #[arg(long, value_enum)]
     pub(crate) by: Option<CostSummaryBy>,
+    /// Report each run's full lifetime spend if it was touched in the window,
+    /// instead of only the spend incurred inside the window. Restores the
+    /// pre-v0.5.x summary semantics.
+    #[arg(long)]
+    pub(crate) lifetime: bool,
 }
 
 /// Grouping dimension for the `cost workflow` breakdown view.
