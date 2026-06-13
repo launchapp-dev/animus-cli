@@ -91,13 +91,21 @@ pub(crate) async fn handle_queue(
             let response = crate::services::plugin_clients::call_queue_list(project_root_path, &plugin_list_req)
                 .await?
                 .ok_or_else(|| queue_plugin_required("list"))?;
-            print_value(response, json)
+            if json {
+                return print_value(response, true);
+            }
+            render_queue_list_human(&response);
+            Ok(())
         }
         QueueCommand::Stats => {
             let stats = crate::services::plugin_clients::call_queue_stats(project_root_path)
                 .await?
                 .ok_or_else(|| queue_plugin_required("stats"))?;
-            print_value(stats, json)
+            if json {
+                return print_value(stats, true);
+            }
+            println!("{}", queue_stats_summary(&stats));
+            Ok(())
         }
         QueueCommand::Enqueue(args) => {
             let input = args.input_json.clone().map(|value| serde_json::from_str(&value)).transpose()?;
@@ -169,6 +177,52 @@ pub(crate) async fn handle_queue(
                 true,
             )
         }
+    }
+}
+
+/// Render a `queue list` response for human (non-`--json`) output: a table of
+/// queued entries plus a one-line stats summary. An empty queue prints a hint
+/// instead of a bare table.
+fn render_queue_list_human(response: &animus_queue_protocol::QueueListResponse) {
+    if response.entries.is_empty() {
+        println!("queue is empty");
+        println!("enqueue work with `animus queue enqueue --task-id <id>` (or --requirement-id / --title)");
+        return;
+    }
+    let rows: Vec<Vec<String>> = response
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(pos, entry)| {
+            vec![
+                (pos + 1).to_string(),
+                entry.subject_id.clone(),
+                entry.status.clone(),
+                entry.subject_dispatch.workflow_ref.clone(),
+                queue_short_timestamp(&entry.enqueued_at),
+            ]
+        })
+        .collect();
+    crate::render_table(&["POS", "SUBJECT", "STATUS", "WORKFLOW", "ENQUEUED"], &rows);
+    println!("\n{}", queue_stats_summary(&response.stats));
+}
+
+/// One-line aggregate summary of queue counts.
+fn queue_stats_summary(stats: &animus_queue_protocol::QueueStats) -> String {
+    format!("{} total | {} pending | {} assigned | {} held", stats.total, stats.pending, stats.assigned, stats.held)
+}
+
+/// Trim an RFC 3339 timestamp to `YYYY-MM-DD HH:MM` for table density.
+fn queue_short_timestamp(ts: &str) -> String {
+    if ts.is_empty() {
+        return "--".to_string();
+    }
+    match ts.split_once('T') {
+        Some((date, time)) => {
+            let hm = time.get(..5).unwrap_or(time);
+            format!("{date} {hm}")
+        }
+        None => ts.to_string(),
     }
 }
 
@@ -396,8 +450,21 @@ async fn lookup_plugin_entries_by_subject(
     else {
         return Ok(None);
     };
-    let matched = response.entries.into_iter().filter(|entry| entry.subject_id == subject_id).collect();
+    let matched =
+        response.entries.into_iter().filter(|entry| subject_id_matches(&entry.subject_id, subject_id)).collect();
     Ok(Some(matched))
+}
+
+/// Compare a stored queue `subject_id` (kind-qualified, e.g. `task:TASK-001`)
+/// against a user-supplied id, accepting either the qualified form or the
+/// bare native id (e.g. `TASK-001`). Matching strips the leading `<kind>:`
+/// qualifier from each side before comparing so both forms resolve the same
+/// entry.
+fn subject_id_matches(stored: &str, query: &str) -> bool {
+    if stored == query {
+        return true;
+    }
+    crate::bare_subject_id(stored) == crate::bare_subject_id(query)
 }
 
 async fn try_queue_hold_via_plugin(
@@ -610,6 +677,28 @@ mod tests {
             .expect_err("--yes without --all should be rejected");
         assert!(err.to_string().contains("--all"), "error should mention --all: {err}");
         assert_eq!(crate::classify_cli_error_kind(&err), CliErrorKind::InvalidInput);
+    }
+
+    #[test]
+    fn subject_id_matches_accepts_bare_and_qualified() {
+        assert!(subject_id_matches("task:TASK-001", "task:TASK-001"));
+        assert!(subject_id_matches("task:TASK-001", "TASK-001"));
+        assert!(subject_id_matches("TASK-001", "task:TASK-001"));
+        assert!(!subject_id_matches("task:TASK-001", "TASK-002"));
+        assert!(subject_id_matches("linear:ENG-9", "ENG-9"));
+    }
+
+    #[test]
+    fn queue_stats_summary_renders_all_buckets() {
+        let stats = animus_queue_protocol::QueueStats { total: 5, pending: 3, assigned: 1, held: 1 };
+        assert_eq!(queue_stats_summary(&stats), "5 total | 3 pending | 1 assigned | 1 held");
+    }
+
+    #[test]
+    fn queue_short_timestamp_trims_to_minute() {
+        assert_eq!(queue_short_timestamp("2026-06-10T12:34:56Z"), "2026-06-10 12:34");
+        assert_eq!(queue_short_timestamp(""), "--");
+        assert_eq!(queue_short_timestamp("nodate"), "nodate");
     }
 
     #[test]

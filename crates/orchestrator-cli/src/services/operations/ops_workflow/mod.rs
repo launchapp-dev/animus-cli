@@ -410,7 +410,11 @@ pub(crate) async fn handle_workflow(
                 print_value(pruned, json)
             }
         },
-        WorkflowCommand::Run(args) => {
+        WorkflowCommand::Run(mut args) => {
+            // Accept either a bare task id (`TASK-001`) or the kind-qualified
+            // form (`task:TASK-001`); the task store and workflow run input
+            // key on the bare native id, so normalize at the CLI boundary.
+            args.task_id = args.task_id.map(|id| crate::bare_subject_id(&id));
             let workflow_ref = args.pipeline.clone();
             if args.sync {
                 let execute_args = WorkflowExecuteArgs {

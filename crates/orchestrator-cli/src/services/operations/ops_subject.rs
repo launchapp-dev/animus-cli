@@ -63,10 +63,10 @@ async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bo
 
 async fn handle_subject_get(args: SubjectGetArgs, project_root: &str, json: bool) -> Result<()> {
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
-    let id = args.id.trim();
-    if id.is_empty() {
+    if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
+    let id = crate::qualify_subject_id(&args.id, &kind);
     let params = Some(json!({ "id": id }));
     dispatch(&kind, "get", params, project_root, json).await
 }
@@ -97,10 +97,10 @@ async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json
 
 async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json: bool) -> Result<()> {
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
-    let id = args.id.trim();
-    if id.is_empty() {
+    if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
+    let id = crate::qualify_subject_id(&args.id, &kind);
     let mut patch = serde_json::Map::new();
     if let Some(status) = args.status.as_deref() {
         patch.insert("status".to_string(), json!(status));
@@ -392,10 +392,11 @@ async fn handle_subject_next(args: SubjectNextArgs, project_root: &str, json: bo
 
 async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json: bool) -> Result<()> {
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
-    let id = args.id.trim();
-    if id.is_empty() {
+    if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
+    let id = crate::qualify_subject_id(&args.id, &kind);
+    let id = id.as_str();
     let status = args.status.trim();
     if status.is_empty() {
         return Err(invalid_input_error("--status must not be empty"));
@@ -418,16 +419,20 @@ async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json
             eprintln!("{line}");
         }
     }
-    print_value(
-        SubjectCallResponse {
-            kind: kind.to_string(),
-            verb: "status",
-            method,
-            plugin_count: resolution.selected.plugin_count(),
-            result,
-        },
-        json,
-    )
+    if json {
+        return print_value(
+            SubjectCallResponse {
+                kind: kind.to_string(),
+                verb: "status",
+                method,
+                plugin_count: resolution.selected.plugin_count(),
+                result,
+            },
+            true,
+        );
+    }
+    render_subject_human("status", &kind, &result);
+    Ok(())
 }
 
 /// Compare a subject's pre/post-transition JSON and describe which
@@ -474,10 +479,11 @@ fn describe_cleared_block_flags(before: &Value, after: &Value) -> Option<String>
 
 async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json: bool) -> Result<()> {
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
-    let id = args.id.trim();
-    if id.is_empty() {
+    if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
+    let id = crate::qualify_subject_id(&args.id, &kind);
+    let id = id.as_str();
     if !args.yes {
         let preview = json!({
             "kind": kind,
@@ -571,16 +577,156 @@ async fn dispatch(kind: &str, verb: &'static str, params: Option<Value>, project
     if matches!(verb, "create" | "update" | "status") {
         orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
     }
-    print_value(
-        SubjectCallResponse {
-            kind: kind.to_string(),
-            verb,
-            method,
-            plugin_count: resolution.selected.plugin_count(),
-            result,
+    if json {
+        return print_value(
+            SubjectCallResponse {
+                kind: kind.to_string(),
+                verb,
+                method,
+                plugin_count: resolution.selected.plugin_count(),
+                result,
+            },
+            true,
+        );
+    }
+    render_subject_human(verb, kind, &result);
+    Ok(())
+}
+
+/// Render a subject call result for human (non-`--json`) output, stripping the
+/// routing envelope (kind/verb/method/plugin_count) entirely. `list` renders a
+/// table; `get`/`next`/`create`/`update`/`status` render a readable
+/// key:value block. Falls back to a single line for anything unexpected.
+fn render_subject_human(verb: &str, kind: &str, result: &Value) {
+    match verb {
+        "list" => {
+            let subjects = extract_subjects(result);
+            render_subject_table(&subjects);
+        }
+        "next" => match extract_single_subject(result) {
+            Some(subject) => render_subject_block(subject),
+            None => println!("no ready {kind} subject"),
         },
-        json,
-    )
+        _ => match extract_single_subject(result) {
+            Some(subject) => render_subject_block(subject),
+            None => println!("{result}"),
+        },
+    }
+}
+
+/// Pull the array of subject objects out of a `<kind>/list` result. Accepts a
+/// `{ "subjects": [...] }` wrapper (the protocol shape), a bare array, or a
+/// single object.
+fn extract_subjects(result: &Value) -> Vec<&Value> {
+    if let Some(array) = result.get("subjects").and_then(Value::as_array) {
+        return array.iter().collect();
+    }
+    match result {
+        Value::Array(items) => items.iter().collect(),
+        Value::Object(_) => vec![result],
+        _ => Vec::new(),
+    }
+}
+
+/// Unwrap a single subject object from a `get`/`next`/`create`/`update`/
+/// `status` result, tolerating a `{ "subject": {...} }` wrapper, a `null`
+/// (no subject), or a bare object.
+fn extract_single_subject(result: &Value) -> Option<&Value> {
+    if result.is_null() {
+        return None;
+    }
+    if let Some(inner) = result.get("subject") {
+        return inner.as_object().map(|_| inner);
+    }
+    result.as_object().map(|_| result)
+}
+
+/// Render a list of subjects as a fixed-width table:
+/// `ID  STATUS  PRI  TITLE  BLOCKED_REASON  UPDATED`.
+fn render_subject_table(subjects: &[&Value]) {
+    if subjects.is_empty() {
+        println!("no subjects found");
+        return;
+    }
+    let rows: Vec<Vec<String>> = subjects
+        .iter()
+        .map(|subject| {
+            vec![
+                subject_field_str(subject, "id"),
+                subject_field_str(subject, "status"),
+                crate::format_priority(subject.get("priority")),
+                subject_field_str(subject, "title"),
+                subject_blocked_reason(subject),
+                subject_updated(subject),
+            ]
+        })
+        .collect();
+    crate::render_table(&["ID", "STATUS", "PRI", "TITLE", "BLOCKED_REASON", "UPDATED"], &rows);
+}
+
+/// Render a single subject as an aligned `key: value` block.
+fn render_subject_block(subject: &Value) {
+    let fields: &[(&str, String)] = &[
+        ("id", subject_field_str(subject, "id")),
+        ("kind", subject_field_str(subject, "kind")),
+        ("title", subject_field_str(subject, "title")),
+        ("status", subject_field_str(subject, "status")),
+        ("priority", crate::format_priority(subject.get("priority"))),
+    ];
+    let width = fields.iter().map(|(k, _)| k.len()).max().unwrap_or(0);
+    for (key, value) in fields {
+        println!("{key:<width$}  {value}");
+    }
+    let blocked = subject_blocked_reason(subject);
+    if blocked != "--" {
+        println!("{:<width$}  {blocked}", "blocked");
+    }
+    if let Some(labels) = subject.get("labels").and_then(Value::as_array) {
+        if !labels.is_empty() {
+            let joined = labels.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ");
+            println!("{:<width$}  {joined}", "labels");
+        }
+    }
+    let updated = subject_updated(subject);
+    if updated != "--" {
+        println!("{:<width$}  {updated}", "updated");
+    }
+    if let Some(description) = subject.get("description").and_then(Value::as_str) {
+        if !description.trim().is_empty() {
+            println!("\n{description}");
+        }
+    }
+}
+
+fn subject_field_str(subject: &Value, key: &str) -> String {
+    match subject.get(key) {
+        Some(Value::String(s)) if !s.is_empty() => s.clone(),
+        Some(Value::String(_)) | None | Some(Value::Null) => "--".to_string(),
+        Some(other) => other.to_string(),
+    }
+}
+
+/// Resolve a subject's blocked reason from either a top-level field or the
+/// backend-specific `custom` map. Returns `--` when not blocked.
+fn subject_blocked_reason(subject: &Value) -> String {
+    for source in [Some(subject), subject.get("custom")] {
+        let Some(source) = source else { continue };
+        if let Some(reason) = source.get("blocked_reason").and_then(Value::as_str) {
+            if !reason.trim().is_empty() {
+                return reason.to_string();
+            }
+        }
+    }
+    "--".to_string()
+}
+
+/// Format the subject's `updated_at` timestamp as a date (`YYYY-MM-DD`),
+/// trimming the time component for table density.
+fn subject_updated(subject: &Value) -> String {
+    match subject.get("updated_at").and_then(Value::as_str) {
+        Some(ts) if !ts.is_empty() => ts.split('T').next().unwrap_or(ts).to_string(),
+        _ => "--".to_string(),
+    }
 }
 
 async fn route_or_not_found(dispatch: &SubjectPluginDispatch, method: &str, params: Option<Value>) -> Result<Value> {
@@ -892,6 +1038,51 @@ mod tests {
         assert!(describe_cleared_block_flags(&blocked, &blocked).is_none());
         // Non-object payloads are ignored gracefully.
         assert!(describe_cleared_block_flags(&json!("ok"), &json!("ok")).is_none());
+    }
+
+    #[test]
+    fn extract_subjects_unwraps_protocol_and_bare_shapes() {
+        let wrapped = json!({ "subjects": [ { "id": "task:T-1" }, { "id": "task:T-2" } ] });
+        assert_eq!(extract_subjects(&wrapped).len(), 2);
+        let bare = json!([ { "id": "task:T-1" } ]);
+        assert_eq!(extract_subjects(&bare).len(), 1);
+        let single = json!({ "id": "task:T-1", "title": "x" });
+        assert_eq!(extract_subjects(&single).len(), 1);
+        assert!(extract_subjects(&json!(null)).is_empty());
+    }
+
+    #[test]
+    fn extract_single_subject_handles_wrappers_and_null() {
+        let wrapped = json!({ "subject": { "id": "task:T-1" } });
+        assert!(extract_single_subject(&wrapped).is_some());
+        let bare = json!({ "id": "task:T-1" });
+        assert!(extract_single_subject(&bare).is_some());
+        assert!(extract_single_subject(&json!(null)).is_none());
+    }
+
+    #[test]
+    fn subject_blocked_reason_reads_top_level_and_custom() {
+        let top = json!({ "blocked_reason": "dep gate" });
+        assert_eq!(subject_blocked_reason(&top), "dep gate");
+        let nested = json!({ "custom": { "blocked_reason": "waiting on infra" } });
+        assert_eq!(subject_blocked_reason(&nested), "waiting on infra");
+        let clean = json!({ "id": "task:T-1" });
+        assert_eq!(subject_blocked_reason(&clean), "--");
+    }
+
+    #[test]
+    fn subject_updated_trims_time_component() {
+        let s = json!({ "updated_at": "2026-06-10T12:00:00Z" });
+        assert_eq!(subject_updated(&s), "2026-06-10");
+        assert_eq!(subject_updated(&json!({})), "--");
+    }
+
+    #[test]
+    fn subject_field_str_falls_back_to_dashes() {
+        let s = json!({ "id": "task:T-1", "title": "" });
+        assert_eq!(subject_field_str(&s, "id"), "task:T-1");
+        assert_eq!(subject_field_str(&s, "title"), "--");
+        assert_eq!(subject_field_str(&s, "missing"), "--");
     }
 
     #[test]

@@ -27,13 +27,11 @@ impl BatchOnError {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SubjectCommand {
-    /// List subjects for a given kind via the active subject_backend plugin.
+    /// List subjects of a given kind.
     ///
-    /// Routes `<kind>/list` through the daemon's [`SubjectRouter`]. When no
-    /// subject_backend plugin is installed for the requested kind the call
-    /// fails with `NotFound`. Set
-    /// `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1` to force every call to
-    /// `NotFound` even when plugins are installed.
+    /// Filter by status with --status and cap results with --limit. Without
+    /// --json the results print as a table; with --json they print the
+    /// machine-readable envelope.
     List(SubjectListArgs),
     /// Fetch a single subject by id from the active subject_backend plugin.
     Get(SubjectGetArgs),
@@ -57,41 +55,33 @@ pub(crate) enum SubjectCommand {
     /// 100); each item needs at least one of status / priority / labels.
     /// `--on-error` semantics match `batch-create`.
     BatchUpdate(SubjectBatchUpdateArgs),
-    /// Return the highest-priority Ready subject for the given kind.
+    /// Return the highest-priority ready subject of the given kind.
     ///
-    /// Backed by the active subject_backend plugin for the resolved kind.
-    /// Plugins opt in by implementing `<kind>/next`.
-    /// Returns JSON `null` when no eligible subject exists.
+    /// Prints nothing actionable when no ready subject exists (JSON `null`
+    /// under --json).
     Next(SubjectNextArgs),
-    /// Set the status of a subject by id through the active subject_backend.
+    /// Set the status of a subject by id.
     Status(SubjectStatusArgs),
-    /// Delete a subject by id through the active subject_backend plugin.
+    /// Delete a subject by id.
     ///
-    /// Routes `<kind>/delete` through the daemon's [`SubjectRouter`]. Backends
-    /// that do not support delete return `BackendError::Unsupported` (the
-    /// `SubjectBackend::delete` default impl restored in `animus-protocol`
-    /// v0.5.7). Plugins that claim `supports_delete: true` honor it.
+    /// Not every kind supports deletion; kinds that do not will report the
+    /// operation as unsupported.
     Delete(SubjectDeleteArgs),
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectListArgs {
-    /// Subject kind to route through (e.g. `task`, `issue`, `linear`).
-    /// Resolved against the kind→plugin map populated at daemon startup.
-    /// When omitted, falls back to `default_subject_kind` in
-    /// `.animus/config.json` (defaults to `task`).
+    /// Subject kind to list (e.g. `task`, `issue`, `linear`). When omitted,
+    /// falls back to `default_subject_kind` in `.animus/config.json`
+    /// (defaults to `task`).
     #[arg(long, value_name = "KIND")]
     pub kind: Option<String>,
 
-    /// Filter by normalized status (e.g. `ready`, `in_progress`,
-    /// `blocked`, `done`). Backend-specific raw statuses can be queried
-    /// via the structured filter once we expose `--native-status`; for
-    /// v0.4.0 the CLI only forwards the normalized bucket.
+    /// Filter by status (e.g. `ready`, `in_progress`, `blocked`, `done`).
     #[arg(long, value_name = "STATUS")]
     pub status: Option<String>,
 
-    /// Maximum number of subjects to return. Forwarded to the backend's
-    /// list call via `SubjectFilter.limit`.
+    /// Maximum number of subjects to return.
     #[arg(long, value_name = "N")]
     pub limit: Option<u32>,
 }
@@ -103,8 +93,8 @@ pub(crate) struct SubjectGetArgs {
     /// `task`).
     #[arg(long, value_name = "KIND")]
     pub kind: Option<String>,
-    /// Backend-qualified subject id (e.g. `sqlite:01ABCD...`,
-    /// `linear:ENG-123`).
+    /// Subject id. Accepts either the bare native id (e.g. `TASK-001`) or
+    /// the kind-qualified form (e.g. `task:TASK-001`, `linear:ENG-123`).
     #[arg(long, value_name = "ID")]
     pub id: String,
 }
@@ -140,7 +130,8 @@ pub(crate) struct SubjectUpdateArgs {
     /// `task`).
     #[arg(long, value_name = "KIND")]
     pub kind: Option<String>,
-    /// Backend-qualified subject id.
+    /// Subject id. Accepts the bare native id (e.g. `TASK-001`) or the
+    /// kind-qualified form (e.g. `task:TASK-001`).
     #[arg(long, value_name = "ID")]
     pub id: String,
     /// New normalized status.
@@ -206,7 +197,8 @@ pub(crate) struct SubjectStatusArgs {
     /// `task`).
     #[arg(long, value_name = "KIND")]
     pub kind: Option<String>,
-    /// Backend-qualified subject id.
+    /// Subject id. Accepts the bare native id (e.g. `TASK-001`) or the
+    /// kind-qualified form (e.g. `task:TASK-001`).
     #[arg(long, value_name = "ID")]
     pub id: String,
     /// New normalized status to set.
@@ -221,7 +213,8 @@ pub(crate) struct SubjectDeleteArgs {
     /// `task`).
     #[arg(long, value_name = "KIND")]
     pub kind: Option<String>,
-    /// Backend-qualified subject id to delete.
+    /// Subject id to delete. Accepts the bare native id (e.g. `TASK-001`)
+    /// or the kind-qualified form (e.g. `task:TASK-001`).
     #[arg(long, value_name = "ID")]
     pub id: String,
     /// Confirm the destructive operation. Required to actually delete;
