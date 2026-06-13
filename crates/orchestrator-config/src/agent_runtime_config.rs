@@ -255,6 +255,74 @@ impl AgentToolPolicy {
     }
 }
 
+/// Author-controlled harness-hook configuration for an agent profile.
+///
+/// Two complementary, deliberately-constrained authoring surfaces:
+///
+/// * `policy_rules` — guardrail rules ([`protocol::hook_policy::HookPolicyRule`])
+///   that merge into the compiled `animus-policy.json` alongside the
+///   kernel/tool_policy-derived rules. Pure data evaluated by the kernel's
+///   severity-ordered evaluator (`Deny` > `Ask` > `Allow` > `Defer`), so an
+///   author rule can only ever *add* restriction — an author `allow` can never
+///   weaken a kernel/tool_policy `deny` for the same call (deny always wins
+///   regardless of rule source or order). Always safe: the rule never runs
+///   shell, it only expresses a decision the kernel evaluator applies.
+///
+/// * `observers` — additional harness events the author wants routed to the
+///   Animus hook spine for observability/automation. **Constrained for
+///   safety**: an observer entry can NOT run arbitrary shell. It only names
+///   harness events; the kernel generates the command, which is always the
+///   validated `animus-hook emit` invocation (the same binary the kernel
+///   wires for its own observability hooks). This is option (a) from the
+///   trust model — author picks events + a built-in action, never a raw
+///   command — so an author-controlled profile can widen *observation* but
+///   cannot smuggle an arbitrary payload into the agent's session.
+///
+/// Both fields default empty, are skipped on serialization when empty, and a
+/// config without a `hooks` block loads unchanged.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct AgentHooksConfig {
+    /// Author-supplied guardrail rules merged into the compiled hook policy.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policy_rules: Vec<protocol::hook_policy::HookPolicyRule>,
+    /// Harness events the author wants additionally routed to `animus-hook`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub observers: Vec<AgentHookObserver>,
+}
+
+impl AgentHooksConfig {
+    pub fn is_empty(&self) -> bool {
+        self.policy_rules.is_empty() && self.observers.is_empty()
+    }
+}
+
+/// A single author-requested observability hook. Constrained to a named
+/// built-in action over a set of harness events — never an arbitrary command.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentHookObserver {
+    /// Harness event names to additionally route through the Animus hook spine
+    /// (e.g. `PostToolUse`, `Stop`, `SessionEnd`). Empty is rejected by
+    /// config validation — an observer with no events is meaningless.
+    #[serde(default)]
+    pub events: Vec<String>,
+    /// The built-in action. Only [`AgentHookAction::Record`] exists this wave;
+    /// it routes the named events to `animus-hook emit` (observability only,
+    /// never a gate). The enum exists so future safe built-ins can be added
+    /// without ever admitting arbitrary shell.
+    #[serde(default)]
+    pub action: AgentHookAction,
+}
+
+/// Named, kernel-controlled observer action. Deliberately a closed enum: an
+/// author can only select a built-in behavior, never supply a command line.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentHookAction {
+    /// Route the event to `animus-hook emit` for recording (no policy gate).
+    #[default]
+    Record,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalPolicyDefault {
@@ -469,6 +537,11 @@ pub struct AgentProfile {
     pub tool_policy: AgentToolPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<ApprovalPolicy>,
+    /// Optional author-controlled harness-hook configuration (guardrail policy
+    /// rules + constrained observers). Additive: a profile without a `hooks`
+    /// block loads unchanged.
+    #[serde(default, skip_serializing_if = "AgentHooksConfig::is_empty")]
+    pub hooks: AgentHooksConfig,
     #[serde(default)]
     pub skills: Vec<String>,
     #[serde(default)]
@@ -558,6 +631,8 @@ pub struct AgentProfileOverlay {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_policy: Option<ApprovalPolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<AgentHooksConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<BTreeMap<String, bool>>,
@@ -635,6 +710,7 @@ impl AgentProfileOverlay {
             mcp_servers,
             tool_policy,
             approval_policy,
+            hooks,
             skills,
             capabilities,
             mcp_server_configs,
@@ -673,6 +749,7 @@ impl From<AgentProfile> for AgentProfileOverlay {
             mcp_servers: Some(profile.mcp_servers),
             tool_policy: Some(profile.tool_policy),
             approval_policy: profile.approval_policy,
+            hooks: Some(profile.hooks),
             skills: Some(profile.skills),
             capabilities: Some(profile.capabilities),
             mcp_server_configs: profile.mcp_server_configs,
@@ -1341,6 +1418,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     codex_config_overrides: vec![],
                     max_continuations: None,
                     approval_policy: None,
+                    hooks: AgentHooksConfig::default(),
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1382,6 +1460,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     codex_config_overrides: vec![],
                     max_continuations: None,
                     approval_policy: None,
+                    hooks: AgentHooksConfig::default(),
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1444,6 +1523,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     codex_config_overrides: vec![],
                     max_continuations: None,
                     approval_policy: None,
+                    hooks: AgentHooksConfig::default(),
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1508,6 +1588,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     codex_config_overrides: vec![],
                     max_continuations: None,
                     approval_policy: None,
+                    hooks: AgentHooksConfig::default(),
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1549,6 +1630,7 @@ fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
                     codex_config_overrides: vec![],
                     max_continuations: None,
                     approval_policy: None,
+                    hooks: AgentHooksConfig::default(),
                     mcp_server_configs: None,
                     structured_capabilities: None,
                     project_overrides: None,
@@ -1941,6 +2023,9 @@ fn merge_agent_profile(base: &mut AgentProfile, overlay: &AgentProfileOverlay) {
     }
     if overlay.approval_policy.is_some() {
         base.approval_policy = overlay.approval_policy.clone();
+    }
+    if let Some(hooks) = &overlay.hooks {
+        base.hooks = hooks.clone();
     }
     if let Some(skills) = &overlay.skills {
         base.skills = skills.clone();
@@ -2471,6 +2556,44 @@ pub fn is_known_permission_mode(value: &str) -> bool {
     KNOWN_PERMISSION_MODES.iter().any(|known| known.eq_ignore_ascii_case(trimmed))
 }
 
+/// Validate an author-controlled `hooks` block: author policy rules must carry
+/// valid matcher regexes (so a malformed guardrail is caught at config-load,
+/// not silently fail-closed at session spawn), and every observer must name at
+/// least one event. The author surface deliberately cannot express an
+/// arbitrary command, so there is nothing shell-shaped to validate.
+/// Public wrapper over [`validate_agent_hooks`] so workflow-YAML overlay
+/// validation can check author `hooks` blocks with the same rules the
+/// agent-runtime config uses (the overlay path does not go through
+/// [`validate_agent_runtime_config`]).
+pub fn validate_agent_hooks_block(agent_id: &str, hooks: &AgentHooksConfig) -> Result<()> {
+    validate_agent_hooks(agent_id, hooks)
+}
+
+fn validate_agent_hooks(agent_id: &str, hooks: &AgentHooksConfig) -> Result<()> {
+    // Reuse the kernel policy validator so author matcher regexes are checked
+    // with the exact engine that evaluates them at session time. A malformed
+    // guardrail is rejected at config-load instead of silently fail-closing
+    // the whole session later.
+    let probe = protocol::hook_policy::HookPolicy {
+        version: protocol::hook_policy::HOOK_POLICY_VERSION,
+        default_decision: protocol::hook_policy::PolicyDecision::Defer,
+        rules: hooks.policy_rules.clone(),
+    };
+    probe
+        .validate(&format!("agents['{agent_id}'].hooks.policy_rules"))
+        .map_err(|err| anyhow!("agents['{}'].hooks.policy_rules are invalid: {}", agent_id, err))?;
+    for (index, observer) in hooks.observers.iter().enumerate() {
+        if observer.events.iter().all(|event| event.trim().is_empty()) {
+            return Err(anyhow!(
+                "agents['{}'].hooks.observers[{}] must name at least one harness event",
+                agent_id,
+                index
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
     fn is_valid_codex_config_override(value: &str) -> bool {
         let Some((key, expr)) = value.split_once('=') else {
@@ -2607,6 +2730,8 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
             return Err(anyhow!("agents['{}'].tool_policy must not contain empty patterns", agent_id));
         }
 
+        validate_agent_hooks(agent_id, &profile.hooks)?;
+
         if profile.skills.iter().any(|value| value.trim().is_empty()) {
             return Err(anyhow!("agents['{}'].skills must not contain empty values", agent_id));
         }
@@ -2680,6 +2805,81 @@ mod tests {
 
         let serialized = serde_json::to_value(&base).expect("profile serializes");
         assert_eq!(serialized.pointer("/approval_policy/default").and_then(Value::as_str), Some("deny"));
+    }
+
+    #[test]
+    fn agent_profile_without_hooks_block_loads_unchanged() {
+        // Back-compat: a profile with no `hooks` key deserializes to an empty
+        // AgentHooksConfig and serializes without re-emitting the key.
+        let profile: AgentProfile = serde_json::from_value(json!({
+            "description": "legacy",
+            "system_prompt": "p"
+        }))
+        .expect("legacy profile parses");
+        assert!(profile.hooks.is_empty());
+        let serialized = serde_json::to_value(&profile).expect("serializes");
+        assert!(serialized.get("hooks").is_none(), "empty hooks block is skipped on serialize");
+    }
+
+    #[test]
+    fn agent_hooks_round_trip_through_overlay_and_merge() {
+        let overlay: AgentProfileOverlay = serde_json::from_value(json!({
+            "hooks": {
+                "policy_rules": [{
+                    "id": "no-prod",
+                    "tools": ["Bash"],
+                    "input_matchers": [{"field": "command", "regex": "--env prod"}],
+                    "decision": "deny",
+                    "reason": "prod gated"
+                }],
+                "observers": [{ "events": ["PostToolUse"], "action": "record" }]
+            }
+        }))
+        .expect("overlay parses");
+        let hooks = overlay.hooks.clone().expect("hooks present");
+        assert_eq!(hooks.policy_rules.len(), 1);
+        assert_eq!(hooks.policy_rules[0].decision, protocol::hook_policy::PolicyDecision::Deny);
+        assert_eq!(hooks.observers.len(), 1);
+        assert_eq!(hooks.observers[0].action, AgentHookAction::Record);
+
+        let mut base = AgentProfile::default();
+        assert!(base.hooks.is_empty());
+        merge_agent_profile(&mut base, &overlay);
+        assert_eq!(base.hooks, hooks);
+
+        let round_tripped = AgentProfileOverlay::from(base.clone());
+        assert_eq!(round_tripped.hooks.as_ref(), Some(&hooks));
+    }
+
+    #[test]
+    fn validate_agent_hooks_rejects_bad_regex_and_empty_observer_events() {
+        let bad_regex = AgentHooksConfig {
+            policy_rules: vec![protocol::hook_policy::HookPolicyRule {
+                id: Some("bad".to_string()),
+                events: vec![],
+                tools: vec![],
+                input_matchers: vec![protocol::hook_policy::InputMatcher {
+                    field: "command".to_string(),
+                    regex: "(".to_string(),
+                }],
+                decision: protocol::hook_policy::PolicyDecision::Deny,
+                reason: None,
+            }],
+            observers: vec![],
+        };
+        assert!(validate_agent_hooks("a", &bad_regex).is_err(), "invalid regex rejected");
+
+        let empty_observer = AgentHooksConfig {
+            policy_rules: vec![],
+            observers: vec![AgentHookObserver { events: vec![], action: AgentHookAction::Record }],
+        };
+        assert!(validate_agent_hooks("a", &empty_observer).is_err(), "observer with no events rejected");
+
+        let ok = AgentHooksConfig {
+            policy_rules: vec![],
+            observers: vec![AgentHookObserver { events: vec!["Stop".to_string()], action: AgentHookAction::Record }],
+        };
+        assert!(validate_agent_hooks("a", &ok).is_ok());
     }
 
     #[test]

@@ -436,6 +436,445 @@ pub fn set_mcp_tool_policy(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Harness-hook activation (P2)
+//
+// The kernel compiles guardrail intent into a provider-agnostic
+// `protocol::HookPolicy` and, for providers whose harness exposes a hook
+// config vector, writes a minimal per-session harness config that routes every
+// hook event through the `animus-hook` sibling binary. Only the claude
+// `Settings` vector is generated this wave; the helper classifies the others so
+// the wiring is ready, but they are not yet materialized.
+// ---------------------------------------------------------------------------
+
+/// Env kill-switch: when set (to any non-empty value), `inject_harness_hooks`
+/// is a complete no-op — no policy file, no settings file, no launch flags.
+pub const DISABLE_HARNESS_HOOKS_ENV: &str = "ANIMUS_DISABLE_HARNESS_HOOKS";
+
+/// File name of the generated claude settings file (hooks-only) under the
+/// per-session run dir.
+pub const HARNESS_HOOKS_SETTINGS_FILE: &str = "animus-hooks.settings.json";
+
+/// File name of the compiled hook policy under the per-session run dir.
+pub const HARNESS_HOOK_POLICY_FILE: &str = "animus-policy.json";
+
+/// How a given provider's harness expects hook configuration to be supplied.
+/// Only [`HarnessHookVector::Settings`] (claude) is generated this wave; the
+/// remaining variants are classified so later waves can wire them without
+/// reshaping the gate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HarnessHookVector {
+    /// claude: a settings JSON file passed via `--settings` (additive).
+    Settings,
+    /// codex / opencode style: a `hooks.json`-shaped config (not yet wired).
+    HooksJson,
+    /// gemini-style hooks config (not yet wired).
+    GeminiHooks,
+    /// Provider has no known harness hook vector.
+    None,
+}
+
+/// Classify a provider CLI tool's harness hook config vector. Provider-name
+/// matching mirrors the capability table in `orchestrator_core::runtime_contract`.
+pub fn harness_hook_config_vector(tool: &str) -> HarnessHookVector {
+    match tool.trim().to_ascii_lowercase().as_str() {
+        "claude" => HarnessHookVector::Settings,
+        "codex" | "opencode" => HarnessHookVector::HooksJson,
+        "gemini" => HarnessHookVector::GeminiHooks,
+        _ => HarnessHookVector::None,
+    }
+}
+
+/// Gate events the spine evaluates the compiled policy against. PreToolUse is
+/// the load-bearing gate for headless (`--print`) claude sessions, where
+/// PermissionRequest hooks do not fire. PermissionRequest is still wired so an
+/// interactive session is also governed.
+const HARNESS_GATE_EVENTS: &[&str] = &["PreToolUse", "PermissionRequest"];
+
+/// Kernel observability events wired unconditionally (record-only, no policy).
+const HARNESS_OBSERVABILITY_EVENTS: &[&str] = &["PostToolUse", "Stop", "SessionStart", "SessionEnd"];
+
+/// Translate one claude-style tool-policy matcher into a [`protocol::HookPolicyRule`]
+/// with the given decision.
+///
+/// claude matcher syntax used in `AgentToolPolicy` entries:
+/// * `Bash` — bare tool name → tool glob, no input matcher.
+/// * `Bash(*--live*)` — tool name + an argument-content glob → tool glob plus
+///   an `input_matcher` on the `command` field whose regex is the glob
+///   translated to a regex (anchored as a substring search via `.*`).
+/// * `mcp__github__*` — glob over the tool name (no parens) → tool glob.
+///
+/// Unparenthesized patterns map straight to the `tools` glob (the kernel
+/// evaluator already supports `*`). Parenthesized patterns additionally
+/// constrain the `command` field — the only structured tool-input field claude
+/// exposes for `Bash`-shaped tools — so a `Bash(*--live*)` deny blocks exactly
+/// the live invocations, not every `Bash` call.
+fn compile_matcher_rule(
+    matcher: &str,
+    decision: protocol::hook_policy::PolicyDecision,
+    source: &str,
+) -> Option<protocol::hook_policy::HookPolicyRule> {
+    let matcher = matcher.trim();
+    if matcher.is_empty() {
+        return None;
+    }
+    let (tool_glob, arg_glob) = match matcher.split_once('(') {
+        Some((tool, rest)) => {
+            let arg = rest.strip_suffix(')').unwrap_or(rest).trim();
+            (tool.trim().to_string(), (!arg.is_empty()).then(|| arg.to_string()))
+        }
+        None => (matcher.to_string(), None),
+    };
+
+    let input_matchers = match arg_glob {
+        Some(arg) => vec![protocol::hook_policy::InputMatcher {
+            field: "command".to_string(),
+            regex: glob_to_unanchored_regex(&arg),
+        }],
+        None => Vec::new(),
+    };
+
+    Some(protocol::hook_policy::HookPolicyRule {
+        id: Some(format!("{source}:{matcher}")),
+        // Gate events only; observability events never carry a decision.
+        events: HARNESS_GATE_EVENTS.iter().map(|e| e.to_string()).collect(),
+        tools: if tool_glob.is_empty() || tool_glob == "*" { Vec::new() } else { vec![tool_glob] },
+        input_matchers,
+        decision,
+        reason: Some(match decision {
+            protocol::hook_policy::PolicyDecision::Deny => {
+                format!("Blocked by Animus agent guardrail ({source}): {matcher}")
+            }
+            _ => format!("Animus agent guardrail ({source}): {matcher}"),
+        }),
+    })
+}
+
+/// Translate a `*`-glob into an UNANCHORED regex that matches the glob anywhere
+/// in the haystack. `*` becomes `.*`; every other character is escaped. The
+/// result is a substring search (no leading/trailing anchors) so
+/// `Bash(*--live*)` matches `cmd --live x` exactly as claude's own
+/// `*`-substring matcher would.
+fn glob_to_unanchored_regex(glob: &str) -> String {
+    let mut out = String::with_capacity(glob.len() + 4);
+    for ch in glob.chars() {
+        if ch == '*' {
+            out.push_str(".*");
+        } else {
+            // regex::escape on a single char keeps the translation total.
+            out.push_str(&regex_escape_char(ch));
+        }
+    }
+    out
+}
+
+fn regex_escape_char(ch: char) -> String {
+    const SPECIAL: &[char] = &['.', '+', '?', '(', ')', '[', ']', '{', '}', '^', '$', '|', '\\'];
+    if SPECIAL.contains(&ch) {
+        format!("\\{ch}")
+    } else {
+        ch.to_string()
+    }
+}
+
+/// Compile a resolved [`AgentToolPolicy`] plus author-supplied guardrail rules
+/// into a single [`protocol::HookPolicy`].
+///
+/// * `tool_policy.deny` → deny rules, `tool_policy.allow` → allow rules
+///   (claude-matcher syntax translated by [`compile_matcher_rule`]).
+/// * `author_rules` (from the agent profile `hooks.policy_rules` block) are
+///   appended, but an author rule may only ever *add* restriction: an author
+///   `allow` or `defer` is downgraded to `defer` (abstain) so it cannot emit an
+///   explicit `permissionDecision=allow` that bypasses the harness's own
+///   permission prompt. Only `deny`/`ask` from an author rule survive. (Kernel
+///   `tool_policy.allow` entries are intentionally allow rules — they are
+///   operator-authored guardrail intent, not the constrained agent surface.)
+/// * `default_decision` mirrors [`AgentToolPolicy::is_tool_permitted`]: when
+///   `tool_policy.allow` is NON-EMPTY the policy is an allowlist, so an
+///   unmatched call defaults to `Deny` (every tool not explicitly allowed is
+///   blocked). When `allow` is empty there is no allowlist, so unmatched calls
+///   default to `Defer` (abstain — the agent's own harness permission flow and
+///   the user's own hooks still govern).
+///
+/// Ordering is irrelevant to safety: the kernel evaluator collects every
+/// matching rule and the most restrictive decision wins, so an author `allow`
+/// can never weaken a kernel/tool_policy `deny` for the same call.
+pub fn compile_hook_policy(
+    tool_policy: &orchestrator_core::agent_runtime_config::AgentToolPolicy,
+    author_rules: &[protocol::hook_policy::HookPolicyRule],
+) -> protocol::hook_policy::HookPolicy {
+    use protocol::hook_policy::PolicyDecision;
+
+    let mut rules = Vec::new();
+    for matcher in &tool_policy.deny {
+        if let Some(rule) = compile_matcher_rule(matcher, PolicyDecision::Deny, "tool_policy") {
+            rules.push(rule);
+        }
+    }
+    for matcher in &tool_policy.allow {
+        if let Some(rule) = compile_matcher_rule(matcher, PolicyDecision::Allow, "tool_policy") {
+            rules.push(rule);
+        }
+    }
+    // Allowlist semantics: a non-empty `allow` means "deny everything not
+    // explicitly allowed", matching `AgentToolPolicy::is_tool_permitted`.
+    let default_decision = if tool_policy.allow.is_empty() { PolicyDecision::Defer } else { PolicyDecision::Deny };
+
+    // Author rules can only TIGHTEN. An author rule survives only if it is one
+    // of the restricting decisions (`ask`/`deny`) AND is strictly more
+    // restrictive than the policy default; otherwise it is downgraded to
+    // `defer` (abstain). `HookPolicy::evaluate` short-circuits the default on
+    // any matched non-defer rule, so this guards two ways the constrained agent
+    // surface could otherwise weaken the kernel posture:
+    //   * `allow`/`defer` are never honored from authors — an author `allow`
+    //     would bypass the harness permission prompt.
+    //   * `ask` is dropped when it would undercut a stricter default — e.g. an
+    //     allowlist's deny-by-default (`ask` is less restrictive than `deny`).
+    // `deny` always survives (maximally restrictive).
+    for rule in author_rules {
+        let mut rule = rule.clone();
+        let keep = match rule.decision {
+            // Maximally restrictive — always honored (and preserves the
+            // author's reason even when the default is already deny).
+            PolicyDecision::Deny => true,
+            // Honored only when strictly more restrictive than the default, so
+            // it can never undercut an allowlist's deny-by-default.
+            PolicyDecision::Ask => PolicyDecision::Ask > default_decision,
+            // Never honored from authors — would widen access.
+            PolicyDecision::Allow | PolicyDecision::Defer => false,
+        };
+        if !keep {
+            rule.decision = PolicyDecision::Defer;
+        }
+        rules.push(rule);
+    }
+
+    protocol::hook_policy::HookPolicy { version: protocol::hook_policy::HOOK_POLICY_VERSION, default_decision, rules }
+}
+
+/// Build one claude settings `hooks` entry value:
+/// `[{ "matcher"?, "hooks": [{ "type": "command", "command": <cmd> }] }]`.
+/// `matcher` is omitted for non-tool events (claude treats those matchers as a
+/// session-source filter, not a tool filter, so an empty matcher is correct).
+fn claude_hook_entry(command: &str, include_matcher: bool) -> Value {
+    let mut entry = serde_json::Map::new();
+    if include_matcher {
+        // Empty matcher = "every tool" for tool events. claude documents an
+        // empty string (not "*") as the catch-all for PreToolUse/PostToolUse.
+        entry.insert("matcher".to_string(), Value::String(String::new()));
+    }
+    entry.insert("hooks".to_string(), serde_json::json!([{ "type": "command", "command": command }]));
+    Value::Array(vec![Value::Object(entry)])
+}
+
+/// Assemble the claude `hooks` settings block. Gate events carry `--policy`;
+/// observability events do not. Author observer events are merged into the
+/// observability set (kernel-generated `animus-hook emit` command — never an
+/// author-supplied shell string).
+fn build_claude_hooks_block(
+    hook_bin: &str,
+    session: &str,
+    project_root: &str,
+    policy_path: &str,
+    author_observer_events: &[String],
+) -> Value {
+    let gate_cmd = |event: &str| {
+        format!(
+            "{} emit --event {} --session {} --project-root {} --policy {}",
+            shell_quote(hook_bin),
+            event,
+            shell_quote(session),
+            shell_quote(project_root),
+            shell_quote(policy_path),
+        )
+    };
+    let observe_cmd = |event: &str| {
+        format!(
+            "{} emit --event {} --session {} --project-root {}",
+            shell_quote(hook_bin),
+            event,
+            shell_quote(session),
+            shell_quote(project_root),
+        )
+    };
+
+    let mut hooks = serde_json::Map::new();
+    for event in HARNESS_GATE_EVENTS {
+        hooks.insert((*event).to_string(), claude_hook_entry(&gate_cmd(event), true));
+    }
+
+    // Observability events: kernel set plus any author-requested events, deduped.
+    let mut observe_events: Vec<String> = HARNESS_OBSERVABILITY_EVENTS.iter().map(|e| e.to_string()).collect();
+    for event in author_observer_events {
+        let event = event.trim();
+        if !event.is_empty() && !observe_events.iter().any(|e| e == event) && !HARNESS_GATE_EVENTS.contains(&event) {
+            observe_events.push(event.to_string());
+        }
+    }
+    for event in observe_events {
+        // SessionStart/SessionEnd/Stop are non-tool events → omit matcher;
+        // PostToolUse is a tool event → include matcher.
+        let include_matcher = event == "PostToolUse";
+        hooks.insert(event.clone(), claude_hook_entry(&observe_cmd(&event), include_matcher));
+    }
+
+    serde_json::json!({ "hooks": hooks })
+}
+
+/// Minimal POSIX-ish single-quote shell quoting for the command strings claude
+/// runs via `/bin/sh -c`. Wraps in single quotes and escapes embedded single
+/// quotes. Paths and identifiers Animus generates are well-formed, but quoting
+/// keeps a path with spaces from splitting the command.
+fn shell_quote(value: &str) -> String {
+    if !value.is_empty() && value.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'/' | b'_' | b'-' | b'.')) {
+        return value.to_string();
+    }
+    let escaped = value.replace('\'', r"'\''");
+    format!("'{escaped}'")
+}
+
+/// Resolve the agent profile `hooks` block for a phase, mirroring the
+/// precedence in [`inject_agent_tool_policy`]: workflow YAML profile wins over
+/// the agent-runtime profile.
+fn resolve_agent_hooks(
+    ctx: &RuntimeConfigContext,
+    phase_id: &str,
+) -> orchestrator_core::agent_runtime_config::AgentHooksConfig {
+    let agent_id = ctx.phase_agent_id(phase_id);
+    if let Some(hooks) = agent_id
+        .as_deref()
+        .and_then(|id| ctx.workflow_config.config.agent_profiles.get(id))
+        .and_then(|overlay| overlay.hooks.clone())
+    {
+        return hooks;
+    }
+    agent_id
+        .as_deref()
+        .and_then(|id| ctx.agent_runtime_config.agent_profile(id))
+        .map(|profile| profile.hooks.clone())
+        .unwrap_or_default()
+}
+
+/// Resolve the active tool policy for a phase, mirroring [`inject_agent_tool_policy`].
+fn resolve_tool_policy(
+    ctx: &RuntimeConfigContext,
+    phase_id: &str,
+) -> orchestrator_core::agent_runtime_config::AgentToolPolicy {
+    let agent_id = ctx.phase_agent_id(phase_id);
+    let wf = agent_id.as_deref().and_then(|id| ctx.workflow_config.config.agent_profiles.get(id));
+    let rt = agent_id.as_deref().and_then(|id| ctx.agent_runtime_config.agent_profile(id));
+    wf.and_then(|p| p.tool_policy.clone()).or_else(|| rt.map(|p| p.tool_policy.clone())).unwrap_or_default()
+}
+
+/// Activate harness hooks for a provider session.
+///
+/// For claude providers (and when `ANIMUS_DISABLE_HARNESS_HOOKS` is unset),
+/// this:
+///
+/// 1. Compiles the resolved tool_policy + agent-authored policy rules into
+///    `<session_dir>/animus-policy.json` (a `protocol::HookPolicy`).
+/// 2. Writes `<session_dir>/animus-hooks.settings.json` — a claude settings
+///    file with ONLY a `hooks` block, every command pointing at the resolved
+///    `animus-hook` sibling binary. Gate events (PreToolUse / PermissionRequest)
+///    carry `--policy`; observability events (PostToolUse / Stop / SessionStart
+///    / SessionEnd, plus any author observer events) do not.
+/// 3. Appends `--settings <path>` to `/cli/launch/args`.
+///
+/// Never touches `~/.claude` or any shared settings — only the per-session run
+/// dir, which is reaped with the run. Non-claude providers are a no-op
+/// (classified but not yet generated). Any IO failure is logged and skipped:
+/// failing to write the settings file must not break the session, and because
+/// `--settings` is only appended on success the agent never points at a
+/// missing file.
+///
+/// # Wiring
+///
+/// Like the sibling phase-contract injectors in this module
+/// ([`inject_agent_tool_policy`], [`inject_response_schema_into_launch_args`],
+/// [`inject_workflow_mcp_servers`], [`apply_phase_capability_launch_flags`]),
+/// this is a kernel pub API consumed by the workflow-runner that assembles the
+/// final per-phase launch contract. That assembler lives out-of-tree
+/// (`launchapp-dev/animus-workflow-runner-default`, backed by
+/// `launchapp-dev/animus-runtime-shared`); there is intentionally no in-tree
+/// phase-assembly call site. Production activation lands when the out-of-tree
+/// runner is bumped to call this alongside the other injectors with the
+/// per-session run dir — the P3 follow-up that also extends generation to the
+/// non-`Settings` provider vectors.
+pub fn inject_harness_hooks(
+    runtime_contract: &mut Value,
+    ctx: &RuntimeConfigContext,
+    phase_id: &str,
+    session: &str,
+    project_root: &str,
+    session_dir: &std::path::Path,
+) {
+    if std::env::var(DISABLE_HARNESS_HOOKS_ENV).map(|v| !v.trim().is_empty()).unwrap_or(false) {
+        return;
+    }
+
+    let cli_name = runtime_contract.pointer("/cli/name").and_then(Value::as_str).unwrap_or("");
+    if harness_hook_config_vector(cli_name) != HarnessHookVector::Settings {
+        // Only the claude `Settings` vector is generated this wave.
+        return;
+    }
+
+    let tool_policy = resolve_tool_policy(ctx, phase_id);
+    let agent_hooks = resolve_agent_hooks(ctx, phase_id);
+
+    let policy = compile_hook_policy(&tool_policy, &agent_hooks.policy_rules);
+
+    if let Err(err) = std::fs::create_dir_all(session_dir) {
+        warn!(error = %err, dir = %session_dir.display(), "failed to create session dir for harness hooks; skipping");
+        return;
+    }
+
+    let policy_path = session_dir.join(HARNESS_HOOK_POLICY_FILE);
+    let policy_json = match serde_json::to_string_pretty(&policy) {
+        Ok(json) => json,
+        Err(err) => {
+            warn!(error = %err, "failed to serialize compiled hook policy; skipping harness hooks");
+            return;
+        }
+    };
+    if let Err(err) = std::fs::write(&policy_path, policy_json) {
+        warn!(error = %err, path = %policy_path.display(), "failed to write compiled hook policy; skipping harness hooks");
+        return;
+    }
+
+    let hook_bin = sibling_animus_binary(ANIMUS_HOOK_BIN);
+    let author_observer_events: Vec<String> =
+        agent_hooks.observers.iter().flat_map(|observer| observer.events.iter().cloned()).collect();
+    let settings = build_claude_hooks_block(
+        &hook_bin,
+        session,
+        project_root,
+        &policy_path.display().to_string(),
+        &author_observer_events,
+    );
+
+    let settings_path = session_dir.join(HARNESS_HOOKS_SETTINGS_FILE);
+    let settings_json = match serde_json::to_string_pretty(&settings) {
+        Ok(json) => json,
+        Err(err) => {
+            warn!(error = %err, "failed to serialize harness hooks settings; skipping");
+            return;
+        }
+    };
+    if let Err(err) = std::fs::write(&settings_path, settings_json) {
+        warn!(error = %err, path = %settings_path.display(), "failed to write harness hooks settings; skipping");
+        return;
+    }
+
+    // Append `--settings <path>` ahead of the trailing prompt arg, mirroring
+    // `inject_response_schema_into_launch_args`. `--settings` is additive in
+    // claude v2.1.x, so the user's own ~/.claude and project hooks still run.
+    if let Some(args) = runtime_contract.pointer_mut("/cli/launch/args").and_then(Value::as_array_mut) {
+        let prompt_idx = args.len().saturating_sub(1);
+        args.insert(prompt_idx, Value::String("--settings".to_string()));
+        args.insert(prompt_idx + 1, Value::String(settings_path.display().to_string()));
+    }
+}
+
 fn primary_mcp_agent_id(runtime_contract: &Value) -> Option<&str> {
     runtime_contract.pointer("/mcp/agent_id").and_then(Value::as_str).map(str::trim).filter(|value| !value.is_empty())
 }
@@ -579,6 +1018,36 @@ pub fn inject_workflow_mcp_servers_with_project_root(
 /// Base name of the proxy binary (no platform suffix).
 const MCP_PROXY_BIN: &str = "animus-mcp-proxy";
 
+/// Base name of the harness-hook spine binary (no platform suffix).
+const ANIMUS_HOOK_BIN: &str = "animus-hook";
+
+/// Resolve a sibling Animus binary by base name, using the same resolution
+/// order as [`mcp_proxy_command`]: (1) sibling of the daemon-supplied host CLI
+/// path, (2) sibling of the current executable, (3) bare name (PATH lookup).
+/// The `.exe` suffix is appended on Windows.
+fn sibling_animus_binary(base_name: &str) -> String {
+    let file_name = format!("{base_name}{}", std::env::consts::EXE_SUFFIX);
+
+    if let Some(host_cli) = memory_mcp_stdio_command_override() {
+        if let Some(dir) = std::path::Path::new(&host_cli).parent() {
+            let candidate = dir.join(&file_name);
+            if candidate.exists() {
+                return candidate.display().to_string();
+            }
+        }
+    }
+
+    if let Some(candidate) = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(|dir| dir.join(&file_name)))
+        .filter(|candidate| candidate.exists())
+    {
+        return candidate.display().to_string();
+    }
+
+    base_name.to_string()
+}
+
 /// Resolve the `animus-mcp-proxy` binary path. The proxy ships in the same
 /// package as the `animus` CLI, so it sits next to whichever `animus` binary
 /// is in use. Resolution order:
@@ -592,29 +1061,7 @@ const MCP_PROXY_BIN: &str = "animus-mcp-proxy";
 ///
 /// On Windows the sibling carries the `.exe` suffix that Cargo emits.
 fn mcp_proxy_command() -> String {
-    let file_name = format!("{MCP_PROXY_BIN}{}", std::env::consts::EXE_SUFFIX);
-
-    // (1) Sibling of the host CLI path.
-    if let Some(host_cli) = memory_mcp_stdio_command_override() {
-        if let Some(dir) = std::path::Path::new(&host_cli).parent() {
-            let candidate = dir.join(&file_name);
-            if candidate.exists() {
-                return candidate.display().to_string();
-            }
-        }
-    }
-
-    // (2) Sibling of the current executable.
-    if let Some(candidate) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(|dir| dir.join(&file_name)))
-        .filter(|candidate| candidate.exists())
-    {
-        return candidate.display().to_string();
-    }
-
-    // (3) PATH lookup.
-    MCP_PROXY_BIN.to_string()
+    sibling_animus_binary(MCP_PROXY_BIN)
 }
 
 /// Rewrite an OAuth-protected MCP server entry to launch the local
@@ -1793,5 +2240,355 @@ mod tests {
             args,
             vec!["--server", "linear", "--project-root", "/tmp/proj2", "--url", "https://mcp.linear.app/mcp"]
         );
+    }
+
+    // -- Harness-hook activation (P2) -------------------------------------
+
+    use orchestrator_core::agent_runtime_config::{
+        AgentHookObserver, AgentHooksConfig, AgentProfileOverlay, AgentToolPolicy,
+    };
+    use protocol::hook_policy::{HookPolicy, HookPolicyRule, InputMatcher, PolicyDecision};
+
+    fn ctx_with_overlay(agent_id: &str, phase_id: &str, overlay: AgentProfileOverlay) -> RuntimeConfigContext {
+        let mut workflow_config = builtin_workflow_config();
+        workflow_config.agent_profiles.insert(agent_id.to_string(), overlay);
+        // Bind the phase to the agent so resolve_* sees the overlay.
+        let phase: orchestrator_config::agent_runtime_config::PhaseExecutionDefinition =
+            serde_json::from_value(serde_json::json!({ "mode": "agent", "agent_id": agent_id })).unwrap();
+        workflow_config.phase_definitions.insert(phase_id.to_string(), phase);
+        let loaded = LoadedWorkflowConfig {
+            metadata: WorkflowConfigMetadata {
+                schema: workflow_config.schema.clone(),
+                version: workflow_config.version,
+                hash: workflow_config_hash(&workflow_config),
+                source: WorkflowConfigSource::Builtin,
+            },
+            config: workflow_config,
+            path: PathBuf::from("builtin"),
+        };
+        RuntimeConfigContext { agent_runtime_config: builtin_agent_runtime_config(), workflow_config: loaded }
+    }
+
+    fn claude_contract() -> Value {
+        serde_json::json!({
+            "cli": { "name": "claude", "launch": { "args": ["--print", "the prompt"] } },
+            "mcp": {}
+        })
+    }
+
+    #[test]
+    fn harness_hook_vector_classification() {
+        assert_eq!(harness_hook_config_vector("claude"), HarnessHookVector::Settings);
+        assert_eq!(harness_hook_config_vector("Claude"), HarnessHookVector::Settings);
+        assert_eq!(harness_hook_config_vector("codex"), HarnessHookVector::HooksJson);
+        assert_eq!(harness_hook_config_vector("opencode"), HarnessHookVector::HooksJson);
+        assert_eq!(harness_hook_config_vector("gemini"), HarnessHookVector::GeminiHooks);
+        assert_eq!(harness_hook_config_vector("aider"), HarnessHookVector::None);
+    }
+
+    #[test]
+    fn glob_to_regex_translates_star_and_escapes_specials() {
+        assert_eq!(glob_to_unanchored_regex("*--live*"), ".*--live.*");
+        assert_eq!(glob_to_unanchored_regex("submit-order"), "submit-order");
+        assert_eq!(glob_to_unanchored_regex("a.b"), "a\\.b");
+    }
+
+    #[test]
+    fn compile_matcher_rule_parses_bash_arg_glob() {
+        let rule =
+            compile_matcher_rule("Bash(* --live*)", PolicyDecision::Deny, "tool_policy").expect("matcher compiles");
+        assert_eq!(rule.tools, vec!["Bash".to_string()]);
+        assert_eq!(rule.decision, PolicyDecision::Deny);
+        assert_eq!(rule.input_matchers.len(), 1);
+        assert_eq!(rule.input_matchers[0].field, "command");
+        assert_eq!(rule.input_matchers[0].regex, ".* --live.*");
+        // Compiled gate-event rule applies to both gate events.
+        assert!(rule.events.contains(&"PreToolUse".to_string()));
+    }
+
+    #[test]
+    fn compile_matcher_rule_bare_tool_has_no_input_matcher() {
+        let rule = compile_matcher_rule("Bash", PolicyDecision::Deny, "tool_policy").expect("compiles");
+        assert_eq!(rule.tools, vec!["Bash".to_string()]);
+        assert!(rule.input_matchers.is_empty());
+    }
+
+    #[test]
+    fn compile_matcher_rule_star_tool_matches_all() {
+        let rule = compile_matcher_rule("*", PolicyDecision::Deny, "tool_policy").expect("compiles");
+        assert!(rule.tools.is_empty(), "'*' tool glob compiles to the empty (match-all) tools list");
+    }
+
+    #[test]
+    fn trading_firm_guardrail_compiles_and_denies_live_order() {
+        // Acceptance: tool_policy.deny = ["Bash(* --live*)", "Bash(*submit-order*)"]
+        let tool_policy = AgentToolPolicy {
+            allow: vec![],
+            deny: vec!["Bash(* --live*)".to_string(), "Bash(*submit-order*)".to_string()],
+        };
+        let policy = compile_hook_policy(&tool_policy, &[]);
+        assert_eq!(policy.default_decision, PolicyDecision::Defer);
+        assert_eq!(policy.rules.len(), 2);
+
+        // A matching live invocation denies.
+        let v = policy.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "trade --live --qty 1"}));
+        assert_eq!(v.decision, PolicyDecision::Deny);
+
+        // A submit-order invocation denies.
+        let v = policy.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "./cli submit-order"}));
+        assert_eq!(v.decision, PolicyDecision::Deny);
+
+        // A dry-run abstains (defer) — no rule matches.
+        let v = policy.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "trade --dry-run"}));
+        assert_eq!(v.decision, PolicyDecision::Defer);
+    }
+
+    #[test]
+    fn author_allow_cannot_override_kernel_deny_for_same_tool() {
+        // Kernel/tool_policy denies Bash; author rule tries to allow it.
+        let tool_policy = AgentToolPolicy { allow: vec![], deny: vec!["Bash".to_string()] };
+        let author_allow = HookPolicyRule {
+            id: Some("author-allow-bash".to_string()),
+            events: vec![],
+            tools: vec!["Bash".to_string()],
+            input_matchers: vec![],
+            decision: PolicyDecision::Allow,
+            reason: None,
+        };
+        let policy = compile_hook_policy(&tool_policy, std::slice::from_ref(&author_allow));
+        // deny-wins regardless of source/order.
+        let v = policy.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "ls"}));
+        assert_eq!(v.decision, PolicyDecision::Deny, "author allow must not weaken kernel deny");
+    }
+
+    #[test]
+    fn author_allow_rule_is_downgraded_to_defer() {
+        // An author allow rule must NOT emit an explicit allow that bypasses the
+        // harness prompt: it is downgraded to defer (abstain).
+        let tool_policy = AgentToolPolicy::default();
+        let author_allow = HookPolicyRule {
+            id: Some("author-allow".to_string()),
+            events: vec![],
+            tools: vec!["Bash".to_string()],
+            input_matchers: vec![],
+            decision: PolicyDecision::Allow,
+            reason: None,
+        };
+        let policy = compile_hook_policy(&tool_policy, std::slice::from_ref(&author_allow));
+        assert_eq!(policy.rules.len(), 1);
+        assert_eq!(policy.rules[0].decision, PolicyDecision::Defer, "author allow downgraded to defer");
+        // Evaluating a Bash call abstains rather than emitting allow.
+        let v = policy.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "ls"}));
+        assert_eq!(v.decision, PolicyDecision::Defer);
+    }
+
+    #[test]
+    fn author_ask_and_deny_rules_pass_through() {
+        let tool_policy = AgentToolPolicy::default();
+        for decision in [PolicyDecision::Ask, PolicyDecision::Deny] {
+            let rule = HookPolicyRule {
+                id: Some("r".to_string()),
+                events: vec![],
+                tools: vec!["Bash".to_string()],
+                input_matchers: vec![],
+                decision,
+                reason: None,
+            };
+            let policy = compile_hook_policy(&tool_policy, std::slice::from_ref(&rule));
+            assert_eq!(policy.rules[0].decision, decision, "restricting author decisions survive");
+        }
+    }
+
+    #[test]
+    fn author_ask_is_downgraded_under_allowlist_default_deny() {
+        // In allowlist mode (default Deny), an author `ask` on a non-allowlisted
+        // tool must NOT weaken the deny-default to an ask prompt.
+        let tool_policy = AgentToolPolicy { allow: vec!["Read".to_string()], deny: vec![] };
+        let author_ask = HookPolicyRule {
+            id: Some("author-ask-bash".to_string()),
+            events: vec![],
+            tools: vec!["Bash".to_string()],
+            input_matchers: vec![],
+            decision: PolicyDecision::Ask,
+            reason: None,
+        };
+        let policy = compile_hook_policy(&tool_policy, std::slice::from_ref(&author_ask));
+        // The author ask rule is downgraded to defer, so Bash still hits the
+        // deny default.
+        let v = policy.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "ls"}));
+        assert_eq!(v.decision, PolicyDecision::Deny, "author ask must not undercut allowlist deny-default");
+    }
+
+    #[test]
+    fn non_empty_allowlist_defaults_to_deny_for_unmatched_tools() {
+        // Mirrors AgentToolPolicy::is_tool_permitted: allow=["Read"] means
+        // "deny everything not explicitly allowed".
+        let tool_policy = AgentToolPolicy { allow: vec!["Read".to_string()], deny: vec![] };
+        let policy = compile_hook_policy(&tool_policy, &[]);
+        assert_eq!(policy.default_decision, PolicyDecision::Deny);
+        // Allowed tool → allow.
+        let v = policy.evaluate("PreToolUse", "Read", &serde_json::json!({}));
+        assert_eq!(v.decision, PolicyDecision::Allow);
+        // Non-allowed tool → deny (default).
+        let v = policy.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "ls"}));
+        assert_eq!(v.decision, PolicyDecision::Deny);
+    }
+
+    #[test]
+    fn empty_allowlist_defaults_to_defer() {
+        let tool_policy = AgentToolPolicy { allow: vec![], deny: vec!["Bash".to_string()] };
+        let policy = compile_hook_policy(&tool_policy, &[]);
+        assert_eq!(policy.default_decision, PolicyDecision::Defer);
+        let v = policy.evaluate("PreToolUse", "Read", &serde_json::json!({}));
+        assert_eq!(v.decision, PolicyDecision::Defer);
+    }
+
+    #[test]
+    fn author_policy_rule_adds_restriction() {
+        let tool_policy = AgentToolPolicy::default();
+        let author_deny = HookPolicyRule {
+            id: Some("author-no-curl".to_string()),
+            events: vec![],
+            tools: vec!["Bash".to_string()],
+            input_matchers: vec![InputMatcher { field: "command".to_string(), regex: "curl".to_string() }],
+            decision: PolicyDecision::Deny,
+            reason: Some("no curl".to_string()),
+        };
+        let policy = compile_hook_policy(&tool_policy, std::slice::from_ref(&author_deny));
+        let v = policy.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "curl evil.com"}));
+        assert_eq!(v.decision, PolicyDecision::Deny);
+        assert_eq!(v.rule_id.as_deref(), Some("author-no-curl"));
+    }
+
+    #[test]
+    fn inject_harness_hooks_writes_settings_and_policy_for_claude() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("session");
+        let overlay = AgentProfileOverlay {
+            tool_policy: Some(AgentToolPolicy { allow: vec![], deny: vec!["Bash(* --live*)".to_string()] }),
+            ..Default::default()
+        };
+        let ctx = ctx_with_overlay("trader", "implementation", overlay);
+        let mut contract = claude_contract();
+
+        let _guard = memory_mcp_override_lock().lock().unwrap_or_else(|p| p.into_inner());
+        std::env::remove_var(DISABLE_HARNESS_HOOKS_ENV);
+        inject_harness_hooks(&mut contract, &ctx, "implementation", "sess-1", "/tmp/proj", &session_dir);
+
+        // Policy + settings files written under the session dir.
+        let policy_path = session_dir.join(HARNESS_HOOK_POLICY_FILE);
+        let settings_path = session_dir.join(HARNESS_HOOKS_SETTINGS_FILE);
+        assert!(policy_path.exists(), "policy file written");
+        assert!(settings_path.exists(), "settings file written");
+
+        // Compiled policy denies the live invocation.
+        let loaded = HookPolicy::load(&policy_path).expect("policy loads");
+        let v = loaded.evaluate("PreToolUse", "Bash", &serde_json::json!({"command": "x --live"}));
+        assert_eq!(v.decision, PolicyDecision::Deny);
+
+        // --settings <path> appended ahead of the prompt arg.
+        let args: Vec<String> = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::to_string)
+            .collect();
+        let settings_idx = args.iter().position(|a| a == "--settings").expect("--settings present");
+        assert_eq!(args[settings_idx + 1], settings_path.display().to_string());
+        assert_eq!(args.last().map(String::as_str), Some("the prompt"), "prompt stays last");
+
+        // Settings hooks block: gate events carry --policy, observability do not.
+        let settings: Value = serde_json::from_str(&std::fs::read_to_string(&settings_path).unwrap()).unwrap();
+        let pre = settings.pointer("/hooks/PreToolUse/0/hooks/0/command").and_then(Value::as_str).unwrap();
+        assert!(pre.contains("--policy"), "PreToolUse gate carries --policy");
+        assert!(pre.contains("animus-hook") || pre.contains("'animus-hook'"));
+        let post = settings.pointer("/hooks/PostToolUse/0/hooks/0/command").and_then(Value::as_str).unwrap();
+        assert!(!post.contains("--policy"), "PostToolUse observability omits --policy");
+        // Non-tool observability event omits matcher.
+        assert!(settings.pointer("/hooks/Stop/0/matcher").is_none(), "Stop omits matcher");
+        // Tool event includes (empty) matcher.
+        assert_eq!(settings.pointer("/hooks/PreToolUse/0/matcher").and_then(Value::as_str), Some(""));
+    }
+
+    #[test]
+    fn inject_harness_hooks_merges_author_observer_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("session");
+        let overlay = AgentProfileOverlay {
+            hooks: Some(AgentHooksConfig {
+                policy_rules: vec![],
+                observers: vec![AgentHookObserver {
+                    events: vec!["UserPromptSubmit".to_string()],
+                    action: orchestrator_core::agent_runtime_config::AgentHookAction::Record,
+                }],
+            }),
+            ..Default::default()
+        };
+        let ctx = ctx_with_overlay("obs", "implementation", overlay);
+        let mut contract = claude_contract();
+        let _guard = memory_mcp_override_lock().lock().unwrap_or_else(|p| p.into_inner());
+        std::env::remove_var(DISABLE_HARNESS_HOOKS_ENV);
+        inject_harness_hooks(&mut contract, &ctx, "implementation", "s", "/tmp/p", &session_dir);
+
+        let settings: Value =
+            serde_json::from_str(&std::fs::read_to_string(session_dir.join(HARNESS_HOOKS_SETTINGS_FILE)).unwrap())
+                .unwrap();
+        let cmd = settings.pointer("/hooks/UserPromptSubmit/0/hooks/0/command").and_then(Value::as_str);
+        assert!(cmd.is_some(), "author observer event wired");
+        assert!(!cmd.unwrap().contains("--policy"), "observer event is record-only");
+    }
+
+    #[test]
+    fn inject_harness_hooks_skips_non_claude_provider() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("session");
+        let ctx = ctx_with_overlay("x", "implementation", AgentProfileOverlay::default());
+        let mut contract = serde_json::json!({
+            "cli": { "name": "codex", "launch": { "args": ["exec", "the prompt"] } },
+            "mcp": {}
+        });
+        let _guard = memory_mcp_override_lock().lock().unwrap_or_else(|p| p.into_inner());
+        std::env::remove_var(DISABLE_HARNESS_HOOKS_ENV);
+        inject_harness_hooks(&mut contract, &ctx, "implementation", "s", "/tmp/p", &session_dir);
+        assert!(!session_dir.join(HARNESS_HOOKS_SETTINGS_FILE).exists(), "non-claude gets no settings file");
+        let args: Vec<&str> = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(!args.contains(&"--settings"), "non-claude gets no --settings flag");
+    }
+
+    #[test]
+    fn inject_harness_hooks_kill_switch_suppresses_everything() {
+        let dir = tempfile::tempdir().unwrap();
+        let session_dir = dir.path().join("session");
+        let ctx = ctx_with_overlay("x", "implementation", AgentProfileOverlay::default());
+        let mut contract = claude_contract();
+        let _guard = memory_mcp_override_lock().lock().unwrap_or_else(|p| p.into_inner());
+        std::env::set_var(DISABLE_HARNESS_HOOKS_ENV, "1");
+        inject_harness_hooks(&mut contract, &ctx, "implementation", "s", "/tmp/p", &session_dir);
+        std::env::remove_var(DISABLE_HARNESS_HOOKS_ENV);
+        assert!(!session_dir.join(HARNESS_HOOKS_SETTINGS_FILE).exists(), "kill switch suppresses settings file");
+        let args: Vec<&str> = contract
+            .pointer("/cli/launch/args")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(!args.contains(&"--settings"));
+    }
+
+    #[test]
+    fn shell_quote_leaves_simple_paths_unquoted_and_quotes_spaces() {
+        assert_eq!(shell_quote("/usr/bin/animus-hook"), "/usr/bin/animus-hook");
+        assert_eq!(shell_quote("sess-1"), "sess-1");
+        assert_eq!(shell_quote("/has space/x"), "'/has space/x'");
+        assert_eq!(shell_quote("a'b"), "'a'\\''b'");
     }
 }

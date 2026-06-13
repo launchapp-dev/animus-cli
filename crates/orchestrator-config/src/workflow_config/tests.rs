@@ -80,6 +80,38 @@ fn builtin_workflow_config_is_valid() {
 }
 
 #[test]
+fn workflow_overlay_hooks_with_bad_regex_are_rejected() {
+    use crate::agent_runtime_config::{AgentHooksConfig, AgentProfileOverlay};
+    use protocol::hook_policy::{HookPolicyRule, InputMatcher, PolicyDecision};
+
+    let mut config = builtin_workflow_config();
+    config.agent_profiles.insert(
+        "trader".to_string(),
+        AgentProfileOverlay {
+            hooks: Some(AgentHooksConfig {
+                policy_rules: vec![HookPolicyRule {
+                    id: Some("bad".to_string()),
+                    events: vec![],
+                    tools: vec![],
+                    input_matchers: vec![InputMatcher { field: "command".to_string(), regex: "(".to_string() }],
+                    decision: PolicyDecision::Deny,
+                    reason: None,
+                }],
+                observers: vec![],
+            }),
+            ..Default::default()
+        },
+    );
+    let runtime = crate::agent_runtime_config::builtin_agent_runtime_config();
+    let err = validate_workflow_and_runtime_configs(&config, &runtime)
+        .expect_err("invalid overlay hooks regex should fail workflow validation");
+    assert!(
+        err.to_string().contains("agent_profiles['trader'].hooks"),
+        "validation error should mention the overlay hooks block: {err}"
+    );
+}
+
+#[test]
 fn missing_v2_file_reports_actionable_error() {
     let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");

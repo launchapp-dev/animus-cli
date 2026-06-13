@@ -59,14 +59,14 @@ impl PolicyDecision {
 /// `file_path`, `options.cwd`). String values are matched directly; other
 /// scalar values are matched against their JSON rendering. A missing field
 /// never matches.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InputMatcher {
     pub field: String,
     pub regex: String,
 }
 
 /// One compiled guardrail rule.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookPolicyRule {
     /// Stable identifier surfaced in decision reasons and the event log.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,7 +88,7 @@ pub struct HookPolicyRule {
 }
 
 /// The compiled, versioned policy file.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HookPolicy {
     pub version: u32,
     /// Decision when no rule matches. Defaults to `defer` (abstain).
