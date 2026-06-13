@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- **`animus mcp auth` auto-detects advertised OAuth scopes.** When neither
+  `--scopes` nor config `scopes:` is set, the flow now requests the server's
+  advertised `scopes_supported` from discovery metadata (RFC 8414) instead of
+  requesting nothing. Scope precedence is now `--scopes` > config `scopes:` >
+  advertised `scopes_supported` > none. Auto-detected scopes are clearly marked
+  as such in the consent preview, `--dry-run` output, and the `--json` envelope
+  (new `scopes_auto_detected` flag), and can be narrowed with `--scopes` or
+  fully opted out with `--scopes none` (or config `scopes: [none]`) to force the
+  prior no-scope server-default behavior. Scope resolution and the consent gate
+  now run after discovery (a read-only public-metadata GET) so the preview shows
+  the real resolved scopes before the browser opens.
+  ([`docs/reference/mcp-oauth.md`](docs/reference/mcp-oauth.md))
+
+### Fixed
+
+- **`animus mcp auth` against servers that require a scope** (e.g. Robinhood's
+  trading MCP, which advertises `["internal"]` and rejects an empty-scope
+  authorize). Requesting the advertised scope set by default makes these servers
+  authenticate without the user having to discover and pass `--scopes` by hand.
+
 ## [0.5.15] - 2026-06-12
 
 **Hooks, conformance, and provider parity.** Harness hooks (kernel `animus-hook`

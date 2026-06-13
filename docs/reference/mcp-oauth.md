@@ -60,7 +60,7 @@ Fields:
 |---|---|---|
 | `flow` | yes | `authorization_code` |
 | `url` | yes | Upstream HTTP MCP endpoint; also the OAuth `resource` indicator (RFC 8707), the discovery seed (RFC 9728 protected-resource metadata → authorization server), and the proxy target |
-| `scopes` | no | Requested at authorization. **When omitted, NO scopes are requested** and the authorization server applies its own minimal default (least-privilege — see "Scope posture" below). Set this to request specific scopes a server requires. |
+| `scopes` | no | Requested at authorization. **When omitted, Animus auto-detects the server's advertised `scopes_supported`** from discovery metadata and requests those (see "Scope posture" below); if the server advertises none, nothing is requested and it applies its own minimal default. Set this to pin a specific (narrower) scope set, or `[none]` to force no scopes (opt out of auto-detection). |
 | `client_id` | no | Pre-registered client id; when omitted, Dynamic Client Registration (RFC 7591) is used |
 
 The machine-to-machine credential pointers (`token_url`, `client_id_env`,
@@ -93,11 +93,11 @@ animus mcp auth-logout my-server --url https://mcp.example.com/           # not-
 
 | Flag | Effect |
 |---|---|
-| `--scopes a,b` | Comma-separated scopes to request; overrides config `scopes:`. When omitted, NO scopes are requested (server default applies). |
+| `--scopes a,b` | Comma-separated scopes to request; overrides config `scopes:` **and** the server's advertised scopes. When omitted, scopes resolve to config `scopes:`, else the server's advertised `scopes_supported` (auto-detected), else none. Pass this to narrow an over-broad auto-detected set, or `--scopes none` to force **no** scopes (opt out of auto-detection; server default applies). |
 | `--url <u>` | Upstream MCP URL for a server not yet in config. |
 | `--yes` | Skip the interactive consent prompt and open the browser immediately. |
 | `--dry-run` | Run OAuth discovery (validates the endpoint + auth-server metadata), resolve the scope set, and report them (incl. whether DCR would run) **without** opening a browser, binding the callback, constructing the keychain token store, or obtaining any token. A broken/unreachable endpoint surfaces a discovery error. Exits 0. |
-| `--json` | Emit the `animus.cli.v1` envelope. Implies non-interactive (skips the prompt) and includes the resolved `requested_scopes`. |
+| `--json` | Emit the `animus.cli.v1` envelope. Implies non-interactive (skips the prompt) and includes the resolved `requested_scopes` plus a `scopes_auto_detected` flag. |
 
 Tokens are bound to the upstream URL (see "Token storage" below), so for a
 server you authenticated with `--url` (one not defined in config), pass the
@@ -105,42 +105,67 @@ same `--url` to `auth-status`/`auth-logout` to address its token.
 
 All three honor the global `--json` flag for the `animus.cli.v1` envelope.
 
-### Scope posture (least-privilege)
+### Scope posture (auto-detect advertised scopes)
 
-When you run `animus mcp auth <server>` with **no** `--scopes` flag and **no**
-`scopes:` in config, Animus requests **no scopes at all** and lets the
-authorization server apply its own minimal default. Animus deliberately does
-**not** request the server's full advertised scope set — doing so surfaced an
-over-broad "all accounts" consent screen on some providers (e.g. a trading MCP
-that advertised an `all_accounts` scope). The OAuth metadata Animus reads
-exposes only the full `scopes_supported` list with no required/optional split,
-so there is no narrower-than-empty "required only" subset to honor: a server
-that genuinely requires specific scopes must be given them explicitly via
-`--scopes` or config `scopes:` (the consent screen / a `403 insufficient_scope`
-will tell you which).
+Scope resolution precedence (highest first):
 
-> Note: some servers advertise a *required* `scope` in the `WWW-Authenticate`
-> header of their initial `401`. The underlying rmcp library does record that
-> value, but only exposes it blended with the full advertised `scopes_supported`
-> set (no required-only accessor), so requesting "required only" would also pull
-> in the broad set that caused the over-broad-consent bug. Until rmcp exposes
-> the required set in isolation, Animus defaults to empty: if your server
-> rejects an empty-scope token, pass its required scopes explicitly with
-> `--scopes` (or pin them in config `scopes:`).
+1. **`--scopes` (CLI override)** — explicit, wins.
+2. **config `scopes:`** — explicit.
+3. **the server's advertised scopes** — auto-detected from the discovery
+   metadata when neither explicit source is set. This adopts rmcp's
+   highest-priority advertised set (SEP-835 order): the `WWW-Authenticate`
+   `scope` from the server's initial `401` if present, else RFC 9728
+   protected-resource-metadata `scopes_supported`, else RFC 8414
+   authorization-server-metadata `scopes_supported` (plus `offline_access` when
+   the server advertises it).
+4. **none** — when the server advertises no scopes either, nothing is requested
+   and the authorization server applies its own minimal default.
+
+Tiers 1–2 are unchanged. Tier 3 (auto-detect) exists because some authorization
+servers **require** a specific scope and **fail** the authorize step when an
+empty scope is requested — e.g. Robinhood's trading MCP advertises
+`"scopes_supported": ["internal"]` and rejects an empty-scope authorize. Reading
+the advertised set off the discovery metadata Animus already fetches makes those
+servers work out of the box, without the user having to discover and type the
+scope by hand.
+
+Auto-detected scopes are clearly **marked as such** everywhere they surface (the
+consent preview, `--dry-run` output, and the `--json` envelope's
+`scopes_auto_detected: true`) so you know that **all** advertised scopes were
+adopted. If that set is broader than you want, narrow it with `--scopes` (or pin
+config `scopes:`) — both override the advertised set and render as *not*
+auto-detected.
+
+**Opting out of auto-detection.** For a server that advertises a broad
+*optional* scope set but still accepts a bare (no-`scope`) authorize, pass
+`--scopes none` (or set config `scopes: [none]`), case-insensitive, to force an
+empty request and keep the server's own minimal default — the pre-auto-detect
+behavior. `none` is only the opt-out sentinel when it is the **sole** scope; a
+literal scope actually named `none` alongside others is requested verbatim.
+
+Scope resolution runs **after** discovery (the advertised set only exists
+post-discovery), so the consent gate also runs after discovery in order to show
+you the real resolved scopes before the browser opens. Discovery is a read-only
+GET of public metadata and consults no credentials, so a consent "no" still
+obtains no token and touches no keychain.
 
 Before opening the browser, the flow prints a preview to stderr and asks for
 confirmation (default **No**):
 
 ```text
 animus mcp auth: about to authorize 'robinhood-trading' (https://agent.robinhood.com/mcp/trading)
-  requesting scopes: (none — server default / minimal)
+  requesting scopes: internal (auto-detected from server metadata)
 Open browser to authorize? [y/N]
 ```
+
+When the server advertises no scopes and none are configured, the preview reads
+`requesting scopes: (none — server default / minimal)` instead.
 
 The preview never prints the authorization URL (it carries PKCE + `state`) —
 only the server, base URL, and the exact scopes being requested. Pass `--yes`
 (or `--json`) to skip the prompt in scripts; `--json` still emits the resolved
-`requested_scopes` in the envelope so an automated caller can audit breadth.
+`requested_scopes` (and `scopes_auto_detected`) in the envelope so an automated
+caller can audit breadth.
 
 If the proxy has no stored token (or a refresh is rejected), it returns a
 clear MCP error instructing you to run `animus mcp auth <server>`.
@@ -199,13 +224,18 @@ without a storage migration.
 - The `state` (CSRF) parameter is validated against the value issued at
   authorization-URL generation; a mismatch is rejected before the code is used.
 - The callback times out (5 minutes) so an abandoned login can't hang the CLI.
-- **Least-privilege scopes by default** (see "Scope posture"): with no explicit
-  `--scopes`/config scopes, nothing is requested rather than the full advertised
-  set, so consent screens stay minimal.
-- **Preview + confirm before the browser opens.** The exact scopes + server are
-  shown and a `y/N` (default No) is required; `--dry-run` inspects the resolved
-  request without authorizing. The consent gate runs before any discovery,
-  callback bind, or browser open, so a "no" aborts with zero side effects.
+- **Scopes requested are explicit-then-advertised** (see "Scope posture"): with
+  no `--scopes`/config scopes, the server's advertised `scopes_supported` is
+  adopted (marked auto-detected) so required-scope servers work; if nothing is
+  advertised, nothing is requested. Narrow an over-broad advertised set with
+  `--scopes`.
+- **Preview + confirm before the browser opens.** The exact (possibly
+  auto-detected) scopes + server are shown and a `y/N` (default No) is required;
+  `--dry-run` inspects the resolved request without authorizing. The consent
+  gate runs **after** discovery (so the preview shows the real auto-detected
+  scopes) but **before** any callback bind or browser open — discovery is a
+  read-only public-metadata GET, so a "no" still obtains no token and touches no
+  keychain.
 - Authorization codes, `state`, access/refresh tokens, client secrets, and the
   full authorization URL's code/state are never written to logs — and the
   consent preview never prints the authorization URL either.

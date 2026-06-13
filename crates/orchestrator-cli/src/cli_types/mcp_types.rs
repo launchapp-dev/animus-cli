@@ -49,9 +49,12 @@ pub(crate) struct McpAuthArgs {
     /// Override the upstream MCP URL (for servers not yet in config).
     #[arg(long)]
     pub url: Option<String>,
-    /// Comma-separated OAuth scopes to request (overrides config scopes).
-    /// When omitted, no extra scopes are requested and the server applies its
-    /// own minimal default (least-privilege).
+    /// Comma-separated OAuth scopes to request (overrides config scopes and
+    /// the server's advertised scopes). When omitted, scopes resolve in order:
+    /// config `scopes:`, else the server's advertised `scopes_supported`
+    /// (auto-detected from discovery metadata), else none (server default).
+    /// Pass this to narrow an over-broad auto-detected set, or `--scopes none`
+    /// to force NO scopes (opt out of auto-detection; server default applies).
     #[arg(long, value_delimiter = ',')]
     pub scopes: Option<Vec<String>>,
     /// Skip the consent prompt and open the browser immediately.
