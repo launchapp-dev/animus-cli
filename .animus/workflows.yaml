@@ -6,7 +6,7 @@ default_workflow_ref: standard
 # - Creates a feature branch for implementation work
 # - Prevents direct pushes to main during task execution
 # - Automatically creates a pull request after all phases succeed
-# - Requires explicit PR review and merge (auto_merge: false)
+# - Requires explicit PR review and a human merge (autonomous merge-to-main was removed)
 # - Cleans up the feature branch worktree after merge
 #
 # This workflow ensures:

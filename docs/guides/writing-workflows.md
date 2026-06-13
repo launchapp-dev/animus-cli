@@ -296,7 +296,6 @@ workflows:
         strategy: squash
         target_branch: main
         create_pr: true
-        auto_merge: true
         cleanup_worktree: true
 ```
 
@@ -304,11 +303,14 @@ Post-success options:
 
 | Field | Description |
 |-------|-------------|
-| `merge.strategy` | Merge strategy: `squash`, `merge`, `rebase` |
-| `merge.target_branch` | Branch to merge into |
-| `merge.create_pr` | Create a pull request |
-| `merge.auto_merge` | Automatically merge the PR |
-| `merge.cleanup_worktree` | Remove the task worktree after merge |
+| `merge.strategy` | Merge strategy metadata for the PR: `squash`, `merge`, `rebase` |
+| `merge.target_branch` | Branch the PR targets |
+| `merge.create_pr` | Open a pull request |
+| `merge.cleanup_worktree` | Remove the task worktree after the run |
+
+> `auto_merge` was removed in v0.5.x — Animus no longer merges to `main`
+> autonomously. Open a PR with `create_pr: true` and merge it yourself. A
+> workflow that still sets `auto_merge:` is rejected at parse time.
 
 ## Variables
 
@@ -385,7 +387,6 @@ workflows:
         strategy: squash
         target_branch: main
         create_pr: true
-        auto_merge: false
         cleanup_worktree: true
 ```
 

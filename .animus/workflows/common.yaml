@@ -595,7 +595,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: review-cycle
   name: Review Cycle
@@ -658,7 +657,6 @@ workflows:
       strategy: squash
       target_branch: main
       create_pr: true
-      auto_merge: false
       cleanup_worktree: true
 - id: ao-task-complete
   name: AO Task Complete
@@ -673,7 +671,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: gated
   name: Gated

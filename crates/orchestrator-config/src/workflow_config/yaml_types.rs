@@ -273,8 +273,6 @@ pub(super) struct YamlMergeConfig {
     #[serde(default)]
     pub(super) create_pr: bool,
     #[serde(default)]
-    pub(super) auto_merge: bool,
-    #[serde(default)]
     pub(super) cleanup_worktree: bool,
 }
 
