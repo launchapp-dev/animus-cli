@@ -818,6 +818,14 @@ pub struct DaemonHealth {
     /// when not paused (or when the pause predates this field).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub paused_at: Option<String>,
+    /// Wave-2: actionable reasons the daemon is in a degraded state even
+    /// though the process is alive — e.g. the subject router is empty or
+    /// unroutable, or a required-role plugin spawn was refused by the
+    /// per-process plugin cap. Empty when nothing is degraded. Surfaced in
+    /// `animus daemon health` and the `animus status` Warnings section so a
+    /// silent-but-broken router no longer shows as green.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub degraded_reasons: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

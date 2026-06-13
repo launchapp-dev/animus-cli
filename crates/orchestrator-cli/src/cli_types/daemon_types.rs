@@ -345,6 +345,12 @@ pub(crate) struct DaemonConfigArgs {
         help = "Set the fleet daily spend cap in USD (rolling 24h). New dispatch pauses when crossed and resumes automatically as spend ages out or the cap is raised. Pass 0 to clear. Hot-reloaded by running daemon."
     )]
     pub(crate) max_daily_usd: Option<f64>,
+    #[arg(
+        long,
+        value_name = "MINUTES",
+        help = "Minutes an in-progress phase may produce no output before its agent is marked SILENT in the dashboard. Set 0 to disable. Hot-reloaded by running daemon."
+    )]
+    pub(crate) silent_threshold_mins: Option<u64>,
     #[arg(long, value_name = "JSON")]
     pub(crate) notification_config_json: Option<String>,
     #[arg(long, value_name = "PATH")]

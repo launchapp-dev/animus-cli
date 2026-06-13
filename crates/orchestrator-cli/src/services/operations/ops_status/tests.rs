@@ -91,12 +91,14 @@ fn active_agent_assignments_fill_unknown_slots() {
     let mut titles = HashMap::new();
     titles.insert("TASK-001".to_string(), "Implement status".to_string());
 
-    let assignments = active_agent_assignments(3, &workflows, &titles);
+    let assignments = active_agent_assignments(3, &workflows, &titles, &SilenceContext::empty());
     assert_eq!(assignments.len(), 3);
     assert!(assignments[0].attributed);
     assert_eq!(assignments[0].task_id, "TASK-001");
     assert_eq!(assignments[1].workflow_id, "unknown-1");
     assert!(!assignments[1].attributed);
+    assert!(!assignments[0].silent);
+    assert!(assignments[0].last_output_at.is_none());
 }
 
 #[test]
@@ -109,16 +111,121 @@ fn active_agent_assignments_are_limited_to_daemon_count() {
     titles.insert("TASK-001".to_string(), "One".to_string());
     titles.insert("TASK-002".to_string(), "Two".to_string());
 
-    let assignments = active_agent_assignments(1, &workflows, &titles);
+    let assignments = active_agent_assignments(1, &workflows, &titles, &SilenceContext::empty());
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0].workflow_id, "WF-001");
+}
+
+fn silence_context_with(workflow_id: &str, last_output_at: DateTime<Utc>, threshold_secs: u64, now: DateTime<Utc>)
+-> SilenceContext {
+    let mut last = HashMap::new();
+    last.insert(workflow_id.to_string(), last_output_at);
+    SilenceContext { last_output_at: last, threshold_secs, now }
+}
+
+#[test]
+fn silent_agent_is_flagged_past_threshold() {
+    let workflows = vec![make_activity_summary("WF-001", "TASK-001", "implementation")];
+    let now = parse_time("2026-06-12T01:00:00Z");
+    // last output 40 minutes ago, threshold 20 minutes -> silent
+    let silence = silence_context_with("WF-001", parse_time("2026-06-12T00:20:00Z"), 20 * 60, now);
+
+    let assignments = active_agent_assignments(1, &workflows, &HashMap::new(), &silence);
+    assert_eq!(assignments.len(), 1);
+    assert!(assignments[0].silent);
+    assert_eq!(assignments[0].silent_for_secs, Some(40 * 60));
+    assert!(assignments[0].last_output_at.is_some());
+}
+
+#[test]
+fn recent_output_agent_is_not_silent() {
+    let workflows = vec![make_activity_summary("WF-001", "TASK-001", "implementation")];
+    let now = parse_time("2026-06-12T01:00:00Z");
+    // last output 2 minutes ago, threshold 20 minutes -> not silent
+    let silence = silence_context_with("WF-001", parse_time("2026-06-12T00:58:00Z"), 20 * 60, now);
+
+    let assignments = active_agent_assignments(1, &workflows, &HashMap::new(), &silence);
+    assert!(!assignments[0].silent);
+    assert_eq!(assignments[0].silent_for_secs, Some(120));
+}
+
+#[test]
+fn zero_threshold_disables_silence_detection() {
+    let workflows = vec![make_activity_summary("WF-001", "TASK-001", "implementation")];
+    let now = parse_time("2026-06-12T05:00:00Z");
+    let silence = silence_context_with("WF-001", parse_time("2026-06-12T00:00:00Z"), 0, now);
+
+    let assignments = active_agent_assignments(1, &workflows, &HashMap::new(), &silence);
+    assert!(!assignments[0].silent, "threshold 0 disables silence flagging");
+    assert!(assignments[0].silent_for_secs.is_some());
+}
+
+#[test]
+fn warnings_slice_aggregates_degraded_reasons_and_silent_agents() {
+    let agents = ActiveAgentsSlice {
+        available: true,
+        count: 1,
+        assignments: vec![ActiveAgentAssignment {
+            task_id: "TASK-001".to_string(),
+            task_title: "t".to_string(),
+            workflow_id: "WF-001".to_string(),
+            phase_id: "impl".to_string(),
+            attributed: true,
+            last_output_at: Some(parse_time("2026-06-12T00:00:00Z")),
+            silent_for_secs: Some(3600),
+            silent: true,
+        }],
+        error: None,
+    };
+    let health = DaemonHealth {
+        healthy: true,
+        status: DaemonStatus::Running,
+        runner_connected: false,
+        runner_pid: None,
+        provider_plugins_healthy: true,
+        active_agents: 1,
+        pool_size: Some(5),
+        project_root: None,
+        daemon_pid: None,
+        process_alive: None,
+        pool_utilization_percent: None,
+        queued_tasks: None,
+        total_agents_spawned: None,
+        total_agents_completed: None,
+        total_agents_failed: None,
+        flavor: None,
+        runtime_paused: false,
+        paused_at: None,
+        degraded_reasons: vec!["subject_backend unroutable: ...".to_string()],
+    };
+
+    let warnings = build_warnings_slice(Some(&health), &agents);
+    assert!(warnings.degraded);
+    assert_eq!(warnings.degraded_reasons.len(), 1);
+    assert_eq!(warnings.silent_agents, 1);
+}
+
+#[test]
+fn warnings_slice_clean_when_healthy_and_quiet() {
+    let agents = ActiveAgentsSlice { available: true, count: 0, assignments: Vec::new(), error: None };
+    let warnings = build_warnings_slice(None, &agents);
+    assert!(!warnings.degraded);
+    assert!(warnings.degraded_reasons.is_empty());
+    assert_eq!(warnings.silent_agents, 0);
+}
+
+#[test]
+fn format_duration_secs_renders_compact_units() {
+    assert_eq!(format_duration_secs(45), "45s");
+    assert_eq!(format_duration_secs(90), "1m 30s");
+    assert_eq!(format_duration_secs(3661), "1h 1m 1s");
 }
 
 #[test]
 fn active_agent_assignment_uses_unknown_task_title_when_task_is_missing() {
     let workflows = vec![make_activity_summary("WF-001", "TASK-404", "implementation")];
 
-    let assignments = active_agent_assignments(1, &workflows, &HashMap::new());
+    let assignments = active_agent_assignments(1, &workflows, &HashMap::new(), &SilenceContext::empty());
     assert_eq!(assignments.len(), 1);
     assert_eq!(assignments[0].task_id, "TASK-404");
     assert_eq!(assignments[0].task_title, "Unknown task");
@@ -315,9 +422,11 @@ fn render_status_dashboard_uses_required_section_order() {
                 flavor: None,
                 runtime_paused: false,
                 paused_at: None,
+                degraded_reasons: Vec::new(),
             }),
             None,
         ),
+        warnings: WarningsSlice { degraded: false, degraded_reasons: Vec::new(), silent_agents: 0 },
         active_agents: ActiveAgentsSlice { available: true, count: 0, assignments: Vec::new(), error: None },
         task_summary: TaskSummarySlice {
             available: true,
@@ -351,6 +460,7 @@ fn render_status_dashboard_uses_required_section_order() {
 
     let output = render_status_dashboard(&dashboard);
     let daemon_idx = output.find("Daemon").expect("daemon section should exist");
+    let warnings_idx = output.find("Warnings").expect("warnings section should exist");
     let agents_idx = output.find("Active Agents").expect("active agents section should exist");
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
     let blocked_idx = output.find("Blocked / Paused").expect("blocked/paused section should exist");
@@ -359,7 +469,8 @@ fn render_status_dashboard_uses_required_section_order() {
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
-    assert!(daemon_idx < agents_idx);
+    assert!(daemon_idx < warnings_idx);
+    assert!(warnings_idx < agents_idx);
     assert!(agents_idx < summary_idx);
     assert!(summary_idx < blocked_idx);
     assert!(blocked_idx < needs_you_idx);

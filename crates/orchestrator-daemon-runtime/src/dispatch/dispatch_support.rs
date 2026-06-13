@@ -224,6 +224,7 @@ mod tests {
             flavor: None,
             runtime_paused: false,
             paused_at: None,
+            degraded_reasons: Vec::new(),
         };
 
         assert_eq!(ready_dispatch_limit(10, &health), 2);
