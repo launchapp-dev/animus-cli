@@ -9,15 +9,21 @@ pub(crate) struct CliError {
     kind: CliErrorKind,
     message: String,
     details: Option<serde_json::Value>,
+    exit_only: bool,
 }
 
 impl CliError {
     pub(crate) fn new(kind: CliErrorKind, message: impl Into<String>) -> Self {
-        Self { kind, message: message.into(), details: None }
+        Self { kind, message: message.into(), details: None, exit_only: false }
     }
 
     pub(crate) fn with_details(mut self, details: serde_json::Value) -> Self {
         self.details = Some(details);
+        self
+    }
+
+    pub(crate) fn exit_only(mut self) -> Self {
+        self.exit_only = true;
         self
     }
 
@@ -27,6 +33,10 @@ impl CliError {
 
     pub(crate) fn details(&self) -> Option<&serde_json::Value> {
         self.details.as_ref()
+    }
+
+    pub(crate) const fn is_exit_only(&self) -> bool {
+        self.exit_only
     }
 }
 
@@ -56,6 +66,21 @@ pub(crate) fn unavailable_error(message: impl Into<String>) -> anyhow::Error {
 
 pub(crate) fn internal_error(message: impl Into<String>) -> anyhow::Error {
     CliError::new(CliErrorKind::Internal, message).into()
+}
+
+/// A typed error whose only job is to set a non-zero process exit code. The
+/// command has already rendered its full output (e.g. `animus doctor` printed
+/// its report / JSON envelope), so `emit_cli_error` must NOT print a second
+/// error envelope for it — doing so would contradict the success envelope
+/// already on stdout. The `message` is still available for human stderr.
+pub(crate) fn exit_only_error(kind: CliErrorKind, message: impl Into<String>) -> anyhow::Error {
+    CliError::new(kind, message).exit_only().into()
+}
+
+/// True when `err` is an [`exit_only_error`] — the dispatcher should set the
+/// exit code from it but suppress any error-envelope emission.
+pub(crate) fn is_exit_only_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|source| source.downcast_ref::<CliError>().is_some_and(CliError::is_exit_only))
 }
 
 /// Structured remediation payload for "a required plugin is not installed"

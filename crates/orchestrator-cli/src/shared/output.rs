@@ -66,6 +66,12 @@ pub(crate) fn classify_exit_code(err: &anyhow::Error) -> i32 {
 }
 
 pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
+    // Exit-only errors carry a non-zero exit code but no message to print —
+    // the command already rendered its full output (e.g. `animus doctor`).
+    // Emitting an error envelope here would contradict that output.
+    if super::is_exit_only_error(err) {
+        return;
+    }
     let kind = classify_cli_error_kind(err);
     let code = kind.code();
     let exit_code = kind.exit_code();
@@ -117,8 +123,32 @@ pub(crate) fn dry_run_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{conflict_error, invalid_input_error, not_found_error, unavailable_error};
+    use crate::{
+        conflict_error, exit_only_error, invalid_input_error, is_exit_only_error, not_found_error, unavailable_error,
+        CliErrorKind,
+    };
     use anyhow::anyhow;
+
+    #[test]
+    fn exit_only_error_carries_exit_code_but_is_suppressed() {
+        let err = exit_only_error(CliErrorKind::Unavailable, "3 doctor check(s) failed");
+        assert!(is_exit_only_error(&err), "exit-only marker should be discoverable in the chain");
+        assert_eq!(classify_exit_code(&err), 5, "Unavailable maps to exit 5 regardless of suppression");
+    }
+
+    #[test]
+    fn exit_only_marker_survives_context_wrapping() {
+        use anyhow::Context;
+        let err = Err::<(), anyhow::Error>(exit_only_error(CliErrorKind::Unavailable, "failed"))
+            .context("outer")
+            .unwrap_err();
+        assert!(is_exit_only_error(&err));
+    }
+
+    #[test]
+    fn plain_errors_are_not_exit_only() {
+        assert!(!is_exit_only_error(&unavailable_error("daemon down")));
+    }
 
     #[test]
     fn classify_error_marks_typed_invalid_input_failures() {
