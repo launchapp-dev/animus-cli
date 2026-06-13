@@ -37,6 +37,8 @@ pub(crate) enum CostSummaryBy {
     Provider,
     /// Group spend by model id.
     Model,
+    /// Group spend by the subject / task each run was for.
+    Task,
 }
 
 #[derive(Debug, Args)]
@@ -47,7 +49,7 @@ pub(crate) struct CostSummaryArgs {
     /// Cap on top-spender rows printed in the text view.
     #[arg(long, default_value_t = 5)]
     pub(crate) top: usize,
-    /// Group totals by provider or model instead of the workflow leaderboard.
+    /// Group totals by provider, model, or task instead of the workflow leaderboard.
     #[arg(long, value_enum)]
     pub(crate) by: Option<CostSummaryBy>,
     /// Report each run's full lifetime spend if it was touched in the window,
