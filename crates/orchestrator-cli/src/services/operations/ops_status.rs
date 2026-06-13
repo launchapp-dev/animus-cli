@@ -8,10 +8,13 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Utc};
 use orchestrator_core::{
     load_active_workflow_summaries, load_daemon_health_snapshot, load_recent_failed_workflow_summaries,
-    load_task_statistics, open_project_db, DaemonHealth, DaemonStatus, OrchestratorTask, TaskStatistics, TaskStatus,
-    WorkflowActivitySummary,
+    open_project_db, DaemonHealth, DaemonStatus, WorkflowActivitySummary,
 };
+#[cfg(test)]
+use orchestrator_core::{OrchestratorTask, TaskStatus};
+use orchestrator_daemon_runtime::resolve_subject_dispatch;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::print_value;
 
@@ -37,6 +40,8 @@ struct StatusDashboard {
     daemon: DaemonStatusSlice,
     active_agents: ActiveAgentsSlice,
     task_summary: TaskSummarySlice,
+    blocked_subjects: BlockedSubjectsSlice,
+    needs_you: NeedsYouSlice,
     recent_completions: RecentCompletionsSlice,
     recent_failures: RecentFailuresSlice,
     ci: CiStatusSlice,
@@ -65,6 +70,12 @@ struct DaemonStatusSlice {
     runtime_paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     paused_at: Option<String>,
+    /// v0.5.3 replacement for the deprecated `runner_connected` field: true
+    /// when the daemon's provider plugins are all healthy.
+    provider_plugins_healthy: bool,
+    /// Deprecated wire fields kept for `--json` envelope back-compat. The
+    /// human dashboard renders `provider_plugins_healthy` instead. Always
+    /// `false` / `None` on the wire.
     runner_connected: bool,
     runner_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +110,52 @@ struct TaskSummarySlice {
     blocked: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedSubjectsSlice {
+    available: bool,
+    count: usize,
+    entries: Vec<BlockedSubjectEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BlockedSubjectEntry {
+    id: String,
+    /// `"blocked"` or `"paused"` — which stuck state put it here.
+    state: &'static str,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocked_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    blocked_by: Option<String>,
+    /// Human age string (e.g. `"2d"`) derived from `blocked_at`/`updated_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    age: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NeedsYouSlice {
+    available: bool,
+    count: usize,
+    entries: Vec<NeedsYouEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct NeedsYouEntry {
+    id: String,
+    /// `"question"` or `"approval"`.
+    kind: &'static str,
+    agent: String,
+    summary: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    age: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    timeout_remaining: Option<String>,
+    answer_command: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -237,16 +294,16 @@ struct GhRunListEntry {
 }
 
 pub(crate) async fn handle_status(project_root: &str, failures: usize, json: bool) -> Result<()> {
-    let (daemon_result, task_stats_result, workflow_snapshot_result, recent_completions_result, ci_slice) = tokio::join!(
+    let (daemon_result, subjects_result, workflow_snapshot_result, recent_completions_result, ci_slice) = tokio::join!(
         load_daemon_health_snapshot(Path::new(project_root)),
-        collect_task_statistics(project_root),
+        collect_subjects_via_router(project_root),
         collect_workflow_status_snapshot(project_root, failures),
         collect_recent_completions(project_root),
         collect_ci_status(project_root),
     );
 
     let (daemon_health, daemon_error) = split_result(daemon_result);
-    let (task_stats, task_stats_error) = split_result(task_stats_result);
+    let (subjects, subjects_error) = split_result(subjects_result);
     let (workflow_snapshot, workflows_error) = split_result(workflow_snapshot_result);
     let (recent_completions, recent_completions_error) = split_result(recent_completions_result);
     let (task_titles, task_titles_error) = match workflow_snapshot
@@ -275,7 +332,9 @@ pub(crate) async fn handle_status(project_root: &str, failures: usize, json: boo
             task_titles.as_ref(),
             combine_errors([daemon_error.as_deref(), workflows_error.as_deref(), task_titles_error.as_deref()]),
         ),
-        task_summary: build_task_summary_slice(task_stats.as_ref(), None, task_stats_error),
+        task_summary: build_task_summary_slice_from_router(subjects.as_deref(), subjects_error.clone()),
+        blocked_subjects: build_blocked_subjects_slice(subjects.as_deref(), subjects_error.clone()),
+        needs_you: build_needs_you_slice(project_root),
         recent_completions: build_recent_completions_entries_slice(
             recent_completions.as_deref(),
             recent_completions_error,
@@ -299,11 +358,129 @@ pub(crate) async fn handle_status(project_root: &str, failures: usize, json: boo
     Ok(())
 }
 
-async fn collect_task_statistics(project_root: &str) -> Result<TaskStatistics> {
-    let project_root = project_root.to_string();
-    tokio::task::spawn_blocking(move || load_task_statistics(Path::new(project_root.as_str())))
-        .await
-        .map_err(|error| anyhow!("failed to collect task statistics: {error}"))?
+/// Fetch the `kind=task` subject list through the same `SubjectRouter` path
+/// `animus subject list` uses, so the dashboard's Task Summary reflects what
+/// the installed subject_backend plugin actually holds (not the legacy
+/// in-tree store, which is empty when subjects live in a plugin). Returns the
+/// raw subject objects; aggregation happens in the slice builders.
+async fn collect_subjects_via_router(project_root: &str) -> Result<Vec<Value>> {
+    let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
+    if resolution.selected.plugin_count() == 0 {
+        return Err(anyhow!(
+            "no subject_backend plugin is mounted for kind 'task'; install one with \
+             `animus plugin install-defaults --include-subjects`"
+        ));
+    }
+    let mut subjects = Vec::new();
+    let mut cursor: Option<Value> = None;
+    // Page through every `task/list` response so the dashboard counts the
+    // whole store, not just the first page, for cursor-paginating backends.
+    // Bounded to stop a misbehaving backend that never clears `next_cursor`
+    // from looping forever.
+    for _ in 0..MAX_SUBJECT_LIST_PAGES {
+        let mut params = serde_json::Map::new();
+        params.insert("kind".to_string(), serde_json::json!(["task"]));
+        if let Some(cursor) = cursor.take() {
+            params.insert("cursor".to_string(), cursor);
+        }
+        let result = resolution
+            .selected
+            .route_call("task/list", Some(Value::Object(params)))
+            .await
+            .map_err(|error| anyhow!("subject call 'task/list' failed ({}): {}", error.code, error.message))?;
+        subjects.extend(extract_subject_list(&result));
+        match extract_next_cursor(&result) {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    Ok(subjects)
+}
+
+/// Upper bound on `task/list` pages followed by [`collect_subjects_via_router`].
+/// At the default backend page size this covers very large stores while
+/// guaranteeing the dashboard never hangs on a backend that returns a
+/// non-empty `next_cursor` indefinitely.
+const MAX_SUBJECT_LIST_PAGES: usize = 1_000;
+
+/// Pull a non-empty pagination cursor out of a `task/list` response. Returns
+/// `None` when the backend omits `next_cursor`, sets it to null, or returns an
+/// empty string — any of which signals the final page.
+fn extract_next_cursor(result: &Value) -> Option<Value> {
+    let cursor = result.as_object()?.get("next_cursor")?;
+    match cursor {
+        Value::Null => None,
+        Value::String(s) if s.trim().is_empty() => None,
+        other => Some(other.clone()),
+    }
+}
+
+/// Pull the array of subject objects out of a `task/list` response. Backends
+/// vary in envelope shape, so probe the common wrappers (`items`, `subjects`,
+/// `tasks`, `results`) before falling back to a bare top-level array.
+fn extract_subject_list(result: &Value) -> Vec<Value> {
+    if let Value::Array(items) = result {
+        return items.clone();
+    }
+    if let Value::Object(map) = result {
+        for key in ["items", "subjects", "tasks", "results"] {
+            if let Some(Value::Array(items)) = map.get(key) {
+                return items.clone();
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Normalize a backend status string to the dashboard's canonical buckets.
+/// Backends differ on casing/spelling (`in_progress` vs `in-progress`), so
+/// fold everything to lowercase with `-`/`_` collapsed.
+fn normalize_status(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace('_', "-")
+}
+
+fn subject_status(subject: &Value) -> Option<String> {
+    subject.get("status").and_then(Value::as_str).map(normalize_status)
+}
+
+fn subject_id(subject: &Value) -> String {
+    for key in ["id", "subject_id", "task_id"] {
+        if let Some(id) = subject.get(key).and_then(Value::as_str) {
+            if !id.trim().is_empty() {
+                return id.to_string();
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
+fn subject_str(subject: &Value, key: &str) -> Option<String> {
+    subject.get(key).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(ToOwned::to_owned)
+}
+
+/// Human age string from an RFC3339 timestamp relative to now (`"2d"`,
+/// `"3h"`, `"5m"`, `"just now"`). `None` when the timestamp is absent or
+/// unparseable.
+fn age_from_timestamp(raw: Option<&str>) -> Option<String> {
+    let raw = raw?.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    let parsed = DateTime::parse_from_rfc3339(raw).ok()?.with_timezone(&Utc);
+    let delta = Utc::now() - parsed;
+    let secs = delta.num_seconds();
+    if secs < 0 {
+        return None;
+    }
+    Some(if secs >= 86_400 {
+        format!("{}d", secs / 86_400)
+    } else if secs >= 3_600 {
+        format!("{}h", secs / 3_600)
+    } else if secs >= 60 {
+        format!("{}m", secs / 60)
+    } else {
+        "just now".to_string()
+    })
 }
 
 fn split_result<T>(result: Result<T>) -> (Option<T>, Option<String>) {
@@ -330,8 +507,10 @@ fn build_daemon_slice(health: Option<&DaemonHealth>, error: Option<String>) -> D
             running: daemon_running(health.status),
             runtime_paused: health.runtime_paused,
             paused_at: health.paused_at.clone(),
-            runner_connected: health.runner_connected,
-            runner_pid: health.runner_pid,
+            provider_plugins_healthy: health.provider_plugins_healthy,
+            // Deprecated wire fields: always `false` / `None`.
+            runner_connected: false,
+            runner_pid: None,
             error,
         },
         None => DaemonStatusSlice {
@@ -340,6 +519,7 @@ fn build_daemon_slice(health: Option<&DaemonHealth>, error: Option<String>) -> D
             running: false,
             runtime_paused: false,
             paused_at: None,
+            provider_plugins_healthy: false,
             runner_connected: false,
             runner_pid: None,
             error,
@@ -443,36 +623,143 @@ fn active_agent_assignments(
     assignments
 }
 
-fn build_task_summary_slice(
-    statistics: Option<&TaskStatistics>,
-    tasks: Option<&[OrchestratorTask]>,
-    error: Option<String>,
-) -> TaskSummarySlice {
-    if let Some(statistics) = statistics {
-        return TaskSummarySlice {
-            available: true,
-            total: statistics.total,
-            done: statistics.by_status.get("done").copied().unwrap_or(0),
-            in_progress: statistics.in_progress,
-            ready: statistics.by_status.get("ready").copied().unwrap_or(0),
-            blocked: statistics.blocked,
-            error,
-        };
+/// Aggregate the router-sourced subject list into the Task Summary buckets.
+/// When the router is unreachable (`subjects == None`) the section renders as
+/// unavailable carrying the error string — never zeros reported as truth.
+fn build_task_summary_slice_from_router(subjects: Option<&[Value]>, error: Option<String>) -> TaskSummarySlice {
+    let Some(subjects) = subjects else {
+        return TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, error };
+    };
+    let mut done = 0;
+    let mut in_progress = 0;
+    let mut ready = 0;
+    let mut blocked = 0;
+    for subject in subjects {
+        let status = subject_status(subject);
+        match status.as_deref() {
+            Some("done" | "completed") => done += 1,
+            Some("in-progress" | "inprogress" | "active") => in_progress += 1,
+            Some("ready") => ready += 1,
+            // `on-hold`/`on_hold` is a blocked state (`TaskStatus::is_blocked`),
+            // so it counts in the blocked bucket alongside `blocked`.
+            Some("blocked" | "on-hold" | "onhold") => blocked += 1,
+            _ => {}
+        }
+        if !status_is_blocked(status.as_deref()) && subject_is_blocked_or_paused(subject) {
+            blocked += 1;
+        }
     }
+    TaskSummarySlice { available: true, total: subjects.len(), done, in_progress, ready, blocked, error }
+}
 
-    if let Some(tasks) = tasks {
-        return TaskSummarySlice {
-            available: true,
-            total: tasks.len(),
-            done: tasks.iter().filter(|task| task.status == TaskStatus::Done).count(),
-            in_progress: tasks.iter().filter(|task| task.status == TaskStatus::InProgress).count(),
-            ready: tasks.iter().filter(|task| task.status == TaskStatus::Ready).count(),
-            blocked: tasks.iter().filter(|task| task.status.is_blocked()).count(),
-            error,
-        };
+fn subject_is_paused(subject: &Value) -> bool {
+    subject.get("paused").and_then(Value::as_bool).unwrap_or(false)
+}
+
+/// `blocked` and `on-hold`/`onhold` are the blocked task statuses
+/// (`TaskStatus::is_blocked`). `normalize_status` already folds `on_hold` to
+/// `on-hold`, so only the two dash/no-dash spellings need matching here.
+fn status_is_blocked(status: Option<&str>) -> bool {
+    matches!(status, Some("blocked" | "on-hold" | "onhold"))
+}
+
+/// A subject belongs in the Blocked / Paused section when it is in a blocked
+/// status, has its `paused` flag set, or carries a non-empty pause/block
+/// annotation (`blocked_reason` / `blocked_by`). The workflow-pause path stamps
+/// those annotations while intentionally leaving `status` and `paused`
+/// untouched, so a status/paused-only predicate would silently drop them.
+fn subject_is_blocked_or_paused(subject: &Value) -> bool {
+    status_is_blocked(subject_status(subject).as_deref())
+        || subject_is_paused(subject)
+        || subject_str(subject, "blocked_reason").is_some()
+        || subject_str(subject, "blocked_by").is_some()
+}
+
+/// A subject is "blocked-or-paused" when its status is blocked/on-hold, its
+/// `paused` flag is set, or it carries a pause/block annotation. Such subjects
+/// are surfaced in the Blocked / Paused section with their reason and age.
+fn build_blocked_subjects_slice(subjects: Option<&[Value]>, error: Option<String>) -> BlockedSubjectsSlice {
+    let Some(subjects) = subjects else {
+        return BlockedSubjectsSlice { available: false, count: 0, entries: Vec::new(), error };
+    };
+    let mut entries = Vec::new();
+    for subject in subjects {
+        if !subject_is_blocked_or_paused(subject) {
+            continue;
+        }
+        let is_blocked = status_is_blocked(subject_status(subject).as_deref());
+        let age = age_from_timestamp(
+            subject_str(subject, "blocked_at")
+                .or_else(|| subject_str(subject, "status_changed_at"))
+                .or_else(|| subject_str(subject, "updated_at"))
+                .as_deref(),
+        );
+        entries.push(BlockedSubjectEntry {
+            id: subject_id(subject),
+            state: if is_blocked { "blocked" } else { "paused" },
+            blocked_reason: subject_str(subject, "blocked_reason"),
+            blocked_by: subject_str(subject, "blocked_by"),
+            age,
+        });
     }
+    entries.sort_by(|left, right| left.id.cmp(&right.id));
+    BlockedSubjectsSlice { available: true, count: entries.len(), entries, error }
+}
 
-    TaskSummarySlice { available: false, total: 0, done: 0, in_progress: 0, ready: 0, blocked: 0, error }
+/// Pending agent interactions (questions + tool approvals) needing a human
+/// decision, read from the scoped runtime root the same way
+/// `animus agent interactions list` reads them.
+fn build_needs_you_slice(project_root: &str) -> NeedsYouSlice {
+    match animus_runtime_shared::list_interactions(project_root, false, None) {
+        Ok(records) => {
+            let entries: Vec<NeedsYouEntry> = records
+                .iter()
+                .map(|record| {
+                    let kind = match record.kind {
+                        animus_runtime_shared::InteractionKind::Question => "question",
+                        animus_runtime_shared::InteractionKind::Approval => "approval",
+                    };
+                    let age = age_from_timestamp(Some(record.created_at.as_str()));
+                    let timeout_remaining = timeout_remaining(record);
+                    NeedsYouEntry {
+                        id: record.id.clone(),
+                        kind,
+                        agent: record.agent_id.clone(),
+                        summary: crate::services::runtime::runtime_agent::interactions::interaction_summary(record),
+                        age,
+                        timeout_remaining,
+                        answer_command:
+                            crate::services::runtime::runtime_agent::interactions::interaction_answer_command(record),
+                    }
+                })
+                .collect();
+            NeedsYouSlice { available: true, count: entries.len(), entries, error: None }
+        }
+        Err(error) => NeedsYouSlice { available: false, count: 0, entries: Vec::new(), error: Some(error.to_string()) },
+    }
+}
+
+/// Remaining time before a pending interaction's `timeout_secs` lapses,
+/// measured from `created_at`. `None` when the record has no timeout or the
+/// created-at timestamp is unparseable.
+fn timeout_remaining(record: &animus_runtime_shared::InteractionRecord) -> Option<String> {
+    let timeout = record.timeout_secs?;
+    let created = DateTime::parse_from_rfc3339(record.created_at.trim()).ok()?.with_timezone(&Utc);
+    let elapsed = (Utc::now() - created).num_seconds();
+    if elapsed < 0 {
+        return None;
+    }
+    let remaining = i64::try_from(timeout).unwrap_or(i64::MAX).saturating_sub(elapsed);
+    if remaining <= 0 {
+        return Some("expired".to_string());
+    }
+    Some(if remaining >= 3_600 {
+        format!("{}h", remaining / 3_600)
+    } else if remaining >= 60 {
+        format!("{}m", remaining / 60)
+    } else {
+        format!("{remaining}s")
+    })
 }
 
 fn build_recent_completions_entries_slice(
@@ -838,12 +1125,7 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     if let Some(paused_at) = dashboard.daemon.paused_at.as_deref() {
         let _ = writeln!(&mut output, "  paused_at: {paused_at}");
     }
-    let _ = writeln!(&mut output, "  runner_connected: {}", dashboard.daemon.runner_connected);
-    let _ = writeln!(
-        &mut output,
-        "  runner_pid: {}",
-        dashboard.daemon.runner_pid.map(|pid| pid.to_string()).unwrap_or_else(|| "n/a".to_string())
-    );
+    let _ = writeln!(&mut output, "  provider_plugins_healthy: {}", dashboard.daemon.provider_plugins_healthy);
     if let Some(error) = dashboard.daemon.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
@@ -874,6 +1156,48 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let _ = writeln!(&mut output, "  ready: {}", dashboard.task_summary.ready);
     let _ = writeln!(&mut output, "  blocked: {}", dashboard.task_summary.blocked);
     if let Some(error) = dashboard.task_summary.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    if !dashboard.task_summary.available && dashboard.task_summary.error.is_none() {
+        let _ = writeln!(&mut output, "  (unavailable)");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Blocked / Paused");
+    let blocked = &dashboard.blocked_subjects;
+    if !blocked.available {
+        let _ = writeln!(&mut output, "  (unavailable)");
+    } else if blocked.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        for entry in &blocked.entries {
+            let age = entry.age.as_deref().map(|age| format!(" {age}")).unwrap_or_default();
+            let reason = entry.blocked_reason.as_deref().map(|r| format!("  reason: {r}")).unwrap_or_default();
+            let by = entry.blocked_by.as_deref().map(|b| format!("  by: {b}")).unwrap_or_default();
+            let _ = writeln!(&mut output, "  - {}  {}{}{}{}", entry.id, entry.state, age, reason, by);
+        }
+    }
+    if let Some(error) = blocked.error.as_deref() {
+        let _ = writeln!(&mut output, "  error: {error}");
+    }
+    let _ = writeln!(&mut output);
+
+    let _ = writeln!(&mut output, "Needs You");
+    let needs_you = &dashboard.needs_you;
+    if !needs_you.available {
+        let _ = writeln!(&mut output, "  (unavailable)");
+    } else if needs_you.entries.is_empty() {
+        let _ = writeln!(&mut output, "  entries: none");
+    } else {
+        let _ = writeln!(&mut output, "  count: {}", needs_you.count);
+        for entry in &needs_you.entries {
+            let age = entry.age.as_deref().map(|age| format!(" ({age} ago)")).unwrap_or_default();
+            let timeout = entry.timeout_remaining.as_deref().map(|t| format!(" [timeout: {t}]")).unwrap_or_default();
+            let _ = writeln!(&mut output, "  - {} {}: {}{}{}", entry.id, entry.kind, entry.summary, age, timeout);
+            let _ = writeln!(&mut output, "    {}", entry.answer_command);
+        }
+    }
+    if let Some(error) = needs_you.error.as_deref() {
         let _ = writeln!(&mut output, "  error: {error}");
     }
     let _ = writeln!(&mut output);
