@@ -249,15 +249,19 @@ animus
 │   ├── ping                 Health-check a plugin by spawning it, completing the handshake, and pinging
 │   ├── install              Install a plugin binary from a public GitHub release (OWNER/REPO[@TAG]), a local path, or a direct URL into ~/.animus/plugins/ (override with --plugin-dir or $ANIMUS_PLUGIN_DIR)
 │   ├── uninstall            Remove a previously installed plugin from ~/.animus/plugins/ (override with --plugin-dir or $ANIMUS_PLUGIN_DIR) and ~/.animus/plugins.yaml
+│   ├── prune                Remove stale `plugins.yaml` entries whose binary is gone. Dry-run by default; `--yes` removes the entries. Stale-entry warnings in `plugin list`/`outdated`/`browse --installed` point here for cleanup
 │   ├── new                  Scaffold a new plugin project from the launchapp-dev/animus-plugin-template scaffold
+│   ├── scaffold             Emit a minimal offline starter Cargo project for a new plugin kind
 │   ├── search               Search the public Animus plugin registry by substring + filters
 │   ├── browse               Browse the public Animus plugin registry, grouped by kind
 │   ├── update               Update one or all installed release-source plugins to the latest tag
+│   ├── outdated             Report version drift: installed tag vs recommended pin vs latest published tag
 │   ├── install-defaults     Install every plugin the flavor manifest (`--flavor <name>`, default `default`) marks `required` from public GitHub releases. `--include-recommended` adds the recommended set. Skips plugins that are already installed
 │   ├── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`). The lockfile records sha256 + version for every installed plugin so an `install --force` or tampered-binary scenario is visible to operators
 │   │   ├── list             List every entry currently recorded in the plugin lockfile
 │   │   └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
 │   ├── doctor               Per-role view of installed plugins. Shows every preflight role with its installed plugins (by installed_kind + native_kind) and flags duplicates so collisions are visible without spelunking through the lockfile (v0.5.7)
+│   ├── rename               Rename an installed plugin's dispatch kind without touching the on-disk binary
 │   ├── status               Per-plugin runtime status (pid, state, last RPC, restart count, last error). Answers "why does this plugin feel stuck?" by surfacing the supervisor's restart counter for every discovered plugin (v0.5.8)
 │   ├── cache                Inspect or wipe the on-disk plugin manifest cache (`~/.animus/cache/manifests/`) that backs the v0.5.9 discovery speed-up (v0.5.9)
 │   │   ├── clear            Remove every cached manifest entry; discovery repopulates on next call
@@ -266,7 +270,6 @@ animus
 │   │   ├── show             Print the effective scope (mode + resolved admit-set) for the current project
 │   │   ├── set              Write `.animus/plugin-scope.yaml` with the supplied mode + allow/extras/require sets
 │   │   └── reset            Delete `.animus/plugin-scope.yaml` and fall back to the default scope
-│   ├── prune                Remove stale `plugins.yaml` entries whose binary is gone. Dry-run by default; `--yes` removes the entries. Stale-entry warnings in `plugin list`/`outdated`/`browse --installed` point here for cleanup
 │   ├── trust                Inspect the TOFU org allowlist (`~/.animus/trusted-orgs.yaml`)
 │   │   └── list             List trusted orgs (current + revoked tombstones) with `trusted_at`/`revoked_at` and how each grant was decided
 │   └── revoke-trust         Revoke trust for a GitHub org (tombstones `revoked_at` so re-installs re-prompt); the built-in `launchapp-dev` org cannot be revoked
