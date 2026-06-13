@@ -457,14 +457,18 @@ async fn lookup_plugin_entries_by_subject(
 
 /// Compare a stored queue `subject_id` (kind-qualified, e.g. `task:TASK-001`)
 /// against a user-supplied id, accepting either the qualified form or the
-/// bare native id (e.g. `TASK-001`). Matching strips the leading `<kind>:`
-/// qualifier from each side before comparing so both forms resolve the same
-/// entry.
+/// bare native id (e.g. `TASK-001`). A qualified query matches only an
+/// identical stored id, so two kinds sharing a native id (`task:TASK-001` vs
+/// `linear:TASK-001`) never alias. A bare query matches any stored entry whose
+/// native id equals it, after the stored `<kind>:` qualifier is stripped.
 fn subject_id_matches(stored: &str, query: &str) -> bool {
     if stored == query {
         return true;
     }
-    crate::bare_subject_id(stored) == crate::bare_subject_id(query)
+    if query.contains(':') {
+        return false;
+    }
+    crate::bare_subject_id(stored) == query
 }
 
 async fn try_queue_hold_via_plugin(
@@ -683,9 +687,20 @@ mod tests {
     fn subject_id_matches_accepts_bare_and_qualified() {
         assert!(subject_id_matches("task:TASK-001", "task:TASK-001"));
         assert!(subject_id_matches("task:TASK-001", "TASK-001"));
-        assert!(subject_id_matches("TASK-001", "task:TASK-001"));
+        assert!(subject_id_matches("TASK-001", "TASK-001"));
         assert!(!subject_id_matches("task:TASK-001", "TASK-002"));
         assert!(subject_id_matches("linear:ENG-9", "ENG-9"));
+    }
+
+    #[test]
+    fn subject_id_matches_keeps_qualified_queries_exact() {
+        // A qualified query must not alias a same-native-id entry of another kind.
+        assert!(!subject_id_matches("linear:TASK-001", "task:TASK-001"));
+        assert!(subject_id_matches("task:TASK-001", "task:TASK-001"));
+        // A bare query still matches across the qualifier boundary, but only
+        // against the stored native id.
+        assert!(subject_id_matches("linear:TASK-001", "TASK-001"));
+        assert!(subject_id_matches("task:TASK-001", "TASK-001"));
     }
 
     #[test]

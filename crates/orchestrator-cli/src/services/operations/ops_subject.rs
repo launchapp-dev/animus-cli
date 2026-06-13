@@ -607,6 +607,7 @@ fn render_subject_human(verb: &str, kind: &str, result: &Value) {
             Some(subject) => render_subject_block(subject),
             None => println!("no ready {kind} subject"),
         },
+        "delete" => println!("deleted {kind} subject"),
         _ => match extract_single_subject(result) {
             Some(subject) => render_subject_block(subject),
             None => println!("{result}"),
@@ -630,15 +631,17 @@ fn extract_subjects(result: &Value) -> Vec<&Value> {
 
 /// Unwrap a single subject object from a `get`/`next`/`create`/`update`/
 /// `status` result, tolerating a `{ "subject": {...} }` wrapper, a `null`
-/// (no subject), or a bare object.
+/// (no subject), or a bare object. Requires the object to be subject-shaped
+/// (carry an `id`) so non-subject responses (e.g. a `{ "ok": true }` ack) fall
+/// through to the caller's raw fallback rather than rendering blank fields.
 fn extract_single_subject(result: &Value) -> Option<&Value> {
     if result.is_null() {
         return None;
     }
     if let Some(inner) = result.get("subject") {
-        return inner.as_object().map(|_| inner);
+        return inner.as_object().filter(|_| inner.get("id").is_some()).map(|_| inner);
     }
-    result.as_object().map(|_| result)
+    result.as_object().filter(|_| result.get("id").is_some()).map(|_| result)
 }
 
 /// Render a list of subjects as a fixed-width table:
@@ -1058,6 +1061,9 @@ mod tests {
         let bare = json!({ "id": "task:T-1" });
         assert!(extract_single_subject(&bare).is_some());
         assert!(extract_single_subject(&json!(null)).is_none());
+        // A non-subject ack (no `id`) is not treated as a subject.
+        assert!(extract_single_subject(&json!({ "ok": true })).is_none());
+        assert!(extract_single_subject(&json!({ "subject": { "ok": true } })).is_none());
     }
 
     #[test]
