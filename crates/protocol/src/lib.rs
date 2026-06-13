@@ -15,6 +15,7 @@ pub mod daemon_event_record;
 pub mod deploy_config;
 pub mod error_classification;
 pub mod errors;
+pub mod hook_policy;
 pub mod model_routing;
 pub mod orchestrator;
 pub mod output;

@@ -165,6 +165,19 @@ main() {
     fi
   fi
 
+  # Harness hook spine: the `animus-hook` binary ships alongside `animus`
+  # so provider harness hook configs (e.g. claude --settings hook entries)
+  # can record events and evaluate compiled guardrail policy. Installed
+  # best-effort like the MCP proxy: new archives carry it, older ones don't.
+  if [[ -f "${stage_dir}/animus-hook" ]]; then
+    rm -f "${INSTALL_DIR}/animus-hook"
+    cp "${stage_dir}/animus-hook" "${INSTALL_DIR}/animus-hook"
+    chmod +x "${INSTALL_DIR}/animus-hook"
+    if [[ "$(uname -s)" == "Darwin" ]] && command -v codesign &>/dev/null; then
+      codesign --force --sign - "${INSTALL_DIR}/animus-hook" 2>/dev/null || true
+    fi
+  fi
+
   # Workflow runner: prefer the v0.5 plugin install. If the archive
   # carries the legacy runner binary, drop it next to other CLI binaries
   # so an upgrading daemon keeps dispatching while the operator runs
