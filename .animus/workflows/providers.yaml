@@ -155,7 +155,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: standard-glm
   name: Standard (GLM)
@@ -171,7 +170,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: standard-minimax
   name: Standard (MiniMax)
@@ -187,7 +185,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: standard-gemini
   name: Standard (Gemini)
@@ -203,7 +200,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: standard-opus
   name: Standard (Opus)
@@ -219,7 +215,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: quick-fix-minimax
   name: Quick Fix (MiniMax)
@@ -232,7 +227,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: quick-fix-glm
   name: Quick Fix (GLM)
@@ -245,7 +239,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: minimax-smoke-test
   name: MiniMax Smoke Test
@@ -271,7 +264,6 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true
 - id: ui-ux-standard
   name: UI/UX Standard
@@ -287,5 +279,4 @@ workflows:
       strategy: squash
       target_branch: develop
       create_pr: true
-      auto_merge: true
       cleanup_worktree: true

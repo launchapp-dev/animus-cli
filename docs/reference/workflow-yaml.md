@@ -628,7 +628,6 @@ workflows:
         strategy: merge
         target_branch: main
         create_pr: true
-        auto_merge: false
         cleanup_worktree: true
     variables:
       - name: target_branch
@@ -828,20 +827,26 @@ Actions to perform after all phases complete successfully:
 ```yaml
 post_success:
   merge:
-    strategy: merge            # merge, squash, or rebase
-    target_branch: main        # Branch to merge into
-    create_pr: true            # Create a pull request
-    auto_merge: false          # Auto-merge the PR
-    cleanup_worktree: true     # Remove the worktree after merge
+    strategy: merge            # merge, squash, or rebase (PR merge metadata)
+    target_branch: main        # Branch the PR targets
+    create_pr: true            # Open a pull request
+    cleanup_worktree: true     # Remove the worktree after the run
 ```
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `merge.strategy` | string | `"merge"` | Git merge strategy: `merge`, `squash`, or `rebase` |
-| `merge.target_branch` | string | `"main"` | Target branch for the merge |
-| `merge.create_pr` | boolean | `false` | Whether to create a pull request |
-| `merge.auto_merge` | boolean | `false` | Whether to auto-merge the PR |
-| `merge.cleanup_worktree` | boolean | `true` | Whether to remove the worktree after merge |
+| `merge.strategy` | string | `"merge"` | Merge strategy metadata for the PR: `merge`, `squash`, or `rebase` |
+| `merge.target_branch` | string | `"main"` | Target branch the PR is opened against |
+| `merge.create_pr` | boolean | `false` | Whether to open a pull request |
+| `merge.cleanup_worktree` | boolean | `true` | Whether to remove the worktree after the run |
+
+> **`auto_merge` was removed in v0.5.x.** Animus no longer merges to `main`
+> autonomously — an agent with repo write access could flip `auto_merge: true`
+> in a hand-edited workflow overlay and self-authorize the most dangerous
+> autonomous action. Workflows may still open PRs via `create_pr: true`; a human
+> performs the final merge (or you run the merge as an explicit manual step). A
+> workflow YAML that still sets `auto_merge:` is rejected at parse time with an
+> actionable error.
 
 ---
 
@@ -921,7 +926,6 @@ post_success:
     strategy: squash
     target_branch: main
     create_pr: true
-    auto_merge: false
     cleanup_worktree: true
 
 variables:

@@ -315,8 +315,6 @@ pub struct MergeConfig {
     #[serde(default)]
     pub create_pr: bool,
     #[serde(default)]
-    pub auto_merge: bool,
-    #[serde(default)]
     pub cleanup_worktree: bool,
 }
 
@@ -326,7 +324,6 @@ impl Default for MergeConfig {
             strategy: MergeStrategy::default(),
             target_branch: default_target_branch(),
             create_pr: false,
-            auto_merge: false,
             cleanup_worktree: true,
         }
     }
@@ -639,10 +636,6 @@ pub struct TaskIntegrationConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GitIntegrationConfig {
     pub provider: String,
-    #[serde(default)]
-    pub auto_pr: bool,
-    #[serde(default)]
-    pub auto_merge: bool,
     #[serde(default)]
     pub base_branch: Option<String>,
     #[serde(default)]

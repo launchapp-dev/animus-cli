@@ -290,7 +290,6 @@ pub(super) fn merge_config_to_yaml(config: MergeConfig) -> YamlMergeConfig {
         }),
         target_branch: config.target_branch,
         create_pr: config.create_pr,
-        auto_merge: config.auto_merge,
         cleanup_worktree: config.cleanup_worktree,
     }
 }
@@ -426,13 +425,59 @@ pub(super) fn yaml_merge_to_merge_config(yaml: YamlMergeConfig) -> Result<MergeC
         strategy: yaml.strategy.as_deref().map(parse_merge_strategy).transpose()?.unwrap_or_default(),
         target_branch: yaml.target_branch,
         create_pr: yaml.create_pr,
-        auto_merge: yaml.auto_merge,
         cleanup_worktree: yaml.cleanup_worktree,
     })
 }
 
 fn source_label(source_path: Option<&Path>) -> String {
     source_path.map(|p| p.display().to_string()).unwrap_or_else(|| "<in-memory>".to_string())
+}
+
+fn reject_removed_auto_merge(yaml_str: &str, source_path: Option<&Path>) -> Result<()> {
+    let Ok(doc) = serde_yaml::from_str::<serde_yaml::Value>(yaml_str) else {
+        return Ok(());
+    };
+
+    let mut found = false;
+    if let Some(workflows) = doc.get("workflows").and_then(serde_yaml::Value::as_sequence) {
+        for workflow in workflows {
+            if workflow
+                .get("post_success")
+                .and_then(|ps| ps.get("merge"))
+                .and_then(|merge| merge.get("auto_merge"))
+                .is_some()
+            {
+                found = true;
+                break;
+            }
+        }
+    }
+    if !found
+        && doc
+            .get("integrations")
+            .and_then(|integrations| integrations.get("git"))
+            .and_then(|git| git.get("auto_merge"))
+            .is_some()
+    {
+        found = true;
+    }
+
+    if !found {
+        return Ok(());
+    }
+
+    let location = yaml_str
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.trim_start().starts_with("auto_merge:"))
+        .map(|(idx, _)| format!("{}:{}", source_label(source_path), idx + 1))
+        .unwrap_or_else(|| source_label(source_path));
+
+    Err(anyhow!(
+        "`auto_merge` was removed in v0.5.x ({location}): Animus no longer merges to main \
+         autonomously. Use `create_pr: true` under `post_success.merge` and merge the PR \
+         yourself, or run the merge as an explicit manual step."
+    ))
 }
 
 fn resolve_system_prompt_file_path(raw: &str, source_path: Option<&Path>) -> PathBuf {
@@ -947,6 +992,8 @@ fn parse_yaml_workflow_config_unredacted(
     pack_root: Option<&Path>,
     original: Option<&str>,
 ) -> Result<WorkflowConfig> {
+    reject_removed_auto_merge(yaml_str, source_path)?;
+
     let yaml_file: YamlWorkflowFile = match serde_yaml::from_str(yaml_str) {
         Ok(file) => file,
         Err(err) => {

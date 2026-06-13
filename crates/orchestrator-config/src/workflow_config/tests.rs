@@ -35,7 +35,6 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
                     strategy: MergeStrategy::Merge,
                     target_branch: "main".to_string(),
                     create_pr: true,
-                    auto_merge: false,
                     cleanup_worktree: true,
                 }),
             }),
@@ -61,7 +60,6 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
                     strategy: MergeStrategy::Merge,
                     target_branch: "main".to_string(),
                     create_pr: true,
-                    auto_merge: false,
                     cleanup_worktree: true,
                 }),
             }),
@@ -467,7 +465,6 @@ workflows:
         strategy: rebase
         target_branch: release
         create_pr: true
-        auto_merge: true
         cleanup_worktree: false
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("should parse YAML with post_success");
@@ -477,8 +474,40 @@ workflows:
     assert_eq!(merge.strategy, MergeStrategy::Rebase);
     assert_eq!(merge.target_branch, "release");
     assert!(merge.create_pr);
-    assert!(merge.auto_merge);
     assert!(!merge.cleanup_worktree);
+}
+
+#[test]
+fn yaml_rejects_removed_auto_merge_in_post_success_merge() {
+    let yaml = r#"
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+      - implementation
+      - testing
+    post_success:
+      merge:
+        create_pr: true
+        auto_merge: true
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("auto_merge must be rejected");
+    let message = format!("{err:#}");
+    assert!(message.contains("`auto_merge` was removed"), "unexpected error: {message}");
+    assert!(message.contains("create_pr: true"), "error should suggest create_pr: {message}");
+}
+
+#[test]
+fn yaml_rejects_removed_auto_merge_in_integrations_git() {
+    let yaml = r#"
+integrations:
+  git:
+    provider: github
+    auto_merge: true
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("auto_merge must be rejected");
+    assert!(format!("{err:#}").contains("`auto_merge` was removed"));
 }
 
 #[test]
@@ -1331,8 +1360,6 @@ integrations:
       scope: "org"
   git:
     provider: github
-    auto_pr: true
-    auto_merge: false
     base_branch: "main"
     config:
       organization: "acme"
@@ -1370,8 +1397,6 @@ workflows:
     assert_eq!(task_integration.provider, "github");
     let git_integration = integrations.git.as_ref().expect("git integration should be parsed");
     assert_eq!(git_integration.provider, "github");
-    assert!(git_integration.auto_pr);
-    assert!(!git_integration.auto_merge);
     assert_eq!(git_integration.base_branch.as_deref(), Some("main"));
     assert_eq!(config.schedules.len(), 1);
     assert_eq!(config.schedules[0].id, "nightly");
@@ -1431,7 +1456,6 @@ schedules:
 integrations:
   git:
     provider: github
-    auto_pr: true
     base_branch: main
 "#;
     let base = parse_yaml_workflow_config(base_yaml).expect("parse base");
