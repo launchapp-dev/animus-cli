@@ -80,6 +80,38 @@ fn builtin_workflow_config_is_valid() {
 }
 
 #[test]
+fn workflow_overlay_hooks_with_bad_regex_are_rejected() {
+    use crate::agent_runtime_config::{AgentHooksConfig, AgentProfileOverlay};
+    use protocol::hook_policy::{HookPolicyRule, InputMatcher, PolicyDecision};
+
+    let mut config = builtin_workflow_config();
+    config.agent_profiles.insert(
+        "trader".to_string(),
+        AgentProfileOverlay {
+            hooks: Some(AgentHooksConfig {
+                policy_rules: vec![HookPolicyRule {
+                    id: Some("bad".to_string()),
+                    events: vec![],
+                    tools: vec![],
+                    input_matchers: vec![InputMatcher { field: "command".to_string(), regex: "(".to_string() }],
+                    decision: PolicyDecision::Deny,
+                    reason: None,
+                }],
+                observers: vec![],
+            }),
+            ..Default::default()
+        },
+    );
+    let runtime = crate::agent_runtime_config::builtin_agent_runtime_config();
+    let err = validate_workflow_and_runtime_configs(&config, &runtime)
+        .expect_err("invalid overlay hooks regex should fail workflow validation");
+    assert!(
+        err.to_string().contains("agent_profiles['trader'].hooks"),
+        "validation error should mention the overlay hooks block: {err}"
+    );
+}
+
+#[test]
 fn missing_v2_file_reports_actionable_error() {
     let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
@@ -465,8 +497,18 @@ workflows:
         target_branch: main
 "#;
     let err = parse_yaml_workflow_config(yaml).expect_err("invalid merge strategy should fail parsing");
-    let message = err.to_string();
-    assert!(message.contains("strategy must be one of"), "error should mention supported strategies: {}", message);
+    let message = format!("{err:#}");
+    assert!(
+        message.contains("post_success.merge.strategy must be one of"),
+        "error should mention supported strategies on the post_success path: {}",
+        message
+    );
+    assert!(
+        message.contains("workflows['standard']"),
+        "error should name the offending workflow, not a nonexistent 'merge' phase: {}",
+        message
+    );
+    assert!(!message.contains("phases['merge']"), "error must not reference a phase named 'merge': {}", message);
 }
 
 #[test]
@@ -4133,6 +4175,41 @@ workflows:
     let msg = format!("{:#}", err);
     assert!(msg.contains("unknown field"), "expected unknown-field diagnostic, got: {msg}");
     assert!(msg.contains("did you mean `workflow_ref`"), "expected workflow_ref suggestion, got: {msg}");
+}
+
+#[test]
+fn diagnostic_caret_points_at_offending_list_entry_not_prior_valid_one() {
+    // A valid `- build` entry sits on the line before the broken
+    // `- workflow_reff:` entry. serde_yaml anchors the unknown-field error
+    // on the sequence start; the enrich pass must re-anchor the caret onto
+    // the line that actually declares the unknown field.
+    let yaml = r#"
+phases:
+  build:
+    mode: agent
+    agent: swe
+    directive: "Build."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "You are a SWE."
+workflows:
+- id: bad
+  phases:
+  - build
+  - workflow_reff: standard
+"#;
+    let err = parse_yaml_workflow_config(yaml).expect_err("typo must error");
+    let diag = err
+        .chain()
+        .find_map(|source| source.downcast_ref::<super::yaml_diagnostic::YamlDiagnostic>())
+        .expect("a YamlDiagnostic must be present in the chain");
+    let line = diag.line.expect("diagnostic must carry a line");
+    let offending_line = yaml.lines().nth(line.saturating_sub(1)).unwrap_or_default();
+    assert!(
+        offending_line.contains("workflow_reff"),
+        "caret must land on the broken `- workflow_reff:` entry, got line {line}: {offending_line:?}"
+    );
 }
 
 #[test]

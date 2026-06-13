@@ -9,6 +9,9 @@ pub(crate) enum LogsCommand {
     /// `log_storage_backend` plugin when one is discovered. Set
     /// `ANIMUS_DAEMON_DISABLE_LOG_STORAGE_PLUGIN=1` to force the in-tree
     /// fallback even when a plugin is installed.
+    ///
+    /// Not sure which surface you need? Run `animus daemon observe` for the
+    /// routing matrix.
     Tail(LogsTailArgs),
 }
 
@@ -34,11 +37,9 @@ pub(crate) struct LogsTailArgs {
     #[arg(long, default_value_t = 100)]
     pub limit: usize,
 
-    /// Reserved for future streaming support; currently a no-op. When the
-    /// active backend is the in-tree fallback `--follow` returns the
-    /// requested entries and exits (tail-and-quit). Plugin backends that
-    /// advertise streaming will deliver follow notifications via the
-    /// stdio protocol; that wiring lands in a v0.4.1+ commit.
-    #[arg(long, default_value_t = false)]
+    /// Deprecated no-op kept for back-compat: `logs tail` never streamed, it
+    /// always returns the requested window and exits. Use `animus daemon
+    /// stream` for live streaming.
+    #[arg(long, hide = true, default_value_t = false)]
     pub follow: bool,
 }

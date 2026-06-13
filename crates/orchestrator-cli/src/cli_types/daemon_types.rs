@@ -23,10 +23,22 @@ pub(crate) enum DaemonCommand {
     /// Resume daemon scheduling.
     Resume,
     /// Print recent daemon event history; pass --follow to stream.
+    ///
+    /// Scoped to the current project root by default; pass --all-projects for
+    /// the fleet-wide view across every project on this host.
+    ///
+    /// Not sure which surface you need? Run `animus daemon observe` for the
+    /// routing matrix.
     Events(DaemonEventsArgs),
     /// Read daemon logs.
+    ///
+    /// Not sure which surface you need? Run `animus daemon observe` for the
+    /// routing matrix.
     Logs(LogArgs),
     /// Stream structured log events in real-time across daemon, workflows, and runs.
+    ///
+    /// Not sure which surface you need? Run `animus daemon observe` for the
+    /// routing matrix.
     Stream(DaemonStreamArgs),
     /// Clear daemon logs.
     ClearLogs,
@@ -183,7 +195,12 @@ pub(crate) struct DaemonSchedulerArgs {
 pub(crate) struct DaemonStartArgs {
     #[command(flatten)]
     pub(crate) scheduler: DaemonSchedulerArgs,
-    #[arg(long, default_value_t = false, help = "Do not auto-start the runner process.")]
+    #[arg(
+        long,
+        hide = true,
+        default_value_t = false,
+        help = "Deprecated no-op (the agent-runner sidecar was removed in v0.5.3; provider plugins handle CLI invocation)."
+    )]
     pub(crate) skip_runner: bool,
     #[arg(
         long,
@@ -427,4 +444,10 @@ pub(crate) struct DaemonEventsArgs {
         help = "Continue streaming new events until interrupted; without it the command prints and exits."
     )]
     pub(crate) follow: bool,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Show events for every project root on this host instead of just the current project."
+    )]
+    pub(crate) all_projects: bool,
 }

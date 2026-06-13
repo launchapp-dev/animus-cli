@@ -4,6 +4,9 @@ use clap::{Args, Subcommand};
 pub(crate) enum EventsCommand {
     /// Stream workflow lifecycle events (phase_started, phase_completed,
     /// workflow_completed, workflow_failed) from the daemon.
+    ///
+    /// Not sure which surface you need? Run `animus daemon observe` for the
+    /// routing matrix.
     Tail(EventsTailArgs),
 }
 

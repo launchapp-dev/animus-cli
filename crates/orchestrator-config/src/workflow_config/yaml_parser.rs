@@ -108,7 +108,7 @@ pub(super) fn parse_merge_strategy(value: &str) -> Result<MergeStrategy> {
         "squash" => Ok(MergeStrategy::Squash),
         "merge" => Ok(MergeStrategy::Merge),
         "rebase" => Ok(MergeStrategy::Rebase),
-        _ => Err(anyhow!("phases['merge'].strategy must be one of: squash, merge, rebase (got '{}')", value)),
+        _ => Err(anyhow!("post_success.merge.strategy must be one of: squash, merge, rebase (got '{}')", value)),
     }
 }
 
@@ -392,7 +392,10 @@ pub(super) fn yaml_phase_entry_to_workflow_phase_entry(entry: YamlPhaseEntry) ->
 
 pub(super) fn yaml_workflow_to_workflow_definition(yaml: YamlWorkflowDefinition) -> Result<WorkflowDefinition> {
     let post_success = match yaml.post_success {
-        Some(post_success) => Some(yaml_post_success_to_post_success_config(post_success)?),
+        Some(post_success) => Some(
+            yaml_post_success_to_post_success_config(post_success)
+                .with_context(|| format!("workflows['{}']", yaml.id))?,
+        ),
         None => None,
     };
 
@@ -751,6 +754,19 @@ fn enrich_diagnostic(
             diag.suggestion = Some(suggestion.to_string());
             diag.message = format!("unknown field `{}`", field);
         }
+        // serde_yaml reports the location of the enclosing sequence/mapping
+        // start, not the offending key. For a list entry such as
+        // `- id: review`, the caret lands on the previous valid entry
+        // (`- build`). Re-anchor the diagnostic on the line that actually
+        // declares `<field>:` so the caret points at the broken entry.
+        if let Some(start_line) = diag.line {
+            if let Some((line, col_start, col_end)) = locate_field_line(yaml_str, &field, start_line) {
+                diag.line = Some(line);
+                diag.col = Some(col_start);
+                diag.excerpt = None;
+                diag = diag.with_excerpt_from(yaml_str, line, col_start, col_end);
+            }
+        }
     } else if msg.contains("invalid `worktree:`") {
         diag.code = "yaml.invalid_worktree".to_string();
         diag.expected = vec![
@@ -797,19 +813,32 @@ fn locate_field_line(yaml_str: &str, field: &str, start_line: usize) -> Option<(
     let key = format!("{}:", field);
     let lines: Vec<&str> = yaml_str.lines().collect();
     let start_idx = start_line.saturating_sub(1).min(lines.len());
-    for (offset, line) in lines.iter().enumerate().skip(start_idx) {
+    let matches = |line: &str| -> Option<usize> {
+        // Match `<field>:` either as the bare key or as the first key of a
+        // YAML sequence entry (`- <field>:`). The caret column is the start
+        // of the key itself (after any `- ` marker) so it underlines the
+        // offending field, not the list bullet.
         let trimmed = line.trim_start();
+        let leading_ws = line.len() - trimmed.len();
         if trimmed.starts_with(&key) {
-            let indent = line.len() - trimmed.len();
-            return Some((offset + 1, indent + 1, line.chars().count() + 1));
+            return Some(leading_ws);
+        }
+        if let Some(rest) = trimmed.strip_prefix("- ") {
+            if rest.trim_start().starts_with(&key) {
+                let after_marker = rest.len() - rest.trim_start().len();
+                return Some(leading_ws + 2 + after_marker);
+            }
+        }
+        None
+    };
+    for (offset, line) in lines.iter().enumerate().skip(start_idx) {
+        if let Some(col) = matches(line) {
+            return Some((offset + 1, col + 1, line.chars().count() + 1));
         }
     }
     for offset in (0..start_idx).rev() {
-        let line = lines[offset];
-        let trimmed = line.trim_start();
-        if trimmed.starts_with(&key) {
-            let indent = line.len() - trimmed.len();
-            return Some((offset + 1, indent + 1, line.chars().count() + 1));
+        if let Some(col) = matches(lines[offset]) {
+            return Some((offset + 1, col + 1, lines[offset].chars().count() + 1));
         }
     }
     None
@@ -925,7 +954,12 @@ fn parse_yaml_workflow_config_unredacted(
             if let Some(original) = original.filter(|original| *original != yaml_str) {
                 diag = rebuild_excerpt_from_original(diag, original);
             }
-            return Err(anyhow!("{}", diag));
+            // Preserve the typed `YamlDiagnostic` in the error chain (its
+            // Display still renders the full rustc-style caret via `{:#}`),
+            // so downstream consumers — notably `workflow config validate` —
+            // can downcast and surface message + line/col + code structurally
+            // instead of only seeing a flattened string.
+            return Err(anyhow::Error::new(diag));
         }
     };
 

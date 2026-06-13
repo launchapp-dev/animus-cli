@@ -93,9 +93,13 @@ fn daemon_events_exits_after_printing_when_events_exist() -> Result<()> {
 
     // Regression guard: `daemon events` used to default to follow mode and
     // never exit once an events file existed. Without `--follow` it must
-    // print the batch and return promptly.
-    let output =
-        harness.run_json_output_within(&["daemon", "events", "--limit", "10"], std::time::Duration::from_secs(30))?;
+    // print the batch and return promptly. The fixture record carries a
+    // null project_root, so `--all-projects` is required for it to clear the
+    // default current-project scope filter.
+    let output = harness.run_json_output_within(
+        &["daemon", "events", "--limit", "10", "--all-projects"],
+        std::time::Duration::from_secs(30),
+    )?;
 
     assert!(
         output.status.success(),
@@ -105,6 +109,47 @@ fn daemon_events_exits_after_printing_when_events_exist() -> Result<()> {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("event-regression-1"), "printed events should include the stored record, got: {stdout}");
+
+    Ok(())
+}
+
+#[test]
+fn daemon_events_scopes_to_current_project_by_default() -> Result<()> {
+    let harness = CliHarness::new()?;
+
+    let foreign = serde_json::json!({
+        "schema": "animus.daemon.event.v1",
+        "id": "event-foreign-1",
+        "seq": 1,
+        "timestamp": "2026-01-01T00:00:00Z",
+        "event_type": "queue",
+        "project_root": "/some/other/project",
+        "data": {},
+    });
+    std::fs::write(harness.config_root().join("daemon-events.jsonl"), format!("{foreign}\n"))?;
+
+    // Default scope is the current project root, so a record tagged with a
+    // different project must be hidden.
+    let scoped =
+        harness.run_json_output_within(&["daemon", "events", "--limit", "10"], std::time::Duration::from_secs(30))?;
+    assert!(scoped.status.success(), "scoped daemon events should exit cleanly");
+    let scoped_stdout = String::from_utf8_lossy(&scoped.stdout);
+    assert!(
+        !scoped_stdout.contains("event-foreign-1"),
+        "default-scoped daemon events must hide other projects, got: {scoped_stdout}"
+    );
+
+    // --all-projects opens the fleet-wide view.
+    let fleet = harness.run_json_output_within(
+        &["daemon", "events", "--limit", "10", "--all-projects"],
+        std::time::Duration::from_secs(30),
+    )?;
+    assert!(fleet.status.success(), "fleet daemon events should exit cleanly");
+    let fleet_stdout = String::from_utf8_lossy(&fleet.stdout);
+    assert!(
+        fleet_stdout.contains("event-foreign-1"),
+        "--all-projects must surface other projects' events, got: {fleet_stdout}"
+    );
 
     Ok(())
 }

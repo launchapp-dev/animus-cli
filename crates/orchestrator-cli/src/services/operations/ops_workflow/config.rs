@@ -201,6 +201,36 @@ pub(crate) fn get_workflow_config_payload(project_root: &str) -> Value {
     }
 }
 
+/// Build a structured error object from an `anyhow::Error`, routing through
+/// the same `YamlDiagnostic` formatter `compile` surfaces. When a
+/// `YamlDiagnostic` is present anywhere in the error chain, its message,
+/// file/line/col, stable code, and full rustc-style caret rendering are
+/// carried through so `validate` errors[] are as rich as `compile`'s output.
+/// Otherwise the full `{:#}` context chain is flattened into `message`.
+fn config_error_to_value(error: &anyhow::Error) -> Value {
+    for source in error.chain() {
+        if let Some(diag) = source.downcast_ref::<orchestrator_core::YamlDiagnostic>() {
+            let mut obj = serde_json::json!({
+                "message": diag.message.clone(),
+                "code": diag.code.clone(),
+                "rendered": format!("{diag}"),
+            });
+            let map = obj.as_object_mut().expect("json object");
+            if let Some(file) = &diag.file {
+                map.insert("file".into(), Value::String(file.display().to_string()));
+            }
+            if let Some(line) = diag.line {
+                map.insert("line".into(), Value::from(line));
+            }
+            if let Some(col) = diag.col {
+                map.insert("col".into(), Value::from(col));
+            }
+            return obj;
+        }
+    }
+    serde_json::json!({ "message": format!("{error:#}") })
+}
+
 pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
     let workflow_loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root));
     let runtime_loaded =
@@ -218,6 +248,13 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
                     "valid": true,
                     "errors": [],
                     "warnings": warnings,
+                    "summary": {
+                        "workflows": workflow.config.workflows.len(),
+                        "phases": workflow.config.phase_definitions.len(),
+                        "agents": workflow.config.agent_profiles.len(),
+                        "errors": 0,
+                        "warnings": warnings.len(),
+                    },
                     "workflow_config_path": workflow.path.display().to_string(),
                     "agent_runtime_path": runtime.path.display().to_string(),
                     "workflow_config_hash": workflow.metadata.hash,
@@ -225,7 +262,7 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
                 }),
                 Err(error) => serde_json::json!({
                     "valid": false,
-                    "errors": [error.to_string()],
+                    "errors": [config_error_to_value(&error)],
                     "warnings": warnings,
                     "workflow_config_path": workflow.path.display().to_string(),
                     "agent_runtime_path": runtime.path.display().to_string(),
@@ -234,19 +271,85 @@ pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
         }
         (Err(workflow_error), Err(runtime_error)) => serde_json::json!({
             "valid": false,
-            "errors": [workflow_error.to_string(), runtime_error.to_string()],
+            "errors": [config_error_to_value(&workflow_error), config_error_to_value(&runtime_error)],
             "warnings": warnings,
         }),
         (Err(workflow_error), _) => serde_json::json!({
             "valid": false,
-            "errors": [workflow_error.to_string()],
+            "errors": [config_error_to_value(&workflow_error)],
             "warnings": warnings,
         }),
         (_, Err(runtime_error)) => serde_json::json!({
             "valid": false,
-            "errors": [runtime_error.to_string()],
+            "errors": [config_error_to_value(&runtime_error)],
             "warnings": warnings,
         }),
+    }
+}
+
+/// Render the `validate` payload for human (non-`--json`) consumers. On
+/// success prints a one-line summary; on failure prints each structured
+/// error using the same rustc-style caret rendering `compile` shows, then
+/// any warnings. Mirrors `compile`'s human ergonomics so the two verbs no
+/// longer diverge.
+pub(crate) fn render_validate_human(payload: &Value) -> String {
+    let mut out = String::new();
+    let warnings = payload.get("warnings").and_then(Value::as_array);
+    let warning_count = warnings.map(Vec::len).unwrap_or(0);
+
+    if payload.get("valid").and_then(Value::as_bool).unwrap_or(false) {
+        let summary = payload.get("summary");
+        let workflows = summary.and_then(|s| s.get("workflows")).and_then(Value::as_u64).unwrap_or(0);
+        let phases = summary.and_then(|s| s.get("phases")).and_then(Value::as_u64).unwrap_or(0);
+        let agents = summary.and_then(|s| s.get("agents")).and_then(Value::as_u64).unwrap_or(0);
+        out.push_str(&format!(
+            "valid: {} workflow{}, {} phase{}, {} agent{} — 0 errors, {} warning{}\n",
+            workflows,
+            plural(workflows),
+            phases,
+            plural(phases),
+            agents,
+            plural(agents),
+            warning_count,
+            plural(warning_count as u64),
+        ));
+    } else {
+        if let Some(errors) = payload.get("errors").and_then(Value::as_array) {
+            for err in errors {
+                if let Some(rendered) = err.get("rendered").and_then(Value::as_str) {
+                    out.push_str(rendered);
+                    if !rendered.ends_with('\n') {
+                        out.push('\n');
+                    }
+                } else if let Some(message) = err.get("message").and_then(Value::as_str) {
+                    out.push_str(&format!("error: {message}\n"));
+                }
+            }
+        }
+        let error_count = payload.get("errors").and_then(Value::as_array).map(Vec::len).unwrap_or(0);
+        out.push_str(&format!(
+            "invalid: {} error{}, {} warning{}\n",
+            error_count,
+            plural(error_count as u64),
+            warning_count,
+            plural(warning_count as u64),
+        ));
+    }
+
+    for warning in warnings.into_iter().flatten() {
+        if let Some(message) = warning.get("message").and_then(Value::as_str) {
+            out.push_str(&format!("warning: {message}\n"));
+        }
+    }
+
+    out
+}
+
+fn plural(n: u64) -> &'static str {
+    if n == 1 {
+        ""
+    } else {
+        "s"
     }
 }
 
@@ -467,5 +570,49 @@ mod tests {
         assert_eq!(value["reloaded"], serde_json::json!(false), "malformed overlay must NOT reload");
         let errors = value["errors"].as_array().expect("errors array");
         assert!(!errors.is_empty(), "diagnostic must be surfaced");
+    }
+
+    #[test]
+    fn validate_payload_carries_summary_on_success() {
+        let dir = tempdir().unwrap();
+        write_minimal_overlay(dir.path());
+        let project_root = dir.path().to_string_lossy().to_string();
+        let value = validate_workflow_config_payload(&project_root);
+        assert_eq!(value["valid"], serde_json::json!(true), "minimal overlay must validate: {value}");
+        let summary = value.get("summary").expect("summary present on success");
+        assert!(summary["workflows"].as_u64().is_some(), "summary must count workflows: {summary}");
+        assert!(summary["phases"].as_u64().is_some(), "summary must count phases: {summary}");
+        assert!(summary["agents"].as_u64().is_some(), "summary must count agents: {summary}");
+
+        let human = render_validate_human(&value);
+        assert!(human.starts_with("valid: "), "human success line must start with 'valid: ': {human}");
+        assert!(human.contains("0 errors"), "human success line must report 0 errors: {human}");
+    }
+
+    #[test]
+    fn validate_payload_bad_merge_strategy_carries_rich_error() {
+        let dir = tempdir().unwrap();
+        let animus = dir.path().join(".animus");
+        fs::create_dir_all(&animus).unwrap();
+        let yaml = "phases:\n  alpha:\n    mode: agent\n    agent_id: a\nagents:\n  a:\n    description: d\n    system_prompt: p\n    skills: []\nworkflows:\n  - id: ship\n    name: Ship\n    phases:\n      - alpha\n    post_success:\n      merge:\n        strategy: frobnicate\n        target_branch: main\n";
+        fs::write(animus.join("workflows.yaml"), yaml).unwrap();
+        let project_root = dir.path().to_string_lossy().to_string();
+
+        let value = validate_workflow_config_payload(&project_root);
+        assert_eq!(value["valid"], serde_json::json!(false), "bad strategy must fail: {value}");
+        let errors = value["errors"].as_array().expect("errors array");
+        let first = &errors[0];
+        let message = first["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("strategy must be one of")
+                || first["rendered"].as_str().unwrap_or_default().contains("strategy must be one of"),
+            "error must name supported strategies: {first}"
+        );
+        // The misleading 'phases[merge]' path must be gone.
+        let blob = format!("{first}");
+        assert!(!blob.contains("phases['merge']"), "must not reference a phase named 'merge': {blob}");
+
+        let human = render_validate_human(&value);
+        assert!(human.contains("invalid:"), "human failure must summarize counts: {human}");
     }
 }

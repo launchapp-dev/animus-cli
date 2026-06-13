@@ -699,7 +699,13 @@ pub(crate) async fn handle_workflow(
         WorkflowCommand::Config { command } => match command {
             WorkflowConfigCommand::Get => print_value(config::get_workflow_config_payload(project_root), json),
             WorkflowConfigCommand::Validate => {
-                print_value(config::validate_workflow_config_payload(project_root), json)
+                let payload = config::validate_workflow_config_payload(project_root);
+                if json {
+                    print_value(payload, json)
+                } else {
+                    print!("{}", config::render_validate_human(&payload));
+                    Ok(())
+                }
             }
             WorkflowConfigCommand::Compile => print_value(config::compile_yaml_workflows_payload(project_root)?, json),
             WorkflowConfigCommand::Reload => print_value(config::reload_workflow_config_payload(project_root), json),
