@@ -30,8 +30,8 @@ lines (JSONL passthrough where structured) until interrupted:
 - `animus chat send` (streams provider output as it arrives)
 
 `animus logs tail` is *not* exempt: it is a bounded, pull-style reader that
-returns one envelope and exits; its `--follow` flag is reserved and currently
-a no-op (see the `animus logs tail` section below).
+returns one envelope and exits; its `--follow` flag is a hidden deprecated
+no-op (see the `animus logs tail` section below).
 
 ### Destructive commands: dry-run by default, `--yes` to apply
 
@@ -101,7 +101,7 @@ animus
 │   ├── pause                Pause daemon scheduling
 │   ├── resume               Resume daemon scheduling
 │   ├── observe              One observability front-door: routes to events/logs/stream; bare prints a data-source matrix + recent merged tail
-│   ├── events               Print recent daemon event history and exit; `--follow` keeps streaming new events until Ctrl-C
+│   ├── events               Print recent daemon event history scoped to the current project and exit; `--follow` keeps streaming new events until Ctrl-C; `--all-projects` shows events for every project root on this host
 │   ├── logs                 Read daemon logs
 │   ├── stream               Stream structured log events in real-time across daemon, workflows, and runs
 │   ├── clear-logs           Clear daemon logs
@@ -266,11 +266,12 @@ animus
 │   │   ├── show             Print the effective scope (mode + resolved admit-set) for the current project
 │   │   ├── set              Write `.animus/plugin-scope.yaml` with the supplied mode + allow/extras/require sets
 │   │   └── reset            Delete `.animus/plugin-scope.yaml` and fall back to the default scope
+│   ├── prune                Remove stale `plugins.yaml` entries whose binary is gone. Dry-run by default; `--yes` removes the entries. Stale-entry warnings in `plugin list`/`outdated`/`browse --installed` point here for cleanup
 │   ├── trust                Inspect the TOFU org allowlist (`~/.animus/trusted-orgs.yaml`)
 │   │   └── list             List trusted orgs (current + revoked tombstones) with `trusted_at`/`revoked_at` and how each grant was decided
 │   └── revoke-trust         Revoke trust for a GitHub org (tombstones `revoked_at` so re-installs re-prompt); the built-in `launchapp-dev` org cannot be revoked
 │
-├── status                   Show a unified project status dashboard. `--failures N` sets how many recent workflow failures to list (default 3; applies to both human and JSON output)
+├── status                   Show a unified project status dashboard. `--failures N` sets how many recent workflow failures to list (default 3; applies to both human and JSON output). Human view includes three additional sections: **Task Summary** (live from SubjectRouter; renders "unavailable" with an error when the router is unreachable), **Blocked / Paused** (id + reason + blocked_by + age), and **Needs You** (pending agent interactions with answer-command hints). The Daemon section now shows `provider_plugins_healthy` instead of the deprecated `runner_connected`/`runner_pid` fields (those remain in `--json` only for back-compat)
 ├── output                   Inspect run output and artifacts
 │   ├── read                 Read run event payloads (`--run-id`, or `--workflow-id` to resolve the latest run recorded for that workflow; clear error when none or ambiguous)
 │   ├── phase-outputs        Read persisted workflow phase outputs. Human view renders one block per phase (verdict, reason, commit) plus a Skills section — requested vs applied (with source scope and contribution kinds) vs missing — so an attached skill is verifiably applied, never a silent no-op; `--json` carries the raw outputs incl. the persisted skill records
@@ -295,14 +296,14 @@ animus
 ├── init                     Initialize an Animus project from a template
 │   (no subcommands)         Supports registry-backed or local copy templates, plan mode, and daemon defaults
 │
-├── doctor                   Run environment and configuration diagnostics. `--fix` applies safe remediations (stale daemon pid cleanup, zombie phase-session normalization, lock-file removal, chmod plugin binaries); `--fix` also prunes stale cli-tracker entries for exited CLI processes (absorbed from the removed `animus runner orphans` verbs; live tracked PIDs get a manual `kill` suggestion instead because the tracker is global across projects); `--fix --yes` additionally removes orphan worktrees via `git worktree remove --force`. `--check <id|category>` narrows to a single check; `--filter <substr>` keeps the legacy substring match.
+├── doctor                   Run environment and configuration diagnostics. Exits non-zero (code 5, Unavailable) when any `[fail]` check remains after the run; `[warn]` findings do not affect the exit code. `--fix` applies safe remediations (stale daemon pid cleanup, zombie phase-session normalization, lock-file removal, chmod plugin binaries); `--fix` also prunes stale cli-tracker entries for exited CLI processes (absorbed from the removed `animus runner orphans` verbs; live tracked PIDs get a manual `kill` suggestion instead because the tracker is global across projects); `--fix --yes` additionally removes orphan worktrees via `git worktree remove --force`. `--check <id|category>` narrows to a single check; `--filter <substr>` keeps the legacy substring match. API-key checks are satisfied by a provider-CLI login session or an OS keychain entry, not just an environment variable.
 │
 ├── trigger                  Inspect and manage event triggers
 │   ├── list                 List all configured event triggers for this project
 │   └── fire                 Manually fire a webhook trigger (for testing and development)
 │
 ├── logs                     Tail and inspect daemon log output (in-tree or via log_storage_backend plugin)
-│   └── tail                 Tail recent log entries from the active log storage backend
+│   └── tail                 Tail recent log entries from the active log storage backend. `--follow` is a hidden deprecated no-op; use `animus daemon stream` for live follow behavior
 │
 ├── subject                  List, get, create, update, status, and delete subjects via installed subject_backend plugins
 │   ├── list                 List subjects for a given kind via the active subject_backend plugin
@@ -324,16 +325,11 @@ animus
 ├── update                   Manage the `animus` binary itself — check for, download, and atomically install a newer release (`--check / --yes / --channel / --force / --prerelease`)
 │
 ├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
-│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders. `--by provider|model` groups in-window active-run spend by tool or model with token/USD totals and percentages
+│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders. Default reports spend incurred inside the window only; `--lifetime` reports each touched run's full lifetime spend instead (restores pre-v0.5.x semantics). Output splits reported vs estimated cost with `(est.)` markers. `--by provider|model` groups in-window active-run spend by tool or model with token/USD totals and percentages
 │   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`. `--by provider|model|phase` regroups the same run's spend (rejected for archived runs, which lack per-phase detail)
 │   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`. `--by model` / `--by provider` switch to a cross-run model/provider leaderboard (token/USD totals + percentages). Grouped views print a one-line note when the `unknown` attribution bucket exceeds 20% of grouped cost
 │   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets (workflow-level totals; not split by provider/model)
 │   └── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
-│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders
-│   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`
-│   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`
-│   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets
-│   ├── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
 │   └── decisions            List recorded budget-cap breaches from the scoped breach log; `--since <DURATION>` filters the window
 │
 ├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)
@@ -441,7 +437,9 @@ invocation, not recovered from the previous run.
 
 Standalone preflight report. Runs the same checks as daemon startup but never
 starts the daemon. Useful for CI and onboarding to confirm a project's plugin
-prerequisites are in place.
+prerequisites are in place. Human output renders as a checklist (one
+`[pass]`/`[fail]` line per required role), not a JSON blob; `--json` emits the
+`animus.daemon.preflight.v1` envelope.
 
 | Flag | Description |
 |---|---|
@@ -504,7 +502,8 @@ All new fields are additive with serde defaults — pre-v0.5.10 payloads
 still parse, and old consumers ignore the new keys.
 
 v0.5.x adds a one-line health verdict. Human `animus daemon health` output
-now LEADS with `healthy: true|false`, and `animus daemon health --json` (and
+now LEADS with a `status:` word (e.g. `stopped`, `running`, `degraded`) and a
+`providers:` summary line, followed by `healthy: true|false`. `animus daemon health --json` (and
 the `animus.daemon.health` MCP tool) carries the same boolean as an additive
 `healthy` key. The rule:
 
@@ -739,7 +738,8 @@ mutations.
 
 ```bash
 animus approval request --operation-type prune_worktrees --repo-name demo
-animus approval respond --request-id <ID> --approved [--comment <TEXT>]
+animus approval respond --request-id <ID> --approve [--comment <TEXT>]
+animus approval respond --request-id <ID> --reject [--comment <TEXT>]
 animus approval outcome --request-id <ID> --success --message "pruned"
 ```
 
@@ -749,7 +749,8 @@ animus approval outcome --request-id <ID> --success --message "pruned"
 | `--repo-name <REPO>` | (`request`) Repository the approval applies to |
 | `--context-json <JSON>` | (`request`) Optional JSON context payload stored on the record |
 | `--request-id <ID>` | (`respond` / `outcome`) Approval request identifier |
-| `--approved` | (`respond`) Approve the request; omit to reject |
+| `--approve` | (`respond`) Approve the request. Mutually exclusive with `--reject`; exactly one is required |
+| `--reject` | (`respond`) Reject the request. Mutually exclusive with `--approve`; exactly one is required |
 | `--comment <TEXT>` / `--user-id <USER>` | (`respond`) Optional reviewer comment and id |
 | `--success` | (`outcome`) Mark the recorded operation as successful; omit for failure |
 | `--message <TEXT>` / `--metadata-json <JSON>` | (`outcome`) Outcome message and optional metadata |
@@ -889,12 +890,32 @@ the bounded, pull-style log reader; for live structured events use
 | `--level <LEVEL>` | Minimum severity to include. One of `debug`, `info`, `warn`, `error`. Default `info` |
 | `--since <DURATION>` | Only return entries newer than the supplied duration (for example `1h`, `30m`, `15s`). Default `1h` |
 | `--limit <COUNT>` | Maximum number of entries to return. Default `100` |
-| `--follow` | Reserved for future streaming support. Today the in-tree fallback still returns the requested batch and exits, so use `animus daemon stream` for live follow behavior |
+| `--follow` | **Deprecated no-op (hidden).** The flag is accepted for back-compat but is ignored; the command always returns the bounded batch and exits. Use `animus daemon stream` for live follow behavior |
 
 When a `log_storage_backend` plugin is installed, `animus logs tail` reads
 through that backend. Set
 `ANIMUS_DAEMON_DISABLE_LOG_STORAGE_PLUGIN=1` to force the in-tree
 `~/.animus/<repo-scope>/logs/events.jsonl` fallback.
+
+### `animus doctor` (exit-code contract)
+
+`animus doctor` exits non-zero (code **5**, `Unavailable`) when any check
+finishes with a `[fail]` verdict after the run — including after `--fix`
+remediations. `[warn]` findings do not affect the exit code; the command exits
+0 when only warnings remain. CI gates can rely on `$?` to distinguish clean
+(`0`), warnings-only (`0`), and failed (`5`) runs.
+
+API-key checks are satisfied by any of: the expected environment variable
+present, a provider-CLI login session on disk, or an OS keychain entry for the
+current `repo-scope`. The old env-var-only test was removed.
+
+| Flag | Description |
+|---|---|
+| `--fix` | Apply safe local remediations (stale pid cleanup, zombie phase normalization, lock-file removal, chmod plugin binaries, prune stale cli-tracker entries for exited processes) |
+| `--fix --yes` | Also remove orphan worktrees via `git worktree remove --force` |
+| `--check <NAME>` | Run only checks whose id or category matches exactly (repeatable) |
+| `--filter <SUBSTR>` | Run only checks whose id contains the substring (repeatable, case-insensitive) |
+| `--skip-subprocess` | Skip checks that spawn external subprocesses (cosign verify, plugin `--manifest` probes) |
 
 ### `animus init`
 
@@ -1147,12 +1168,16 @@ binaries from being picked up. Pass `--include-system-path` to opt in to scannin
 `$PATH` for `animus-provider-*` and `animus-plugin-*` binaries.
 
 Stale `plugins.yaml` entries (a configured plugin whose binary path has
-vanished) collapse to a single summary warning line above the table — naming
-the prune remedy (`animus plugin uninstall <name>`) instead of repeating one
-warning per entry. Warnings from other discovery tiers (e.g. a genuinely broken
-installed plugin) still print one line each. Pass `--verbose` to restore the
-full per-entry detail for every tier; `--json` always carries the complete
-`warnings` array regardless.
+vanished) collapse to a single summary warning line above the table — pointing
+at `animus plugin prune` as the cleanup command instead of repeating one
+warning per entry. `plugin list`, `plugin outdated`, and `plugin browse
+--installed` all read one reconciled discovery view; the stale-entry warning
+is consistent across all three. VERSION is sourced from the lockfile tag with
+a binary/source mismatch indicator when the on-disk binary's manifest-reported
+version disagrees with the lockfile. Warnings from other discovery tiers (e.g.
+a genuinely broken installed plugin) still print one line each. Pass
+`--verbose` to restore the full per-entry detail for every tier; `--json`
+always carries the complete `warnings` array regardless.
 
 `animus plugin info`, `animus plugin ping`, and `animus plugin call` spawn the
 target binary with manifest-derived env checks enabled. If the plugin declares
@@ -1280,6 +1305,31 @@ default flags) so the new plugin binaries are picked up; when the daemon is
 not running it is a no-op with a note, and when any plugin update failed the
 restart is skipped. In `--json` mode the outcome is reported under a
 `daemon_restart` key in the result envelope.
+
+### `animus plugin prune`
+
+Remove stale `plugins.yaml` registry entries — keys pointing at a binary that
+has been deleted out of band (e.g. manually removed from `~/.animus/plugins/`
+without going through `animus plugin uninstall`). Scans both the global
+registry (`~/.animus/plugins.yaml`) and the project-local one
+(`.animus/plugins.yaml`).
+
+Dry-run by default: without `--yes` the command previews the stale set and
+exits 0 without writing anything. Pass `--yes` to remove the entries.
+
+```bash
+animus plugin prune          # preview stale entries
+animus plugin prune --yes    # remove them
+animus plugin prune --json   # machine-readable preview/result
+```
+
+| Flag | Description |
+|---|---|
+| `--yes` | Remove the stale entries; without this flag the command previews only |
+| `--json` | Emit the result envelope as JSON instead of human-readable text |
+
+Stale-entry warnings in `animus plugin list`, `animus plugin outdated`, and
+`animus plugin browse --installed` all point at this command for cleanup.
 
 ### `animus plugin lock`
 
@@ -1459,6 +1509,57 @@ naming conventions, host allowlist, and rollback procedure.
 The former `animus self update` group was retired in v0.5.x — `animus
 update` is the only self-update surface, with `--check` replacing the old
 `--check-only` and `--force` / `--prerelease` folded in. No aliases.
+
+### Human-mode table output (default for listing commands)
+
+The following commands default to a human-readable table in non-`--json`
+mode. Pass `--json` to get the `animus.cli.v1` envelope instead.
+
+| Command | Notes |
+|---|---|
+| `animus subject list` | Table with id, title, status, priority |
+| `animus subject get` | Detail card |
+| `animus subject next` | Single-row card; prints nothing when no ready subject exists |
+| `animus queue list` | Table with id, title, status, priority |
+| `animus workflow list` | Table; empty set prints a "Start one with:" hint |
+| `animus agent list` | Table of configured agent profiles |
+| `animus agent interactions list` | Table of pending interactions with answer-command hints |
+| `animus chat list` | Table, most-recently-updated first |
+| `animus pack list` | Table; active packs flagged |
+| `animus skill list` | Table; `--verbose` surfaces per-file unparseable-skill warnings (otherwise suppressed/aggregated) |
+| `animus daemon preflight` | Checklist (pass/fail per role), not a JSON blob |
+
+Priority is displayed in `p0`–`p3` bucket notation in all human-readable views.
+
+### ID normalization
+
+`subject get/update/status --id`, `queue hold/release/drop`, and
+`workflow run --task-id` all accept **either** the bare native id (e.g.
+`TASK-001`) or the kind-qualified form (e.g. `task:TASK-001`). The bare form
+is normalized to the qualified form at the CLI boundary, so both resolve the
+same subject. You do not need to run any command in `--json` mode to discover
+the id format.
+
+### `animus pack search` (positional query)
+
+`pack search` now takes the search query as a positional argument (with
+`--query` as an alias), matching the `animus plugin search` convention:
+
+```bash
+animus pack search "database"          # positional form
+animus pack search --query "database"  # flag alias
+animus pack search --category devops   # filter-only, no query
+```
+
+### `animus workflow config validate` (human summary + rich errors)
+
+`animus workflow config validate` now prints a one-line human summary by
+default (e.g. `ok — 3 workflows, 0 errors, 2 warnings`) and renders
+validation errors with rich caret-style line/column indicators. Under
+`--json` the result envelope carries a structured `errors[]` array with
+`line`, `col`, `message`, and `context` fields, matching `workflow config
+compile`. The `warnings[]` array reports declared-but-unenforced fields in
+both modes.
 
 ## Summary
 

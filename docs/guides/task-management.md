@@ -27,9 +27,7 @@ kind-qualified form (`task:TASK-001`) wherever an `--id` or subject-id argument
 is taken — `subject get/update/status`, `queue hold/release/drop`, and
 `workflow run --task-id`. The bare form is normalized to the qualified form at
 the CLI boundary, so both resolve the same subject. The human-readable
-`animus subject list` table prints the canonical qualified ids; use
-`animus subject list --kind task --json` if you need to confirm the exact id
-format your active backend returns.
+`animus subject list` table prints the canonical qualified ids.
 
 ## Update Task State
 
