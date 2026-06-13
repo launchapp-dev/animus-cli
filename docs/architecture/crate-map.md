@@ -44,12 +44,12 @@ binary inside the installed plugin (see
 | `animus-plugin-runtime` | Runtime helper crate for plugin implementations |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates
-for provider/session contracts plus queue/workflow/subject plugin routing,
-currently through `animus-provider-protocol`, `animus-session-backend`,
-`animus-queue-protocol`, `animus-workflow-runner-protocol`, and
-`animus-subject-protocol` in crate-local `Cargo.toml` pins. The root
-workspace file currently pins `animus-provider-protocol`,
-`animus-session-backend`, and `animus-subject-protocol`.
+for provider/session contracts plus queue/workflow/subject plugin routing.
+The root `Cargo.toml` currently pins `animus-provider-protocol`,
+`animus-session-backend`, and `animus-subject-protocol`;
+`crates/orchestrator-cli/Cargo.toml` adds crate-local pins for `animus-queue-protocol`,
+`animus-workflow-runner-protocol`, and the parallel v0.1.13/v0.5.x subject
+wire crates used by the CLI surface.
 
 ## Repo-Local Directories Outside The Workspace
 
