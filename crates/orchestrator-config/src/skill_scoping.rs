@@ -416,7 +416,32 @@ pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDe
     Ok(skills)
 }
 
+static SUPPRESS_MARKDOWN_SKILL_PARSE_WARNINGS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Suppress (or re-enable) the per-file `could not parse markdown skill`
+/// warnings emitted while sweeping foreign agent-host tool directories
+/// (`~/.claude`, `~/.codex`, `~/.cursor`, ...). Only the agent-host sweep
+/// honors this flag — parse failures in first-party Animus skill
+/// directories always warn so broken project/user skills stay
+/// diagnosable. `animus skill list` sets this unless `--verbose`.
+pub fn set_suppress_markdown_skill_parse_warnings(suppress: bool) {
+    SUPPRESS_MARKDOWN_SKILL_PARSE_WARNINGS.store(suppress, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn markdown_skill_parse_warnings_suppressed() -> bool {
+    SUPPRESS_MARKDOWN_SKILL_PARSE_WARNINGS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn load_markdown_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDefinition>> {
+    load_markdown_skills_from_directory_inner(dir, false)
+}
+
+fn load_markdown_skills_from_agent_host_directory(dir: &Path) -> Result<BTreeMap<String, SkillDefinition>> {
+    load_markdown_skills_from_directory_inner(dir, markdown_skill_parse_warnings_suppressed())
+}
+
+fn load_markdown_skills_from_directory_inner(dir: &Path, quiet: bool) -> Result<BTreeMap<String, SkillDefinition>> {
     let mut skills = BTreeMap::new();
 
     let entries = match fs::read_dir(dir) {
@@ -443,7 +468,9 @@ fn load_markdown_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, Sk
                 skills.insert(skill.name.clone(), skill);
             }
             Err(error) => {
-                eprintln!("warning: could not parse markdown skill {}: {}", path.display(), error);
+                if !quiet {
+                    eprintln!("warning: could not parse markdown skill {}: {}", path.display(), error);
+                }
             }
         }
     }
@@ -1086,7 +1113,7 @@ fn load_agent_host_skill_sources(project_root: &Path) -> Vec<SkillSource> {
             if !dir.is_dir() {
                 continue;
             }
-            let Ok(skills) = load_markdown_skills_from_directory(&dir) else {
+            let Ok(skills) = load_markdown_skills_from_agent_host_directory(&dir) else {
                 continue;
             };
             if skills.is_empty() {

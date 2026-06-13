@@ -25,10 +25,32 @@ use uuid::Uuid;
 use self::execute::WorkflowExecuteArgs;
 use crate::{
     dry_run_envelope, ensure_destructive_confirmation, parse_workflow_query_sort_opt, parse_workflow_status_opt,
-    print_value, WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand, WorkflowConfigCommand,
-    WorkflowDefinitionsCommand, WorkflowPhaseCommand, WorkflowPhasesCommand, WorkflowPromptCommand,
-    WorkflowStateMachineCommand,
+    print_table, print_value, WorkflowAgentRuntimeCommand, WorkflowCheckpointCommand, WorkflowCommand,
+    WorkflowConfigCommand, WorkflowDefinitionsCommand, WorkflowPhaseCommand, WorkflowPhasesCommand,
+    WorkflowPromptCommand, WorkflowStateMachineCommand,
 };
+
+/// Render `workflow list` results as a human-readable table, or an
+/// empty-state hint when there are no runs yet.
+fn print_workflow_list_table(items: &[protocol::orchestrator::OrchestratorWorkflow]) {
+    if items.is_empty() {
+        println!("No workflow runs yet. Start one with: animus workflow run <pipeline> --task-id <id>");
+        return;
+    }
+    let rows: Vec<Vec<String>> = items
+        .iter()
+        .map(|w| {
+            vec![
+                w.id.clone(),
+                w.workflow_ref.clone().unwrap_or_else(|| "--".to_string()),
+                format!("{:?}", w.status).to_ascii_lowercase(),
+                if w.task_id.is_empty() { "--".to_string() } else { w.task_id.clone() },
+                w.started_at.format("%Y-%m-%d %H:%M").to_string(),
+            ]
+        })
+        .collect();
+    print_table(&["ID", "WORKFLOW", "STATUS", "TASK", "STARTED"], &rows);
+}
 
 #[allow(clippy::too_many_arguments)]
 async fn resolve_workflow_run_dispatch(
@@ -387,6 +409,10 @@ pub(crate) async fn handle_workflow(
                 }
             }
             let page = workflows.query(build_workflow_query(args)?).await?;
+            if !json {
+                print_workflow_list_table(&page.items);
+                return Ok(());
+            }
             print_value(page.items, json)
         }
         WorkflowCommand::Get(args) => {

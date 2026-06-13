@@ -9,7 +9,7 @@ use anyhow::{anyhow, Result};
 
 use anyhow::Context;
 
-use crate::shared::{canonicalize_cwd_in_project, print_ok, print_value};
+use crate::shared::{canonicalize_cwd_in_project, format_age, print_ok, print_table, print_value};
 use crate::{
     ChatCommand, ChatDeleteArgs, ChatExportArgs, ChatExportFormat, ChatGetArgs, ChatNewArgs, ChatRenameArgs,
     ChatSearchArgs, ChatSendArgs,
@@ -414,6 +414,27 @@ fn handle_chat_get(args: ChatGetArgs, project_root: &str, json: bool) -> Result<
 fn handle_chat_list(project_root: &str, json: bool) -> Result<()> {
     let store = FileConversationStore::for_project(Path::new(project_root))?;
     let summaries = store.list()?;
+    if !json {
+        if summaries.is_empty() {
+            println!("No chat conversations yet. Start one with: animus chat new");
+            return Ok(());
+        }
+        let rows: Vec<Vec<String>> = summaries
+            .iter()
+            .map(|s| {
+                vec![
+                    s.id.clone(),
+                    s.title.clone().unwrap_or_else(|| "--".to_string()),
+                    s.tool.clone().unwrap_or_else(|| "--".to_string()),
+                    s.model.clone().unwrap_or_else(|| "--".to_string()),
+                    s.message_count.to_string(),
+                    format_age(&s.updated_at),
+                ]
+            })
+            .collect();
+        print_table(&["ID", "TITLE", "TOOL", "MODEL", "MSGS", "UPDATED"], &rows);
+        return Ok(());
+    }
     print_value(summaries, json)
 }
 

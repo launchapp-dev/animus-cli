@@ -3,7 +3,7 @@ use crate::cli_types::{
     SkillRegistryAddArgs, SkillRegistryCommand, SkillRegistryRemoveArgs, SkillSearchArgs, SkillShowArgs,
     SkillUninstallArgs, SkillUpdateArgs,
 };
-use crate::{conflict_error, invalid_input_error, not_found_error, print_value, unavailable_error};
+use crate::{conflict_error, invalid_input_error, not_found_error, print_table, print_value, unavailable_error};
 use anyhow::{Context, Result};
 use orchestrator_config::skill_definition::{
     skill_definition_warnings, SkillActivation, SkillDefinition, SkillModelPreference, SkillPrompt,
@@ -13,8 +13,8 @@ use orchestrator_config::skill_scoping::{
     legacy_project_markdown_skills_dir, legacy_project_yaml_skills_dir, legacy_user_markdown_skills_dir,
     legacy_user_yaml_skills_dir, load_markdown_skill_file, load_skill_sources, markdown_skill_file_for_path,
     migrate_legacy_skills_from_ao, parse_skill_category_label, project_markdown_skills_dir, project_skills_dir,
-    user_markdown_skills_dir, user_skills_dir, validate_skill_slug, write_skill_yaml, MigrateFromAoOutcome,
-    SkillWriteOutcome, SkillWriteScope,
+    set_suppress_markdown_skill_parse_warnings, user_markdown_skills_dir, user_skills_dir, validate_skill_slug,
+    write_skill_yaml, MigrateFromAoOutcome, SkillWriteOutcome, SkillWriteScope,
 };
 use semver::Version;
 use sha2::{Digest, Sha256};
@@ -673,6 +673,14 @@ fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()
     let source_filter = args.source.as_deref().map(|s| s.trim().to_ascii_lowercase());
     let mut items: Vec<serde_json::Value> = Vec::new();
 
+    // Suppress per-file "could not parse markdown skill" warnings from
+    // foreign tool directories (~/.claude, ~/.codex, ~/.cursor) unless the
+    // operator explicitly asks for them. Skill list sweeps those dirs to
+    // surface adapter-shaped skills, so unrelated parse failures otherwise
+    // spam the default output.
+    set_suppress_markdown_skill_parse_warnings(!args.verbose);
+    let _restore_warnings = RestoreSkillParseWarnings;
+
     let skip_definitions = source_filter.as_deref() == Some("installed");
     if !skip_definitions {
         let sources = load_skill_sources(Path::new(project_root), None).unwrap_or_default();
@@ -724,7 +732,37 @@ fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()
         a_name.cmp(b_name)
     });
 
+    if !json {
+        if items.is_empty() {
+            println!("No skills found. Author one with: animus skill create --name <name> --description <text>");
+            return Ok(());
+        }
+        let rows: Vec<Vec<String>> = items
+            .iter()
+            .map(|item| {
+                let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("--").to_string();
+                let version = item.get("version").and_then(|v| v.as_str()).unwrap_or("--").to_string();
+                let source = item.get("source").and_then(|v| v.as_str()).unwrap_or("--").to_string();
+                let kind = item.get("type").and_then(|v| v.as_str()).unwrap_or("--").to_string();
+                vec![name, version, source, kind]
+            })
+            .collect();
+        print_table(&["NAME", "VERSION", "SOURCE", "TYPE"], &rows);
+        return Ok(());
+    }
+
     print_value(items, json)
+}
+
+/// RAII guard that re-enables markdown-skill parse warnings when the skill
+/// list scope exits, so the process-global suppression never leaks into
+/// subsequent operations (e.g. workflow validate) in long-lived hosts.
+struct RestoreSkillParseWarnings;
+
+impl Drop for RestoreSkillParseWarnings {
+    fn drop(&mut self) {
+        set_suppress_markdown_skill_parse_warnings(false);
+    }
 }
 
 fn resolve_update_targets(

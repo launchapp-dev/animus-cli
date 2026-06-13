@@ -143,6 +143,12 @@ pub(crate) struct SkillUninstallArgs {
 pub(crate) struct SkillListArgs {
     #[arg(long, help = "Filter by source: built-in, user, project, or installed.")]
     pub(crate) source: Option<String>,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Surface per-file warnings for unparseable markdown skills in foreign tool directories."
+    )]
+    pub(crate) verbose: bool,
 }
 
 #[derive(Debug, Args)]
