@@ -126,26 +126,93 @@ fn active_agent_assignment_uses_unknown_task_title_when_task_is_missing() {
 }
 
 #[test]
-fn task_summary_uses_done_status_from_by_status() {
-    let mut by_status = HashMap::new();
-    by_status.insert("done".to_string(), 2);
-    by_status.insert("cancelled".to_string(), 4);
-    let summary = build_task_summary_slice(
-        Some(&TaskStatistics {
-            total: 10,
-            by_status,
-            by_priority: HashMap::new(),
-            by_type: HashMap::new(),
-            in_progress: 3,
-            blocked: 1,
-            completed: 6,
-        }),
-        None,
-        None,
-    );
+fn task_summary_from_router_aggregates_normalized_statuses() {
+    let subjects = vec![
+        serde_json::json!({ "id": "task:T-1", "status": "ready" }),
+        serde_json::json!({ "id": "task:T-2", "status": "in_progress" }),
+        serde_json::json!({ "id": "task:T-3", "status": "in-progress" }),
+        serde_json::json!({ "id": "task:T-4", "status": "done" }),
+        serde_json::json!({ "id": "task:T-5", "status": "completed" }),
+        serde_json::json!({ "id": "task:T-6", "status": "blocked" }),
+        serde_json::json!({ "id": "task:T-7", "status": "ready", "paused": true }),
+        serde_json::json!({ "id": "task:T-8", "status": "on_hold" }),
+        serde_json::json!({ "id": "task:T-9", "status": "ready", "blocked_reason": "workflow paused" }),
+    ];
+    let summary = build_task_summary_slice_from_router(Some(&subjects), None);
+    assert!(summary.available);
+    assert_eq!(summary.total, 9);
+    assert_eq!(summary.ready, 3);
+    assert_eq!(summary.in_progress, 2);
     assert_eq!(summary.done, 2);
-    assert_eq!(summary.in_progress, 3);
-    assert_eq!(summary.blocked, 1);
+    // T-6 (blocked) + T-7 (paused flag) + T-8 (on-hold status) + T-9
+    // (workflow-pause annotation on a non-blocked status) all count blocked.
+    assert_eq!(summary.blocked, 4);
+}
+
+#[test]
+fn task_summary_unavailable_when_router_unreachable_never_reports_zero_as_truth() {
+    let summary = build_task_summary_slice_from_router(None, Some("router down".to_string()));
+    assert!(!summary.available);
+    assert_eq!(summary.total, 0);
+    assert_eq!(summary.error.as_deref(), Some("router down"));
+}
+
+#[test]
+fn blocked_subjects_slice_lists_blocked_and_paused() {
+    let subjects = vec![
+        serde_json::json!({ "id": "task:T-1", "status": "ready" }),
+        serde_json::json!({
+            "id": "task:T-2",
+            "status": "blocked",
+            "blocked_reason": "dep gate",
+            "blocked_by": "wf-9"
+        }),
+        serde_json::json!({ "id": "task:T-3", "status": "ready", "paused": true }),
+        serde_json::json!({ "id": "task:T-4", "status": "on-hold" }),
+        serde_json::json!({
+            "id": "task:T-5",
+            "status": "ready",
+            "blocked_reason": "workflow paused",
+            "blocked_by": "wf-77"
+        }),
+    ];
+    let slice = build_blocked_subjects_slice(Some(&subjects), None);
+    assert!(slice.available);
+    assert_eq!(slice.count, 4);
+    let blocked = slice.entries.iter().find(|e| e.id == "task:T-2").expect("blocked entry");
+    assert_eq!(blocked.state, "blocked");
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("dep gate"));
+    assert_eq!(blocked.blocked_by.as_deref(), Some("wf-9"));
+    let paused = slice.entries.iter().find(|e| e.id == "task:T-3").expect("paused entry");
+    assert_eq!(paused.state, "paused");
+    let on_hold = slice.entries.iter().find(|e| e.id == "task:T-4").expect("on-hold entry");
+    assert_eq!(on_hold.state, "blocked");
+    // Workflow-pause annotation on a non-blocked, non-paused subject still
+    // surfaces (state falls back to "paused" since status isn't blocked).
+    let annotated = slice.entries.iter().find(|e| e.id == "task:T-5").expect("annotated entry");
+    assert_eq!(annotated.state, "paused");
+    assert_eq!(annotated.blocked_by.as_deref(), Some("wf-77"));
+}
+
+#[test]
+fn extract_subject_list_handles_envelope_shapes() {
+    let bare = serde_json::json!([{ "id": "a" }, { "id": "b" }]);
+    assert_eq!(extract_subject_list(&bare).len(), 2);
+    let wrapped = serde_json::json!({ "items": [{ "id": "a" }] });
+    assert_eq!(extract_subject_list(&wrapped).len(), 1);
+    let tasks = serde_json::json!({ "tasks": [{ "id": "a" }, { "id": "b" }, { "id": "c" }] });
+    assert_eq!(extract_subject_list(&tasks).len(), 3);
+    let empty = serde_json::json!({ "unrelated": 1 });
+    assert!(extract_subject_list(&empty).is_empty());
+}
+
+#[test]
+fn extract_next_cursor_treats_empty_and_null_as_final_page() {
+    assert_eq!(extract_next_cursor(&serde_json::json!({ "next_cursor": "abc" })), Some(serde_json::json!("abc")));
+    assert!(extract_next_cursor(&serde_json::json!({ "next_cursor": null })).is_none());
+    assert!(extract_next_cursor(&serde_json::json!({ "next_cursor": "   " })).is_none());
+    assert!(extract_next_cursor(&serde_json::json!({ "subjects": [] })).is_none());
+    assert!(extract_next_cursor(&serde_json::json!([{ "id": "a" }])).is_none());
 }
 
 #[test]
@@ -261,6 +328,8 @@ fn render_status_dashboard_uses_required_section_order() {
             blocked: 0,
             error: None,
         },
+        blocked_subjects: BlockedSubjectsSlice { available: true, count: 0, entries: Vec::new(), error: None },
+        needs_you: NeedsYouSlice { available: true, count: 0, entries: Vec::new(), error: None },
         recent_completions: RecentCompletionsSlice { available: true, entries: Vec::new(), error: None },
         recent_failures: RecentFailuresSlice { available: true, entries: Vec::new(), error: None },
         ci: CiStatusSlice {
@@ -284,15 +353,24 @@ fn render_status_dashboard_uses_required_section_order() {
     let daemon_idx = output.find("Daemon").expect("daemon section should exist");
     let agents_idx = output.find("Active Agents").expect("active agents section should exist");
     let summary_idx = output.find("Task Summary").expect("task summary section should exist");
+    let blocked_idx = output.find("Blocked / Paused").expect("blocked/paused section should exist");
+    let needs_you_idx = output.find("Needs You").expect("needs you section should exist");
     let completions_idx = output.find("Recent Completions").expect("recent completions section should exist");
     let failures_idx = output.find("Recent Failures").expect("recent failures section should exist");
     let ci_idx = output.find("CI Status").expect("ci section should exist");
 
     assert!(daemon_idx < agents_idx);
     assert!(agents_idx < summary_idx);
-    assert!(summary_idx < completions_idx);
+    assert!(summary_idx < blocked_idx);
+    assert!(blocked_idx < needs_you_idx);
+    assert!(needs_you_idx < completions_idx);
     assert!(completions_idx < failures_idx);
     assert!(failures_idx < ci_idx);
+
+    // The deprecated runner fields must not appear in the human dashboard.
+    assert!(!output.contains("runner_connected"), "human dashboard must not render runner_connected");
+    assert!(!output.contains("runner_pid"), "human dashboard must not render runner_pid");
+    assert!(output.contains("provider_plugins_healthy"), "human dashboard renders provider_plugins_healthy");
 }
 
 mod cache_tests {
