@@ -20,6 +20,11 @@ pub(crate) enum PluginCommand {
     /// Remove a previously installed plugin from ~/.animus/plugins/ (override
     /// with --plugin-dir or $ANIMUS_PLUGIN_DIR) and ~/.animus/plugins.yaml.
     Uninstall(PluginUninstallArgs),
+    /// Remove plugins.yaml entries whose binaries are gone.
+    #[command(long_about = "Remove stale plugins.yaml entries — registry keys whose binary was \
+        deleted out of band. Scans the global registry and the project-local one. \
+        Without --yes the stale set is previewed; --yes removes the entries.")]
+    Prune(PluginPruneArgs),
     /// Scaffold a new plugin project from the launchapp-dev/animus-plugin-template scaffold.
     New(PluginNewArgs),
     /// Emit a minimal, offline starter Cargo project for a new plugin kind.
@@ -47,50 +52,45 @@ pub(crate) enum PluginCommand {
     /// (claude, codex, gemini, opencode, oai). Skips plugins that are already
     /// installed. Optional flags pull in additional default plugins.
     InstallDefaults(PluginInstallDefaultsArgs),
-    /// Inspect and verify the plugin lockfile (`.animus/plugins.lock`).
-    /// The lockfile records sha256 + version for every installed plugin so an
-    /// `install --force` or tampered-binary scenario is visible to operators.
-    #[command(subcommand)]
+    /// Inspect and verify the plugin lockfile.
+    #[command(
+        subcommand,
+        long_about = "Inspect and verify the plugin lockfile. The lockfile records a sha256 + \
+            version for every installed plugin so a forced reinstall or tampered binary is visible."
+    )]
     Lock(PluginLockCommand),
-    /// Per-role view of installed plugins. Shows every preflight role with its
-    /// installed plugins (by installed_kind + native_kind) and flags duplicates
-    /// so collisions are visible without spelunking through the lockfile.
+    /// Per-role view of installed plugins, flagging duplicate roles.
+    #[command(long_about = "Per-role view of installed plugins. Shows every preflight role with \
+        its installed plugins and flags duplicates so collisions are visible.")]
     Doctor(PluginDoctorArgs),
-    /// Rename an installed plugin's `installed_kind` after install. Reuses the
-    /// same collision check + auto-increment + invalid-character validation
-    /// the install pipeline applies for `--as-kind`. Operates on the lockfile
-    /// entry keyed by `<PLUGIN_NAME>`; the on-disk binary and manifest's
-    /// `native_kind` are untouched. Only the user-facing `installed_kind` —
-    /// the prefix the SubjectRouter dispatches against — changes.
+    /// Rename an installed plugin's dispatch kind.
+    #[command(long_about = "Rename an installed plugin's user-facing kind after install. Reuses \
+        the install pipeline's collision check, auto-increment, and validation. The on-disk binary \
+        is untouched; only the dispatch kind changes.")]
     Rename(PluginRenameArgs),
-    /// Per-plugin runtime status (pid, state, last RPC, restart count, last
-    /// error). Answers "why does this plugin feel stuck?" by surfacing the
-    /// supervisor's restart counter for every discovered plugin. As of
-    /// v0.5.8 only provider plugin runtimes report live pid/last_rpc/restart
-    /// fields; other kinds (subject_backend, trigger, log_storage,
-    /// transport, queue, workflow_runner) appear as `discovered` until their
-    /// spawners are wired through the same status registry. See
-    /// TODO(codex-p2) markers in `daemon/run_daemon.rs`.
+    /// Per-plugin runtime status (pid, state, last RPC, restarts).
+    #[command(long_about = "Per-plugin runtime status: pid, state, last RPC, restart count, and \
+        last error. Answers \"why does this plugin feel stuck?\". Provider runtimes report live \
+        fields; other kinds appear as `discovered`.")]
     Status(PluginStatusArgs),
-    /// Inspect or wipe the on-disk plugin manifest cache. The cache stores
-    /// serialized `--manifest` responses keyed by binary sha256 under
-    /// `~/.animus/cache/manifests/<sha>.json` and is the reason
-    /// `animus daemon status` returns in ~50ms instead of ~3s on a 30-plugin
-    /// install. Use `clear` to wipe after a manual binary swap that didn't
-    /// rewrite the lockfile, or `list` to debug cache contents.
-    #[command(subcommand)]
+    /// Inspect or wipe the on-disk plugin manifest cache.
+    #[command(
+        subcommand,
+        long_about = "Inspect or wipe the on-disk plugin manifest cache. The cache stores manifest \
+            responses keyed by binary sha256, keeping plugin discovery fast on large installs. Use \
+            `clear` after a manual binary swap, or `list` to debug cache contents."
+    )]
     Cache(PluginCacheCommand),
-    /// Per-project plugin scope (`.animus/plugin-scope.yaml`). Lets a
-    /// project opt into a subset of the globally installed plugin set so
-    /// discovery, preflight, and the plugin-status registry iterate just
-    /// the project's relevant plugins instead of every binary in
-    /// `~/.animus/plugins/`.
-    #[command(subcommand)]
+    /// Per-project plugin scope (opt into a subset of installed plugins).
+    #[command(
+        subcommand,
+        long_about = "Per-project plugin scope. Lets a project opt into a subset of the globally \
+            installed plugins so discovery, preflight, and status iterate just the relevant plugins."
+    )]
     Scope(PluginScopeCommand),
-    /// Inspect the trust-on-first-use (TOFU) org allowlist
-    /// (`~/.animus/trusted-orgs.yaml`). Shows currently-trusted orgs and
-    /// revoked tombstones with their `trusted_at` / `revoked_at` timestamps
-    /// and how each grant was decided.
+    /// Inspect the trust-on-first-use (TOFU) org allowlist.
+    #[command(long_about = "Inspect the trust-on-first-use (TOFU) org allowlist. Shows currently \
+        trusted orgs and revoked tombstones with their timestamps and how each grant was decided.")]
     #[command(subcommand)]
     Trust(PluginTrustCommand),
     /// Revoke trust for a GitHub org so future installs from it re-prompt.
@@ -587,6 +587,17 @@ pub(crate) struct PluginInstallArgs {
     /// queue, or trigger plugin is an error.
     #[arg(long = "as-kind", value_name = "KIND")]
     pub(crate) as_kind: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PluginPruneArgs {
+    /// Remove the stale entries. Without this flag the command previews the
+    /// stale set and writes nothing.
+    #[arg(long, default_value_t = false)]
+    pub(crate) yes: bool,
+    /// Emit the result envelope as JSON instead of human-readable text.
+    #[arg(long, default_value_t = false)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Args)]

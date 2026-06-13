@@ -283,7 +283,9 @@ pub(crate) async fn run_plugin_browse(req: PluginBrowseRequest) -> Result<Plugin
                 continue;
             }
         }
-        let installed_entry = installed.get(&entry.name);
+        // Reconciled view: a registry entry whose binary is gone does not count
+        // as installed. This keeps `browse --installed` aligned with `list`.
+        let installed_entry = installed.get(&entry.name).filter(|e| e.is_present());
         let is_installed = installed_entry.is_some();
         if req.installed && !is_installed {
             continue;
@@ -504,15 +506,25 @@ fn build_update_plan(
     };
 
     if let PluginUpdateSelector::Name(name) = selector {
-        if installed.get(name).is_none() {
-            return Err(invalid_input_error(format!("plugin '{name}' is not installed")));
+        match installed.get(name) {
+            None => return Err(invalid_input_error(format!("plugin '{name}' is not installed"))),
+            Some(entry) if !entry.is_present() => {
+                return Err(invalid_input_error(format!(
+                    "plugin '{name}' has a stale registry entry (binary missing); run `animus plugin prune` to clear it"
+                )));
+            }
+            Some(_) => {}
         }
     }
 
     let mut plans: Vec<UpdatePlan> = Vec::new();
     let entries: Vec<&InstalledPlugin> = match selector {
         PluginUpdateSelector::Name(n) => vec![installed.get(n).expect("checked above")],
-        PluginUpdateSelector::All | PluginUpdateSelector::Kind(_) => installed.values().collect(),
+        // Reconciled view: `--all` / `--kind` only act on plugins whose binary
+        // is still present. Stale registry entries are cleared via `prune`.
+        PluginUpdateSelector::All | PluginUpdateSelector::Kind(_) => {
+            installed.values().filter(|e| e.is_present()).collect()
+        }
     };
 
     for installed_entry in entries {
@@ -1039,6 +1051,16 @@ fn tag_is_behind(installed: &str, target: &str) -> bool {
 }
 
 /// Decide a drift status from the installed tag and the known reference tags.
+///
+/// The recommended pin (from `default-install.json`) is the authoritative
+/// reference: it is the version Animus intends operators to run. The registry's
+/// `latest_tag` is advisory only — its index frequently lags behind the pins,
+/// so it never on its own marks a plugin "outdated".
+///
+/// - behind the recommended pin -> `outdated`
+/// - at or ahead of the recommended pin, but ahead of the registry's latest ->
+///   `current` with a "newer than registry (registry index may be stale)" note
+/// - otherwise -> `current`
 fn outdated_status(
     installed_tag: Option<&str>,
     recommended_tag: Option<&str>,
@@ -1047,18 +1069,28 @@ fn outdated_status(
     let Some(installed) = installed_tag else {
         return ("unknown", Some("installed release tag unknown".to_string()));
     };
-    let targets: Vec<&str> = [recommended_tag, latest_tag].into_iter().flatten().collect();
-    if targets.is_empty() {
-        return ("unknown", Some("no recommended pin and no registry entry".to_string()));
+
+    // The recommended pin is authoritative when present.
+    if let Some(recommended) = recommended_tag {
+        if tag_is_behind(installed, recommended) {
+            return ("outdated", None);
+        }
+        // At or ahead of the pin. Note the case where the registry index has
+        // not yet caught up, but never let a stale registry mark us outdated.
+        if let Some(latest) = latest_tag {
+            if matches!(compare_tags(installed, latest), Some(std::cmp::Ordering::Greater)) {
+                return ("current", Some("newer than registry (registry index may be stale)".to_string()));
+            }
+        }
+        return ("current", None);
     }
-    if targets.iter().any(|t| tag_is_behind(installed, t)) {
-        return ("outdated", None);
+
+    // No recommended pin: fall back to the registry's latest, if any.
+    match latest_tag {
+        Some(latest) if tag_is_behind(installed, latest) => ("outdated", None),
+        Some(_) => ("current", None),
+        None => ("unknown", Some("no recommended pin and no registry entry".to_string())),
     }
-    let all_ahead = targets.iter().all(|t| matches!(compare_tags(installed, t), Some(std::cmp::Ordering::Greater)));
-    if all_ahead {
-        return ("ahead", Some("ahead of every known reference".to_string()));
-    }
-    ("current", None)
 }
 
 /// Pure drift computation: compare every installed plugin against the
@@ -1071,6 +1103,12 @@ fn build_outdated_rows(
 ) -> Vec<PluginOutdatedRow> {
     let mut rows: Vec<PluginOutdatedRow> = Vec::with_capacity(installed.len());
     for entry in installed.values() {
+        // Reconciled view: a registry entry whose binary was deleted out of
+        // band is stale, not installed. Skip it so `outdated` enumerates the
+        // same set `list` shows. `animus plugin prune` clears such entries.
+        if !entry.is_present() {
+            continue;
+        }
         let source_kind = entry.source_kind.as_deref().unwrap_or("");
         if source_kind != "release" {
             let note = if source_kind.is_empty() {
@@ -1217,6 +1255,35 @@ pub(crate) struct InstalledPlugin {
     pub(crate) installed_at: Option<String>,
     pub(crate) binary: Option<String>,
     pub(crate) kind: Option<String>,
+    /// Whether the recorded `binary` path still resolves to a file on disk.
+    /// A `plugins.yaml` entry whose binary was deleted out of band is a stale
+    /// entry: it should not count as installed for `list`, `browse`,
+    /// `outdated`, or `update`. Defaults to `true` when no binary path is
+    /// recorded so older entries are not silently dropped.
+    #[serde(default)]
+    pub(crate) binary_present: bool,
+}
+
+impl InstalledPlugin {
+    /// A plugin is effectively installed only while its recorded binary still
+    /// exists on disk. The single reconciliation predicate every installed-state
+    /// command (`list`, `browse --installed`, `outdated`, `update`) shares.
+    pub(crate) fn is_present(&self) -> bool {
+        self.binary_present
+    }
+}
+
+/// Compute on-disk presence for a recorded `binary` path. Uses the same
+/// resolution discovery applies (`~/` expansion, absolute/relative paths, and
+/// `$PATH` lookup for bare command names) so this view never disagrees with
+/// what the daemon would actually load. An entry with no recorded binary is
+/// treated as present (it predates binary tracking and we must not silently
+/// drop it from the reconciled view).
+fn binary_path_present(binary: Option<&str>) -> bool {
+    match binary {
+        Some(path) if !path.trim().is_empty() => orchestrator_plugin_host::resolve_configured_binary(path).is_some(),
+        _ => true,
+    }
 }
 
 /// Load the installed-plugin registry as a `name → InstalledPlugin` map.
@@ -1279,6 +1346,7 @@ fn parse_installed_entry(name: &str, value: &serde_yaml::Value, kind: Option<Str
             }
         }
     }
+    entry.binary_present = binary_path_present(entry.binary.as_deref());
     entry
 }
 
@@ -1848,6 +1916,8 @@ mod tests {
             source_kind: Some("release".to_string()),
             origin: Some(format!("{slug}@{tag}")),
             release_tag: Some(tag.to_string()),
+            // No binary recorded → treated as present by the reconciled view.
+            binary_present: true,
             ..Default::default()
         }
     }
@@ -1909,6 +1979,7 @@ mod tests {
                 source_kind: Some("path".to_string()),
                 origin: None,
                 release_tag: None,
+                binary_present: true,
                 ..Default::default()
             },
         );
@@ -2101,19 +2172,23 @@ mod tests {
 
     #[test]
     fn outdated_status_classifies_drift() {
-        // Behind the recommended pin.
+        // Behind the recommended pin → outdated (the pin is authoritative).
         assert_eq!(outdated_status(Some("v0.1.0"), Some("v0.2.0"), None).0, "outdated");
-        // Behind the registry latest even when matching the pin.
-        assert_eq!(outdated_status(Some("v0.2.0"), Some("v0.2.0"), Some("v0.3.0")).0, "outdated");
+        // At the pin but the registry latest is newer → still current. A
+        // stale/lagging registry never marks a pinned install outdated.
+        assert_eq!(outdated_status(Some("v0.2.0"), Some("v0.2.0"), Some("v0.3.0")).0, "current");
         // Current against both references.
         assert_eq!(outdated_status(Some("v0.2.0"), Some("v0.2.0"), Some("v0.2.0")).0, "current");
-        // Ahead of every known reference.
-        assert_eq!(outdated_status(Some("v0.9.0"), Some("v0.2.0"), Some("v0.3.0")).0, "ahead");
+        // Ahead of the pin AND ahead of the registry latest → current, with a
+        // "newer than registry" note (no "ahead of every known reference").
+        let (status, note) = outdated_status(Some("v0.9.0"), Some("v0.2.0"), Some("v0.3.0"));
+        assert_eq!(status, "current");
+        assert_eq!(note.as_deref(), Some("newer than registry (registry index may be stale)"));
         // No references at all.
         assert_eq!(outdated_status(Some("v0.1.0"), None, None).0, "unknown");
         // Installed tag missing.
         assert_eq!(outdated_status(None, Some("v0.2.0"), None).0, "unknown");
-        // Non-semver mismatch counts as drift.
+        // Non-semver mismatch against the pin counts as drift.
         assert_eq!(outdated_status(Some("nightly-1"), Some("nightly-2"), None).0, "outdated");
     }
 
@@ -2131,7 +2206,9 @@ mod tests {
         assert_eq!(claude.latest_tag, None, "latest must be unknown offline");
 
         assert_eq!(by_name("animus-provider-codex").status, "current");
-        assert_eq!(by_name("animus-subject-default").status, "ahead");
+        // Ahead of the pin with no registry reference → current (the pin is the
+        // authoritative reference; being newer than it is not drift).
+        assert_eq!(by_name("animus-subject-default").status, "current");
         assert_eq!(by_name("animus-trigger-webhook").status, "unknown");
         let local = by_name("my-local-plugin");
         assert_eq!(local.status, "local");
@@ -2165,8 +2242,10 @@ mod tests {
         };
         let rows = build_outdated_rows(&installed, &pins, Some(&registry), "global");
         assert_eq!(rows.len(), 1);
-        // Matches the pin (v0.2.2) but the registry has v0.5.0 → outdated.
-        assert_eq!(rows[0].status, "outdated");
+        // Matches the pin (v0.2.2); the registry advertises a newer v0.5.0, but
+        // the recommended pin is authoritative so this stays current. The
+        // registry latest is still surfaced for operator visibility.
+        assert_eq!(rows[0].status, "current");
         assert_eq!(rows[0].latest_tag.as_deref(), Some("v0.5.0"));
         assert_eq!(rows[0].recommended_tag.as_deref(), Some("v0.2.2"));
     }

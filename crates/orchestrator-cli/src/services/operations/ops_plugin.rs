@@ -40,7 +40,7 @@ use sha2::{Digest, Sha256};
 use crate::{
     invalid_input_error, not_found_error, print_value, unavailable_error, PluginCallArgs, PluginCommand,
     PluginDoctorArgs, PluginInfoArgs, PluginInstallArgs, PluginInstallDefaultsArgs, PluginListArgs, PluginLockCommand,
-    PluginLockListArgs, PluginLockVerifyArgs, PluginPingArgs, PluginRenameArgs, PluginRevokeTrustArgs,
+    PluginLockListArgs, PluginLockVerifyArgs, PluginPingArgs, PluginPruneArgs, PluginRenameArgs, PluginRevokeTrustArgs,
     PluginScaffoldCommand, PluginScopeCommand, PluginTrustCommand, PluginTrustListArgs, PluginUninstallArgs,
 };
 
@@ -184,6 +184,22 @@ pub(crate) struct PluginUninstallOutput {
     pub(crate) scope: &'static str,
 }
 
+#[derive(Debug, Serialize)]
+pub(crate) struct PluginPruneOutput {
+    /// `name` + `scope` (`global`/`project`) for each stale entry handled.
+    pub(crate) stale: Vec<PluginPruneEntry>,
+    /// `true` when the entries were actually removed; `false` for a dry-run
+    /// preview (no `--yes`).
+    pub(crate) pruned: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct PluginPruneEntry {
+    pub(crate) name: String,
+    pub(crate) scope: &'static str,
+    pub(crate) plugins_yaml: String,
+}
+
 // ===== Typed request structs (shared between CLI and MCP) =====
 
 /// Typed request for `plugin list`. Both CLI and MCP build one of these and
@@ -325,6 +341,7 @@ pub(crate) async fn handle_plugin(command: PluginCommand, project_root: &str, js
         // path is intentionally direct.
         PluginCommand::Install(args) => handle_plugin_install(args, project_root, json).await,
         PluginCommand::Uninstall(args) => handle_plugin_uninstall(args, project_root, json),
+        PluginCommand::Prune(args) => handle_plugin_prune(args, project_root, json),
         PluginCommand::New(args) => new::handle_plugin_new(args, json),
         PluginCommand::Scaffold(cmd) => match cmd {
             PluginScaffoldCommand::Trigger(mut args) => {
@@ -1188,6 +1205,199 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
         plugins_yaml: yaml_path.to_string_lossy().to_string(),
         scope: scope_paths.scope,
     })
+}
+
+/// Whether a `plugins.yaml` entry's binary still resolves on disk, using the
+/// same resolution discovery applies (`~/` expansion, path resolution, `$PATH`
+/// lookup). The entry's recorded `binary:` field is authoritative when present;
+/// otherwise the conventional `<install_dir>/<name>` is checked.
+fn entry_binary_resolves(entry: &serde_yaml::Value, name: &str, install_dir: &Path) -> bool {
+    if let Some(binary) = entry
+        .as_mapping()
+        .and_then(|m| m.get(serde_yaml::Value::String("binary".to_string())).and_then(serde_yaml::Value::as_str))
+    {
+        let trimmed = binary.trim();
+        if !trimmed.is_empty() {
+            return orchestrator_plugin_host::resolve_configured_binary(trimmed).is_some();
+        }
+    }
+    install_dir.join(name).is_file()
+}
+
+/// Collect the names of `plugins.yaml` entries whose binary is gone for one
+/// registry scope, removing them from `config` when `apply` is set.
+fn collect_stale_entries(
+    config: &mut PluginsYamlConfig,
+    install_dir: &Path,
+    scope: &'static str,
+    yaml_path: &Path,
+    apply: bool,
+    out: &mut Vec<PluginPruneEntry>,
+) -> bool {
+    let mut removed_any = false;
+    for table in [&mut config.plugins, &mut config.providers] {
+        let stale_keys: Vec<serde_yaml::Value> = table
+            .iter()
+            .filter_map(|(key, value)| {
+                let name = key.as_str()?;
+                if entry_binary_resolves(value, name, install_dir) {
+                    None
+                } else {
+                    Some(key.clone())
+                }
+            })
+            .collect();
+        for key in stale_keys {
+            if let Some(name) = key.as_str() {
+                out.push(PluginPruneEntry {
+                    name: name.to_string(),
+                    scope,
+                    plugins_yaml: yaml_path.to_string_lossy().to_string(),
+                });
+            }
+            if apply {
+                table.remove(&key);
+                removed_any = true;
+            }
+        }
+    }
+    removed_any
+}
+
+/// Resolve the global `plugins.yaml` path WITHOUT side effects. Unlike
+/// [`plugins_yaml_path`], this never creates the config dir or migrates the
+/// legacy registry — a read-only preview (`prune` without `--yes`) must write
+/// nothing. Prefers the canonical path when it exists, else the legacy one,
+/// else the canonical path as the nominal location for an empty scan.
+fn plugins_yaml_path_readonly() -> PathBuf {
+    let canonical = plugins_registry_path();
+    if canonical.exists() {
+        return canonical;
+    }
+    let legacy = legacy_plugins_registry_path();
+    if legacy.exists() {
+        return legacy;
+    }
+    canonical
+}
+
+/// Remove the supplied names from the lockfile at `lock_path` so a pruned
+/// stale entry does not linger as a `missing_binary` record in `lock verify`.
+/// Best-effort: a missing/unparseable lockfile is ignored.
+fn prune_lock_entries(lock_path: &Path, names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+    if let Ok(mut lockfile) = PluginLockfile::load_or_empty(lock_path) {
+        let mut changed = false;
+        for name in names {
+            if lockfile.remove(name).is_some() {
+                changed = true;
+            }
+        }
+        if changed {
+            if let Err(err) = lockfile.save() {
+                tracing::warn!(path = %lockfile.path().display(), %err, "failed to persist lockfile after prune");
+            }
+        }
+    }
+}
+
+/// Remove `plugins.yaml` entries whose binaries are gone (stale registry
+/// entries left behind by an out-of-band binary deletion). Scans both the
+/// global registry and — when a project root resolves — the project-local one.
+/// With `apply = false` it previews the stale set without writing. When
+/// applying, matching lockfile records are removed too so `lock verify` stays
+/// consistent with the pruned registry (parity with `uninstall`).
+///
+// TODO(codex-p2): the lockfile cleanup here keys off the registry entry name
+// for the single-binary common case. Two uninstall behaviors are not yet
+// mirrored: (1) a plugins.yaml entry that registered MULTIPLE lock binaries
+// only has its name-matched lock record pruned; (2) pruning a project entry
+// does not re-copy a shadowed same-named GLOBAL lock entry's alias/integrity
+// metadata back into the project lockfile. Both require the full uninstall
+// mirror/shadow algorithm and are out of scope for stale-entry pruning.
+pub(crate) fn run_plugin_prune(project_root: Option<&str>, apply: bool) -> Result<PluginPruneOutput> {
+    let mut stale: Vec<PluginPruneEntry> = Vec::new();
+    let project_root_pb = project_root.map(str::trim).filter(|r| !r.is_empty()).map(Path::new);
+
+    let global_yaml = if apply { plugins_yaml_path()? } else { plugins_yaml_path_readonly() };
+    let mut global_config = load_plugins_yaml(&global_yaml)?;
+    let before = stale.len();
+    let global_removed =
+        collect_stale_entries(&mut global_config, &plugin_install_dir(), "global", &global_yaml, apply, &mut stale);
+    if apply && global_removed {
+        save_plugins_yaml(&global_yaml, &global_config)?;
+        // Global registry entries map to global lockfile records. Prune the
+        // global lockfile, and the default-path lockfile only when it IS the
+        // global one (no project root) — inside a project `default_path`
+        // resolves to the PROJECT lockfile, whose same-named entry belongs to a
+        // project-scoped install and must not be touched by a global prune.
+        let names: Vec<String> = stale[before..].iter().map(|e| e.name.clone()).collect();
+        let global_lock_path = global_lockfile_path();
+        prune_lock_entries(&global_lock_path, &names);
+        let default_lock_path = PluginLockfile::default_path(project_root_pb);
+        if default_lock_path == global_lock_path {
+            prune_lock_entries(&default_lock_path, &names);
+        }
+    }
+
+    if let Some(root) = project_root_pb {
+        let project_yaml = project_plugins_registry_path(root);
+        if project_yaml.exists() {
+            let mut project_config = load_plugins_yaml(&project_yaml)?;
+            let before = stale.len();
+            let project_removed = collect_stale_entries(
+                &mut project_config,
+                &project_plugin_install_dir(root),
+                "project",
+                &project_yaml,
+                apply,
+                &mut stale,
+            );
+            if apply && project_removed {
+                save_plugins_yaml(&project_yaml, &project_config)?;
+                let names: Vec<String> = stale[before..].iter().map(|e| e.name.clone()).collect();
+                prune_lock_entries(&PluginLockfile::default_path(Some(root)), &names);
+            }
+        }
+    }
+
+    let pruned = apply && !stale.is_empty();
+    Ok(PluginPruneOutput { stale, pruned })
+}
+
+fn handle_plugin_prune(args: PluginPruneArgs, project_root: &str, json: bool) -> Result<()> {
+    let want_json = json || args.json;
+    let output = run_plugin_prune(Some(project_root), args.yes)?;
+    if want_json {
+        return print_value(output, true);
+    }
+    if output.stale.is_empty() {
+        println!("no stale plugins.yaml entries found");
+        return Ok(());
+    }
+    if output.pruned {
+        println!("pruned {} stale plugins.yaml entr{}:", output.stale.len(), plural_y(output.stale.len()));
+    } else {
+        println!(
+            "{} stale plugins.yaml entr{} (run `animus plugin prune --yes` to remove):",
+            output.stale.len(),
+            plural_y(output.stale.len())
+        );
+    }
+    for entry in &output.stale {
+        println!("  {} ({})", entry.name, entry.scope);
+    }
+    Ok(())
+}
+
+fn plural_y(count: usize) -> &'static str {
+    if count == 1 {
+        "y"
+    } else {
+        "ies"
+    }
 }
 
 /// Load the plugin lockfile for `project_root`, refusing the install when the
@@ -2571,14 +2781,71 @@ fn plugin_list_warning_lines(warnings: &[PluginWarningRow], verbose: bool) -> Ve
         ));
     }
     if stale_config > 0 {
-        let noun = if stale_config == 1 { "binary" } else { "binaries" };
+        let noun = if stale_config == 1 { "entry" } else { "entries" };
         lines.push(format!(
-            "warning: {stale_config} configured plugin {noun} not found \
-             (stale plugins.yaml entries); run `animus plugin uninstall <name>` to prune, \
-             or `animus doctor --check plugins` / `animus plugin list --verbose` for detail",
+            "warning: {stale_config} stale plugins.yaml {noun} (binary missing); run `animus plugin prune`",
         ));
     }
     lines
+}
+
+/// Normalize a recorded `installed_at` timestamp to a single `YYYY-MM-DD HH:MM`
+/// form. `plugins.yaml` carries two historical shapes — RFC3339 (`2026-05-30T20:25:20...`)
+/// and a space-separated chrono debug form (`2026-05-29 17:32:43.172858+00:00`).
+/// Both reduce to date + minutes so the INSTALLED column reads uniformly.
+fn normalize_installed_at(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "--".to_string();
+    }
+    // Split the date from the time on either `T` or a space.
+    let (date, rest) = match trimmed.split_once(['T', ' ']) {
+        Some((d, r)) => (d, r),
+        None => return trimmed.to_string(),
+    };
+    // Keep only HH:MM from the time component (drop seconds, fractions, zone).
+    let time = rest.split([':', '.', '+', 'Z']).take(2).collect::<Vec<_>>();
+    let hh = time.first().copied().unwrap_or("");
+    let mm = time.get(1).copied().unwrap_or("");
+    if hh.is_empty() {
+        date.to_string()
+    } else if mm.is_empty() {
+        format!("{date} {hh}")
+    } else {
+        format!("{date} {hh}:{mm}")
+    }
+}
+
+/// Compute the VERSION cell for `plugin list`. The recorded lockfile/registry
+/// `release_tag` is authoritative; the binary's manifest version is advisory.
+/// When the two disagree, surface a `(binary <v>)` mismatch hint so operators
+/// see the divergence instead of a single misleading number.
+fn list_version_cell(recorded_tag: Option<&str>, manifest_version: &str) -> String {
+    let tag = recorded_tag.map(str::trim).filter(|t| !t.is_empty());
+    let manifest = manifest_version.trim();
+    match tag {
+        Some(tag) => {
+            if manifest.is_empty() || tags_describe_same_version(tag, manifest) {
+                tag.to_string()
+            } else {
+                format!("{tag} (binary {manifest})")
+            }
+        }
+        None => {
+            if manifest.is_empty() {
+                "--".to_string()
+            } else {
+                manifest.to_string()
+            }
+        }
+    }
+}
+
+/// True when a `vX.Y.Z` release tag and a bare `X.Y.Z` manifest version name the
+/// same release (tolerates the conventional leading `v` on tags).
+fn tags_describe_same_version(tag: &str, manifest: &str) -> bool {
+    let strip = |s: &str| s.trim().trim_start_matches('v').to_string();
+    strip(tag) == strip(manifest)
 }
 
 /// Render `plugin list` results as a table with source-of-truth columns:
@@ -2614,12 +2881,16 @@ fn print_plugin_list_table(output: &PluginListOutput, project_root: &str) -> Res
             let source = installed_entry.map(marketplace::format_installed_source).unwrap_or_else(|| "--".to_string());
             let installed_at = installed_entry
                 .and_then(|e| e.installed_at.as_deref())
-                .map(|s| s.split('T').next().unwrap_or(s).to_string())
+                .map(normalize_installed_at)
                 .unwrap_or_else(|| "--".to_string());
             Row {
                 name: p.name.clone(),
                 kind: p.plugin_kind.clone(),
-                version: if p.version.is_empty() { "--".to_string() } else { p.version.clone() },
+                // VERSION is the authoritative lockfile/registry release tag.
+                // The binary's self-reported manifest version is advisory; when
+                // it disagrees with the recorded tag we flag a mismatch so the
+                // operator knows the on-disk binary and the lockfile diverged.
+                version: list_version_cell(installed_entry.and_then(|e| e.release_tag.as_deref()), &p.version),
                 scope: p.scope.to_string(),
                 source,
                 installed: installed_at,
@@ -5263,9 +5534,9 @@ mod tests {
         // Stale not-found entries collapse across BOTH registry tiers
         // (explicit_config + project_local) into a single summary line.
         assert_eq!(lines.len(), 1, "{lines:?}");
-        let summary = lines.iter().find(|l| l.contains("stale plugins.yaml entries")).expect("summary line");
-        assert!(summary.contains("3 configured plugin binaries not found"), "{summary}");
-        assert!(summary.contains("animus plugin uninstall"), "summary must name the prune remedy: {summary}");
+        let summary = lines.iter().find(|l| l.contains("stale plugins.yaml")).expect("summary line");
+        assert!(summary.contains("3 stale plugins.yaml entries"), "{summary}");
+        assert!(summary.contains("animus plugin prune"), "summary must name the prune remedy: {summary}");
     }
 
     #[test]
@@ -5273,7 +5544,7 @@ mod tests {
         let warnings = vec![warning_row("animus-subject-default", "explicit_config")];
         let lines = plugin_list_warning_lines(&warnings, false);
         assert_eq!(lines.len(), 1);
-        assert!(lines[0].contains("1 configured plugin binary not found"), "{}", lines[0]);
+        assert!(lines[0].contains("1 stale plugins.yaml entry"), "{}", lines[0]);
     }
 
     #[test]
@@ -5285,6 +5556,78 @@ mod tests {
         let lines = plugin_list_warning_lines(&warnings, true);
         assert_eq!(lines.len(), 2, "verbose prints one line per stale entry: {lines:?}");
         assert!(lines.iter().all(|l| l.contains("could not be loaded")), "{lines:?}");
+    }
+
+    #[test]
+    fn normalize_installed_at_handles_both_formats() {
+        // RFC3339 (`T` separator).
+        assert_eq!(normalize_installed_at("2026-05-30T20:25:20.159924+00:00"), "2026-05-30 20:25");
+        // Space-separated chrono debug form.
+        assert_eq!(normalize_installed_at("2026-05-29 17:32:43.172858+00:00"), "2026-05-29 17:32");
+        // Date only.
+        assert_eq!(normalize_installed_at("2026-06-05"), "2026-06-05");
+        // Empty -> placeholder.
+        assert_eq!(normalize_installed_at("  "), "--");
+    }
+
+    #[test]
+    fn list_version_cell_uses_lockfile_tag_and_flags_mismatch() {
+        // Tag and manifest agree (v-prefix tolerated) -> just the tag.
+        assert_eq!(list_version_cell(Some("v0.2.1"), "0.2.1"), "v0.2.1");
+        // Disagreement -> tag wins, binary version flagged.
+        assert_eq!(list_version_cell(Some("v0.2.1"), "0.1.0"), "v0.2.1 (binary 0.1.0)");
+        // No recorded tag -> fall back to manifest version.
+        assert_eq!(list_version_cell(None, "0.1.0"), "0.1.0");
+        // Neither -> placeholder.
+        assert_eq!(list_version_cell(None, ""), "--");
+        // Tag present, manifest empty -> tag alone (no spurious mismatch).
+        assert_eq!(list_version_cell(Some("v0.2.1"), ""), "v0.2.1");
+    }
+
+    #[test]
+    fn collect_stale_entries_flags_missing_binaries() {
+        let temp = tempfile::tempdir().unwrap();
+        let install_dir = temp.path();
+        // One present binary, one missing.
+        let present = install_dir.join("animus-present");
+        std::fs::write(&present, b"x").unwrap();
+
+        let yaml = format!(
+            "plugins:\n  animus-present:\n    binary: {}\n  animus-gone:\n    binary: {}\n",
+            present.display(),
+            install_dir.join("animus-gone").display()
+        );
+        let mut config: PluginsYamlConfig = serde_yaml::from_str(&yaml).unwrap();
+
+        // Preview: collect without removing.
+        let mut preview = Vec::new();
+        let removed = collect_stale_entries(
+            &mut config,
+            install_dir,
+            "global",
+            Path::new("/tmp/plugins.yaml"),
+            false,
+            &mut preview,
+        );
+        assert!(!removed, "preview must not mutate");
+        assert_eq!(preview.len(), 1);
+        assert_eq!(preview[0].name, "animus-gone");
+        assert!(config.plugins.contains_key(serde_yaml::Value::String("animus-gone".to_string())));
+
+        // Apply: remove the stale entry.
+        let mut applied = Vec::new();
+        let removed = collect_stale_entries(
+            &mut config,
+            install_dir,
+            "global",
+            Path::new("/tmp/plugins.yaml"),
+            true,
+            &mut applied,
+        );
+        assert!(removed);
+        assert_eq!(applied.len(), 1);
+        assert!(!config.plugins.contains_key(serde_yaml::Value::String("animus-gone".to_string())));
+        assert!(config.plugins.contains_key(serde_yaml::Value::String("animus-present".to_string())));
     }
 
     #[test]

@@ -604,7 +604,7 @@ impl PluginDiscovery {
             if seen.contains(&effective_name) {
                 continue;
             }
-            let Some(path) = find_binary(&expand_home(&entry.binary)) else {
+            let Some(path) = resolve_configured_binary(&entry.binary) else {
                 // Reserve the name even when the configured binary is gone so
                 // a lower-precedence directory scan can't silently shadow a
                 // stale explicit config entry. The warning still surfaces so
@@ -1056,6 +1056,15 @@ fn expand_home(value: &str) -> String {
     std::env::var_os("HOME")
         .map(|home| PathBuf::from(home).join(rest).to_string_lossy().to_string())
         .unwrap_or_else(|| value.to_string())
+}
+
+/// Resolve a configured `binary:` value to an existing on-disk path using the
+/// same semantics discovery applies: `~/` home expansion, then absolute /
+/// relative path resolution, then a `$PATH` lookup for bare command names.
+/// Returns `None` when nothing resolves — the canonical "this configured
+/// binary is gone" signal that drives both discovery warnings and prune.
+pub fn resolve_configured_binary(value: &str) -> Option<PathBuf> {
+    find_binary(&expand_home(value))
 }
 
 fn find_binary(value: &str) -> Option<PathBuf> {
