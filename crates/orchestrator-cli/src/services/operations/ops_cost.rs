@@ -452,6 +452,15 @@ struct SummaryView {
     /// `$0.00` average).
     #[serde(skip_serializing_if = "Option::is_none")]
     avg_cost_per_completed_subject_usd: Option<f64>,
+    /// Fleet daily spend cap rollup: cap, today's rolling-24h spend, and
+    /// remaining headroom. `max_daily_usd` / `daily_remaining_usd` are
+    /// absent when no fleet cap is configured.
+    daily_spend_usd: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_daily_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    daily_remaining_usd: Option<f64>,
+    daily_cap_exceeded: bool,
     top_workflows: Vec<TopSpenderRow>,
 }
 
@@ -586,6 +595,7 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
     let completed_subjects = completed_subjects_in_window(&links, window_start, now);
     let avg_cost_per_completed_subject_usd =
         (completed_subjects > 0).then(|| total_cost_usd / completed_subjects as f64);
+    let cap_status = crate::services::cost::DailyCapStatus::evaluate(project_path, &state);
     let view = SummaryView {
         schema: SUMMARY_SCHEMA,
         state_schema: COST_STATE_SCHEMA_ID,
@@ -601,6 +611,10 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
         completed_workflows: completed,
         completed_subjects,
         avg_cost_per_completed_subject_usd,
+        daily_spend_usd: cap_status.spent_usd,
+        max_daily_usd: cap_status.max_daily_usd,
+        daily_remaining_usd: cap_status.remaining_usd,
+        daily_cap_exceeded: cap_status.exceeded,
         top_workflows: all_rows,
     };
     if json {
@@ -907,6 +921,13 @@ fn print_summary_text(view: &SummaryView) {
             fmt_total_with_estimate(avg, if view.windowed { view.estimated_usd } else { 0.0 }),
         ),
         None => println!("  subjects:  0 completed in window (no avg cost/task)"),
+    if let Some(cap) = view.max_daily_usd {
+        let remaining = view.daily_remaining_usd.unwrap_or(0.0);
+        let flag = if view.daily_cap_exceeded { "  [CAP REACHED — new dispatch paused]" } else { "" };
+        println!(
+            "  daily cap: ${:.2} spent of ${:.2} (rolling 24h), ${:.2} remaining{}",
+            view.daily_spend_usd, cap, remaining, flag
+        );
     }
     if view.top_workflows.is_empty() {
         println!("  no workflow activity in window");

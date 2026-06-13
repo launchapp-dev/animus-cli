@@ -88,7 +88,13 @@ where
     } else {
         (preparation.ready_dispatch_limit, preparation.queue_drain_limit)
     };
-    if ready_dispatch_limit > 0 || queue_drain_limit > 0 {
+    // Fleet daily spend cap: when latched, suppress ALL new dispatch this
+    // tick — ready tasks AND explicit queue drain. The schedule / trigger
+    // legs above are gated on the same latch inside the hooks, so a blown
+    // cap stops every new run until spend ages out of the rolling window or
+    // the operator raises/clears the cap.
+    let dispatch_suppressed = hooks.dispatch_suppressed(root);
+    if !dispatch_suppressed && (ready_dispatch_limit > 0 || queue_drain_limit > 0) {
         execution_outcome.ready_workflow_starts =
             hooks.dispatch_ready_tasks(root, ready_dispatch_limit, queue_drain_limit).await?;
     }
@@ -120,12 +126,17 @@ mod tests {
         zombie_calls: usize,
         stale_calls: usize,
         budget_cap_calls: usize,
+        suppress_dispatch: bool,
     }
 
     #[async_trait::async_trait(?Send)]
     impl ProjectTickHooks for RecordingHooks {
         fn process_due_schedules(&mut self, _root: &str, _now: DateTime<Utc>, _budget: &mut TickBudget) {
             self.schedule_calls += 1;
+        }
+
+        fn dispatch_suppressed(&self, _root: &str) -> bool {
+            self.suppress_dispatch
         }
 
         async fn reconcile_zombie_workflows(&mut self, _root: &str) -> Result<usize> {
@@ -274,6 +285,32 @@ mod tests {
         assert_eq!(hooks.completed_process_calls, 1);
         assert_eq!(hooks.schedule_calls, 1);
         assert_eq!(hooks.dispatch_calls.len(), 1);
+    }
+
+    #[test]
+    fn latched_daily_cap_suppresses_ready_and_queue_dispatch() {
+        // With the fleet daily-cap latch engaged, the central tick gate must
+        // skip dispatch_ready_tasks entirely (both ready + queue limits),
+        // even though auto_run_ready is on and headroom exists.
+        let _env_lock = crate::dispatch::test_env::lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        let project = tempfile::tempdir().expect("project tempdir");
+        let options = DaemonRuntimeOptions::default();
+        let mut hooks = RecordingHooks { suppress_dispatch: true, ..RecordingHooks::default() };
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().expect("test runtime");
+        runtime
+            .block_on(run_project_tick(
+                project.path().to_string_lossy().as_ref(),
+                &options,
+                ProjectTickRunMode { active_process_count: 0, housekeeping: true },
+                false,
+                &mut hooks,
+            ))
+            .expect("tick should succeed");
+        assert!(hooks.dispatch_calls.is_empty(), "a latched daily cap must suppress all ready/queue dispatch");
+        // Housekeeping legs (incl. budget-cap reconciliation) still run.
+        assert_eq!(hooks.budget_cap_calls, 1, "the sweep that reconciles the latch must still run");
     }
 
     #[test]

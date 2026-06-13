@@ -6,6 +6,7 @@
 pub(crate) mod aggregator;
 pub(crate) mod breach_summary;
 pub(crate) mod cap_check;
+pub(crate) mod daily_cap;
 pub(crate) mod enforcement;
 pub(crate) mod model_rates;
 pub(crate) mod persistence;
@@ -14,6 +15,8 @@ pub(crate) mod scanner;
 pub(crate) use aggregator::{CostState, PhaseCost, WorkflowCost};
 #[allow(unused_imports)]
 pub(crate) use breach_summary::{summarize_breaches, BudgetBreachSummary};
+#[allow(unused_imports)]
+pub(crate) use daily_cap::{read_max_daily_usd, DailyCapStatus};
 pub(crate) use persistence::save_cost_state;
 pub(crate) use scanner::enforce_caps;
 #[allow(unused_imports)]

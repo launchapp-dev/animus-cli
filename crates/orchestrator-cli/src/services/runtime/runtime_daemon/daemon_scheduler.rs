@@ -75,6 +75,7 @@ mod tests {
             retry_cooldown_secs: None,
             phase_routing: None,
             mcp: None,
+            budget: None,
         });
         orchestrator_core::write_workflow_config(project_root.path(), &workflow).expect("write workflow config");
 
@@ -119,6 +120,7 @@ mod tests {
             retry_cooldown_secs: None,
             phase_routing: None,
             mcp: None,
+            budget: None,
         });
         orchestrator_core::write_workflow_config(project_root.path(), &workflow).expect("write workflow config");
 

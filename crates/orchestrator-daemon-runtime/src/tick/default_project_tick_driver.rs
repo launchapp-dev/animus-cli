@@ -79,6 +79,15 @@ pub trait DefaultProjectTickServices {
         Ok(Vec::new())
     }
 
+    /// `true` when ALL new dispatch must be suppressed this tick — the
+    /// fleet daily spend cap is latched. Gates schedule, trigger, ready-task,
+    /// AND queue-drain dispatch so the cap actually stops every new run, not
+    /// just auto-dispatched ready tasks. Default `false` (uncapped); the CLI
+    /// tick services read the cost layer's daily-cap latch here.
+    fn dispatch_suppressed(&self, _root: &str) -> bool {
+        false
+    }
+
     async fn dispatch_ready_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
@@ -193,9 +202,14 @@ impl<S> ProjectTickHooks for DefaultSlimProjectTickHooks<'_, S>
 where
     S: DefaultProjectTickServices,
 {
+    fn dispatch_suppressed(&self, root: &str) -> bool {
+        self.services.dispatch_suppressed(root)
+    }
+
     fn process_due_schedules(&mut self, root: &str, now: DateTime<Utc>, budget: &mut TickBudget) {
-        // Skip entirely when the shared tick budget is already exhausted.
-        if budget.is_exhausted() {
+        // Skip entirely when the shared tick budget is already exhausted, or
+        // when the fleet daily spend cap is latched (no new runs at all).
+        if budget.is_exhausted() || self.services.dispatch_suppressed(root) {
             return;
         }
 
@@ -266,7 +280,7 @@ where
     }
 
     fn process_due_triggers(&mut self, root: &str, now: DateTime<Utc>, budget: &mut TickBudget) {
-        if budget.is_exhausted() {
+        if budget.is_exhausted() || self.services.dispatch_suppressed(root) {
             return;
         }
 

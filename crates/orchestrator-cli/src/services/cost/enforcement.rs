@@ -59,7 +59,18 @@ pub(crate) async fn run_budget_enforcement(
     let project_path = Path::new(project_root);
     let state = super::refresh_cost_state(project_path, &mut *warn)?;
     let breaches = super::scanner::evaluate_caps(project_path, &state)?;
-    apply_breach_actions(hub, project_root, breaches, warn).await
+    let mut events = apply_breach_actions(hub, project_root, breaches, warn).await?;
+    // Fleet-level daily spend cap: reconcile the dispatch latch against the
+    // same freshly refreshed rollup. A newly engaged latch yields one
+    // notifier event; the tick gates new dispatch on the persisted latch
+    // (`daily_cap::is_dispatch_paused`). A reconcile failure is non-fatal —
+    // surface it and let the next sweep retry.
+    match super::daily_cap::reconcile_daily_cap(project_path, &state) {
+        Ok(Some(breach)) => events.push(breach.to_breach_event()),
+        Ok(None) => {}
+        Err(error) => warn(format!("daily-cap reconciliation failed: {error}; retrying next sweep")),
+    }
+    Ok(events)
 }
 
 /// Act on evaluated breaches: per-run decision record + scoped fleet
