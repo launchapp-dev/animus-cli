@@ -243,15 +243,57 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
         let _ = set_daemon_pid(project_root, None);
     }
     if !json {
-        println!("{}", health_verdict_line(health.healthy, health.runtime_paused));
+        render_offline_daemon_health_human(&health);
         render_budget_health_human(&budget);
-        return print_value(health, json);
+        return Ok(());
     }
     let mut value = serde_json::to_value(&health)?;
     if let Some(map) = value.as_object_mut() {
         map.insert("budget_enforcement".to_string(), serde_json::to_value(&budget)?);
     }
     print_value(value, json)
+}
+
+/// Map a `DaemonStatus` to a single human-facing status word. A stopped
+/// daemon reports `stopped` rather than the ambiguous `healthy: false`.
+fn daemon_status_word(status: DaemonStatus, runtime_paused: bool) -> &'static str {
+    match status {
+        DaemonStatus::Stopped => "stopped",
+        DaemonStatus::Crashed => "crashed",
+        DaemonStatus::Starting => "starting",
+        DaemonStatus::Stopping => "stopping",
+        DaemonStatus::Paused => "paused",
+        DaemonStatus::Running if runtime_paused => "paused",
+        DaemonStatus::Running => "running",
+    }
+}
+
+/// Pretty-render the locally-loaded `DaemonHealth` snapshot used when the
+/// daemon control socket is unavailable. The deprecated `runner_connected`
+/// / `runner_pid` fields are intentionally omitted from this human view
+/// (they remain in the `--json` wire output for back-compat).
+fn render_offline_daemon_health_human(health: &orchestrator_core::DaemonHealth) {
+    println!("status: {}", daemon_status_word(health.status, health.runtime_paused));
+    if health.runtime_paused {
+        match health.paused_at.as_deref() {
+            Some(at) => println!("runtime: paused (since {at})"),
+            None => println!("runtime: paused"),
+        }
+    }
+    if let Some(pid) = health.daemon_pid {
+        println!("daemon_pid: {pid}");
+    }
+    println!("providers: {}", if health.provider_plugins_healthy { "healthy" } else { "none discovered" });
+    println!("active_agents: {}", health.active_agents);
+    if let Some(pool) = health.pool_size {
+        println!("pool_size: {pool}");
+    }
+    if let Some(queued) = health.queued_tasks {
+        println!("queued_tasks: {queued}");
+    }
+    if let Some(flavor) = health.flavor.as_deref() {
+        println!("flavor: {flavor}");
+    }
 }
 
 /// One-line health verdict rule (documented in `docs/reference/cli/index.md`):
@@ -317,11 +359,45 @@ pub(crate) fn finalize_offline_health(
     }
 }
 
+/// Map the wire `DaemonHealthStatus` to a single human-facing status word.
+/// A `Down` daemon reports `stopped` rather than the ambiguous `healthy:
+/// false`; a paused runtime overrides an otherwise-healthy daemon.
+fn daemon_wire_status_word(
+    status: animus_control_protocol::types::DaemonHealthStatus,
+    runtime_paused: bool,
+) -> &'static str {
+    use animus_control_protocol::types::DaemonHealthStatus as Status;
+    match status {
+        Status::Down => "stopped",
+        Status::Unhealthy => "unhealthy",
+        _ if runtime_paused => "paused",
+        Status::Healthy => "running",
+        Status::Degraded => "degraded",
+    }
+}
+
+/// Render a plugin uptime (milliseconds) as a compact `1h2m`, `5m`, `12s`
+/// string for the human health view.
+fn format_uptime_ms(uptime_ms: u64) -> String {
+    let total_secs = uptime_ms / 1000;
+    let hours = total_secs / 3600;
+    let minutes = (total_secs % 3600) / 60;
+    let seconds = total_secs % 60;
+    if hours > 0 {
+        format!("{hours}h{minutes}m")
+    } else if minutes > 0 {
+        format!("{minutes}m{seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn render_daemon_health_human(
     response: &animus_control_protocol::types::DaemonHealthResponse,
     healthy: bool,
     (runtime_paused, paused_at): (bool, Option<String>),
 ) -> Result<()> {
+    println!("status: {}", daemon_wire_status_word(response.status, runtime_paused));
     println!("{}", health_verdict_line(healthy, runtime_paused));
     println!("daemon: {:?}", response.status);
     if runtime_paused {
@@ -335,20 +411,42 @@ fn render_daemon_health_human(
     if let Some(err) = response.last_error.as_ref() {
         println!("last_error: {err}");
     }
+    let provider_plugins: Vec<_> = response.plugins.iter().filter(|p| p.kind == "provider").collect();
+    if !provider_plugins.is_empty() {
+        let healthy_providers = provider_plugins
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.status,
+                    animus_control_protocol::types::DaemonHealthStatus::Healthy
+                        | animus_control_protocol::types::DaemonHealthStatus::Degraded
+                )
+            })
+            .count();
+        println!("providers: {healthy_providers}/{} healthy", provider_plugins.len());
+    }
     if response.plugins.is_empty() {
         println!("plugins: (none installed)");
     } else {
         println!("plugins:");
         let name_w = response.plugins.iter().map(|p| p.name.len()).max().unwrap_or(0).max(4);
         let kind_w = response.plugins.iter().map(|p| p.kind.len()).max().unwrap_or(0).max(4);
-        println!("  {:<name_w$}  {:<kind_w$}  status", "name", "kind", name_w = name_w, kind_w = kind_w);
+        println!(
+            "  {:<name_w$}  {:<kind_w$}  {:<8}  uptime",
+            "name",
+            "kind",
+            "status",
+            name_w = name_w,
+            kind_w = kind_w
+        );
         for p in &response.plugins {
             let detail = p.last_error.as_deref().map(|err| format!("  ({err})")).unwrap_or_default();
+            let uptime = p.uptime_ms.map(format_uptime_ms).unwrap_or_else(|| "-".to_string());
             println!(
-                "  {:<name_w$}  {:<kind_w$}  {:?}{detail}",
+                "  {:<name_w$}  {:<kind_w$}  {:<8}  {uptime}{detail}",
                 p.name,
                 p.kind,
-                p.status,
+                format!("{:?}", p.status),
                 name_w = name_w,
                 kind_w = kind_w
             );
@@ -791,7 +889,7 @@ pub(crate) async fn handle_daemon(
         DaemonCommand::Start(args) => handle_daemon_start(args, project_root, json).await,
         DaemonCommand::Restart(args) => handle_daemon_restart(args, hub.clone(), project_root, json).await,
         DaemonCommand::Run(args) => handle_daemon_run(args, project_root, json).await,
-        DaemonCommand::Events(args) => handle_daemon_events(args, json).await,
+        DaemonCommand::Events(args) => handle_daemon_events(args, project_root, json).await,
         DaemonCommand::Stop(args) => {
             handle_daemon_stop(args, hub.clone(), project_root, json).await?;
             Ok(())
@@ -1960,8 +2058,9 @@ fn handle_daemon_logs(limit: Option<usize>, search: Option<String>, project_root
     Ok(())
 }
 
-async fn handle_daemon_events(args: DaemonEventsArgs, json: bool) -> Result<()> {
-    handle_daemon_events_impl(args, json).await
+async fn handle_daemon_events(args: DaemonEventsArgs, project_root: &str, json: bool) -> Result<()> {
+    let scope_filter = if args.all_projects { None } else { Some(canonicalize_lossy(project_root)) };
+    handle_daemon_events_impl(args, scope_filter.as_deref(), json).await
 }
 
 #[cfg(test)]
@@ -2231,6 +2330,37 @@ mod tests {
         // A crashed daemon never reports paused, but the verdict must win
         // even if stale pause state lingers on disk.
         assert_eq!(health_verdict_line(false, true), "healthy: false");
+    }
+
+    #[test]
+    fn status_word_reports_stopped_not_ambiguous_unhealthy() {
+        use DaemonStatus as S;
+        assert_eq!(daemon_status_word(S::Stopped, false), "stopped");
+        assert_eq!(daemon_status_word(S::Crashed, false), "crashed");
+        assert_eq!(daemon_status_word(S::Running, false), "running");
+        assert_eq!(daemon_status_word(S::Running, true), "paused");
+        assert_eq!(daemon_status_word(S::Paused, false), "paused");
+        assert_eq!(daemon_status_word(S::Starting, false), "starting");
+        assert_eq!(daemon_status_word(S::Stopping, false), "stopping");
+    }
+
+    #[test]
+    fn wire_status_word_reports_stopped_for_down_daemon() {
+        use animus_control_protocol::types::DaemonHealthStatus as S;
+        assert_eq!(daemon_wire_status_word(S::Down, false), "stopped");
+        assert_eq!(daemon_wire_status_word(S::Unhealthy, false), "unhealthy");
+        assert_eq!(daemon_wire_status_word(S::Healthy, false), "running");
+        assert_eq!(daemon_wire_status_word(S::Healthy, true), "paused");
+        assert_eq!(daemon_wire_status_word(S::Degraded, false), "degraded");
+        assert_eq!(daemon_wire_status_word(S::Degraded, true), "paused");
+    }
+
+    #[test]
+    fn format_uptime_ms_renders_compact_units() {
+        assert_eq!(format_uptime_ms(0), "0s");
+        assert_eq!(format_uptime_ms(12_000), "12s");
+        assert_eq!(format_uptime_ms(125_000), "2m5s");
+        assert_eq!(format_uptime_ms(3_720_000), "1h2m");
     }
 
     fn offline_health(status: DaemonStatus, runtime_paused: bool) -> orchestrator_core::DaemonHealth {

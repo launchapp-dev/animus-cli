@@ -1,4 +1,3 @@
-#[cfg(test)]
 use super::canonicalize_lossy;
 use crate::cli_types::DaemonEventsArgs;
 use crate::print_value;
@@ -364,6 +363,22 @@ mod tests {
     }
 
     #[test]
+    fn event_line_in_scope_filters_by_project_root() {
+        let line = serde_json::to_string(&sample_event(1, "queue", Some("/repo/a"))).expect("event json");
+        assert!(event_line_in_scope(&line, None), "no scope keeps every line");
+        assert!(event_line_in_scope(&line, Some("/repo/a")), "matching scope keeps line");
+        assert!(!event_line_in_scope(&line, Some("/repo/b")), "non-matching scope drops line");
+
+        let padded = serde_json::to_string(&sample_event(2, "queue", Some("  /repo/a  "))).expect("event json");
+        assert!(event_line_in_scope(&padded, Some("/repo/a")), "padded project root is trimmed before compare");
+
+        assert!(event_line_in_scope("{not-json", Some("/repo/a")), "unparseable lines are never dropped by scope");
+
+        let no_root = serde_json::to_string(&sample_event(3, "queue", None)).expect("event json");
+        assert!(!event_line_in_scope(&no_root, Some("/repo/a")), "rootless records are excluded under a scope");
+    }
+
+    #[test]
     fn poll_daemon_events_returns_metadata_and_count() {
         let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let config_root = TempDir::new().expect("config temp dir");
@@ -386,10 +401,44 @@ mod tests {
     }
 }
 
-pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool) -> Result<()> {
+/// True when an event line belongs to `scope_root` (or when no scope filter
+/// is active). Lines that fail to parse are kept so opaque/legacy records are
+/// never silently dropped by the scope gate.
+fn event_line_in_scope(line: &str, scope_root: Option<&str>) -> bool {
+    let Some(scope) = scope_root else {
+        return true;
+    };
+    match serde_json::from_str::<DaemonEventRecord>(line) {
+        Ok(record) => match record.project_root.as_deref().map(str::trim).filter(|value| !value.is_empty()) {
+            Some(root) => canonicalize_lossy(root) == scope,
+            None => false,
+        },
+        Err(_) => true,
+    }
+}
+
+fn print_empty_events_hint(scope_root: Option<&str>) {
+    if scope_root.is_some() {
+        eprintln!(
+            "no daemon events for this project yet (scoped to the current project root); \
+             pass --all-projects for the fleet-wide view."
+        );
+    } else {
+        eprintln!("no daemon events recorded yet.");
+    }
+}
+
+pub(super) async fn handle_daemon_events_impl(
+    args: DaemonEventsArgs,
+    scope_root: Option<&str>,
+    json: bool,
+) -> Result<()> {
     let path = daemon_events_log_path();
     if !path.exists() {
         if !args.follow {
+            if !json {
+                print_empty_events_hint(scope_root);
+            }
             print_value(
                 serde_json::json!({
                     "schema": "animus.daemon.events.v1",
@@ -412,11 +461,15 @@ pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool
 
     let mut cursor = FollowCursor::default();
     let mut first_iteration = true;
+    let mut emitted_any = false;
 
     loop {
         let lines = if first_iteration {
             let follow_cursor = args.follow.then_some(&mut cursor);
-            let mut lines = read_all_nonempty_lines(&path, follow_cursor)?;
+            let mut lines: Vec<String> = read_all_nonempty_lines(&path, follow_cursor)?
+                .into_iter()
+                .filter(|line| event_line_in_scope(line, scope_root))
+                .collect();
             if let Some(limit) = args.limit {
                 if lines.len() > limit {
                     lines = lines.split_off(lines.len() - limit);
@@ -425,9 +478,13 @@ pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool
             lines
         } else {
             read_new_complete_lines(&path, &mut cursor)?
+                .into_iter()
+                .filter(|line| event_line_in_scope(line, scope_root))
+                .collect()
         };
 
         for line in &lines {
+            emitted_any = true;
             if json {
                 println!("{line}");
             } else if let Ok(record) = serde_json::from_str::<DaemonEventRecord>(line) {
@@ -440,6 +497,9 @@ pub(super) async fn handle_daemon_events_impl(args: DaemonEventsArgs, json: bool
 
         first_iteration = false;
         if !args.follow {
+            if !emitted_any && !json {
+                print_empty_events_hint(scope_root);
+            }
             break;
         }
 
