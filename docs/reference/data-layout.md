@@ -233,7 +233,7 @@ Animus maintains three independent registries — for skills, packs, and plugins
 | `~/.animus/<repo-scope>/state/skills-registry.v1.json` | Catalog of installed skill versions for this project scope; written by `animus skill install` and `animus skill publish`. |
 | `~/.animus/<repo-scope>/state/skills-lock.v1.json` | Integrity lock for the installed skill versions; pins the resolved version set and prevents silent drift. **Known limitation:** there is no per-skill `animus skill pin` verb (unlike `animus pack pin`); the lock pins the whole resolved set on `install` / `update`, so pinning a single skill independently is not yet supported. |
 
-The skill registry is per-project-scope. Each project independently tracks which skill versions are installed and which registries (source URLs) are configured. `animus skill list` and `animus skill show` read from this registry.
+The skill registry is per-project-scope. Each project independently tracks which skill versions are installed and which registries (source URLs) are configured. `animus skill list` and `animus skill info` read from this registry.
 
 ### Pack registry (selection state)
 

@@ -823,9 +823,8 @@ filters (`--older-than`, `--keep-last`, `--status`); `delete` removes exactly
 one run identified by `--run-id`.
 
 Reclaim disk from finished workflow runs. Both commands remove the run's row
-(and checkpoints) from `workflow.db` plus its `runs/<run-id>/`,
-`artifacts/<run-id>/`, and `state/workflows/<run-id>/` (persisted phase
-outputs) directories under the scoped runtime root
+(and checkpoints) from `workflow.db` plus its `runs/<run-id>/` and
+`artifacts/<run-id>/` directories under the scoped runtime root
 (`~/.animus/<repo-scope>/`). Legacy repo-local run paths are never touched.
 Only terminal runs (`completed`, `failed`, `escalated`, `cancelled`) are ever
 eligible — in-progress, queued, and paused runs are always skipped, and
