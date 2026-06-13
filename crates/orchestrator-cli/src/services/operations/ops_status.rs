@@ -35,6 +35,9 @@ struct StatusDashboard {
     #[serde(skip_serializing_if = "Option::is_none")]
     flavor: Option<String>,
     daemon: DaemonStatusSlice,
+    /// Wave-2: proactive degraded-state + agent-silence rollup. Empty
+    /// `reasons` and zero `silent_agents` means nothing to flag.
+    warnings: WarningsSlice,
     active_agents: ActiveAgentsSlice,
     task_summary: TaskSummarySlice,
     recent_completions: RecentCompletionsSlice,
@@ -71,6 +74,17 @@ struct DaemonStatusSlice {
     error: Option<String>,
 }
 
+/// Wave-2: surfaces conditions that keep a live daemon out of a clean
+/// "healthy" state. `degraded_reasons` carries actionable subject-router /
+/// plugin-cap text from `DaemonHealth`; `silent_agents` counts active
+/// agents that have crossed the silence threshold.
+#[derive(Debug, Clone, Serialize)]
+struct WarningsSlice {
+    degraded: bool,
+    degraded_reasons: Vec<String>,
+    silent_agents: usize,
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct ActiveAgentsSlice {
     available: bool,
@@ -87,6 +101,21 @@ struct ActiveAgentAssignment {
     workflow_id: String,
     phase_id: String,
     attributed: bool,
+    /// RFC3339 timestamp of the agent's most recent output event, derived
+    /// from the newest output JSONL in the workflow's latest run dir.
+    /// `None` when no run output is on disk yet (e.g. a just-started phase
+    /// or an unattributed placeholder slot).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_output_at: Option<DateTime<Utc>>,
+    /// Whole seconds since `last_output_at`. `None` when `last_output_at`
+    /// is unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    silent_for_secs: Option<u64>,
+    /// `true` when `silent_for_secs` has crossed the configured
+    /// `silent_threshold_mins` — the agent is marked SILENT in the
+    /// dashboard. Always `false` when the threshold is `0` (disabled) or
+    /// `last_output_at` is unknown.
+    silent: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -257,7 +286,12 @@ pub(crate) async fn handle_status(project_root: &str, failures: usize, json: boo
         None => (None, None),
     };
 
-    let dashboard = StatusDashboard {
+    let silence = build_silence_context(
+        project_root,
+        workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()).unwrap_or_default(),
+    );
+
+    let mut dashboard = StatusDashboard {
         schema: STATUS_SCHEMA,
         project_root: project_root.to_string(),
         generated_at: Utc::now(),
@@ -269,10 +303,12 @@ pub(crate) async fn handle_status(project_root: &str, failures: usize, json: boo
         .flatten()
         .map(|m| m.id),
         daemon: build_daemon_slice(daemon_health.as_ref(), daemon_error.clone()),
+        warnings: WarningsSlice { degraded: false, degraded_reasons: Vec::new(), silent_agents: 0 },
         active_agents: build_active_agents_slice(
             daemon_health.as_ref(),
             workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
             task_titles.as_ref(),
+            &silence,
             combine_errors([daemon_error.as_deref(), workflows_error.as_deref(), task_titles_error.as_deref()]),
         ),
         task_summary: build_task_summary_slice(task_stats.as_ref(), None, task_stats_error),
@@ -290,6 +326,8 @@ pub(crate) async fn handle_status(project_root: &str, failures: usize, json: boo
             workflow_snapshot.as_ref().map(|snapshot| snapshot.active_workflows.as_slice()),
         ),
     };
+
+    dashboard.warnings = build_warnings_slice(daemon_health.as_ref(), &dashboard.active_agents);
 
     if json {
         return print_value(dashboard, true);
@@ -391,16 +429,82 @@ fn daemon_status_label(status: DaemonStatus) -> &'static str {
     }
 }
 
+/// Wave-2: per-workflow last-output timestamps plus the resolved silence
+/// threshold, used to decorate active-agent assignments. `now` is captured
+/// once so all silence durations in a single dashboard render share a clock.
+struct SilenceContext {
+    last_output_at: HashMap<String, DateTime<Utc>>,
+    threshold_secs: u64,
+    now: DateTime<Utc>,
+}
+
+impl SilenceContext {
+    /// Empty context (no on-disk output known, detection disabled). Used by
+    /// unit tests and as the fallback when the silence scan is skipped.
+    fn empty() -> Self {
+        SilenceContext { last_output_at: HashMap::new(), threshold_secs: 0, now: Utc::now() }
+    }
+
+    /// Resolve `(last_output_at, silent_for_secs, silent)` for a workflow.
+    fn for_workflow(&self, workflow_id: &str) -> (Option<DateTime<Utc>>, Option<u64>, bool) {
+        let Some(last_output_at) = self.last_output_at.get(workflow_id).copied() else {
+            return (None, None, false);
+        };
+        let silent_for_secs = (self.now - last_output_at).num_seconds().max(0) as u64;
+        let silent = self.threshold_secs > 0 && silent_for_secs >= self.threshold_secs;
+        (Some(last_output_at), Some(silent_for_secs), silent)
+    }
+}
+
+/// Build the [`SilenceContext`] for the dashboard by resolving each running
+/// workflow's most recent output JSONL mtime. The threshold comes from
+/// `pm-config.json` (`silent_threshold_mins`, defaulting to
+/// [`orchestrator_core::DEFAULT_SILENT_THRESHOLD_MINS`]).
+fn build_silence_context(project_root: &str, workflows: &[WorkflowActivitySummary]) -> SilenceContext {
+    let threshold_mins = orchestrator_core::resolve_silent_threshold_mins(Path::new(project_root));
+    let threshold_secs = threshold_mins.saturating_mul(60);
+    let mut last_output_at = HashMap::new();
+    for workflow in workflows {
+        if let Some(at) = latest_output_at_for_workflow(project_root, &workflow.workflow_id) {
+            last_output_at.insert(workflow.workflow_id.clone(), at);
+        }
+    }
+    SilenceContext { last_output_at, threshold_secs, now: Utc::now() }
+}
+
+/// Resolve the most recent output timestamp for a running workflow: the
+/// newest mtime across the known output JSONL files in the workflow's latest
+/// run dir. Returns `None` when no run dir or output file exists yet.
+fn latest_output_at_for_workflow(project_root: &str, workflow_id: &str) -> Option<DateTime<Utc>> {
+    let (_run_id, run_dir) =
+        super::ops_mcp::output_tail_resolution::resolve_latest_workflow_run_dir(project_root, workflow_id).ok()??;
+    const OUTPUT_FILES: [&str; 6] =
+        ["json-output.jsonl", "stdout.jsonl", "events.jsonl", "system.jsonl", "stderr.jsonl", "signals.jsonl"];
+    let mut newest: Option<std::time::SystemTime> = None;
+    for file_name in OUTPUT_FILES {
+        let path = run_dir.join(file_name);
+        if let Ok(modified) = std::fs::metadata(&path).and_then(|meta| meta.modified()) {
+            newest = Some(newest.map_or(modified, |current| current.max(modified)));
+        }
+    }
+    newest.map(DateTime::<Utc>::from)
+}
+
 fn build_active_agents_slice(
     daemon_health: Option<&DaemonHealth>,
     workflows: Option<&[WorkflowActivitySummary]>,
     task_titles: Option<&HashMap<String, String>>,
+    silence: &SilenceContext,
     error: Option<String>,
 ) -> ActiveAgentsSlice {
     let count = daemon_health.map(|health| health.active_agents).unwrap_or(0);
     let empty_titles = HashMap::new();
-    let assignments =
-        active_agent_assignments(count, workflows.unwrap_or_default(), task_titles.unwrap_or(&empty_titles));
+    let assignments = active_agent_assignments(
+        count,
+        workflows.unwrap_or_default(),
+        task_titles.unwrap_or(&empty_titles),
+        silence,
+    );
     ActiveAgentsSlice { available: daemon_health.is_some(), count, assignments, error }
 }
 
@@ -408,6 +512,7 @@ fn active_agent_assignments(
     active_count: usize,
     workflows: &[WorkflowActivitySummary],
     task_titles: &HashMap<String, String>,
+    silence: &SilenceContext,
 ) -> Vec<ActiveAgentAssignment> {
     let mut running: Vec<&WorkflowActivitySummary> = workflows.iter().collect();
     running
@@ -417,15 +522,21 @@ fn active_agent_assignments(
     let mut assignments: Vec<ActiveAgentAssignment> = running
         .into_iter()
         .take(attributed_count)
-        .map(|workflow| ActiveAgentAssignment {
-            task_id: workflow.task_id.clone(),
-            task_title: task_titles
-                .get(workflow.task_id.as_str())
-                .cloned()
-                .unwrap_or_else(|| "Unknown task".to_string()),
-            workflow_id: workflow.workflow_id.clone(),
-            phase_id: workflow.phase_id.clone(),
-            attributed: true,
+        .map(|workflow| {
+            let (last_output_at, silent_for_secs, silent) = silence.for_workflow(&workflow.workflow_id);
+            ActiveAgentAssignment {
+                task_id: workflow.task_id.clone(),
+                task_title: task_titles
+                    .get(workflow.task_id.as_str())
+                    .cloned()
+                    .unwrap_or_else(|| "Unknown task".to_string()),
+                workflow_id: workflow.workflow_id.clone(),
+                phase_id: workflow.phase_id.clone(),
+                attributed: true,
+                last_output_at,
+                silent_for_secs,
+                silent,
+            }
         })
         .collect();
 
@@ -437,10 +548,21 @@ fn active_agent_assignments(
             workflow_id: format!("unknown-{}", placeholder_index + 1),
             phase_id: "unknown".to_string(),
             attributed: false,
+            last_output_at: None,
+            silent_for_secs: None,
+            silent: false,
         });
     }
 
     assignments
+}
+
+/// Build the Warnings slice from the daemon's degraded reasons and the
+/// computed active-agent assignments.
+fn build_warnings_slice(daemon_health: Option<&DaemonHealth>, agents: &ActiveAgentsSlice) -> WarningsSlice {
+    let degraded_reasons = daemon_health.map(|health| health.degraded_reasons.clone()).unwrap_or_default();
+    let silent_agents = agents.assignments.iter().filter(|assignment| assignment.silent).count();
+    WarningsSlice { degraded: !degraded_reasons.is_empty() || silent_agents > 0, degraded_reasons, silent_agents }
 }
 
 fn build_task_summary_slice(
@@ -824,6 +946,21 @@ fn parse_gh_run_list(payload: &str) -> Result<Option<CiRunSummary>> {
     }))
 }
 
+/// Compact `Nh Nm Ns` rendering of a duration in seconds, dropping
+/// zero-valued leading units (e.g. `90` -> `1m 30s`, `3661` -> `1h 1m 1s`).
+fn format_duration_secs(secs: u64) -> String {
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
 fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     let mut output = String::new();
     let _ = writeln!(&mut output, "Animus Status Dashboard");
@@ -849,16 +986,39 @@ fn render_status_dashboard(dashboard: &StatusDashboard) -> String {
     }
     let _ = writeln!(&mut output);
 
+    let _ = writeln!(&mut output, "Warnings");
+    if !dashboard.warnings.degraded {
+        let _ = writeln!(&mut output, "  none");
+    } else {
+        let _ = writeln!(&mut output, "  degraded: true");
+        for reason in &dashboard.warnings.degraded_reasons {
+            let _ = writeln!(&mut output, "  - {reason}");
+        }
+        if dashboard.warnings.silent_agents > 0 {
+            let _ = writeln!(
+                &mut output,
+                "  - {} agent(s) SILENT (no output past the configured threshold)",
+                dashboard.warnings.silent_agents
+            );
+        }
+    }
+    let _ = writeln!(&mut output);
+
     let _ = writeln!(&mut output, "Active Agents");
     let _ = writeln!(&mut output, "  count: {}", dashboard.active_agents.count);
     if dashboard.active_agents.assignments.is_empty() {
         let _ = writeln!(&mut output, "  entries: none");
     } else {
         for entry in &dashboard.active_agents.assignments {
+            let silence = match (entry.silent, entry.silent_for_secs) {
+                (true, Some(secs)) => format!(" SILENT silent_for={}", format_duration_secs(secs)),
+                (false, Some(secs)) => format!(" silent_for={}", format_duration_secs(secs)),
+                _ => String::new(),
+            };
             let _ = writeln!(
                 &mut output,
-                "  - task_id={} task_title={} workflow_id={} phase_id={} attributed={}",
-                entry.task_id, entry.task_title, entry.workflow_id, entry.phase_id, entry.attributed
+                "  - task_id={} task_title={} workflow_id={} phase_id={} attributed={}{}",
+                entry.task_id, entry.task_title, entry.workflow_id, entry.phase_id, entry.attributed, silence
             );
         }
     }

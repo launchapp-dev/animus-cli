@@ -8,6 +8,12 @@ use serde_json::Value;
 
 pub const DAEMON_PROJECT_CONFIG_FILE_NAME: &str = "pm-config.json";
 
+/// Default agent-silence threshold (minutes) when `silent_threshold_mins`
+/// is unset in `pm-config.json`. An in-progress phase that emits no output
+/// for longer than this is surfaced as SILENT in `animus status` and
+/// `animus daemon agents`, and triggers an `agent-silent` daemon event.
+pub const DEFAULT_SILENT_THRESHOLD_MINS: u64 = 20;
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DaemonProjectConfig {
     // Runtime-reconfigurable settings (persisted, hot-reloaded by daemon each tick)
@@ -23,6 +29,12 @@ pub struct DaemonProjectConfig {
     pub stale_threshold_hours: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_timeout_secs: Option<u64>,
+    /// Minutes an in-progress phase may produce no output before the
+    /// dashboard marks its agent SILENT. `None` falls back to
+    /// [`DEFAULT_SILENT_THRESHOLD_MINS`]. Hot-reloaded by the running
+    /// daemon each tick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_threshold_mins: Option<u64>,
     /// Unknown keys round-trip untouched. This also keeps pm-config.json
     /// files written before the v0.5.x removal of the daemon git/merge
     /// policy fields (`auto_merge_enabled`, `auto_pr_enabled`,
@@ -59,6 +71,17 @@ pub fn load_daemon_project_config(project_root: &Path) -> Result<DaemonProjectCo
 pub fn write_daemon_project_config(project_root: &Path, config: &DaemonProjectConfig) -> Result<()> {
     let path = daemon_project_config_path(project_root);
     crate::domain_state::write_json_pretty(&path, config)
+}
+
+/// Resolve the effective agent-silence threshold in minutes for a project,
+/// falling back to [`DEFAULT_SILENT_THRESHOLD_MINS`] when unset or when the
+/// config cannot be read. A configured value of `0` disables silence
+/// detection entirely (returns `0`).
+pub fn resolve_silent_threshold_mins(project_root: &Path) -> u64 {
+    load_daemon_project_config(project_root)
+        .ok()
+        .and_then(|config| config.silent_threshold_mins)
+        .unwrap_or(DEFAULT_SILENT_THRESHOLD_MINS)
 }
 
 #[cfg(test)]
@@ -148,6 +171,7 @@ mod tests {
             auto_run_ready: Some(false),
             stale_threshold_hours: Some(48),
             phase_timeout_secs: Some(600),
+            silent_threshold_mins: Some(45),
             ..Default::default()
         };
         write_daemon_project_config(temp.path(), &config).expect("write should succeed");
@@ -158,6 +182,23 @@ mod tests {
         assert_eq!(loaded.auto_run_ready, Some(false));
         assert_eq!(loaded.stale_threshold_hours, Some(48));
         assert_eq!(loaded.phase_timeout_secs, Some(600));
+        assert_eq!(loaded.silent_threshold_mins, Some(45));
+    }
+
+    #[test]
+    fn resolve_silent_threshold_defaults_when_unset() {
+        crate::test_env::stable_test_home();
+        let temp = tempfile::tempdir().expect("tempdir");
+        assert_eq!(resolve_silent_threshold_mins(temp.path()), DEFAULT_SILENT_THRESHOLD_MINS);
+    }
+
+    #[test]
+    fn resolve_silent_threshold_reads_configured_value() {
+        crate::test_env::stable_test_home();
+        let temp = tempfile::tempdir().expect("tempdir");
+        let config = DaemonProjectConfig { silent_threshold_mins: Some(5), ..Default::default() };
+        write_daemon_project_config(temp.path(), &config).expect("write should succeed");
+        assert_eq!(resolve_silent_threshold_mins(temp.path()), 5);
     }
 
     #[test]

@@ -113,8 +113,27 @@ impl DaemonOpsRouting for DaemonOpsRoutingImpl {
         let rows = orchestrator_plugin_host::global_status_registry().map(|r| r.snapshot()).unwrap_or_default();
         let disabled: Vec<&str> =
             rows.iter().filter(|row| row.disabled_by_supervisor).map(|row| row.name.as_str()).collect();
-        let (status, last_error) = if wire_status == DaemonHealthStatus::Healthy && !disabled.is_empty() {
-            (DaemonHealthStatus::Degraded, Some(format!("plugins disabled by supervisor: {}", disabled.join(", "))))
+
+        // Collect actionable degraded reasons. The wire `last_error` is a
+        // single pinned string, so we join the reasons; the richer
+        // `degraded_reasons` array still flows through the in-tree
+        // `DaemonHealth` snapshot read by `animus status`.
+        let mut reasons: Vec<String> = snapshot.degraded_reasons.clone();
+        if !disabled.is_empty() {
+            reasons.push(format!("plugins disabled by supervisor: {}", disabled.join(", ")));
+        }
+        // The cap counter and quota are populated in-process (this routing
+        // runs inside the daemon), so check saturation here where the live
+        // values are real — `orchestrator-core` can't reach the daemon-runtime
+        // quota module without a dependency cycle.
+        if let Some(reason) = plugin_process_cap_degraded_reason() {
+            reasons.push(reason);
+        }
+
+        let (status, last_error) = if wire_status == DaemonHealthStatus::Healthy && !reasons.is_empty() {
+            (DaemonHealthStatus::Degraded, Some(reasons.join("; ")))
+        } else if !reasons.is_empty() {
+            (wire_status, Some(reasons.join("; ")))
         } else {
             (wire_status, None)
         };
@@ -128,6 +147,24 @@ impl DaemonOpsRouting for DaemonOpsRoutingImpl {
         // CLI in-process path until the AgentPool exposes a queryable
         // snapshot.
         Ok(DaemonAgentsResponse { agents: Vec::new() })
+    }
+}
+
+/// Report when the per-process plugin cap is saturated so the next
+/// required-role spawn would be refused. Runs inside the daemon process,
+/// where the live plugin-process counter and `RuntimeQuotas` cap are real.
+/// Historically this condition surfaced only as a `WRN` log while
+/// `daemon health` stayed green.
+fn plugin_process_cap_degraded_reason() -> Option<String> {
+    let cap = orchestrator_daemon_runtime::runtime_quotas().plugin_process_max;
+    let live = orchestrator_daemon_runtime::live_plugin_process_count();
+    if cap > 0 && live >= cap {
+        Some(format!(
+            "plugin process cap reached ({live}/{cap}) — new required-role plugin spawns will be refused; \
+             uninstall unused plugins or raise ANIMUS_PLUGIN_PROCESS_MAX"
+        ))
+    } else {
+        None
     }
 }
 

@@ -339,6 +339,12 @@ pub(crate) struct DaemonConfigArgs {
         help = "Set phase timeout override in seconds."
     )]
     pub(crate) phase_timeout_secs: Option<u64>,
+    #[arg(
+        long,
+        value_name = "MINUTES",
+        help = "Minutes an in-progress phase may produce no output before its agent is marked SILENT in the dashboard. Set 0 to disable. Hot-reloaded by running daemon."
+    )]
+    pub(crate) silent_threshold_mins: Option<u64>,
     #[arg(long, value_name = "JSON")]
     pub(crate) notification_config_json: Option<String>,
     #[arg(long, value_name = "PATH")]

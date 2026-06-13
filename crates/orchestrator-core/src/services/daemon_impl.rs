@@ -223,7 +223,70 @@ async fn load_daemon_health_snapshot_uncached(project_root: &Path) -> Result<Dae
         flavor: active_flavor_for_project(project_root),
         runtime_paused,
         paused_at,
+        degraded_reasons: degraded_reasons_for(project_root, &status),
     })
+}
+
+/// Wave-2: compute actionable degraded-state reasons for a project. This is
+/// the proactive surface that turns a silent-but-broken daemon from green
+/// into `degraded`. From `orchestrator-core` (which runs both inside and
+/// outside the daemon process) it probes the cheap, on-disk condition that
+/// the daemon otherwise only logs as `WRN`: the subject router is
+/// unroutable (no installed `subject_backend` plugin can serve the
+/// `task`/`requirement` kinds the kernel requires).
+///
+/// The per-process plugin-cap saturation reason is layered in by the
+/// live-daemon health path (`control_routing` / `runtime_daemon`), which
+/// runs inside the daemon process where the live plugin-process counter and
+/// `RuntimeQuotas` cap are populated. From outside that process the counter
+/// always reads zero, so probing it here would produce a false negative.
+///
+/// Only computed for a live daemon (Running/Paused); a stopped daemon is
+/// reported via `status`, not as degraded.
+fn degraded_reasons_for(project_root: &Path, status: &DaemonStatus) -> Vec<String> {
+    if !matches!(status, DaemonStatus::Running | DaemonStatus::Paused) {
+        return Vec::new();
+    }
+    let mut reasons = Vec::new();
+    if let Some(reason) = subject_router_degraded_reason(project_root) {
+        reasons.push(reason);
+    }
+    reasons
+}
+
+/// Probe whether the installed subject-backend plugins can route the
+/// kernel-required `task` and `requirement` kinds. An install dir with no
+/// executable `animus-subject-*` binary covering those kinds means subject
+/// CRUD will hard-fail at runtime even though the daemon process is alive.
+fn subject_router_degraded_reason(_project_root: &Path) -> Option<String> {
+    use orchestrator_plugin_host::plugin_install_dir;
+    let dir = plugin_install_dir();
+    let entries = std::fs::read_dir(&dir).ok()?;
+    let mut has_executable_subject_backend = false;
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name_str) = name.to_str() else {
+            continue;
+        };
+        if !name_str.starts_with("animus-subject-") {
+            continue;
+        }
+        let path = entry.path();
+        let candidate = if path.is_dir() { path.join(name_str) } else { path };
+        if is_binary_executable(&candidate) {
+            has_executable_subject_backend = true;
+            break;
+        }
+    }
+    if has_executable_subject_backend {
+        None
+    } else {
+        Some(
+            "subject_backend unroutable: no executable subject-backend plugin installed — \
+             run `animus plugin install-defaults --include-subjects`"
+                .to_string(),
+        )
+    }
 }
 
 /// v0.5: probe the working tree for an `animus.flavor.v1` manifest and

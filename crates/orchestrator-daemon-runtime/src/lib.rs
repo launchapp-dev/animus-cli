@@ -55,7 +55,7 @@ pub use queue::{
     remove_terminal_dispatch_queue_entry_non_fatal, save_dispatch_queue_state, DispatchQueueEntry,
     DispatchQueueEntryStatus, DispatchQueueState,
 };
-pub use quotas::{install_runtime_quotas, runtime_quotas, RuntimeQuotas};
+pub use quotas::{install_runtime_quotas, live_plugin_process_count, runtime_quotas, RuntimeQuotas};
 pub use schedule::{
     discover_trigger_plugins, ScheduleDispatch, ScheduleDispatchOutcome, TriggerDispatch, TriggerDispatchOutcome,
     TriggerSupervisor, TriggerSupervisorEvent, TriggerSupervisorSink, MAX_RESTART_ATTEMPTS,

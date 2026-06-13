@@ -655,6 +655,10 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         config["phase_timeout_secs"] = serde_json::json!(v);
         updated = true;
     }
+    if let Some(v) = args.silent_threshold_mins {
+        config["silent_threshold_mins"] = serde_json::json!(v);
+        updated = true;
+    }
     if args.clear_notification_config {
         clear_notification_config(&mut config);
         updated = true;
@@ -691,6 +695,9 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
             "max_tasks_per_tick": config.get("max_tasks_per_tick").and_then(serde_json::Value::as_u64),
             "stale_threshold_hours": config.get("stale_threshold_hours").and_then(serde_json::Value::as_u64),
             "phase_timeout_secs": config.get("phase_timeout_secs").and_then(serde_json::Value::as_u64),
+            "silent_threshold_mins": config.get("silent_threshold_mins")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(orchestrator_core::DEFAULT_SILENT_THRESHOLD_MINS),
             "notification_config_schema": NOTIFICATION_CONFIG_SCHEMA,
             "notification_config": notification_config,
             "updated": updated
@@ -2383,6 +2390,7 @@ mod tests {
             flavor: None,
             runtime_paused,
             paused_at: runtime_paused.then(|| "2026-06-11T00:00:00Z".to_string()),
+            degraded_reasons: Vec::new(),
         }
     }
 
