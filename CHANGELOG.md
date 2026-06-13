@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-06-12
+
+**Hooks, conformance, and provider parity.** Harness hooks (kernel `animus-hook`
+spine + claude PreToolUse policy enforcement + author-controlled agent `hooks:`),
+SDK-conformant AskUserQuestion/permission-prompt handling with structured-question
+parity across all providers, plus observability and config-validate polish.
+
 ### Added
 
 - **Harness-hook activation (claude) + agent-level author-controlled hooks.**
