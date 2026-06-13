@@ -416,7 +416,32 @@ pub fn load_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDe
     Ok(skills)
 }
 
+static SUPPRESS_MARKDOWN_SKILL_PARSE_WARNINGS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Suppress (or re-enable) the per-file `could not parse markdown skill`
+/// warnings emitted while sweeping foreign agent-host tool directories
+/// (`~/.claude`, `~/.codex`, `~/.cursor`, ...). Only the agent-host sweep
+/// honors this flag — parse failures in first-party Animus skill
+/// directories always warn so broken project/user skills stay
+/// diagnosable. `animus skill list` sets this unless `--verbose`.
+pub fn set_suppress_markdown_skill_parse_warnings(suppress: bool) {
+    SUPPRESS_MARKDOWN_SKILL_PARSE_WARNINGS.store(suppress, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn markdown_skill_parse_warnings_suppressed() -> bool {
+    SUPPRESS_MARKDOWN_SKILL_PARSE_WARNINGS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn load_markdown_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, SkillDefinition>> {
+    load_markdown_skills_from_directory_inner(dir, false)
+}
+
+fn load_markdown_skills_from_agent_host_directory(dir: &Path) -> Result<BTreeMap<String, SkillDefinition>> {
+    load_markdown_skills_from_directory_inner(dir, markdown_skill_parse_warnings_suppressed())
+}
+
+fn load_markdown_skills_from_directory_inner(dir: &Path, quiet: bool) -> Result<BTreeMap<String, SkillDefinition>> {
     let mut skills = BTreeMap::new();
 
     let entries = match fs::read_dir(dir) {
@@ -456,7 +481,7 @@ fn load_markdown_skills_from_directory(dir: &Path) -> Result<BTreeMap<String, Sk
     // and only warn the first time a given directory fails within this
     // process (a single CLI command rescans the same agent-host dirs several
     // times — once per overlay/validate/runtime load leg).
-    if parse_failures > 0 && mark_skill_parse_warning_emitted(dir) {
+    if parse_failures > 0 && !quiet && mark_skill_parse_warning_emitted(dir) {
         eprintln!(
             "warning: {parse_failures} markdown skill{} in {} failed to parse (skipped)",
             if parse_failures == 1 { "" } else { "s" },
@@ -1117,7 +1142,7 @@ fn load_agent_host_skill_sources(project_root: &Path) -> Vec<SkillSource> {
             if !dir.is_dir() {
                 continue;
             }
-            let Ok(skills) = load_markdown_skills_from_directory(&dir) else {
+            let Ok(skills) = load_markdown_skills_from_agent_host_directory(&dir) else {
                 continue;
             };
             if skills.is_empty() {

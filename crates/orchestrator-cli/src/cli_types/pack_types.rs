@@ -57,12 +57,22 @@ pub(crate) struct PackRegistrySyncArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct PackSearchArgs {
-    #[arg(long, help = "Search query to match against pack names and descriptions.")]
-    pub(crate) query: Option<String>,
+    #[arg(value_name = "QUERY", help = "Search query to match against pack names and descriptions (positional form).")]
+    pub(crate) query_positional: Option<String>,
+    #[arg(long = "query", help = "Search query to match against pack names and descriptions (flag alias).")]
+    pub(crate) query_flag: Option<String>,
     #[arg(long, help = "Filter by category (e.g. 'database', 'productivity', 'devops').")]
     pub(crate) category: Option<String>,
     #[arg(long, help = "Filter by registry identifier.")]
     pub(crate) registry: Option<String>,
+}
+
+impl PackSearchArgs {
+    /// Resolve the effective query, preferring the positional form and
+    /// falling back to the `--query` flag alias.
+    pub(crate) fn query(&self) -> Option<&str> {
+        self.query_positional.as_deref().or(self.query_flag.as_deref())
+    }
 }
 
 #[derive(Debug, Args)]

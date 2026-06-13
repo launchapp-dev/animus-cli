@@ -6,8 +6,8 @@ use orchestrator_daemon_runtime::DaemonEventLog;
 use serde_json::{json, Value};
 
 use crate::{
-    print_value, AgentGetArgs, AgentMemoryAppendArgs, AgentMemoryClearArgs, AgentMemoryGetArgs, AgentMessageListArgs,
-    AgentMessageSendArgs,
+    print_value, render_table, AgentGetArgs, AgentMemoryAppendArgs, AgentMemoryClearArgs, AgentMemoryGetArgs,
+    AgentMessageListArgs, AgentMessageSendArgs,
 };
 
 fn ensure_agent_exists(project_root: &str, agent_id: &str) -> Result<()> {
@@ -58,6 +58,29 @@ pub(super) fn handle_agent_list(project_root: &str, json_output: bool) -> Result
             })
         })
         .collect::<Vec<_>>();
+
+    if !json_output {
+        if agents.is_empty() {
+            println!("No agent profiles configured.");
+            return Ok(());
+        }
+        let rows: Vec<Vec<String>> = loaded
+            .config
+            .agents
+            .iter()
+            .map(|(id, profile)| {
+                vec![
+                    id.clone(),
+                    profile.name.clone().unwrap_or_else(|| "--".to_string()),
+                    profile.model.clone().unwrap_or_else(|| "--".to_string()),
+                    profile.tool.clone().unwrap_or_else(|| "--".to_string()),
+                    profile.role.clone().unwrap_or_else(|| "--".to_string()),
+                ]
+            })
+            .collect();
+        render_table(&["ID", "NAME", "MODEL", "TOOL", "ROLE"], &rows);
+        return Ok(());
+    }
 
     print_value(
         json!({

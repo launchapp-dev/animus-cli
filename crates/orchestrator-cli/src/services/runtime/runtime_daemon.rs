@@ -754,6 +754,10 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
     }
 
     if result.is_ok() {
+        if !json {
+            print_preflight_checklist(&result, false);
+            return Ok(());
+        }
         return print_value(payload, json);
     }
 
@@ -774,9 +778,7 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
         // `error:` summary line. JSON mode preserves the same payload
         // via `CliError::with_details` (attached below), which surfaces
         // under `/error/details` in the envelope.
-        if let Ok(rendered) = serde_json::to_string_pretty(&payload) {
-            eprintln!("{rendered}");
-        }
+        print_preflight_checklist(&result, true);
     }
     // Attach the full preflight payload as structured details so
     // machine consumers in JSON mode can still read `schema` /
@@ -787,6 +789,54 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
     Err(crate::CliError::new(crate::CliErrorKind::InvalidInput, result.render_missing_message())
         .with_details(payload)
         .into())
+}
+
+/// Render the preflight result as a human-readable checklist: one line per
+/// required role (satisfied roles marked `✓`, missing roles marked `✗` with
+/// the fix command), closing with a summary. `to_stderr` routes the output to
+/// stderr so the failure path can interleave it before the `error:` line.
+fn print_preflight_checklist(result: &orchestrator_core::PreflightResult, to_stderr: bool) {
+    macro_rules! line {
+        ($($arg:tt)*) => {
+            if to_stderr { eprintln!($($arg)*) } else { println!($($arg)*) }
+        };
+    }
+
+    if let Some(reason) = &result.flavor_manifest_error {
+        line!("✗ flavor manifest — {reason}");
+        line!(
+            "  the flavor-only plugin scope admits no plugins until the manifest is fixed; \
+             every required role below reports as missing"
+        );
+    }
+
+    let mut satisfied = result.satisfied.clone();
+    satisfied.sort();
+    for role in &satisfied {
+        line!("✓ {role}");
+    }
+
+    for missing in &result.missing {
+        if result.flavor_manifest_error.is_some() {
+            line!("✗ {} — unsatisfied", missing.role);
+        } else {
+            line!("✗ {} — missing; fix: {}", missing.role, missing.fix_command);
+        }
+    }
+
+    for installed in &result.auto_installed {
+        line!("↻ {} — auto-installed from {}", installed.role, installed.repo);
+    }
+
+    let total = result.satisfied.len() + result.missing.len();
+    if result.is_ok() {
+        line!("all {total} required roles satisfied");
+    } else {
+        line!("{} of {} required roles satisfied; {} missing", result.satisfied.len(), total, result.missing.len());
+        if result.flavor_manifest_error.is_none() && result.missing.len() > 1 {
+            line!("fix all missing roles: animus plugin install-defaults --flavor default --yes");
+        }
+    }
 }
 
 fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Result<AutonomousDaemonSpawn> {

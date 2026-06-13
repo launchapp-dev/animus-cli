@@ -11,7 +11,10 @@ use animus_runtime_shared::{
 use orchestrator_core::{services::ServiceHub, FileServiceHub, WorkflowStatus};
 use orchestrator_daemon_runtime::DaemonEventLog;
 
-use crate::{print_value, AgentInteractionsAnswerArgs, AgentInteractionsListArgs, AgentInteractionsShowArgs};
+use crate::{
+    format_age, print_value, render_table, AgentInteractionsAnswerArgs, AgentInteractionsListArgs,
+    AgentInteractionsShowArgs,
+};
 
 /// One-line human summary of the interaction, carried on the daemon event so
 /// notifier plugins can render a push without re-reading the store.
@@ -78,6 +81,39 @@ pub(super) fn handle_agent_interactions_list(
     json_output: bool,
 ) -> Result<()> {
     let interactions = animus_runtime_shared::list_interactions(project_root, args.all, args.agent.as_deref())?;
+    if !json_output {
+        if interactions.is_empty() {
+            println!("no pending interactions");
+            return Ok(());
+        }
+        let rows: Vec<Vec<String>> = interactions
+            .iter()
+            .map(|record| {
+                let kind = match record.kind {
+                    InteractionKind::Question => "question",
+                    InteractionKind::Approval => "approval",
+                };
+                vec![
+                    record.id.clone(),
+                    record.agent_id.clone(),
+                    kind.to_string(),
+                    interaction_summary(record),
+                    format_age(&record.created_at),
+                ]
+            })
+            .collect();
+        render_table(&["ID", "AGENT", "TYPE", "SUMMARY", "AGE"], &rows);
+        let has_approvals = interactions.iter().any(|r| matches!(r.kind, InteractionKind::Approval));
+        let has_questions = interactions.iter().any(|r| matches!(r.kind, InteractionKind::Question));
+        match (has_approvals, has_questions) {
+            (true, true) => println!(
+                "answer with: animus agent interactions answer <id> --allow|--deny (approvals) or --text <answer> (questions)"
+            ),
+            (true, false) => println!("answer with: animus agent interactions answer <id> --allow|--deny"),
+            _ => println!("answer with: animus agent interactions answer <id> --text <answer>"),
+        }
+        return Ok(());
+    }
     print_value(json!({ "count": interactions.len(), "interactions": interactions }), json_output)
 }
 

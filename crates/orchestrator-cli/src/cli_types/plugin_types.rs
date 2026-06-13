@@ -630,7 +630,7 @@ pub(crate) struct PluginListArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct PluginInfoArgs {
-    #[arg(long, value_name = "NAME", help = "Plugin name (matches the discovered manifest or filename).")]
+    #[arg(value_name = "NAME", help = "Plugin name (matches the discovered manifest or filename).")]
     pub(crate) name: String,
     #[arg(long, default_value_t = false, help = "Also scan $PATH while resolving the plugin.")]
     pub(crate) include_system_path: bool,

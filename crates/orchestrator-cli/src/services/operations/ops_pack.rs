@@ -13,9 +13,31 @@ use orchestrator_config::{
 use serde::Serialize;
 
 use crate::{
-    conflict_error, invalid_input_error, not_found_error, print_ok, print_value, PackCommand, PackInspectArgs,
-    PackPinArgs, PackPublishArgs, PackRegistryCommand, PackUninstallArgs,
+    conflict_error, invalid_input_error, not_found_error, print_ok, print_value, render_table, PackCommand,
+    PackInspectArgs, PackPinArgs, PackPublishArgs, PackRegistryCommand, PackUninstallArgs,
 };
+
+/// Render `pack list` results as a human-readable table matching the
+/// `animus plugin list` style.
+fn print_pack_list_table(rows: &[PackListRow]) {
+    if rows.is_empty() {
+        println!("No packs installed. Browse available packs with: animus pack search");
+        return;
+    }
+    let table_rows: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| {
+            vec![
+                r.pack_id.clone(),
+                r.version.clone(),
+                r.source.clone(),
+                if r.active { "yes".to_string() } else { "no".to_string() },
+                r.title.clone().unwrap_or_else(|| "--".to_string()),
+            ]
+        })
+        .collect();
+    render_table(&["NAME", "VERSION", "SOURCE", "ACTIVE", "TITLE"], &table_rows);
+}
 
 #[derive(Debug, Serialize)]
 struct PackListRow {
@@ -1084,12 +1106,15 @@ pub(crate) async fn handle_pack(command: PackCommand, project_root: &str, json: 
                 .filter(|entry| !args.active_only || entry.active)
                 .map(inventory_row)
                 .collect::<Vec<_>>();
+            if !json {
+                print_pack_list_table(&rows);
+                return Ok(());
+            }
             print_value(rows, json)
         }
         PackCommand::Info(args) => print_value(inspect_pack(project_root, args)?, json),
         PackCommand::Search(args) => {
-            let results =
-                search_marketplace_packs(args.query.as_deref(), args.category.as_deref(), args.registry.as_deref())?;
+            let results = search_marketplace_packs(args.query(), args.category.as_deref(), args.registry.as_deref())?;
             if results.is_empty() && !json {
                 print_ok("no packs found matching the query", false);
                 return Ok(());

@@ -114,10 +114,45 @@ pub(crate) fn bare_task_id(id: &str) -> String {
     }
 }
 
+/// Render an RFC 3339 timestamp as a compact relative age (e.g. `5m`, `3h`,
+/// `2d`). Falls back to the raw string when it cannot be parsed.
+pub(crate) fn format_age(rfc3339: &str) -> String {
+    let Ok(parsed) = chrono::DateTime::parse_from_rfc3339(rfc3339) else {
+        return rfc3339.to_string();
+    };
+    let secs = (chrono::Utc::now() - parsed.with_timezone(&chrono::Utc)).num_seconds();
+    if secs < 0 {
+        return "0s".to_string();
+    }
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3_600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn format_age_returns_raw_string_on_parse_failure() {
+        assert_eq!(format_age("not-a-timestamp"), "not-a-timestamp");
+    }
+
+    #[test]
+    fn format_age_buckets_by_unit() {
+        let now = chrono::Utc::now();
+        let ten_min_ago = (now - chrono::Duration::minutes(10)).to_rfc3339();
+        assert_eq!(format_age(&ten_min_ago), "10m");
+        let three_hours_ago = (now - chrono::Duration::hours(3)).to_rfc3339();
+        assert_eq!(format_age(&three_hours_ago), "3h");
+    }
 
     #[test]
     fn format_priority_maps_numbers_and_words_to_buckets() {
