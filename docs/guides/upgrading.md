@@ -23,7 +23,7 @@ animus daemon preflight
 
 # 5. Install or update plugins as the preflight output requests
 animus plugin install-defaults --include-subjects --include-transports
-# (or `animus plugin update` to bump installed plugins to their latest tags)
+# (or `animus plugin update --all` to move installed release plugins to their recommended pins)
 
 # 6. Start the daemon
 animus daemon start
@@ -73,23 +73,39 @@ JSON envelope is `animus.daemon.preflight.v1`.
 
 ## Plugin updates
 
-Plugins are versioned separately from the `animus` binary. To bump all
-installed plugins to their latest tags:
+Plugins are versioned separately from the `animus` binary. `animus plugin update`
+does not chase the registry head by default; it reinstalls to the recommended
+pins declared in `crates/orchestrator-cli/config/default-install.json`.
+
+To move every installed release-source plugin to its recommended pin:
 
 ```bash
-animus plugin update
+animus plugin update --all
 ```
 
-To pin a specific plugin to a specific tag:
+To update one plugin by name:
 
 ```bash
-animus plugin install launchapp-dev/animus-provider-claude@v0.2.2
+animus plugin update --name animus-provider-claude
 ```
 
-To see which plugins have updates available:
+To pin a specific plugin to an explicit tag:
 
 ```bash
-animus plugin update --dry-run
+animus plugin update --name animus-provider-claude --tag v0.2.2
+```
+
+To preview what would change without writing anything:
+
+```bash
+animus plugin update --all --check
+```
+
+To see version drift against both the recommended pin and the latest published
+registry tag:
+
+```bash
+animus plugin outdated
 ```
 
 ## Per-version migration guides

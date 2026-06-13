@@ -254,7 +254,7 @@ animus
 │   ├── scaffold             Emit a minimal offline starter Cargo project for a new plugin kind
 │   ├── search               Search the public Animus plugin registry by substring + filters
 │   ├── browse               Browse the public Animus plugin registry, grouped by kind
-│   ├── update               Update one or all installed release-source plugins to the latest tag
+│   ├── update               Update installed release-source plugins to the recommended pins from `default-install.json` (`--all`, `--kind`, or `--name`)
 │   ├── outdated             Report version drift: installed tag vs recommended pin vs latest published tag
 │   ├── install-defaults     Install every plugin the flavor manifest (`--flavor <name>`, default `default`) marks `required` from public GitHub releases. `--include-recommended` adds the recommended set. Skips plugins that are already installed
 │   ├── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`). The lockfile records sha256 + version for every installed plugin so an `install --force` or tampered-binary scenario is visible to operators
@@ -328,11 +328,11 @@ animus
 ├── update                   Manage the `animus` binary itself — check for, download, and atomically install a newer release (`--check / --yes / --channel / --force / --prerelease`)
 │
 ├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
-│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders. Default reports spend incurred inside the window only; `--lifetime` reports each touched run's full lifetime spend instead (restores pre-v0.5.x semantics). Output splits reported vs estimated cost with `(est.)` markers. `--by provider|model` groups in-window active-run spend by tool or model with token/USD totals and percentages
+│   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders. Default reports spend incurred inside the window only; `--lifetime` reports each touched run's full lifetime spend instead (restores pre-v0.5.x semantics). Output splits reported vs estimated cost with `(est.)` markers. `--by provider|model|task` groups spend by tool, model, or subject/task with token/USD totals and percentages
 │   ├── workflow             Per-phase breakdown for one `<WORKFLOW_RUN_ID>`. `--by provider|model|phase` regroups the same run's spend (rejected for archived runs, which lack per-phase detail)
 │   ├── top                  Rank workflows by `--by tokens|cost` (default cost), `--limit N`. `--by model` / `--by provider` switch to a cross-run model/provider leaderboard (token/USD totals + percentages). Grouped views print a one-line note when the `unknown` attribution bucket exceeds 20% of grouped cost
 │   ├── trends               Bucket spend by `--window day|week|month`, last `--n N` buckets (workflow-level totals; not split by provider/model)
-│   └── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
+│   ├── conversation         Show token + USD spend for one `<CONVERSATION_ID>` (v0.5.10)
 │   └── decisions            List recorded budget-cap breaches from the scoped breach log; `--since <DURATION>` filters the window
 │
 ├── auth                     Inspect identity + permissions (v0.5.8 small-core RBAC)

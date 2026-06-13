@@ -363,10 +363,10 @@ animus daemon start
 For routine plugin updates:
 
 ```bash
-animus plugin update                                # all installed plugins
-animus plugin update <plugin-name>                  # specific plugin
-animus plugin update <plugin-name> --tag v0.2.0     # pin to a tag
-animus plugin update --dry-run                      # preview
+animus plugin update --all                          # all installed plugins -> recommended pins
+animus plugin update --name <plugin-name>           # specific plugin
+animus plugin update --name <plugin-name> --tag v0.2.0
+animus plugin update --all --check                 # preview
 ```
 
 ---
