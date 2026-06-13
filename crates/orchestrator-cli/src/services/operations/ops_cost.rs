@@ -921,6 +921,7 @@ fn print_summary_text(view: &SummaryView) {
             fmt_total_with_estimate(avg, if view.windowed { view.estimated_usd } else { 0.0 }),
         ),
         None => println!("  subjects:  0 completed in window (no avg cost/task)"),
+    }
     if let Some(cap) = view.max_daily_usd {
         let remaining = view.daily_remaining_usd.unwrap_or(0.0);
         let flag = if view.daily_cap_exceeded { "  [CAP REACHED — new dispatch paused]" } else { "" };
