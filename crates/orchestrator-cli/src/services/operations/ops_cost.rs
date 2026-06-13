@@ -329,6 +329,15 @@ struct SummaryView {
     total_cost_usd: f64,
     active_workflows: usize,
     completed_workflows: usize,
+    /// Fleet daily spend cap rollup: cap, today's rolling-24h spend, and
+    /// remaining headroom. `max_daily_usd` / `daily_remaining_usd` are
+    /// absent when no fleet cap is configured.
+    daily_spend_usd: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_daily_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    daily_remaining_usd: Option<f64>,
+    daily_cap_exceeded: bool,
     top_workflows: Vec<TopSpenderRow>,
 }
 
@@ -401,6 +410,7 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
     let total_cost_usd: f64 = all_rows.iter().map(|row| row.total_cost_usd).sum();
     all_rows.sort_by(|a, b| b.total_cost_usd.partial_cmp(&a.total_cost_usd).unwrap_or(std::cmp::Ordering::Equal));
     all_rows.truncate(args.top);
+    let cap_status = crate::services::cost::DailyCapStatus::evaluate(project_path, &state);
     let view = SummaryView {
         schema: SUMMARY_SCHEMA,
         state_schema: COST_STATE_SCHEMA_ID,
@@ -411,6 +421,10 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
         total_cost_usd,
         active_workflows: active_count,
         completed_workflows: completed,
+        daily_spend_usd: cap_status.spent_usd,
+        max_daily_usd: cap_status.max_daily_usd,
+        daily_remaining_usd: cap_status.remaining_usd,
+        daily_cap_exceeded: cap_status.exceeded,
         top_workflows: all_rows,
     };
     if json {
@@ -508,6 +522,14 @@ fn print_summary_text(view: &SummaryView) {
         view.total_cost_usd, view.total_tokens
     );
     println!("  workflows: {} active, {} completed in window", view.active_workflows, view.completed_workflows);
+    if let Some(cap) = view.max_daily_usd {
+        let remaining = view.daily_remaining_usd.unwrap_or(0.0);
+        let flag = if view.daily_cap_exceeded { "  [CAP REACHED — new dispatch paused]" } else { "" };
+        println!(
+            "  daily cap: ${:.2} spent of ${:.2} (rolling 24h), ${:.2} remaining{}",
+            view.daily_spend_usd, cap, remaining, flag
+        );
+    }
     if view.top_workflows.is_empty() {
         println!("  no workflow activity in window");
         return;

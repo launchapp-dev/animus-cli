@@ -837,6 +837,28 @@ pub struct DaemonConfig {
     pub phase_routing: Option<protocol::PhaseRoutingConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp: Option<protocol::McpRuntimeConfig>,
+    /// Fleet-level daily spend cap. Distinct from per-workflow / per-phase
+    /// [`BudgetConfig`]: this bounds the daemon's TOTAL rolling-24h spend
+    /// and pauses new dispatch when crossed. The scoped daemon runtime
+    /// config (`max_daily_usd`, set by `animus daemon config
+    /// --max-daily-usd`) takes precedence over this YAML block.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget: Option<DaemonBudgetConfig>,
+}
+
+/// Fleet/daemon-level daily spend cap declared under the workflow YAML
+/// `daemon.budget` block.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DaemonBudgetConfig {
+    /// USD ceiling for the daemon's total rolling-24h spend. `None` (or a
+    /// non-positive value) means no fleet cap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd_per_day: Option<f64>,
+    /// Action when the daily cap is crossed. Only `pause` is honored today
+    /// (new dispatch stops until spend ages out of the window or the cap is
+    /// raised); the field is carried for forward compatibility.
+    #[serde(default)]
+    pub on_exceed: BudgetOnExceed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]

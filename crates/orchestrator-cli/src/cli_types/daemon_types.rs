@@ -339,6 +339,12 @@ pub(crate) struct DaemonConfigArgs {
         help = "Set phase timeout override in seconds."
     )]
     pub(crate) phase_timeout_secs: Option<u64>,
+    #[arg(
+        long,
+        value_name = "USD",
+        help = "Set the fleet daily spend cap in USD (rolling 24h). New dispatch pauses when crossed and resumes automatically as spend ages out or the cap is raised. Pass 0 to clear. Hot-reloaded by running daemon."
+    )]
+    pub(crate) max_daily_usd: Option<f64>,
     #[arg(long, value_name = "JSON")]
     pub(crate) notification_config_json: Option<String>,
     #[arg(long, value_name = "PATH")]

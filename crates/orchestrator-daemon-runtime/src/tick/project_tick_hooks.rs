@@ -28,6 +28,13 @@ pub trait ProjectTickHooks {
         0
     }
 
+    /// `true` when the fleet daily spend cap is latched and ALL new dispatch
+    /// for this project must be suppressed this tick (schedules, triggers,
+    /// ready tasks, queue drain). Default `false`.
+    fn dispatch_suppressed(&self, _root: &str) -> bool {
+        false
+    }
+
     async fn capture_snapshot(&mut self, root: &str) -> Result<ProjectTickSnapshot>;
 
     async fn reconcile_completed_processes(&mut self, root: &str) -> Result<CompletedProcessReconciliation>;

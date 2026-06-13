@@ -177,16 +177,45 @@ struct BudgetHealthSlice {
     #[serde(skip_serializing_if = "Option::is_none")]
     last_sweep_at: Option<String>,
     breaches: crate::services::cost::BudgetBreachSummary,
+    /// Fleet daily spend cap: configured cap, today's rolling-24h spend,
+    /// remaining headroom, and whether new dispatch is currently paused.
+    daily_cap: BudgetHealthDailyCap,
+}
+
+#[derive(serde::Serialize)]
+struct BudgetHealthDailyCap {
+    window_hours: i64,
+    spent_usd: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_daily_usd: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    remaining_usd: Option<f64>,
+    exceeded: bool,
+    /// `true` when the daemon is suppressing new dispatch on the latch.
+    dispatch_paused: bool,
 }
 
 fn budget_health_slice(project_root: &str) -> BudgetHealthSlice {
     let path = Path::new(project_root);
     let status = crate::services::cost::load_budget_enforcement_status(path);
     let records = crate::services::cost::read_decision_records(path).unwrap_or_default();
+    // Cheap reads only on the health path: the cached cost-state JSON for
+    // the spend rollup and the persisted latch — no live run rescan.
+    let cost_state = crate::services::cost::load_cost_state(path).unwrap_or_default();
+    let cap_status = crate::services::cost::DailyCapStatus::evaluate(path, &cost_state);
+    let dispatch_paused = crate::services::cost::daily_cap::is_dispatch_paused(path);
     BudgetHealthSlice {
         enabled: status.as_ref().map(|s| s.enabled).unwrap_or_else(crate::services::cost::budget_enforcement_enabled),
         last_sweep_at: status.map(|s| s.last_sweep_at.to_rfc3339()),
         breaches: crate::services::cost::summarize_breaches(&records, None),
+        daily_cap: BudgetHealthDailyCap {
+            window_hours: cap_status.window_hours,
+            spent_usd: cap_status.spent_usd,
+            max_daily_usd: cap_status.max_daily_usd,
+            remaining_usd: cap_status.remaining_usd,
+            exceeded: cap_status.exceeded,
+            dispatch_paused,
+        },
     }
 }
 
@@ -655,6 +684,14 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
         config["phase_timeout_secs"] = serde_json::json!(v);
         updated = true;
     }
+    if let Some(v) = args.max_daily_usd {
+        // Store the cap as a top-level key the daemon's cost layer reads
+        // (`daily_cap::read_max_daily_usd`). A non-positive value persists as
+        // an EXPLICIT "uncapped" override (clamped to 0) so it overrides any
+        // workflow-YAML `daemon.budget` cap instead of falling through to it.
+        config["max_daily_usd"] = serde_json::json!(v.max(0.0));
+        updated = true;
+    }
     if args.clear_notification_config {
         clear_notification_config(&mut config);
         updated = true;
@@ -691,6 +728,7 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
             "max_tasks_per_tick": config.get("max_tasks_per_tick").and_then(serde_json::Value::as_u64),
             "stale_threshold_hours": config.get("stale_threshold_hours").and_then(serde_json::Value::as_u64),
             "phase_timeout_secs": config.get("phase_timeout_secs").and_then(serde_json::Value::as_u64),
+            "max_daily_usd": config.get("max_daily_usd").and_then(serde_json::Value::as_f64),
             "notification_config_schema": NOTIFICATION_CONFIG_SCHEMA,
             "notification_config": notification_config,
             "updated": updated

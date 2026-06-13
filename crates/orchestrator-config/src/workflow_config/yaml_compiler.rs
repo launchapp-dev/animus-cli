@@ -283,6 +283,9 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
             if overlay.mcp.is_some() {
                 base.mcp = overlay.mcp;
             }
+            if overlay.budget.is_some() {
+                base.budget = overlay.budget;
+            }
             Some(base)
         }
     };

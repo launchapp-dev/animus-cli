@@ -111,6 +111,15 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         }
     }
 
+    /// Suppress ALL new dispatch (schedules, triggers, ready tasks, queue
+    /// drain) when the fleet daily spend cap is latched. Honor the
+    /// enforcement kill-switch: when budget enforcement is disabled the
+    /// latch is never reconciled, so a stale latch must not strand dispatch.
+    fn dispatch_suppressed(&self, root: &str) -> bool {
+        crate::services::cost::budget_enforcement_enabled()
+            && crate::services::cost::daily_cap::is_dispatch_paused(std::path::Path::new(root))
+    }
+
     async fn reconcile_stale_in_progress_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,

@@ -640,6 +640,41 @@ accidental empty override cannot disable a cap.
 | `ANIMUS_PLUGIN_PROCESS_MAX` | 50 | Max concurrently-spawned plugin child processes; further spawns are refused with an error |
 | `ANIMUS_WORKFLOW_CONCURRENCY_MAX` | 10 | Max workflow runner subprocesses dispatched in parallel; excess requests queue until headroom appears. Also upper-bounds `pool_size` (see [Daemon scheduler timing](#daemon-scheduler-timing)) |
 
+### Fleet daily spend cap
+
+A fleet-level wallet kill-switch: a USD ceiling on the daemon's **total**
+rolling-24h spend, distinct from the per-workflow / per-phase `budget:` caps in
+workflow YAML. When the rolling spend crosses the cap, the daemon's
+housekeeping sweep latches a flag and the tick suppresses **all** new dispatch
+(cron schedules, triggers, ready tasks, and explicit queue-drain entries) until
+spend ages out of the rolling window or the operator raises/clears the cap, at
+which point dispatch resumes automatically on the next sweep. In-flight phases
+are never interrupted.
+
+Set it via the scoped daemon runtime config (preferred, hot-reloaded):
+
+```bash
+animus daemon config --max-daily-usd 50    # cap at $50 / rolling 24h
+animus daemon config --max-daily-usd 0     # clear the cap (uncapped)
+```
+
+The cap is stored as `max_daily_usd` in
+`~/.animus/<repo-scope>/daemon/pm-config.json`. An explicit pm-config value
+(positive or zero) always overrides the workflow-YAML
+[`daemon.budget.max_cost_usd_per_day`](workflow-yaml.md#daemonbudget-fleet-daily-spend-cap)
+fallback. **Window semantics:** a rolling 24-hour window, not a calendar day
+(no timezone applies).
+
+Observability: the cap, today's rolling spend, remaining headroom, and the
+dispatch-paused state appear under `budget_enforcement.daily_cap` in
+`animus daemon health --json` and as the `daily_*` fields in
+`animus cost summary` (`--json` and text). The latch and a fleet breach record
+also persist alongside the cost state under the scoped root
+(`daily-cap.v1.json`; the breach is logged to `decisions.jsonl` with run id
+`fleet:daily-cap`, visible via `animus cost decisions`). The
+`ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT` kill-switch disables the fleet cap
+along with the rest of budget enforcement.
+
 ### Notifications
 
 | Variable | Description |

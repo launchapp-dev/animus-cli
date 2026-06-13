@@ -1175,6 +1175,47 @@ The daemon currently honours these fields from the YAML `daemon:` block:
 | `active_hours` | string | unset (24/7) | Local-time window during which the daemon's project tick will dispatch new schedule- AND trigger-driven work, e.g. `"09:00-17:00"`. Outside this window the tick skips **both** `process_due_schedules` and `process_due_triggers`, so cron schedules, webhook events, file-watcher events, and plugin events are all suppressed. Missed cron fires are **not** replayed when the window reopens — the next tick re-evaluates the cron expression against the new current minute, so an 08:00 cron does not get a delayed run when a 09:00 window opens. Webhook and plugin events stay queued in `pending_events` until the window opens and drain then. In-flight phases are not interrupted. Schedules suppressed this way do **not** bump `missed_count`. Read on every tick from workflow YAML (the persisted daemon config has no `active_hours` field) |
 | `phase_routing` | object | unset | Per-phase model/tool routing overrides applied at daemon spawn time. See [Model Routing](../guides/model-routing.md) |
 | `mcp` | object | unset | Daemon-side MCP runtime config (forwarded to `ProcessManager`). See [MCP Tools](mcp-tools.md) |
+| `budget` | object | unset | Fleet-level daily spend cap. See [`daemon.budget`](#daemonbudget-fleet-daily-spend-cap) below |
+
+### `daemon.budget` (fleet daily spend cap)
+
+The `daemon.budget` block is a **fleet-level** spend cap, distinct from the
+per-workflow / per-phase [`budget:`](#budget) caps. Per-workflow caps stop a
+single runaway workflow; the fleet cap bounds the daemon's **total** rolling
+spend so that many individually in-budget workflows cannot collectively blow
+through a daily wallet.
+
+```yaml
+daemon:
+  budget:
+    max_cost_usd_per_day: 50.0   # pause new dispatch past $50 in any rolling 24h
+    on_exceed: pause             # only `pause` is honored today
+```
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `max_cost_usd_per_day` | float | unset (uncapped) | USD ceiling on the daemon's total spend over a **rolling 24-hour** window. A non-positive value means uncapped |
+| `on_exceed` | `pause` \| `fail` \| `warn` | `pause` | Action when the cap is crossed. Only `pause` is honored today; the field is carried for forward compatibility |
+
+**Window semantics.** The cap is measured over a **rolling 24-hour** window,
+not a calendar day — no timezone applies. When the rolling spend crosses the
+cap, the daemon stops picking up *all* new work (cron schedules, triggers,
+ready tasks, and explicit queue-drain entries) until either spend ages out of
+the window or the cap is raised/cleared, at which point dispatch resumes
+automatically on the next sweep. In-flight phases are never interrupted.
+
+**Precedence.** The scoped daemon runtime config takes precedence over this
+YAML block: set it with `animus daemon config --max-daily-usd <N>` (persisted
+to `~/.animus/<repo-scope>/daemon/pm-config.json`, hot-reloaded). Pass
+`--max-daily-usd 0` to explicitly clear the cap — an explicit pm-config value
+(positive or zero) always overrides the YAML cap. The cap, today's rolling
+spend, remaining headroom, and the pause state are surfaced under
+`budget_enforcement.daily_cap` in `animus daemon health --json` and as the
+`daily_*` fields in `animus cost summary --json`.
+
+The fleet cap honors the `ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT` kill-switch:
+when budget enforcement is disabled, the daily-cap latch is neither reconciled
+nor enforced.
 
 ### Fields parsed but not consumed by the daemon
 
