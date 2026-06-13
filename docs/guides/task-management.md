@@ -22,8 +22,10 @@ animus subject next --kind task
 animus subject get --kind task --id task:TASK-001
 ```
 
-Subject ids are backend-qualified. Use `animus subject list --kind task --json`
-to discover the exact id format your active backend returns.
+Subject ids are backend-qualified. The default backend uses `task:TASK-NNN`
+form; both the bare `TASK-NNN` and the qualified `task:TASK-NNN` forms are
+accepted by most commands. Use `animus subject list --kind task --json` if you
+need to confirm the exact id format your active backend returns.
 
 ## Update Task State
 
@@ -68,6 +70,28 @@ animus queue release task:TASK-001 task:TASK-002
 animus queue drop --all --yes
 animus daemon start
 ```
+
+## Blocked / Paused Ghost State
+
+When a workflow run fails, the daemon calls `apply_task_status` which sets the
+task to `Blocked` and also sets `paused: true` on the task record. The scheduler
+skips tasks with `paused: true`, so the task will not be auto-dispatched again
+even after you fix the underlying problem.
+
+**Symptom:** a task stays in the queue but the daemon never picks it up, even
+though `animus subject list` shows it as `blocked` or you have cleared the
+blocker manually.
+
+**Cure:** reset the task to `ready`. The `animus subject status` command calls
+`apply_task_status` which clears `paused`, `blocked_at`, `blocked_reason`,
+`blocked_phase`, and `blocked_by` atomically:
+
+```bash
+animus subject status --kind task --id task:TASK-001 --status ready
+```
+
+Never edit the task JSON directly — only the command surface clears all the
+associated fields correctly.
 
 ## Notes
 

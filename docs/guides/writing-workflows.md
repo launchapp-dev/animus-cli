@@ -36,10 +36,10 @@ A workflow file can contain the following top-level sections:
 ```yaml
 mcp_servers:    # External tool integrations
 agents:         # Agent definitions (model, tool, system_prompt/system_prompt_file)
+models:         # Named model+tool registry (agents reference by name)
 phase_catalog:  # Phase metadata (label, description, category, tags)
 phases:         # Phase execution config (mode, directive, command)
 workflows:      # Workflow definitions (sequence of phases)
-pipelines:      # Reusable pipeline definitions (sequence of phases)
 ```
 
 ## Agents
@@ -186,12 +186,14 @@ phases:
       timeout_secs: 120
 ```
 
-## Pipelines
+## Workflows with Shared Sequences
 
-Pipelines are named sequences of phases that can be reused across workflows:
+Workflows are the top-level unit. A workflow that embeds another workflow (via
+`workflow_ref`) achieves the same reuse as a "pipeline" concept — the referenced
+workflow's phases are expanded inline at dispatch time:
 
 ```yaml
-pipelines:
+workflows:
   - id: review-cycle
     name: "Review Cycle"
     description: "Reusable code review and testing sequence"
@@ -210,7 +212,7 @@ pipelines:
       - testing
 ```
 
-### Phase Configuration Within Pipelines
+### Phase Configuration Within Workflows
 
 Phases in a pipeline support these options:
 
@@ -230,16 +232,16 @@ phases:
 phases:
   - implementation:
       skip_if:
-        - "task_type == docs"
+        - "task.type == 'docs'"
 ```
 
-**Sub-pipeline references** -- Embed a reusable pipeline:
+**Sub-workflow references** -- Embed another workflow definition by ID:
 
 ```yaml
 phases:
   - requirements
   - implementation
-  - pipeline: review-cycle
+  - workflow_ref: review-cycle
 ```
 
 ## Workflows
@@ -267,10 +269,10 @@ workflows:
 
 ## Post-Success Hooks
 
-Define what happens after a pipeline completes successfully:
+Define what happens after a workflow completes successfully:
 
 ```yaml
-pipelines:
+workflows:
   - id: full
     name: "Full Lifecycle"
     phases:
@@ -310,14 +312,19 @@ Post-success options:
 
 ## Variables
 
-Define variables with defaults that can be overridden at runtime:
+Variables live inside a workflow definition (not at the file's top level) and
+can be overridden at runtime via `--input-json`:
 
 ```yaml
-variables:
-  - name: target_branch
-    default: main
-  - name: review_depth
-    default: standard
+workflows:
+  - id: my-workflow
+    name: My Workflow
+    phases: [implementation]
+    variables:
+      - name: target_branch
+        default: main
+      - name: review_depth
+        default: standard
 ```
 
 ## Complete Example: Code Review Workflow
@@ -359,19 +366,17 @@ phases:
       args: ["test", "--workspace"]
       timeout_secs: 600
 
-pipelines:
+workflows:
   - id: reviewed-implementation
     name: "Reviewed Implementation"
     description: "Implement, test, review with rework loop"
     phases:
-      - implement:
-          agent: implementer
+      - implement
       - run-tests:
           on_verdict:
             rework:
               target: implement
       - review:
-          agent: reviewer
           on_verdict:
             rework:
               target: implement
