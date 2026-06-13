@@ -191,6 +191,14 @@ phase_catalog:
     tags:
     - reconciliation
     - state-management
+  commit:
+    label: Commit
+    description: Commit implementation changes before pushing the branch
+    category: operations
+    tags:
+    - git
+    - commit
+    - automation
   create-pr:
     label: Create PR
     description: Push branch and create GitHub PR after successful implementation
@@ -401,6 +409,25 @@ phases:
       args:
       - clean
       timeout_secs: 60
+  commit:
+    mode: command
+    directive: Stage and commit implementation changes, succeeding even when there is nothing to commit
+    command:
+      program: bash
+      args:
+      - -c
+      - 'git config user.name >/dev/null 2>&1 || git config user.name "Animus Daemon"; git config user.email >/dev/null 2>&1 || git config user.email "daemon@animus.local"; msg="$1"; case "$msg" in ""|"{{"*"}}") msg="chore: automated commit of task changes";; esac; git add -A && (git diff --cached --quiet || git commit -m "$msg")'
+      - animus-commit
+      - '{{commit_message}}'
+      cwd_mode: task_root
+      timeout_secs: 60
+      success_exit_codes:
+      - 0
+    output_contract:
+      kind: phase_result
+      fields:
+        exit_code:
+          type: integer
   push-branch:
     mode: command
     directive: Push the current branch to origin
@@ -599,6 +626,7 @@ workflows:
   - implementation:
       skip_if:
       - task_type == docs
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -607,6 +635,7 @@ workflows:
   description: "Implement \u2192 Push \u2192 PR fast"
   phases:
   - implementation
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -617,6 +646,7 @@ workflows:
   - triage
   - refine-requirements
   - workflow_ref: review-cycle
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -675,6 +705,7 @@ workflows:
       on_verdict:
         rework:
           target: implementation
+  - commit
   - push-branch
   - create-pr-main
   - cleanup
@@ -685,6 +716,7 @@ workflows:
   - triage
   - refine-requirements
   - workflow_ref: review-cycle
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -694,6 +726,7 @@ workflows:
   phases:
   - requirements
   - workflow_ref: review-cycle
+  - commit
   - push-branch
   - create-pr
   - cleanup

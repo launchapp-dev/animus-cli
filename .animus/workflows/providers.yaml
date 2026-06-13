@@ -149,6 +149,7 @@ workflows:
   - kimi-implementation:
       skip_if:
       - task_type == docs
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -160,6 +161,7 @@ workflows:
   - glm-implementation:
       skip_if:
       - task_type == docs
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -171,6 +173,7 @@ workflows:
   - minimax-implementation:
       skip_if:
       - task_type == docs
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -182,6 +185,7 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -193,6 +197,7 @@ workflows:
   - opus-implementation:
       skip_if:
       - task_type == docs
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -201,6 +206,7 @@ workflows:
   description: "Implement \u2192 Push \u2192 PR fast with MiniMax"
   phases:
   - minimax-implementation
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -209,6 +215,7 @@ workflows:
   description: "Implement \u2192 Push \u2192 PR fast with GLM"
   phases:
   - glm-implementation
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -230,6 +237,7 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
+  - commit
   - push-branch
   - create-pr
   - cleanup
@@ -241,6 +249,7 @@ workflows:
   - gemini-implementation:
       skip_if:
       - task_type == docs
+  - commit
   - push-branch
   - create-pr
   - cleanup
