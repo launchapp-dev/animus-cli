@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use animus_plugin_protocol::RpcError;
 use anyhow::{anyhow, Result};
-use orchestrator_core::ServiceHub;
+use orchestrator_core::{format_repo_spec, ServiceHub, DEFAULT_TRANSPORT_PLUGINS};
 use orchestrator_daemon_runtime::control::control_socket_path;
 use orchestrator_plugin_host::{
     discover_plugins, DiscoveredPlugin, HostError, PluginHost, PluginSpawnOptions, TRANSPORT_METHOD_START,
@@ -602,18 +602,20 @@ fn plugin_advertises_web_ui(plugin: &DiscoveredPlugin) -> bool {
 /// help, matching the pre-fix experience operators are used to.
 fn missing_transport_plugins_error(json: bool) -> anyhow::Error {
     let install_command = "animus plugin install-defaults --include-transports";
+    let individual_plugins: Vec<String> = DEFAULT_TRANSPORT_PLUGINS
+        .iter()
+        .copied()
+        .map(format_repo_spec)
+        .map(|spec| format!("animus plugin install {spec}"))
+        .collect();
     let details = serde_json::json!({
         "install_command": install_command,
-        "individual_plugins": [
-            "animus plugin install launchapp-dev/animus-transport-http@v0.2.1",
-            "animus plugin install launchapp-dev/animus-transport-graphql@v0.2.3",
-            "animus plugin install launchapp-dev/animus-web-ui@v0.1.1",
-        ],
+        "individual_plugins": individual_plugins,
     });
     let message = if json {
         format!("no transport_backend or web_ui plugins are installed; run `{install_command}` to install the defaults")
     } else {
-        [
+        let mut lines = vec![
             "No transport_backend or web_ui plugins are installed.".to_string(),
             "".to_string(),
             "Animus delegates `animus web` to standalone transport + UI plugins.".to_string(),
@@ -622,11 +624,9 @@ fn missing_transport_plugins_error(json: bool) -> anyhow::Error {
             format!("  {install_command}"),
             "".to_string(),
             "Or install them individually:".to_string(),
-            "  animus plugin install launchapp-dev/animus-transport-http@v0.2.1".to_string(),
-            "  animus plugin install launchapp-dev/animus-transport-graphql@v0.2.3".to_string(),
-            "  animus plugin install launchapp-dev/animus-web-ui@v0.1.1".to_string(),
-        ]
-        .join("\n")
+        ];
+        lines.extend(individual_plugins.iter().map(|command| format!("  {command}")));
+        lines.join("\n")
     };
     CliError::new(CliErrorKind::InvalidInput, message).with_details(details).into()
 }

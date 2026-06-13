@@ -133,8 +133,10 @@ pins from `crates/orchestrator-core/src/plugin_registry.rs`:
 Add `--include-recommended` for the manifest's recommended set: extra
 providers (`animus-provider-codex`, ...), more subject backends
 (`animus-subject-linear`, `animus-subject-sqlite`, `animus-subject-markdown`),
-plus `animus-transport-graphql` and `animus-web-ui` (required for
-`animus web serve`). Add `--include-oai-agent` to also install
+plus `animus-transport-graphql` and `animus-web-ui` (recommended for the full
+browser UI experience under `animus web`). `animus web serve` still works with
+just the required `animus-transport-http` install, but it falls back to the API
+endpoint when no UI-capable plugin is present. Add `--include-oai-agent` to also install
 `animus-provider-oai-agent` (OpenAI Responses API agent loop, separate from
 the chat completions provider). The legacy `--include-subjects` /
 `--include-transports` flags still work and add just those recommended
@@ -161,7 +163,7 @@ animus plugin install launchapp-dev/animus-subject-markdown
 animus plugin install launchapp-dev/animus-workflow-runner-default
 animus plugin install launchapp-dev/animus-queue-default
 
-# Transport + web UI (required for `animus web serve`)
+# Transport + web UI (`transport-http` is required; GraphQL + web UI are recommended for `animus web`)
 animus plugin install launchapp-dev/animus-transport-http
 animus plugin install launchapp-dev/animus-transport-graphql
 animus plugin install launchapp-dev/animus-web-ui

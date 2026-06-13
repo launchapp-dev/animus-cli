@@ -6,7 +6,7 @@ spawns installed `transport_backend` and `web_ui` plugins.
 
 ## Installing the Web Stack
 
-Install the default transport + UI plugins in one shot:
+Install the curated transport + UI set in one shot:
 
 ```bash
 animus plugin install-defaults --include-transports
@@ -20,10 +20,10 @@ animus plugin install launchapp-dev/animus-transport-graphql
 animus plugin install launchapp-dev/animus-web-ui
 ```
 
-The exact default tags live in
+The exact curated tags live in
 `crates/orchestrator-core/src/plugin_registry.rs`, so prefer
 `animus plugin install-defaults --include-transports` when you want the
-curated set.
+checked-in set instead of unpinned latest releases.
 
 ## Starting the Web UI
 
@@ -41,6 +41,9 @@ animus web open
 
 `animus web serve --open` does both at once. If no transport plugins are
 installed, the command exits non-zero and prints the install commands above.
+With only `animus-transport-http` installed, `animus web` still starts and
+falls back to the API URL; adding `animus-web-ui` (or another plugin that
+advertises the `$ui/web` capability) upgrades that fallback to the browser UI.
 If an installed transport or UI plugin declares required env vars in its
 manifest, those vars must also be set before `animus web` will spawn it.
 Use `animus plugin info --name <plugin-name>` to inspect `env_required`
