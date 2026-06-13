@@ -843,6 +843,7 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             mcp_servers: Vec::new(),
             tool_policy: Default::default(),
             approval_policy: None,
+            hooks: Default::default(),
             skills: Vec::new(),
             capabilities: Default::default(),
             mcp_server_configs: None,

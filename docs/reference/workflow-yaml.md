@@ -313,6 +313,18 @@ agents:
       auto_allow: ["cargo *", "git.commit"]
       auto_deny: ["git.push*"]
       default: ask               # ask (escalate to a human) | allow | deny
+    hooks:                       # Optional. Author-controlled harness-hook config.
+      policy_rules:              #   Guardrail rules merged into the compiled hook policy.
+        - id: no-prod-deploy
+          tools: ["Bash"]
+          input_matchers:
+            - field: command
+              regex: "deploy .*--env(=| )prod"
+          decision: deny         #   deny | ask | allow | defer (deny always wins)
+          reason: "Production deploys require a human."
+      observers:                 #   Extra events routed to animus-hook (record-only).
+        - events: ["UserPromptSubmit"]
+          action: record         #   only `record` this wave (no arbitrary shell)
 ```
 
 ### Fields
@@ -337,6 +349,7 @@ agents:
 | `capabilities` | map\<string, bool\> | no | Capability flags |
 | `tool_policy` | object | no | Tool access control policy |
 | `approval_policy` | object | no | Routing for `animus.agent.request_approval` MCP calls. `auto_allow` / `auto_deny` are `*`-glob pattern lists matched against the request's `tool_name` when present, otherwise its `action`; `auto_deny` wins on overlap (fail closed). `default` is `ask` (escalate to a pending human interaction — the default), `allow`, or `deny` |
+| `hooks` | object | no | Author-controlled harness-hook config. `policy_rules` are guardrail rules (`protocol::HookPolicyRule` shape) merged into the compiled hook policy; `observers` route extra harness events to `animus-hook` (constrained to a named built-in `action` — only `record` this wave — never an arbitrary command). An author rule can only **add** restriction: `deny` always wins over `allow` regardless of source. claude-only this wave; gated behind `ANIMUS_DISABLE_HARNESS_HOOKS`. See [harness-hooks.md](harness-hooks.md) |
 
 Agent profiles defined in YAML are merged into the agent runtime config during compilation. Phase definitions reference agents by profile name.
 

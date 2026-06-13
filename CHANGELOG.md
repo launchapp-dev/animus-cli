@@ -4,6 +4,44 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- **Harness-hook activation (claude) + agent-level author-controlled hooks.**
+  Building on the P1 hook spine (`animus-hook` binary + `protocol::hook_policy`),
+  the kernel now activates a provider's native harness hooks so every tool call
+  an autonomous agent makes is gated by an Animus policy before it runs.
+  - `inject_harness_hooks` (in `animus-runtime-shared`) — for **claude** providers
+    (gated on a new `harness_hook_config_vector(tool)` classifier; only the
+    `Settings`/claude vector is generated this wave) and when
+    `ANIMUS_DISABLE_HARNESS_HOOKS` is unset — writes a per-session
+    `animus-policy.json` (compiled `protocol::HookPolicy`) and a minimal
+    `animus-hooks.settings.json` (claude settings with ONLY a `hooks` block,
+    every command pointing at the resolved `animus-hook` sibling binary), then
+    appends `--settings <path>` to the launch args. Gate events
+    (`PreToolUse`/`PermissionRequest`) carry `--policy`; observability events
+    (`PostToolUse`/`Stop`/`SessionStart`/`SessionEnd`) do not. Only the
+    per-session run dir is written — never `~/.claude` or any shared settings —
+    and `--settings` is additive so the user's own hooks still run.
+    `--include-hook-events` is intentionally NOT emitted (it is not a real claude
+    flag and would error the session).
+  - `compile_hook_policy` — compiles a resolved `AgentToolPolicy` (claude matcher
+    syntax like `Bash(* --live*)` → tool glob + `command` regex) plus
+    agent-authored guardrail rules into one `HookPolicy` with
+    `default_decision = defer`.
+  - Agent profiles gain an optional `hooks:` block (additive serde; old configs
+    load unchanged), authored identically in the agent-runtime config and
+    workflow-YAML agent definitions. `hooks.policy_rules` (author
+    `HookPolicyRule`s) merge into the compiled policy; `hooks.observers` route
+    extra harness events to `animus-hook` constrained to a named built-in
+    `action` (`record`) — never an arbitrary shell command. **deny-wins**: the
+    severity-ordered evaluator guarantees an author `allow` can never weaken a
+    kernel/`tool_policy` `deny`.
+  - `protocol::hook_policy` types (`HookPolicy`, `HookPolicyRule`, `InputMatcher`)
+    now derive `PartialEq`/`Eq`.
+  - New docs: `docs/reference/harness-hooks.md`; agent `hooks:` block in
+    `docs/reference/workflow-yaml.md`; `ANIMUS_DISABLE_HARNESS_HOOKS` kill-switch
+    in `docs/reference/configuration.md`.
+
 ### Fixed
 
 - `animus.agent.request_approval` now conforms to the Claude Agent SDK

@@ -212,6 +212,11 @@ pub fn validate_workflow_and_runtime_configs_with_project_root(
     }
 
     for (agent_id, profile) in &workflow.agent_profiles {
+        if let Some(hooks) = profile.hooks.as_ref() {
+            if let Err(error) = crate::agent_runtime_config::validate_agent_hooks_block(agent_id, hooks) {
+                errors.push(format!("agent_profiles['{agent_id}'].hooks invalid: {error}"));
+            }
+        }
         if let Some(profile_name) = trim_nonempty(profile.tool_profile.as_deref()) {
             let resolved_tool = resolve_tool_id(profile.tool.as_deref(), profile.model.as_deref()).or_else(|| {
                 runtime
