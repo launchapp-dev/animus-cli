@@ -6,7 +6,7 @@
 //! as a side effect so the daemon's auto-pause hook can read a recent
 //! snapshot without re-scanning.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::Path;
 
 use anyhow::Result;
@@ -30,8 +30,13 @@ const TOP_SCHEMA: &str = "animus.cost.top.v1";
 const TRENDS_SCHEMA: &str = "animus.cost.trends.v1";
 const CONVERSATION_SCHEMA: &str = "animus.cost.conversation.v1";
 const SUMMARY_BREAKDOWN_SCHEMA: &str = "animus.cost.summary.breakdown.v1";
+const SUMMARY_TASK_BREAKDOWN_SCHEMA: &str = "animus.cost.summary.task.v1";
 const WORKFLOW_BREAKDOWN_SCHEMA: &str = "animus.cost.workflow.breakdown.v1";
 const TOP_MODELS_SCHEMA: &str = "animus.cost.top.models.v1";
+
+/// Bucket key used when a run cannot be linked back to a subject / task
+/// (ad-hoc runs, or workflows whose DB row carries no `task_id`).
+const UNATTRIBUTED_TASK: &str = "(no task)";
 
 /// Bucket key used when a phase carries no provider / model attribution
 /// (legacy cost-state records, or runs whose checkpoint predates
@@ -294,6 +299,70 @@ fn refresh_state(project_path: &Path) -> Result<CostState> {
     Ok(state)
 }
 
+/// One workflow's subject linkage, read from the project workflow DB.
+#[derive(Debug, Clone)]
+struct WorkflowSubjectLink {
+    /// The task / subject id the workflow ran for, empty when unbound.
+    task_id: String,
+    /// Terminal workflow status string (DB snake_case, e.g. `completed`).
+    status: String,
+    /// Completion timestamp, when the workflow reached a terminal state.
+    completed_at: Option<DateTime<Utc>>,
+}
+
+/// Build a `workflow_id → WorkflowSubjectLink` map from the project
+/// workflow DB. This is the existing read path `animus history` uses
+/// (`load_workflow_history_summaries`); it carries the canonical
+/// run → task linkage (the daemon writes `workflows.task_id`) without
+/// any new daemon RPC. A read failure degrades to an empty map so the
+/// cost views still render, just without task attribution.
+fn load_workflow_subject_links(project_path: &Path) -> HashMap<String, WorkflowSubjectLink> {
+    match orchestrator_core::load_workflow_history_summaries(project_path) {
+        Ok(summaries) => summaries
+            .into_iter()
+            .map(|summary| {
+                (
+                    summary.workflow_id,
+                    WorkflowSubjectLink {
+                        task_id: summary.task_id,
+                        status: summary.status,
+                        completed_at: summary.completed_at,
+                    },
+                )
+            })
+            .collect(),
+        Err(error) => {
+            eprintln!("warning: failed to read workflow → task linkage ({error}); task attribution unavailable");
+            HashMap::new()
+        }
+    }
+}
+
+/// Count distinct subjects whose workflow completed inside the window —
+/// the denominator for "avg cost / completed task". A subject is counted
+/// once even if several of its workflows completed in-window. Counts only
+/// `completed` terminal status (the honest "shipped" signal); failed /
+/// cancelled runs are excluded.
+fn completed_subjects_in_window(
+    links: &HashMap<String, WorkflowSubjectLink>,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+) -> usize {
+    let mut subjects: HashSet<&str> = HashSet::new();
+    for link in links.values() {
+        let task_id = link.task_id.trim();
+        if task_id.is_empty() || link.status != "completed" {
+            continue;
+        }
+        if let Some(completed_at) = link.completed_at {
+            if completed_at >= window_start && completed_at < window_end {
+                subjects.insert(task_id);
+            }
+        }
+    }
+    subjects.len()
+}
+
 #[derive(Debug, Serialize)]
 struct DecisionsView {
     schema: &'static str,
@@ -375,6 +444,14 @@ struct SummaryView {
     windowed: bool,
     active_workflows: usize,
     completed_workflows: usize,
+    /// Distinct subjects whose workflow reached `completed` inside the
+    /// window — the denominator for `avg_cost_per_completed_subject_usd`.
+    completed_subjects: usize,
+    /// Windowed spend / `completed_subjects`, or `None` when no subject
+    /// completed in the window (avoids a divide-by-zero and a misleading
+    /// `$0.00` average).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avg_cost_per_completed_subject_usd: Option<f64>,
     top_workflows: Vec<TopSpenderRow>,
 }
 
@@ -431,6 +508,10 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
         // under `--lifetime` (or when the windowed scan failed), group
         // from the lifetime state.
         let breakdown_state = window_state.as_ref().filter(|_| windowed).unwrap_or(&state);
+        if let CostSummaryBy::Task = by {
+            let links = load_workflow_subject_links(project_path);
+            return handle_summary_task_breakdown(breakdown_state, &links, window, window_start, now, windowed, json);
+        }
         return handle_summary_breakdown(breakdown_state, window, window_start, by, json);
     }
 
@@ -498,6 +579,13 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
     let estimated_usd: f64 = all_rows.iter().map(|row| row.estimated_usd).sum();
     all_rows.sort_by(|a, b| b.total_cost_usd.partial_cmp(&a.total_cost_usd).unwrap_or(std::cmp::Ordering::Equal));
     all_rows.truncate(args.top);
+    // Join windowed spend against subjects that actually completed in the
+    // same window — the "what did I get for it" denominator. Uses the same
+    // workflow-DB read path `animus history` uses; no new daemon call.
+    let links = load_workflow_subject_links(project_path);
+    let completed_subjects = completed_subjects_in_window(&links, window_start, now);
+    let avg_cost_per_completed_subject_usd =
+        (completed_subjects > 0).then(|| total_cost_usd / completed_subjects as f64);
     let view = SummaryView {
         schema: SUMMARY_SCHEMA,
         state_schema: COST_STATE_SCHEMA_ID,
@@ -511,6 +599,8 @@ fn handle_summary(project_path: &Path, args: CostSummaryArgs, json: bool) -> Res
         windowed,
         active_workflows: active_count,
         completed_workflows: completed,
+        completed_subjects,
+        avg_cost_per_completed_subject_usd,
         top_workflows: all_rows,
     };
     if json {
@@ -557,6 +647,7 @@ fn handle_summary_breakdown(
             let key = match by {
                 CostSummaryBy::Provider => phase.provider.as_deref(),
                 CostSummaryBy::Model => phase.model.as_deref(),
+                CostSummaryBy::Task => unreachable!("task grouping routes to handle_summary_task_breakdown"),
             };
             entries.push(GroupEntry::from_phase(key, phase));
         }
@@ -567,6 +658,7 @@ fn handle_summary_breakdown(
     let by_label: &'static str = match by {
         CostSummaryBy::Provider => "provider",
         CostSummaryBy::Model => "model",
+        CostSummaryBy::Task => unreachable!("task grouping routes to handle_summary_task_breakdown"),
     };
     let view = SummaryBreakdownView {
         schema: SUMMARY_BREAKDOWN_SCHEMA,
@@ -601,6 +693,191 @@ fn handle_summary_breakdown(
     }
 }
 
+/// One task-grouped spend row: every workflow run linked to a single
+/// subject, folded into run count + spend with the Wave-1 reported /
+/// estimated split, plus the subject's latest terminal status when known.
+#[derive(Debug, Clone, Serialize)]
+struct TaskSpendRow {
+    /// Subject / task id, or [`UNATTRIBUTED_TASK`] for runs with no linkage.
+    task_id: String,
+    runs: usize,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    /// Vendor-reported portion of `total_cost_usd`.
+    reported_usd: f64,
+    /// Table-estimated portion of `total_cost_usd`.
+    estimated_usd: f64,
+    /// Terminal workflow status for the subject when cheaply known from the
+    /// workflow DB (`completed` / `failed` / ...). `None` for unattributed
+    /// runs or live workflows the DB has not recorded a status for yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SummaryTaskBreakdownView {
+    schema: &'static str,
+    state_schema: &'static str,
+    since: String,
+    window_start: DateTime<Utc>,
+    window_end: DateTime<Utc>,
+    by: &'static str,
+    windowed: bool,
+    total_tokens: u64,
+    total_cost_usd: f64,
+    reported_usd: f64,
+    estimated_usd: f64,
+    rows: Vec<TaskSpendRow>,
+}
+
+/// Pure folding for `cost summary --by task`: walk the in-window cost rollup,
+/// resolve each run's subject via `links`, and emit one [`TaskSpendRow`] per
+/// task sorted by descending spend. Runs with no linkage fold into the
+/// [`UNATTRIBUTED_TASK`] bucket. Archived history runs are only folded under
+/// `--lifetime` (`windowed == false`), matching the other views' handling of
+/// history rows (no per-event detail to window).
+fn task_spend_rows(
+    state: &CostState,
+    links: &HashMap<String, WorkflowSubjectLink>,
+    window_start: DateTime<Utc>,
+    windowed: bool,
+) -> Vec<TaskSpendRow> {
+    struct Tally {
+        runs: usize,
+        tokens: u64,
+        reported: f64,
+        estimated: f64,
+        status: Option<String>,
+    }
+    let mut tally: BTreeMap<String, Tally> = BTreeMap::new();
+    let task_key = |run_id: &str| -> (String, Option<String>) {
+        match links.get(run_id) {
+            Some(link) if !link.task_id.trim().is_empty() => {
+                (link.task_id.trim().to_string(), (!link.status.trim().is_empty()).then(|| link.status.clone()))
+            }
+            _ => (UNATTRIBUTED_TASK.to_string(), None),
+        }
+    };
+    let mut fold = |key: String, status: Option<String>, tokens: u64, reported: f64, estimated: f64| {
+        let slot =
+            tally.entry(key).or_insert(Tally { runs: 0, tokens: 0, reported: 0.0, estimated: 0.0, status: None });
+        slot.runs += 1;
+        slot.tokens = slot.tokens.saturating_add(tokens);
+        slot.reported += reported;
+        slot.estimated += estimated;
+        if slot.status.is_none() {
+            slot.status = status;
+        }
+    };
+    for (run_id, workflow) in &state.workflows {
+        let last_seen = workflow.updated_at.unwrap_or(workflow.started_at);
+        if last_seen < window_start && workflow.started_at < window_start {
+            continue;
+        }
+        let (key, status) = task_key(run_id);
+        fold(key, status, workflow.total_tokens, workflow.reported_usd(), workflow.estimated_usd());
+    }
+    // Archived history runs carry no reported/estimated split; treat their
+    // whole spend as reported (matching the other views' history handling).
+    if !windowed {
+        for history in &state.history {
+            if history.finished_at < window_start {
+                continue;
+            }
+            let (key, status) = task_key(&history.workflow_run_id);
+            fold(key, status, history.total_tokens, history.total_cost_usd, 0.0);
+        }
+    }
+
+    let mut rows: Vec<TaskSpendRow> = tally
+        .into_iter()
+        .map(|(task_id, tally)| TaskSpendRow {
+            task_id,
+            runs: tally.runs,
+            total_tokens: tally.tokens,
+            total_cost_usd: tally.reported + tally.estimated,
+            reported_usd: tally.reported,
+            estimated_usd: tally.estimated,
+            status: tally.status,
+        })
+        .collect();
+    rows.sort_by(|a, b| {
+        b.total_cost_usd
+            .partial_cmp(&a.total_cost_usd)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| b.total_tokens.cmp(&a.total_tokens))
+            .then_with(|| a.task_id.cmp(&b.task_id))
+    });
+    rows
+}
+
+/// Render `cost summary --by task`: group in-window spend by the subject /
+/// task each run was for, joining the cost rollup against the workflow → task
+/// linkage in the workflow DB (`load_workflow_subject_links`). Carries the
+/// same reported / estimated split as the other Wave-1 cost views. Runs that
+/// cannot be linked to a subject fold into the [`UNATTRIBUTED_TASK`] bucket.
+fn handle_summary_task_breakdown(
+    state: &CostState,
+    links: &HashMap<String, WorkflowSubjectLink>,
+    window: &str,
+    window_start: DateTime<Utc>,
+    now: DateTime<Utc>,
+    windowed: bool,
+    json: bool,
+) -> Result<()> {
+    let rows = task_spend_rows(state, links, window_start, windowed);
+    let total_tokens: u64 = rows.iter().map(|row| row.total_tokens).sum();
+    let reported_usd: f64 = rows.iter().map(|row| row.reported_usd).sum();
+    let estimated_usd: f64 = rows.iter().map(|row| row.estimated_usd).sum();
+    let total_cost_usd = reported_usd + estimated_usd;
+    let view = SummaryTaskBreakdownView {
+        schema: SUMMARY_TASK_BREAKDOWN_SCHEMA,
+        state_schema: COST_STATE_SCHEMA_ID,
+        since: window.to_string(),
+        window_start,
+        window_end: now,
+        by: "task",
+        windowed,
+        total_tokens,
+        total_cost_usd,
+        reported_usd,
+        estimated_usd,
+        rows,
+    };
+    if json {
+        return print_value(&view, json);
+    }
+    println!("animus cost — last {} by task", view.since);
+    println!(
+        "  window: {} → {}",
+        view.window_start.format("%Y-%m-%d %H:%M UTC"),
+        view.window_end.format("%Y-%m-%d %H:%M UTC")
+    );
+    let scope_note = if view.windowed { "spend incurred in window" } else { "lifetime totals for touched runs" };
+    println!(
+        "  spend:  {} across {} tokens ({scope_note})",
+        fmt_total_with_estimate(view.total_cost_usd, view.estimated_usd),
+        view.total_tokens
+    );
+    println!();
+    if view.rows.is_empty() {
+        println!("  (no task-attributed spend in window)");
+        return Ok(());
+    }
+    for row in &view.rows {
+        let est_mark = if clamp_cost(row.estimated_usd) > 0.0 { " (est.)" } else { "" };
+        let status = row.status.as_deref().unwrap_or("-");
+        println!(
+            "  {:.<28} {:>3} runs  ${:>8}  {:>10} toks  [{status}]{est_mark}",
+            truncate(&row.task_id, 27),
+            row.runs,
+            fmt_usd(row.total_cost_usd),
+            row.total_tokens,
+        );
+    }
+    Ok(())
+}
+
 fn print_summary_text(view: &SummaryView) {
     println!("animus cost — last {}", view.since);
     println!(
@@ -623,6 +900,14 @@ fn print_summary_text(view: &SummaryView) {
         );
     }
     println!("  workflows: {} active, {} completed in window", view.active_workflows, view.completed_workflows);
+    match view.avg_cost_per_completed_subject_usd {
+        Some(avg) => println!(
+            "  subjects:  {} completed in window, avg {} / completed task",
+            view.completed_subjects,
+            fmt_total_with_estimate(avg, if view.windowed { view.estimated_usd } else { 0.0 }),
+        ),
+        None => println!("  subjects:  0 completed in window (no avg cost/task)"),
+    }
     if view.top_workflows.is_empty() {
         println!("  no workflow activity in window");
         return;
@@ -1372,5 +1657,90 @@ mod tests {
         assert_eq!(bucket_label(ts, CostTrendWindow::Day), "2026-06-05");
         assert_eq!(bucket_label(ts, CostTrendWindow::Month), "2026-06");
         assert!(bucket_label(ts, CostTrendWindow::Week).starts_with("2026-W"));
+    }
+
+    fn link(task_id: &str, status: &str, completed_at: Option<DateTime<Utc>>) -> WorkflowSubjectLink {
+        WorkflowSubjectLink { task_id: task_id.to_string(), status: status.to_string(), completed_at }
+    }
+
+    #[test]
+    fn completed_subjects_counts_distinct_in_window_completed_only() {
+        let now = Utc::now();
+        let in_window = now - Duration::hours(2);
+        let before = now - Duration::days(5);
+        let mut links: HashMap<String, WorkflowSubjectLink> = HashMap::new();
+        // Two workflows for the SAME task, both completed in-window → counts once.
+        links.insert("wf-1".into(), link("TASK-1", "completed", Some(in_window)));
+        links.insert("wf-2".into(), link("TASK-1", "completed", Some(in_window)));
+        // A different task completed in-window → +1.
+        links.insert("wf-3".into(), link("TASK-2", "completed", Some(in_window)));
+        // Failed in-window → excluded.
+        links.insert("wf-4".into(), link("TASK-3", "failed", Some(in_window)));
+        // Completed but BEFORE the window → excluded.
+        links.insert("wf-5".into(), link("TASK-4", "completed", Some(before)));
+        // Completed in-window but no task id → excluded.
+        links.insert("wf-6".into(), link("", "completed", Some(in_window)));
+
+        let count = completed_subjects_in_window(&links, now - Duration::days(1), now);
+        assert_eq!(count, 2, "TASK-1 (deduped) + TASK-2; failed/old/unattributed excluded");
+    }
+
+    #[test]
+    fn task_spend_rows_group_by_task_with_reported_estimated_split() {
+        use crate::services::cost::aggregator::{MetadataDelta, WorkflowCost};
+        let now = Utc::now();
+        let mut state = CostState::default();
+        // wf-a → TASK-1, reported $0.30.
+        let mut wf_a = WorkflowCost::new("flow-a", now);
+        wf_a.record_metadata(
+            "impl",
+            now,
+            MetadataDelta {
+                cost_usd: 0.30,
+                cost_usd_reported: 0.30,
+                provider: Some("claude".into()),
+                ..Default::default()
+            },
+        );
+        // wf-b → TASK-1, estimated $0.20 (a second run for the same task).
+        let mut wf_b = WorkflowCost::new("flow-b", now);
+        wf_b.record_metadata(
+            "impl",
+            now,
+            MetadataDelta {
+                cost_usd: 0.20,
+                cost_usd_estimated: 0.20,
+                provider: Some("gemini".into()),
+                ..Default::default()
+            },
+        );
+        // wf-c → no linkage → folds under "(no task)".
+        let mut wf_c = WorkflowCost::new("flow-c", now);
+        wf_c.record_metadata(
+            "impl",
+            now,
+            MetadataDelta { cost_usd: 0.05, cost_usd_reported: 0.05, ..Default::default() },
+        );
+        state.workflows.insert("wf-a".into(), wf_a);
+        state.workflows.insert("wf-b".into(), wf_b);
+        state.workflows.insert("wf-c".into(), wf_c);
+
+        let mut links: HashMap<String, WorkflowSubjectLink> = HashMap::new();
+        links.insert("wf-a".into(), link("TASK-1", "completed", Some(now)));
+        links.insert("wf-b".into(), link("TASK-1", "running", None));
+
+        let rows = task_spend_rows(&state, &links, now - Duration::days(1), true);
+        assert_eq!(rows.len(), 2, "TASK-1 and the (no task) bucket");
+        let task1 = &rows[0];
+        assert_eq!(task1.task_id, "TASK-1", "TASK-1 leads on $0.50 spend");
+        assert_eq!(task1.runs, 2, "two runs folded under one task");
+        assert!((task1.total_cost_usd - 0.50).abs() < 1e-9);
+        assert!((task1.reported_usd - 0.30).abs() < 1e-9);
+        assert!((task1.estimated_usd - 0.20).abs() < 1e-9, "estimated split preserved");
+        assert_eq!(task1.status.as_deref(), Some("completed"), "first non-empty linked status wins");
+        let unattributed = &rows[1];
+        assert_eq!(unattributed.task_id, UNATTRIBUTED_TASK);
+        assert_eq!(unattributed.runs, 1);
+        assert!(unattributed.status.is_none());
     }
 }
