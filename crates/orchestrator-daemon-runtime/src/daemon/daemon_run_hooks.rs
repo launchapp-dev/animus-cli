@@ -34,6 +34,17 @@ pub trait DaemonRunHooks {
         Ok(())
     }
 
+    /// Earliest future deferred-entry `run_at` reported by the installed
+    /// queue plugin (`queue/next_deadline`), used by the wake loop to sleep
+    /// precisely until a deferred entry is due instead of waiting for the
+    /// heartbeat. Default `None` (no queue plugin / no future-dated entries);
+    /// the CLI binary overrides this to query the queue plugin. Errors are
+    /// the impl's concern — it should swallow them to `None` so a transient
+    /// plugin hiccup degrades to heartbeat pacing rather than killing the loop.
+    async fn queue_next_deadline(&mut self, _project_root: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+        None
+    }
+
     /// Called from every daemon exit path (`--once`, `GracefulShutdown`,
     /// SIGINT, SIGTERM) AFTER the loop breaks but BEFORE the runtime
     /// drops. Default is no-op. The CLI binary's notifier dispatcher

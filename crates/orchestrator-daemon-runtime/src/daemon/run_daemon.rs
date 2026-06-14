@@ -534,8 +534,18 @@ where
         // is strictly in the future again. An occurrence the tick already
         // dispatched (anchor races the tick's own evaluation instant by
         // sub-millisecond) costs at most one extra no-op pass.
-        let cron_sleep = crate::ScheduleDispatch::next_schedule_deadline(project_root, tick_anchor)
-            .map(|deadline| (deadline - chrono::Utc::now()).to_std().unwrap_or(Duration::ZERO));
+        let cron_deadline = crate::ScheduleDispatch::next_schedule_deadline(project_root, tick_anchor);
+        // Precise wake for deferred queue entries: the earliest future
+        // `run_at` reported by the queue plugin. Folded into the timed arm
+        // alongside the cron deadline so a deferred entry fires on time
+        // instead of waiting for the heartbeat. Errors degrade to `None`.
+        let queue_deadline = hooks.queue_next_deadline(&primary_root).await;
+        let next_deadline = match (cron_deadline, queue_deadline) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (only, None) | (None, only) => only,
+        };
+        let cron_sleep =
+            next_deadline.map(|deadline| (deadline - chrono::Utc::now()).to_std().unwrap_or(Duration::ZERO));
 
         // Retry-sweep ceiling: a cron occurrence that woke the loop but
         // could not dispatch (pool/budget full, transient spawn failure)
@@ -546,7 +556,7 @@ where
         // cadence is unaffected — `housekeeping_due` keys off the
         // configured `interval`, not off which arm woke the loop.
         let max_sleep =
-            if cron_sleep.is_some() { interval.min(crate::schedule::SCHEDULE_RETRY_SWEEP_MAX) } else { interval };
+            if cron_deadline.is_some() { interval.min(crate::schedule::SCHEDULE_RETRY_SWEEP_MAX) } else { interval };
 
         // Every arm either breaks the loop or falls through to the next
         // pass, which re-arms a fresh sleep (heartbeat) and a fresh

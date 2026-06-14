@@ -794,12 +794,20 @@ animus queue enqueue --task-id TASK-001 --at 2h --expire-after 10m  # drop if no
 | `--at <WHEN>` | Defer until an RFC 3339 timestamp or a relative offset (`90s`, `30m`, `2h`, `3d`; bare number = seconds). Omit for immediate dispatch. |
 | `--expire-after <DURATION>` | Grace window after `--at`. If still pending past `--at + this`, the entry is dropped instead of dispatched late. Requires `--at`; omit to always fire late. |
 
-One-off jobs are **not deduplicated**: scheduling the same subject for
-distinct times is allowed. When another entry already targets the subject,
+Enqueue is **not deduplicated** (immediate or deferred): every enqueue
+creates a new entry. When another entry already targets the same subject,
 the enqueue still succeeds and returns a `warning` (in the human output and
 the `animus.cli.v1` envelope's `warning` field) — the caller decides whether
-to `drop` the duplicate. Immediate (no `--at`) enqueues keep their
-`(subject, workflow_ref)` idempotency and report the no-op via `warning`.
+to `drop` the duplicate. Lease-side exclusivity still prevents two entries
+for the same subject from running concurrently.
+
+> **Dispatch model.** The daemon is **queue-only**: it executes only what is
+> explicitly enqueued (leasing as agent slots free) plus cron `schedules:`.
+> It does **not** scan the subject backend for `Ready` tasks — putting work
+> in the queue is the end user's job (an agent, a script, or a configured
+> trigger calling `animus queue enqueue`). The `daemon --auto-run-ready` flag
+> and `daemon.auto_run_ready` config are deprecated no-ops kept for
+> back-compat.
 
 ### `animus queue hold` / `release` / `drop` (bulk subject operations)
 

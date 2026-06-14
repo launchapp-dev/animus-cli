@@ -256,6 +256,14 @@ pub async fn call_queue_stats(project_root: &Path) -> Result<Option<queue_proto:
     queue_call(project_root, queue_proto::METHOD_QUEUE_STATS, Some(json!({}))).await
 }
 
+/// `queue/next_deadline` — earliest future `run_at` across pending deferred
+/// entries, for the daemon's precise-wake loop. `Ok(None)` when no queue
+/// plugin is installed; the inner `next_run_at` is `None` when the queue
+/// holds no future-dated entries.
+pub async fn call_queue_next_deadline(project_root: &Path) -> Result<Option<queue_proto::QueueNextDeadlineResponse>> {
+    queue_call(project_root, queue_proto::METHOD_QUEUE_NEXT_DEADLINE, Some(json!({}))).await
+}
+
 /// `queue/enqueue` — append a [`SubjectDispatch`] to the queue.
 pub async fn call_queue_enqueue(
     project_root: &Path,

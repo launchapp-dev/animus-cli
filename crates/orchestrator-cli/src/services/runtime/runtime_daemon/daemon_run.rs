@@ -609,6 +609,23 @@ impl DaemonRunHooks for CliDaemonRunHost {
         self.inner.handle_event(event)
     }
 
+    async fn queue_next_deadline(&mut self, project_root: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+        // Query the installed queue plugin for the earliest future deferred
+        // run_at. Any failure (no plugin, RPC error, unparseable timestamp)
+        // degrades to None so the wake loop falls back to heartbeat pacing.
+        let response = crate::services::plugin_clients::call_queue_next_deadline(std::path::Path::new(project_root))
+            .await
+            .ok()??;
+        let raw = response.next_run_at?;
+        match chrono::DateTime::parse_from_rfc3339(&raw) {
+            Ok(dt) => Some(dt.with_timezone(&chrono::Utc)),
+            Err(error) => {
+                tracing::warn!(run_at = %raw, %error, "queue/next_deadline returned unparseable run_at; ignoring");
+                None
+            }
+        }
+    }
+
     async fn daemon_status(&mut self, project_root: &str) -> Result<DaemonStatus> {
         let hub = FileServiceHub::new(project_root)?;
         hub.daemon().status().await
@@ -945,7 +962,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn daemon_run_emits_selection_source_for_started_task_events() {
+    async fn daemon_run_does_not_dispatch_backend_ready_tasks() {
         let _lock = lock_env();
 
         let config_root = TempDir::new().expect("config temp dir");
@@ -1009,27 +1026,35 @@ mod tests {
             auto_install: false,
             skip_preflight: true,
         };
-        handle_daemon_run(args, &primary_root, true).await.expect("daemon run should emit selection source transition");
+        handle_daemon_run(args, &primary_root, true).await.expect("daemon run should complete");
 
+        // Queue-only model: the daemon must NOT pull a Ready task out of the
+        // subject backend. Even with `auto_run_ready: true` (now inert) the
+        // task is never dispatched — it stays Ready and no task-state-change
+        // selection-source event is emitted for it. Ingestion into the queue
+        // is the end user's responsibility.
         let events_path = daemon_events_log_path();
-        let events_content = std::fs::read_to_string(events_path).expect("daemon events log should exist");
-        let events: Vec<DaemonEventRecord> = events_content
+        let events: Vec<DaemonEventRecord> = std::fs::read_to_string(events_path)
+            .unwrap_or_default()
             .lines()
             .filter(|line| !line.trim().is_empty())
             .map(|line| serde_json::from_str::<DaemonEventRecord>(line).expect("event json"))
             .collect();
 
-        let selection_event = events
-            .iter()
-            .find(|event| {
-                event.event_type == "task-state-change"
-                    && event.project_root.as_deref() == Some(canonicalize_lossy(&primary_root).as_str())
-                    && event.data.get("task_id").and_then(serde_json::Value::as_str) == Some(task.id.as_str())
-                    && event.data.get("selection_source").and_then(serde_json::Value::as_str).is_some()
-            })
-            .expect("task-state-change event with selection source should be emitted");
+        let dispatched = events.iter().any(|event| {
+            event.event_type == "task-state-change"
+                && event.project_root.as_deref() == Some(canonicalize_lossy(&primary_root).as_str())
+                && event.data.get("task_id").and_then(serde_json::Value::as_str) == Some(task.id.as_str())
+                && event.data.get("selection_source").and_then(serde_json::Value::as_str).is_some()
+        });
+        assert!(!dispatched, "daemon must not auto-dispatch a backend Ready task in the queue-only model");
 
-        assert_eq!(selection_event.data.get("selection_source").and_then(serde_json::Value::as_str), Some("queue"));
+        let reloaded = primary_hub.tasks().get(&task.id).await.expect("task still present");
+        assert_eq!(
+            reloaded.status,
+            orchestrator_core::TaskStatus::Ready,
+            "Ready task must remain Ready (not dispatched)"
+        );
     }
 
     /// Notification delivery moved out-of-tree to the `notifier` plugin

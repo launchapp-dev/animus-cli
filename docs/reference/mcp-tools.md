@@ -229,10 +229,12 @@ bounded fetch for recent entries, not a live stream.
 offset like `90s` / `30m` / `2h` / `3d`) to **defer** dispatch: the entry
 stays queued but is not leased until the time passes. `expire_after` (e.g.
 `10m`) sets a grace window after `run_at` past which a still-pending entry is
-dropped instead of dispatched late. Deferred enqueues are not deduplicated —
-a collision with an existing entry for the same subject still enqueues and
-returns a `warning` in the result for the agent to act on. This is the path
-an agent uses to schedule a one-off run for a specific time.
+dropped instead of dispatched late. Enqueue is never deduplicated (immediate
+or deferred) — a collision with an existing entry for the same subject still
+enqueues and returns a `warning` in the result for the agent to act on. This
+is the path an agent uses to schedule a one-off run for a specific time. The
+daemon is queue-only: it executes only enqueued work plus cron schedules and
+never auto-dispatches `Ready` tasks from the subject backend.
 
 ---
 

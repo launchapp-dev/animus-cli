@@ -8,11 +8,10 @@ use orchestrator_core::services::ServiceHub;
 use orchestrator_core::{TaskStatus, WorkflowStateManager, WorkflowStatus};
 use orchestrator_daemon_runtime::{
     default_slim_project_tick_driver, BudgetBreachEvent, CompletedProcess, CompletedProcessReconciliation,
-    DefaultProjectTickServices, DefaultSlimProjectTickDriver, DispatchNotice, DispatchSelectionSource,
-    DispatchWorkflowStart, DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot,
+    DefaultProjectTickServices, DefaultSlimProjectTickDriver, DispatchNotice, DispatchWorkflowStartSummary,
+    ProcessManager, ProjectTickSnapshot,
 };
 use orchestrator_logging::Logger;
-use protocol::SubjectDispatchExt;
 use std::sync::Arc;
 
 pub(crate) struct CliProjectTickServices {
@@ -176,76 +175,22 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         let Some(process_manager) = process_manager else {
             return Ok(DispatchWorkflowStartSummary::default());
         };
-        // Explicitly enqueued dispatch-queue entries drain on their own
-        // limit so `daemon.auto_run_ready: false` (limit == 0) cannot
-        // starve operator-issued `animus queue enqueue` work.
-        let mut summary = if queue_drain_limit > 0 {
+        // Queue-only dispatch model: the daemon executes ONLY what has been
+        // explicitly enqueued, leasing up to the available agent-slot
+        // capacity (`queue_drain_limit`, zeroed while the pool is draining).
+        // It does NOT scan the subject backend for Ready tasks — moving a
+        // task from a subject backend into the queue is the end user's
+        // responsibility (an agent, a script, or a configured trigger calls
+        // `animus queue enqueue`). Cron `schedules:` still dispatch via their
+        // own leg. `limit` (formerly the ready-task cap, gated on
+        // `auto_run_ready`) no longer drives any backend scan and is inert;
+        // it is retained on the signature pending the flag's full removal.
+        let _ = (limit, &hub);
+        let summary = if queue_drain_limit > 0 {
             dispatch_queued_entries_via_runner(root, process_manager, queue_drain_limit).await?
         } else {
             DispatchWorkflowStartSummary::default()
         };
-
-        let remaining = limit.saturating_sub(summary.started);
-        if remaining > 0 {
-            let tasks = hub.tasks().list_prioritized().await?;
-            let workflows = hub.workflows().list().await?;
-            let active_task_ids: std::collections::HashSet<_> = workflows
-                .iter()
-                .filter(|w| {
-                    !matches!(
-                        w.status,
-                        WorkflowStatus::Completed
-                            | WorkflowStatus::Failed
-                            | WorkflowStatus::Cancelled
-                            | WorkflowStatus::Escalated
-                    )
-                })
-                .map(|w| w.task_id.clone())
-                .collect();
-            let active_subject_ids = process_manager.active_subject_ids();
-            let ready_tasks: Vec<_> = tasks
-                .iter()
-                .filter(|t| {
-                    t.status == TaskStatus::Ready
-                        && !active_task_ids.contains(&t.id)
-                        && !active_subject_ids.contains(&t.id)
-                })
-                .take(remaining)
-                .collect();
-            // Post-v0.5 the daemon has no in-process workflow executor:
-            // `hub.workflows().run(...)` would only bootstrap a Running
-            // record that nothing executes (zombie-cancelled ~90s later,
-            // blocking the task). Spawn the workflow_runner plugin instead —
-            // the same path queue dispatch uses; the runner creates and
-            // drives the workflow record itself.
-            let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(root));
-            for task in ready_tasks {
-                let workflow_ref = if task.is_frontend_related() {
-                    orchestrator_core::UI_UX_WORKFLOW_REF.to_string()
-                } else {
-                    workflow_config.config.default_workflow_ref.clone()
-                };
-                let dispatch = protocol::SubjectDispatch::for_task(task.id.clone(), workflow_ref);
-                match process_manager.spawn_workflow_runner(&dispatch, root) {
-                    Ok(()) => {
-                        let _ = hub.tasks().set_status(&task.id, TaskStatus::InProgress, false).await;
-                        summary.started += 1;
-                        summary.started_workflows.push(DispatchWorkflowStart {
-                            dispatch,
-                            workflow_id: None,
-                            selection_source: DispatchSelectionSource::ReadyQueue,
-                        });
-                    }
-                    Err(error) => {
-                        self.logger
-                            .error("process", format!("failed to start runner for ready task {}", task.id))
-                            .err(error.to_string())
-                            .emit();
-                        break;
-                    }
-                }
-            }
-        }
 
         Ok(summary)
     }
