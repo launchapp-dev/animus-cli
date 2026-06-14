@@ -32,15 +32,14 @@ use serde_json::Value;
 
 use animus_control_protocol::{
     types::{
-        AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest, DaemonAgentsResponse,
-        DaemonHealthResponse, DaemonStatusResponse, PluginBrowseRequest, PluginCallRequest, PluginCallResponse,
-        PluginInfo, PluginInfoRequest, PluginInstallRequest, PluginInstallResponse, PluginListRequest,
-        PluginListResponse, PluginPingRequest, PluginPingResponse, PluginSearchRequest, PluginSearchResponse,
-        PluginUninstallRequest, PluginUpdateRequest, PluginUpdateResponse, QueueDropRequest, QueueEnqueueRequest,
-        QueueEntry, QueueHoldRequest, QueueListRequest, QueueListResponse, QueueReleaseRequest, QueueReorderRequest,
-        QueueStats, Unit, WorkflowCancelRequest, WorkflowExecuteRequest, WorkflowGetRequest, WorkflowListRequest,
-        WorkflowListResponse, WorkflowPauseRequest, WorkflowResumeRequest, WorkflowRun, WorkflowRunRequest,
-        WorkflowRunStart,
+        DaemonAgentsResponse, DaemonHealthResponse, DaemonStatusResponse, PluginBrowseRequest, PluginCallRequest,
+        PluginCallResponse, PluginInfo, PluginInfoRequest, PluginInstallRequest, PluginInstallResponse,
+        PluginListRequest, PluginListResponse, PluginPingRequest, PluginPingResponse, PluginSearchRequest,
+        PluginSearchResponse, PluginUninstallRequest, PluginUpdateRequest, PluginUpdateResponse, QueueDropRequest,
+        QueueEnqueueRequest, QueueEntry, QueueHoldRequest, QueueListRequest, QueueListResponse, QueueReleaseRequest,
+        QueueReorderRequest, QueueStats, Unit, WorkflowCancelRequest, WorkflowExecuteRequest, WorkflowGetRequest,
+        WorkflowListRequest, WorkflowListResponse, WorkflowPauseRequest, WorkflowResumeRequest, WorkflowRun,
+        WorkflowRunRequest, WorkflowRunStart,
     },
     ControlError,
 };
@@ -169,29 +168,6 @@ pub trait QueueRouting: Send + Sync {
 
     /// `queue/stats` — per-status counts and recent throughput.
     async fn queue_stats(&self) -> Result<QueueStats, ControlError>;
-}
-
-/// `agent/*` dispatcher used by [`super::InProcessSurface`].
-///
-/// Wraps the CLI's existing agent-runner helpers
-/// (`handle_agent_run` / `handle_agent_status` / `handle_agent_control`)
-/// behind a transport-agnostic interface. C6.7 lands the wire surface as
-/// a pass-through: there is no daemon-side `AgentPool` struct in the
-/// current tree, so the wire returns `NotSupported` in practice and CLI
-/// callers degrade to the local in-process path. The trait surface
-/// exists so that MCP (C7) and the WebAPI (C8) can swap to a real
-/// implementation when agent supervision returns as a first-class
-/// daemon-owned subsystem — without changing the wire contract.
-#[async_trait]
-pub trait AgentRouting: Send + Sync {
-    /// `agent/run` — start a new agent session.
-    async fn agent_run(&self, request: AgentRunRequest) -> Result<AgentRunResult, ControlError>;
-
-    /// `agent/status` — fetch lifecycle status for a session id.
-    async fn agent_status(&self, request: AgentStatusRequest) -> Result<AgentStatus, ControlError>;
-
-    /// `agent/cancel` — cancel an in-flight agent session.
-    async fn agent_cancel(&self, request: AgentCancelRequest) -> Result<Unit, ControlError>;
 }
 
 /// Marker used by integration tests that need to assert "the surface

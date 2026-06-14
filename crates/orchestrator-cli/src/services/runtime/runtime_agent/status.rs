@@ -13,8 +13,8 @@ pub(super) async fn handle_agent_control(
 ) -> Result<()> {
     // v0.5.3: provider plugins do not yet expose a `pause/resume/terminate`
     // wire surface. The sidecar that previously implemented these was
-    // removed when the agent-runner was deleted; the daemon's
-    // `AgentRouting` impl returned `NotSupported` even before that. Surface
+    // removed when the agent-runner was deleted; the control-wire agent
+    // surface returned `NotSupported` even before that. Surface
     // an `unavailable` error so scripted callers can detect that no
     // control endpoint is connected and degrade accordingly. Cancellation
     // can still be performed via process signal to the child PID.

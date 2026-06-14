@@ -56,7 +56,7 @@ pub use policy::{
     check_method as check_policy_method, parse_set_principal, permission_denied_error, AsOverrideError,
     ConnectionPrincipal, PolicyState, SetPrincipalParams, METHOD_SET_PRINCIPAL,
 };
-pub use routing::{AgentRouting, DaemonOpsRouting, PluginRouting, QueueRouting, WorkflowRouting};
+pub use routing::{DaemonOpsRouting, PluginRouting, QueueRouting, WorkflowRouting};
 pub use server::{
     control_server_disable_env_set, control_socket_path, ControlServer, ControlServerHandle, CONTROL_SERVER_DISABLE_ENV,
 };

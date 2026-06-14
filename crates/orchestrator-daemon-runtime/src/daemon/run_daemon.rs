@@ -831,9 +831,6 @@ async fn start_control_server_for_daemon<H: DaemonRunHooks>(
     if let Some(routing) = hooks.queue_routing() {
         surface_builder = surface_builder.queue_routing(routing);
     }
-    if let Some(routing) = hooks.agent_routing() {
-        surface_builder = surface_builder.agent_routing(routing);
-    }
     let surface = surface_builder.build();
     let surface_arc: Arc<dyn animus_control_protocol::ControlSurface> = Arc::new(surface);
 
