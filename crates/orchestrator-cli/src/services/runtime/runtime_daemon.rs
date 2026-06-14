@@ -1033,9 +1033,6 @@ async fn handle_daemon_start(args: DaemonStartArgs, project_root: &str, json: bo
     if !json {
         let _ = crate::services::metrics::maybe_prompt_first_run(std::path::Path::new(project_root));
     }
-    // `--autonomous` is a deprecated no-op as of v0.6: `daemon start` always
-    // detaches into the background. `daemon run` is the foreground verb.
-    let _ = args.autonomous;
     let log_path = autonomous_daemon_log_path(project_root);
     if let Some(existing_pid) = get_daemon_pid(project_root)? {
         if is_process_alive(existing_pid) {

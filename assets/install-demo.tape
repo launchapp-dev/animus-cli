@@ -10,7 +10,7 @@
 #   1. animus doctor              (env is ready)
 #   2. animus init                (scaffold a project)
 #   3. animus subject create      (queue a task)
-#   4. animus daemon start        (autonomous mode on)
+#   4. animus daemon start        (detached background daemon)
 #   5. animus daemon stream       (show the workforce shipping)
 #
 # Run this against a fresh tmp project so the cast is reproducible.
@@ -48,7 +48,7 @@ Type "animus subject create --kind task --title 'Add rate limiting' --priority p
 Enter
 Sleep 2s
 
-Type "animus daemon start --autonomous"
+Type "animus daemon start"
 Enter
 Sleep 2s
 

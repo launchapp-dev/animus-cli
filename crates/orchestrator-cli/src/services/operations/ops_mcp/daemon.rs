@@ -14,9 +14,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_opt_num(&mut args, "--stale-threshold-hours", input.stale_threshold_hours);
     push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
     push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
-    // `autonomous` is a deprecated no-op (daemon start always detaches);
-    // accept it in the input schema but do not forward it.
-    let _ = input.autonomous;
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
     push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
