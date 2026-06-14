@@ -188,32 +188,12 @@ mod tests {
     }
 
     #[test]
-    fn daemon_start_accepts_deprecated_autonomous_flag_as_hidden_noop() {
-        // `daemon start` always detaches as of v0.6; `--autonomous` stays
-        // accepted for fleet automation back-compat but changes nothing.
-        let bare = Cli::try_parse_from(["animus", "daemon", "start"]).expect("daemon start should parse");
-        match bare.command {
-            Command::Daemon { command: DaemonCommand::Start(args) } => {
-                assert!(!args.autonomous, "flag defaults to false (and is a no-op either way)");
-            }
-            other => panic!("expected daemon start, got {other:?}"),
-        }
-
-        let with_flag = Cli::try_parse_from(["animus", "daemon", "start", "--autonomous"])
-            .expect("deprecated --autonomous must remain accepted");
-        match with_flag.command {
-            Command::Daemon { command: DaemonCommand::Start(args) } => assert!(args.autonomous),
-            other => panic!("expected daemon start, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn daemon_start_help_hides_deprecated_autonomous_flag() {
-        let error = Cli::try_parse_from(["animus", "daemon", "start", "--help"])
-            .expect_err("help output should short-circuit parsing");
-        assert_eq!(error.kind(), ErrorKind::DisplayHelp);
-        let help = error.to_string();
-        assert!(!help.contains("--autonomous"), "deprecated no-op flag should be hidden from help");
+    fn daemon_start_rejects_removed_autonomous_flag() {
+        // `daemon start` always detaches; the deprecated `--autonomous` no-op
+        // was removed. Passing it now errors instead of being silently accepted.
+        let error = Cli::try_parse_from(["animus", "daemon", "start", "--autonomous"])
+            .expect_err("removed --autonomous flag must be rejected");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument);
     }
 
     #[test]

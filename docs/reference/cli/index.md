@@ -383,12 +383,10 @@ As of v0.5.14 the two verbs have a fixed, non-overlapping split:
   process. This is the dev/debug verb; use Ctrl-C to stop. `--once` runs a
   single scheduler tick and exits.
 
-The legacy `--autonomous` flag is a deprecated, hidden no-op: detached mode
-is now the default and only behavior of `daemon start`, so
-`animus daemon start --autonomous` behaves identically to
-`animus daemon start`. Before v0.5.14, `daemon start` without `--autonomous`
-silently fell through to the foreground `run` path — that fallthrough was
-removed.
+The legacy `--autonomous` flag was **removed**: detached mode is the default
+and only behavior of `daemon start`, so the flag carried no meaning.
+`animus daemon start --autonomous` now errors with an unknown-argument
+message; drop the flag. (Use `animus daemon run` for the foreground verb.)
 
 ### `animus daemon start` / `animus daemon run` (plugin preflight)
 

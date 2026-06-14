@@ -3,7 +3,7 @@ services:
     build: .
     image: ghcr.io/launchapp-dev/animus:latest
     entrypoint: ["animus"]
-    command: ["daemon", "start", "--autonomous"]
+    command: ["daemon", "start"]
     volumes:
       - animus-data:/root/.animus
       - ./:/workspace

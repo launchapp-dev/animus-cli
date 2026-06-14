@@ -43,12 +43,10 @@ fn e2e_daemon_start_detaches_by_default_idempotent_then_stop() -> Result<()> {
         "daemon start should report the background log path"
     );
 
-    // The deprecated `--autonomous` flag stays accepted as a hidden no-op
-    // and behaves identically (idempotent against the running daemon).
+    // A second `daemon start` is idempotent against the running daemon.
     let already_running = harness.run_json_ok(&[
         "daemon",
         "start",
-        "--autonomous",
         "--interval-secs",
         "1",
         "--startup-cleanup",
@@ -64,7 +62,7 @@ fn e2e_daemon_start_detaches_by_default_idempotent_then_stop() -> Result<()> {
     assert_eq!(
         already_running.pointer("/data/daemon_pid").and_then(Value::as_u64),
         Some(daemon_pid),
-        "second start (with deprecated --autonomous) should report the same running daemon pid"
+        "second start should report the same running daemon pid"
     );
 
     harness.run_json_ok(&["daemon", "stop"])?;

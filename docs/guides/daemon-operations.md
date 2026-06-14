@@ -6,8 +6,8 @@ The Animus daemon is the autonomous scheduler that picks up tasks, dispatches wo
 
 ### Background Mode (Default)
 
-Start the daemon as a detached background process (as of v0.5.14 `daemon start`
-always detaches; the legacy `--autonomous` flag is a deprecated no-op):
+Start the daemon as a detached background process (`daemon start` always
+detaches; the legacy `--autonomous` flag was removed):
 
 ```bash
 animus daemon start

@@ -191,13 +191,6 @@ pub(crate) struct DaemonStartArgs {
     pub(crate) scheduler: DaemonSchedulerArgs,
     #[arg(
         long,
-        hide = true,
-        default_value_t = false,
-        help = "Deprecated no-op: detached/background mode is now the default for `daemon start`. Use `daemon run` for foreground."
-    )]
-    pub(crate) autonomous: bool,
-    #[arg(
-        long,
         default_value_t = false,
         help = "Auto-install any plugins that preflight finds missing, using the daemon's recommended defaults."
     )]
@@ -227,7 +220,6 @@ impl DaemonStartArgs {
                 max_tasks_per_tick: None,
                 phase_timeout_secs: None,
             },
-            autonomous: false,
             auto_install: false,
             skip_preflight: false,
         }
