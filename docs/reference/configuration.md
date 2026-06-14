@@ -932,13 +932,23 @@ loop is gone. A dispatch pass runs when any of these fire:
    additionally sweeps at least every 5 minutes (half the catch-up
    horizon) so a fire blocked by a full pool is retried before it falls
    out of the horizon, even when `interval_secs` is much longer.
-3. **Fallback heartbeat (`interval_secs`)** — the maximum sleep when no
+3. **Queue deferred deadlines** — when the queue holds deferred entries
+   (`animus queue enqueue --at`), the loop asks the queue plugin
+   (`queue/next_deadline`) for the earliest future `run_at` and folds it
+   into the same timed wake as the cron deadline (`min(cron, queue)`), so a
+   deferred entry dispatches on time instead of waiting for the heartbeat.
+4. **Fallback heartbeat (`interval_secs`)** — the maximum sleep when no
    event arrives. This is *not* the dispatch latency; it bounds pickup of
    out-of-band state mutations made without the CLI/MCP surfaces, and it
    paces housekeeping: the heavier reconciliation legs (manual-timeout,
    zombie-workflow, stale in-progress sweeps) run at most once per
-   heartbeat period, while event wakes run only the dispatch legs
-   (schedules, queue drain, ready tasks, completed-process reaping).
+   heartbeat period, while event wakes run only the dispatch legs (cron
+   schedules, queue drain, completed-process reaping).
+
+The daemon is **queue-only**: dispatch executes explicitly enqueued work
+(leased as agent slots free) plus cron schedules. It does not scan the
+subject backend for `Ready` tasks — the `daemon.auto_run_ready` setting and
+`--auto-run-ready` flag are deprecated no-ops kept for back-compat.
 
 Pause/resume gating is unchanged: `animus daemon pause` still gates
 dispatch on event wakes, not just heartbeat ticks — a nudge while paused

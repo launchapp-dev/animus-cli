@@ -144,7 +144,7 @@ pub(crate) struct DaemonSchedulerArgs {
     #[arg(
         long,
         action = ArgAction::Set,
-        help = "Enable or disable automatic dispatch of ready tasks. When omitted, the daemon uses persisted config or workflow YAML defaults."
+        help = "DEPRECATED / no-op. The daemon is queue-only: it executes only explicitly enqueued work (`animus queue enqueue`) plus cron schedules, and never auto-dispatches Ready tasks from the subject backend. Accepted for back-compat; has no effect."
     )]
     pub(crate) auto_run_ready: Option<bool>,
     #[arg(

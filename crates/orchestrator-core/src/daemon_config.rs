@@ -23,6 +23,10 @@ pub struct DaemonProjectConfig {
     pub interval_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tasks_per_tick: Option<usize>,
+    /// DEPRECATED / inert. The daemon is queue-only: it leases explicitly
+    /// enqueued work (plus cron schedules) and never auto-dispatches Ready
+    /// tasks from the subject backend. Parsed for back-compat with existing
+    /// `pm-config.json` files but no longer affects dispatch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_run_ready: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
