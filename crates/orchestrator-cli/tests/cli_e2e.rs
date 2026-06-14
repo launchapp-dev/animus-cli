@@ -16,7 +16,6 @@ fn e2e_daemon_start_detaches_by_default_idempotent_then_stop() -> Result<()> {
     let started = harness.run_json_ok(&[
         "daemon",
         "start",
-        "--skip-runner",
         "--interval-secs",
         "1",
         "--startup-cleanup",
@@ -50,7 +49,6 @@ fn e2e_daemon_start_detaches_by_default_idempotent_then_stop() -> Result<()> {
         "daemon",
         "start",
         "--autonomous",
-        "--skip-runner",
         "--interval-secs",
         "1",
         "--startup-cleanup",
@@ -92,7 +90,6 @@ fn e2e_daemon_start_reports_early_exit_failure() -> Result<()> {
     let (failure, exit_code) = harness.run_json_err_with_exit(&[
         "daemon",
         "start",
-        "--skip-runner",
         "--interval-secs",
         "1",
         "--startup-cleanup",
@@ -168,7 +165,6 @@ fn e2e_daemon_start_without_preflight_refuses_when_no_plugins() -> Result<()> {
     let (failure, exit_code) = harness.run_json_err_with_exit(&[
         "daemon",
         "start",
-        "--skip-runner",
         "--interval-secs",
         "1",
         "--startup-cleanup",

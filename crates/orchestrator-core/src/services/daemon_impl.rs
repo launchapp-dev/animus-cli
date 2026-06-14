@@ -770,11 +770,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_hub_start_skips_runner_when_requested_noop() {
-        // v0.5.3: `skip_runner` is a no-op since there is no runner sidecar.
+    async fn file_hub_start_does_not_spawn_runner_sidecar() {
+        // v0.5.3: there is no runner sidecar; starting the daemon must never
+        // set a runner_pid.
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
-        DaemonServiceApi::start(&hub, DaemonStartConfig { skip_runner: true, ..Default::default() })
+        DaemonServiceApi::start(&hub, DaemonStartConfig::default())
             .await
             .expect("daemon start should succeed without starting runner");
 

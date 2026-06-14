@@ -787,18 +787,9 @@ fn build_daemon_start_args_defaults_minimal() {
 
 #[test]
 fn build_daemon_start_args_with_flags() {
-    let input = DaemonStartInput { pool_size: Some(4), skip_runner: Some(true), ..Default::default() };
+    let input = DaemonStartInput { pool_size: Some(4), ..Default::default() };
     let args = build_daemon_start_args(&input);
-    assert_eq!(
-        args,
-        vec![
-            "daemon".to_string(),
-            "start".to_string(),
-            "--pool-size".to_string(),
-            "4".to_string(),
-            "--skip-runner".to_string(),
-        ]
-    );
+    assert_eq!(args, vec!["daemon".to_string(), "start".to_string(), "--pool-size".to_string(), "4".to_string(),]);
 }
 
 #[test]

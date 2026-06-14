@@ -744,7 +744,7 @@ fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &s
 pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, json: bool) -> Result<()> {
     apply_scheduler_overrides_to_pm_config(&args, project_root);
     let mut runtime_options = runtime_options_from_cli(&args, project_root);
-    let start_config = DaemonStartConfig { pool_size: runtime_options.pool_size, skip_runner: args.skip_runner };
+    let start_config = DaemonStartConfig { pool_size: runtime_options.pool_size };
     let workflow_config = orchestrator_core::load_workflow_config_or_default(std::path::Path::new(project_root));
     let daemon_config = workflow_config.config.daemon.as_ref();
     // Install the process-wide RuntimeQuotas BEFORE constructing
@@ -814,7 +814,6 @@ mod tests {
                 max_tasks_per_tick: Some(1),
                 phase_timeout_secs: None,
             },
-            skip_runner: true,
             once: true,
             auto_install: false,
             skip_preflight: true,
@@ -918,7 +917,6 @@ mod tests {
                 max_tasks_per_tick: Some(1),
                 phase_timeout_secs: None,
             },
-            skip_runner: true,
             once: true,
             auto_install: false,
             skip_preflight: true,
@@ -1009,7 +1007,6 @@ mod tests {
                 max_tasks_per_tick: Some(1),
                 phase_timeout_secs: None,
             },
-            skip_runner: true,
             once: true,
             auto_install: false,
             skip_preflight: true,
@@ -1114,7 +1111,6 @@ mod tests {
                 max_tasks_per_tick: Some(1),
                 phase_timeout_secs: None,
             },
-            skip_runner: true,
             once: true,
             auto_install: false,
             skip_preflight: true,
@@ -1168,7 +1164,6 @@ mod tests {
                 max_tasks_per_tick: None,
                 phase_timeout_secs: None,
             },
-            skip_runner: true,
             once: true,
             auto_install: false,
             skip_preflight: true,

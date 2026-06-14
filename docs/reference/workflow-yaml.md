@@ -1219,23 +1219,25 @@ The fleet cap honors the `ANIMUS_DAEMON_DISABLE_BUDGET_ENFORCEMENT` kill-switch:
 when budget enforcement is disabled, the daily-cap latch is neither reconciled
 nor enforced.
 
-### Fields parsed but not consumed by the daemon
+### Removed daemon keys
 
-The remaining fields exist on the `DaemonConfig` struct and round-trip through
-config compilation, but the daemon does not currently read them from workflow
-YAML. The persisted daemon config lives at
+The following keys were **removed from the workflow `DaemonConfig` struct**.
+They no longer parse into a field; declaring them under `daemon:` in workflow
+YAML still compiles but emits a removed-key warning.
+
+| Key | Where to set it today |
+|---|---|
+| `interval_secs` | `animus daemon config --interval-secs <n>` (persisted to `~/.animus/<repo-scope>/daemon/pm-config.json`, hot-reloaded) or `animus daemon run --interval-secs <n>` |
+| `pool_size` (alias `max_agents`) | `animus daemon config --pool-size <n>` (persisted, hot-reloaded) or `animus daemon run --pool-size <n>` |
+| `max_task_retries` | No runtime sink — the daemon never read it; drop it from the daemon block |
+| `retry_cooldown_secs` | No runtime sink — the daemon never read it; drop it from the daemon block |
+
+The persisted daemon config lives at
 `~/.animus/<repo-scope>/daemon/pm-config.json` (not the project-local
 `.animus/` tree). Set persisted fields via
 `animus daemon config --<flag> <value>` (a leaf command — flags directly, no
 `set` subcommand) or pass equivalent flags to `animus daemon run` /
 `animus daemon start`.
-
-| Field | Type | Where to set it today |
-|---|---|---|
-| `interval_secs` | integer | `animus daemon config --interval-secs <n>` (persisted, hot-reloaded) or `animus daemon run --interval-secs <n>` |
-| `pool_size` | integer | `animus daemon config --pool-size <n>` (persisted, hot-reloaded) or `animus daemon run --pool-size <n>`. Alias: `max_agents` |
-| `max_task_retries` | integer | **No wired sink today.** The field exists on `DaemonConfig` but is not read from workflow YAML and is not a field on `DaemonProjectConfig`. Setting it has no runtime effect |
-| `retry_cooldown_secs` | integer | **No wired sink today.** Same as `max_task_retries` |
 
 The daemon git/merge policy keys (`auto_merge`, `auto_pr`,
 `auto_commit_before_merge`, `auto_prune_worktrees`) were **removed in v0.5.x**
@@ -1244,13 +1246,6 @@ along with their `animus daemon start` / `animus daemon run` /
 removed-key warning. Animus no longer performs git operations as runner
 automation — express commit/push/PR/merge as
 [command phases](#git-operations-are-command-phases) instead.
-
-Setting the table's keys (`interval_secs`, `pool_size`, `max_task_retries`,
-`retry_cooldown_secs`) under `daemon:` in workflow YAML is harmless (the config
-round-trips), but it will not change daemon behaviour. For `interval_secs` and
-`pool_size`, use [`animus daemon config`](cli/index.md) (which accepts flags
-directly — there is no `set` subcommand) or the equivalent CLI flags on
-`animus daemon run` / `animus daemon start` instead.
 
 Declaring any of these keys in workflow YAML emits a compile-time warning
 (stderr, on every path that compiles YAML — daemon start, workflow run,

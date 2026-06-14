@@ -621,6 +621,7 @@ struct SilenceContext {
 impl SilenceContext {
     /// Empty context (no on-disk output known, detection disabled). Used by
     /// unit tests and as the fallback when the silence scan is skipped.
+    #[cfg(test)]
     fn empty() -> Self {
         SilenceContext { last_output_at: HashMap::new(), threshold_secs: 0, now: Utc::now() }
     }

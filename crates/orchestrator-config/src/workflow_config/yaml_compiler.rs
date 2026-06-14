@@ -259,20 +259,8 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
         (Some(base), None) => Some(base),
         (None, Some(overlay)) => Some(overlay),
         (Some(mut base), Some(overlay)) => {
-            if overlay.interval_secs.is_some() {
-                base.interval_secs = overlay.interval_secs;
-            }
-            if overlay.pool_size.is_some() {
-                base.pool_size = overlay.pool_size;
-            }
             if overlay.active_hours.is_some() {
                 base.active_hours = overlay.active_hours;
-            }
-            if overlay.max_task_retries.is_some() {
-                base.max_task_retries = overlay.max_task_retries;
-            }
-            if overlay.retry_cooldown_secs.is_some() {
-                base.retry_cooldown_secs = overlay.retry_cooldown_secs;
             }
             if overlay.phase_routing.is_some() {
                 base.phase_routing = overlay.phase_routing;

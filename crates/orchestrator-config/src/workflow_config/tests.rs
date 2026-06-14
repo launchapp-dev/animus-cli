@@ -1311,8 +1311,6 @@ workflows:
     assert_eq!(config.schedules[0].workflow_ref.as_deref(), Some("standard"));
     assert!(config.schedules[0].enabled);
     let daemon = config.daemon.as_ref().expect("daemon config should be parsed");
-    assert_eq!(daemon.interval_secs, Some(300));
-    assert_eq!(daemon.pool_size, Some(2));
     assert_eq!(daemon.active_hours.as_deref(), Some("00:00-06:00"));
 }
 
@@ -3092,7 +3090,8 @@ secrets:
   api_token:
     env: ANIMUS_TEST_TYPED_SECRET
 daemon:
-  pool_size: ${secret.api_token}
+  budget:
+    max_cost_usd_per_day: ${secret.api_token}
 "#;
     fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
 
@@ -3121,7 +3120,8 @@ secrets:
   api_token:
     env: ANIMUS_TEST_ESCAPED_SECRET
 daemon:
-  pool_size: ${secret.api_token}
+  budget:
+    max_cost_usd_per_day: ${secret.api_token}
 "#;
     fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
 
@@ -3153,7 +3153,8 @@ fn yaml_parse_error_message_redacts_keychain_resolved_env_value() {
     fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
     let yaml = r#"
 daemon:
-  pool_size: ${ANIMUS_TEST_KEYCHAIN_REDACT}
+  budget:
+    max_cost_usd_per_day: ${ANIMUS_TEST_KEYCHAIN_REDACT}
 "#;
     fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
 
@@ -3248,7 +3249,6 @@ fn yaml_merge_field_merges_daemon_blocks_across_overlays() {
     let base_yaml = r#"
 daemon:
   active_hours: "09:00-17:00"
-  pool_size: 4
 workflows:
   - id: standard
     name: Standard
@@ -3257,18 +3257,13 @@ workflows:
 "#;
     let overlay_yaml = r#"
 daemon:
-  pool_size: 2
+  active_hours: "10:00-18:00"
 "#;
     let base = parse_yaml_workflow_config(base_yaml).expect("parse base");
     let overlay = parse_yaml_workflow_config(overlay_yaml).expect("parse overlay");
     let merged = merge_yaml_into_config(base, overlay);
     let daemon = merged.daemon.expect("daemon block present");
-    assert_eq!(
-        daemon.active_hours.as_deref(),
-        Some("09:00-17:00"),
-        "earlier overlay's active_hours must survive a later daemon block"
-    );
-    assert_eq!(daemon.pool_size, Some(2), "later overlay's explicit field must win");
+    assert_eq!(daemon.active_hours.as_deref(), Some("10:00-18:00"), "later overlay's explicit field must win");
 }
 
 #[test]
@@ -4365,6 +4360,38 @@ mod unenforced_field_warnings {
     fn removed_daemon_auto_run_ready_is_flagged() {
         let fields = fields("daemon:\n  auto_run_ready: true\n");
         assert_eq!(fields, vec!["daemon.auto_run_ready"]);
+    }
+
+    #[test]
+    fn removed_daemon_max_task_retries_is_flagged() {
+        let warnings = unenforced_yaml_field_warnings("daemon:\n  max_task_retries: 3\n", "test.yaml");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].field, "daemon.max_task_retries");
+        assert!(warnings[0].message.contains("removed"), "{}", warnings[0].message);
+    }
+
+    #[test]
+    fn removed_daemon_retry_cooldown_secs_is_flagged() {
+        let warnings = unenforced_yaml_field_warnings("daemon:\n  retry_cooldown_secs: 60\n", "test.yaml");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].field, "daemon.retry_cooldown_secs");
+        assert!(warnings[0].message.contains("removed"), "{}", warnings[0].message);
+    }
+
+    #[test]
+    fn removed_daemon_pool_size_is_flagged() {
+        let warnings = unenforced_yaml_field_warnings("daemon:\n  pool_size: 4\n", "test.yaml");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].field, "daemon.pool_size");
+        assert!(warnings[0].message.contains("removed"), "{}", warnings[0].message);
+    }
+
+    #[test]
+    fn removed_daemon_interval_secs_is_flagged() {
+        let warnings = unenforced_yaml_field_warnings("daemon:\n  interval_secs: 10\n", "test.yaml");
+        assert_eq!(warnings.len(), 1);
+        assert_eq!(warnings[0].field, "daemon.interval_secs");
+        assert!(warnings[0].message.contains("removed"), "{}", warnings[0].message);
     }
 
     #[test]

@@ -206,12 +206,6 @@ fn push_opt(args: &mut Vec<String>, flag: &str, value: Option<String>) {
     }
 }
 
-fn push_bool_flag(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
-    if value == Some(true) {
-        args.push(flag.to_string());
-    }
-}
-
 fn push_bool_set(args: &mut Vec<String>, flag: &str, value: Option<bool>) {
     if let Some(v) = value {
         args.push(flag.to_string());

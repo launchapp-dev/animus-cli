@@ -193,13 +193,6 @@ pub(crate) struct DaemonStartArgs {
         long,
         hide = true,
         default_value_t = false,
-        help = "Deprecated no-op (the agent-runner sidecar was removed in v0.5.3; provider plugins handle CLI invocation)."
-    )]
-    pub(crate) skip_runner: bool,
-    #[arg(
-        long,
-        hide = true,
-        default_value_t = false,
         help = "Deprecated no-op: detached/background mode is now the default for `daemon start`. Use `daemon run` for foreground."
     )]
     pub(crate) autonomous: bool,
@@ -234,7 +227,6 @@ impl DaemonStartArgs {
                 max_tasks_per_tick: None,
                 phase_timeout_secs: None,
             },
-            skip_runner: false,
             autonomous: false,
             auto_install: false,
             skip_preflight: false,
@@ -260,8 +252,6 @@ pub(crate) struct DaemonRestartArgs {
 pub(crate) struct DaemonRunArgs {
     #[command(flatten)]
     pub(crate) scheduler: DaemonSchedulerArgs,
-    #[arg(long, hide = true, default_value_t = false)]
-    pub(crate) skip_runner: bool,
     #[arg(long, default_value_t = false, help = "Run one scheduler tick and exit.")]
     pub(crate) once: bool,
     #[arg(
