@@ -766,15 +766,7 @@ pub(crate) fn phase_ui_definition(label: &str, description: &str, category: &str
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
     #[serde(default)]
-    pub interval_secs: Option<u64>,
-    #[serde(default, alias = "max_agents")]
-    pub pool_size: Option<u32>,
-    #[serde(default)]
     pub active_hours: Option<String>,
-    #[serde(default)]
-    pub max_task_retries: Option<u32>,
-    #[serde(default)]
-    pub retry_cooldown_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase_routing: Option<protocol::PhaseRoutingConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

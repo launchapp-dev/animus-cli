@@ -92,7 +92,6 @@ pub fn plan_task_priority_rebalance(
 #[derive(Debug, Clone, Default)]
 pub struct DaemonStartConfig {
     pub pool_size: Option<usize>,
-    pub skip_runner: bool,
 }
 
 #[async_trait]
@@ -241,14 +240,6 @@ impl InMemoryServiceHub {
     pub fn with_project_root(mut self, project_root: impl Into<PathBuf>) -> Self {
         self.project_root = Some(project_root.into());
         self
-    }
-
-    fn log(&self, level: LogLevel, message: String) {
-        let state = self.state.clone();
-        tokio::spawn(async move {
-            let mut lock = state.write().await;
-            lock.logs.push(LogEntry { timestamp: Utc::now(), level, message });
-        });
     }
 }
 

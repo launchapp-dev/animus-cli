@@ -34,11 +34,13 @@ extend the daemon itself:
   GitHub webhooks, or trigger backend plugins. See
   [Workflow YAML: triggers](workflow-yaml.md#triggers).
 - **`daemon`** — workflow-YAML-side daemon settings: `active_hours`,
-  `phase_routing`, and `mcp`. Other `DaemonConfig` keys exist
-  on the struct but are configured elsewhere — `pool_size` and `interval_secs`
-  are read from the persisted daemon project config or CLI flags, while
-  `max_task_retries` and `retry_cooldown_secs` currently have no runtime sink
-  at all (round-trip-only). The daemon git/merge policy keys (`auto_merge`,
+  `phase_routing`, `mcp`, and `budget`. The `pool_size`, `interval_secs`,
+  `max_task_retries`, and `retry_cooldown_secs` keys were removed from
+  `DaemonConfig`: declaring them in workflow YAML emits a removed-key warning.
+  `pool_size` and `interval_secs` are configured via the persisted daemon
+  project config or CLI flags (`animus daemon config` / `daemon run` /
+  `daemon start`); `max_task_retries` and `retry_cooldown_secs` had no runtime
+  sink and were dropped entirely. The daemon git/merge policy keys (`auto_merge`,
   `auto_pr`, `auto_commit_before_merge`, `auto_prune_worktrees`) were removed
   in v0.5.x — merge/PR behavior now lives in workflow `post_success.merge`,
   executed by the workflow runner plugin. See

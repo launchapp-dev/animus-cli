@@ -1074,12 +1074,6 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
     }
 
     if let Some(daemon) = &config.daemon {
-        if daemon.interval_secs == Some(0) {
-            errors.push("daemon.interval_secs must be greater than zero when set".to_string());
-        }
-        if daemon.pool_size == Some(0) {
-            errors.push("daemon.pool_size must be greater than zero when set".to_string());
-        }
         if daemon.active_hours.as_deref().is_some_and(|value| value.trim().is_empty()) {
             errors.push("daemon.active_hours must not be empty when set".to_string());
         }
@@ -1139,19 +1133,19 @@ struct UnenforcedRule {
 const UNENFORCED_RULES: &[UnenforcedRule] = &[
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["max_task_retries"]),
-        explanation: "this field is a no-op: the daemon never reads it, so task retry limits are not enforced anywhere yet",
+        explanation: "this key was removed: the daemon never read it, so task retry limits were never enforced; drop it from the daemon block",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["retry_cooldown_secs"]),
-        explanation: "this field is a no-op: the daemon never reads it, so retry cooldowns are not enforced anywhere yet",
+        explanation: "this key was removed: the daemon never read it, so retry cooldowns were never enforced; drop it from the daemon block",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["pool_size", "max_agents"]),
-        explanation: "the daemon ignores this YAML value; set pool size via `animus daemon config --pool-size <n>` (persisted, hot-reloaded) or `animus daemon run --pool-size <n>`",
+        explanation: "this key was removed from the daemon block: set pool size via `animus daemon config --pool-size <n>` (persisted, hot-reloaded) or `animus daemon run --pool-size <n>`",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["interval_secs"]),
-        explanation: "the daemon ignores this YAML value; set the tick interval via `animus daemon config --interval-secs <n>` (persisted, hot-reloaded) or `animus daemon run --interval-secs <n>`",
+        explanation: "this key was removed from the daemon block: set the tick interval via `animus daemon config --interval-secs <n>` (persisted, hot-reloaded) or `animus daemon run --interval-secs <n>`",
     },
     UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_run_ready"]),

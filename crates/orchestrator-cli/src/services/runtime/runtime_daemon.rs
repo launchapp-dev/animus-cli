@@ -924,9 +924,6 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         command.arg("--phase-timeout-secs").arg(phase_timeout_secs.to_string());
     }
 
-    if args.skip_runner {
-        command.arg("--skip-runner");
-    }
     if args.auto_install {
         command.arg("--auto-install");
     }
