@@ -5,7 +5,6 @@ mod daemon;
 mod dispatch;
 mod log_storage;
 pub mod metrics;
-mod queue;
 pub mod quotas;
 mod schedule;
 mod subject_dispatch;
@@ -50,11 +49,6 @@ pub use log_storage::{
     LogStorageHandle, LogStorageResolution, LogStorageSupervisorOutcome, LOG_STORAGE_DISABLE_ENV,
 };
 pub use protocol::{RunnerEvent, SubjectDispatch, SubjectDispatchExt, SubjectExecutionFact};
-pub use queue::{
-    dispatch_queue_state_path, load_dispatch_queue_state, mark_dispatch_queue_entry_assigned,
-    remove_terminal_dispatch_queue_entry_non_fatal, save_dispatch_queue_state, DispatchQueueEntry,
-    DispatchQueueEntryStatus, DispatchQueueState,
-};
 pub use quotas::{install_runtime_quotas, live_plugin_process_count, runtime_quotas, RuntimeQuotas};
 pub use schedule::{
     discover_trigger_plugins, ScheduleDispatch, ScheduleDispatchOutcome, TriggerDispatch, TriggerDispatchOutcome,

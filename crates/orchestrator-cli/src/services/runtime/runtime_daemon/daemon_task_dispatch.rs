@@ -105,10 +105,7 @@ pub async fn dispatch_queued_entries_via_runner(
         }
     }
 
-    let mut notice_sink = CliDispatchNoticeSink {
-        plugin_owned_subject_keys: plugin_owned_subject_keys.clone(),
-        hard_failed_subject_keys: std::collections::HashSet::new(),
-    };
+    let mut notice_sink = CliDispatchNoticeSink { hard_failed_subject_keys: std::collections::HashSet::new() };
     let summary = execute_dispatch_plan_via_runner(root, process_manager, &planned_starts, limit, &mut notice_sink);
 
     if !leased_entry_ids.is_empty() {
@@ -186,24 +183,12 @@ async fn release_leased_entry_to_pending(project_root_path: &std::path::Path, en
 }
 
 struct CliDispatchNoticeSink {
-    plugin_owned_subject_keys: std::collections::HashSet<String>,
     hard_failed_subject_keys: std::collections::HashSet<String>,
 }
 
 impl DispatchNoticeSink for CliDispatchNoticeSink {
     fn notice(&mut self, notice: DispatchNotice) {
         match notice {
-            DispatchNotice::QueueAssignmentFailed { dispatch, error } => {
-                if self.plugin_owned_subject_keys.contains(&dispatch.subject_key()) {
-                    return;
-                }
-                warn!(
-                    actor = protocol::ACTOR_DAEMON,
-                    subject_id = %dispatch.subject_key(),
-                    error = %error,
-                    "failed to mark dispatch queue entry assigned"
-                );
-            }
             DispatchNotice::Failed { dispatch, error } => {
                 self.hard_failed_subject_keys.insert(dispatch.subject_key());
                 warn!(
