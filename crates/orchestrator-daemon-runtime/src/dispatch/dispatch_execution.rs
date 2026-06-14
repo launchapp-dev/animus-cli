@@ -1,7 +1,7 @@
 use crate::dispatch::process_manager::WorkflowConcurrencyCapReached;
 use crate::{
-    mark_dispatch_queue_entry_assigned, DispatchNotice, DispatchNoticeSink, DispatchSelectionSource,
-    DispatchWorkflowStart, DispatchWorkflowStartSummary, PlannedDispatchStart, ProcessManager,
+    DispatchNotice, DispatchNoticeSink, DispatchWorkflowStart, DispatchWorkflowStartSummary, PlannedDispatchStart,
+    ProcessManager,
 };
 
 pub fn execute_dispatch_plan_via_runner<S>(
@@ -26,15 +26,6 @@ where
 
         match process_manager.spawn_workflow_runner(&planned_start.dispatch, project_root) {
             Ok(()) => {
-                if planned_start.selection_source == DispatchSelectionSource::DispatchQueue {
-                    if let Err(error) = mark_dispatch_queue_entry_assigned(project_root, &planned_start.dispatch, None)
-                    {
-                        notice_sink.notice(DispatchNotice::QueueAssignmentFailed {
-                            dispatch: planned_start.dispatch.clone(),
-                            error: error.to_string(),
-                        });
-                    }
-                }
                 notice_sink.notice(DispatchNotice::Started {
                     dispatch: planned_start.dispatch.clone(),
                     selection_source: planned_start.selection_source,
@@ -67,6 +58,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DispatchSelectionSource;
     use protocol::{SubjectDispatch, SubjectDispatchExt};
 
     struct RecordingSink {

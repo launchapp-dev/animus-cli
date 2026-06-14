@@ -19,10 +19,6 @@ pub enum DispatchNotice {
         dispatch: SubjectDispatch,
         reason: String,
     },
-    QueueAssignmentFailed {
-        dispatch: SubjectDispatch,
-        error: String,
-    },
     ScheduleDispatched {
         schedule_id: String,
         dispatch: SubjectDispatch,

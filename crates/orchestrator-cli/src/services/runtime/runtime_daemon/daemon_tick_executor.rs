@@ -202,9 +202,6 @@ impl DefaultProjectTickServices for CliProjectTickServices {
                     .err(error)
                     .emit();
             }
-            DispatchNotice::QueueAssignmentFailed { dispatch, error } => {
-                self.logger.error("queue", format!("failed to assign {}", dispatch.subject_key())).err(error).emit();
-            }
             DispatchNotice::Failed { dispatch, error } => {
                 self.logger
                     .error("process", format!("failed to start runner for {}", dispatch.subject_key()))

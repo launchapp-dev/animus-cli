@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use animus_queue_protocol::{self as queue_proto, QueueCompletionRequest, QueueListRequest};
 use orchestrator_core::{project_task_terminal_workflow_status, services::ServiceHub, WorkflowStatus};
-use orchestrator_daemon_runtime::remove_terminal_dispatch_queue_entry_non_fatal;
 
 use crate::services::plugin_clients;
 
@@ -24,10 +23,8 @@ pub(crate) async fn project_terminal_workflow_result(
         return;
     }
 
-    remove_terminal_dispatch_queue_entry_non_fatal(project_root, subject_id, workflow_ref, workflow_id);
-
-    // Codex R7 [P1]: when a v0.5 queue plugin owns the queue, also call
-    // `queue/completion` so the entry leaves `assigned`. We don't have
+    // When a v0.5 queue plugin owns the queue, call `queue/completion`
+    // so the entry leaves `assigned`. We don't have
     // the `entry_id` here (the projection happens at terminal-result
     // time, far from the original dispatch), so look it up by
     // subject_id via `queue/list { status: ["assigned"] }`. If multiple
@@ -78,9 +75,8 @@ pub(crate) async fn project_terminal_workflow_result(
             }
         }
         Ok(None) => {
-            // No queue plugin installed — terminal cleanup already
-            // handled by the in-tree `remove_terminal_dispatch_queue_entry_non_fatal`
-            // call above.
+            // No queue plugin installed — nothing to finalize (the queue
+            // plugin owns all queue state in v0.5).
         }
         Err(error) => {
             tracing::warn!(

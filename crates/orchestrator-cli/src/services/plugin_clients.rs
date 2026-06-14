@@ -4,27 +4,24 @@
 // helpers stay available for follow-on call-site migrations in v0.5.x.
 #![allow(dead_code)]
 
-//! Outbound RPC clients for v0.5 `workflow_runner` and `queue` plugins.
+//! Outbound RPC clients for the v0.5 `workflow_runner` and `queue` plugins.
 //!
-//! Wave 3 of the v0.5 release routes `workflow/execute`, `workflow/run_phase`,
-//! and `queue/*` RPCs through plugin host calls instead of the in-tree
-//! `animus_runtime_shared` crate and the `orchestrator_daemon_runtime::queue`
-//! module. This module provides thin per-call wrappers that:
+//! `workflow/execute`, `workflow/run_phase`, and `queue/*` RPCs route through
+//! plugin host calls. `workflow_runner` and `queue` are required preflight
+//! roles, so the daemon refuses to start without them; the in-tree queue
+//! module and the in-tree workflow-execution fallback have been removed. This
+//! module provides thin per-call wrappers that:
 //!
 //! 1. Discover whether a `workflow_runner` / `queue` plugin is installed.
-//! 2. Spawn the plugin process (one process per call — caching is deferred
-//!    to v0.5.1 once preflight confirms the plugin-only path is stable).
+//! 2. Spawn the plugin process (one process per call).
 //! 3. Issue a custom `initialize` request that includes the v0.5
 //!    `init_extensions.project_binding.project_root` field so the plugin
 //!    binds to the correct project root, then issue the typed method call.
 //!
-//! Each entry point returns `Ok(None)` when no matching plugin is installed
-//! so existing callers fall back to the in-tree code path. The in-tree
-//! `animus_runtime_shared` crate and `orchestrator_daemon_runtime::queue` module
-//! are intentionally retained in v0.5 — deletion is a v0.5.x follow-up after
-//! preflight confirms the plugin-only path is stable. (See
-//! `docs/architecture/v0.5-execution-plan.md` "Wave 3 — Out of scope" for the
-//! deletion gate.)
+//! Each entry point returns `Ok(None)` when no matching plugin is installed.
+//! In the daemon this cannot happen (preflight enforces the roles); callers
+//! invoked outside the daemon (e.g. `animus workflow execute` on a fresh
+//! checkout) surface an actionable "install the plugin" error instead.
 
 use std::path::Path;
 use std::time::Duration;
@@ -139,7 +136,8 @@ async fn shutdown_quiet(host: PluginHost) {
 /// Wrapper around the v0.5 `workflow/execute` RPC.
 ///
 /// Returns `Ok(None)` if no `workflow_runner` plugin is installed; callers
-/// fall back to the in-tree `animus_runtime_shared::execute_workflow`.
+/// surface an actionable "install the plugin" error (there is no in-tree
+/// workflow-execution fallback — it was removed in v0.5.1).
 pub async fn call_workflow_execute(
     project_root: &Path,
     request: &workflow_proto::WorkflowExecuteRequest,

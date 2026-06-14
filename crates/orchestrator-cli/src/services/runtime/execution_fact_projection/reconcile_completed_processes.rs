@@ -3,8 +3,7 @@ use std::sync::Arc;
 use animus_queue_protocol::{self as queue_proto, QueueCompletionRequest, QueueListRequest};
 use orchestrator_core::{project_execution_fact, project_schedule_execution_fact, services::ServiceHub};
 use orchestrator_daemon_runtime::{
-    build_completion_reconciliation_plan, remove_terminal_dispatch_queue_entry_non_fatal, CompletedProcess,
-    CompletedProcessReconciliation,
+    build_completion_reconciliation_plan, CompletedProcess, CompletedProcessReconciliation,
 };
 use tracing::{debug, info, warn};
 
@@ -29,15 +28,8 @@ pub(crate) async fn reconcile_completed_processes(
             );
         }
 
-        remove_terminal_dispatch_queue_entry_non_fatal(
-            root,
-            &fact.subject_id,
-            fact.workflow_ref.as_deref(),
-            fact.workflow_id.as_deref(),
-        );
-
-        // Codex R9 [P1]: also drain the v0.5 queue plugin (when
-        // installed). The `fact.completion_status()` already maps
+        // Drain the v0.5 queue plugin (when installed). The
+        // `fact.completion_status()` already maps
         // onto the plugin's `completion_status` vocabulary
         // (`completed`/`failed`/`cancelled`).
         finalize_plugin_queue_entry(root, &fact).await;
