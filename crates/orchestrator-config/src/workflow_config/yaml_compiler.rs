@@ -268,9 +268,6 @@ pub fn merge_yaml_into_config(base: WorkflowConfig, yaml: WorkflowConfig) -> Wor
             if overlay.active_hours.is_some() {
                 base.active_hours = overlay.active_hours;
             }
-            if overlay.auto_run_ready {
-                base.auto_run_ready = true;
-            }
             if overlay.max_task_retries.is_some() {
                 base.max_task_retries = overlay.max_task_retries;
             }

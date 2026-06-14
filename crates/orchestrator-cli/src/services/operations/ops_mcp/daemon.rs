@@ -18,7 +18,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     // `autonomous` is a deprecated no-op (daemon start always detaches);
     // accept it in the input schema but do not forward it.
     let _ = input.autonomous;
-    push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
     push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
@@ -27,7 +26,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
 
 pub(super) fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<String> {
     let mut args = vec!["daemon".to_string(), "config".to_string()];
-    push_bool_set(&mut args, "--auto-run-ready", input.auto_run_ready);
     push_opt_usize(&mut args, "--pool-size", input.pool_size);
     push_opt_num(&mut args, "--interval-secs", input.interval_secs);
     push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);

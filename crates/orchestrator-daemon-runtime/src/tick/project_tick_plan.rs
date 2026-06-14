@@ -1,41 +1,24 @@
-use crate::{ready_dispatch_limit_for_options, DaemonRuntimeOptions, ScheduleDispatch};
+use crate::{dispatch_capacity_for_options, DaemonRuntimeOptions, ScheduleDispatch};
 use chrono::NaiveTime;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectTickPlan {
     pub within_active_hours: bool,
     pub should_process_due_schedules: bool,
-    pub should_prepare_ready_tasks: bool,
-    pub ready_dispatch_limit: usize,
     /// Capacity for draining explicitly enqueued dispatch-queue entries.
-    /// Unlike `ready_dispatch_limit` this is NOT gated on `auto_run_ready`:
-    /// `auto_run_ready: false` only disables auto-dispatch of Ready tasks,
-    /// while `animus queue enqueue` is an operator command whose entries
-    /// must still drain. Only a draining pool zeroes this limit.
+    /// `animus queue enqueue` is an operator command whose entries must
+    /// drain up to available pool capacity. Only a draining pool zeroes
+    /// this limit.
     pub queue_drain_limit: usize,
 }
 
 impl ProjectTickPlan {
-    pub fn build(
-        options: &DaemonRuntimeOptions,
-        active_hours: Option<&str>,
-        now: NaiveTime,
-        pool_draining: bool,
-        requested_ready_dispatch_limit: usize,
-    ) -> Self {
+    pub fn build(active_hours: Option<&str>, now: NaiveTime, pool_draining: bool, dispatch_capacity: usize) -> Self {
         let within_active_hours = ScheduleDispatch::allows_proactive_dispatch(active_hours, now);
         let should_process_due_schedules = within_active_hours && !pool_draining;
-        let should_prepare_ready_tasks = !pool_draining && options.auto_run_ready;
-        let ready_dispatch_limit = if should_prepare_ready_tasks { requested_ready_dispatch_limit } else { 0 };
-        let queue_drain_limit = if pool_draining { 0 } else { requested_ready_dispatch_limit };
+        let queue_drain_limit = if pool_draining { 0 } else { dispatch_capacity };
 
-        Self {
-            within_active_hours,
-            should_process_due_schedules,
-            should_prepare_ready_tasks,
-            ready_dispatch_limit,
-            queue_drain_limit,
-        }
+        Self { within_active_hours, should_process_due_schedules, queue_drain_limit }
     }
 
     pub fn for_slim_tick(
@@ -46,10 +29,9 @@ impl ProjectTickPlan {
         daemon_pool_size: Option<usize>,
         active_process_count: usize,
     ) -> Self {
-        let requested_ready_dispatch_limit =
-            ready_dispatch_limit_for_options(options, active_process_count, daemon_pool_size);
+        let dispatch_capacity = dispatch_capacity_for_options(options, active_process_count, daemon_pool_size);
 
-        Self::build(options, active_hours, now, pool_draining, requested_ready_dispatch_limit)
+        Self::build(active_hours, now, pool_draining, dispatch_capacity)
     }
 }
 
@@ -63,7 +45,6 @@ mod tests {
     #[test]
     fn disables_schedule_dispatch_outside_active_hours() {
         let plan = ProjectTickPlan::build(
-            &DaemonRuntimeOptions::default(),
             Some("09:00-17:00"),
             NaiveTime::from_hms_opt(8, 30, 0).expect("time should be valid"),
             false,
@@ -72,46 +53,27 @@ mod tests {
 
         assert!(!plan.within_active_hours);
         assert!(!plan.should_process_due_schedules);
-        assert!(plan.should_prepare_ready_tasks);
-        assert_eq!(plan.ready_dispatch_limit, 2);
         assert_eq!(plan.queue_drain_limit, 2);
     }
 
     #[test]
     fn disables_all_dispatch_while_pool_is_draining() {
-        let plan = ProjectTickPlan::build(
-            &DaemonRuntimeOptions::default(),
-            None,
-            NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
-            true,
-            3,
-        );
+        let plan =
+            ProjectTickPlan::build(None, NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"), true, 3);
 
         assert!(plan.within_active_hours);
         assert!(!plan.should_process_due_schedules, "paused/draining daemon must not dispatch schedules or triggers");
-        assert!(!plan.should_prepare_ready_tasks);
-        assert_eq!(plan.ready_dispatch_limit, 0);
         assert_eq!(plan.queue_drain_limit, 0, "draining pool must not drain the dispatch queue either");
     }
 
     #[test]
-    fn disables_ready_task_preparation_when_auto_run_ready_is_off() {
-        let plan = ProjectTickPlan::build(
-            &DaemonRuntimeOptions { auto_run_ready: false, ..DaemonRuntimeOptions::default() },
-            None,
-            NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"),
-            false,
-            4,
-        );
+    fn drains_enqueued_entries_up_to_available_capacity() {
+        let plan =
+            ProjectTickPlan::build(None, NaiveTime::from_hms_opt(12, 0, 0).expect("time should be valid"), false, 4);
 
         assert!(plan.within_active_hours);
         assert!(plan.should_process_due_schedules);
-        assert!(!plan.should_prepare_ready_tasks);
-        assert_eq!(plan.ready_dispatch_limit, 0);
-        assert_eq!(
-            plan.queue_drain_limit, 4,
-            "explicitly enqueued entries must still drain when auto_run_ready is off"
-        );
+        assert_eq!(plan.queue_drain_limit, 4, "explicitly enqueued entries drain up to available capacity");
     }
 
     #[test]
@@ -125,7 +87,7 @@ mod tests {
             3,
         );
 
-        assert_eq!(plan.ready_dispatch_limit, 1);
+        assert_eq!(plan.queue_drain_limit, 1);
     }
 
     #[test]
@@ -139,6 +101,6 @@ mod tests {
             1,
         );
 
-        assert_eq!(plan.ready_dispatch_limit, 2);
+        assert_eq!(plan.queue_drain_limit, 2);
     }
 }

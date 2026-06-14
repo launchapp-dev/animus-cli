@@ -67,15 +67,16 @@ Key configuration options:
 |---------|-------------|
 | `pool_size` | Maximum number of concurrent agents the daemon will run |
 | `active_hours` | Time window during which schedule-driven workflow dispatch is allowed |
-| `auto_run_ready` | Whether ready tasks are promoted during daemon ticks |
 
-`active_hours` only gates schedule-driven dispatch. Ready-task pickup is controlled separately by `auto_run_ready`.
+`active_hours` only gates schedule-driven dispatch. The daemon is queue-only:
+it dispatches explicitly enqueued work (`animus queue enqueue`) plus cron
+schedules, and never auto-promotes `Ready` subjects from the backend. The
+former `auto_run_ready` setting and `--auto-run-ready` flag were removed.
 
 Update a specific setting:
 
 ```bash
 animus daemon config --pool-size 3
-animus daemon config --auto-run-ready false
 ```
 
 ## Monitoring

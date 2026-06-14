@@ -1280,7 +1280,6 @@ daemon:
   interval_secs: 300
   max_agents: 2
   active_hours: "00:00-06:00"
-  auto_run_ready: true
 workflows:
   - id: standard
     name: Standard
@@ -1315,7 +1314,6 @@ workflows:
     assert_eq!(daemon.interval_secs, Some(300));
     assert_eq!(daemon.pool_size, Some(2));
     assert_eq!(daemon.active_hours.as_deref(), Some("00:00-06:00"));
-    assert!(daemon.auto_run_ready);
 }
 
 #[test]
@@ -3249,7 +3247,6 @@ workflows:
 fn yaml_merge_field_merges_daemon_blocks_across_overlays() {
     let base_yaml = r#"
 daemon:
-  auto_run_ready: true
   active_hours: "09:00-17:00"
   pool_size: 4
 workflows:
@@ -3266,8 +3263,11 @@ daemon:
     let overlay = parse_yaml_workflow_config(overlay_yaml).expect("parse overlay");
     let merged = merge_yaml_into_config(base, overlay);
     let daemon = merged.daemon.expect("daemon block present");
-    assert!(daemon.auto_run_ready, "earlier overlay's auto_run_ready must survive a later daemon block");
-    assert_eq!(daemon.active_hours.as_deref(), Some("09:00-17:00"));
+    assert_eq!(
+        daemon.active_hours.as_deref(),
+        Some("09:00-17:00"),
+        "earlier overlay's active_hours must survive a later daemon block"
+    );
     assert_eq!(daemon.pool_size, Some(2), "later overlay's explicit field must win");
 }
 
@@ -4357,8 +4357,14 @@ mod unenforced_field_warnings {
 
     #[test]
     fn enforced_daemon_keys_are_not_flagged() {
-        let yaml = "daemon:\n  auto_run_ready: true\n  active_hours: \"09:00-17:00\"\n  phase_routing: {}\n  mcp: {}\n";
+        let yaml = "daemon:\n  active_hours: \"09:00-17:00\"\n  phase_routing: {}\n  mcp: {}\n";
         assert!(fields(yaml).is_empty(), "enforced daemon fields must not warn: {:?}", fields(yaml));
+    }
+
+    #[test]
+    fn removed_daemon_auto_run_ready_is_flagged() {
+        let fields = fields("daemon:\n  auto_run_ready: true\n");
+        assert_eq!(fields, vec!["daemon.auto_run_ready"]);
     }
 
     #[test]

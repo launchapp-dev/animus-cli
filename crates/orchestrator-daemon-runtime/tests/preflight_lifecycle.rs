@@ -108,7 +108,6 @@ impl ProjectTickHooks for StubDriver {
     async fn dispatch_ready_tasks(
         &mut self,
         _root: &str,
-        _limit: usize,
         _queue_drain_limit: usize,
     ) -> Result<DispatchWorkflowStartSummary> {
         Ok(DispatchWorkflowStartSummary::default())
@@ -333,7 +332,6 @@ impl ProjectTickHooks for PauseProbeDriver {
     async fn dispatch_ready_tasks(
         &mut self,
         _root: &str,
-        _limit: usize,
         _queue_drain_limit: usize,
     ) -> Result<DispatchWorkflowStartSummary> {
         Ok(DispatchWorkflowStartSummary::default())

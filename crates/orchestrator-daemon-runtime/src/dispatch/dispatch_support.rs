@@ -8,7 +8,7 @@ pub fn ready_dispatch_limit(max_tasks_per_tick: usize, health: &DaemonHealth) ->
     dispatch_headroom(max_tasks_per_tick, health.active_agents, effective_capacity_limit(&[health.pool_size]))
 }
 
-pub fn ready_dispatch_limit_for_options(
+pub fn dispatch_capacity_for_options(
     options: &DaemonRuntimeOptions,
     active_agents: usize,
     observed_pool_size: Option<usize>,
@@ -153,7 +153,7 @@ pub fn workflow_current_phase_id(workflow: &OrchestratorWorkflow) -> Option<Stri
 mod tests {
     use orchestrator_core::{DaemonHealth, DaemonStatus};
 
-    use super::{ready_dispatch_limit, ready_dispatch_limit_for_options, schedule_headroom, TickBudget};
+    use super::{dispatch_capacity_for_options, ready_dispatch_limit, schedule_headroom, TickBudget};
     use crate::DaemonRuntimeOptions;
 
     #[test]
@@ -231,18 +231,18 @@ mod tests {
     }
 
     #[test]
-    fn ready_dispatch_limit_for_options_uses_smallest_available_capacity() {
+    fn dispatch_capacity_for_options_uses_smallest_available_capacity() {
         let options =
             DaemonRuntimeOptions { pool_size: Some(2), max_tasks_per_tick: 5, ..DaemonRuntimeOptions::default() };
 
-        assert_eq!(ready_dispatch_limit_for_options(&options, 1, Some(3)), 1);
+        assert_eq!(dispatch_capacity_for_options(&options, 1, Some(3)), 1);
     }
 
     #[test]
-    fn ready_dispatch_limit_for_options_returns_max_tasks_when_uncapped() {
+    fn dispatch_capacity_for_options_returns_max_tasks_when_uncapped() {
         let options = DaemonRuntimeOptions { max_tasks_per_tick: 4, ..DaemonRuntimeOptions::default() };
 
-        assert_eq!(ready_dispatch_limit_for_options(&options, 2, None), 4);
+        assert_eq!(dispatch_capacity_for_options(&options, 2, None), 4);
     }
 
     #[test]

@@ -124,7 +124,7 @@ approval gate stays human-only.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `auto_run_ready`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `skip_runner`, `autonomous` (deprecated no-op; the daemon always starts detached), `auto_install`, `skip_preflight`, `project_root` |
+| `animus.daemon.start` | Start the Animus daemon for task scheduling and agent management | `pool_size` (alias: `max_agents`), `interval_secs`, `startup_cleanup`, `resume_interrupted`, `reconcile_stale`, `stale_threshold_hours`, `max_tasks_per_tick`, `phase_timeout_secs`, `skip_runner`, `autonomous` (deprecated no-op; the daemon always starts detached), `auto_install`, `skip_preflight`, `project_root` |
 | `animus.daemon.stop` | Stop the daemon gracefully | `project_root` |
 | `animus.daemon.status` | Check if daemon is running and view basic state | `project_root` |
 | `animus.daemon.health` | Get detailed health metrics (active agents, queue, capacity); payload carries an additive `healthy` boolean verdict (false when the daemon is down/crashed or any plugin is unhealthy; a paused runtime stays true) | `project_root` |
@@ -134,7 +134,7 @@ approval gate stays human-only.
 | `animus.daemon.agents` | List currently running agent tasks and their status | `project_root` |
 | `animus.daemon.logs` | Read recent daemon log entries | `limit`, `search`, `project_root` |
 | `animus.daemon.config` | Read current daemon automation settings | `project_root` |
-| `animus.daemon.config-set` | Update daemon runtime settings and notification config | `auto_run_ready`, `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
+| `animus.daemon.config-set` | Update daemon runtime settings and notification config | `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
 | `animus.daemon.observe` | Routing front-door over the existing observability surfaces: returns the merged, chronological window of daemon events + logs (or routes to a single `source`). Non-streaming — always returns and never follows live. Works offline (reads scoped event/log history; the daemon need not be running) | `since`, `source` (`logs`/`events`/`stream`/`workflow`), `workflow_id`, `limit`, `project_root` |
 
 ---

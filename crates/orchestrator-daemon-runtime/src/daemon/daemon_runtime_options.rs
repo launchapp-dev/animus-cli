@@ -4,7 +4,6 @@ use serde::{Deserialize, Serialize};
 pub struct DaemonRuntimeOptions {
     pub pool_size: Option<usize>,
     pub interval_secs: u64,
-    pub auto_run_ready: bool,
     pub startup_cleanup: bool,
     pub resume_interrupted: bool,
     pub reconcile_stale: bool,
@@ -21,7 +20,6 @@ impl Default for DaemonRuntimeOptions {
         Self {
             pool_size: None,
             interval_secs: 5,
-            auto_run_ready: true,
             startup_cleanup: true,
             resume_interrupted: true,
             reconcile_stale: true,
@@ -57,9 +55,6 @@ impl DaemonRuntimeOptions {
         }
         if let Some(v) = config.max_tasks_per_tick {
             self.max_tasks_per_tick = v;
-        }
-        if let Some(v) = config.auto_run_ready {
-            self.auto_run_ready = v;
         }
         if let Some(v) = config.stale_threshold_hours {
             self.stale_threshold_hours = v;
@@ -115,19 +110,6 @@ mod tests {
         assert_eq!(options.max_tasks_per_tick, 2);
         options.reload_from_project_config(temp.path());
         assert_eq!(options.max_tasks_per_tick, 10);
-    }
-
-    #[test]
-    fn reload_from_project_config_applies_auto_run_ready() {
-        stable_test_home();
-        let temp = tempfile::tempdir().expect("tempdir");
-        let config = orchestrator_core::DaemonProjectConfig { auto_run_ready: Some(false), ..Default::default() };
-        orchestrator_core::write_daemon_project_config(temp.path(), &config).expect("write config");
-
-        let mut options = DaemonRuntimeOptions::default();
-        assert!(options.auto_run_ready);
-        options.reload_from_project_config(temp.path());
-        assert!(!options.auto_run_ready);
     }
 
     #[test]

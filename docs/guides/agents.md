@@ -174,7 +174,7 @@ dispatch control.
 {}                                          // animus.daemon.status / health / agents
 { "pool_size": 3, "auto_install": true }                    // animus.daemon.start (always detaches)
 { "skip_preflight": true }                  // animus.daemon.start (dev escape hatch)
-{ "auto_run_ready": true, "pool_size": 4 }  // animus.daemon.config-set
+{ "pool_size": 4, "interval_secs": 10 }     // animus.daemon.config-set
 { "limit": 50 }                              // animus.daemon.events
 { "project_root": "/repo" }                  // animus.queue.list / stats
 { "subject_id": "task:TASK-001" }            // animus.queue.hold / release / drop

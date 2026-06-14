@@ -643,10 +643,6 @@ fn save_pm_config(project_root: &str, value: &serde_json::Value) -> Result<()> {
     Ok(())
 }
 
-fn daemon_config_bool(config: &serde_json::Value, key: &str) -> Option<bool> {
-    config.get(key).and_then(serde_json::Value::as_bool)
-}
-
 fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) -> Result<()> {
     if args.notification_config_json.is_some() && args.notification_config_file.is_some() {
         anyhow::bail!("--notification-config-json and --notification-config-file cannot be used together");
@@ -670,10 +666,6 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     }
     if let Some(v) = args.max_tasks_per_tick {
         config["max_tasks_per_tick"] = serde_json::json!(v);
-        updated = true;
-    }
-    if let Some(v) = args.auto_run_ready {
-        config["auto_run_ready"] = serde_json::json!(v);
         updated = true;
     }
     if let Some(v) = args.stale_threshold_hours {
@@ -726,7 +718,6 @@ fn handle_daemon_config(args: DaemonConfigArgs, project_root: &str, json: bool) 
     print_value(
         serde_json::json!({
             "config_path": pm_config_path(project_root).display().to_string(),
-            "auto_run_ready": daemon_config_bool(&config, "auto_run_ready").unwrap_or(true),
             "pool_size": config.get("pool_size").and_then(serde_json::Value::as_u64),
             "interval_secs": config.get("interval_secs").and_then(serde_json::Value::as_u64),
             "max_tasks_per_tick": config.get("max_tasks_per_tick").and_then(serde_json::Value::as_u64),
@@ -921,9 +912,6 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
     }
     if let Some(interval_secs) = args.scheduler.interval_secs {
         command.arg("--interval-secs").arg(interval_secs.to_string());
-    }
-    if let Some(auto_run_ready) = args.scheduler.auto_run_ready {
-        command.arg("--auto-run-ready").arg(auto_run_ready.to_string());
     }
     if let Some(stale_threshold_hours) = args.scheduler.stale_threshold_hours {
         command.arg("--stale-threshold-hours").arg(stale_threshold_hours.to_string());

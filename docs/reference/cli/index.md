@@ -806,8 +806,8 @@ for the same subject from running concurrently.
 > It does **not** scan the subject backend for `Ready` tasks — putting work
 > in the queue is the end user's job (an agent, a script, or a configured
 > trigger calling `animus queue enqueue`). The `daemon --auto-run-ready` flag
-> and `daemon.auto_run_ready` config are deprecated no-ops kept for
-> back-compat.
+> and `daemon.auto_run_ready` config were **removed** — declaring
+> `daemon.auto_run_ready` in workflow YAML now emits a removed-key warning.
 
 ### `animus queue hold` / `release` / `drop` (bulk subject operations)
 

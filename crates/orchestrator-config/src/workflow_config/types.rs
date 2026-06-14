@@ -772,8 +772,6 @@ pub struct DaemonConfig {
     #[serde(default)]
     pub active_hours: Option<String>,
     #[serde(default)]
-    pub auto_run_ready: bool,
-    #[serde(default)]
     pub max_task_retries: Option<u32>,
     #[serde(default)]
     pub retry_cooldown_secs: Option<u64>,

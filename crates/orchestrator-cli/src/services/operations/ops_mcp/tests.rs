@@ -787,12 +787,7 @@ fn build_daemon_start_args_defaults_minimal() {
 
 #[test]
 fn build_daemon_start_args_with_flags() {
-    let input = DaemonStartInput {
-        pool_size: Some(4),
-        skip_runner: Some(true),
-        auto_run_ready: Some(true),
-        ..Default::default()
-    };
+    let input = DaemonStartInput { pool_size: Some(4), skip_runner: Some(true), ..Default::default() };
     let args = build_daemon_start_args(&input);
     assert_eq!(
         args,
@@ -802,8 +797,6 @@ fn build_daemon_start_args_with_flags() {
             "--pool-size".to_string(),
             "4".to_string(),
             "--skip-runner".to_string(),
-            "--auto-run-ready".to_string(),
-            "true".to_string(),
         ]
     );
 }
@@ -864,7 +857,6 @@ fn build_daemon_config_set_args_wires_max_tasks_per_tick() {
 #[test]
 fn build_daemon_config_set_args_wires_all_runtime_settings() {
     let input = DaemonConfigSetInput {
-        auto_run_ready: Some(false),
         pool_size: Some(4),
         interval_secs: Some(10),
         max_tasks_per_tick: Some(5),
@@ -879,8 +871,6 @@ fn build_daemon_config_set_args_wires_all_runtime_settings() {
     assert!(args.contains(&"10".to_string()));
     assert!(args.contains(&"--max-tasks-per-tick".to_string()));
     assert!(args.contains(&"5".to_string()));
-    assert!(args.contains(&"--auto-run-ready".to_string()));
-    assert!(args.contains(&"false".to_string()));
     assert!(args.contains(&"--stale-threshold-hours".to_string()));
     assert!(args.contains(&"48".to_string()));
     assert!(args.contains(&"--phase-timeout-secs".to_string()));

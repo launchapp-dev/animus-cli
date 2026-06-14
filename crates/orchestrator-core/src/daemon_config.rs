@@ -23,12 +23,6 @@ pub struct DaemonProjectConfig {
     pub interval_secs: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tasks_per_tick: Option<usize>,
-    /// DEPRECATED / inert. The daemon is queue-only: it leases explicitly
-    /// enqueued work (plus cron schedules) and never auto-dispatches Ready
-    /// tasks from the subject backend. Parsed for back-compat with existing
-    /// `pm-config.json` files but no longer affects dispatch.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auto_run_ready: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stale_threshold_hours: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,7 +166,6 @@ mod tests {
             pool_size: Some(8),
             interval_secs: Some(30),
             max_tasks_per_tick: Some(5),
-            auto_run_ready: Some(false),
             stale_threshold_hours: Some(48),
             phase_timeout_secs: Some(600),
             silent_threshold_mins: Some(45),
@@ -183,7 +176,6 @@ mod tests {
         assert_eq!(loaded.pool_size, Some(8));
         assert_eq!(loaded.interval_secs, Some(30));
         assert_eq!(loaded.max_tasks_per_tick, Some(5));
-        assert_eq!(loaded.auto_run_ready, Some(false));
         assert_eq!(loaded.stale_threshold_hours, Some(48));
         assert_eq!(loaded.phase_timeout_secs, Some(600));
         assert_eq!(loaded.silent_threshold_mins, Some(45));
@@ -241,7 +233,6 @@ mod tests {
             pool_size: Some(4),
             interval_secs: None,
             max_tasks_per_tick: None,
-            auto_run_ready: None,
             stale_threshold_hours: None,
             phase_timeout_secs: None,
             ..Default::default()
@@ -252,7 +243,6 @@ mod tests {
         // skip_serializing_if = "Option::is_none" means these should be absent
         assert!(!parsed.as_object().unwrap().contains_key("interval_secs"));
         assert!(!parsed.as_object().unwrap().contains_key("max_tasks_per_tick"));
-        assert!(!parsed.as_object().unwrap().contains_key("auto_run_ready"));
     }
 
     #[test]
@@ -278,6 +268,5 @@ mod tests {
         assert_eq!(loaded.pool_size, None);
         assert_eq!(loaded.interval_secs, None);
         assert_eq!(loaded.max_tasks_per_tick, None);
-        assert_eq!(loaded.auto_run_ready, None);
     }
 }

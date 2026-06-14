@@ -1159,7 +1159,6 @@ workflow — and compiles into `DaemonConfig`.
 
 ```yaml
 daemon:
-  auto_run_ready: true
   active_hours: "09:00-17:00"
   phase_routing:
     implementation:
@@ -1175,7 +1174,6 @@ The daemon currently honours these fields from the YAML `daemon:` block:
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `auto_run_ready` | boolean | `false` | When `true`, the daemon auto-dispatches Ready subjects without a manual `animus workflow run`. Used as the fallback when the persisted daemon config does not pin `auto_run_ready` and no CLI override is passed. This gate only controls auto-dispatch of Ready tasks — entries placed on the dispatch queue explicitly (`animus queue enqueue`) are operator commands and still drain into free pool headroom when `auto_run_ready` is `false` |
 | `active_hours` | string | unset (24/7) | Local-time window during which the daemon's project tick will dispatch new schedule- AND trigger-driven work, e.g. `"09:00-17:00"`. Outside this window the tick skips **both** `process_due_schedules` and `process_due_triggers`, so cron schedules, webhook events, file-watcher events, and plugin events are all suppressed. Missed cron fires are **not** replayed when the window reopens — the next tick re-evaluates the cron expression against the new current minute, so an 08:00 cron does not get a delayed run when a 09:00 window opens. Webhook and plugin events stay queued in `pending_events` until the window opens and drain then. In-flight phases are not interrupted. Schedules suppressed this way do **not** bump `missed_count`. Read on every tick from workflow YAML (the persisted daemon config has no `active_hours` field) |
 | `phase_routing` | object | unset | Per-phase model/tool routing overrides applied at daemon spawn time. See [Model Routing](../guides/model-routing.md) |
 | `mcp` | object | unset | Daemon-side MCP runtime config (forwarded to `ProcessManager`). See [MCP Tools](mcp-tools.md) |
@@ -1270,9 +1268,7 @@ compiles and validates. The warning registry lives in
 the same id). The `daemon:` block **field-merges**: as each overlay is applied,
 only the fields the overlay explicitly sets override the previously-accumulated
 block — fields defined only in earlier overlays survive a later partial
-`daemon:` block. One caveat: `auto_run_ready` is a plain boolean (an omitted
-value is indistinguishable from an explicit `false`), so once an earlier
-overlay sets it to `true` a later overlay cannot reset it to `false`.
+`daemon:` block.
 
 ---
 

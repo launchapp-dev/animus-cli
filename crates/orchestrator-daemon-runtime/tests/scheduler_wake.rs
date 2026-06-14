@@ -82,7 +82,7 @@ impl DaemonRunHooks for StubHooks {
 struct WakeProbe {
     ticks: Arc<Mutex<usize>>,
     zombie_reconciliations: Arc<Mutex<usize>>,
-    dispatch_calls: Arc<Mutex<Vec<(usize, usize)>>>,
+    dispatch_calls: Arc<Mutex<Vec<usize>>>,
 }
 
 impl WakeProbe {
@@ -94,7 +94,7 @@ impl WakeProbe {
         *self.zombie_reconciliations.lock().unwrap()
     }
 
-    fn dispatch_calls(&self) -> Vec<(usize, usize)> {
+    fn dispatch_calls(&self) -> Vec<usize> {
         self.dispatch_calls.lock().unwrap().clone()
     }
 
@@ -146,10 +146,9 @@ impl ProjectTickHooks for WakeProbeDriver {
     async fn dispatch_ready_tasks(
         &mut self,
         _root: &str,
-        limit: usize,
         queue_drain_limit: usize,
     ) -> Result<DispatchWorkflowStartSummary> {
-        self.probe.dispatch_calls.lock().unwrap().push((limit, queue_drain_limit));
+        self.probe.dispatch_calls.lock().unwrap().push(queue_drain_limit);
         Ok(DispatchWorkflowStartSummary::default())
     }
 
