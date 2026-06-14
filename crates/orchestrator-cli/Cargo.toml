@@ -39,9 +39,11 @@ animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "htt
 # `SubjectDispatch` identity; `protocol::SubjectDispatch` re-exports it.
 # Wire formats remain byte-for-byte compatible with the v0.1.13 surface
 # per the Wave 1 handoff state.
-animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.3" }
+animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.9" }
 animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.3" }
-animus-subject-protocol-v05 = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.3" }
+# v0.5.9 (not v0.5.3): must share the same subject-protocol revision as
+# animus-queue-protocol so SubjectId unifies in QueueLeaseRequest.exclude_subjects.
+animus-subject-protocol-v05 = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.9" }
 protocol = { path = "../protocol" }
 animus-session-backend = { workspace = true }
 which = "8"

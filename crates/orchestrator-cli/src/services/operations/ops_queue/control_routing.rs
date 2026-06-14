@@ -160,7 +160,10 @@ fn plugin_entry_to_wire(entry: queue_proto::QueueEntry) -> WireQueueEntry {
 
 fn plugin_stats_to_wire(stats: queue_proto::QueueStats) -> WireQueueStats {
     WireQueueStats {
-        ready: stats.pending as u64,
+        // `pending` includes deferred entries that are not yet leasable, so
+        // subtract them: "ready" must mean dispatchable-now. `deferred` is a
+        // subset of `pending`, but saturate defensively against bad backends.
+        ready: stats.pending.saturating_sub(stats.deferred) as u64,
         held: stats.held as u64,
         in_flight: stats.assigned as u64,
         done_recent: 0,
@@ -215,7 +218,13 @@ impl QueueRouting for QueueRoutingImpl {
             .map_err(|e| ControlError::Internal(format!("queue routing: encode SubjectDispatch failed: {e}")))?;
         let plugin_dispatch = serde_json::from_value(dispatch_value)
             .map_err(|e| ControlError::Internal(format!("queue routing: SubjectDispatch shape drift: {e}")))?;
-        let plugin_request = queue_proto::QueueEnqueueRequest { subject_dispatch: plugin_dispatch };
+        // Control-routed enqueues are always immediate; deferral is a
+        // CLI/MCP-only surface (`queue enqueue --at`).
+        let plugin_request = queue_proto::QueueEnqueueRequest {
+            subject_dispatch: plugin_dispatch,
+            run_at: None,
+            expire_after_secs: None,
+        };
         let response = plugin_clients::call_queue_enqueue(self.project_root_path(), &plugin_request)
             .await
             .map_err(internal_err)?
@@ -390,13 +399,23 @@ mod tests {
 
     #[test]
     fn plugin_stats_map_into_wire_buckets() {
-        let stats = PluginStats { total: 9, pending: 5, assigned: 3, held: 1 };
+        let stats = PluginStats { total: 9, pending: 5, assigned: 3, held: 1, deferred: 0 };
         let wire = plugin_stats_to_wire(stats);
         assert_eq!(wire.ready, 5);
         assert_eq!(wire.in_flight, 3);
         assert_eq!(wire.held, 1);
         assert_eq!(wire.done_recent, 0);
         assert_eq!(wire.dropped_recent, 0);
+    }
+
+    #[test]
+    fn deferred_entries_are_excluded_from_ready_stat() {
+        // 5 pending, 2 of which are deferred → only 3 are dispatchable now.
+        let stats = PluginStats { total: 9, pending: 5, assigned: 3, held: 1, deferred: 2 };
+        let wire = plugin_stats_to_wire(stats);
+        assert_eq!(wire.ready, 3, "ready must exclude deferred entries");
+        assert_eq!(wire.in_flight, 3);
+        assert_eq!(wire.held, 1);
     }
 
     #[test]

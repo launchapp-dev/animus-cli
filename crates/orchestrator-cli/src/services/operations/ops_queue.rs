@@ -121,17 +121,25 @@ pub(crate) async fn handle_queue(
             )
             .await?;
 
+            let run_at = args.run_at.as_deref().map(resolve_run_at).transpose()?;
+
             let dispatch_value =
                 serde_json::to_value(&dispatch).context("encoding subject_dispatch for queue plugin")?;
             let plugin_dispatch = serde_json::from_value(dispatch_value)
                 .context("subject_dispatch shape drift vs animus_subject_protocol v0.5")?;
-            let plugin_request = animus_queue_protocol::QueueEnqueueRequest { subject_dispatch: plugin_dispatch };
+            let plugin_request = animus_queue_protocol::QueueEnqueueRequest {
+                subject_dispatch: plugin_dispatch,
+                run_at: run_at.clone(),
+                expire_after_secs: args.expire_after_secs,
+            };
             let plugin_response =
                 crate::services::plugin_clients::call_queue_enqueue(project_root_path, &plugin_request)
                     .await?
                     .ok_or_else(|| queue_plugin_required("enqueue"))?;
             // Wake a running daemon so the freshly enqueued entry drains
-            // now instead of on the next heartbeat. Fire-and-forget.
+            // now instead of on the next heartbeat. Fire-and-forget. Deferred
+            // entries still nudge — the scheduler re-evaluates and simply
+            // leaves a not-yet-due entry queued.
             if plugin_response.enqueued {
                 orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(project_root_path).await;
             }
@@ -139,14 +147,24 @@ pub(crate) async fn handle_queue(
                 "enqueued": plugin_response.enqueued,
                 "entry_id": plugin_response.entry_id,
                 "subject_id": plugin_response.subject_id,
+                "run_at": run_at,
+                "expire_after_secs": args.expire_after_secs,
+                "warning": plugin_response.warning,
                 "via": "plugin_host",
             });
             if !json {
-                if plugin_response.enqueued {
-                    print_ok("subject dispatch enqueued (via queue plugin)", false);
-                    return Ok(());
+                let base = if plugin_response.enqueued {
+                    match run_at.as_deref() {
+                        Some(when) => format!("subject dispatch scheduled for {when} (via queue plugin)"),
+                        None => "subject dispatch enqueued (via queue plugin)".to_string(),
+                    }
+                } else {
+                    "subject dispatch already queued (via queue plugin)".to_string()
+                };
+                print_ok(&base, false);
+                if let Some(warning) = plugin_response.warning.as_deref() {
+                    println!("warning: {warning}");
                 }
-                print_ok("subject dispatch already queued (via queue plugin)", false);
                 return Ok(());
             }
             print_value(translated, true)
@@ -180,6 +198,23 @@ pub(crate) async fn handle_queue(
     }
 }
 
+/// Resolve a `--at` value into an RFC 3339 timestamp for the queue plugin.
+/// Accepts either an absolute RFC 3339 instant (normalized to UTC) or a
+/// relative offset like `90s` / `30m` / `2h` / `3d` added to now (a bare
+/// number is treated as seconds).
+fn resolve_run_at(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(trimmed) {
+        return Ok(dt.with_timezone(&chrono::Utc).to_rfc3339());
+    }
+    let secs = crate::cli_types::parse_duration_secs_default_seconds(trimmed).map_err(|err| {
+        invalid_input_error(format!(
+            "--at '{trimmed}' is not an RFC 3339 timestamp or a duration (e.g. 30m, 2h): {err}"
+        ))
+    })?;
+    Ok((chrono::Utc::now() + chrono::Duration::seconds(secs as i64)).to_rfc3339())
+}
+
 /// Render a `queue list` response for human (non-`--json`) output: a table of
 /// queued entries plus a one-line stats summary. An empty queue prints a hint
 /// instead of a bare table.
@@ -207,9 +242,18 @@ fn render_queue_list_human(response: &animus_queue_protocol::QueueListResponse) 
     println!("\n{}", queue_stats_summary(&response.stats));
 }
 
-/// One-line aggregate summary of queue counts.
+/// One-line aggregate summary of queue counts. `deferred` (a subset of
+/// `pending` not yet leasable) is shown only when non-zero to keep the
+/// common line uncluttered.
 fn queue_stats_summary(stats: &animus_queue_protocol::QueueStats) -> String {
-    format!("{} total | {} pending | {} assigned | {} held", stats.total, stats.pending, stats.assigned, stats.held)
+    let mut summary = format!(
+        "{} total | {} pending | {} assigned | {} held",
+        stats.total, stats.pending, stats.assigned, stats.held
+    );
+    if stats.deferred > 0 {
+        summary.push_str(&format!(" ({} deferred)", stats.deferred));
+    }
+    summary
 }
 
 /// Trim an RFC 3339 timestamp to `YYYY-MM-DD HH:MM` for table density.
@@ -705,8 +749,14 @@ mod tests {
 
     #[test]
     fn queue_stats_summary_renders_all_buckets() {
-        let stats = animus_queue_protocol::QueueStats { total: 5, pending: 3, assigned: 1, held: 1 };
+        let stats = animus_queue_protocol::QueueStats { total: 5, pending: 3, assigned: 1, held: 1, deferred: 0 };
         assert_eq!(queue_stats_summary(&stats), "5 total | 3 pending | 1 assigned | 1 held");
+    }
+
+    #[test]
+    fn queue_stats_summary_appends_deferred_when_present() {
+        let stats = animus_queue_protocol::QueueStats { total: 5, pending: 3, assigned: 1, held: 1, deferred: 2 };
+        assert_eq!(queue_stats_summary(&stats), "5 total | 3 pending | 1 assigned | 1 held (2 deferred)");
     }
 
     #[test]
@@ -714,6 +764,30 @@ mod tests {
         assert_eq!(queue_short_timestamp("2026-06-10T12:34:56Z"), "2026-06-10 12:34");
         assert_eq!(queue_short_timestamp(""), "--");
         assert_eq!(queue_short_timestamp("nodate"), "nodate");
+    }
+
+    #[test]
+    fn resolve_run_at_passes_through_rfc3339() {
+        let out = resolve_run_at("2030-01-01T15:00:00Z").expect("rfc3339");
+        let parsed = chrono::DateTime::parse_from_rfc3339(&out).expect("re-parse");
+        assert_eq!(parsed.with_timezone(&chrono::Utc).to_rfc3339(), out);
+        assert!(out.starts_with("2030-01-01T15:00:00"));
+    }
+
+    #[test]
+    fn resolve_run_at_accepts_relative_offset() {
+        let before = chrono::Utc::now();
+        let out = resolve_run_at("2h").expect("relative");
+        let when = chrono::DateTime::parse_from_rfc3339(&out).expect("parse").with_timezone(&chrono::Utc);
+        let delta = (when - before).num_seconds();
+        // ~2h ahead, allowing a wide band for test scheduling slack.
+        assert!((7_100..=7_300).contains(&delta), "delta was {delta}s");
+    }
+
+    #[test]
+    fn resolve_run_at_rejects_garbage() {
+        let err = resolve_run_at("whenever").expect_err("garbage must error");
+        assert!(err.to_string().contains("--at 'whenever'"));
     }
 
     #[test]

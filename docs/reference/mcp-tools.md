@@ -219,11 +219,20 @@ bounded fetch for recent entries, not a live stream.
 |---|---|---|
 | `animus.queue.list` | List queued subject dispatches | `project_root` |
 | `animus.queue.stats` | Get aggregate queue depth and status counts | `project_root` |
-| `animus.queue.enqueue` | Add a subject dispatch to the queue | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json`, `project_root` |
+| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`) | `task_id`, `requirement_id`, `title`, `description`, `workflow_ref`, `input_json`, `run_at`, `expire_after`, `project_root` |
 | `animus.queue.reorder` | Set preferred dispatch order | `subject_ids[]`, `project_root` |
 | `animus.queue.hold` | Hold one or more pending subjects from dispatch | `subject_id`, `subject_ids[]`, `project_root` |
 | `animus.queue.release` | Release one or more held subjects for dispatch | `subject_id`, `subject_ids[]`, `project_root` |
 | `animus.queue.drop` | Remove one or more queued subject dispatches permanently | `subject_id`, `subject_ids[]`, `project_root` |
+
+`animus.queue.enqueue` accepts `run_at` (an RFC 3339 timestamp or relative
+offset like `90s` / `30m` / `2h` / `3d`) to **defer** dispatch: the entry
+stays queued but is not leased until the time passes. `expire_after` (e.g.
+`10m`) sets a grace window after `run_at` past which a still-pending entry is
+dropped instead of dispatched late. Deferred enqueues are not deduplicated —
+a collision with an existing entry for the same subject still enqueues and
+returns a `warning` in the result for the agent to act on. This is the path
+an agent uses to schedule a one-off run for a specific time.
 
 ---
 

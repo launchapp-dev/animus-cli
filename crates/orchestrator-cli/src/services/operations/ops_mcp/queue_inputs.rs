@@ -14,6 +14,16 @@ pub(super) struct QueueEnqueueInput {
     pub(super) workflow_ref: Option<String>,
     #[serde(default)]
     pub(super) input_json: Option<String>,
+    /// Defer dispatch until this time: an RFC 3339 timestamp or a relative
+    /// offset (`90s`, `30m`, `2h`, `3d`). The entry stays queued but is not
+    /// leased until then. Omit to dispatch as soon as capacity allows.
+    #[serde(default)]
+    pub(super) run_at: Option<String>,
+    /// Grace window after `run_at` (e.g. `10m`, `1h`; bare number = seconds).
+    /// A still-pending deferred entry past `run_at + expire_after` is dropped
+    /// instead of dispatched late. Requires `run_at`.
+    #[serde(default)]
+    pub(super) expire_after: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }

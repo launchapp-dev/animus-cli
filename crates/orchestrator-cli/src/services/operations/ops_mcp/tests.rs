@@ -896,6 +896,8 @@ fn build_queue_enqueue_args_includes_optional_fields() {
         description: None,
         workflow_ref: Some("ops".to_string()),
         input_json: Some("{\"mode\":\"fast\"}".to_string()),
+        run_at: Some("30m".to_string()),
+        expire_after: Some("10m".to_string()),
         project_root: None,
     };
     let args = build_queue_enqueue_args(&input);
@@ -910,6 +912,10 @@ fn build_queue_enqueue_args_includes_optional_fields() {
             "ops".to_string(),
             "--input-json".to_string(),
             "{\"mode\":\"fast\"}".to_string(),
+            "--at".to_string(),
+            "30m".to_string(),
+            "--expire-after".to_string(),
+            "10m".to_string(),
         ]
     );
 }
