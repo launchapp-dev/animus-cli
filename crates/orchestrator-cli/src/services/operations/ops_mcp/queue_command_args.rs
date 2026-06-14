@@ -8,6 +8,8 @@ pub(super) fn build_queue_enqueue_args(input: &QueueEnqueueInput) -> Vec<String>
     push_opt(&mut args, "--description", input.description.clone());
     push_opt(&mut args, "--workflow-ref", input.workflow_ref.clone());
     push_opt(&mut args, "--input-json", input.input_json.clone());
+    push_opt(&mut args, "--at", input.run_at.clone());
+    push_opt(&mut args, "--expire-after", input.expire_after.clone());
     args
 }
 

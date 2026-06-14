@@ -767,6 +767,40 @@ raise mid-run via `animus.agent.request_approval` are answered with
 The former `animus git confirm {request, respond, outcome}` alias was
 removed in v0.5.14 — `animus approval` is the only surface.
 
+### `animus queue enqueue` (immediate + deferred dispatch)
+
+Enqueue a subject dispatch for a task, requirement, or custom title. By
+default the entry is dispatched as soon as the daemon has capacity.
+
+```bash
+animus queue enqueue --task-id TASK-001
+animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
+animus queue enqueue --title "Investigate flaky test" --description "Fails on CI"
+```
+
+**Deferred dispatch.** `--at` schedules the entry for a future time; it stays
+queued (counted under `pending`, and broken out as `deferred` in
+`queue stats`) but is not leased until the time passes, then dispatches on
+the next daemon pickup.
+
+```bash
+animus queue enqueue --task-id TASK-001 --at 2026-06-13T15:00:00Z   # absolute (RFC 3339)
+animus queue enqueue --task-id TASK-001 --at 2h                     # relative: 90s / 30m / 2h / 3d
+animus queue enqueue --task-id TASK-001 --at 2h --expire-after 10m  # drop if not dispatched within grace
+```
+
+| Flag | Description |
+|---|---|
+| `--at <WHEN>` | Defer until an RFC 3339 timestamp or a relative offset (`90s`, `30m`, `2h`, `3d`; bare number = seconds). Omit for immediate dispatch. |
+| `--expire-after <DURATION>` | Grace window after `--at`. If still pending past `--at + this`, the entry is dropped instead of dispatched late. Requires `--at`; omit to always fire late. |
+
+One-off jobs are **not deduplicated**: scheduling the same subject for
+distinct times is allowed. When another entry already targets the subject,
+the enqueue still succeeds and returns a `warning` (in the human output and
+the `animus.cli.v1` envelope's `warning` field) — the caller decides whether
+to `drop` the duplicate. Immediate (no `--at`) enqueues keep their
+`(subject, workflow_ref)` idempotency and report the no-op via `warning`.
+
 ### `animus queue hold` / `release` / `drop` (bulk subject operations)
 
 `hold`, `release`, and `drop` accept one or more subject ids as positional

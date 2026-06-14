@@ -139,6 +139,15 @@ dependencies = [
 [[package]]
 name = "animus-plugin-protocol"
 version = "0.1.14"
+dependencies = [
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "animus-plugin-protocol"
+version = "0.1.14"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.3#6b114186adc16a2b59a47702b578c0138a33241c"
 dependencies = [
  "schemars 1.2.1",
@@ -172,11 +181,10 @@ dependencies = [
 
 [[package]]
 name = "animus-queue-protocol"
-version = "0.3.0"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.3#6b114186adc16a2b59a47702b578c0138a33241c"
+version = "0.3.1"
 dependencies = [
- "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.3)",
- "animus-subject-protocol 0.1.14",
+ "animus-plugin-protocol 0.1.14",
+ "animus-subject-protocol 0.1.15",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -247,6 +255,21 @@ version = "0.1.14"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.3#6b114186adc16a2b59a47702b578c0138a33241c"
 dependencies = [
  "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.3)",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures-core",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "animus-subject-protocol"
+version = "0.1.15"
+dependencies = [
+ "animus-plugin-protocol 0.1.14",
  "anyhow",
  "async-trait",
  "chrono",
@@ -2698,7 +2721,7 @@ dependencies = [
  "animus-runtime-shared",
  "animus-session-backend",
  "animus-subject-protocol 0.1.13",
- "animus-subject-protocol 0.1.14",
+ "animus-subject-protocol 0.1.15",
  "animus-workflow-runner-protocol",
  "anyhow",
  "assert_cmd",
@@ -3050,7 +3073,7 @@ dependencies = [
 name = "protocol"
 version = "0.1.0"
 dependencies = [
- "animus-subject-protocol 0.1.15",
+ "animus-subject-protocol 0.1.15 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.7)",
  "anyhow",
  "chrono",
  "dirs 6.0.0",

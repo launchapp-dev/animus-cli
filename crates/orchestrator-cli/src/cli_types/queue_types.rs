@@ -1,6 +1,6 @@
 use clap::{Args, Subcommand};
 
-use super::INPUT_JSON_PRECEDENCE_HELP;
+use super::{parse_duration_secs_default_seconds, INPUT_JSON_PRECEDENCE_HELP};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum QueueCommand {
@@ -54,6 +54,20 @@ pub(crate) struct QueueEnqueueArgs {
     pub(crate) workflow_ref: Option<String>,
     #[arg(long, value_name = "JSON", help = INPUT_JSON_PRECEDENCE_HELP)]
     pub(crate) input_json: Option<String>,
+    #[arg(
+        long = "at",
+        value_name = "WHEN",
+        help = "Defer dispatch until this time. Accepts an RFC 3339 timestamp (2026-06-13T15:00:00Z) or a relative offset (90s, 30m, 2h, 3d). The entry stays queued but is not dispatched until then."
+    )]
+    pub(crate) run_at: Option<String>,
+    #[arg(
+        long = "expire-after",
+        value_name = "DURATION",
+        requires = "run_at",
+        value_parser = parse_duration_secs_default_seconds,
+        help = "Grace window after --at (e.g. 10m, 1h; bare number = seconds). If the entry is still pending past --at + this window, it is dropped instead of dispatched late. Omit to always fire late."
+    )]
+    pub(crate) expire_after_secs: Option<u64>,
 }
 
 #[derive(Debug, Args)]
