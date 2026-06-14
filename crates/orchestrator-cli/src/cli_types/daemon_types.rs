@@ -144,12 +144,6 @@ pub(crate) struct DaemonSchedulerArgs {
     #[arg(
         long,
         action = ArgAction::Set,
-        help = "DEPRECATED / no-op. The daemon is queue-only: it executes only explicitly enqueued work (`animus queue enqueue`) plus cron schedules, and never auto-dispatches Ready tasks from the subject backend. Accepted for back-compat; has no effect."
-    )]
-    pub(crate) auto_run_ready: Option<bool>,
-    #[arg(
-        long,
-        action = ArgAction::Set,
         default_value_t = true,
         help = "Run startup cleanup before scheduling."
     )]
@@ -233,7 +227,6 @@ impl DaemonStartArgs {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: None,
-                auto_run_ready: None,
                 startup_cleanup: true,
                 resume_interrupted: true,
                 reconcile_stale: true,
@@ -319,12 +312,6 @@ pub(crate) struct DaemonConfigArgs {
         help = "Set max new workflows to dispatch per scheduler tick (queue cap). Hot-reloaded by running daemon."
     )]
     pub(crate) max_tasks_per_tick: Option<usize>,
-    #[arg(
-        long,
-        action = ArgAction::Set,
-        help = "Enable or disable automatic dispatch of ready tasks."
-    )]
-    pub(crate) auto_run_ready: Option<bool>,
     #[arg(
         long,
         value_name = "HOURS",

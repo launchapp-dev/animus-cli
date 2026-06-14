@@ -166,9 +166,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
 
     async fn dispatch_ready_tasks(
         &mut self,
-        hub: Arc<dyn ServiceHub>,
         root: &str,
-        limit: usize,
         queue_drain_limit: usize,
         process_manager: Option<&mut ProcessManager>,
     ) -> Result<DispatchWorkflowStartSummary> {
@@ -182,10 +180,7 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         // task from a subject backend into the queue is the end user's
         // responsibility (an agent, a script, or a configured trigger calls
         // `animus queue enqueue`). Cron `schedules:` still dispatch via their
-        // own leg. `limit` (formerly the ready-task cap, gated on
-        // `auto_run_ready`) no longer drives any backend scan and is inert;
-        // it is retained on the signature pending the flag's full removal.
-        let _ = (limit, &hub);
+        // own leg.
         let summary = if queue_drain_limit > 0 {
             dispatch_queued_entries_via_runner(root, process_manager, queue_drain_limit).await?
         } else {

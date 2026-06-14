@@ -1154,6 +1154,10 @@ const UNENFORCED_RULES: &[UnenforcedRule] = &[
         explanation: "the daemon ignores this YAML value; set the tick interval via `animus daemon config --interval-secs <n>` (persisted, hot-reloaded) or `animus daemon run --interval-secs <n>`",
     },
     UnenforcedRule {
+        detector: UnenforcedDetector::DaemonKey(&["auto_run_ready"]),
+        explanation: "this key was removed: the daemon is queue-only and never auto-dispatches Ready tasks; enqueue work with `animus queue enqueue` or drive it from a `schedules:` cron entry",
+    },
+    UnenforcedRule {
         detector: UnenforcedDetector::DaemonKey(&["auto_merge"]),
         explanation: "this key was removed: the daemon has no merge/PR automation; express commit/push/PR/merge as a command phase (a phase with a `command:` running `git`/`gh`)",
     },

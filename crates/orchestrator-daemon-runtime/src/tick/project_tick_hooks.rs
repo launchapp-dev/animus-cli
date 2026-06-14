@@ -64,14 +64,11 @@ pub trait ProjectTickHooks {
         Ok(Vec::new())
     }
 
-    /// Dispatch work into free pool headroom. `limit` caps auto-dispatched
-    /// Ready tasks (0 when `auto_run_ready` is off); `queue_drain_limit`
-    /// caps explicitly enqueued dispatch-queue entries, which drain even
-    /// when ready-task auto-dispatch is disabled.
+    /// Dispatch work into free pool headroom. `queue_drain_limit` caps the
+    /// explicitly enqueued dispatch-queue entries leased this tick.
     async fn dispatch_ready_tasks(
         &mut self,
         root: &str,
-        _limit: usize,
         _queue_drain_limit: usize,
     ) -> Result<DispatchWorkflowStartSummary>;
 

@@ -714,12 +714,6 @@ fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &s
             changed = true;
         }
     }
-    if let Some(value) = args.scheduler.auto_run_ready {
-        if config.auto_run_ready != Some(value) {
-            config.auto_run_ready = Some(value);
-            changed = true;
-        }
-    }
     if let Some(value) = args.scheduler.interval_secs {
         if config.interval_secs != Some(value) {
             config.interval_secs = Some(value);
@@ -813,8 +807,6 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: Some(1),
-
-                auto_run_ready: Some(false),
                 startup_cleanup: true,
                 resume_interrupted: false,
                 reconcile_stale: false,
@@ -919,8 +911,6 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: Some(1),
-
-                auto_run_ready: Some(false),
                 startup_cleanup: false,
                 resume_interrupted: false,
                 reconcile_stale: true,
@@ -1012,8 +1002,6 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: Some(1),
-
-                auto_run_ready: Some(true),
                 startup_cleanup: false,
                 resume_interrupted: false,
                 reconcile_stale: false,
@@ -1029,8 +1017,8 @@ mod tests {
         handle_daemon_run(args, &primary_root, true).await.expect("daemon run should complete");
 
         // Queue-only model: the daemon must NOT pull a Ready task out of the
-        // subject backend. Even with `auto_run_ready: true` (now inert) the
-        // task is never dispatched — it stays Ready and no task-state-change
+        // subject backend. The task is never dispatched — it stays Ready and
+        // no task-state-change
         // selection-source event is emitted for it. Ingestion into the queue
         // is the end user's responsibility.
         let events_path = daemon_events_log_path();
@@ -1119,8 +1107,6 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: Some(1),
-
-                auto_run_ready: Some(false),
                 startup_cleanup: true,
                 resume_interrupted: false,
                 reconcile_stale: false,
@@ -1153,7 +1139,7 @@ mod tests {
     }
 
     #[test]
-    fn daemon_run_does_not_clobber_auto_run_ready_when_omitted() {
+    fn daemon_run_does_not_clobber_persisted_config_when_omitted() {
         let _lock = lock_env();
 
         let config_root = TempDir::new().expect("config temp dir");
@@ -1164,7 +1150,6 @@ mod tests {
 
         let project_root = TempDir::new().expect("project dir");
         let config = orchestrator_core::DaemonProjectConfig {
-            auto_run_ready: Some(false),
             interval_secs: Some(11),
             max_tasks_per_tick: Some(7),
             stale_threshold_hours: Some(42),
@@ -1176,7 +1161,6 @@ mod tests {
             scheduler: DaemonSchedulerArgs {
                 pool_size: None,
                 interval_secs: None,
-                auto_run_ready: None,
                 startup_cleanup: true,
                 resume_interrupted: true,
                 reconcile_stale: true,
@@ -1193,7 +1177,6 @@ mod tests {
         apply_scheduler_overrides_to_pm_config(&args, project_root.path().to_string_lossy().as_ref());
 
         let loaded = orchestrator_core::load_daemon_project_config(project_root.path()).expect("load daemon config");
-        assert_eq!(loaded.auto_run_ready, Some(false));
         assert_eq!(loaded.interval_secs, Some(11));
         assert_eq!(loaded.max_tasks_per_tick, Some(7));
         assert_eq!(loaded.stale_threshold_hours, Some(42));

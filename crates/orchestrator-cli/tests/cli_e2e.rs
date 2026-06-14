@@ -19,8 +19,6 @@ fn e2e_daemon_start_detaches_by_default_idempotent_then_stop() -> Result<()> {
         "--skip-runner",
         "--interval-secs",
         "1",
-        "--auto-run-ready",
-        "false",
         "--startup-cleanup",
         "false",
         "--resume-interrupted",
@@ -55,8 +53,6 @@ fn e2e_daemon_start_detaches_by_default_idempotent_then_stop() -> Result<()> {
         "--skip-runner",
         "--interval-secs",
         "1",
-        "--auto-run-ready",
-        "false",
         "--startup-cleanup",
         "false",
         "--resume-interrupted",
@@ -99,8 +95,6 @@ fn e2e_daemon_start_reports_early_exit_failure() -> Result<()> {
         "--skip-runner",
         "--interval-secs",
         "1",
-        "--auto-run-ready",
-        "false",
         "--startup-cleanup",
         "false",
         "--resume-interrupted",
@@ -177,8 +171,6 @@ fn e2e_daemon_start_without_preflight_refuses_when_no_plugins() -> Result<()> {
         "--skip-runner",
         "--interval-secs",
         "1",
-        "--auto-run-ready",
-        "false",
         "--startup-cleanup",
         "false",
         "--resume-interrupted",
@@ -260,21 +252,6 @@ fn e2e_daemon_config_persists_max_tasks_per_tick() -> Result<()> {
 }
 
 #[test]
-fn e2e_daemon_config_persists_auto_run_ready() -> Result<()> {
-    let harness = CliHarness::new()?;
-
-    let configured = harness.run_json_ok(&["daemon", "config", "--auto-run-ready", "false"])?;
-    assert_eq!(configured.pointer("/data/auto_run_ready").and_then(Value::as_bool), Some(false));
-
-    let pm_config_path = harness.scoped_root().join("daemon").join("pm-config.json");
-    let pm_config: Value =
-        serde_json::from_str(&std::fs::read_to_string(&pm_config_path).context("pm-config readable")?)?;
-    assert_eq!(pm_config.get("auto_run_ready").and_then(Value::as_bool), Some(false));
-
-    Ok(())
-}
-
-#[test]
 fn e2e_daemon_config_shows_runtime_settings() -> Result<()> {
     let harness = CliHarness::new()?;
 
@@ -283,8 +260,6 @@ fn e2e_daemon_config_shows_runtime_settings() -> Result<()> {
     let result = harness.run_json_ok(&["daemon", "config"])?;
     assert_eq!(result.pointer("/data/pool_size").and_then(Value::as_u64), Some(4));
     assert_eq!(result.pointer("/data/interval_secs").and_then(Value::as_u64), Some(20));
-    // auto_run_ready should show default true when not explicitly set
-    assert_eq!(result.pointer("/data/auto_run_ready").and_then(Value::as_bool), Some(true));
 
     Ok(())
 }

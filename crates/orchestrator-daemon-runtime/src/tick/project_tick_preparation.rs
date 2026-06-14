@@ -5,7 +5,6 @@ use crate::{DaemonRuntimeOptions, ProjectTickPlan};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProjectTickPreparation {
     pub schedule_plan: ProjectTickPlan,
-    pub ready_dispatch_limit: usize,
     pub queue_drain_limit: usize,
 }
 
@@ -27,11 +26,7 @@ impl ProjectTickPreparation {
             daemon_pool_size,
             active_process_count,
         );
-        Self {
-            schedule_plan,
-            ready_dispatch_limit: tick_plan.ready_dispatch_limit,
-            queue_drain_limit: tick_plan.queue_drain_limit,
-        }
+        Self { schedule_plan, queue_drain_limit: tick_plan.queue_drain_limit }
     }
 }
 
@@ -54,6 +49,6 @@ mod tests {
         );
 
         assert!(preparation.schedule_plan.should_process_due_schedules);
-        assert_eq!(preparation.ready_dispatch_limit, 1);
+        assert_eq!(preparation.queue_drain_limit, 1);
     }
 }

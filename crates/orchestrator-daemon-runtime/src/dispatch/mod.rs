@@ -37,8 +37,8 @@ pub use dispatch_execution::execute_dispatch_plan_via_runner;
 pub use dispatch_notice::{DispatchNotice, DispatchNoticeSink};
 pub use dispatch_selection_source::DispatchSelectionSource;
 pub use dispatch_support::{
-    active_workflow_subject_ids, active_workflow_task_ids, is_terminally_completed_workflow, ready_dispatch_limit,
-    ready_dispatch_limit_for_options, schedule_headroom, workflow_current_phase_id, TickBudget,
+    active_workflow_subject_ids, active_workflow_task_ids, dispatch_capacity_for_options,
+    is_terminally_completed_workflow, ready_dispatch_limit, schedule_headroom, workflow_current_phase_id, TickBudget,
 };
 pub use dispatch_workflow_start::DispatchWorkflowStart;
 pub use dispatch_workflow_start_summary::DispatchWorkflowStartSummary;

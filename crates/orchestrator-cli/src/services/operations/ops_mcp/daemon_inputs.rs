@@ -18,8 +18,6 @@ pub(super) struct DaemonStartInput {
     #[serde(default)]
     pub(super) autonomous: Option<bool>,
     #[serde(default)]
-    pub(super) auto_run_ready: Option<bool>,
-    #[serde(default)]
     pub(super) startup_cleanup: Option<bool>,
     #[serde(default)]
     pub(super) resume_interrupted: Option<bool>,
@@ -75,8 +73,6 @@ pub(super) struct DaemonObserveInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, Default)]
 pub(super) struct DaemonConfigSetInput {
-    #[serde(default)]
-    pub(super) auto_run_ready: Option<bool>,
     // Runtime-reconfigurable settings (hot-reloaded by daemon without restart)
     #[serde(default, alias = "max_agents")]
     pub(super) pool_size: Option<usize>,

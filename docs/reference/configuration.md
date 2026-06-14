@@ -33,8 +33,8 @@ extend the daemon itself:
 - **`triggers`** — event-driven dispatch from file watchers, generic webhooks,
   GitHub webhooks, or trigger backend plugins. See
   [Workflow YAML: triggers](workflow-yaml.md#triggers).
-- **`daemon`** — workflow-YAML-side daemon settings: `auto_run_ready`,
-  `active_hours`, `phase_routing`, and `mcp`. Other `DaemonConfig` keys exist
+- **`daemon`** — workflow-YAML-side daemon settings: `active_hours`,
+  `phase_routing`, and `mcp`. Other `DaemonConfig` keys exist
   on the struct but are configured elsewhere — `pool_size` and `interval_secs`
   are read from the persisted daemon project config or CLI flags, while
   `max_task_retries` and `retry_cooldown_secs` currently have no runtime sink
@@ -209,7 +209,7 @@ These files are Animus-managed state. Treat them as runtime data, not hand-autho
 Persisted daemon runtime settings, written by `animus daemon config` (CLI) or
 `animus.daemon.config-set` (MCP) — never project-local `.animus/`. The
 runtime-reconfigurable keys are `pool_size`, `interval_secs`,
-`max_tasks_per_tick`, `auto_run_ready`, `stale_threshold_hours`, and
+`max_tasks_per_tick`, `stale_threshold_hours`, and
 `phase_timeout_secs`; the running daemon re-reads them once per scheduler tick,
 so changes apply without a restart. Exception: the daemon's `ProcessManager`
 captures `phase_timeout_secs` once at startup, so a changed phase timeout only
@@ -948,7 +948,7 @@ loop is gone. A dispatch pass runs when any of these fire:
 The daemon is **queue-only**: dispatch executes explicitly enqueued work
 (leased as agent slots free) plus cron schedules. It does not scan the
 subject backend for `Ready` tasks — the `daemon.auto_run_ready` setting and
-`--auto-run-ready` flag are deprecated no-ops kept for back-compat.
+`--auto-run-ready` flag were **removed**.
 
 Pause/resume gating is unchanged: `animus daemon pause` still gates
 dispatch on event wakes, not just heartbeat ticks — a nudge while paused

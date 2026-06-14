@@ -81,22 +81,21 @@ where
     // that was not yet reflected in the pre-reconciliation active count used by
     // `preparation`.  Requerying here ensures we can dispatch into that headroom.
     let post_reconcile_active_count = hooks.active_process_count();
-    let (ready_dispatch_limit, queue_drain_limit) = if post_reconcile_active_count != updated_active_count {
+    let queue_drain_limit = if post_reconcile_active_count != updated_active_count {
         let recomputed =
             mode.build_preparation(&context, args, now, pool_draining, &snapshot, post_reconcile_active_count);
-        (recomputed.ready_dispatch_limit, recomputed.queue_drain_limit)
+        recomputed.queue_drain_limit
     } else {
-        (preparation.ready_dispatch_limit, preparation.queue_drain_limit)
+        preparation.queue_drain_limit
     };
     // Fleet daily spend cap: when latched, suppress ALL new dispatch this
-    // tick — ready tasks AND explicit queue drain. The schedule / trigger
-    // legs above are gated on the same latch inside the hooks, so a blown
-    // cap stops every new run until spend ages out of the rolling window or
-    // the operator raises/clears the cap.
+    // tick — the explicit queue drain. The schedule / trigger legs above are
+    // gated on the same latch inside the hooks, so a blown cap stops every
+    // new run until spend ages out of the rolling window or the operator
+    // raises/clears the cap.
     let dispatch_suppressed = hooks.dispatch_suppressed(root);
-    if !dispatch_suppressed && (ready_dispatch_limit > 0 || queue_drain_limit > 0) {
-        execution_outcome.ready_workflow_starts =
-            hooks.dispatch_ready_tasks(root, ready_dispatch_limit, queue_drain_limit).await?;
+    if !dispatch_suppressed && queue_drain_limit > 0 {
+        execution_outcome.ready_workflow_starts = hooks.dispatch_ready_tasks(root, queue_drain_limit).await?;
     }
 
     let health = hooks.collect_health(root).await?;
@@ -119,7 +118,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingHooks {
-        dispatch_calls: Vec<(usize, usize)>,
+        dispatch_calls: Vec<usize>,
         schedule_calls: usize,
         completed_process_calls: usize,
         manual_timeout_calls: usize,
@@ -180,10 +179,9 @@ mod tests {
         async fn dispatch_ready_tasks(
             &mut self,
             _root: &str,
-            limit: usize,
             queue_drain_limit: usize,
         ) -> Result<DispatchWorkflowStartSummary> {
-            self.dispatch_calls.push((limit, queue_drain_limit));
+            self.dispatch_calls.push(queue_drain_limit);
             Ok(DispatchWorkflowStartSummary::default())
         }
 
@@ -245,33 +243,26 @@ mod tests {
         hooks
     }
 
-    fn tick_dispatch_calls(options: &DaemonRuntimeOptions, pool_draining: bool) -> Vec<(usize, usize)> {
+    fn tick_dispatch_calls(options: &DaemonRuntimeOptions, pool_draining: bool) -> Vec<usize> {
         run_recorded_tick(options, pool_draining, true).dispatch_calls
     }
 
     #[test]
-    fn tick_drains_dispatch_queue_when_auto_run_ready_is_off() {
-        let options = DaemonRuntimeOptions { auto_run_ready: false, ..DaemonRuntimeOptions::default() };
+    fn tick_drains_dispatch_queue_up_to_capacity() {
+        let options = DaemonRuntimeOptions::default();
         let calls = tick_dispatch_calls(&options, false);
         assert_eq!(
             calls,
-            vec![(0, options.max_tasks_per_tick)],
-            "queue drain must run with zero ready-task limit when auto_run_ready is off"
+            vec![options.max_tasks_per_tick],
+            "queue drain must lease enqueued entries up to available capacity"
         );
     }
 
     #[test]
     fn tick_skips_all_dispatch_while_pool_is_draining() {
-        let options = DaemonRuntimeOptions { auto_run_ready: false, ..DaemonRuntimeOptions::default() };
-        let calls = tick_dispatch_calls(&options, true);
-        assert!(calls.is_empty(), "draining pool must not dispatch queue entries or ready tasks");
-    }
-
-    #[test]
-    fn tick_dispatches_both_limits_when_auto_run_ready_is_on() {
         let options = DaemonRuntimeOptions::default();
-        let calls = tick_dispatch_calls(&options, false);
-        assert_eq!(calls, vec![(options.max_tasks_per_tick, options.max_tasks_per_tick)]);
+        let calls = tick_dispatch_calls(&options, true);
+        assert!(calls.is_empty(), "draining pool must not dispatch queue entries");
     }
 
     #[test]
@@ -288,10 +279,10 @@ mod tests {
     }
 
     #[test]
-    fn latched_daily_cap_suppresses_ready_and_queue_dispatch() {
+    fn latched_daily_cap_suppresses_queue_dispatch() {
         // With the fleet daily-cap latch engaged, the central tick gate must
-        // skip dispatch_ready_tasks entirely (both ready + queue limits),
-        // even though auto_run_ready is on and headroom exists.
+        // skip dispatch_ready_tasks entirely (the queue drain leg), even
+        // though headroom exists.
         let _env_lock = crate::dispatch::test_env::lock().lock().unwrap_or_else(|p| p.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
         let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
