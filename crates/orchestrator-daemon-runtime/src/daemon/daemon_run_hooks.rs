@@ -3,7 +3,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use orchestrator_core::{DaemonStatus, PluginInstaller, PluginPreflightSpec};
 
-use crate::control::{AgentRouting, DaemonOpsRouting, PluginRouting, QueueRouting, WorkflowRouting};
+use crate::control::{DaemonOpsRouting, PluginRouting, QueueRouting, WorkflowRouting};
 use crate::DaemonRunEvent;
 
 #[async_trait::async_trait(?Send)]
@@ -86,18 +86,6 @@ pub trait DaemonRunHooks {
     /// The CLI binary builds an implementation that delegates to the
     /// installed `queue` plugin via `animus-queue-protocol` RPCs.
     fn queue_routing(&self) -> Option<Arc<dyn QueueRouting>> {
-        None
-    }
-
-    /// Provide an `agent/*` routing handle for the control-RPC surface.
-    /// Defaults to `None`, which leaves the daemon's
-    /// `InProcessSurface` returning `NotSupported` for agent/* methods.
-    /// C6.7 wires a pass-through implementation from the CLI binary
-    /// whose runtime impl still degrades to `NotSupported` (AgentPool
-    /// is currently dead-coded); the wire surface exists so MCP (C7)
-    /// and WebAPI (C8) can mount a real implementation without changing
-    /// the control contract.
-    fn agent_routing(&self) -> Option<Arc<dyn AgentRouting>> {
         None
     }
 

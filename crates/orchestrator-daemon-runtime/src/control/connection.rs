@@ -521,6 +521,13 @@ async fn invoke_surface(
         }
 
         // ----- Agent -------------------------------------------------
+        // The surface impls always return `NotSupported` (there is no
+        // in-tree control-wire agent surface — the live `animus agent`
+        // path runs in-process via provider plugins, not over this
+        // socket). The arms are retained so callers get a "known method,
+        // unavailable" response rather than `METHOD_NOT_FOUND`, which
+        // preserves graceful degradation and avoids clients treating the
+        // daemon as version-incompatible.
         method_names::METHOD_AGENT_RUN => {
             let req: AgentRunRequest = parse_params(params)?;
             surface.agent_run(req).await.map(|r| Some(serialize_result(r))).map_err(rpc_from_control)

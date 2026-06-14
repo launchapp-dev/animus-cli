@@ -38,15 +38,14 @@ use crate::control::control_socket_path;
 use animus_control_protocol::{
     method as method_names,
     types::{
-        AgentCancelRequest, AgentRunRequest, AgentRunResult, AgentStatus, AgentStatusRequest, DaemonAgentsResponse,
-        DaemonHealthResponse, DaemonLogEntry, DaemonLogsRequest, DaemonStatusResponse, PluginBrowseRequest,
-        PluginCallRequest, PluginCallResponse, PluginInfo, PluginInfoRequest, PluginInstallRequest,
-        PluginInstallResponse, PluginListRequest, PluginListResponse, PluginPingRequest, PluginPingResponse,
-        PluginSearchRequest, PluginSearchResponse, PluginUninstallRequest, PluginUpdateRequest, PluginUpdateResponse,
-        QueueDropRequest, QueueEnqueueRequest, QueueEntry, QueueHoldRequest, QueueListRequest, QueueListResponse,
-        QueueReleaseRequest, QueueReorderRequest, QueueStats, Unit, WorkflowCancelRequest, WorkflowExecuteRequest,
-        WorkflowGetRequest, WorkflowListRequest, WorkflowListResponse, WorkflowPauseRequest, WorkflowResumeRequest,
-        WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
+        DaemonAgentsResponse, DaemonHealthResponse, DaemonLogEntry, DaemonLogsRequest, DaemonStatusResponse,
+        PluginBrowseRequest, PluginCallRequest, PluginCallResponse, PluginInfo, PluginInfoRequest,
+        PluginInstallRequest, PluginInstallResponse, PluginListRequest, PluginListResponse, PluginPingRequest,
+        PluginPingResponse, PluginSearchRequest, PluginSearchResponse, PluginUninstallRequest, PluginUpdateRequest,
+        PluginUpdateResponse, QueueDropRequest, QueueEnqueueRequest, QueueEntry, QueueHoldRequest, QueueListRequest,
+        QueueListResponse, QueueReleaseRequest, QueueReorderRequest, QueueStats, Unit, WorkflowCancelRequest,
+        WorkflowExecuteRequest, WorkflowGetRequest, WorkflowListRequest, WorkflowListResponse, WorkflowPauseRequest,
+        WorkflowResumeRequest, WorkflowRun, WorkflowRunRequest, WorkflowRunStart,
     },
 };
 use animus_plugin_protocol::{error_codes, RpcRequest, RpcResponse};
@@ -374,23 +373,6 @@ impl ControlClient {
     /// Call `queue/stats`.
     pub async fn queue_stats(&self) -> Result<QueueStats> {
         self.call::<Value, _>(method_names::METHOD_QUEUE_STATS, Value::Null).await
-    }
-
-    // ----- Agent convenience methods ---------------------------------
-
-    /// Call `agent/run`.
-    pub async fn agent_run(&self, request: AgentRunRequest) -> Result<AgentRunResult> {
-        self.call(method_names::METHOD_AGENT_RUN, request).await
-    }
-
-    /// Call `agent/status`.
-    pub async fn agent_status(&self, request: AgentStatusRequest) -> Result<AgentStatus> {
-        self.call(method_names::METHOD_AGENT_STATUS, request).await
-    }
-
-    /// Call `agent/cancel`.
-    pub async fn agent_cancel(&self, request: AgentCancelRequest) -> Result<Unit> {
-        self.call(method_names::METHOD_AGENT_CANCEL, request).await
     }
 
     /// Stream the daemon's historical log tail and (optionally) live
@@ -1062,147 +1044,6 @@ mod tests {
         assert_eq!(response.in_flight, 1);
         assert_eq!(response.done_recent, 9);
         assert_eq!(response.dropped_recent, 0);
-        let _ = std::fs::remove_file(socket_path);
-        server.abort();
-    }
-
-    // ----- C6.7: agent/* convenience method round-trips ----------------
-
-    /// `agent/run` round-trips an AgentRunResult through the wire.
-    /// Mirrors the daemon-side `agent_run_routes_through_configured_routing`
-    /// test from the CLI side: spawn a fake server, call the typed
-    /// convenience method, verify the decoded response shape.
-    #[tokio::test]
-    async fn agent_run_routes_via_control_when_socket_present() {
-        let socket_path = short_sock_path();
-        let handler = |req: RpcRequest| {
-            assert_eq!(req.method, "agent/run");
-            RpcResponse::ok(
-                req.id,
-                serde_json::json!({
-                    "session_id": "sess-wire-1",
-                    "model": "claude-sonnet-4-6",
-                    "output": "hi",
-                }),
-            )
-        };
-        let server = spawn_fake_server(socket_path.clone(), handler).await;
-        let client = ControlClient::from_socket_path(socket_path.clone());
-        let request = animus_control_protocol::types::AgentRunRequest {
-            provider: "claude".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            prompt: "hi".to_string(),
-            system: None,
-            cwd: None,
-            env: Default::default(),
-        };
-        let response = tokio::time::timeout(Duration::from_secs(5), client.agent_run(request))
-            .await
-            .expect("timeout")
-            .expect("call");
-        assert_eq!(response.session_id, "sess-wire-1");
-        assert_eq!(response.model, "claude-sonnet-4-6");
-        assert_eq!(response.output, "hi");
-        let _ = std::fs::remove_file(socket_path);
-        server.abort();
-    }
-
-    /// C6.7: when no socket is present `try_connect` returns Ok(None)
-    /// so CLI agent commands fall back to the local in-process path
-    /// under `runtime_agent`.
-    #[tokio::test]
-    async fn agent_run_falls_back_to_local_when_socket_missing() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let result = ControlClient::try_connect(dir.path()).await.unwrap();
-        assert!(result.is_none_or(|c| !c.socket_path().exists()));
-    }
-
-    /// `agent/status` round-trips an AgentStatus through the wire,
-    /// preserving the lifecycle enum and provider/model fields the CLI
-    /// renderer keys off of.
-    #[tokio::test]
-    async fn agent_status_round_trip() {
-        let socket_path = short_sock_path();
-        let handler = |req: RpcRequest| {
-            assert_eq!(req.method, "agent/status");
-            RpcResponse::ok(
-                req.id,
-                serde_json::json!({
-                    "session_id": "sess-wire-1",
-                    "status": "running",
-                    "provider": "claude",
-                    "model": "claude-sonnet-4-6",
-                    "started_at": "2026-05-20T00:00:00Z",
-                }),
-            )
-        };
-        let server = spawn_fake_server(socket_path.clone(), handler).await;
-        let client = ControlClient::from_socket_path(socket_path.clone());
-        let request = animus_control_protocol::types::AgentStatusRequest { id: "sess-wire-1".to_string() };
-        let response = tokio::time::timeout(Duration::from_secs(5), client.agent_status(request))
-            .await
-            .expect("timeout")
-            .expect("call");
-        assert_eq!(response.session_id, "sess-wire-1");
-        assert_eq!(response.provider, "claude");
-        assert_eq!(response.model, "claude-sonnet-4-6");
-        let _ = std::fs::remove_file(socket_path);
-        server.abort();
-    }
-
-    /// `agent/cancel` round-trips through the wire — the response is a
-    /// `Unit` envelope but the request method name must match exactly so
-    /// the daemon can route it to the routing handle.
-    #[tokio::test]
-    async fn agent_cancel_routes_through() {
-        let socket_path = short_sock_path();
-        let handler = |req: RpcRequest| {
-            assert_eq!(req.method, "agent/cancel");
-            RpcResponse::ok(req.id, serde_json::json!({}))
-        };
-        let server = spawn_fake_server(socket_path.clone(), handler).await;
-        let client = ControlClient::from_socket_path(socket_path.clone());
-        let request = animus_control_protocol::types::AgentCancelRequest { session_id: "sess-wire-1".to_string() };
-        let _response = tokio::time::timeout(Duration::from_secs(5), client.agent_cancel(request))
-            .await
-            .expect("timeout")
-            .expect("call");
-        let _ = std::fs::remove_file(socket_path);
-        server.abort();
-    }
-
-    /// C6.7: when the daemon advertises the wire surface but a specific
-    /// agent method returns NotSupported (the C6.7 pass-through impl
-    /// returns that for everything), `is_method_unavailable` reports
-    /// true so CLI handlers degrade to the local in-process path.
-    #[tokio::test]
-    async fn agent_run_preserves_opaque_response_shape_on_not_supported() {
-        let socket_path = short_sock_path();
-        let handler = |req: RpcRequest| {
-            RpcResponse::err(
-                req.id,
-                RpcError {
-                    code: animus_plugin_protocol::error_codes::METHOD_NOT_SUPPORTED,
-                    message: "agent/run wire surface is pass-through pending AgentPool query surface".to_string(),
-                    data: None,
-                },
-            )
-        };
-        let server = spawn_fake_server(socket_path.clone(), handler).await;
-        let client = ControlClient::from_socket_path(socket_path.clone());
-        let request = animus_control_protocol::types::AgentRunRequest {
-            provider: "claude".to_string(),
-            model: "claude-sonnet-4-6".to_string(),
-            prompt: "hi".to_string(),
-            system: None,
-            cwd: None,
-            env: Default::default(),
-        };
-        let err = tokio::time::timeout(Duration::from_secs(5), client.agent_run(request))
-            .await
-            .expect("timeout")
-            .unwrap_err();
-        assert!(is_method_unavailable(&err), "C6.7 pass-through should surface as method-unavailable: {err}");
         let _ = std::fs::remove_file(socket_path);
         server.abort();
     }
