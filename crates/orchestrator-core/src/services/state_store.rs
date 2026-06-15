@@ -9,7 +9,6 @@ pub(super) struct CoreState {
     pub(super) daemon_status: DaemonStatus,
     #[serde(alias = "daemon_max_agents")]
     pub(super) daemon_pool_size: Option<usize>,
-    pub(super) runner_pid: Option<u32>,
     #[serde(default, skip_serializing, skip_deserializing)]
     pub(super) logs: Vec<LogEntry>,
     pub(super) active_project_id: Option<String>,
@@ -42,11 +41,6 @@ pub(super) struct DaemonStateSnapshot {
     pub(super) daemon_status: DaemonStatus,
     #[serde(alias = "daemon_max_agents", default)]
     pub(super) daemon_pool_size: Option<usize>,
-    /// v0.5.3: kept for back-compat on-disk deserialization only; the
-    /// runner sidecar was deleted and the field is never produced.
-    #[serde(default)]
-    #[allow(dead_code)]
-    pub(super) runner_pid: Option<u32>,
     #[serde(default)]
     pub(super) active_process_count: Option<usize>,
 }

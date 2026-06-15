@@ -207,8 +207,6 @@ async fn load_daemon_health_snapshot_uncached(project_root: &Path) -> Result<Dae
     Ok(DaemonHealth {
         healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
         status,
-        runner_connected: false,
-        runner_pid: None,
         provider_plugins_healthy,
         active_agents,
         pool_size,
@@ -375,7 +373,6 @@ impl DaemonServiceApi for InMemoryServiceHub {
     async fn stop(&self) -> Result<()> {
         let mut lock = self.state.write().await;
         lock.daemon_status = DaemonStatus::Stopped;
-        lock.runner_pid = None;
         lock.logs.push(LogEntry {
             timestamp: Utc::now(),
             level: LogLevel::Info,
@@ -411,8 +408,6 @@ impl DaemonServiceApi for InMemoryServiceHub {
         Ok(DaemonHealth {
             healthy: matches!(lock.daemon_status, DaemonStatus::Running | DaemonStatus::Paused),
             status: lock.daemon_status,
-            runner_connected: false,
-            runner_pid: None,
             provider_plugins_healthy: false,
             active_agents: 0,
             pool_size: lock.daemon_pool_size,
@@ -467,9 +462,6 @@ impl DaemonServiceApi for FileServiceHub {
             if let Some(ps) = pool_size {
                 state.daemon_pool_size = Some(ps);
             }
-            // v0.5.3: agent-runner sidecar was deleted; runner_pid is
-            // kept on the state struct for back-compat reads only.
-            state.runner_pid = None;
             state.logs.push(LogEntry {
                 timestamp: Utc::now(),
                 level: LogLevel::Info,
@@ -488,7 +480,6 @@ impl DaemonServiceApi for FileServiceHub {
     async fn stop(&self) -> Result<()> {
         let result = mutate_daemon_state(self, |state| {
             state.daemon_status = DaemonStatus::Stopped;
-            state.runner_pid = None;
             state.active_process_count = None;
             state.logs.push(LogEntry {
                 timestamp: Utc::now(),
@@ -629,8 +620,6 @@ impl DaemonServiceApi for FileServiceHub {
         let value = DaemonHealth {
             healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
             status,
-            runner_connected: false,
-            runner_pid: None,
             provider_plugins_healthy,
             active_agents,
             pool_size,
@@ -721,7 +710,6 @@ mod tests {
 
         let state = hub.state.read().await;
         assert_eq!(state.daemon_status, DaemonStatus::Running);
-        assert_eq!(state.runner_pid, None, "v0.5.3: runner_pid is always None after sidecar removal");
     }
 
     #[tokio::test]
@@ -771,8 +759,8 @@ mod tests {
 
     #[tokio::test]
     async fn file_hub_start_does_not_spawn_runner_sidecar() {
-        // v0.5.3: there is no runner sidecar; starting the daemon must never
-        // set a runner_pid.
+        // v0.5.3: there is no runner sidecar; starting the daemon must
+        // succeed without it.
         let temp = tempfile::tempdir().expect("tempdir");
         let hub = new_file_hub(&temp);
         DaemonServiceApi::start(&hub, DaemonStartConfig::default())
@@ -781,15 +769,12 @@ mod tests {
 
         let state = hub.state.read().await;
         assert_eq!(state.daemon_status, DaemonStatus::Running);
-        assert_eq!(state.runner_pid, None);
     }
 
     fn sample_health(status: DaemonStatus) -> DaemonHealth {
         DaemonHealth {
             healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
             status,
-            runner_connected: false,
-            runner_pid: None,
             provider_plugins_healthy: false,
             active_agents: 0,
             pool_size: None,

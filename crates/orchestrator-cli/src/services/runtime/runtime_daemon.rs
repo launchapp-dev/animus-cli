@@ -298,9 +298,7 @@ fn daemon_status_word(status: DaemonStatus, runtime_paused: bool) -> &'static st
 }
 
 /// Pretty-render the locally-loaded `DaemonHealth` snapshot used when the
-/// daemon control socket is unavailable. The deprecated `runner_connected`
-/// / `runner_pid` fields are intentionally omitted from this human view
-/// (they remain in the `--json` wire output for back-compat).
+/// daemon control socket is unavailable.
 fn render_offline_daemon_health_human(health: &orchestrator_core::DaemonHealth) {
     println!("status: {}", daemon_status_word(health.status, health.runtime_paused));
     if health.runtime_paused {
@@ -2444,8 +2442,6 @@ mod tests {
         orchestrator_core::DaemonHealth {
             healthy: matches!(status, DaemonStatus::Running | DaemonStatus::Paused),
             status,
-            runner_connected: false,
-            runner_pid: None,
             provider_plugins_healthy: false,
             active_agents: 0,
             pool_size: None,

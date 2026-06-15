@@ -73,14 +73,9 @@ struct DaemonStatusSlice {
     runtime_paused: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     paused_at: Option<String>,
-    /// v0.5.3 replacement for the deprecated `runner_connected` field: true
+    /// v0.5.3 replacement for the removed `runner_connected` field: true
     /// when the daemon's provider plugins are all healthy.
     provider_plugins_healthy: bool,
-    /// Deprecated wire fields kept for `--json` envelope back-compat. The
-    /// human dashboard renders `provider_plugins_healthy` instead. Always
-    /// `false` / `None` on the wire.
-    runner_connected: bool,
-    runner_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     error: Option<String>,
 }
@@ -546,9 +541,6 @@ fn build_daemon_slice(health: Option<&DaemonHealth>, error: Option<String>) -> D
             runtime_paused: health.runtime_paused,
             paused_at: health.paused_at.clone(),
             provider_plugins_healthy: health.provider_plugins_healthy,
-            // Deprecated wire fields: always `false` / `None`.
-            runner_connected: false,
-            runner_pid: None,
             error,
         },
         None => DaemonStatusSlice {
@@ -558,8 +550,6 @@ fn build_daemon_slice(health: Option<&DaemonHealth>, error: Option<String>) -> D
             runtime_paused: false,
             paused_at: None,
             provider_plugins_healthy: false,
-            runner_connected: false,
-            runner_pid: None,
             error,
         },
     }
