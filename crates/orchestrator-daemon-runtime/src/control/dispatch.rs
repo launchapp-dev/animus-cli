@@ -407,14 +407,32 @@ impl ControlSurface for InProcessSurface {
     }
 
     async fn subject_watch(&self, request: SubjectWatchRequest) -> Result<SubjectWatchStream, ControlError> {
-        // C5 lands the wire wrapper; the persistent subject/watch stream
-        // routing through plugins is out of scope. CLI clients today
-        // poll via `subject/list`. Returning an empty stream lets the
-        // ack-and-stream path on the connection drive without behavior
-        // change.
-        let _ = request;
-        let stream = futures_util::stream::empty::<SubjectChangedEvent>();
-        Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = SubjectChangedEvent> + Send>>)
+        // Source the stream from the mounted subject-backend plugin(s) via
+        // their `subject/watch` RPC + `subject/changed` notification broadcast
+        // (see [`SubjectPluginDispatch::subject_watch`]). The request's
+        // optional `kind` scopes the watch to a single backend; absent it,
+        // every mounted backend is watched and merged.
+        //
+        // Graceful degradation: when no subject dispatch is configured, no
+        // backend is mounted for the requested kind, or every selected
+        // backend is polling-only (`METHOD_NOT_SUPPORTED`), the returned
+        // stream is empty/closed rather than an error — CLI clients can keep
+        // polling `subject/list` as before.
+        let Some(dispatch) = self.subject_dispatch.as_ref() else {
+            tracing::debug!("subject/watch requested but no subject dispatch configured; returning empty stream");
+            let stream = futures_util::stream::empty::<SubjectChangedEvent>();
+            return Ok(Box::pin(stream) as Pin<Box<dyn Stream<Item = SubjectChangedEvent> + Send>>);
+        };
+        let filter = match request.filter {
+            Some(filter) => match serde_json::to_value(&filter) {
+                Ok(value) => Some(value),
+                Err(error) => {
+                    return Err(ControlError::InvalidRequest(format!("subject/watch filter encode: {error}")));
+                }
+            },
+            None => None,
+        };
+        Ok(dispatch.subject_watch(request.kind, filter))
     }
 
     // ----- Plugin -----------------------------------------------------
@@ -541,9 +559,21 @@ impl ControlSurface for InProcessSurface {
         if let Some(routing) = &self.daemon_ops_routing {
             return routing.daemon_agents().await;
         }
-        // No clean Arc reference to the live AgentPool yet; daemon-side
-        // agent tracking lands as part of C7. Returning an empty list
-        // matches the historical "no agents currently active" shape.
+        // Left intentionally empty when no daemon_ops_routing is attached.
+        //
+        // `DaemonAgentsResponse.agents` is a rich per-agent list (session id,
+        // provider, model, started_at, lifecycle). The daemon does NOT hold
+        // such a registry: as of the v0.5.3 agent-runner deletion, agents run
+        // in-process per call via `SessionBackendResolver` — provider plugins
+        // own the CLI lifecycle, and the daemon only tracks an `active_agents`
+        // COUNT for dispatch headroom (see `DaemonHealth.active_agents`), not
+        // addressable per-session records. There is no cheap live source for
+        // this shape without standing up a daemon-resident session registry
+        // (the `AgentPool` in `daemon_agent_pool.rs` is `allow(dead_code)` and
+        // not wired into production). Building that is out of scope here;
+        // callers needing live agent detail should use `animus plugin status`
+        // (provider health) and per-run output streams. Returning an empty
+        // list matches the historical "no addressable agents" shape.
         Ok(DaemonAgentsResponse { agents: Vec::new() })
     }
 

@@ -1091,16 +1091,66 @@ impl PluginHost {
         request_raw_inner(self.inner.as_ref(), method, params).await
     }
 
+    /// Like [`PluginHost::request_with_timeout`] but also returns the JSON-RPC
+    /// request id the host allocated for this call.
+    ///
+    /// Needed by streaming methods whose plugin emits correlated
+    /// notifications: the `subject/watch` runtime, for example, echoes the
+    /// request id in every `subject/changed` notification's `params.id`, so a
+    /// subscriber must know its own id to demultiplex notifications when
+    /// several watch RPCs share one plugin host's notification broadcast.
+    pub async fn request_with_timeout_capturing_id(
+        &self,
+        method: impl Into<String>,
+        params: Option<Value>,
+        timeout: Duration,
+    ) -> (u64, Result<Value, RpcError>) {
+        let method = method.into();
+        let (id, raw) = self.request_raw_with_timeout_capturing_id(&method, params, timeout).await;
+        let result = match raw {
+            Ok(response) => match response.error {
+                Some(error) => Err(error),
+                None => Ok(response.result.unwrap_or(Value::Null)),
+            },
+            Err(host_error) => Err(RpcError::from(host_error)),
+        };
+        (id, result)
+    }
+
     async fn request_raw_with_timeout(
         &self,
         method: &str,
         params: Option<Value>,
         timeout: Duration,
     ) -> Result<RpcResponse, HostError> {
+        self.request_raw_with_timeout_capturing_id(method, params, timeout).await.1
+    }
+
+    /// Implementation shared by [`Self::request_raw_with_timeout`] and
+    /// [`Self::request_with_timeout_capturing_id`]. Returns the allocated id
+    /// alongside the raw result. On the early-out paths (dead host before the
+    /// id is allocated) the returned id is `0`, which is never a live request
+    /// id (the counter starts at 1).
+    async fn request_raw_with_timeout_capturing_id(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        timeout: Duration,
+    ) -> (u64, Result<RpcResponse, HostError>) {
         if !self.inner.alive.load(Ordering::Acquire) {
-            return Err(HostError::ConnectionLost);
+            return (0, Err(HostError::ConnectionLost));
         }
         let id = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
+        (id, self.request_raw_with_id(id, method, params, timeout).await)
+    }
+
+    async fn request_raw_with_id(
+        &self,
+        id: u64,
+        method: &str,
+        params: Option<Value>,
+        timeout: Duration,
+    ) -> Result<RpcResponse, HostError> {
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
 

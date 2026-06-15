@@ -5,6 +5,7 @@ use animus_plugin_protocol::RpcError;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
+use crate::host::PluginNotificationRx;
 use crate::PluginHost;
 
 /// Generous upper bound for a single subject-backend RPC routed through
@@ -14,6 +15,11 @@ use crate::PluginHost;
 /// task forever on the otherwise-untimed request path. Expiry surfaces as
 /// an `RpcError` with the protocol's `TIMEOUT` code.
 const SUBJECT_ROUTE_TIMEOUT: Duration = Duration::from_mins(2);
+
+/// `subject/watch` JSON-RPC wire method name (animus-subject-protocol
+/// `METHOD_SUBJECT_WATCH`). Duplicated here as a literal so the plugin-host
+/// crate avoids a dependency on the subject protocol crate.
+const SUBJECT_METHOD_WATCH: &str = "subject/watch";
 
 /// Subject-kind registration parsed from a plugin's declared
 /// `subject_kinds`. A pattern ending in `.*` matches any kind whose dotted
@@ -46,6 +52,19 @@ impl KindPattern {
             self.prefix == kind
         }
     }
+}
+
+/// Live `subject/watch` subscription handle returned by
+/// [`SubjectRouter::start_watch`].
+///
+/// `notifications` is the plugin host's broadcast receiver; `watch_id` is the
+/// JSON-RPC id of the `subject/watch` request, echoed by the runtime in every
+/// correlated `subject/changed` notification's `params.id`.
+pub struct SubjectWatchSubscription {
+    /// Notification receiver for the plugin host backing this watch.
+    pub notifications: PluginNotificationRx,
+    /// JSON-RPC id allocated for the `subject/watch` request.
+    pub watch_id: u64,
 }
 
 pub struct SubjectRouter {
@@ -314,6 +333,140 @@ impl SubjectRouter {
 
     pub async fn resolve_subject(&self, subject_kind: &str, subject_id: &str) -> Result<Value, RpcError> {
         self.route_call(&format!("{subject_kind}/get"), Some(serde_json::json!({ "id": subject_id }))).await
+    }
+
+    /// Distinct plugin names that should be asked to watch for changes when a
+    /// caller subscribes for `installed_kind`.
+    ///
+    /// - `Some(kind)` → the single plugin registered for that exact/glob kind
+    ///   (empty when no backend is mounted for it).
+    /// - `None` → every distinct subject-backend plugin currently mounted, so
+    ///   an unscoped watch receives events across all kinds.
+    ///
+    /// The names are de-duplicated: a plugin claiming several kinds is only
+    /// watched once.
+    pub fn watch_plugin_names(&self, installed_kind: Option<&str>) -> Vec<String> {
+        match installed_kind {
+            Some(kind) => self.plugin_for_kind(kind).map(|name| vec![name.to_string()]).unwrap_or_default(),
+            None => {
+                let mut names: Vec<String> = Vec::new();
+                for name in self.exact_kinds.values().chain(self.glob_kinds.iter().map(|(_, n)| n)) {
+                    if !names.iter().any(|existing| existing == name) {
+                        names.push(name.clone());
+                    }
+                }
+                names
+            }
+        }
+    }
+
+    /// Open a `subject/watch` subscription against a single mounted plugin.
+    ///
+    /// Subscribes to the plugin host's notification broadcast *before* issuing
+    /// the `subject/watch` request so no early `subject/changed` notification
+    /// is missed, then forwards the watch request (with outbound kind
+    /// translation applied to `installed_kind` and any nested `filter.kind`).
+    ///
+    /// Returns the live notification receiver on success. Callers filter the
+    /// stream down to `subject/changed` notifications themselves and are
+    /// responsible for inbound kind
+    /// translation via [`Self::installed_kind_for_plugin_native`].
+    ///
+    /// `Err` is returned for transport / RPC failures, including the
+    /// `METHOD_NOT_SUPPORTED` code a polling-only backend returns — callers
+    /// should treat that as "this backend cannot stream" and degrade rather
+    /// than fail the whole subscription.
+    ///
+    /// On success the returned [`SubjectWatchSubscription`] carries both the
+    /// notification receiver and the JSON-RPC request id the host used for the
+    /// `subject/watch` call. The runtime echoes that id in every
+    /// `subject/changed` notification's `params.id`, so a subscriber can
+    /// demultiplex its own events from any concurrent / stale watch RPC that
+    /// shares the same plugin host's notification broadcast.
+    pub async fn start_watch(
+        &self,
+        plugin_name: &str,
+        installed_kind: Option<&str>,
+        filter: Option<Value>,
+    ) -> Result<SubjectWatchSubscription, RpcError> {
+        let Some(host) = self.hosts.get(plugin_name) else {
+            return Err(RpcError {
+                code: animus_plugin_protocol::error_codes::INTERNAL_ERROR,
+                message: format!("subject backend '{plugin_name}' is not available"),
+                data: None,
+            });
+        };
+
+        // Subscribe before the request so notifications emitted between the
+        // plugin acking `subject/watch` and us returning are not dropped.
+        let rx = host.subscribe_notifications();
+
+        // Outbound kind translation: the watch request carries the
+        // user-facing `installed_kind`; the plugin only understands its
+        // native kind.
+        let native_kind = installed_kind.and_then(|kind| {
+            self.aliases.native_for_installed(kind).map(str::to_string).or_else(|| Some(kind.to_string()))
+        });
+        let mut params = serde_json::Map::new();
+        if let Some(kind) = native_kind.as_deref() {
+            params.insert("kind".to_string(), Value::String(kind.to_string()));
+        }
+        if let Some(filter) = filter {
+            // Translate `filter.kind` from installed -> native when a rename
+            // is in effect, mirroring `route_call`'s outbound handling.
+            let translated = match (installed_kind, native_kind.as_deref()) {
+                (Some(installed), Some(native)) if installed != native => {
+                    let mut wrapped = serde_json::Map::new();
+                    wrapped.insert("filter".to_string(), filter);
+                    let rewritten = rewrite_outbound_id_prefix(Value::Object(wrapped), installed, native);
+                    rewritten.get("filter").cloned().unwrap_or(Value::Null)
+                }
+                _ => filter,
+            };
+            params.insert("filter".to_string(), translated);
+        }
+        let watch_params = if params.is_empty() { None } else { Some(Value::Object(params)) };
+
+        // `subject/watch` wire method name (animus-subject-protocol). Spelled
+        // as a literal so the plugin-host crate need not pull in the subject
+        // protocol crate (and its potentially divergent version).
+        //
+        // Capture the request id: the runtime echoes it in every
+        // `subject/changed` notification's `params.id` so the subscriber can
+        // filter out notifications belonging to other watch RPCs sharing this
+        // host's broadcast.
+        //
+        // TODO(codex-p2): no per-watch cancellation. The pinned
+        // animus-subject-protocol / animus-plugin-runtime expose `subject/watch`
+        // but NO `subject/unwatch` (or per-request cancel) verb — the runtime's
+        // `drive_watch_stream` task runs until the plugin's stdio closes. When a
+        // daemon stream is dropped (client disconnects), we drop only the
+        // broadcast receiver; the plugin keeps its `backend.watch()` task alive
+        // and emits discarded notifications until daemon shutdown. Fixing this
+        // requires an upstream protocol + runtime change (add a `subject/unwatch`
+        // RPC keyed by the watch request id, then send it on drop). Flagged for a
+        // separate plugin-protocol change. Bounded in practice: the daemon hosts
+        // one subject plugin process per kind for its whole lifetime, so leaked
+        // watch tasks accumulate within that single process, not unboundedly
+        // across processes.
+        let (watch_id, result) =
+            host.request_with_timeout_capturing_id(SUBJECT_METHOD_WATCH, watch_params, SUBJECT_ROUTE_TIMEOUT).await;
+        result?;
+
+        Ok(SubjectWatchSubscription { notifications: rx, watch_id })
+    }
+
+    /// Translate a plugin's native subject kind back to the user-facing
+    /// installed kind for `plugin_name`, if an install-time rename is in
+    /// effect. Returns `None` when there is no rename (identity).
+    pub fn installed_kind_for_plugin_native(&self, plugin_name: &str, native_kind: &str) -> Option<&str> {
+        self.aliases.installed_for_plugin_native(plugin_name, native_kind)
+    }
+
+    /// `true` when no install-time kind renames are registered. Lets watch
+    /// callers skip inbound translation in the common identity case.
+    pub fn aliases_are_identity(&self) -> bool {
+        self.aliases.is_empty()
     }
 }
 
