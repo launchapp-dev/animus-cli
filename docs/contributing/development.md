@@ -78,6 +78,8 @@ delegates to installed `transport_backend` and `web_ui` plugins.
 npm install
 npm run docs:check-sync
 cargo test -p orchestrator-cli cli_types::tests::cli_reference_top_level_tree_matches_live_clap_commands -- --exact
+cargo test -p orchestrator-cli cli_types::tests::agents_guide_top_level_commands_match_live_clap_commands -- --exact
+cargo test -p orchestrator-cli cli_types::tests::crate_map_matches_live_workspace_members -- --exact
 cargo test -p orchestrator-cli services::operations::ops_mcp::tests::mcp_reference_table_matches_live_builtin_tools -- --exact
 cargo test -p orchestrator-cli services::operations::ops_mcp::tests::mcp_docs_publish_the_live_builtin_tool_count -- --exact
 npm run docs:dev
@@ -92,8 +94,9 @@ changes. It compares `crates/orchestrator-cli/src/cli_types/root_types.rs` and
 reference docs and fails on drift.
 
 For a full drift check, also run the `orchestrator-cli` tests that assert the
-published CLI tree and MCP tool table match the live clap/MCP registries before
-deploying the docs site to Vercel.
+published CLI tree, `AGENTS.md` top-level command list, crate map, and MCP
+tool table match the live clap/MCP registries before deploying the docs site
+to Vercel.
 
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. If a local CLI exists
