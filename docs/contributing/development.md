@@ -97,9 +97,10 @@ deploying the docs site to Vercel.
 
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. If a local CLI exists
-at `node_modules/.bin/vercel`, the script uses it directly; otherwise it falls
-back to `npx vercel --yes --prod` using a temporary npm cache directory so the
-fallback does not depend on a writable `~/.npm/`.
+at `node_modules/.bin/vercel`, the script uses it directly. Otherwise it tries
+an already-installed global `vercel` binary before falling back to
+`npx vercel --yes --prod` using a temporary npm cache directory so the fallback
+does not depend on a writable `~/.npm/`.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
 the local CLI is absent, it also assumes the runner can reach

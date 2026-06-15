@@ -12,6 +12,8 @@ echo "Deploying docs with Vercel..."
 echo "Prerequisites: npm registry access and a valid Vercel login."
 if [ -x "./node_modules/.bin/vercel" ]; then
   ./node_modules/.bin/vercel --yes --prod
+elif command -v vercel >/dev/null 2>&1; then
+  vercel --yes --prod
 else
   npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
   trap 'rm -rf "$npx_cache_dir"' EXIT
