@@ -732,6 +732,14 @@ fn apply_scheduler_overrides_to_pm_config(args: &DaemonRunArgs, project_root: &s
 }
 
 pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, json: bool) -> Result<()> {
+    // The daemon is a long-running process that re-scans foreign agent-host skill
+    // dirs (~/.claude, ~/.codex, ~/.cursor, ~/.config/opencode) on every config
+    // reload. Those dirs ship SKILL.md files Animus does not parse (and can contain
+    // unresolved merge markers), so without this the daemon sprays parse warnings on
+    // every tick — millions of lines that bloat daemon.log and fill the disk. Suppress
+    // them for the daemon's lifetime; first-party project/user skill parse failures
+    // still warn elsewhere, and `animus skill list --verbose` re-enables them.
+    orchestrator_config::skill_scoping::set_suppress_markdown_skill_parse_warnings(true);
     apply_scheduler_overrides_to_pm_config(&args, project_root);
     let mut runtime_options = runtime_options_from_cli(&args, project_root);
     let start_config = DaemonStartConfig { pool_size: runtime_options.pool_size };
