@@ -184,8 +184,6 @@ fn warnings_slice_aggregates_degraded_reasons_and_silent_agents() {
     let health = DaemonHealth {
         healthy: true,
         status: DaemonStatus::Running,
-        runner_connected: false,
-        runner_pid: None,
         provider_plugins_healthy: true,
         active_agents: 1,
         pool_size: Some(5),
@@ -410,8 +408,6 @@ fn render_status_dashboard_uses_required_section_order() {
             Some(&DaemonHealth {
                 healthy: true,
                 status: DaemonStatus::Running,
-                runner_connected: false,
-                runner_pid: None,
                 provider_plugins_healthy: true,
                 active_agents: 1,
                 pool_size: Some(5),
