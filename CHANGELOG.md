@@ -4,6 +4,32 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-06-16
+
+**Daemon queue-dispatch reliability.** The enqueue → lease → run → drain
+pipeline now works end to end — two compounding bugs that stranded queued work
+are fixed — plus foreign-skill log-spam suppression.
+
+### Fixed
+
+- **Dispatch queue never drained — leases were starved.** The daemon eagerly
+  spawned every installed `subject_backend` plugin at startup and held them
+  alive, exhausting the plugin-process cap (50). The queue plugin's
+  spawn-per-call lease was then refused, so enqueued work sat `pending` forever.
+  Subject plugins now spawn **lazily** on first route to their kind (bounded LRU
+  host cache with lease-pinning + per-plugin spawn locks), so a project only
+  spins up the backends it actually uses.
+- **Completed queue entries were stranded as `assigned`.** The
+  `queue/completion` request passed the real run `workflow_id`, which never
+  matched the id the queue plugin synthesizes at lease time, so the plugin
+  refused to prune the entry. The daemon now omits it (the unique `entry_id` +
+  `workflow_ref` identify the entry), so dispatches drain
+  `pending → assigned → completed → gone`.
+- **Daemon foreign-skill parse-warning spam.** The daemon no longer sprays
+  `could not parse markdown skill` warnings for foreign agent-host skill dirs
+  (`~/.claude`, `~/.codex`, `~/.cursor`, `~/.config/opencode`) on every tick,
+  which could bloat `daemon.log` and fill the disk.
+
 ### Changed
 
 - **`animus mcp auth` auto-detects advertised OAuth scopes.** When neither

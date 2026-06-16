@@ -1925,7 +1925,6 @@ mod tests {
         run_walkthrough(&args_no_packs, project.path(), InitMode::NonInteractive, true)
             .await
             .expect("plan should succeed");
-        ();
 
         // --no-packs with --install-packs: no_packs wins
         let args_conflict = InitArgs {
@@ -1946,6 +1945,5 @@ mod tests {
         run_walkthrough(&args_conflict, project.path(), InitMode::NonInteractive, true)
             .await
             .expect("plan should succeed with conflicting flags");
-        ();
     }
 }
