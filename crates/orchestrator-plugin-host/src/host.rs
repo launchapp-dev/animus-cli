@@ -1992,10 +1992,11 @@ mod tests {
     }
 
     /// Serialize the slot-factory tests so they don't race each other on the
-    /// process-wide installed factory.
+    /// process-wide installed factory — or the `subject_router` lazy-spawn
+    /// tests, which also spawn real plugin children that draw slots from any
+    /// installed factory.
     fn slot_factory_lock() -> &'static std::sync::Mutex<()> {
-        static LOCK: OnceLock<std::sync::Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| std::sync::Mutex::new(()))
+        &crate::TEST_SLOT_FACTORY_GUARD
     }
 
     #[test]
