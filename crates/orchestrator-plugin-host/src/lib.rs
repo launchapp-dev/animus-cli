@@ -44,6 +44,15 @@ pub use manifest_cache::{CachedEntry, ManifestCache};
 /// kill-switch env var and produce flaky CI runs. Codex round 4 P2.
 #[cfg(test)]
 pub(crate) static TEST_ENV_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Crate-wide mutex any test that installs a process-global plugin-process
+/// slot factory (or spawns real plugin children that consume slots from one)
+/// MUST hold while running. The slot factory is process-global, so the
+/// `host` cap tests and the `subject_router` lazy-spawn tests would otherwise
+/// race: a cap-of-2 factory installed by one test starves the real spawns the
+/// other performs. Serializing on this single lock keeps both deterministic.
+#[cfg(test)]
+pub(crate) static TEST_SLOT_FACTORY_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 pub use registry::PluginRegistry;
 pub use scope::{read_active_flavor, PluginScope, PluginScopeMode, PLUGIN_SCOPE_FILE, PLUGIN_SCOPE_SCHEMA_V1};
 pub use signature_verifier::{
@@ -54,5 +63,5 @@ pub use status::{
     global_status_registry, install_global_status_registry, PluginLastError, PluginRuntimeState, PluginRuntimeStatus,
     PluginStatusRegistry, PluginStatusResponse, StatusRegistryObserver, PLUGIN_STATUS_PROTOCOL_VERSION,
 };
-pub use subject_router::{KindAliasMap, SubjectRouter, SubjectWatchGuard, SubjectWatchSubscription};
+pub use subject_router::{KindAliasMap, SubjectPluginSpec, SubjectRouter, SubjectWatchGuard, SubjectWatchSubscription};
 pub use transport::StdioTransport;

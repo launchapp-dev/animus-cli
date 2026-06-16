@@ -33,7 +33,6 @@
 //! `animus plugin install-defaults --include-subjects`) to keep the
 //! `kind=task` and `kind=requirement` surfaces routable.
 
-use std::collections::HashMap;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -42,7 +41,7 @@ use anyhow::{Context, Result};
 use futures_core::Stream;
 use futures_util::StreamExt;
 use orchestrator_plugin_host::{
-    discover_plugins, DiscoveredPlugin, KindAliasMap, PluginHost, PluginLockfile, PluginSpawnOptions, SubjectRouter,
+    discover_plugins, DiscoveredPlugin, KindAliasMap, PluginLockfile, SubjectPluginSpec, SubjectRouter,
 };
 use serde_json::Value;
 
@@ -537,26 +536,6 @@ pub async fn resolve_subject_dispatch(project_root: &Path) -> Result<SubjectDisp
         });
     }
 
-    let mut hosts: HashMap<String, PluginHost> = HashMap::new();
-    let mut kinds: Vec<String> = Vec::new();
-    let mut plugin_count = 0usize;
-
-    for plugin in &candidates {
-        let options = PluginSpawnOptions::for_manifest(
-            plugin.name.clone(),
-            &plugin.manifest.env_required,
-            std::iter::empty::<String>(),
-            None,
-        )
-        .with_notification_buffer_hint(plugin.manifest.notification_buffer_size)
-        .with_working_dir(project_root);
-        let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
-            .await
-            .with_context(|| format!("failed to spawn subject_backend plugin '{}'", plugin.name))?;
-        hosts.insert(plugin.name.clone(), host);
-        plugin_count += 1;
-    }
-
     // v0.5.7: load install-time kind renames from the project's
     // plugins.lock so the SubjectRouter can translate
     // `<installed_kind>/<verb>` -> `<native_kind>/<verb>` at the wire
@@ -564,23 +543,54 @@ pub async fn resolve_subject_dispatch(project_root: &Path) -> Result<SubjectDisp
     // installed under its native kind, the alias map is empty and the
     // router behaves identically to its pre-v0.5.7 form.
     let aliases = load_kind_aliases_from_lockfile(project_root, &candidates);
-    let router = SubjectRouter::from_initialized_hosts_with_aliases(hosts, aliases.clone()).await?;
+
+    // Lazy spawn model (v0.5.x): build the kind routing table from each
+    // plugin's manifest `subject_kind:<kind>` capabilities WITHOUT spawning
+    // any plugin. A subject backend is spawned only on the first request that
+    // routes to one of its kinds, and the router bounds its live-host set with
+    // an LRU cap. This keeps the live subject-host count far below the runtime
+    // plugin-process cap even when dozens of data-source subject plugins are
+    // installed globally — the eager model spun every one of them up at
+    // startup and exhausted the cap, starving the spawn-per-call queue /
+    // workflow_runner roles.
+    let mut specs: Vec<SubjectPluginSpec> = Vec::with_capacity(candidates.len());
+    let mut kinds: Vec<String> = Vec::new();
+    let mut plugin_count = 0usize;
 
     for plugin in &candidates {
-        for cap in &plugin.manifest.capabilities {
-            if let Some(rest) = cap.strip_prefix("subject_kind:") {
-                let trimmed = rest.trim().to_string();
-                if trimmed.is_empty() {
-                    continue;
-                }
-                let effective =
-                    aliases.installed_for_plugin_native(&plugin.name, &trimmed).unwrap_or(trimmed.as_str()).to_string();
-                if !kinds.contains(&effective) {
-                    kinds.push(effective);
-                }
+        let native_kinds: Vec<String> = plugin
+            .manifest
+            .capabilities
+            .iter()
+            .filter_map(|cap| cap.strip_prefix("subject_kind:"))
+            .map(str::trim)
+            .filter(|rest| !rest.is_empty())
+            .map(ToString::to_string)
+            .collect();
+
+        // Accumulate the operator-facing (alias-translated) kind list for
+        // the resolution summary / SubjectRouterResolved event.
+        for native in &native_kinds {
+            let effective =
+                aliases.installed_for_plugin_native(&plugin.name, native).unwrap_or(native.as_str()).to_string();
+            if !kinds.contains(&effective) {
+                kinds.push(effective);
             }
         }
+
+        specs.push(SubjectPluginSpec {
+            name: plugin.name.clone(),
+            path: plugin.path.clone(),
+            native_kinds,
+            env_required: plugin.manifest.env_required.clone(),
+            notification_buffer_size: plugin.manifest.notification_buffer_size,
+            working_dir: Some(project_root.to_path_buf()),
+        });
+        plugin_count += 1;
     }
+
+    let router = SubjectRouter::from_lazy_specs(specs, aliases.clone())
+        .with_context(|| "failed to build lazy subject router from installed plugin manifests")?;
 
     Ok(SubjectDispatchResolution {
         selected: SubjectPluginDispatch::from_router(router, kinds, plugin_count),
