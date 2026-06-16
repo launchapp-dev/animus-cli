@@ -279,7 +279,7 @@ where
     let log_storage_handle = resolve_log_storage_dispatch_for_daemon(project_root, &primary_root, hooks).await;
     let log_storage_drop_guard = LogStorageHandleDropGuard::new(log_storage_handle.clone());
 
-    resolve_subject_dispatch_for_daemon(project_root, &primary_root, hooks).await;
+    let subject_dispatch = resolve_subject_dispatch_for_daemon(project_root, &primary_root, hooks).await;
 
     let workflow_event_broadcaster = WorkflowEventBroadcaster::new();
     install_workflow_event_emitter(BroadcastWorkflowEventEmitter::new(workflow_event_broadcaster.clone()));
@@ -291,6 +291,7 @@ where
         hooks,
         workflow_event_broadcaster.clone(),
         plugin_status_registry.clone(),
+        subject_dispatch,
     )
     .await;
 
@@ -723,7 +724,11 @@ fn drain_trigger_events<H: DaemonRunHooks>(
 /// plus a warning rather than aborting startup — a misbehaving subject
 /// plugin must never block the daemon from coming up. CLI `animus subject`
 /// calls against unrouted kinds will surface `NotFound`.
-async fn resolve_subject_dispatch_for_daemon<H: DaemonRunHooks>(project_root: &str, primary_root: &str, hooks: &mut H) {
+async fn resolve_subject_dispatch_for_daemon<H: DaemonRunHooks>(
+    project_root: &str,
+    primary_root: &str,
+    hooks: &mut H,
+) -> Arc<crate::subject_dispatch::SubjectPluginDispatch> {
     let disable_env_set = crate::subject_plugins_disable_env_set();
     match crate::resolve_subject_dispatch(Path::new(project_root)).await {
         Ok(resolution) => {
@@ -736,6 +741,13 @@ async fn resolve_subject_dispatch_for_daemon<H: DaemonRunHooks>(project_root: &s
                 disable_env_set,
                 warnings: resolution.warnings,
             });
+            // Hand the resolved dispatch to the control surface so
+            // control-routed subject ops (subject/list,get,create,update,
+            // next,status,watch — used by the HTTP/GraphQL transports) reach
+            // the same backends the in-process CLI path does. Without this the
+            // surface's subject_dispatch stays None and every transport
+            // subject call returns "subject dispatch not initialized".
+            Arc::new(resolution.selected)
         }
         Err(error) => {
             let _ = hooks.handle_event(DaemonRunEvent::SubjectRouterResolved {
@@ -747,6 +759,7 @@ async fn resolve_subject_dispatch_for_daemon<H: DaemonRunHooks>(project_root: &s
                     "subject_backend discovery failed; subject CLI calls will return NotFound: {error:#}"
                 )],
             });
+            Arc::new(crate::subject_dispatch::SubjectPluginDispatch::empty())
         }
     }
 }
@@ -799,6 +812,7 @@ async fn start_control_server_for_daemon<H: DaemonRunHooks>(
     hooks: &mut H,
     workflow_event_broadcaster: Arc<WorkflowEventBroadcaster>,
     plugin_status_registry: Arc<orchestrator_plugin_host::PluginStatusRegistry>,
+    subject_dispatch: Arc<crate::subject_dispatch::SubjectPluginDispatch>,
 ) -> Option<crate::control::ControlServerHandle> {
     let project_root_path = Path::new(project_root);
     let socket_path = crate::control::control_socket_path(project_root_path);
@@ -818,7 +832,8 @@ async fn start_control_server_for_daemon<H: DaemonRunHooks>(
     }
 
     let mut surface_builder = crate::control::InProcessSurface::builder(project_root_path.to_path_buf())
-        .daemon_version(env!("CARGO_PKG_VERSION").to_string());
+        .daemon_version(env!("CARGO_PKG_VERSION").to_string())
+        .subject_dispatch(subject_dispatch);
     if let Some(routing) = hooks.plugin_routing() {
         surface_builder = surface_builder.plugin_routing(routing);
     }
