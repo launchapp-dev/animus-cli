@@ -319,6 +319,7 @@ async fn consent_callback_sees_auto_detected_scopes() {
     let (base, _state) = spawn_as().await;
     let root = project_root();
 
+    #[allow(clippy::type_complexity)]
     let seen: Arc<std::sync::Mutex<Option<(Vec<String>, bool)>>> = Arc::new(std::sync::Mutex::new(None));
     let seen_cb = seen.clone();
     let opts = RunAuthOptions {
