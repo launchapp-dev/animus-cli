@@ -449,3 +449,29 @@ fn workflow_runner_underpin_warning_ignores_unparseable_versions() {
     assert!(super::workflow_runner_underpin_warning("rnr", "0.4").is_none());
     assert!(super::workflow_runner_underpin_warning("rnr", "").is_none());
 }
+
+#[test]
+fn queue_underpin_warning_fires_below_floor() {
+    // v0.3.0 < v0.3.2 floor → warning naming the plugin + upgrade hint.
+    let warning =
+        super::queue_underpin_warning("animus-queue-default", "v0.3.0").expect("under-pinned queue plugin must warn");
+    assert!(warning.contains("animus-queue-default"), "got: {warning}");
+    assert!(warning.contains("precise-wake"), "got: {warning}");
+    assert!(warning.contains("animus plugin update"), "got: {warning}");
+    assert!(super::queue_underpin_warning("q", "0.3.1").is_some());
+}
+
+#[test]
+fn queue_underpin_warning_silent_at_or_above_floor() {
+    assert!(super::queue_underpin_warning("q", "v0.3.2").is_none(), "the floor itself must not warn");
+    assert!(super::queue_underpin_warning("q", "0.3.3").is_none());
+    assert!(super::queue_underpin_warning("q", "1.0.0").is_none());
+    assert!(super::queue_underpin_warning("q", "0.3.2-rc1").is_none());
+}
+
+#[test]
+fn queue_underpin_warning_ignores_unparseable_versions() {
+    assert!(super::queue_underpin_warning("q", "unknown").is_none());
+    assert!(super::queue_underpin_warning("q", "0.3").is_none());
+    assert!(super::queue_underpin_warning("q", "").is_none());
+}

@@ -182,6 +182,22 @@ pub fn workflow_runner_warnings(project_root: &str) -> Vec<String> {
         .collect()
 }
 
+/// Discover installed `queue` plugins and surface a non-fatal preflight warning
+/// for any whose manifest version is below the precise-wake floor. Mirrors
+/// [`workflow_runner_warnings`]; the daemon concatenates both at startup.
+pub fn queue_warnings(project_root: &str) -> Vec<String> {
+    let root = Path::new(project_root);
+    let scope = resolve_scope_for_project(root);
+    let Ok(plugins) = PluginDiscovery::new().with_project_root(root).with_scope(scope).discover() else {
+        return Vec::new();
+    };
+    plugins
+        .iter()
+        .filter(|p| p.manifest.plugin_kind == "queue")
+        .filter_map(|p| orchestrator_core::queue_underpin_warning(&p.name, &p.manifest.version))
+        .collect()
+}
+
 /// Render the scope's recorded flavor-manifest failure when (and only
 /// when) it actually gates discovery. An explicit
 /// `.animus/plugin-scope.yaml` that overrides the mode to `all` or

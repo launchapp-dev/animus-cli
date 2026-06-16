@@ -64,7 +64,7 @@
     "queues": [
       {
         "repo": "launchapp-dev/animus-queue-default",
-        "tag": "v0.3.0"
+        "tag": "v0.3.3"
       }
     ],
     "notifiers": [
