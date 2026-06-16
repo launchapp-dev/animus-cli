@@ -14,8 +14,8 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    print_value, SecretCommand, SecretExportEnvArgs, SecretGetArgs, SecretImportEnvArgs, SecretListArgs, SecretRmArgs,
-    SecretSetArgs,
+    print_value, SecretCommand, SecretExportEnvArgs, SecretGetArgs, SecretImportEnvArgs, SecretListArgs,
+    SecretMigrateArgs, SecretRmArgs, SecretSetArgs,
 };
 
 pub(crate) async fn handle_secret(
@@ -41,6 +41,104 @@ pub(crate) async fn handle_secret(
         SecretCommand::ExportEnv(args) => {
             handle_export_env(args, store.as_ref(), &project_root_path, &scoped_root, &actor, cli_json)
         }
+        SecretCommand::Migrate(args) => handle_migrate(args, &project_root_path, &scoped_root, &actor, cli_json),
+    }
+}
+
+/// Copy every secret between backends (keyring <-> device store). Builds both
+/// ends explicitly via `build_backend` (independent of the configured default),
+/// verifies each copy, and only clears the source when `--remove-source` is set.
+fn handle_migrate(
+    args: SecretMigrateArgs,
+    project_root: &Path,
+    scoped_root: &Path,
+    actor: &AuditActor,
+    cli_json: bool,
+) -> Result<()> {
+    let scope = resolve_keychain_scope(project_root, scoped_root);
+    let (source_name, target_name) = match args.to.as_str() {
+        "device" => ("keyring", "device"),
+        "keyring" => ("device", "keyring"),
+        other => return Err(anyhow!("unknown migrate target '{other}' (expected: device or keyring)")),
+    };
+    let source = orchestrator_core::build_backend(&scope, scoped_root.to_path_buf(), source_name);
+    let target = orchestrator_core::build_backend(&scope, scoped_root.to_path_buf(), target_name);
+
+    let migrated = migrate_secrets(source.as_ref(), target.as_ref(), args.remove_source)?;
+    log_secret_event(
+        scoped_root,
+        actor,
+        AuditEventKind::PolicyOverride,
+        "secret_migrate",
+        &format!("{source_name}->{target_name}"),
+        None,
+    );
+
+    let json = cli_json || args.json;
+    if json {
+        print_value(
+            json!({
+                "from": source.backend_label(),
+                "to": target.backend_label(),
+                "migrated": migrated,
+                "removed_source": args.remove_source,
+            }),
+            true,
+        )?;
+    } else {
+        println!("migrated {} secret(s) from {} to {}", migrated.len(), source.backend_label(), target.backend_label());
+        if args.remove_source {
+            println!("cleared {} secret(s) from {}", migrated.len(), source.backend_label());
+        } else if !migrated.is_empty() {
+            println!("source ({}) left intact — re-run with --remove-source to clear it", source.backend_label());
+        }
+    }
+    Ok(())
+}
+
+/// Copy every secret from `source` to `target`, verifying each write; on
+/// `remove_source`, delete each successfully-copied key from `source`. Returns
+/// the migrated keys. Generic over [`SecretStore`] so it is unit-testable
+/// without touching the OS keychain.
+fn migrate_secrets(source: &dyn SecretStore, target: &dyn SecretStore, remove_source: bool) -> Result<Vec<String>> {
+    let mut migrated: Vec<String> = Vec::new();
+    for key in source.list_keys()? {
+        let Some(value) = source.get(&key)? else { continue };
+        target.set(&key, &value)?;
+        if target.get(&key)?.as_deref() != Some(value.as_str()) {
+            return Err(anyhow!(
+                "verification failed for {key}: target did not return the copied value; source left intact"
+            ));
+        }
+        migrated.push(key);
+    }
+    if remove_source {
+        for key in &migrated {
+            let _ = source.delete(key);
+        }
+    }
+    Ok(migrated)
+}
+
+#[cfg(test)]
+mod migrate_tests {
+    use super::*;
+    use orchestrator_core::MockSecretStore;
+
+    #[test]
+    fn migrate_copies_verifies_and_respects_remove_source() {
+        let src = MockSecretStore::with_entries([("A_KEY", "1"), ("B_KEY", "2")]);
+        let dst = MockSecretStore::new();
+        let mut moved = migrate_secrets(&src, &dst, false).unwrap();
+        moved.sort();
+        assert_eq!(moved, vec!["A_KEY".to_string(), "B_KEY".to_string()]);
+        assert_eq!(dst.get("A_KEY").unwrap().as_deref(), Some("1"));
+        assert_eq!(src.get("A_KEY").unwrap().as_deref(), Some("1"), "non-destructive must keep the source");
+
+        let dst2 = MockSecretStore::new();
+        migrate_secrets(&src, &dst2, true).unwrap();
+        assert_eq!(dst2.get("B_KEY").unwrap().as_deref(), Some("2"));
+        assert_eq!(src.get("A_KEY").unwrap(), None, "--remove-source must clear the source after a verified copy");
     }
 }
 

@@ -316,19 +316,31 @@ fn restrict_dir(_path: &Path) {}
 pub fn build_secret_store(repo_scope: &str, scoped_root: impl Into<PathBuf>) -> Box<dyn SecretStore> {
     let scoped_root = scoped_root.into();
     let cfg = protocol::Config::load_global_if_exists().and_then(|c| c.secrets).unwrap_or_default();
-    let key_config = key_source_config(&cfg);
-    let backend = cfg.backend.as_deref().unwrap_or("auto");
-
-    let device = DeviceEncryptedSecretStore::new(scoped_root.clone(), key_config);
-    let use_device = match backend {
-        "device" => true,
-        "keyring" | "env" => false,
+    let resolved = match cfg.backend.as_deref().unwrap_or("auto") {
+        "device" => "device",
+        "keyring" | "env" => "keyring",
         // auto: keep using the device store once one exists (post-migration),
         // otherwise stay on the keyring so existing secrets are never stranded.
-        _ => device.path().exists(),
+        _ => {
+            let device = DeviceEncryptedSecretStore::new(scoped_root.clone(), key_source_config(&cfg));
+            if device.path().exists() {
+                "device"
+            } else {
+                "keyring"
+            }
+        }
     };
-    if use_device {
-        Box::new(device)
+    build_backend(repo_scope, scoped_root, resolved)
+}
+
+/// Build a SPECIFIC backend by name (`"device"` or anything else → keyring),
+/// bypassing the auto-selection. Used by `animus secret migrate` to construct
+/// both the source and target ends explicitly.
+pub fn build_backend(repo_scope: &str, scoped_root: impl Into<PathBuf>, backend: &str) -> Box<dyn SecretStore> {
+    let scoped_root = scoped_root.into();
+    if backend == "device" {
+        let cfg = protocol::Config::load_global_if_exists().and_then(|c| c.secrets).unwrap_or_default();
+        Box::new(DeviceEncryptedSecretStore::new(scoped_root, key_source_config(&cfg)))
     } else {
         Box::new(crate::secret_store::KeyringSecretStore::new(repo_scope, scoped_root))
     }

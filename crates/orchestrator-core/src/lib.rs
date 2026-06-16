@@ -96,7 +96,7 @@ pub use runtime_contract::{
     cli_tool_executable, cli_tool_read_only_flag, cli_tool_response_schema_flag, CliCapabilities, CliSessionResumeMode,
     CliSessionResumePlan,
 };
-pub use secret_device_store::{build_secret_store, DeviceEncryptedSecretStore};
+pub use secret_device_store::{build_backend, build_secret_store, DeviceEncryptedSecretStore};
 pub use secret_keysource::{KeySource, KeySourceConfig, KeySourceKind};
 pub use secret_store::{
     enforce_injection_cap, index_path as secrets_index_path, keychain_service_name,

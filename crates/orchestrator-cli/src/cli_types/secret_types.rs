@@ -23,6 +23,24 @@ pub(crate) enum SecretCommand {
     /// Export stored secrets back to a `.env` file. Loud warning:
     /// this writes plaintext to disk.
     ExportEnv(SecretExportEnvArgs),
+    /// Move every stored secret between backends (OS keyring <-> the
+    /// device-encrypted store). Non-destructive: the source is left intact
+    /// unless `--remove-source` is passed.
+    Migrate(SecretMigrateArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SecretMigrateArgs {
+    /// Target backend to copy every secret into.
+    #[arg(long, value_parser = ["device", "keyring"])]
+    pub(crate) to: String,
+    /// After copying (and verifying) each secret, delete it from the source
+    /// backend. Off by default so a failed migration never loses secrets.
+    #[arg(long)]
+    pub(crate) remove_source: bool,
+    /// Emit machine-readable JSON output on the `animus.cli.v1` envelope.
+    #[arg(long)]
+    pub(crate) json: bool,
 }
 
 #[derive(Debug, Args)]
