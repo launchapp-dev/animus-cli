@@ -251,6 +251,10 @@ impl SecretStore for DeviceEncryptedSecretStore {
         // One decrypt for the whole map (cheaper + safer than per-key).
         Ok(self.read_state()?.entries)
     }
+
+    fn backend_label(&self) -> &'static str {
+        "device-encrypted store"
+    }
 }
 
 // --- length-prefixed (u32-LE) framing helpers ---

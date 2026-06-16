@@ -107,6 +107,12 @@ pub trait SecretStore: Send + Sync {
         }
         Ok(out)
     }
+
+    /// Human-readable label for the active backend, surfaced by the CLI so
+    /// operators can see where secrets actually live (keyring vs device store).
+    fn backend_label(&self) -> &'static str {
+        "OS keyring"
+    }
 }
 
 /// A boxed store is itself a store, so [`build_secret_store`]'s
@@ -127,6 +133,9 @@ impl SecretStore for Box<dyn SecretStore> {
     }
     fn snapshot_for_spawn(&self) -> SecretStoreResult<BTreeMap<String, String>> {
         (**self).snapshot_for_spawn()
+    }
+    fn backend_label(&self) -> &'static str {
+        (**self).backend_label()
     }
 }
 

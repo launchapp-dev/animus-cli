@@ -113,7 +113,7 @@ fn handle_set(
             true,
         )?;
     } else {
-        println!("stored {} in keychain (scope={})", args.key, scope_hint);
+        println!("stored {} in {} (scope={})", args.key, store.backend_label(), scope_hint);
     }
     Ok(())
 }
