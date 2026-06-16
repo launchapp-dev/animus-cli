@@ -109,6 +109,27 @@ pub trait SecretStore: Send + Sync {
     }
 }
 
+/// A boxed store is itself a store, so [`build_secret_store`]'s
+/// `Box<dyn SecretStore>` can be passed anywhere `S: SecretStore` is expected
+/// (e.g. the daemon's generic snapshot/resolver adapters).
+impl SecretStore for Box<dyn SecretStore> {
+    fn set(&self, key: &str, value: &str) -> SecretStoreResult<()> {
+        (**self).set(key, value)
+    }
+    fn get(&self, key: &str) -> SecretStoreResult<Option<String>> {
+        (**self).get(key)
+    }
+    fn delete(&self, key: &str) -> SecretStoreResult<bool> {
+        (**self).delete(key)
+    }
+    fn list_keys(&self) -> SecretStoreResult<Vec<String>> {
+        (**self).list_keys()
+    }
+    fn snapshot_for_spawn(&self) -> SecretStoreResult<BTreeMap<String, String>> {
+        (**self).snapshot_for_spawn()
+    }
+}
+
 /// Validate the secret KEY shape. Mirrors the workflow-YAML env var
 /// rule so secrets and interpolated env vars share the same alphabet.
 pub fn validate_key(key: &str) -> SecretStoreResult<()> {

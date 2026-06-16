@@ -55,6 +55,29 @@ pub struct Config {
     /// Opt-in anonymous usage telemetry. Absent means "never asked".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metrics: Option<MetricsConfig>,
+    /// Secret-storage backend + encryption-key source. Absent means "auto":
+    /// the device-encrypted store where a good key source exists, else the OS
+    /// keyring. See docs/architecture/secret-backends.md.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets: Option<SecretsConfig>,
+}
+
+/// Secret-storage configuration. Every field is optional; an absent value
+/// means "auto", so existing configs keep their current behavior.
+#[derive(Debug, Serialize, Deserialize, Clone, Default, PartialEq, Eq)]
+pub struct SecretsConfig {
+    /// `auto` | `keyring` | `device` | `env`. `auto` keeps installs that
+    /// already have keyring secrets on the keyring and uses the device store
+    /// otherwise / where no keyring exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<String>,
+    /// Encryption-key source for the `device` backend:
+    /// `auto` | `user-key` | `passphrase` | `device-id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_source: Option<String>,
+    /// Path to a raw key file (hex or base64) when `key_source = user-key`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_file: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -233,6 +256,7 @@ impl Config {
             default_subject_kind: Some("task".to_string()),
             auto_update: None,
             metrics: None,
+            secrets: None,
         };
         let json = serde_json::to_string_pretty(&default_config)?;
         fs::write(config_path, json)?;
@@ -394,6 +418,7 @@ mod tests {
             default_subject_kind: None,
             auto_update: None,
             metrics: None,
+            secrets: None,
         };
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(!json.contains("mcp_servers"));

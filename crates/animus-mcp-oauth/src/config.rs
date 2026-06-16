@@ -8,7 +8,6 @@ use std::sync::Arc;
 use orchestrator_config::workflow_config::{
     load_workflow_config_or_default, load_workflow_config_with_metadata, OauthConfig, OauthFlow,
 };
-use orchestrator_core::secret_store::KeyringSecretStore;
 use orchestrator_core::SecretStore;
 use protocol::repository_scope::{repository_scope_for_path, scoped_state_root};
 use thiserror::Error;
@@ -57,7 +56,7 @@ pub fn build_secret_store(project_root: &Path) -> Result<Arc<dyn SecretStore>, S
     let scoped_root = scoped_state_root(project_root)
         .ok_or_else(|| ServerResolutionError::NoScopedRoot(project_root.display().to_string()))?;
     let scope = resolve_keychain_scope(project_root, &scoped_root);
-    Ok(Arc::new(KeyringSecretStore::new(&scope, scoped_root)))
+    Ok(Arc::from(orchestrator_core::build_secret_store(&scope, scoped_root)))
 }
 
 /// Pick the keychain service-scope string from the adopted scoped state

@@ -26,6 +26,14 @@ toml = "1.0"
 serde_yaml = "0.9"
 thiserror = "1"
 keyring = { version = "3", default-features = false, features = ["apple-native", "linux-native-sync-persistent", "windows-native", "crypto-rust"] }
+# Device-encrypted secret store (pure-Rust RustCrypto; satisfies rust-only dep policy).
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
+hkdf = "0.12"
+zeroize = { version = "1", features = ["derive"] }
+rand = "0.8"
+hex = "0.4"
+base64 = "0.22"
 
 [lints]
 workspace = true

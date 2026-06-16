@@ -253,7 +253,7 @@ pub fn install_keychain_secret_provider_for(project_root: &std::path::Path) -> b
         return false;
     };
     let scope = scope_label_for_scoped_root(project_root, &scoped_root);
-    let store = orchestrator_core::KeyringSecretStore::new(&scope, scoped_root);
+    let store = orchestrator_core::build_secret_store(&scope, scoped_root);
     orchestrator_plugin_host::install_secret_snapshot_provider(std::sync::Arc::new(
         KeychainSecretSnapshotProvider::new(store),
     ))
@@ -296,7 +296,7 @@ pub fn install_keychain_workflow_resolver_for(project_root: &std::path::Path) ->
         return false;
     };
     let scope = scope_label_for_scoped_root(project_root, &scoped_root);
-    let store = orchestrator_core::KeyringSecretStore::new(&scope, scoped_root);
+    let store = orchestrator_core::build_secret_store(&scope, scoped_root);
     orchestrator_config::install_workflow_secret_resolver(std::sync::Arc::new(KeychainWorkflowResolver::new(store)))
 }
 

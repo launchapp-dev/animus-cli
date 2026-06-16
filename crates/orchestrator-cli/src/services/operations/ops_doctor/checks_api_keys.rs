@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use animus_plugin_protocol::EnvRequirement;
-use orchestrator_core::{KeyringSecretStore, SecretStore};
+use orchestrator_core::SecretStore;
 use orchestrator_plugin_host::discover_plugins;
 use protocol::repository_scope::{repository_scope_for_path, scoped_state_root};
 
@@ -66,18 +66,18 @@ fn cli_config_login_present(plugin_name: &str) -> Option<&'static str> {
 /// Build a keychain-backed secret store for the project's repo-scope,
 /// matching how `animus secret` resolves the scope (adopted scoped-state
 /// directory name first, freshly-derived `repo-scope` otherwise).
-fn keychain_store(project_root: &Path) -> Option<KeyringSecretStore> {
+fn keychain_store(project_root: &Path) -> Option<Box<dyn SecretStore>> {
     let scoped_root = scoped_state_root(project_root)?;
     let scope = scoped_root
         .file_name()
         .and_then(|s| s.to_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| repository_scope_for_path(project_root));
-    Some(KeyringSecretStore::new(&scope, scoped_root))
+    Some(orchestrator_core::build_secret_store(&scope, scoped_root))
 }
 
-/// True when `name` resolves to a non-empty value in the project keychain.
-fn keychain_has_key(store: Option<&KeyringSecretStore>, name: &str) -> bool {
+/// True when `name` resolves to a non-empty value in the project secret store.
+fn keychain_has_key(store: Option<&dyn SecretStore>, name: &str) -> bool {
     match store {
         Some(store) => matches!(store.get(name), Ok(Some(value)) if !value.trim().is_empty()),
         None => false,
@@ -136,7 +136,7 @@ pub(crate) fn run(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
             let check = if std::env::var(&name).map(|v| !v.trim().is_empty()).unwrap_or(false) {
                 DiagnosticCheck::new(id, CATEGORY, CheckStatus::Pass, title)
                     .details(format!("{name} satisfied via env var set in this shell"))
-            } else if keychain_injectable && keychain_has_key(store.as_ref(), &name) {
+            } else if keychain_injectable && keychain_has_key(store.as_deref(), &name) {
                 DiagnosticCheck::new(id, CATEGORY, CheckStatus::Pass, title)
                     .details(format!("{name} satisfied via keychain (`animus secret`)"))
             } else if let Some(cli) = cli_login.filter(|_| cli_auth_keys.contains(&name.as_str())) {

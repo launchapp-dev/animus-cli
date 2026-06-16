@@ -217,6 +217,7 @@ fn load_global_or_fresh_or_bail(action: &str) -> Result<Config> {
             default_subject_kind: None,
             auto_update: None,
             metrics: None,
+            secrets: None,
         });
     }
     Config::load_global_if_exists().ok_or_else(|| {

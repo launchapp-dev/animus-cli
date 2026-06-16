@@ -7,9 +7,7 @@ use orchestrator_core::principal::{
     bootstrap_principals_file_if_absent, current_os_username, default_principals_path, load_principals_file,
     resolve_principal_by_id, resolve_principal_for_os_user, PrincipalKind,
 };
-use orchestrator_core::{
-    keychain_service_name, secrets_index_path, validate_secret_key, KeyringSecretStore, SecretStore,
-};
+use orchestrator_core::{keychain_service_name, secrets_index_path, validate_secret_key, SecretStore};
 use orchestrator_daemon_runtime::audit::{Audit, AuditActor, AuditEventKind};
 use protocol::repository_scope::{repository_scope_for_path, scoped_state_root};
 use serde::Serialize;
@@ -68,7 +66,7 @@ fn build_store(project_root: &Path) -> Result<Box<dyn SecretStore>> {
     let scoped_root = scoped_state_root(project_root)
         .ok_or_else(|| anyhow!("could not resolve scoped state root for project at {}", project_root.display()))?;
     let scope = resolve_keychain_scope(project_root, &scoped_root);
-    Ok(Box::new(KeyringSecretStore::new(&scope, scoped_root)))
+    Ok(orchestrator_core::build_secret_store(&scope, scoped_root))
 }
 
 /// Pick the keychain service-scope string from the adopted scoped state

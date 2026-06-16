@@ -51,6 +51,7 @@ pub(crate) fn maybe_prompt_first_run(_project_root: &Path) -> Result<ConsentSour
             default_subject_kind: None,
             auto_update: None,
             metrics: None,
+            secrets: None,
         }
     };
     if config.metrics.is_some() {
