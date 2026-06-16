@@ -53,6 +53,33 @@ pub fn workflow_runner_underpin_warning(name: &str, version: &str) -> Option<Str
     }
 }
 
+/// Minimum `queue` plugin version that implements precise-wake
+/// (`queue/next_deadline`) for the event-driven daemon scheduler. A queue
+/// plugin below this floor leases and completes work fine but cannot signal
+/// precise cron/deferred wake deadlines, so reactive dispatch falls back to the
+/// slower heartbeat — preflight surfaces a non-fatal WARNING rather than failing.
+pub const QUEUE_PRECISE_WAKE_FLOOR: &str = "0.3.2";
+
+/// Build the under-pin preflight warning for a discovered `queue` plugin whose
+/// manifest `version` is below [`QUEUE_PRECISE_WAKE_FLOOR`]. Returns `None` when
+/// the version meets the floor or cannot be parsed (an unparseable version is
+/// not actionable and must never fail preflight). The accepted `version` may
+/// carry a leading `v`.
+pub fn queue_underpin_warning(name: &str, version: &str) -> Option<String> {
+    let installed = parse_version_triple(version)?;
+    let floor = parse_version_triple(QUEUE_PRECISE_WAKE_FLOOR)?;
+    if installed < floor {
+        let display_version = version.trim().trim_start_matches('v');
+        Some(format!(
+            "installed queue plugin {name} v{display_version} lacks precise-wake \
+             (queue/next_deadline); reactive dispatch falls back to the heartbeat \
+             (needs v{QUEUE_PRECISE_WAKE_FLOOR}+); upgrade with `animus plugin update`"
+        ))
+    } else {
+        None
+    }
+}
+
 /// Parse a `major.minor.patch` version (optionally `v`-prefixed, with any
 /// pre-release/build suffix on the patch component ignored) into a
 /// comparable tuple. Returns `None` for anything that does not start with
