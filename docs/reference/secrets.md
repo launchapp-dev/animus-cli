@@ -48,6 +48,46 @@ The keychain itself doesn't support listing entries by service prefix portably. 
 
 The index stores KEY names only — every actual value lives in the OS keychain. The file is safe to back up or commit-to-private-storage if you want to track which secrets a project needs without leaking values.
 
+## Storage backends
+
+Two backends sit behind the same `animus secret` surface. The default is unchanged (OS keyring); the device-encrypted store is opt-in and exists for hosts where the keyring is awkward (a macOS binary whose signature changes re-prompts on every keychain access) or absent (a headless Linux server with no session keyring).
+
+Select per machine in the **global** config (`~/.animus/config.json`, or `$ANIMUS_CONFIG_DIR`):
+
+```jsonc
+{
+  "secrets": {
+    "backend": "device",        // auto (default) | keyring | device | env
+    "key_source": "device-id",  // auto | user-key | passphrase | device-id
+    "key_file": "/path/to/key"  // only for key_source = user-key
+  }
+}
+```
+
+- **`keyring`** — the OS keychain (macOS Keychain / libsecret / Windows Credential Manager). Default.
+- **`device`** — secrets live AEAD-sealed (ChaCha20-Poly1305) in `~/.animus/<scope>/secrets/secrets.enc.v1` (`0600`). A random master key seals the data and is itself wrapped under a **key source**. No keychain, no prompts, and the file is useless if copied off the device.
+- **`auto`** — keeps existing keyring installs on the keyring (never strands secrets); uses the device store once one exists for the scope.
+
+### Key sources (what wraps the device store's master key)
+
+- **`device-id`** — `HKDF(machine-id + per-install salt)`. The machine id never travels with the file, so an off-device copy can't decrypt. Cross-platform, no prompt. Default fallback.
+- **`user-key`** — an operator-supplied 32-byte key from `ANIMUS_SECRET_KEY` (hex/base64) or `key_file`. For headless/server with a deploy-injected key (systemd `LoadCredential`, mounted secret, external KMS).
+- **`passphrase`** — `Argon2id` over a passphrase. Interactive prompt for the CLI; the daemon reads `ANIMUS_SECRET_PASSPHRASE` non-interactively (so an unattended-daemon passphrase is, in exposure terms, equivalent to `user-key` — there is no human to type it at runtime).
+- **`auto`** — an OS hardware-backed key (Secure Enclave / DPAPI / TPM) where available, else `device-id`.
+
+### Moving between backends
+
+```bash
+animus secret migrate --to device      # copy every secret keyring -> device store (verified)
+animus secret migrate --to device --remove-source   # also clear the keyring after a verified copy
+```
+
+Migration is non-destructive by default and verifies each copied value before (optionally) clearing the source.
+
+### Threat model (short version)
+
+The device store **defeats off-device theft** (a copied file / errant backup / synced folder is undecryptable) and **raises the on-device bar**, but does **not** defend against a live attacker running as your user — they can run the same key derivation. See [`docs/architecture/secret-backends.md`](../architecture/secret-backends.md) for the full design and boundaries.
+
 ## Storage layout
 
 - **Service name:** `animus:<repo-scope>` (e.g. `animus:auth-main-5ba84d1bbafc`). Two projects with the same KEY do not collide because the `repo-scope` segment differs.
