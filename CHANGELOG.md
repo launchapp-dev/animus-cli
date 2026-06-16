@@ -4,6 +4,47 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.18] - 2026-06-16
+
+**Device-encrypted secret backend.** A second `animus secret` backend that
+seals secrets in a `0600` file with a device-bound key — an alternative to the
+OS keychain for hosts where the keychain is awkward (a macOS binary whose
+signature changes re-prompts on every access) or absent (a headless Linux box
+with no session keyring).
+
+### Added
+
+- **`device` secret backend.** Secrets live AEAD-sealed (ChaCha20-Poly1305) in
+  `~/.animus/<scope>/secrets/secrets.enc.v1`. A random master key seals the data
+  and is itself wrapped under a configurable **key source**, so the wrapping key
+  can rotate without re-encrypting every secret. All crypto is pure-Rust
+  RustCrypto (`chacha20poly1305`, `argon2`, `hkdf`, `zeroize`), honoring the
+  rust-only dependency policy.
+- **Four key sources** (`secrets.key_source`): `device-id`
+  (`HKDF(machine-id + per-install salt)`, cross-platform, no prompt — the
+  default), `user-key` (operator 32-byte key via `ANIMUS_SECRET_KEY` or
+  `key_file`), `passphrase` (`Argon2id` over `ANIMUS_SECRET_PASSPHRASE`,
+  env-driven and script-safe), and `auto`.
+- **`animus secret migrate --to <device|keyring> [--remove-source]`.** Copies
+  every secret between backends, verifying each value before optionally clearing
+  the source. `--remove-source` reports any deletions that failed instead of
+  claiming a clean clear.
+- **Global `secrets` config block** (`~/.animus/config.json`):
+  `backend` (`auto`|`keyring`|`device`|`env`), `key_source`, `key_file`.
+  `auto` keeps existing keyring installs on the keyring (never strands secrets)
+  and uses the device store once one exists for the scope.
+
+### Notes
+
+- The device store **defeats off-device theft** (a copied file / errant backup
+  is undecryptable) and **raises the on-device bar**, but does **not** defend
+  against a live attacker running as your user. See
+  `docs/architecture/secret-backends.md` for the full threat model.
+- The OS-hardware key sources (Secure Enclave / DPAPI / TPM) are deferred:
+  Secure Enclave re-introduces the keychain prompt this feature exists to avoid,
+  DPAPI can't be built/tested off-Windows, and TPM's `tss-esapi` links a C
+  library. `device-id` is the shipped cross-platform default.
+
 ## [0.5.17] - 2026-06-16
 
 **Plugin release/update hardening.** Recommend the binary-shipping queue plugin,
