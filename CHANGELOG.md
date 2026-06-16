@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.19] - 2026-06-16
+
+**Queue-enqueue plugin-subject fallback.** Control-routed `queue/enqueue`
+resolved the subject only through the in-tree task store, which has been empty
+since v0.4.12 (subjects now live in `subject_backend` plugins). Every enqueue of
+a plugin-backed subject failed with "task not found", silently breaking the
+queue-driven workflow trigger over the HTTP/GraphQL transports.
+
+### Fixed
+
+- **`queue/enqueue` now engages the subject-plugin fallback**, mirroring the
+  workflow-run path: try the in-tree task store first, then resolve via
+  `subject_resolver().resolve_subject_context()` and dispatch with the project's
+  `default_workflow_ref`. The subject *read* path got this fallback in an earlier
+  fix (`bdc7b310`); the enqueue path was missed, so the queue trigger could not
+  see any plugin-backed subject. Found via live transport E2E.
+
 ## [0.5.18] - 2026-06-16
 
 **Device-encrypted secret backend.** A second `animus secret` backend that
