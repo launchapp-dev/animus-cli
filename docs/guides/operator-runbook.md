@@ -5,7 +5,7 @@ Audience: operators running Animus in production.
 This runbook covers healthchecks, common failure scenarios with
 remediations, debug procedures, backup/restore, upgrades, and disaster
 recovery. Every command in this guide is copy-pasteable against a
-current v0.4.x install.
+current v0.5.x install.
 
 For the upgrade procedure itself, see
 [`docs/migration/v0.4.11-to-v0.4.12.md`](../migration/v0.4.11-to-v0.4.12.md)
@@ -90,7 +90,7 @@ error: daemon preflight failed
 ```
 
 The daemon stops shipping with bundled providers, workflow runners,
-queues, subjects, or transports as of v0.4.12/v0.5. The startup
+queues, subjects, or transports as of v0.5. The startup
 preflight refuses to boot without at least one provider, a
 `workflow_runner` plugin, a `queue` plugin, and the required subject
 backends installed.
@@ -140,7 +140,7 @@ animus daemon start
 ### Workflow blocked
 
 ```bash
-animus workflow get <workflow-id>
+animus workflow get --id <workflow-id>
 ```
 
 Look for `blocked_reason`. Common values:
@@ -160,7 +160,7 @@ animus subject status --kind task --id task:TASK-001 --status ready
   phases. Inspect, then if you've decided it's safe:
 
 ```bash
-animus workflow resume <workflow-id> --force
+animus workflow resume --id <workflow-id> --force
 ```
 
 - **`"Subject backend unavailable"`** — the subject plugin that owns
@@ -391,14 +391,14 @@ Decision tree after a crash:
 
 ```bash
 animus workflow list --status blocked
-animus workflow get <id>                            # read blocked_reason
+animus workflow get --id <id>                       # read blocked_reason
 animus subject get --kind task --id <task-id>       # context
 
 # If you've decided it's safe to resume:
-animus workflow resume <id> --force
+animus workflow resume --id <id> --force
 
 # If it should be re-run from scratch:
-animus workflow cancel <id>
+animus workflow cancel --id <id> --confirm <id>
 animus subject status --kind task --id <task-id> --status ready
 
 # If the provider plugin doesn't support resume:

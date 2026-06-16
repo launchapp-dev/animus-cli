@@ -153,9 +153,11 @@ animus logs tail --limit 100
 ```
 
 `animus logs tail` reads through the active `log_storage_backend` when one is
-installed, and otherwise reads the local `events.jsonl` mirror directly. Its
-`--follow` flag is currently reserved for future backend streaming support, so
-the local file path still returns a batch and exits.
+installed, and otherwise reads the local `events.jsonl` mirror directly. It is
+a bounded batch reader that returns recent entries and exits. The hidden
+deprecated `--follow` flag is accepted only for back-compat and is ignored. For
+live follow behavior, use `animus daemon stream --pretty` or start at
+`animus daemon observe`.
 
 For live debugging, stream daemon events:
 

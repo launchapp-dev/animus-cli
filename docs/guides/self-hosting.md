@@ -35,8 +35,8 @@ animus subject status --kind task --id task:TASK-001 --status done
 animus daemon start
 animus daemon status
 animus daemon health
-animus daemon events
-animus logs tail
+animus daemon observe
+animus logs tail --limit 100
 ```
 
 ## Operational Notes
