@@ -21,6 +21,12 @@ const SUBJECT_ROUTE_TIMEOUT: Duration = Duration::from_mins(2);
 /// crate avoids a dependency on the subject protocol crate.
 const SUBJECT_METHOD_WATCH: &str = "subject/watch";
 
+/// `subject/unwatch` JSON-RPC wire method name (animus-subject-protocol
+/// `METHOD_SUBJECT_UNWATCH`, v0.1.16+). Spelled as a literal for the same
+/// reason as [`SUBJECT_METHOD_WATCH`] — the plugin-host crate stays free of
+/// a direct dependency on the subject protocol crate.
+const SUBJECT_METHOD_UNWATCH: &str = "subject/unwatch";
+
 /// Subject-kind registration parsed from a plugin's declared
 /// `subject_kinds`. A pattern ending in `.*` matches any kind whose dotted
 /// prefix matches everything before the trailing `*`.
@@ -60,11 +66,88 @@ impl KindPattern {
 /// `notifications` is the plugin host's broadcast receiver; `watch_id` is the
 /// JSON-RPC id of the `subject/watch` request, echoed by the runtime in every
 /// correlated `subject/changed` notification's `params.id`.
+///
+/// Dropping the subscription fires a best-effort `subject/unwatch` to the
+/// backing plugin (see [`SubjectUnwatchGuard`]) so the plugin can cancel its
+/// `backend.watch()` task instead of leaking it until daemon shutdown.
 pub struct SubjectWatchSubscription {
     /// Notification receiver for the plugin host backing this watch.
     pub notifications: PluginNotificationRx,
     /// JSON-RPC id allocated for the `subject/watch` request.
     pub watch_id: u64,
+    /// Cancel-on-drop guard: sends `subject/unwatch { watch_id }` to the
+    /// plugin when the subscription is dropped. Kept private so callers
+    /// cannot detach it from the subscription's lifetime by accident.
+    unwatch_guard: SubjectUnwatchGuard,
+}
+
+impl SubjectWatchSubscription {
+    /// Split the subscription into its notification receiver, the watch
+    /// request id, and the cancel-on-drop guard.
+    ///
+    /// Consumers that drive the notification stream by value (e.g. wrapping
+    /// `notifications` in a `BroadcastStream`) must keep the returned
+    /// [`SubjectWatchGuard`] alive for as long as they want the watch to
+    /// stay open — dropping it fires `subject/unwatch` to the plugin. Attach
+    /// it to the stream's lifetime so the unwatch fires exactly when the
+    /// stream is dropped.
+    pub fn into_parts(self) -> (PluginNotificationRx, u64, SubjectWatchGuard) {
+        (self.notifications, self.watch_id, SubjectWatchGuard { inner: self.unwatch_guard })
+    }
+}
+
+/// Opaque cancel-on-drop handle yielded by
+/// [`SubjectWatchSubscription::into_parts`]. Holding it keeps the plugin's
+/// watch task alive; dropping it fires a best-effort `subject/unwatch`.
+pub struct SubjectWatchGuard {
+    #[allow(dead_code)]
+    inner: SubjectUnwatchGuard,
+}
+
+/// RAII guard that emits a best-effort `subject/unwatch` notification when a
+/// [`SubjectWatchSubscription`] is dropped.
+///
+/// The daemon drops a subject watch when the consuming stream ends (client
+/// disconnect, scoped subscription teardown, etc.). Before this guard
+/// existed, dropping only released the plugin host's broadcast receiver — the
+/// plugin kept its `backend.watch()` task alive and emitted discarded
+/// notifications until daemon shutdown. The guard closes that leak by telling
+/// the plugin to cancel the watch task keyed by `watch_id`.
+///
+/// Delivery is best-effort and fire-and-forget: `Drop` cannot be async, so it
+/// spawns a detached task that sends the notification. Errors are ignored —
+/// the plugin may already be gone, and a failed unwatch is no worse than the
+/// pre-guard leak it replaces. The `watch_id` is sent as a string to match
+/// the protocol's `SubjectUnwatchRequest { watch_id: String }` shape, where it
+/// correlates with the id the daemon used for the originating `subject/watch`.
+struct SubjectUnwatchGuard {
+    host: PluginHost,
+    watch_id: u64,
+}
+
+impl Drop for SubjectUnwatchGuard {
+    fn drop(&mut self) {
+        let host = self.host.clone();
+        let watch_id = self.watch_id;
+        // Drop runs inside the daemon's tokio runtime (watch streams are
+        // polled there). Spawn a detached best-effort notify rather than
+        // blocking the dropping thread on async I/O. If no runtime is active
+        // (e.g. a unit test dropping the subscription off-runtime), the
+        // `try_current` check skips the send instead of panicking.
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        tokio::spawn(async move {
+            let params = serde_json::json!({ "watch_id": watch_id.to_string() });
+            if let Err(error) = host.notify(SUBJECT_METHOD_UNWATCH, Some(params)).await {
+                tracing::debug!(
+                    watch_id,
+                    error = %error,
+                    "best-effort subject/unwatch notify failed (plugin may already be gone)",
+                );
+            }
+        });
+    }
 }
 
 pub struct SubjectRouter {
@@ -434,26 +517,21 @@ impl SubjectRouter {
         // Capture the request id: the runtime echoes it in every
         // `subject/changed` notification's `params.id` so the subscriber can
         // filter out notifications belonging to other watch RPCs sharing this
-        // host's broadcast.
-        //
-        // TODO(codex-p2): no per-watch cancellation. The pinned
-        // animus-subject-protocol / animus-plugin-runtime expose `subject/watch`
-        // but NO `subject/unwatch` (or per-request cancel) verb — the runtime's
-        // `drive_watch_stream` task runs until the plugin's stdio closes. When a
-        // daemon stream is dropped (client disconnects), we drop only the
-        // broadcast receiver; the plugin keeps its `backend.watch()` task alive
-        // and emits discarded notifications until daemon shutdown. Fixing this
-        // requires an upstream protocol + runtime change (add a `subject/unwatch`
-        // RPC keyed by the watch request id, then send it on drop). Flagged for a
-        // separate plugin-protocol change. Bounded in practice: the daemon hosts
-        // one subject plugin process per kind for its whole lifetime, so leaked
-        // watch tasks accumulate within that single process, not unboundedly
-        // across processes.
+        // host's broadcast. The same id keys the `subject/unwatch` the drop
+        // guard sends below so the plugin cancels the right watch task.
         let (watch_id, result) =
             host.request_with_timeout_capturing_id(SUBJECT_METHOD_WATCH, watch_params, SUBJECT_ROUTE_TIMEOUT).await;
         result?;
 
-        Ok(SubjectWatchSubscription { notifications: rx, watch_id })
+        // Per-watch cancellation: when the daemon drops this subscription
+        // (client disconnect, scoped teardown), the guard fires
+        // `subject/unwatch { watch_id }` so the plugin cancels its
+        // `backend.watch()` task instead of leaking it until daemon shutdown
+        // (animus-subject-protocol v0.1.16+; older backends treat the
+        // notification as an unknown no-op method).
+        let unwatch_guard = SubjectUnwatchGuard { host: host.clone(), watch_id };
+
+        Ok(SubjectWatchSubscription { notifications: rx, watch_id, unwatch_guard })
     }
 
     /// Translate a plugin's native subject kind back to the user-facing
