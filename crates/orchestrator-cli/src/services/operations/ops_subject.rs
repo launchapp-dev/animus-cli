@@ -829,6 +829,9 @@ mod tests {
     }
 
     #[tokio::test]
+    // The test-env serialization lock is intentionally held across the await to
+    // keep HOME / the disable-plugins env stable for the whole async test body.
+    #[allow(clippy::await_holding_lock)]
     async fn run_subject_batch_continue_marks_each_item_failed_without_backend() {
         // Isolated from any globally installed subject plugins (codex review
         // P2): pin HOME to a temp dir and force subject plugin discovery off
