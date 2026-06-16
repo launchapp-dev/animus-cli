@@ -252,8 +252,18 @@ fn plugin_changed_stream(
     filter: Option<Value>,
     subscription: orchestrator_plugin_host::SubjectWatchSubscription,
 ) -> Pin<Box<dyn Stream<Item = SubjectChangedEvent> + Send>> {
-    let orchestrator_plugin_host::SubjectWatchSubscription { notifications, watch_id } = subscription;
+    let (notifications, watch_id, unwatch_guard) = subscription.into_parts();
+    // Hold the cancel-on-drop guard for the stream's whole lifetime: when the
+    // daemon drops this stream (client disconnect, scoped teardown), the guard
+    // is dropped with the owning `filter_map` closure and fires
+    // `subject/unwatch { watch_id }` so the plugin cancels its
+    // `backend.watch()` task instead of leaking it until daemon shutdown. The
+    // closure owns the guard without reading it per-item.
     let stream = tokio_stream::wrappers::BroadcastStream::new(notifications).filter_map(move |item| {
+        // Anchor the guard inside this closure's captured environment so its
+        // lifetime is exactly the stream's. `&unwatch_guard` keeps it owned by
+        // the `FnMut` closure rather than moving it into the per-item future.
+        let _ = &unwatch_guard;
         let router = router.clone();
         let plugin_name = plugin_name.clone();
         let requested_kind = requested_kind.clone();
@@ -814,6 +824,114 @@ mod tests {
         });
 
         PluginHost::from_streams(name, host_reader, host_writer)
+    }
+
+    /// Like [`watch_subject_host`] but reports the `watch_id` carried by any
+    /// `subject/unwatch` notification on `unwatch_tx`, so a test can assert the
+    /// cancel-on-drop guard fires. `subject/unwatch` is a fire-and-forget
+    /// notification (no `id`), so nothing is written back.
+    async fn unwatch_signaling_host(
+        name: &str,
+        subject_kinds: Vec<&str>,
+        unwatch_tx: tokio::sync::mpsc::UnboundedSender<String>,
+    ) -> PluginHost {
+        let (host_reader, mut plugin_writer) = duplex(8192);
+        let (plugin_reader, host_writer) = duplex(8192);
+        let name_for_task = name.to_string();
+        let kinds = subject_kinds.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
+
+        tokio::spawn(async move {
+            let mut reader = BufReader::new(plugin_reader);
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.expect("read line") == 0 {
+                    break;
+                }
+                let request: RpcRequest = serde_json::from_str(line.trim()).expect("parse request");
+                match request.method.as_str() {
+                    "initialize" => {
+                        let response = RpcResponse::ok(
+                            request.id,
+                            serde_json::json!(InitializeResult {
+                                protocol_version: "1.0.0".to_string(),
+                                plugin_info: PluginInfo {
+                                    name: name_for_task.clone(),
+                                    version: "0.1.0".to_string(),
+                                    plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                                    description: None,
+                                },
+                                capabilities: PluginCapabilities {
+                                    subject_kinds: kinds.clone(),
+                                    methods: kinds.iter().map(|k| format!("{k}/list")).collect(),
+                                    ..PluginCapabilities::default()
+                                },
+                            }),
+                        );
+                        let mut encoded = serde_json::to_string(&response).expect("encode");
+                        encoded.push('\n');
+                        plugin_writer.write_all(encoded.as_bytes()).await.expect("write");
+                    }
+                    "initialized" => continue,
+                    "subject/watch" => {
+                        // Ack the watch but emit no events: the test only cares
+                        // about the unwatch sent on drop, and a quiet stream
+                        // keeps the assertion deterministic.
+                        let response = RpcResponse::ok(request.id, serde_json::json!({}));
+                        let mut encoded = serde_json::to_string(&response).expect("encode");
+                        encoded.push('\n');
+                        plugin_writer.write_all(encoded.as_bytes()).await.expect("write");
+                    }
+                    "subject/unwatch" => {
+                        let watch_id = request
+                            .params
+                            .as_ref()
+                            .and_then(|p| p.get("watch_id"))
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string();
+                        let _ = unwatch_tx.send(watch_id);
+                    }
+                    method => {
+                        let response = RpcResponse::ok(request.id, serde_json::json!({ "method": method }));
+                        let mut encoded = serde_json::to_string(&response).expect("encode");
+                        encoded.push('\n');
+                        plugin_writer.write_all(encoded.as_bytes()).await.expect("write");
+                    }
+                }
+            }
+        });
+
+        PluginHost::from_streams(name, host_reader, host_writer)
+    }
+
+    #[tokio::test]
+    async fn dropping_watch_stream_sends_subject_unwatch_to_plugin() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let mut hosts = HashMap::new();
+        hosts.insert("tasks".to_string(), unwatch_signaling_host("tasks", vec!["task"], tx).await);
+        let router = SubjectRouter::from_initialized_hosts(hosts).await.expect("router");
+        let dispatch = SubjectPluginDispatch::from_router(router, vec!["task".to_string()], 1);
+
+        // Open the watch and poll once so the lazy `subject/watch` handshake
+        // runs (the stream is built with `stream::once`, so the request only
+        // fires on first poll).
+        let mut stream = dispatch.subject_watch(Some("task".to_string()), None);
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(250), stream.next()).await;
+
+        // Dropping the stream drops the cancel-on-drop guard, which spawns the
+        // best-effort `subject/unwatch` notify.
+        drop(stream);
+
+        let watch_id = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("unwatch arrives before timeout")
+            .expect("plugin records a subject/unwatch");
+        // The daemon allocates the watch request id starting from the host's
+        // id counter; we only assert it is a non-empty numeric string.
+        assert!(
+            watch_id.parse::<u64>().is_ok(),
+            "unwatch watch_id should be the numeric subject/watch request id, got {watch_id:?}"
+        );
     }
 
     #[tokio::test]

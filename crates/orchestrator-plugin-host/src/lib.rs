@@ -54,5 +54,5 @@ pub use status::{
     global_status_registry, install_global_status_registry, PluginLastError, PluginRuntimeState, PluginRuntimeStatus,
     PluginStatusRegistry, PluginStatusResponse, StatusRegistryObserver, PLUGIN_STATUS_PROTOCOL_VERSION,
 };
-pub use subject_router::{KindAliasMap, SubjectRouter, SubjectWatchSubscription};
+pub use subject_router::{KindAliasMap, SubjectRouter, SubjectWatchGuard, SubjectWatchSubscription};
 pub use transport::StdioTransport;
