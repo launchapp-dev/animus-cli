@@ -93,11 +93,18 @@ async fn finalize_plugin_queue_entry(root: &str, fact: &protocol::SubjectExecuti
                 continue;
             }
         }
+        // Send `workflow_id: None`. The plugin synthesizes its own workflow_id
+        // when it transitions an entry Pending → Assigned (see the comment
+        // above), so that synthesized id never equals `fact.workflow_id` (the
+        // real run id). The plugin's completion handler filters out the entry
+        // when a non-matching workflow_id is supplied, which would strand every
+        // queue-leased entry as Assigned forever. The entry_id (unique) plus
+        // workflow_ref already identify the entry unambiguously.
         let req = QueueCompletionRequest {
             entry_id: entry.entry_id.clone(),
             status: mapped.to_string(),
             workflow_ref: fact.workflow_ref.clone(),
-            workflow_id: fact.workflow_id.clone(),
+            workflow_id: None,
         };
         if let Err(error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
             warn!(
