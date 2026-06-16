@@ -77,11 +77,11 @@ delegates to installed `transport_backend` and `web_ui` plugins.
 ```bash
 npm install
 npm run docs:check-sync
-cargo test -p orchestrator-cli cli_types::tests::cli_reference_top_level_tree_matches_live_clap_commands -- --exact
-cargo test -p orchestrator-cli cli_types::tests::agents_guide_top_level_commands_match_live_clap_commands -- --exact
-cargo test -p orchestrator-cli cli_types::tests::crate_map_matches_live_workspace_members -- --exact
-cargo test -p orchestrator-cli services::operations::ops_mcp::tests::mcp_reference_table_matches_live_builtin_tools -- --exact
-cargo test -p orchestrator-cli services::operations::ops_mcp::tests::mcp_docs_publish_the_live_builtin_tool_count -- --exact
+cargo test -p orchestrator-cli cli_reference_top_level_tree_matches_live_clap_commands
+cargo test -p orchestrator-cli agents_guide_top_level_commands_match_live_clap_commands
+cargo test -p orchestrator-cli crate_map_matches_live_workspace_members
+cargo test -p orchestrator-cli mcp_reference_table_matches_live_builtin_tools
+cargo test -p orchestrator-cli mcp_docs_publish_the_live_builtin_tool_count
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
