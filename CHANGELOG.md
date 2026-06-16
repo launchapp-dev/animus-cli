@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-06-16
+
+**Plugin release/update hardening.** Recommend the binary-shipping queue plugin,
+and warn loudly when a stale one is installed.
+
+### Changed
+
+- **Recommended `animus-queue-default` pin bumped v0.3.0 → v0.3.3.** v0.3.0
+  shipped no release binaries (so `animus plugin install …@vX` and `plugin
+  update` failed with "no release asset matched platform") and predated the
+  dedup-safe enqueue + precise-wake fixes. v0.3.3 is the first release that
+  ships platform binaries.
+
+### Added
+
+- **Stale queue-plugin preflight warning.** The daemon surfaces a non-fatal
+  warning at startup when an installed `queue` plugin is below the precise-wake
+  floor (v0.3.2) — "lacks precise-wake … upgrade with `animus plugin update`" —
+  instead of silently falling back to the heartbeat for reactive dispatch.
+  Mirrors the existing workflow-runner under-pin warning.
+
 ## [0.5.16] - 2026-06-16
 
 **Daemon queue-dispatch reliability.** The enqueue → lease → run → drain
