@@ -203,10 +203,34 @@ impl QueueRouting for QueueRoutingImpl {
     async fn queue_enqueue(&self, request: WireEnqueueRequest) -> Result<WireQueueEntry, ControlError> {
         tracing::info!(target: FORWARD_LOG_TARGET, "forwarding queue/enqueue to queue plugin");
         let hub = self.hub().await?;
-        let task = hub.tasks().get(&request.task_id).await.map_err(internal_err)?;
-        let workflow_ref = workflow_ref_for_task(&task);
+        // v0.4.12+: a subject may live in an installed `subject_backend` plugin
+        // rather than the in-tree task store. Try the in-tree store first (legacy
+        // projects), then route through the subject_resolver so the plugin fallback
+        // engages — mirroring the workflow-run path (ops_workflow). Without this,
+        // control-routed enqueue of any plugin-backed subject failed with
+        // "task not found", silently breaking the queue trigger over the transports.
+        let (resolved_id, workflow_ref) = match hub.tasks().get(&request.task_id).await {
+            Ok(task) => (task.id.clone(), workflow_ref_for_task(&task)),
+            Err(in_tree_err) => {
+                let subject = protocol::orchestrator::SubjectRef::task(request.task_id.clone());
+                match hub.subject_resolver().resolve_subject_context(&subject, None, None).await {
+                    Ok(ctx) => (
+                        ctx.subject_id,
+                        orchestrator_core::load_workflow_config_or_default(self.project_root_path())
+                            .config
+                            .default_workflow_ref,
+                    ),
+                    Err(plugin_err) => {
+                        return Err(ControlError::Internal(format!(
+                            "queue enqueue: task '{}' not found (in-tree: {in_tree_err}; plugin: {plugin_err})",
+                            request.task_id
+                        )));
+                    }
+                }
+            }
+        };
         let mut dispatch = SubjectDispatch::for_task_with_metadata(
-            task.id.clone(),
+            resolved_id,
             workflow_ref,
             "manual-queue-enqueue-via-control",
             Utc::now(),
