@@ -193,8 +193,17 @@ impl DeviceEncryptedSecretStore {
         let tmp = dir.join(format!(".secrets.{}.tmp", std::process::id()));
         std::fs::write(&tmp, bytes).map_err(|e| io_err(&tmp, e))?;
         restrict_file(&tmp);
-        std::fs::rename(&tmp, &self.secrets_path).map_err(|e| io_err(&self.secrets_path, e))?;
-        Ok(())
+        // POSIX `rename` atomically replaces an existing destination; Windows
+        // `rename` errors if the destination exists, so fall back to removing
+        // the old file first (the advisory write lock serializes this).
+        match std::fs::rename(&tmp, &self.secrets_path) {
+            Ok(()) => Ok(()),
+            Err(_) if self.secrets_path.exists() => {
+                std::fs::remove_file(&self.secrets_path).map_err(|e| io_err(&self.secrets_path, e))?;
+                std::fs::rename(&tmp, &self.secrets_path).map_err(|e| io_err(&self.secrets_path, e))
+            }
+            Err(e) => Err(io_err(&self.secrets_path, e)),
+        }
     }
 
     /// Hold an advisory lock across read-modify-write so concurrent writers do
@@ -355,8 +364,11 @@ fn key_source_config(cfg: &protocol::SecretsConfig) -> KeySourceConfig {
     KeySourceConfig {
         kind_override: Some(kind),
         key_file: cfg.key_file.as_ref().map(PathBuf::from),
-        // CLI supplies a prompt-derived passphrase explicitly; the daemon reads
-        // ANIMUS_SECRET_PASSPHRASE at resolve time, so None is correct here.
+        // `passphrase` is env-driven for both the CLI and the daemon: the key
+        // source reads ANIMUS_SECRET_PASSPHRASE at resolve time (and errors with
+        // that instruction when unset), so there is no in-process passphrase to
+        // thread through here. This keeps CLI and daemon behaviour identical and
+        // script-safe — no TTY-only path that breaks under automation.
         passphrase: None,
     }
 }

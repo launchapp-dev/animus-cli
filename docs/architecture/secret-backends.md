@@ -64,20 +64,40 @@ trait KeySource { fn key(&self) -> Result<Zeroizing<[u8; 32]>>; fn id(&self) -> 
 
 Selected by config `secret_key_source`:
 
-- `auto` (default): OS device key — Secure Enclave (macOS) / DPAPI (Windows) /
-  TPM (Linux) → falls back to `device-id` when no hardware path exists.
+- `auto` (default): resolves to `device-id` today. The hardware key sources
+  (Secure Enclave / DPAPI / TPM) are deferred — see "Platform support" below —
+  so `auto` does not currently reach for an OS-hardware key.
 - `user-key`: operator-supplied 32-byte key from `ANIMUS_SECRET_KEY`
   (hex or base64) or a `secret_key_file` path. For headless/server with a
   deploy-injected key (systemd `LoadCredential`, mounted secret, external KMS).
-- `passphrase`: `Argon2id(passphrase, salt)`. Interactive prompt for the CLI;
-  for the daemon the passphrase must arrive non-interactively
-  (`ANIMUS_SECRET_PASSPHRASE` / credential) and is therefore equivalent in
-  exposure to `user-key` (no human types it at runtime — documented).
+- `passphrase`: `Argon2id(passphrase, salt)`. The passphrase arrives via
+  `ANIMUS_SECRET_PASSPHRASE` for both the CLI and the daemon — env-driven and
+  script-safe, with no TTY-only path that would break under automation. In
+  exposure terms it is therefore equivalent to `user-key` (no human types it at
+  runtime). Resolution errors with the variable name when it is unset.
 - `device-id`: `HKDF(machine-id || per-install random salt)`. Binding only — the
   ids are readable, so this gives device-binding but not on-device secrecy.
 
-Per-OS providers are `cfg`-gated so each compiles only where it applies; every
-non-applicable target degrades to `device-id`/`user-key`.
+### Platform support (what's implemented)
+
+`device-id` is the implemented cross-platform default and delivers the no-prompt,
+device-bound behavior on **macOS** (IOPlatformUUID) and **Linux**
+(`/etc/machine-id`). The hardware key sources are deliberately *not* shipped in
+this revision, each for a concrete reason — `device-id`/`user-key`/`passphrase`
+already cover every target:
+
+- **macOS Secure Enclave** — deferred. Reaching an SE key goes through the
+  keychain/SecItem APIs, which re-introduce exactly the unstable-signature
+  re-prompt this feature exists to avoid. `device-id` is the better default here;
+  an SE upgrade only pays off paired with stable code signing.
+- **Windows DPAPI** — future work. It is the clean Windows hardware path, but it
+  is a stateful protected-blob shape (not a deterministic key) and cannot be
+  compiled or tested from the current dev environment. Until it lands, Windows
+  uses `user-key` / `passphrase` (`auto` errors with that guidance, since the
+  device-id machine-GUID read is not yet wired there).
+- **Linux TPM** — out of scope under the repo's rust-only dependency policy: the
+  practical TPM stack (`tss-esapi`) links the TSS2 **C** library. `device-id`
+  (machine-id) is the Linux path.
 
 ## Config (protocol::Config)
 
@@ -92,6 +112,9 @@ non-applicable target degrades to `device-id`/`user-key`.
 
 ## Crypto dependencies (vetted, no homegrown crypto)
 
-`chacha20poly1305`, `argon2`, `hkdf` + `sha2`, `zeroize`, `rand` (OsRng).
-Per-OS: `security-framework` (macOS), `windows` (DPAPI), `tss-esapi`/`systemd`
-or machine-id read (Linux).
+`chacha20poly1305`, `argon2`, `hkdf` + `sha2`, `zeroize`, `rand` (OsRng) —
+all pure-Rust RustCrypto, satisfying the repo's rust-only dependency policy.
+The shipped key sources need no per-OS native crate: `device-id` reads the
+machine id directly (`/etc/machine-id` on Linux, `ioreg` IOPlatformUUID on
+macOS). The hardware sources that would pull `security-framework` /
+`windows` / `tss-esapi` are deferred (see "Platform support").

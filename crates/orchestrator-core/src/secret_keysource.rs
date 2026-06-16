@@ -151,8 +151,10 @@ pub struct PassphraseKeySource {
 }
 
 impl PassphraseKeySource {
-    /// Derive from an explicit passphrase (CLI prompt) or, when `None`, the
-    /// `ANIMUS_SECRET_PASSPHRASE` env var (daemon / non-interactive).
+    /// Derive from an explicit passphrase (callers may inject one) or, when
+    /// `None`, the `ANIMUS_SECRET_PASSPHRASE` env var. Both the CLI and the
+    /// daemon take the env path, so the mode is script-safe and behaves
+    /// identically across surfaces.
     pub fn resolve(passphrase: Option<&str>, salt: &[u8]) -> Result<Self> {
         let owned;
         let pass = match passphrase {

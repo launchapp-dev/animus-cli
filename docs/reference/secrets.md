@@ -72,8 +72,8 @@ Select per machine in the **global** config (`~/.animus/config.json`, or `$ANIMU
 
 - **`device-id`** — `HKDF(machine-id + per-install salt)`. The machine id never travels with the file, so an off-device copy can't decrypt. Cross-platform, no prompt. Default fallback.
 - **`user-key`** — an operator-supplied 32-byte key from `ANIMUS_SECRET_KEY` (hex/base64) or `key_file`. For headless/server with a deploy-injected key (systemd `LoadCredential`, mounted secret, external KMS).
-- **`passphrase`** — `Argon2id` over a passphrase. Interactive prompt for the CLI; the daemon reads `ANIMUS_SECRET_PASSPHRASE` non-interactively (so an unattended-daemon passphrase is, in exposure terms, equivalent to `user-key` — there is no human to type it at runtime).
-- **`auto`** — an OS hardware-backed key (Secure Enclave / DPAPI / TPM) where available, else `device-id`.
+- **`passphrase`** — `Argon2id` over a passphrase read from `ANIMUS_SECRET_PASSPHRASE`. Env-driven for both the CLI and the daemon (so the mode is script-safe and behaves identically everywhere); in exposure terms a non-interactive passphrase is equivalent to `user-key`. The store errors with that variable name when it is unset.
+- **`auto`** — resolves to `device-id` today. The OS hardware-backed sources (Secure Enclave / DPAPI / TPM) are deferred (see the architecture doc for the per-platform reasons), so `auto` is currently equivalent to `device-id`.
 
 ### Moving between backends
 

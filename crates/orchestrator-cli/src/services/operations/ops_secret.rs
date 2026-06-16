@@ -64,7 +64,8 @@ fn handle_migrate(
     let source = orchestrator_core::build_backend(&scope, scoped_root.to_path_buf(), source_name);
     let target = orchestrator_core::build_backend(&scope, scoped_root.to_path_buf(), target_name);
 
-    let migrated = migrate_secrets(source.as_ref(), target.as_ref(), args.remove_source)?;
+    let MigrationOutcome { migrated, remove_failures } =
+        migrate_secrets(source.as_ref(), target.as_ref(), args.remove_source)?;
     log_secret_event(
         scoped_root,
         actor,
@@ -82,16 +83,27 @@ fn handle_migrate(
                 "to": target.backend_label(),
                 "migrated": migrated,
                 "removed_source": args.remove_source,
+                "remove_failures": remove_failures,
             }),
             true,
         )?;
     } else {
         println!("migrated {} secret(s) from {} to {}", migrated.len(), source.backend_label(), target.backend_label());
         if args.remove_source {
-            println!("cleared {} secret(s) from {}", migrated.len(), source.backend_label());
+            let cleared = migrated.len() - remove_failures.len();
+            println!("cleared {} secret(s) from {}", cleared, source.backend_label());
         } else if !migrated.is_empty() {
             println!("source ({}) left intact — re-run with --remove-source to clear it", source.backend_label());
         }
+    }
+    if !remove_failures.is_empty() {
+        return Err(anyhow!(
+            "copied {} secret(s) but failed to remove {} from {}: {}",
+            migrated.len(),
+            remove_failures.len(),
+            source.backend_label(),
+            remove_failures.join("; ")
+        ));
     }
     Ok(())
 }
@@ -100,7 +112,11 @@ fn handle_migrate(
 /// `remove_source`, delete each successfully-copied key from `source`. Returns
 /// the migrated keys. Generic over [`SecretStore`] so it is unit-testable
 /// without touching the OS keychain.
-fn migrate_secrets(source: &dyn SecretStore, target: &dyn SecretStore, remove_source: bool) -> Result<Vec<String>> {
+fn migrate_secrets(
+    source: &dyn SecretStore,
+    target: &dyn SecretStore,
+    remove_source: bool,
+) -> Result<MigrationOutcome> {
     let mut migrated: Vec<String> = Vec::new();
     for key in source.list_keys()? {
         let Some(value) = source.get(&key)? else { continue };
@@ -112,12 +128,23 @@ fn migrate_secrets(source: &dyn SecretStore, target: &dyn SecretStore, remove_so
         }
         migrated.push(key);
     }
+    let mut remove_failures: Vec<String> = Vec::new();
     if remove_source {
         for key in &migrated {
-            let _ = source.delete(key);
+            if let Err(e) = source.delete(key) {
+                remove_failures.push(format!("{key}: {e}"));
+            }
         }
     }
-    Ok(migrated)
+    Ok(MigrationOutcome { migrated, remove_failures })
+}
+
+/// Result of a backend-to-backend migration: every verified-copied key, plus
+/// any source deletions that failed under `--remove-source` (so the caller
+/// never reports a clean clear when secrets remain in the old backend).
+struct MigrationOutcome {
+    migrated: Vec<String>,
+    remove_failures: Vec<String>,
 }
 
 #[cfg(test)]
@@ -129,14 +156,17 @@ mod migrate_tests {
     fn migrate_copies_verifies_and_respects_remove_source() {
         let src = MockSecretStore::with_entries([("A_KEY", "1"), ("B_KEY", "2")]);
         let dst = MockSecretStore::new();
-        let mut moved = migrate_secrets(&src, &dst, false).unwrap();
+        let outcome = migrate_secrets(&src, &dst, false).unwrap();
+        let mut moved = outcome.migrated;
         moved.sort();
         assert_eq!(moved, vec!["A_KEY".to_string(), "B_KEY".to_string()]);
+        assert!(outcome.remove_failures.is_empty());
         assert_eq!(dst.get("A_KEY").unwrap().as_deref(), Some("1"));
         assert_eq!(src.get("A_KEY").unwrap().as_deref(), Some("1"), "non-destructive must keep the source");
 
         let dst2 = MockSecretStore::new();
-        migrate_secrets(&src, &dst2, true).unwrap();
+        let outcome2 = migrate_secrets(&src, &dst2, true).unwrap();
+        assert!(outcome2.remove_failures.is_empty());
         assert_eq!(dst2.get("B_KEY").unwrap().as_deref(), Some("2"));
         assert_eq!(src.get("A_KEY").unwrap(), None, "--remove-source must clear the source after a verified copy");
     }
