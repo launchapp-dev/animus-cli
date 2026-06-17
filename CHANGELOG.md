@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.21] - 2026-06-17
+
+**Queue-enqueue honors custom subject kinds.** Control-routed `queue/enqueue`
+built its `SubjectRef` with a hard-coded `SubjectRef::task(id)` when the in-tree
+task store missed, so a plugin-backed subject with a non-task kind (e.g. a
+Postgres `song:SONG-001`) was resolved through `task/get` and rejected by its
+owning backend ("is not a task subject"). No custom subject kind could be
+enqueued — the queue-driven workflow trigger silently failed for them.
+
+### Fixed
+
+- **`queue/enqueue` derives the subject kind from the `<kind>:<native>` id
+  qualifier** (`song:SONG-001` → resolve via `song/get`). `task:`/`requirement:`
+  still map to the canonical in-tree constructors; a bare id (no prefix) defaults
+  to task for backward compatibility. New `subject_ref_from_qualified_id` helper
+  in `ops_queue/control_routing.rs`, with a unit test.
+
 ## [0.5.20] - 2026-06-17
 
 **Preflight requires any subject backend, not forced task/requirement kinds.**
