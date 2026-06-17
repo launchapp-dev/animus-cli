@@ -367,15 +367,17 @@ recommended = ["launchapp-dev/animus-provider-codex"]
         // The canonical first run is `animus plugin install-defaults` (or
         // `animus flavor install`) followed by `animus daemon start`. The
         // bundled manifest's REQUIRED set must therefore cover every
-        // daemon-preflight role: at_least_one_provider, subject_kind:task,
-        // subject_kind:requirement, workflow_runner, and queue.
+        // daemon-preflight role: at_least_one_provider, at_least_one_subject_backend,
+        // workflow_runner, and queue. The daemon no longer forces specific subject
+        // kinds (task/requirement) — any subject_backend satisfies preflight — but
+        // the bundled flavor still ships the task + requirement backends as curated
+        // defaults.
         let manifest: FlavorManifest = toml::from_str(BUNDLED_DEFAULT_FLAVOR).unwrap();
         manifest.validate().unwrap();
         let required = manifest.required_plugins();
         let has = |needle: &str| required.iter().any(|(_, slug)| slug.contains(needle));
         assert!(has("animus-provider-"), "required set must include a provider");
-        assert!(has("animus-subject-default"), "required set must cover subject_kind:task");
-        assert!(has("animus-subject-requirements"), "required set must cover subject_kind:requirement");
+        assert!(has("animus-subject-default"), "required set must cover at_least_one_subject_backend");
         assert!(has("animus-workflow-runner-default"), "required set must include the workflow runner");
         assert!(has("animus-queue-default"), "required set must include the queue plugin");
     }

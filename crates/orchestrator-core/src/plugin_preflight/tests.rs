@@ -58,14 +58,15 @@ async fn preflight_with_no_plugins_and_no_auto_install_reports_missing_with_fix_
     let result = PluginPreflightRunner::run(&spec, Vec::new(), None).await.expect("preflight run");
 
     assert!(!result.is_ok(), "preflight should fail when no plugins installed");
-    assert_eq!(result.missing.len(), 5, "all five roles should be missing");
+    assert_eq!(result.missing.len(), 4, "all four roles should be missing");
 
     let provider_missing = result.missing.iter().find(|m| m.role == "at_least_one_provider").expect("provider role");
     assert!(provider_missing.fix_command.contains("animus plugin install"));
     assert!(provider_missing.fix_command.contains("animus-provider-claude"));
 
-    let task_missing = result.missing.iter().find(|m| m.role == "subject_kind:task").expect("task subject role");
-    assert!(task_missing.fix_command.contains("subject_kind:task"));
+    let subject_missing =
+        result.missing.iter().find(|m| m.role == "at_least_one_subject_backend").expect("subject backend role");
+    assert!(subject_missing.fix_command.contains("subject_backend"));
 
     let message = result.render_missing_message();
     assert!(message.contains("plugin preflight failed"));
@@ -80,10 +81,11 @@ async fn preflight_with_provider_installed_marks_provider_role_satisfied() {
     let result = PluginPreflightRunner::run(&spec, installed, None).await.expect("preflight run");
 
     assert!(result.satisfied.contains(&"at_least_one_provider".to_string()));
-    assert!(!result.is_ok(), "subject backends still missing");
+    assert!(!result.is_ok(), "subject backend still missing");
     let missing_labels: Vec<&str> = result.missing.iter().map(|m| m.role.as_str()).collect();
-    assert!(missing_labels.contains(&"subject_kind:task"));
-    assert!(missing_labels.contains(&"subject_kind:requirement"));
+    assert!(missing_labels.contains(&"at_least_one_subject_backend"));
+    assert!(!missing_labels.contains(&"subject_kind:task"), "daemon must not force the task kind");
+    assert!(!missing_labels.contains(&"subject_kind:requirement"), "daemon must not force the requirement kind");
 }
 
 #[tokio::test]
@@ -139,7 +141,7 @@ async fn preflight_satisfied_when_subject_backend_covers_all_required_kinds() {
 
     assert!(result.is_ok(), "all roles satisfied");
     assert_eq!(result.missing.len(), 0);
-    assert_eq!(result.satisfied.len(), 5);
+    assert_eq!(result.satisfied.len(), 4);
 }
 
 #[tokio::test]
@@ -211,7 +213,7 @@ async fn provider_missing_preflight_suggests_command_that_actually_works() {
     );
 
     let subject_missing =
-        result.missing.iter().find(|m| m.role.starts_with("subject_kind:")).expect("subject role missing");
+        result.missing.iter().find(|m| m.role == "at_least_one_subject_backend").expect("subject role missing");
     assert!(
         subject_missing.fix_command.contains("--allow-shadow-builtin"),
         "subject fix command also includes --allow-shadow-builtin so a curated subject backend install \
@@ -250,16 +252,16 @@ fn install_target_for_resolves_role_labels_to_repo_specs() {
         provider.starts_with("launchapp-dev/animus-provider-claude@"),
         "provider role must map to the curated claude provider, got: {provider}"
     );
-    let task = spec.install_target_for("subject_kind:task").expect("task role mapped");
+    // The daemon requires A subject backend, not a specific kind; the default
+    // install target for that role is the task backend (a sensible starter).
+    let subject = spec.install_target_for("at_least_one_subject_backend").expect("subject backend role mapped");
     assert!(
-        task.starts_with("launchapp-dev/animus-subject-default@"),
-        "task role must map to animus-subject-default (NOT animus-subject-linear), got: {task}"
+        subject.starts_with("launchapp-dev/animus-subject-default@"),
+        "subject backend role must map to animus-subject-default (NOT animus-subject-linear), got: {subject}"
     );
-    let requirement = spec.install_target_for("subject_kind:requirement").expect("requirement role mapped");
-    assert!(
-        requirement.starts_with("launchapp-dev/animus-subject-requirements@"),
-        "requirement role must map to animus-subject-requirements (NOT animus-subject-linear), got: {requirement}"
-    );
+    // The daemon no longer maps specific subject kinds in its default spec.
+    assert_eq!(spec.install_target_for("subject_kind:task"), None);
+    assert_eq!(spec.install_target_for("subject_kind:requirement"), None);
     assert_eq!(spec.install_target_for("nonexistent_role"), None);
 }
 
