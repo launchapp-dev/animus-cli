@@ -85,6 +85,7 @@ export default withMermaid(
             { text: 'Model Routing', link: '/guides/model-routing' },
             { text: 'Web Dashboard', link: '/guides/web-dashboard' },
             { text: 'Self-Hosting', link: '/guides/self-hosting' },
+            { text: 'Deployment (Docker / Railway / API)', link: '/guides/deployment' },
             { text: 'Plugin Author Guide', link: '/guides/plugin-author-guide' },
             { text: 'CI/CD', link: '/guides/ci-cd' },
             { text: 'Upgrading', link: '/guides/upgrading' },
