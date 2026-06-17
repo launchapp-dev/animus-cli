@@ -12,6 +12,24 @@ On first run it:
 4. writes project config and baseline workflow scaffolding
 5. copies template workflow wrappers into `.animus/workflows/`
 
+`animus init` writes two distinct stores: project-local `.animus/` (checked into your repo) and repo-scoped runtime state under your home directory:
+
+```mermaid
+flowchart LR
+    INIT["animus init"]
+    INIT --> LOCAL["Project-local .animus/ (in your repo)"]
+    INIT --> SCOPED["Repo-scoped state ~/.animus/(repo-scope)/"]
+
+    LOCAL --> CFG["config.json (project config)"]
+    LOCAL --> WF["workflows.yaml + workflows/ (YAML overlays)"]
+
+    SCOPED --> RT["config/ (compiled runtime config)"]
+    SCOPED --> DB["workflow.db + runs/ + logs/"]
+    SCOPED --> DAEMON["daemon/ (daemon settings)"]
+
+    WF -. "compiles into" .-> RT
+```
+
 ## Project-Local Files
 
 ```text

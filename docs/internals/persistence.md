@@ -13,6 +13,22 @@ The low-level JSON helpers live in `crates/orchestrator-core/src/store/mod.rs` (
 
 `write_json_atomic()` writes to a temporary file in the target directory, flushes and syncs it, then renames it into place so readers never observe a partially written JSON file.
 
+The write-temp-then-rename sequence is what keeps readers from ever seeing a half-written file:
+
+```mermaid
+sequenceDiagram
+    participant Caller as service API
+    participant Helper as write_json_atomic
+    participant Tmp as "<target>.tmp"
+    participant Target as "<target>.json"
+
+    Caller->>Helper: write_json_atomic(path, value)
+    Helper->>Tmp: serialize + write bytes
+    Helper->>Tmp: flush + fsync
+    Helper->>Target: rename(tmp -> target)
+    Note over Target: readers observe either the<br/>old file or the new file, never partial
+```
+
 ## Scoped Runtime Root
 
 Runtime state is scoped per repository under:
@@ -22,6 +38,28 @@ Runtime state is scoped per repository under:
 ```
 
 The scope name is derived from the canonical project path and includes a sanitized repo name plus a 12-hex SHA-256 prefix.
+
+The scoped root mixes one SQLite database with several atomic-JSON stores and append-only JSONL logs:
+
+```mermaid
+graph TD
+    Root["~/.animus/&lt;repo-scope&gt;/"]
+    Root --> DB["workflow.db<br/>(SQLite WAL)"]
+    Root --> Core["core-state.json<br/>(atomic JSON + file lock)"]
+    Root --> Config["config/"]
+    Root --> Daemon["daemon/pm-config.json"]
+    Root --> State["state/<br/>(domain JSON stores)"]
+    Root --> Logs["logs/events.jsonl"]
+    Root --> Runs["runs/&lt;run-id&gt;/events.jsonl"]
+    Root --> Artifacts["artifacts/&lt;run-id&gt;/"]
+
+    Config --> C1["state-machines.v1.json"]
+    Config --> C2["workflow-config.v2.json"]
+    Config --> C3["agent-runtime-config.v2.json"]
+
+    DB -.->|workflows / tasks / requirements / checkpoints| DB
+    State -.->|handoffs / history / errors / schedule-state| State
+```
 
 ## Key Stores
 
@@ -37,7 +75,7 @@ The scope name is derived from the canonical project path and includes a sanitiz
 ├── daemon/pm-config.json
 ├── docs/
 ├── logs/
-├── runner/
+├── runs/
 ├── state/
 └── worktrees/
 ```
@@ -67,12 +105,13 @@ Compiled runtime configuration lives under `config/`:
 
 These files are generated runtime state, not hand-authored project config.
 
-### `logs/` and `runner/`
+### `logs/` and `runs/`
 
 - `daemon/pm-config.json` stores persisted daemon automation settings
-- `logs/events.jsonl` stores redacted structured runtime events for the repo scope
-- `runner/config.json` stores scoped runner config, including the runner auth token
-- `runner/agent-runner.sock` is the default scoped Unix socket path for runner clients
+- `logs/events.jsonl` stores redacted structured runtime events for the repo scope (written by `Logger::for_project` in `orchestrator-logging`)
+- `runs/<run-id>/events.jsonl` stores per-run agent events (written by `persist_run_event` in `animus-runtime-shared/src/ipc.rs`)
+
+There is no `runner/` directory. The standalone agent-runner sidecar — along with its scoped `runner/config.json` auth token and `runner/agent-runner.sock` Unix socket — was deleted in v0.5.3; provider plugins now own session execution end to end and there is no socket or token handshake.
 
 ### `state/`
 

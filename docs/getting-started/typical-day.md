@@ -21,6 +21,20 @@ flowchart TB
     STATE --> LOOP
 ```
 
+## The Daily Operator Loop
+
+Day to day, you cycle through a short loop: check the inbox, pick the next subject, enqueue or run it, watch the daemon, then review and merge the result.
+
+```mermaid
+flowchart LR
+    STATUS["Check inbox (animus status)"]
+    --> PICK["Pick next subject (animus subject next)"]
+    --> RUN["Enqueue or run (animus queue / workflow run)"]
+    --> MONITOR["Monitor daemon (animus daemon health)"]
+    --> REVIEW["Review and merge result"]
+    --> STATUS
+```
+
 ## Typical Flow
 
 ### 1. Create work

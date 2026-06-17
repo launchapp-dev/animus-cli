@@ -20,6 +20,22 @@ process as a dynamic library.
 | Curated default plugins | [`crates/orchestrator-core/src/plugin_registry.rs`](../../crates/orchestrator-core/src/plugin_registry.rs) |
 | Web plugin resolution | [`crates/orchestrator-cli/src/services/operations/ops_web.rs`](../../crates/orchestrator-cli/src/services/operations/ops_web.rs) |
 
+The daemon supervises each plugin as an out-of-process child and talks to it only over stdin/stdout JSON-RPC; no third-party code is linked into the daemon:
+
+```mermaid
+graph LR
+    subgraph DaemonProc["daemon process"]
+        HOST["PluginHost<br/>(single stdout reader + pending-response map)"]
+    end
+
+    subgraph PluginProc["plugin process (env_clear'd)"]
+        PLUGIN["plugin binary"]
+    end
+
+    HOST -- "JSON-RPC request (stdin)" --> PLUGIN
+    PLUGIN -- "response / notification (stdout)" --> HOST
+```
+
 ## Design Rules
 
 - Compatibility is defined by the wire protocol, not Rust crate linkage.
@@ -143,8 +159,30 @@ The curated launchapp-dev defaults are defined in
 Daemon default preflight requires:
 
 - at least one provider plugin
-- a subject backend covering `task`
-- a subject backend covering `requirement`
+- at least one subject backend plugin
+- a `workflow_runner` plugin
+- a `queue` plugin
+
+Every required role must resolve to an installed plugin before the daemon will start autonomous work; any unsatisfied role aborts startup with the exact install command:
+
+```mermaid
+flowchart TD
+    START["daemon start / run"] --> PF{"preflight<br/>(unless --skip-preflight)"}
+    PF --> R1{"at least one provider?"}
+    PF --> R2{"at least one subject_backend?"}
+    PF --> R3{"workflow_runner present?"}
+    PF --> R4{"queue present?"}
+    R1 -->|no| FAIL["abort + print<br/>animus plugin install ..."]
+    R2 -->|no| FAIL
+    R3 -->|no| FAIL
+    R4 -->|no| FAIL
+    R1 -->|yes| OK
+    R2 -->|yes| OK
+    R3 -->|yes| OK
+    R4 -->|yes| OK
+    OK["all roles satisfied"] --> BOOT["boot daemon loop"]
+    FAIL -.->|--auto-install| BOOT
+```
 
 `--auto-install` installs the curated defaults for unsatisfied roles.
 
@@ -211,6 +249,25 @@ Provider plugins are driven by `orchestrator-plugin-host::session`.
 Provider dispatch binds the plugin cwd to the resolved `project_root`, so
 provider-owned state and any child CLI cwd-relative lookups stay anchored to the
 repository even when the daemon was started from some other shell directory.
+
+When a provider request fails, the dispatcher routes the `HostError` through
+`classify(&HostError) -> RetryDecision` to decide whether to respawn or surface
+the error. Death-like failures (`ConnectionLost`, `Timeout`, `ProcessExited`,
+and unclassified RPC errors) trigger a supervised retry; structured plugin-side
+JSON-RPC errors are surfaced to the caller without spending restart budget, and
+exceeding the supervisor's restart budget fails with `TooManyRestarts`:
+
+```mermaid
+flowchart TD
+    REQ["plugin request"] --> RESULT{"result?"}
+    RESULT -->|Ok| DONE["return result"]
+    RESULT -->|"Err(HostError)"| CLASSIFY["classify(&HostError)"]
+    CLASSIFY -->|StructuredError| SURFACE["surface to caller<br/>(no restart spent)"]
+    CLASSIFY -->|"DeathLike<br/>(ConnectionLost / Timeout / ProcessExited)"| BUDGET{"restart budget left?"}
+    BUDGET -->|yes| RESPAWN["respawn + retry once"]
+    BUDGET -->|no| TOOMANY["SupervisorError::TooManyRestarts"]
+    RESPAWN --> REQ
+```
 
 There is no in-tree provider fallback. Missing providers return a hard error
 with the install command.

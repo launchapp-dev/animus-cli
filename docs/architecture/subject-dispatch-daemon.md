@@ -138,6 +138,38 @@ flowchart LR
   FACTS --> NOTIF
 ```
 
+## End-to-End Dispatch Sequence
+
+The daemon is queue-driven: a Ready subject is enqueued, and the daemon leases
+work from the `queue` plugin only as execution capacity frees, then hands each
+lease to the `workflow_runner` plugin to execute:
+
+```mermaid
+sequenceDiagram
+    participant Subject as Subject backend (Ready)
+    participant Ingress as Ingress (CLI / MCP / schedule)
+    participant Queue as queue plugin
+    participant Daemon as daemon runtime
+    participant Runner as workflow_runner plugin
+    participant Provider as provider plugin
+
+    Subject->>Ingress: subject is Ready
+    Ingress->>Queue: enqueue SubjectDispatch
+    Ingress-->>Daemon: daemon/nudge
+    loop as capacity frees
+        Daemon->>Queue: lease next dispatch
+        Queue-->>Daemon: SubjectDispatch (subject + workflow_ref)
+        Daemon->>Runner: execute workflow_ref
+        Runner->>Provider: run phase via session host
+        Provider-->>Runner: phase result
+        Runner-->>Daemon: execution facts / events
+    end
+    Daemon->>Daemon: projectors apply facts to subject / schedule state
+```
+
+Both `queue` and `workflow_runner` are required-role plugins enforced by daemon
+preflight (alongside at least one provider and at least one subject backend).
+
 ## Crate Responsibilities
 
 ```mermaid

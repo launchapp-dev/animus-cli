@@ -2,6 +2,20 @@
 
 This guide takes you from a fresh repository to autonomous AI workflows.
 
+The steps below map to this sequence — each numbered section is one stop on the path:
+
+```mermaid
+flowchart TD
+    PLUGINS["1. animus plugin install-defaults"]
+    --> PREP["2. animus init (scaffold .animus/ + packs)"]
+    --> CREATE["3. animus subject create --kind task"]
+    --> READY["4a. animus subject status --status ready"]
+    --> START["4b. animus daemon start (preflight)"]
+    --> INSPECT["5. animus status / workflow list"]
+
+    START -. "optional dry run" .-> SYNC["animus workflow run --task-id ... --sync"]
+```
+
 ## 0. Five-Minute Walkthrough
 
 From your project root:

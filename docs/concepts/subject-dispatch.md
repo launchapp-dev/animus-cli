@@ -29,12 +29,28 @@ Common subject kinds today:
 
 | Kind | Example |
 |---|---|
-| `animus.task` | `TASK-042` |
-| `animus.requirement` | `REQ-007` |
+| `task` | `TASK-042` |
+| `requirement` | `REQ-007` |
 | `custom` | `planning-intake` |
 
 Compatibility adapters still preserve the existing task and requirement flows,
 but routing is now keyed by generic `kind` and `id`.
+
+A subject moves through a lifecycle of status states as work progresses; the
+daemon never auto-promotes a subject — operators (or projectors reacting to
+execution facts) drive these transitions.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Backlog
+    Backlog --> Ready: prioritized
+    Ready --> InProgress: dispatched to a workflow
+    InProgress --> Done: workflow succeeds
+    InProgress --> Blocked: workflow fails / conflict
+    Blocked --> Ready: unblocked
+    Ready --> Backlog: deprioritized
+    Done --> [*]
+```
 
 ## Dispatch Shape
 
@@ -66,11 +82,30 @@ Examples of current workflow refs consumed by dispatch and `animus workflow run`
 
 | Use Case | Subject | Workflow Ref |
 |---|---|---|
-| Requirement execution | `animus.requirement:REQ-007` | `animus.requirement/execute` |
-| Standard task delivery | `animus.task:TASK-042` | `animus.task/standard` |
+| Requirement execution | `requirement:REQ-007` | `animus.requirement/execute` |
+| Standard task delivery | `task:TASK-042` | `animus.task/standard` |
 
 Legacy aliases such as `builtin/requirements-execute` still resolve, but they
 are compatibility shims rather than the preferred surface.
+
+## The Dispatch Path
+
+A Ready subject does not run on its own. It must be enqueued onto the dispatch
+queue, where the daemon leases it as capacity frees and spawns a workflow run.
+The daemon is queue-driven and performs no auto-enqueue of its own.
+
+```mermaid
+flowchart LR
+    ready["Subject is Ready"]
+    enqueue["animus queue enqueue<br/>(builds SubjectDispatch)"]
+    queue["Dispatch queue<br/>(priority + requested_at)"]
+    lease["Daemon leases<br/>highest-priority dispatch<br/>as capacity frees"]
+    run["Spawn workflow-runner<br/>with workflow_ref + subject"]
+
+    ready --> enqueue --> queue
+    queue -->|"daemon/nudge"| lease
+    lease --> run
+```
 
 ## Why This Boundary Matters
 

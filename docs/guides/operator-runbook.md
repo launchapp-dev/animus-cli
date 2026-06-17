@@ -92,8 +92,8 @@ error: daemon preflight failed
 The daemon stops shipping with bundled providers, workflow runners,
 queues, subjects, or transports as of v0.5. The startup
 preflight refuses to boot without at least one provider, a
-`workflow_runner` plugin, a `queue` plugin, and the required subject
-backends installed.
+`workflow_runner` plugin, a `queue` plugin, and at least one subject
+backend installed (any kind, since v0.5.20).
 
 Fix:
 

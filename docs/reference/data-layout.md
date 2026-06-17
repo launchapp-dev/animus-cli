@@ -2,6 +2,40 @@
 
 Animus splits repository-authored configuration from repo-scoped runtime state.
 
+At a glance: the in-repo `.animus/` holds authored sources, the per-repo `~/.animus/<repo-scope>/` holds mutable runtime state, and `~/.animus/` holds machine-wide installs shared by every project.
+
+```mermaid
+graph TD
+    subgraph Repo["in repository"]
+        PL[".animus/"]
+        PL --> PLc["config.json"]
+        PL --> PLw["workflows.yaml / workflows/*.yaml"]
+        PL --> PLp["plugins/ + plugins.lock"]
+        PL --> PLs["skills/ + config/skill_definitions/"]
+    end
+
+    subgraph Scoped["per-repo runtime — ~/.animus/&lt;repo-scope&gt;/"]
+        SC["scoped root"]
+        SC --> SCdb["workflow.db"]
+        SC --> SCcore["core-state.json"]
+        SC --> SCconf["config/*.v2.json + state-machines.v1.json"]
+        SC --> SCd["daemon/ (pm-config.json, daemon.log)"]
+        SC --> SCr["runs/ + artifacts/"]
+        SC --> SCst["state/ + logs/"]
+    end
+
+    subgraph Machine["machine-wide — ~/.animus/"]
+        MW["global root"]
+        MW --> MWp["packs/ + plugins/"]
+        MW --> MWs["skills/"]
+        MW --> MWt["template-registries/"]
+        MW --> MWc["config.json + credentials.json"]
+    end
+
+    PL -. "authored sources compile into" .-> SCconf
+    MW -. "installed plugins/packs resolved per scope" .-> SC
+```
+
 ## Project-Local Layout
 
 These files live in the repository:
@@ -74,9 +108,6 @@ Mutable runtime state lives outside the repo:
 │   └── <workflow-run-id>/
 ├── artifacts/
 │   └── <workflow-run-id>/
-├── runner/
-│   ├── config.json
-│   └── agent-runner.sock
 ├── secrets/
 │   └── index.json
 ├── state/
@@ -110,9 +141,6 @@ Key points:
   `animus workflow prune` (bulk, terminal runs only) or
   `animus workflow delete --run-id <id>` (single run)
 - `metrics/pending.jsonl` buffers opt-in anonymous usage events, `metrics/flushing-*.jsonl` holds rotated in-flight batches during a flush, and `metrics/last-send.txt` records the last successful flush timestamp
-- `runner/config.json` stores the runner auth token for the resolved runner
-  scope, and `runner/agent-runner.sock` is the default Unix socket path used
-  by scoped runner clients
 - `secrets/index.json` stores only the set of known secret KEY names for this
   repo scope; secret values themselves stay in the OS keychain
 - `state/handoffs.json`, `state/history.json`, and `state/errors.json` are the
@@ -131,8 +159,8 @@ Animus also uses machine-wide directories that are not tied to one repository:
 ├── credentials.json
 ├── daemon-events.jsonl
 ├── cli-tracker.json
-├── agent-runner.sock
-├── runner-config.json
+├── runner-sessions/
+│   └── <run-id>.session.json          # provider session-id sidecars (resume lookup)
 ├── packs/
 │   └── <pack-id>/<version>/         # installed packs
 ├── plugins/
@@ -150,16 +178,13 @@ Notes:
 
 - `~/.animus/packs/` holds machine-installed packs only. Current builds do not
   ship bundled pack content or bundled skill fallback.
-- `~/.animus/agent-runner.sock` and `~/.animus/runner-config.json` are the
-  legacy machine-global runner socket/config paths still used when commands run
-  with global runner scope.
+- `~/.animus/runner-sessions/<run-id>.session.json` holds provider session-id
+  sidecars used to resume native provider sessions; the directory is overridable
+  with `ANIMUS_RUNNER_SESSION_DIR`.
 - `~/.animus/template-registries/<registry-id>/` is pinned to a specific commit by default
   (v0.4.0 supply-chain hardening). `animus init --update-registry` fetches HEAD and re-pins.
 - `~/.animus/plugins/` is the install target for `animus plugin install --path` and
   `animus plugin install --url --sha256`.
-- On Unix, if the scoped runner socket path would exceed the platform limit,
-  Animus shortens it into `/tmp/ao-runner/<hash>/` and writes
-  `origin-path.txt` there as a breadcrumb back to the canonical runner dir.
 
 ### Agent-host skill probes
 
@@ -211,8 +236,6 @@ Use Animus commands or Animus MCP tools instead.
 | `~/.animus/<repo-scope>/config/agent-runtime-config.v2.json` | Compiled repo-scoped agent runtime config |
 | `~/.animus/<repo-scope>/daemon/daemon.log` | Autonomous daemon process log |
 | `~/.animus/<repo-scope>/logs/events.jsonl` | Redacted structured runtime event log |
-| `~/.animus/<repo-scope>/runner/config.json` | Runner-scope config, including `agent_runner_token` |
-| `~/.animus/<repo-scope>/runner/agent-runner.sock` | Default scoped Unix runner socket path |
 | `~/.animus/<repo-scope>/state/pack-selection.v1.json` | Repo-scoped pack selection state |
 | `~/.animus/packs/<pack-id>/<version>/` | Machine-installed pack root |
 | `~/.animus/skills/<name>/SKILL.md` | User-scoped Markdown skill |

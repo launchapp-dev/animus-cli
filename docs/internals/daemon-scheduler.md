@@ -2,6 +2,43 @@
 
 The daemon scheduler lives in the `orchestrator-daemon-runtime` crate. It implements the autonomous tick loop that drives workflow dispatch for a project.
 
+## Wake Model
+
+The daemon loop (`run_daemon` in `crates/orchestrator-daemon-runtime/src/daemon/run_daemon.rs`) is event-driven, not a fixed-interval poller. It parks on a `tokio::select!` whose arms are:
+
+- shutdown signals (SIGTERM / SIGINT),
+- a process-global `Notify` wake handle (`scheduler_nudge`) fired by control-socket `daemon/nudge` messages, workflow-config hot-reloads, and the completion forwarder,
+- the next cron deadline computed from compiled `schedules:`,
+- a fallback heartbeat bounded by `interval_secs`.
+
+`daemon/nudge` is sent fire-and-forget by `animus subject create/update/status` and `animus queue enqueue/release`. The completion forwarder subscribes to the `WorkflowEventBroadcaster` for `phase_completed` / `workflow_completed` / `workflow_failed` events and nudges the loop so follow-on work dispatches immediately instead of waiting for the heartbeat. `Notify` stores at most one permit, so nudge bursts coalesce into a single extra pass. `interval_secs` is only a fallback that bounds out-of-band pickup and paces housekeeping — heavy reconciliation legs run at most once per heartbeat period. See [Configuration](../reference/configuration.md#scheduler-wake-model).
+
+The `tokio::select!` in `run_daemon` parks on exactly five arms; the first to fire wins the race, and every non-shutdown arm falls through to a fresh pass that re-arms a new heartbeat sleep and a new `notified()` future.
+
+```mermaid
+flowchart TD
+    Loop["tokio::select! park"]
+    Loop --> SigInt["SIGINT (Ctrl-C)"]
+    Loop --> SigTerm["SIGTERM"]
+    Loop --> Nudge["scheduler_nudge.notified()"]
+    Loop --> Cron["cron/queue deadline sleep"]
+    Loop --> Beat["heartbeat sleep (interval_secs)"]
+
+    SigInt --> Drain["Drain + break loop"]
+    SigTerm --> Drain
+
+    Nudge --> Tick["run_project_tick()"]
+    Cron --> Tick
+    Beat --> Tick
+    Tick --> Loop
+
+    SubjOps["animus subject create/update/status<br/>animus queue enqueue/release"] -. "daemon/nudge (fire-and-forget)" .-> Nudge
+    Completion["WorkflowEventBroadcaster<br/>phase_completed / workflow_completed / workflow_failed"] -. "completion forwarder" .-> Nudge
+    Reload["workflow-config hot-reload"] -. nudge .-> Nudge
+```
+
+The cron arm folds in both the next compiled `schedules:` deadline and the queue plugin's next deferred-entry `run_at`, sleeping until the earlier of the two; when neither exists it parks forever (`std::future::pending`). The heartbeat is clamped to `SCHEDULE_RETRY_SWEEP_MAX` when any schedule is enabled so a cron occurrence that could not dispatch still gets a retry pass inside its catch-up horizon.
+
 ## Tick Loop
 
 The entry point is `run_project_tick()` in `crates/orchestrator-daemon-runtime/src/tick/run_project_tick.rs`. Each tick follows this sequence:
@@ -43,9 +80,15 @@ Subjects are ordered by priority. The `plan_ready_dispatch()` function in `crate
 ## Process Manager
 
 `ProcessManager` in `crates/orchestrator-daemon-runtime/src/dispatch/process_manager.rs`
-tracks spawned workflow-runner child processes. The resolver prefers the
-external `animus-workflow-runner-default` executable and falls back to legacy
-`animus-workflow-runner` / `ao-workflow-runner` names for older installs.
+tracks spawned workflow-runner child processes. The runner binary is resolved by
+`build_runner_command_from_dispatch()` via kind-based plugin discovery
+(`orchestrator_plugin_host::discover_by_kind("workflow_runner")`), which finds
+the installed `workflow_runner` plugin (the reference impl is
+`launchapp-dev/animus-workflow-runner-default`). For back-compat it then falls
+back to binary-name resolution on `animus-workflow-runner-default`,
+`animus-workflow-runner`, and `ao-workflow-runner` for older installs. The
+in-tree workflow-runner binary was deleted in v0.5.1 — there is no in-process
+fallback.
 
 Responsibilities:
 - **Spawn** -- Build the runner command from a `SubjectDispatch`, spawn it as a tokio `Child` process with piped stderr
@@ -55,6 +98,43 @@ Responsibilities:
 The runner command is constructed by `build_runner_command_from_dispatch()`
 which translates dispatch parameters into CLI arguments for the resolved
 workflow-runner executable.
+
+The runner binary is resolved by kind first, then by name for older installs.
+
+```mermaid
+flowchart TD
+    Start["build_runner_command_from_dispatch()"]
+    Start --> Kind["discover_by_kind('workflow_runner')"]
+    Kind --> Found{"plugin found?"}
+    Found -->|yes| Use["use plugin binary<br/>(animus-workflow-runner-default)"]
+    Found -->|no| Name["binary-name fallback"]
+    Name --> N1["animus-workflow-runner-default"]
+    N1 --> N2["animus-workflow-runner"]
+    N2 --> N3["ao-workflow-runner"]
+    N3 --> Resolved{"any on PATH?"}
+    Resolved -->|yes| Use
+    Resolved -->|no| Fail["error: no workflow_runner<br/>(no in-process fallback since v0.5.1)"]
+```
+
+The spawn / poll / reconcile cycle ties the dispatch queue, the `ProcessManager`, and completion reconciliation together across ticks.
+
+```mermaid
+sequenceDiagram
+    participant Tick as run_project_tick
+    participant PM as ProcessManager
+    participant Child as workflow-runner child
+    participant Recon as CompletionReconciliationPlan
+
+    Tick->>PM: poll() for exited children
+    PM-->>Tick: CompletedProcess entries
+    Tick->>Recon: build plan from completions
+    Recon->>Recon: record execution facts (projectors)
+    Recon->>Recon: update task/workflow state
+    Recon->>Recon: remove terminal queue entries
+    Tick->>PM: spawn() for newly dispatched subjects
+    PM->>Child: spawn tokio Child (piped stderr)
+    Note over Child: runs phases, emits<br/>workflow/events
+```
 
 ## Capacity Rules
 

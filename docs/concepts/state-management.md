@@ -1,6 +1,36 @@
 # State Management
 
-Animus separates authored repository config from mutable runtime state.
+Animus separates authored repository config from mutable runtime state. The
+authored side lives in the repository under `.animus/`; the mutable side lives
+outside the repository under `~/.animus/<repo-scope>/`.
+
+```mermaid
+flowchart LR
+    subgraph repo["Project-local (in the repository)"]
+        direction TB
+        cfg[".animus/config.json"]
+        wfy[".animus/workflows.yaml"]
+        wfd[".animus/workflows/*.yaml"]
+        plg[".animus/plugins/"]
+    end
+
+    subgraph scope["Repo-scoped runtime (~/.animus/&lt;repo-scope&gt;/)"]
+        direction TB
+        db["workflow.db<br/>(workflows, checkpoints, tasks, requirements)"]
+        st["state/<br/>(review, history, errors, schedules, QA)"]
+        dmn["daemon/<br/>(pm-config.json, lock, control.sock)"]
+        cmp["config/<br/>(compiled workflow + agent-runtime config)"]
+        wt["worktrees/<br/>(managed task worktrees)"]
+        logs["logs/ + docs/ + artifacts/"]
+    end
+
+    wfy -.->|"compiles into"| cmp
+    wfd -.->|"compiles into"| cmp
+    cfg -.->|"CLI settings"| dmn
+
+    note["Authored by you"] -.- repo
+    note2["Tool-managed, regenerated"] -.- scope
+```
 
 ## Project-Local `.animus/`
 
@@ -73,6 +103,25 @@ Approved mutation surfaces:
 - CLI commands such as `animus subject status --kind task`
 - Animus MCP tools such as `animus.subject.update`
 - pack commands such as `animus pack pin`
+
+All approved surfaces funnel through service APIs, which own the writes to disk.
+No surface writes scoped JSON or SQLite directly:
+
+```mermaid
+flowchart LR
+    cli["CLI<br/>animus subject status ..."]
+    mcp["MCP tools<br/>animus.subject.update"]
+    pack["Pack commands<br/>animus pack pin"]
+    svc["Service APIs<br/>(FileServiceHub)"]
+    disk["Scoped runtime state<br/>~/.animus/&lt;repo-scope&gt;/<br/>(workflow.db, state/, ...)"]
+    direct["Hand-editing JSON / SQLite"]
+
+    cli --> svc
+    mcp --> svc
+    pack --> svc
+    svc --> disk
+    direct -. "discouraged" .-> disk
+```
 
 ## Moving to a new machine
 

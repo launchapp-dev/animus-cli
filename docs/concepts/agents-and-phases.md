@@ -104,6 +104,45 @@ Each phase receives:
 - Task context (subject identity, prior phase outputs)
 - Access to its configured MCP tools
 
+Within `workflow-runner`, a phase moves through a small status state machine
+before it produces a verdict:
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending
+    pending --> ready: dependencies satisfied
+    pending --> skipped: skip_if matches
+    ready --> running: agent spawned
+    running --> success: verdict advance
+    running --> failed: verdict fail / rework exhausted
+    running --> skipped: verdict skip
+    success --> [*]
+    failed --> [*]
+    skipped --> [*]
+```
+
+### Resolving a provider to run the agent
+
+An agent declares a model, but it does not call a model API directly.
+`workflow-runner` asks the `SessionBackendResolver` to map the agent's model to
+an installed `animus-provider-*` plugin, which owns the CLI invocation end to
+end. There is no agent-runner sidecar (it was deleted in v0.5.3); if the
+required provider plugin is missing, resolution hard-errors with an install
+command.
+
+```mermaid
+flowchart LR
+    phase["Phase needs agent<br/>(model: claude-sonnet-4-6)"]
+    resolver["SessionBackendResolver<br/>(plugin discovery)"]
+    provider["animus-provider-claude<br/>plugin"]
+    run["Provider invokes the<br/>provider CLI, streams output,<br/>returns verdict"]
+
+    phase --> resolver
+    resolver -->|"map model to provider"| provider
+    provider --> run
+    resolver -.->|"plugin missing"| err["Hard error<br/>+ install command"]
+```
+
 ---
 
 ## PhaseDecision

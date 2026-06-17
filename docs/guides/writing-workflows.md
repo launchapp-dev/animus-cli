@@ -154,14 +154,20 @@ Agent phases dispatch work to an AI agent:
 ```yaml
 phases:
   implementation:
+    mode: agent
     agent: default
     directive: "Implement the task requirements"
-    max_rework_attempts: 3
 
   code-review:
+    mode: agent
     agent: po-reviewer
     directive: "Review the implementation"
 ```
+
+`mode` is required on every phase definition (`agent`, `command`, or
+`manual`). `max_rework_attempts` is not a phase-definition field — it
+belongs on a rich phase *entry* inside a workflow's `phases:` list (see
+[Phase Configuration Within Workflows](#phase-configuration-within-workflows)).
 
 ### Command-Driven Phases
 

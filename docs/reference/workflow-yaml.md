@@ -1231,6 +1231,7 @@ YAML still compiles but emits a removed-key warning.
 | `pool_size` (alias `max_agents`) | `animus daemon config --pool-size <n>` (persisted, hot-reloaded) or `animus daemon run --pool-size <n>` |
 | `max_task_retries` | No runtime sink — the daemon never read it; drop it from the daemon block |
 | `retry_cooldown_secs` | No runtime sink — the daemon never read it; drop it from the daemon block |
+| `auto_run_ready` | Removed — the daemon is queue-only and never auto-dispatches Ready subjects; enqueue work with `animus queue enqueue` or drive it from a `schedules:` cron entry |
 
 The persisted daemon config lives at
 `~/.animus/<repo-scope>/daemon/pm-config.json` (not the project-local

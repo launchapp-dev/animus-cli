@@ -56,6 +56,25 @@ flowchart TB
     PHOST --> PLUGINS
 ```
 
+## Runtime Layering
+
+Each layer depends only on the ones beneath it: the CLI/MCP interface sits on services, services on the daemon runtime and shared workflow helpers, and all runtime paths reach external integrations only through the plugin host.
+
+```mermaid
+graph TB
+    L1["Interface layer<br/>orchestrator-cli (animus CLI + MCP server)"]
+    L2["Services layer<br/>orchestrator-core (FileServiceHub) + orchestrator-config"]
+    L3["Runtime layer<br/>orchestrator-daemon-runtime + animus-runtime-shared"]
+    L4["Plugin host layer<br/>orchestrator-plugin-host (+ session bridge)"]
+    L5["External plugin processes<br/>provider / subject / trigger / transport / workflow_runner / queue"]
+
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4
+    L1 --> L4
+    L4 --> L5
+```
+
 ## Workspace Responsibilities
 
 | Layer | Crates | Responsibility |
@@ -143,6 +162,30 @@ discover installed `transport_backend` and `web_ui` plugins.
 6. Terminal state is persisted in scoped runtime state and surfaced through CLI,
    MCP, web transports, and output commands.
 
+At runtime, a workflow run flows from queue selection through the workflow_runner plugin into provider sessions, with events and terminal state projected back into scoped state:
+
+```mermaid
+sequenceDiagram
+    participant Daemon as daemon-runtime
+    participant Queue as queue plugin
+    participant Runner as workflow_runner plugin
+    participant Shared as animus-runtime-shared
+    participant Session as SessionBackendResolver
+    participant Provider as provider plugin
+    participant State as "~/.animus/<repo-scope>"
+
+    Daemon->>Queue: lease ready entry (capacity permitting)
+    Daemon->>Runner: spawn workflow run
+    Runner->>Shared: resolve phase config + runtime contract
+    Shared->>Session: agent phase -> resolve provider session
+    Session->>Provider: agent/run (stdio)
+    Provider-->>Session: provider notifications
+    Session-->>Runner: runner events
+    Runner-->>Daemon: workflow events
+    Runner->>State: phase output + completion markers
+    Daemon->>State: completion + subject projection
+```
+
 ## Daemon Responsibilities
 
 The daemon owns scheduling and runtime coordination:
@@ -191,6 +234,5 @@ Use source checks for architecture-affecting changes:
 ```bash
 cargo animus-bin-check
 cargo test -p orchestrator-plugin-host
-cargo test -p orchestrator-session-host
 cargo test -p orchestrator-cli
 ```

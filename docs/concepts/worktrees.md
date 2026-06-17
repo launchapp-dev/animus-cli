@@ -69,6 +69,29 @@ flowchart LR
     dispatch --> create --> execute --> result --> post --> cleanup
 ```
 
+A built-in task subject and a plugin-owned subject take different cwd paths, and
+merge/PR work happens as ordinary command phases (not runner automation) before
+the worktree is pruned:
+
+```mermaid
+flowchart TD
+    dispatch["Daemon spawns workflow-runner<br/>for a task subject"]
+    kind{"Built-in task store?"}
+    wt["Create worktree<br/>~/.animus/.../worktrees/TASK-042/<br/>branch: animus/task-042"]
+    proj["Run in project_root<br/>(plugin owns checkout)"]
+    work["Agent phases write code,<br/>run tests, commit"]
+    merge["Command phases run git / gh<br/>(commit, push, open PR)"]
+    human["Human merges the PR"]
+    prune["animus git worktree prune<br/>(done / cancelled tasks)"]
+
+    dispatch --> kind
+    kind -->|yes| wt
+    kind -->|no| proj
+    wt --> work
+    proj --> work
+    work --> merge --> human --> prune
+```
+
 ### 1. Create
 
 When the daemon spawns `workflow-runner` for a built-in task subject, it
@@ -93,18 +116,30 @@ Animus-managed worktree path.
 
 ### 3. Post-success actions
 
-After all phases pass, the workflow can perform post-success actions defined in the YAML:
+The `post_success.merge` block (and `auto_merge`) was removed in v0.5.x —
+Animus no longer performs git operations (commit, push, PR, merge) as runner
+automation, and a workflow YAML that still sets `post_success.merge` is
+rejected at parse time. Express commit, push, and PR creation as ordinary
+**command phases** that run `git` or `gh` in the task worktree:
 
-| Action | Effect |
-|--------|--------|
-| `create_pr: true` | Create a pull request from the task branch to the target branch. A human merges it — autonomous merge-to-main (`auto_merge`) was removed in v0.5.x. |
-| `cleanup_worktree: true` | Remove the worktree directory after the run. |
+```yaml
+phases:
+  create-pr:
+    mode: command
+    directive: Open a GitHub PR from the current branch
+    command:
+      program: gh
+      args: ["pr", "create", "--fill", "--base", "main"]
+      cwd_mode: task_root
+```
+
+A human still merges the PR. See [Workflow YAML](../reference/workflow-yaml.md).
 
 ### 4. Cleanup
 
-When cleanup runs, the worktree directory is removed and the local branch can
-be pruned. If cleanup is not configured, the worktree persists for manual
-inspection.
+After a run, clean up managed worktrees for done/cancelled tasks with
+`animus git worktree prune`. If cleanup is not run, the worktree persists for
+manual inspection.
 
 ---
 

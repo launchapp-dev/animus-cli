@@ -351,7 +351,8 @@ animus
 │   ├── list                 List stored KEY names (never values)
 │   ├── rm                   Remove a stored secret
 │   ├── import-env           Bulk-import KEY=VALUE pairs from a .env file
-│   └── export-env           Export keychain entries to a .env file (loud warn)
+│   ├── export-env           Export keychain entries to a .env file (loud warn)
+│   └── migrate              Move every stored secret between backends (`--to device|keyring`); non-destructive unless `--remove-source`
 │
 └── help                     Print this message or the help of the given subcommand(s)
 ```

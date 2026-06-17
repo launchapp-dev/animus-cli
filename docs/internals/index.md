@@ -12,7 +12,7 @@ This section documents the internal mechanisms of Animus for contributors who wa
 
 ## Key Concepts
 
-**Tick loop**: The daemon operates on a periodic tick. Each tick loads state, plans dispatches, reconciles completions, and spawns new workflow-runner subprocesses.
+**Tick loop**: The daemon is event-driven. It wakes on `daemon/nudge` control messages, workflow/phase completion events, config hot-reloads, and cron deadlines, with `interval_secs` as a fallback heartbeat. Each tick loads state, plans dispatches, reconciles completions, and spawns new workflow-runner subprocesses.
 
 **Subject dispatch**: Every workflow execution targets a "subject" (typically a task). The dispatch queue orders subjects by priority and tracks their lifecycle from enqueued through assigned to terminal.
 

@@ -22,6 +22,35 @@ build other flavors on top of it.
 This is the Linux distro model applied to AI agent orchestration. The kernel
 compounds across flavors; flavors capture verticals.
 
+A small kernel core sits inside a curated default flavor (a bundle of packs and
+plugins); future verticals are alternate flavors over the same kernel:
+
+```mermaid
+flowchart TB
+    subgraph Kernel["Kernel (small, stable)"]
+        HOST["plugin host (discovery / lifecycle / signing)"]
+        SUPER["daemon supervisor"]
+        CTRL["control plane endpoint"]
+        ROUTE["subject + decision routing"]
+    end
+
+    subgraph Default["Default flavor (curated bundle)"]
+        PROVIDERS["provider plugins (claude, ...)"]
+        SUBJECTS["subject_backend plugins (default, ...)"]
+        QR["queue + workflow_runner reference plugins"]
+        TRANS["transports + web UI"]
+        PACKS["packs (animus.* workflow bundles)"]
+    end
+
+    FUTURE["Future flavors (alternate bundles, deferred until customer pull)"]
+
+    Default --> Kernel
+    FUTURE -.alternate bundle over same kernel.-> Kernel
+```
+
+The kernel never grows to accommodate a flavor; capabilities are pushed down into
+plugins and packs.
+
 ## Why this naming exists
 
 For most of v0.4.x the product was described as an "AI agent orchestrator," a
@@ -297,8 +326,8 @@ accidental coupling.
 | --- | --- | --- |
 | `state-store`           | Scoped JSON under `~/.animus/<repo-scope>/` | SQLite, Postgres, DBOS, self-hosted — users will want choices |
 | `step-store` / `checkpoint` | Implicit; no durable-step semantics | DBOS-backed (Option A in the DBOS analysis), Temporal, custom — required for crash-safe phase resumption |
-| `workflow-runner`       | `workflow-runner-v2` crate | Multiple workflow execution models: in-process (today), DBOS-driven (Option B in the DBOS analysis), Temporal, future |
-| `agent-process-manager` | `agent-runner` crate | Local subprocess (today), detached/`nohup` (required for crash-safe agent reattach), cloud runners, sandboxes |
+| `workflow-runner`       | `animus-runtime-shared` crate + installed `workflow_runner` plugin | Multiple workflow execution models: in-process (today), DBOS-driven (Option B in the DBOS analysis), Temporal, future |
+| `agent-process-manager` | `orchestrator-plugin-host::session` + installed provider plugins | Local subprocess (today), detached/`nohup` (required for crash-safe agent reattach), cloud runners, sandboxes |
 | `git-ops`               | `orchestrator-git-ops` crate | git CLI today; could be GitHub API, GitLab API, internal Gerrit, or a non-git VCS |
 | `worktree-manager`      | git worktree primitives | Could be sandbox containers, ephemeral VMs, snapshot filesystems |
 | `project-root-resolver` | Hardcoded git-common-root + cwd fallback | Non-git projects, monorepo-aware resolution, custom layouts |

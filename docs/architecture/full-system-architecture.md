@@ -60,7 +60,7 @@ library. The actual workflow phase execution binary now comes from an installed
 `ao-workflow-runner` binary names still exist only as fallback resolution
 targets for older installs.
 
-The former `agent-runner` sidecar was removed in v0.5.4. Provider sessions now
+The former `agent-runner` sidecar was removed in v0.5.3. Provider sessions now
 run through `orchestrator-plugin-host::session` plus installed provider
 plugins.
 
@@ -109,6 +109,31 @@ running, control-aware operations prefer the daemon control socket so external
 surfaces see the live runtime view. Direct service operations still exist for
 commands that are local, bootstrap-oriented, or intentionally one-shot.
 
+A single subject-backed CLI command (for example `animus subject list --kind task`) flows from clap parsing through the service hub and out to a kind-scoped plugin RPC:
+
+```mermaid
+sequenceDiagram
+    participant User as operator
+    participant CLI as orchestrator-cli
+    participant Hub as FileServiceHub
+    participant Router as SubjectRouter
+    participant Host as orchestrator-plugin-host
+    participant Plugin as subject_backend plugin
+
+    User->>CLI: animus subject list --kind task
+    CLI->>CLI: resolve project root + repo-scope
+    CLI->>Hub: construct FileServiceHub
+    CLI->>Hub: subject_resolver().list(kind=task)
+    Hub->>Router: route by capabilities.subject_kinds
+    Router->>Host: spawn + initialize plugin (if needed)
+    Host->>Plugin: JSON-RPC task/list (stdio)
+    Plugin-->>Host: subjects
+    Host-->>Router: result
+    Router-->>Hub: normalized subjects
+    Hub-->>CLI: subjects
+    CLI-->>User: animus.cli.v1 JSON / table
+```
+
 ## Startup and Root Resolution
 
 Every command starts in `orchestrator-cli`:
@@ -130,6 +155,36 @@ and state persistence are owned by `orchestrator-core/src/services.rs` and
 crate in v0.5.3).
 
 ## State and Configuration
+
+State lives at three levels: project-local config committed to the repo, repo-scoped runtime state under the home directory, and global config shared across repos.
+
+```mermaid
+graph TB
+    subgraph Local["&lt;project&gt;/.animus/ (project-local, committed)"]
+        L1["config.json"]
+        L2["workflows.yaml + workflows/*.yaml"]
+        L3["plugins.lock"]
+    end
+
+    subgraph Scoped["~/.animus/&lt;repo-scope&gt;/ (per-repo runtime)"]
+        S1["core-state.json"]
+        S2["workflow.db"]
+        S3["config/ (compiled runtime)"]
+        S4["daemon/ runs/ logs/ worktrees/"]
+    end
+
+    subgraph Global["protocol::Config::global_config_dir()"]
+        G1["global config.json"]
+        G2["credentials"]
+        G3["plugins.yaml registry"]
+        G4["daemon event files"]
+    end
+
+    Local -.compiles into.-> Scoped
+    Global -.discovers plugins for.-> Scoped
+```
+
+`<repo-scope>` is `<sanitized-repo-name>-<12 hex sha256(canonical-root)>`, which keeps multiple repositories and linked worktrees from sharing runtime state by accident.
 
 Animus splits state into three levels.
 
@@ -187,7 +242,6 @@ If it changes runtime state, it belongs under the scoped state root.
 `ServiceHub` trait exposes service APIs for:
 
 - daemon lifecycle and health
-- projects
 - tasks and task provider compatibility
 - subject resolution
 - workflows
@@ -251,8 +305,9 @@ The daemon starts autonomous work only after plugin preflight passes unless the
 operator explicitly skips preflight. Default preflight requires:
 
 - at least one provider plugin
-- a `task` subject backend
-- a `requirement` subject backend
+- at least one subject backend plugin
+- a `workflow_runner` plugin
+- a `queue` plugin
 
 ## Dispatch Loop
 

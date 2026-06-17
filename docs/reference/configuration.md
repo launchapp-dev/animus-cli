@@ -201,7 +201,6 @@ Key files:
 - `config/agent-runtime-config.v2.json`
 - `state/pack-selection.v1.json`
 - `daemon/pm-config.json`
-- `runner/config.json`
 - `resume-config.json`
 
 These files are Animus-managed state. Treat them as runtime data, not hand-authored config.
@@ -211,8 +210,8 @@ These files are Animus-managed state. Treat them as runtime data, not hand-autho
 Persisted daemon runtime settings, written by `animus daemon config` (CLI) or
 `animus.daemon.config-set` (MCP) — never project-local `.animus/`. The
 runtime-reconfigurable keys are `pool_size`, `interval_secs`,
-`max_tasks_per_tick`, `stale_threshold_hours`, and
-`phase_timeout_secs`; the running daemon re-reads them once per scheduler tick,
+`max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, and
+`silent_threshold_mins`; the running daemon re-reads them once per scheduler tick,
 so changes apply without a restart. Exception: the daemon's `ProcessManager`
 captures `phase_timeout_secs` once at startup, so a changed phase timeout only
 takes effect for the live process manager after a daemon restart (the per-tick
@@ -619,9 +618,6 @@ legacy aliases; the old names will not be read.
 
 | Variable | Description |
 |---|---|
-| `ANIMUS_SKIP_RUNNER_START` | Skip auto-starting the runner alongside the daemon |
-| `ANIMUS_AUTO_REBUILD_RUNNER_ON_MAIN_UPDATE` | Rebuild the runner binary when main is updated |
-| `ANIMUS_RUNNER_BUILD_ID` | Pin a specific runner build id |
 | `ANIMUS_WORKFLOW_RUNNER_BIN` | Override the workflow-runner binary path |
 | `ANIMUS_PHASE_RUN_ATTEMPTS` | Maximum attempts for a single phase run before giving up |
 | `ANIMUS_PHASE_MAX_CONTINUATIONS` | Cap on phase continuation rounds |

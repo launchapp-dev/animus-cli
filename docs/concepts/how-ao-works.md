@@ -57,6 +57,31 @@ Every interaction follows the same path:
 5. Execution facts are projected back onto subject state by subject-aware
    adapters and projectors.
 
+The diagram below traces a single piece of work end to end, from a subject
+through the queue and daemon into phase execution and back onto subject state:
+
+```mermaid
+sequenceDiagram
+    participant Surface as "Surface (CLI / Web / MCP)"
+    participant Queue as "Dispatch Queue"
+    participant Daemon as "Daemon (scheduler)"
+    participant Runner as "workflow-runner"
+    participant Provider as "Provider plugin (agent)"
+    participant Subject as "Subject state"
+
+    Surface->>Queue: enqueue SubjectDispatch
+    Note over Daemon: queue-driven only<br/>no auto-enqueue
+    Daemon->>Queue: lease next dispatch as capacity frees
+    Daemon->>Runner: spawn + supervise subprocess
+    Runner->>Runner: resolve workflow_ref + overlays
+    loop each phase
+        Runner->>Provider: execute agent / command phase
+        Provider-->>Runner: phase result
+    end
+    Runner-->>Subject: project execution facts (status, artifacts)
+    Runner-->>Daemon: phase + workflow events
+```
+
 The daemon stays dumb throughout this flow. It never owns task policy,
 requirement policy, MCP semantics, or domain-specific routing logic.
 
@@ -121,12 +146,32 @@ This is what keeps task and requirement behavior out of the daemon.
 
 ## Workflow Resolution Today
 
-Animus resolves workflows from a layered source model:
+Animus resolves workflows from a layered source model, checked in order from
+most specific (project overrides) to most general (kernel baseline):
 
 1. `.animus/plugins/<pack-id>/`
 2. `.animus/workflows.yaml` and `.animus/workflows/*.yaml`
 3. `~/.animus/packs/<pack-id>/<version>/`
 4. kernel baseline config embedded in Animus
+
+```mermaid
+flowchart TD
+    ref["workflow_ref<br/>(e.g. animus.task/standard)"]
+    l1["1. Project pack overrides<br/>.animus/plugins/&lt;pack-id&gt;/"]
+    l2["2. Project YAML<br/>.animus/workflows.yaml + .animus/workflows/*.yaml"]
+    l3["3. Installed packs<br/>~/.animus/packs/&lt;pack-id&gt;/&lt;version&gt;/"]
+    l4["4. Kernel baseline<br/>(phase metadata + default MCP wiring)"]
+    resolved["Effective workflow definition"]
+
+    ref --> l1
+    l1 -->|"not found"| l2
+    l2 -->|"not found"| l3
+    l3 -->|"not found"| l4
+    l1 -.->|"found"| resolved
+    l2 -.->|"found"| resolved
+    l3 -.->|"found"| resolved
+    l4 -.->|"found"| resolved
+```
 
 Canonical workflow refs are pack-qualified, such as `animus.task/standard` and
 `animus.requirement/execute`. Legacy `builtin/*` aliases remain as migration

@@ -38,6 +38,61 @@ flowchart TB
 
 ---
 
+## The Wake Model
+
+The main loop is event-driven rather than busy-polling. It sleeps until
+something asks it to wake: a `daemon/nudge` control message (sent
+fire-and-forget by `animus subject create/update/status` and
+`animus queue enqueue/release`), a workflow or phase completion event, a config
+hot-reload, or a precise cron deadline computed from compiled `schedules:`. The
+`interval_secs` heartbeat is only a fallback that bounds out-of-band pickup and
+paces housekeeping — it is not the primary driver.
+
+```mermaid
+flowchart TB
+    sleep["Daemon main loop<br/>sleeps until woken"]
+    nudge["daemon/nudge<br/>(subject + queue mutations)"]
+    completion["workflow / phase<br/>completion event"]
+    reload["config hot-reload"]
+    cron["cron deadline<br/>(compiled schedules:)"]
+    heartbeat["interval_secs<br/>(fallback heartbeat)"]
+    work["Run scheduler leg:<br/>lease + dispatch, reconcile"]
+
+    nudge --> work
+    completion --> work
+    reload --> work
+    cron --> work
+    heartbeat --> work
+    work --> sleep
+    sleep -.-> nudge
+    sleep -.-> completion
+    sleep -.-> reload
+    sleep -.-> cron
+    sleep -.-> heartbeat
+```
+
+A single nudge from enqueueing a subject flows all the way to a spawned
+workflow run without waiting for the next heartbeat:
+
+```mermaid
+sequenceDiagram
+    participant CLI as "animus queue enqueue"
+    participant Q as "Dispatch queue"
+    participant D as "Daemon main loop"
+    participant R as "workflow-runner"
+
+    CLI->>Q: persist SubjectDispatch
+    CLI->>D: daemon/nudge (fire-and-forget)
+    D->>D: wake, check capacity
+    D->>Q: lease highest-priority dispatch
+    Q-->>D: SubjectDispatch (workflow_ref + subject)
+    D->>R: spawn with workflow_ref + subject
+    R-->>D: execution facts (started / completed)
+    D->>D: back to sleep
+```
+
+---
+
 ## Capacity Management
 
 The daemon controls concurrency through three mechanisms:

@@ -36,6 +36,29 @@ Every public surface uses the `animus` name:
 
 One name across every surface. No translation table required.
 
+Every surface hangs off the single `animus` brand; the legacy `ao.*` prefix was
+dropped in v0.4.0 with no aliases:
+
+```mermaid
+flowchart LR
+    ROOT["animus (one brand)"]
+    CLI["CLI: animus &lt;command&gt;"]
+    MCP["MCP: animus.&lt;group&gt;.&lt;verb&gt;"]
+    ENV["env: ANIMUS_*"]
+    STATE["state: .animus/ and ~/.animus/&lt;repo-scope&gt;/"]
+    PACKS["pack ids: animus.*"]
+    JSON["JSON envelope: animus.cli.v1"]
+    LEGACY["legacy ao.* (dropped in v0.4.0, no aliases)"]
+
+    ROOT --> CLI
+    ROOT --> MCP
+    ROOT --> ENV
+    ROOT --> STATE
+    ROOT --> PACKS
+    ROOT --> JSON
+    LEGACY -. removed .-> ROOT
+```
+
 ## Why one name now
 
 v0.3.x kept dual surfaces because changing the wire-level names mid-rebrand

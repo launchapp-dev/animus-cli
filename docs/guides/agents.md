@@ -187,7 +187,7 @@ dispatch control.
 from its recommended defaults before continuing; use `skip_preflight` only for
 dev or intentionally degraded runs.
 
-## Output, Logs, and Runner Operations
+## Output and Logs Operations
 
 Use output tools for run artifacts and structured execution streams. Use
 `animus.logs.tail` for recent daemon-level logs. This MCP tool is a bounded

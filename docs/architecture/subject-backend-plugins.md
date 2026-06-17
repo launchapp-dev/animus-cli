@@ -25,7 +25,7 @@ security boundary, see [Plugin System](plugin-system.md).
 - Subject data comes from installed plugins of kind `subject_backend`.
 - The in-tree task and requirement adapters were removed; there is no native
   fallback for new daemon runs.
-- Daemon preflight requires routable `task` and `requirement` subject kinds
+- Daemon preflight requires at least one installed `subject_backend` plugin
   unless the operator bypasses preflight.
 - Plugin discovery is shared with every other plugin kind and uses the registry,
   project-local plugin directory, explicit plugin environment variables, and
@@ -66,6 +66,26 @@ flowchart LR
     ROUTER --> EXT
     DAEMON --> RUNNER
 ```
+
+The `SubjectRouter` resolves each `animus subject` operation by its `--kind`
+to the one installed `subject_backend` plugin that claimed that kind:
+
+```mermaid
+flowchart LR
+    OP["animus subject &lt;verb&gt; --kind &lt;kind&gt;"]
+    ROUTER["SubjectRouter (route by kind)"]
+    TASK["kind=task -> animus-subject-default"]
+    REQ["kind=requirement -> animus-subject-requirements"]
+    CUSTOM["custom kinds -> custom subject_backend plugin"]
+
+    OP --> ROUTER
+    ROUTER --> TASK
+    ROUTER --> REQ
+    ROUTER --> CUSTOM
+```
+
+There are no in-tree subject backends; every kind must resolve to an installed
+plugin or the call fails with `METHOD_NOT_FOUND`.
 
 The CLI path and daemon path use the same underlying router:
 
@@ -219,6 +239,27 @@ An empty dispatch makes every `<kind>/<verb>` call fail with a
 `METHOD_NOT_FOUND` JSON-RPC error. Daemon preflight exists to catch the common
 case before autonomous work starts.
 
+Subject backends are spawned lazily: the router reads each installed manifest's
+declared `subject_kind` caps to build the kind map up front, but defers actually
+starting a backend process until the first `<kind>/<verb>` call needs it, with an
+LRU cap that keeps the plugin-process pool from being exhausted by many backends:
+
+```mermaid
+flowchart TD
+    DISC["discover subject_backend manifests"]
+    MAP["build kind map from declared subject_kind caps"]
+    CALL["first call: kind/verb"]
+    SPAWN["spawn + initialize the claiming backend"]
+    LRU["LRU cap on live backend processes"]
+    REUSE["reuse already-spawned backend"]
+
+    DISC --> MAP
+    MAP --> CALL
+    CALL -->|backend not yet live| SPAWN
+    CALL -->|backend already live| REUSE
+    SPAWN --> LRU
+```
+
 ## Authoring Rules
 
 A subject backend should:
@@ -250,7 +291,7 @@ animus plugin call <name> task/list --json '{}'
 
 | Failure | Result |
 |---|---|
-| Missing `task` or `requirement` plugin | daemon preflight fails by default |
+| No subject backend plugin installed | daemon preflight fails by default |
 | Kind not claimed | `METHOD_NOT_FOUND` for the requested kind |
 | Duplicate exact kind | router setup fails with both plugin names |
 | Duplicate glob prefix | router setup fails with both plugin names |

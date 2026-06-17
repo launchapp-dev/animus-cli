@@ -78,6 +78,48 @@ the CLI, daemon, and plugin preflight paths.
 `orchestrator-cli` composes the workspace into the user-facing `animus` command
 surface.
 
+## Kernel and Plugin Roles
+
+The kernel crates host the daemon and CLI; everything provider-, subject-, transport-, trigger-, and UI-specific runs as an installed stdio plugin behind the plugin host.
+
+```mermaid
+graph TB
+    subgraph Kernel["Animus kernel (in-tree crates)"]
+        CLI["orchestrator-cli<br/>(animus CLI + MCP)"]
+        DAEMON["orchestrator-daemon-runtime<br/>(scheduler / queue / control)"]
+        CORE["orchestrator-core<br/>(ServiceHub + state)"]
+        WR["animus-runtime-shared<br/>(workflow execution helpers)"]
+        PHOST["orchestrator-plugin-host<br/>(stdio JSON-RPC host + session bridge)"]
+    end
+
+    subgraph Plugins["Installed plugins (out-of-tree, launchapp-dev)"]
+        PROV["provider<br/>(claude / codex / gemini / opencode / oai)"]
+        SUBJ["subject_backend<br/>(task / requirement / linear / sqlite / markdown)"]
+        WFRUN["workflow_runner<br/>(animus-workflow-runner-default)"]
+        QUEUE["queue<br/>(animus-queue-default)"]
+        TRIG["trigger_backend<br/>(webhook / slack)"]
+        TRANS["transport_backend<br/>(http / graphql)"]
+        WEBUI["web_ui<br/>(animus-web-ui)"]
+    end
+
+    CLI --> CORE
+    CLI --> DAEMON
+    DAEMON --> CORE
+    DAEMON --> WR
+    CLI --> PHOST
+    DAEMON --> PHOST
+
+    PHOST --> PROV
+    PHOST --> SUBJ
+    PHOST --> WFRUN
+    PHOST --> QUEUE
+    PHOST --> TRIG
+    PHOST --> TRANS
+    PHOST --> WEBUI
+```
+
+The plugin extraction is complete: 18 standalone repositories at `launchapp-dev` cover the protocol, providers, subject backends, transports, web UI, triggers, log storage, the conformance testkit, and release tooling.
+
 ## Architecture Decision Records
 
 - [Kernel and Flavors](kernel-and-flavors.md) -- **v0.5 product architecture commitment.** Animus is a kernel + a default flavor (curated plugin bundle) for portfolio builders. Future flavors emerge from real customer pull, not roadmap speculation. Read this before adding scope.

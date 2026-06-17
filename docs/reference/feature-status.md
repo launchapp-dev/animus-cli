@@ -42,7 +42,7 @@ This page clarifies which Animus features are **shipped and stable**, **in-fligh
 | Queue Management | **Shipped** | Enqueue, hold, release, drop, and reorder work dispatches |
 | Capacity Limits | **Shipped** | Control concurrent agent runners and workflow spawn rate |
 | Queue Statistics | **Shipped** | Inspect queue depth and per-status counts |
-| Autonomous Scheduling | **Shipped** | Daemon auto-selects ready work and spawns workflows |
+| Queue-Driven Dispatch | **Shipped** | Daemon leases and executes work from the dispatch queue as capacity frees; it does not auto-enqueue Ready subjects (the `auto_run_ready` path was removed). Enqueue via `animus queue enqueue` or drive dispatch from `schedules:` / `triggers:` |
 | Stale Item Detection | **Shipped** | Identify tasks and workflows with no recent state updates |
 
 ### CLI Command Surface
@@ -53,7 +53,7 @@ This page clarifies which Animus features are **shipped and stable**, **in-fligh
 | Subject Commands | **Shipped** | Unified `animus subject` family for task, requirement, and external subject backends |
 | Workflow Commands | **Shipped** | Workflow execution, status, checkpoints, and phase management |
 | Daemon Commands | **Shipped** | Daemon lifecycle, health, queue, and event inspection |
-| Git Integration (`animus git`) | **Shipped** | Worktree creation, branch management, push/pull, confirmation requests |
+| Git Inspection (`animus git`) | **Shipped** | Inspection-only as of v0.5.x: `git repo list`, `git worktree list`, `git worktree prune`. Branch management, push/pull, commit, and confirmation requests were removed — express commit/push/PR/merge as command phases |
 | MCP Integration (`animus mcp serve`) | **Shipped** | Expose Animus state and operations as MCP tools for use by AI agents |
 | Skill Management (`animus skill`) | **Shipped** | Search, install, update, and publish versioned skills |
 | History Inspection | **Shipped** | Inspect execution history through `animus history ...` |
@@ -87,7 +87,7 @@ This page clarifies which Animus features are **shipped and stable**, **in-fligh
 | Scoped Runtime State (`~/.animus/<repo-scope>/`) | **Shipped** | Per-repo runtime state isolation with automatic cleanup |
 | Runtime State Stores | **Shipped** | Runtime state is tool-managed and split between JSON files and `workflow.db` |
 | Git Worktree Isolation | **Shipped** | Built-in tasks get isolated git worktrees; plugin-owned tasks execute from `project_root` unless a plugin provides its own checkout model |
-| Worktree Lifecycle | **Shipped** | Automatic creation, pull/push synchronization, and cleanup |
+| Worktree Lifecycle | **Shipped** | Worktree creation and cleanup are owned by the installed workflow runner plugin; `animus git worktree prune` removes worktrees for done/cancelled tasks. Pull/push synchronization is no longer a built-in worktree operation |
 
 ## Agent Integration and Automation
 

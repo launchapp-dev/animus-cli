@@ -114,6 +114,45 @@ workflows:
 That keeps repository customization local while task and requirement semantics
 stay owned by the relevant pack.
 
+## Phase Pipeline
+
+A workflow is an ordered sequence of phases. `workflow-runner` runs them one at a
+time; each phase runs its agent (or command), which returns a verdict that
+decides what happens next.
+
+```mermaid
+flowchart LR
+    start(["Workflow run"])
+    p1["Phase: triage"]
+    p2["Phase: research"]
+    p3["Phase: implementation"]
+    p4["Phase: review"]
+    done(["Workflow complete"])
+
+    start --> p1 --> p2 --> p3 --> p4 --> done
+```
+
+Each phase ends in one of four verdicts, and `workflow-runner` routes the
+pipeline accordingly:
+
+```mermaid
+flowchart TD
+    run["Agent runs the phase"]
+    verdict{"Verdict?"}
+    advance["advance:<br/>move to next phase"]
+    rework["rework:<br/>return to a prior phase<br/>(bounded by max_rework_attempts)"]
+    skip["skip:<br/>skip this phase,<br/>continue pipeline"]
+    fail["fail:<br/>halt + emit failure fact"]
+
+    run --> verdict
+    verdict -->|advance| advance
+    verdict -->|rework| rework
+    verdict -->|skip| skip
+    verdict -->|fail| fail
+    rework -->|"under limit"| run
+    rework -->|"limit exhausted"| fail
+```
+
 ## Supported Features
 
 Workflow definitions can combine:
@@ -124,7 +163,7 @@ Workflow definitions can combine:
 - command phases
 - manual approval phases
 - per-phase MCP bindings
-- post-success merge and PR behavior
+- git/PR operations as ordinary command phases (the `post_success.merge` block was removed in v0.5.x)
 - pack-owned runtime overlays and policy checks
 
 See [Writing Workflows](../guides/writing-workflows.md) for authoring guidance
