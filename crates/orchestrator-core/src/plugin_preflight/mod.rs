@@ -152,6 +152,12 @@ pub const DEFAULT_REQUIREMENT_BACKEND_REPO: &str = "launchapp-dev/animus-subject
 pub enum RequiredRole {
     AtLeastOneProvider,
     SubjectKind(String),
+    /// Satisfied by ANY installed subject_backend plugin, regardless of the
+    /// kind(s) it serves. The daemon needs a place to read/write subjects, but
+    /// it must not dictate WHICH kinds a deployment uses — a song app legitimately
+    /// has no `task`/`requirement` backend. Prefer this over `SubjectKind(..)` in
+    /// the daemon default so any valid subject backend satisfies preflight.
+    AtLeastOneSubjectBackend,
     TransportEnabled,
     WorkflowRunner,
     Queue,
@@ -162,6 +168,7 @@ impl RequiredRole {
         match self {
             RequiredRole::AtLeastOneProvider => "at_least_one_provider".to_string(),
             RequiredRole::SubjectKind(kind) => format!("subject_kind:{kind}"),
+            RequiredRole::AtLeastOneSubjectBackend => "at_least_one_subject_backend".to_string(),
             RequiredRole::TransportEnabled => "transport_enabled".to_string(),
             RequiredRole::WorkflowRunner => "workflow_runner".to_string(),
             RequiredRole::Queue => "queue".to_string(),
@@ -188,16 +195,18 @@ impl PluginPreflightSpec {
         Self {
             required_roles: vec![
                 RequiredRole::AtLeastOneProvider,
-                RequiredRole::SubjectKind("task".to_string()),
-                RequiredRole::SubjectKind("requirement".to_string()),
+                // Require A valid subject backend, not specific kinds. The daemon
+                // must not force `task`/`requirement` on every deployment.
+                RequiredRole::AtLeastOneSubjectBackend,
                 RequiredRole::WorkflowRunner,
                 RequiredRole::Queue,
             ],
             auto_install: false,
             auto_install_defaults: vec![
                 ("at_least_one_provider".to_string(), default_provider_repo()),
-                ("subject_kind:task".to_string(), default_task_backend_repo()),
-                ("subject_kind:requirement".to_string(), default_requirement_backend_repo()),
+                // If NO subject backend is installed, the default is the task
+                // backend — a sensible starter, not a requirement.
+                ("at_least_one_subject_backend".to_string(), default_task_backend_repo()),
                 ("workflow_runner".to_string(), default_workflow_runner_repo()),
                 ("queue".to_string(), default_queue_repo()),
             ],

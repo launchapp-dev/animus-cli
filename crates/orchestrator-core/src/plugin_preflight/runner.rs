@@ -66,6 +66,7 @@ fn role_is_satisfied(role: &RequiredRole, installed: &[InstalledPluginSummary]) 
     match role {
         RequiredRole::AtLeastOneProvider => installed.iter().any(|p| p.is_provider()),
         RequiredRole::SubjectKind(kind) => installed.iter().any(|p| p.covers_subject_kind(kind)),
+        RequiredRole::AtLeastOneSubjectBackend => installed.iter().any(|p| p.is_subject_backend()),
         RequiredRole::TransportEnabled => true,
         RequiredRole::WorkflowRunner => installed.iter().any(|p| p.is_workflow_runner()),
         RequiredRole::Queue => installed.iter().any(|p| p.is_queue()),
@@ -85,6 +86,9 @@ fn fix_command_for(role: &RequiredRole, default_repo: Option<&str>) -> String {
         }
         RequiredRole::SubjectKind(kind) => {
             format!("animus plugin install {target} --allow-shadow-builtin  # must claim subject_kind:{kind}")
+        }
+        RequiredRole::AtLeastOneSubjectBackend => {
+            format!("animus plugin install {target} --allow-shadow-builtin  # any subject_backend plugin")
         }
         RequiredRole::TransportEnabled => {
             format!("animus plugin install {target} --allow-shadow-builtin  # transport backend")
