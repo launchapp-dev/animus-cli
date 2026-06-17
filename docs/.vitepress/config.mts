@@ -8,6 +8,26 @@ export default withMermaid(
     // Empty for Vercel (root). Set VITEPRESS_BASE=/ao-cli/ for GitHub Pages legacy path.
     base: process.env.VITEPRESS_BASE || '/',
 
+    // Hand-drawn, brand-matched mermaid diagrams (electric orange on dark surfaces).
+    mermaid: {
+      look: 'handDrawn',
+      theme: 'base',
+      fontFamily: '"Space Grotesk", system-ui, sans-serif',
+      themeVariables: {
+        primaryColor: '#1c1c1c',
+        primaryBorderColor: '#ff7a00',
+        primaryTextColor: '#f5f5f5',
+        secondaryColor: '#262626',
+        tertiaryColor: '#161616',
+        lineColor: '#ff9233',
+        textColor: '#f5f5f5',
+        fontFamily: '"Space Grotesk", system-ui, sans-serif',
+        noteBkgColor: '#2a2110',
+        noteTextColor: '#f5f5f5',
+        noteBorderColor: '#ff7a00',
+      },
+    },
+
     head: [
       ['link', { rel: 'icon', type: 'image/svg+xml', href: '/logo.svg' }],
       ['link', { rel: 'preconnect', href: 'https://fonts.googleapis.com' }],
