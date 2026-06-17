@@ -85,6 +85,21 @@ fn internal_err(err: anyhow::Error) -> ControlError {
     ControlError::Internal(format!("{err:#}"))
 }
 
+/// Build a [`SubjectRef`] from a queue `task_id`, honoring the
+/// `<kind>:<native>` qualifier so plugin-backed custom kinds resolve through
+/// their own `<kind>/get` method. `task:`/`requirement:` map to the canonical
+/// in-tree constructors; any other non-empty prefix becomes a custom-kind ref;
+/// a bare id (no prefix) defaults to task for backward compatibility.
+fn subject_ref_from_qualified_id(task_id: &str) -> protocol::orchestrator::SubjectRef {
+    use protocol::orchestrator::SubjectRef;
+    match task_id.split_once(':') {
+        Some((kind, _)) if kind.eq_ignore_ascii_case("task") => SubjectRef::task(task_id.to_string()),
+        Some((kind, _)) if kind.eq_ignore_ascii_case("requirement") => SubjectRef::requirement(task_id.to_string()),
+        Some((kind, _)) if !kind.is_empty() => SubjectRef::new(kind.to_string(), task_id.to_string()),
+        _ => SubjectRef::task(task_id.to_string()),
+    }
+}
+
 fn mutation_to_result(
     verb: &str,
     entry_id: &str,
@@ -212,7 +227,12 @@ impl QueueRouting for QueueRoutingImpl {
         let (resolved_id, workflow_ref) = match hub.tasks().get(&request.task_id).await {
             Ok(task) => (task.id.clone(), workflow_ref_for_task(&task)),
             Err(in_tree_err) => {
-                let subject = protocol::orchestrator::SubjectRef::task(request.task_id.clone());
+                // Derive the subject kind from the qualified id prefix
+                // (`<kind>:<native>`) so plugin-backed custom kinds (e.g. a
+                // `song:SONG-001` subject) resolve via `<kind>/get` instead of
+                // being forced through `task/get`, which the owning backend
+                // rejects ("is not a task subject"). Bare ids default to task.
+                let subject = subject_ref_from_qualified_id(&request.task_id);
                 match hub.subject_resolver().resolve_subject_context(&subject, None, None).await {
                     Ok(ctx) => (
                         ctx.subject_id,
@@ -452,5 +472,21 @@ mod tests {
         assert_eq!(wire_status_to_plugin(WireQueueEntryStatus::InFlight), Some(queue_proto::status::ASSIGNED));
         assert_eq!(wire_status_to_plugin(WireQueueEntryStatus::Held), Some(queue_proto::status::HELD));
         assert!(wire_status_to_plugin(WireQueueEntryStatus::Done).is_none());
+    }
+
+    #[test]
+    fn subject_ref_kind_derives_from_qualified_id() {
+        // Custom plugin kind must resolve via its own `<kind>/get`.
+        let song = subject_ref_from_qualified_id("song:SONG-001");
+        assert_eq!(song.kind(), "song");
+        assert_eq!(song.id(), "song:SONG-001");
+        // Canonical task / requirement keep their namespaced kinds.
+        assert_eq!(subject_ref_from_qualified_id("task:TASK-1").kind(), protocol::orchestrator::SUBJECT_KIND_TASK);
+        assert_eq!(
+            subject_ref_from_qualified_id("requirement:REQ-1").kind(),
+            protocol::orchestrator::SUBJECT_KIND_REQUIREMENT
+        );
+        // Bare id (no prefix) defaults to task for backward compatibility.
+        assert_eq!(subject_ref_from_qualified_id("TASK-9").kind(), protocol::orchestrator::SUBJECT_KIND_TASK);
     }
 }
