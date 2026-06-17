@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.20] - 2026-06-17
+
+**Preflight requires any subject backend, not forced task/requirement kinds.**
+The daemon preflight required-role set hard-coded `subject_kind:task` and
+`subject_kind:requirement`, forcing every deployment to install those two
+specific backends even when a single custom subject backend (e.g. a Postgres
+`kind=song` backend) was the only subject store in use. This was a design flaw:
+the daemon should require *a* working subject backend, not dictate which kinds
+it serves.
+
+### Changed
+
+- **`RequiredRole::AtLeastOneSubjectBackend` replaces the hard-coded
+  `SubjectKind("task")` + `SubjectKind("requirement")` roles** in
+  `PluginPreflightSpec::daemon_default()`. Preflight now passes when any
+  `subject_backend` plugin is installed, regardless of the subject kinds it
+  claims. Auto-install maps the new role to `animus-subject-default`. The
+  `SubjectKind(_)` variant is retained for custom specs but is no longer part of
+  the daemon default. The doctor `plugins` check mirrors the same posture.
+
 ## [0.5.19] - 2026-06-16
 
 **Queue-enqueue plugin-subject fallback.** Control-routed `queue/enqueue`
