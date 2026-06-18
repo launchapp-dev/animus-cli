@@ -131,8 +131,8 @@ The provider runs directly over the plugin host — there is no socket bridge or
 sequenceDiagram
     participant Runner as workflow_runner
     participant Resolver as SessionBackendResolver
-    participant Provider as "provider plugin (claude/codex/...)"
-    participant Log as "runs/<run-id>/events.jsonl"
+    participant Provider as provider plugin (claude/codex/...)
+    participant Log as runs/<run-id>/events.jsonl
 
     Runner->>Runner: build_runtime_contract*
     Runner->>Resolver: resolve provider plugin

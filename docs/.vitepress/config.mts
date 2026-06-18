@@ -8,23 +8,20 @@ export default withMermaid(
     // Empty for Vercel (root). Set VITEPRESS_BASE=/ao-cli/ for GitHub Pages legacy path.
     base: process.env.VITEPRESS_BASE || '/',
 
-    // Hand-drawn, brand-matched mermaid diagrams (electric orange on dark surfaces).
+    // Hand-drawn, brand-matched mermaid diagrams with the ELK layout engine.
+    // Only mode-agnostic accents (electric-orange borders/edges) are overridden so the
+    // diagrams read well in BOTH light and dark mode: the plugin forces mermaid's
+    // built-in `dark` theme on dark pages and falls back to `default` on light pages,
+    // and each handles its own node fills + text color. ELK gives clean orthogonal
+    // routing so dense flow/state diagrams stop overlapping or clipping their labels.
     mermaid: {
       look: 'handDrawn',
-      theme: 'base',
+      layout: 'elk',
       fontFamily: '"Space Grotesk", system-ui, sans-serif',
       themeVariables: {
-        primaryColor: '#1c1c1c',
         primaryBorderColor: '#ff7a00',
-        primaryTextColor: '#f5f5f5',
-        secondaryColor: '#262626',
-        tertiaryColor: '#161616',
-        lineColor: '#ff9233',
-        textColor: '#f5f5f5',
+        lineColor: '#ff7a00',
         fontFamily: '"Space Grotesk", system-ui, sans-serif',
-        noteBkgColor: '#2a2110',
-        noteTextColor: '#f5f5f5',
-        noteBorderColor: '#ff7a00',
       },
     },
 

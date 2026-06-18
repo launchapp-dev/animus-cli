@@ -172,7 +172,7 @@ sequenceDiagram
     participant Shared as animus-runtime-shared
     participant Session as SessionBackendResolver
     participant Provider as provider plugin
-    participant State as "~/.animus/<repo-scope>"
+    participant State as ~/.animus/<repo-scope>
 
     Daemon->>Queue: lease ready entry (capacity permitting)
     Daemon->>Runner: spawn workflow run

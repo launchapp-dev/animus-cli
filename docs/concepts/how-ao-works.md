@@ -62,12 +62,12 @@ through the queue and daemon into phase execution and back onto subject state:
 
 ```mermaid
 sequenceDiagram
-    participant Surface as "Surface (CLI / Web / MCP)"
-    participant Queue as "Dispatch Queue"
-    participant Daemon as "Daemon (scheduler)"
-    participant Runner as "workflow-runner"
-    participant Provider as "Provider plugin (agent)"
-    participant Subject as "Subject state"
+    participant Surface as Surface (CLI / Web / MCP)
+    participant Queue as Dispatch Queue
+    participant Daemon as Daemon (scheduler)
+    participant Runner as workflow-runner
+    participant Provider as Provider plugin (agent)
+    participant Subject as Subject state
 
     Surface->>Queue: enqueue SubjectDispatch
     Note over Daemon: queue-driven only<br/>no auto-enqueue

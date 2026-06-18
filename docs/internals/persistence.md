@@ -19,8 +19,8 @@ The write-temp-then-rename sequence is what keeps readers from ever seeing a hal
 sequenceDiagram
     participant Caller as service API
     participant Helper as write_json_atomic
-    participant Tmp as "<target>.tmp"
-    participant Target as "<target>.json"
+    participant Tmp as <target>.tmp
+    participant Target as <target>.json
 
     Caller->>Helper: write_json_atomic(path, value)
     Helper->>Tmp: serialize + write bytes

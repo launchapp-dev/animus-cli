@@ -76,10 +76,10 @@ workflow run without waiting for the next heartbeat:
 
 ```mermaid
 sequenceDiagram
-    participant CLI as "animus queue enqueue"
-    participant Q as "Dispatch queue"
-    participant D as "Daemon main loop"
-    participant R as "workflow-runner"
+    participant CLI as animus queue enqueue
+    participant Q as Dispatch queue
+    participant D as Daemon main loop
+    participant R as workflow-runner
 
     CLI->>Q: persist SubjectDispatch
     CLI->>D: daemon/nudge (fire-and-forget)

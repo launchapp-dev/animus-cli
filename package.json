@@ -11,5 +11,8 @@
     "mermaid": "^11.4.1",
     "vitepress": "^1.6.3",
     "vitepress-plugin-mermaid": "^2.0.17"
+  },
+  "dependencies": {
+    "@mermaid-js/layout-elk": "^0.1.9"
   }
 }

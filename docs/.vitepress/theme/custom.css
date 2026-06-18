@@ -302,3 +302,37 @@ div[class*='language-'] {
   pointer-events: none;
   z-index: 0;
 }
+
+/* ---------------------------------------------------------------------------
+   Mermaid brand accents — keep the electric-orange identity in BOTH light and
+   dark mode. The plugin swaps mermaid's built-in `dark`/`default` themes per
+   page appearance (handling node fills + text color), so here we only force the
+   mode-agnostic accents: connector edges, node/cluster outlines, and sequence
+   actor boxes. The hand-drawn hatch fill (rough-node fill path) is left alone.
+   --------------------------------------------------------------------------- */
+
+/* Connector lines: flowchart links, state transitions, class relations,
+   sequence messages. */
+.mermaid .edgePaths path.flowchart-link,
+.mermaid .edgePath path.path,
+.mermaid path.transition,
+.mermaid path.relation,
+.mermaid .messageLine0,
+.mermaid .messageLine1 {
+  stroke: #ff7a00 !important;
+}
+
+/* Hand-drawn node + cluster outlines (rough.js draws the outline as the last
+   path in the node's label-container; the earlier path is the hatch fill,
+   which is left untouched). */
+.mermaid .rough-node > .label-container > path:last-child,
+.mermaid .cluster rect,
+.mermaid .statediagram-cluster rect {
+  stroke: #ff7a00 !important;
+}
+
+/* Sequence-diagram actor boxes + lifelines. */
+.mermaid .actor,
+.mermaid line.actor-line {
+  stroke: #ff7a00 !important;
+}
