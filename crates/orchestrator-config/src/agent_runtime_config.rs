@@ -326,10 +326,19 @@ pub enum AgentHookAction {
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalPolicyDefault {
+    /// Manual mode: escalate to a pending human interaction (the default).
     #[default]
     Ask,
+    /// "Dangerous" / approve-everything mode: auto-allow without escalating.
     Allow,
+    /// Auto-deny without escalating (fail closed).
     Deny,
+    /// Auto-approve mode backed by an LLM: a judge model reads the tool call
+    /// (and best-effort run context) and returns allow/deny. Configured via
+    /// [`ApprovalPolicy::evaluator_model`] / [`ApprovalPolicy::evaluator_instructions`].
+    /// The caller falls back to manual escalation (`Ask`) if the evaluator is
+    /// unavailable or errors, so an LLM outage never silently auto-allows.
+    Llm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -337,6 +346,8 @@ pub enum ApprovalPolicyDecision {
     Ask,
     Allow,
     Deny,
+    /// Defer to the configured LLM evaluator (see [`ApprovalPolicyDefault::Llm`]).
+    Evaluate,
 }
 
 /// Per-agent policy for `animus.agent.request_approval` escalations.
@@ -356,6 +367,16 @@ pub struct ApprovalPolicy {
     pub auto_deny: Vec<String>,
     #[serde(default)]
     pub default: ApprovalPolicyDefault,
+    /// Model id for the LLM judge when `default: llm`. When unset the kernel
+    /// falls back to the agent's own model / the compiled default. Ignored
+    /// unless the default (or a future per-pattern rule) selects LLM mode.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluator_model: Option<String>,
+    /// Extra, operator-authored guidance appended to the judge's system prompt
+    /// (e.g. "deny anything that touches production or deletes data"). The base
+    /// judge rubric is built in to the kernel; this narrows it per agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluator_instructions: Option<String>,
 }
 
 impl ApprovalPolicy {
@@ -370,6 +391,7 @@ impl ApprovalPolicy {
             ApprovalPolicyDefault::Ask => ApprovalPolicyDecision::Ask,
             ApprovalPolicyDefault::Allow => ApprovalPolicyDecision::Allow,
             ApprovalPolicyDefault::Deny => ApprovalPolicyDecision::Deny,
+            ApprovalPolicyDefault::Llm => ApprovalPolicyDecision::Evaluate,
         }
     }
 }

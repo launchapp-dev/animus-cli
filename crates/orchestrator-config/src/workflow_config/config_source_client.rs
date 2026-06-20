@@ -23,9 +23,7 @@ const CONFIG_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 /// True if a `config_source` plugin is installed (cheap discovery, no spawn).
 /// Used by callers that early-return when there's nothing to compile.
 pub fn config_source_installed(project_root: &Path) -> bool {
-    discover_by_kind(project_root.to_path_buf(), CONFIG_SOURCE_KIND)
-        .map(|plugins| !plugins.is_empty())
-        .unwrap_or(false)
+    discover_by_kind(project_root.to_path_buf(), CONFIG_SOURCE_KIND).map(|plugins| !plugins.is_empty()).unwrap_or(false)
 }
 
 /// Resolve a `config_source` plugin (if installed) and load the base config.
@@ -53,9 +51,7 @@ async fn load_from_plugin(plugin: DiscoveredPlugin, project_root: PathBuf) -> Re
     let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
         .await
         .with_context(|| format!("spawning config_source plugin {}", plugin.name))?;
-    host.handshake()
-        .await
-        .with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
+    host.handshake().await.with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
 
     let params = serde_json::json!({
         "project_root": project_root,

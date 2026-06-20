@@ -485,6 +485,298 @@ fn interaction_to_json(record: &InteractionRecord) -> Value {
     serde_json::to_value(record).unwrap_or(Value::Null)
 }
 
+// --- LLM auto-approve evaluator ----------------------------------------
+//
+// When an agent's approval_policy has `default: llm`, a gated tool call is
+// judged by a model instead of escalating to a human. The judge runs as a
+// one-shot provider session with NO MCP servers (so it has no tools and
+// cannot recurse back into request_approval) and NO permission gating; it
+// must answer with a single JSON verdict. ANY failure (no model/tool, session
+// error, unparseable output) returns None so the caller falls back to manual
+// human escalation — an LLM outage never silently auto-allows or hard-denies.
+
+const APPROVAL_JUDGE_TIMEOUT_SECS: u64 = 60;
+const APPROVAL_JUDGE_MAX_ARG_CHARS: usize = 4000;
+
+fn build_judge_system_prompt(extra_instructions: Option<&str>) -> String {
+    let mut prompt = String::from(
+        "You are an approval gate for an autonomous coding agent. You decide whether a single requested \
+         action is safe to ALLOW or must be DENIED. Be conservative and fail safe: DENY irreversible, \
+         destructive, or exfiltrating actions (deleting data, dropping databases, writing to production, \
+         force-pushing or rewriting shared history, disabling security controls, sending data or messages to \
+         external parties, leaking secrets/credentials) unless the request is clearly routine and safe. ALLOW \
+         ordinary local development actions (reading files, running tests, building, editing code in the \
+         working tree). When in doubt, DENY. Respond with ONLY a single JSON object and nothing else: \
+         {\"decision\":\"allow\"|\"deny\",\"reason\":\"<one short sentence>\"}.",
+    );
+    if let Some(extra) = extra_instructions.map(str::trim).filter(|value| !value.is_empty()) {
+        prompt.push_str("\n\nAdditional operator policy for this agent (overrides the defaults above on conflict):\n");
+        prompt.push_str(extra);
+    }
+    prompt
+}
+
+fn build_judge_user_prompt(action: &str, tool_name: Option<&str>, arguments: Option<&Value>) -> String {
+    let mut prompt = format!("Requested action: {action}\n");
+    if let Some(tool) = tool_name {
+        prompt.push_str(&format!("Tool: {tool}\n"));
+    }
+    if let Some(args) = arguments {
+        let mut rendered = serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string());
+        if rendered.len() > APPROVAL_JUDGE_MAX_ARG_CHARS {
+            rendered.truncate(APPROVAL_JUDGE_MAX_ARG_CHARS);
+            rendered.push_str("\n…(truncated)");
+        }
+        prompt.push_str(&format!("Tool input:\n{rendered}\n"));
+    }
+    prompt.push_str("\nReturn your JSON verdict now.");
+    prompt
+}
+
+/// Extract `{"decision":"allow|deny","reason":...}` from possibly-fenced or
+/// prose-wrapped model output. Returns `(allow, reason)`.
+fn parse_judge_verdict(text: &str) -> Option<(bool, String)> {
+    // Scan for balanced top-level JSON objects; models sometimes prefix
+    // reasoning before the JSON, so try the last one containing a decision.
+    let bytes = text.as_bytes();
+    let mut candidates: Vec<&str> = Vec::new();
+    let mut depth = 0i32;
+    let mut start = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'{' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            b'}' => {
+                if depth > 0 {
+                    depth -= 1;
+                    if depth == 0 {
+                        if let Some(s) = start.take() {
+                            candidates.push(&text[s..=i]);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for candidate in candidates.iter().rev() {
+        if let Ok(value) = serde_json::from_str::<Value>(candidate) {
+            if let Some(decision) = value.get("decision").and_then(Value::as_str) {
+                let reason = value
+                    .get("reason")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| "no reason given".to_string());
+                return match decision.trim().to_ascii_lowercase().as_str() {
+                    "allow" | "approve" | "approved" | "yes" => Some((true, reason)),
+                    "deny" | "reject" | "rejected" | "no" => Some((false, reason)),
+                    _ => None,
+                };
+            }
+        }
+    }
+    None
+}
+
+async fn evaluate_approval_with_llm(
+    project_root: &str,
+    judge_tool: &str,
+    judge_model: &str,
+    action: &str,
+    tool_name: Option<&str>,
+    arguments: Option<&Value>,
+    extra_instructions: Option<&str>,
+) -> Option<(bool, String)> {
+    use crate::services::runtime::runtime_agent::provider_client;
+    use animus_session_backend::session::{SessionEvent, SessionRequest};
+
+    let request = SessionRequest {
+        tool: judge_tool.to_string(),
+        model: judge_model.to_string(),
+        prompt: build_judge_user_prompt(action, tool_name, arguments),
+        cwd: std::path::PathBuf::from(project_root),
+        project_root: Some(std::path::PathBuf::from(project_root)),
+        // No MCP endpoint -> the judge has no tools and cannot recurse into
+        // request_approval.
+        mcp_endpoint: None,
+        permission_mode: None,
+        timeout_secs: Some(APPROVAL_JUDGE_TIMEOUT_SECS),
+        env_vars: Vec::new(),
+        extras: json!({ "system_prompt": build_judge_system_prompt(extra_instructions) }),
+    };
+
+    let mut run = match provider_client::start_session(std::path::Path::new(project_root), request).await {
+        Ok(run) => run,
+        Err(err) => {
+            tracing::warn!(error = %err, "approval LLM evaluator: session start failed; falling back to manual escalation");
+            return None;
+        }
+    };
+
+    let mut final_text = String::new();
+    let mut deltas = String::new();
+    while let Some(event) = run.events.recv().await {
+        match event {
+            SessionEvent::FinalText { text } => final_text = text,
+            SessionEvent::TextDelta { text } => deltas.push_str(&text),
+            SessionEvent::Error { message, recoverable } => {
+                if !recoverable {
+                    tracing::warn!(
+                        message,
+                        "approval LLM evaluator: provider error; falling back to manual escalation"
+                    );
+                }
+            }
+            SessionEvent::Finished { .. } => break,
+            _ => {}
+        }
+    }
+
+    let text = if !final_text.trim().is_empty() { final_text } else { deltas };
+    let verdict = parse_judge_verdict(&text);
+    if verdict.is_none() {
+        tracing::warn!("approval LLM evaluator: could not parse a verdict; falling back to manual escalation");
+    }
+    verdict
+}
+
+/// LLM autopilot config for an agent whose `approval_policy.default` is `llm`:
+/// `(judge_tool, judge_model, evaluator_instructions)`. Returns `None` unless
+/// the agent is in LLM mode AND a tool + model can be resolved (else the caller
+/// escalates to a human, fail safe). The judge model is `evaluator_model` or
+/// the agent's own model; the tool is the agent's own provider tool.
+fn resolve_llm_autopilot(
+    profile: Option<&orchestrator_config::agent_runtime_config::AgentProfile>,
+) -> Option<(String, String, Option<String>)> {
+    let profile = profile?;
+    let policy = profile.approval_policy.as_ref()?;
+    if policy.default != orchestrator_config::agent_runtime_config::ApprovalPolicyDefault::Llm {
+        return None;
+    }
+    let tool = profile.tool.clone()?;
+    let model = policy.evaluator_model.clone().or_else(|| profile.model.clone())?;
+    Some((tool, model, policy.evaluator_instructions.clone()))
+}
+
+/// Extract `{"answer": "..."}` (or a bare `{"answer": ...}` coerced to string)
+/// from possibly-fenced or prose-wrapped model output.
+fn parse_answer_text(text: &str) -> Option<String> {
+    let bytes = text.as_bytes();
+    let mut candidates: Vec<&str> = Vec::new();
+    let mut depth = 0i32;
+    let mut start = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'{' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            b'}' => {
+                if depth > 0 {
+                    depth -= 1;
+                    if depth == 0 {
+                        if let Some(s) = start.take() {
+                            candidates.push(&text[s..=i]);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for candidate in candidates.iter().rev() {
+        if let Ok(value) = serde_json::from_str::<Value>(candidate) {
+            if let Some(answer) = value.get("answer") {
+                let rendered = match answer {
+                    Value::String(s) => s.trim().to_string(),
+                    other => other.to_string(),
+                };
+                if !rendered.is_empty() {
+                    return Some(rendered);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// LLM autopilot for `animus.agent.ask`: answer a flat question on the human's
+/// behalf. Returns `Some(answer)` or `None` (caller escalates to a human). Runs
+/// as a one-shot provider session with no MCP endpoint (no tools).
+async fn answer_question_with_llm(
+    project_root: &str,
+    judge_tool: &str,
+    judge_model: &str,
+    question: &str,
+    options: &[String],
+    extra_instructions: Option<&str>,
+) -> Option<String> {
+    use crate::services::runtime::runtime_agent::provider_client;
+    use animus_session_backend::session::{SessionEvent, SessionRequest};
+
+    let mut system = String::from(
+        "You are answering, on behalf of a human operator, a clarifying question from an autonomous coding \
+         agent. Answer concisely and decisively using the operator's likely intent and the safest sensible \
+         default. If a list of options is given, choose EXACTLY ONE option verbatim. Respond with ONLY a single \
+         JSON object and nothing else: {\"answer\":\"<your answer>\"}.",
+    );
+    if let Some(extra) = extra_instructions.map(str::trim).filter(|value| !value.is_empty()) {
+        system.push_str("\n\nOperator guidance:\n");
+        system.push_str(extra);
+    }
+    let mut user = format!("Question: {question}\n");
+    if !options.is_empty() {
+        user.push_str("Options (choose exactly one, verbatim):\n");
+        for option in options {
+            user.push_str(&format!("- {option}\n"));
+        }
+    }
+    user.push_str("\nReturn your JSON answer now.");
+
+    let request = SessionRequest {
+        tool: judge_tool.to_string(),
+        model: judge_model.to_string(),
+        prompt: user,
+        cwd: std::path::PathBuf::from(project_root),
+        project_root: Some(std::path::PathBuf::from(project_root)),
+        mcp_endpoint: None,
+        permission_mode: None,
+        timeout_secs: Some(APPROVAL_JUDGE_TIMEOUT_SECS),
+        env_vars: Vec::new(),
+        extras: json!({ "system_prompt": system }),
+    };
+
+    let mut run = match provider_client::start_session(std::path::Path::new(project_root), request).await {
+        Ok(run) => run,
+        Err(err) => {
+            tracing::warn!(error = %err, "ask LLM autopilot: session start failed; escalating to a human");
+            return None;
+        }
+    };
+    let mut final_text = String::new();
+    let mut deltas = String::new();
+    while let Some(event) = run.events.recv().await {
+        match event {
+            SessionEvent::FinalText { text } => final_text = text,
+            SessionEvent::TextDelta { text } => deltas.push_str(&text),
+            SessionEvent::Finished { .. } => break,
+            _ => {}
+        }
+    }
+    let text = if !final_text.trim().is_empty() { final_text } else { deltas };
+    let answer = parse_answer_text(&text);
+    if answer.is_none() {
+        tracing::warn!("ask LLM autopilot: could not parse an answer; escalating to a human");
+    }
+    answer
+}
+
 #[tool_router(router = interaction_tool_router, vis = "pub(super)")]
 impl AoMcpServer {
     #[tool(
@@ -501,6 +793,15 @@ impl AoMcpServer {
         let workflow_id = self.bound_workflow_id(input.workflow_id.as_deref());
         let wait_mode = resolve_wait_mode(workflow_pinned, input.wait.as_deref(), TOOL);
         let timeout_secs = effective_timeout_secs(input.timeout_secs);
+
+        // LLM autopilot: when the agent's approval_policy.default is `llm`, the
+        // judge answers questions on the human's behalf (the question still lands
+        // in the inbox, answered_by "llm", for auditability). Resolved once; the
+        // flat path uses it. Any failure falls through to human escalation.
+        let runtime_config = orchestrator_core::agent_runtime_config::load_agent_runtime_config_or_default(
+            std::path::Path::new(&project_root),
+        );
+        let autopilot = resolve_llm_autopilot(runtime_config.agent_profile(&agent_id));
 
         // Structured path: when `questions[]` is supplied, create the
         // interaction via the shared structured constructor (tool_name = None,
@@ -582,6 +883,42 @@ impl AoMcpServer {
             Err(err) => return structured_err(TOOL, err.to_string()),
         };
         emit_interaction_event("interaction_created", &project_root, &created);
+
+        // LLM autopilot: answer the question with a model instead of escalating.
+        // The answer is recorded on the inbox record (answered_by "llm") so it
+        // stays auditable. On any failure we fall through to normal escalation.
+        if let Some((judge_tool, judge_model, instructions)) = &autopilot {
+            if let Some(answer) = answer_question_with_llm(
+                &project_root,
+                judge_tool,
+                judge_model,
+                &question,
+                &options,
+                instructions.as_deref(),
+            )
+            .await
+            {
+                match animus_runtime_shared::answer_interaction(&project_root, &created.id, &answer, None, Some("llm"))
+                {
+                    Ok(record) => {
+                        emit_interaction_event("interaction_answered", &project_root, &record);
+                        return structured_ok(
+                            TOOL,
+                            json!({
+                                "id": record.id,
+                                "answer": record.answer,
+                                "answered_by": record.answered_by,
+                                "answer_message": record.answer_message,
+                                "source": "llm",
+                            }),
+                        );
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "ask LLM autopilot: failed to record answer; escalating to a human");
+                    }
+                }
+            }
+        }
 
         if wait_mode == InteractionWaitMode::Suspend {
             return suspend_pending_response(TOOL, &project_root, &created, false).await;
@@ -704,9 +1041,8 @@ impl AoMcpServer {
         let runtime_config = orchestrator_core::agent_runtime_config::load_agent_runtime_config_or_default(
             std::path::Path::new(&project_root),
         );
-        if let Some(policy) =
-            runtime_config.agent_profile(&agent_id).and_then(|profile| profile.approval_policy.as_ref())
-        {
+        let profile = runtime_config.agent_profile(&agent_id);
+        if let Some(policy) = profile.and_then(|profile| profile.approval_policy.as_ref()) {
             let subject = tool_name.as_deref().unwrap_or(&action);
             match policy.evaluate(subject) {
                 ApprovalPolicyDecision::Allow => {
@@ -723,6 +1059,57 @@ impl AoMcpServer {
                         json!({ "decision": "deny", "source": "policy", "message": message }),
                         sdk_deny_fields(message),
                     )));
+                }
+                // LLM auto-approve mode: judge the call with a model. A missing
+                // model/tool or any evaluator failure falls through to the
+                // manual human escalation below (fail safe).
+                ApprovalPolicyDecision::Evaluate => {
+                    let judge_tool = profile.and_then(|profile| profile.tool.clone());
+                    let judge_model =
+                        policy.evaluator_model.clone().or_else(|| profile.and_then(|profile| profile.model.clone()));
+                    let judge_instructions = policy.evaluator_instructions.clone();
+                    match (judge_tool, judge_model) {
+                        (Some(judge_tool), Some(judge_model)) => {
+                            let verdict = evaluate_approval_with_llm(
+                                &project_root,
+                                &judge_tool,
+                                &judge_model,
+                                &action,
+                                tool_name.as_deref(),
+                                original_input.as_ref(),
+                                judge_instructions.as_deref(),
+                            )
+                            .await;
+                            match verdict {
+                                Some((true, reason)) => {
+                                    return Ok(CallToolResult::structured(merge_sdk_fields(
+                                        TOOL,
+                                        json!({ "decision": "allow", "source": "llm", "message": reason }),
+                                        sdk_allow_fields(original_input.unwrap_or_else(|| json!({})), None),
+                                    )));
+                                }
+                                Some((false, reason)) => {
+                                    return Ok(CallToolResult::structured(merge_sdk_fields(
+                                        TOOL,
+                                        json!({ "decision": "deny", "source": "llm", "message": reason }),
+                                        sdk_deny_fields(&reason),
+                                    )));
+                                }
+                                None => {
+                                    tracing::warn!(
+                                        agent = agent_id,
+                                        "approval llm mode: evaluator returned no verdict; escalating to a human"
+                                    );
+                                }
+                            }
+                        }
+                        _ => {
+                            tracing::warn!(
+                                agent = agent_id,
+                                "approval llm mode: no evaluator_model and no agent model/tool; escalating to a human"
+                            );
+                        }
+                    }
                 }
                 ApprovalPolicyDecision::Ask => {}
             }
@@ -2416,5 +2803,92 @@ phases:
             assert!(feedback.contains("Introduction, Conclusion"));
             assert!(feedback.contains("keep it short"));
         });
+    }
+}
+
+#[cfg(test)]
+mod approval_judge_tests {
+    use super::{build_judge_system_prompt, build_judge_user_prompt, parse_judge_verdict};
+    use orchestrator_config::agent_runtime_config::{ApprovalPolicy, ApprovalPolicyDecision, ApprovalPolicyDefault};
+    use serde_json::json;
+
+    #[test]
+    fn parses_plain_json_verdict() {
+        let (allow, reason) =
+            parse_judge_verdict(r#"{"decision":"allow","reason":"routine test run"}"#).expect("verdict");
+        assert!(allow);
+        assert_eq!(reason, "routine test run");
+    }
+
+    #[test]
+    fn parses_deny_with_prose_and_fences() {
+        let text =
+            "Let me think about this.\n```json\n{\"decision\": \"deny\", \"reason\": \"drops the prod database\"}\n```";
+        let (allow, reason) = parse_judge_verdict(text).expect("verdict");
+        assert!(!allow);
+        assert_eq!(reason, "drops the prod database");
+    }
+
+    #[test]
+    fn takes_the_last_decision_object_when_reasoning_precedes_it() {
+        // A leading object without a decision must be skipped in favour of the
+        // trailing verdict object.
+        let text = "{\"thought\":\"weighing risk\"} ... final: {\"decision\":\"deny\",\"reason\":\"force push\"}";
+        let (allow, reason) = parse_judge_verdict(text).expect("verdict");
+        assert!(!allow);
+        assert_eq!(reason, "force push");
+    }
+
+    #[test]
+    fn accepts_decision_synonyms_and_defaults_reason() {
+        let (allow, reason) = parse_judge_verdict(r#"{"decision":"approve"}"#).expect("verdict");
+        assert!(allow);
+        assert_eq!(reason, "no reason given");
+    }
+
+    #[test]
+    fn rejects_unparseable_or_missing_decision() {
+        assert!(parse_judge_verdict("I cannot decide.").is_none());
+        assert!(parse_judge_verdict(r#"{"reason":"no decision key"}"#).is_none());
+        assert!(parse_judge_verdict(r#"{"decision":"maybe"}"#).is_none());
+        assert!(parse_judge_verdict("").is_none());
+    }
+
+    #[test]
+    fn llm_default_evaluates_after_allow_deny_lists() {
+        let policy = ApprovalPolicy {
+            auto_allow: vec!["cargo *".to_string()],
+            auto_deny: vec!["git.push*".to_string()],
+            default: ApprovalPolicyDefault::Llm,
+            evaluator_model: Some("anthropic/claude-haiku-4-5".to_string()),
+            evaluator_instructions: None,
+        };
+        // List matches still short-circuit without the LLM.
+        assert_eq!(policy.evaluate("cargo test"), ApprovalPolicyDecision::Allow);
+        assert_eq!(policy.evaluate("git.push --force"), ApprovalPolicyDecision::Deny);
+        // Everything else defers to the evaluator.
+        assert_eq!(policy.evaluate("Bash"), ApprovalPolicyDecision::Evaluate);
+    }
+
+    #[test]
+    fn parses_answer_text_from_json() {
+        assert_eq!(super::parse_answer_text(r#"{"answer":"copy table"}"#).as_deref(), Some("copy table"));
+        assert_eq!(
+            super::parse_answer_text("Sure.\n```json\n{\"answer\": \"in place\"}\n```").as_deref(),
+            Some("in place")
+        );
+        assert!(super::parse_answer_text("I'm not sure").is_none());
+        assert!(super::parse_answer_text(r#"{"answer":""}"#).is_none());
+    }
+
+    #[test]
+    fn judge_prompts_carry_action_tool_and_operator_policy() {
+        let system = build_judge_system_prompt(Some("never touch billing"));
+        assert!(system.contains("approval gate"));
+        assert!(system.contains("never touch billing"));
+        let user = build_judge_user_prompt("drop prod", Some("Bash"), Some(&json!({ "command": "dropdb prod" })));
+        assert!(user.contains("drop prod"));
+        assert!(user.contains("Bash"));
+        assert!(user.contains("dropdb prod"));
     }
 }

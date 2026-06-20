@@ -53,11 +53,8 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
     // v0.6: if a `config_source` plugin is installed, it produces the base config;
     // otherwise fall back to the in-tree YAML acquisition (the default, unchanged).
     let plugin_base = super::config_source_client::resolve_plugin_base(project_root)?;
-    let yaml_sources = if plugin_base.is_some() {
-        Vec::new()
-    } else {
-        super::collect_project_yaml_workflow_sources(project_root)?
-    };
+    let yaml_sources =
+        if plugin_base.is_some() { Vec::new() } else { super::collect_project_yaml_workflow_sources(project_root)? };
     let registry = resolve_pack_registry(project_root)?;
     let path = workflow_config_path(project_root);
     if let Some(legacy_path) = legacy_workflow_config_paths(project_root).iter().find(|candidate| candidate.exists()) {
@@ -82,8 +79,7 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
         // mutating the YAML source files, so a content+mtime hash alone
         // could otherwise serve stale compiled output.
         // Plugin-sourced config bypasses the YAML disk cache (it's keyed on YAML bytes/mtime).
-        let cache_disabled_for_run =
-            plugin_base.is_some() || sources_have_external_inputs(&yaml_sources, &registry);
+        let cache_disabled_for_run = plugin_base.is_some() || sources_have_external_inputs(&yaml_sources, &registry);
         let cache_input = build_workflow_cache_input(project_root, &yaml_sources, &registry);
         let cache_hash = cache_input.hash();
         // Validate pack configuration *before* returning a cache hit so
