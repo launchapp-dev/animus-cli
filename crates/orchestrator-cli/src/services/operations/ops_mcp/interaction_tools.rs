@@ -895,6 +895,66 @@ async fn answer_structured_with_llm(
     answers
 }
 
+// Best-effort audit: record an LLM auto-approve verdict in the unified inbox as
+// an answered approval (answered_by "llm") so judge decisions appear in the
+// audit trail alongside human ones. Failure to record never blocks the verdict.
+#[allow(clippy::too_many_arguments)]
+async fn record_llm_approval_decision(
+    project_root: &str,
+    agent_id: &str,
+    action: &str,
+    tool_name: Option<&str>,
+    original_input: Option<Value>,
+    timeout_secs: u64,
+    workflow_id: Option<&str>,
+    task_id: Option<&str>,
+    allow: bool,
+    reason: &str,
+) {
+    let created = match animus_runtime_shared::create_approval_interaction(
+        project_root,
+        agent_id,
+        action,
+        tool_name,
+        original_input,
+        None,
+        Some(timeout_secs),
+        workflow_id,
+        task_id,
+    ) {
+        Ok(record) => record,
+        Err(err) => {
+            tracing::warn!(error = %err, "approval llm mode: failed to record decision in the inbox (verdict still applied)");
+            return;
+        }
+    };
+    emit_interaction_event("interaction_created", project_root, &created);
+    let outcome = answer_interaction_op_with_resume(
+        project_root,
+        &created.id,
+        AnswerOptions {
+            text: None,
+            allow,
+            deny: !allow,
+            message: Some(reason.to_string()),
+            answered_by: Some("llm".to_string()),
+            selects: Vec::new(),
+            answers: None,
+            response: None,
+            remember: false,
+            updated_input: None,
+            updated_permissions: None,
+        },
+    )
+    .await;
+    match outcome {
+        Ok((record, _resume)) => emit_interaction_event("interaction_answered", project_root, &record),
+        Err(err) => {
+            tracing::warn!(error = %err, "approval llm mode: failed to mark recorded decision answered (verdict still applied)")
+        }
+    }
+}
+
 #[tool_router(router = interaction_tool_router, vis = "pub(super)")]
 impl AoMcpServer {
     #[tool(
@@ -1244,6 +1304,19 @@ impl AoMcpServer {
                             .await;
                             match verdict {
                                 Some((true, reason)) => {
+                                    record_llm_approval_decision(
+                                        &project_root,
+                                        &agent_id,
+                                        &action,
+                                        tool_name.as_deref(),
+                                        original_input.clone(),
+                                        timeout_secs,
+                                        workflow_id.as_deref(),
+                                        input.task_id.as_deref(),
+                                        true,
+                                        &reason,
+                                    )
+                                    .await;
                                     return Ok(CallToolResult::structured(merge_sdk_fields(
                                         TOOL,
                                         json!({ "decision": "allow", "source": "llm", "message": reason }),
@@ -1251,6 +1324,19 @@ impl AoMcpServer {
                                     )));
                                 }
                                 Some((false, reason)) => {
+                                    record_llm_approval_decision(
+                                        &project_root,
+                                        &agent_id,
+                                        &action,
+                                        tool_name.as_deref(),
+                                        original_input.clone(),
+                                        timeout_secs,
+                                        workflow_id.as_deref(),
+                                        input.task_id.as_deref(),
+                                        false,
+                                        &reason,
+                                    )
+                                    .await;
                                     return Ok(CallToolResult::structured(merge_sdk_fields(
                                         TOOL,
                                         json!({ "decision": "deny", "source": "llm", "message": reason }),

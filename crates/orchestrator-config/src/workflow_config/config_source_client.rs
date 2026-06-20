@@ -67,9 +67,12 @@ async fn load_from_plugin(plugin: DiscoveredPlugin, project_root: PathBuf) -> Re
         .with_context(|| format!("spawning config_source plugin {}", plugin.name))?;
     host.handshake().await.with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
 
+    // Compute the repo-scope id from the project root so config_source plugins
+    // that select config rows / repo-scoped secrets by scope (e.g. postgres)
+    // get a real scope, not null.
     let params = serde_json::json!({
         "project_root": project_root,
-        "repo_scope": serde_json::Value::Null,
+        "repo_scope": protocol::repository_scope_for_path(&project_root),
     });
     let value = host
         .request_typed_with_timeout("config/load", Some(params), CONFIG_LOAD_TIMEOUT)
@@ -78,12 +81,17 @@ async fn load_from_plugin(plugin: DiscoveredPlugin, project_root: PathBuf) -> Re
 
     let resp: animus_config_protocol::ConfigLoadResponse =
         serde_json::from_value(value).context("decoding ConfigLoadResponse")?;
-    if resp.config.schema != animus_config_protocol::CONFIG_MODEL_SCHEMA_ID {
+    // Reject incompatible models: wrong schema OR a newer version this kernel
+    // can't safely interpret (`ConfigModel::is_compatible` = schema match AND
+    // version <= CONFIG_MODEL_VERSION).
+    if !resp.config.is_compatible() {
         return Err(anyhow!(
-            "config_source plugin {} returned unexpected config schema '{}' (expected '{}')",
+            "config_source plugin {} returned an incompatible config model (schema '{}', version {}); this kernel supports schema '{}' up to version {}",
             plugin.name,
             resp.config.schema,
-            animus_config_protocol::CONFIG_MODEL_SCHEMA_ID
+            resp.config.version,
+            animus_config_protocol::CONFIG_MODEL_SCHEMA_ID,
+            animus_config_protocol::CONFIG_MODEL_VERSION,
         ));
     }
     let config: WorkflowConfig = serde_json::from_value(resp.config.config)
