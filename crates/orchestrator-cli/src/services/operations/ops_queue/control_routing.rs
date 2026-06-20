@@ -43,7 +43,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use orchestrator_core::{workflow_ref_for_task, FileServiceHub, ServiceHub};
 use orchestrator_daemon_runtime::control::QueueRouting;
-use protocol::{SubjectDispatch, SubjectDispatchExt};
+use protocol::SubjectDispatch;
 
 use animus_queue_protocol as queue_proto;
 
@@ -249,8 +249,17 @@ impl QueueRouting for QueueRoutingImpl {
                 }
             }
         };
-        let mut dispatch = SubjectDispatch::for_task_with_metadata(
-            resolved_id,
+        // Preserve the subject KIND in the STORED dispatch, not just at
+        // resolution time. The v0.5.21 fix derived the kind from the qualified
+        // id to RESOLVE the subject at enqueue, then dropped it by storing a
+        // `for_task` dispatch — so the daemon re-leased the entry as a task and
+        // failed with "failed to resolve subject context" (it called `task/get`
+        // for a `song:` subject). `resolved_id` is the qualified id
+        // (`build_context_from_plugin` sets `subject_id` to the SubjectRef's
+        // full id), so plugin-backed custom kinds lease + resolve via
+        // `<kind>/get`; task/requirement keep their canonical kinds.
+        let mut dispatch = SubjectDispatch::for_subject_with_metadata(
+            subject_ref_from_qualified_id(&resolved_id),
             workflow_ref,
             "manual-queue-enqueue-via-control",
             Utc::now(),
@@ -440,6 +449,7 @@ impl QueueRouting for QueueRoutingImpl {
 mod tests {
     use super::*;
     use animus_queue_protocol::QueueStats as PluginStats;
+    use protocol::SubjectDispatchExt;
 
     #[test]
     fn plugin_stats_map_into_wire_buckets() {
@@ -488,5 +498,33 @@ mod tests {
         );
         // Bare id (no prefix) defaults to task for backward compatibility.
         assert_eq!(subject_ref_from_qualified_id("TASK-9").kind(), protocol::orchestrator::SUBJECT_KIND_TASK);
+    }
+
+    #[test]
+    fn enqueue_dispatch_preserves_custom_subject_kind() {
+        // Regression: the enqueue must STORE the dispatch with the subject's
+        // real kind, not coerce it to `task`. A `song:` subject leased from the
+        // queue must re-resolve via `song/get`; before the fix the stored
+        // dispatch was always `for_task`, so the daemon re-resolved it via
+        // `task/get` and failed with "failed to resolve subject context".
+        let song = SubjectDispatch::for_subject_with_metadata(
+            subject_ref_from_qualified_id("song:SONG-001"),
+            "generate-song".to_string(),
+            "manual-queue-enqueue-via-control",
+            Utc::now(),
+        );
+        assert_eq!(song.to_workflow_run_input().subject().kind(), "song");
+
+        // Canonical task subjects still round-trip as tasks.
+        let task = SubjectDispatch::for_subject_with_metadata(
+            subject_ref_from_qualified_id("task:TASK-1"),
+            "wf".to_string(),
+            "src",
+            Utc::now(),
+        );
+        assert_eq!(
+            task.to_workflow_run_input().subject().kind(),
+            protocol::orchestrator::SUBJECT_KIND_TASK
+        );
     }
 }

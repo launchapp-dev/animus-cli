@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.22] - 2026-06-19
+
+**Queue-enqueue stores the derived subject kind (completes the 0.5.21 fix).**
+0.5.21 derived the subject kind from the `<kind>:<native>` id to *resolve* the
+subject at enqueue, but then stored the queue dispatch with
+`SubjectDispatch::for_task_with_metadata(...)` — coercing it back to `task`. The
+daemon leased that dispatch, re-resolved it via `task/get`, and the owning
+backend rejected it: the workflow died in ~150 ms at the first phase with
+`failed to resolve subject context for '<kind>:<id>'`. This broke every
+queue-driven workflow for non-task subjects (e.g. a Postgres `song:SONG-001`),
+across the control surface and the HTTP/GraphQL transports that route through it.
+
+### Fixed
+
+- **Control-routed `queue/enqueue` now stores the dispatch with the subject's
+  real kind** via `SubjectDispatch::for_subject_with_metadata(
+  subject_ref_from_qualified_id(&resolved_id), ...)`. Plugin-backed custom kinds
+  lease + resolve via `<kind>/get`; `task`/`requirement` keep their canonical
+  kinds; bare ids still default to `task`. Regression test:
+  `enqueue_dispatch_preserves_custom_subject_kind`.
+
 ## [0.5.21] - 2026-06-17
 
 **Queue-enqueue honors custom subject kinds.** Control-routed `queue/enqueue`
