@@ -5126,6 +5126,7 @@ async fn handle_plugin_doctor(args: PluginDoctorArgs, project_root: &str, json: 
                 }
                 (RequiredRole::WorkflowRunner, s) if s.is_workflow_runner() => Some(summary.plugin_kind.clone()),
                 (RequiredRole::Queue, s) if s.is_queue() => Some(summary.plugin_kind.clone()),
+                (RequiredRole::ConfigSource, s) if s.is_config_source() => Some(summary.plugin_kind.clone()),
                 (RequiredRole::TransportEnabled, _) => None,
                 _ => None,
             };

@@ -33,6 +33,11 @@ pub const DEFAULT_WORKFLOW_RUNNER_PLUGINS: &[(&str, &str)] =
 /// v0.5 queue plugin. See [`DEFAULT_WORKFLOW_RUNNER_PLUGINS`].
 pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.3.0")];
 
+/// v0.6 config-source plugin (the default YAML source, once config-sourcing is a
+/// plugin role). Tag is a placeholder until `animus-config-yaml` is published.
+pub const DEFAULT_CONFIG_SOURCE_PLUGINS: &[(&str, &str)] =
+    &[("launchapp-dev/animus-config-yaml", "v0.1.0")];
+
 /// v0.5 durable-store plugin (DBOS Option A). The `animus-step-durable-dbos`
 /// repository has not shipped a tagged release yet; until it does this list
 /// stays empty so `animus plugin install-defaults --include-durable-stores`
