@@ -35,7 +35,10 @@ pub fn ensure_workflow_config_file(project_root: &Path) -> Result<()> {
 pub fn ensure_workflow_config_compiled(project_root: &Path) -> Result<()> {
     let yaml_sources = super::collect_project_yaml_workflow_sources(project_root)?;
     let registry = resolve_pack_registry(project_root)?;
-    if yaml_sources.is_empty() && !registry.has_pack_overlays() {
+    if yaml_sources.is_empty()
+        && !registry.has_pack_overlays()
+        && !super::config_source_client::config_source_installed(project_root)
+    {
         return Ok(());
     }
 
@@ -47,7 +50,14 @@ pub fn load_workflow_config(project_root: &Path) -> Result<WorkflowConfig> {
 }
 
 pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedWorkflowConfig> {
-    let yaml_sources = super::collect_project_yaml_workflow_sources(project_root)?;
+    // v0.6: if a `config_source` plugin is installed, it produces the base config;
+    // otherwise fall back to the in-tree YAML acquisition (the default, unchanged).
+    let plugin_base = super::config_source_client::resolve_plugin_base(project_root)?;
+    let yaml_sources = if plugin_base.is_some() {
+        Vec::new()
+    } else {
+        super::collect_project_yaml_workflow_sources(project_root)?
+    };
     let registry = resolve_pack_registry(project_root)?;
     let path = workflow_config_path(project_root);
     if let Some(legacy_path) = legacy_workflow_config_paths(project_root).iter().find(|candidate| candidate.exists()) {
@@ -65,13 +75,15 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
         ));
     }
 
-    if !yaml_sources.is_empty() || registry.has_pack_overlays() {
+    if !yaml_sources.is_empty() || registry.has_pack_overlays() || plugin_base.is_some() {
         // v0.5.9: bypass the disk cache when sources reference external
         // inputs not captured in the hash (env vars, system_prompt_file:
         // references, declared secrets). Those inputs change without
         // mutating the YAML source files, so a content+mtime hash alone
         // could otherwise serve stale compiled output.
-        let cache_disabled_for_run = sources_have_external_inputs(&yaml_sources, &registry);
+        // Plugin-sourced config bypasses the YAML disk cache (it's keyed on YAML bytes/mtime).
+        let cache_disabled_for_run =
+            plugin_base.is_some() || sources_have_external_inputs(&yaml_sources, &registry);
         let cache_input = build_workflow_cache_input(project_root, &yaml_sources, &registry);
         let cache_hash = cache_input.hash();
         // Validate pack configuration *before* returning a cache hit so
@@ -112,11 +124,22 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
         for warning in super::validation::missing_skill_reference_warnings_for_sources(project_root, &yaml_sources) {
             eprintln!("warning: {warning}");
         }
-        if let Some(yaml_config) = super::compile_yaml_sources_with_base(&config, &yaml_sources)? {
+        // v0.6: the base overlay comes from the config_source plugin when one is
+        // installed; otherwise from compiling the in-tree YAML sources.
+        let base_overlay = if let Some((base, _version)) = &plugin_base {
+            Some(base.clone())
+        } else {
+            super::compile_yaml_sources_with_base(&config, &yaml_sources)?
+        };
+        if let Some(yaml_config) = base_overlay {
             config = merge_yaml_into_config(config, yaml_config);
-            let single_file = project_root.join(".animus").join("workflows.yaml");
-            let workflows_dir = yaml_workflows_dir(project_root);
-            path = if single_file.exists() { single_file } else { workflows_dir };
+            if plugin_base.is_some() {
+                path = project_root.to_path_buf();
+            } else {
+                let single_file = project_root.join(".animus").join("workflows.yaml");
+                let workflows_dir = yaml_workflows_dir(project_root);
+                path = if single_file.exists() { single_file } else { workflows_dir };
+            }
         }
 
         for entry in registry.entries_for_source(PackRegistrySource::ProjectOverride) {
@@ -131,7 +154,10 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
 
         validate_workflow_config_with_project_root(&config, Some(project_root))?;
 
-        let source = if yaml_sources.is_empty() && !registry.has_external_packs() {
+        let source = if plugin_base.is_some() {
+            // Plugin-sourced (Postgres/API/...) — treated as a non-builtin source.
+            WorkflowConfigSource::Yaml
+        } else if yaml_sources.is_empty() && !registry.has_external_packs() {
             WorkflowConfigSource::Builtin
         } else {
             WorkflowConfigSource::Yaml

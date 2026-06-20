@@ -8,6 +8,10 @@ anyhow = "1.0"
 croner = { workspace = true }
 dirs = "6.0"
 protocol = { workspace = true }
+# v0.6: resolve an installed `config_source` plugin (else fall back to in-tree YAML).
+orchestrator-plugin-host = { workspace = true }
+animus-config-protocol = { workspace = true }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -2845,9 +2845,11 @@ dependencies = [
 name = "orchestrator-config"
 version = "0.1.0"
 dependencies = [
+ "animus-config-protocol",
  "anyhow",
  "croner",
  "dirs 6.0.0",
+ "orchestrator-plugin-host",
  "protocol",
  "semver",
  "serde",
@@ -2855,6 +2857,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tempfile",
+ "tokio",
  "toml 1.1.2+spec-1.1.0",
  "uuid",
 ]
