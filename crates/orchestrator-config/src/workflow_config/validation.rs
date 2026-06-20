@@ -1229,7 +1229,7 @@ pub fn unenforced_yaml_field_warnings(yaml: &str, source_label: &str) -> Vec<Une
 /// fields. Read errors are ignored — the compile pipeline owns IO
 /// diagnostics.
 pub fn unenforced_project_yaml_warnings(project_root: &Path) -> Vec<UnenforcedFieldWarning> {
-    let Ok(sources) = super::yaml_compiler::collect_project_yaml_workflow_sources(project_root) else {
+    let Ok(sources) = animus_config_protocol::parse::collect_project_yaml_workflow_sources(project_root) else {
         return Vec::new();
     };
     sources
@@ -1350,7 +1350,7 @@ pub fn missing_skill_reference_warnings_for_sources(
             // On failure (unset required var — the compiler owns that
             // diagnostic) fall back to the raw content; any names that
             // still carry a `${` placeholder are skipped below.
-            let interpolated = super::env_interp::interpolate_env(content, &source_label).ok();
+            let interpolated = animus_config_protocol::env_interp::interpolate_env(content, &source_label).ok();
             missing_skill_yaml_warnings(interpolated.as_deref().unwrap_or(content), &source_label, &skill_resolves)
         })
         .collect()
@@ -1360,7 +1360,7 @@ pub fn missing_skill_reference_warnings_for_sources(
 /// declarations that do not resolve. Read errors are ignored — the
 /// compile pipeline owns IO diagnostics.
 pub fn missing_project_skill_reference_warnings(project_root: &Path) -> Vec<SkillReferenceWarning> {
-    let Ok(yaml_sources) = super::yaml_compiler::collect_project_yaml_workflow_sources(project_root) else {
+    let Ok(yaml_sources) = animus_config_protocol::parse::collect_project_yaml_workflow_sources(project_root) else {
         return Vec::new();
     };
     missing_skill_reference_warnings_for_sources(project_root, &yaml_sources)

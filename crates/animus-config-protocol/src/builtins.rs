@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use super::types::*;
+use crate::workflow_types::*;
 
-pub(crate) fn builtin_workflow_config_base() -> WorkflowConfig {
+pub fn builtin_workflow_config_base() -> WorkflowConfig {
     WorkflowConfig {
         schema: WORKFLOW_CONFIG_SCHEMA_ID.to_string(),
         version: WORKFLOW_CONFIG_VERSION,

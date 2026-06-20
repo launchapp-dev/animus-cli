@@ -153,7 +153,6 @@ pub use workflow::{
     is_terminal_workflow_run_status, select_workflow_prune_candidates, WorkflowRunDeletion, WorkflowRunPruneCandidate,
     WorkflowRunPruneFilter, WorkflowRunPruneReport,
 };
-pub use workflow_config::yaml_diagnostic::{YamlDiagnostic, YamlExcerpt};
 pub use workflow_config::{
     builtin_workflow_config, compile_yaml_workflow_files, ensure_workflow_config_compiled, ensure_workflow_config_file,
     expand_variables, expand_workflow_phases, generated_workflow_phase_is_defined, legacy_workflow_config_paths,
@@ -172,6 +171,7 @@ pub use workflow_config::{
     WorkflowPhaseEntry, WorkflowSchedule, WorkflowTrigger, WorkflowVariable, WORKFLOW_CONFIG_FILE_NAME,
     WORKFLOW_CONFIG_SCHEMA_ID, WORKFLOW_CONFIG_VERSION, YAML_WORKFLOWS_DIR,
 };
+pub use workflow_config::{YamlDiagnostic, YamlExcerpt};
 pub use workflow_events::{dispatch_workflow_event, workflow_task_id, WorkflowEvent, WorkflowEventOutcome};
 pub use workflow_runner_registry::{
     active_workflow_runner_ids, register_workflow_runner_pid, unregister_workflow_runner_pid,

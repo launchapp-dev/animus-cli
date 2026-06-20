@@ -60,11 +60,64 @@
 //!   still runs the authoritative validator; this is for better error locality
 //!   at the source.
 
-#![warn(missing_docs)]
+// NOTE: `missing_docs` is intentionally NOT warned crate-wide. The wire types
+// below are fully documented, but the canonical config-model TYPES and YAML
+// PARSER that now live in this crate (moved from the kernel) carry their docs
+// at the item level where present and are otherwise self-describing; warning on
+// every nested config field would be noise.
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+// =====================================================================
+// Canonical config model TYPES + standardized YAML PARSER
+//
+// `animus-config-protocol` is the canonical home for BOTH the `WorkflowConfig`
+// types and the standardized YAML parser. The kernel (`orchestrator-config`)
+// and the `animus-config-yaml` plugin are both implementations that depend on
+// this crate. The kernel re-exports these so its ~hundreds of internal
+// `crate::workflow_config::types::*` reference sites keep compiling; the plugin
+// depends ONLY on this crate (plus the plugin protocol/runtime).
+// =====================================================================
+
+pub mod agent_types;
+pub mod builtins;
+pub mod env_interp;
+pub mod overlay;
+pub mod parse;
+pub mod workflow_types;
+pub mod yaml_diagnostic;
+pub mod yaml_parser;
+pub mod yaml_types;
+
+/// `crate::types::*` compatibility alias for the two `protocol::orchestrator`
+/// enums the moved config types reference (`PhaseEvidenceKind`,
+/// `WorkflowDecisionRisk`). Mirrors the kernel's old `orchestrator_config::types`
+/// module so moved code paths keep resolving `crate::types::*`.
+pub mod types {
+    pub use protocol::orchestrator::{PhaseEvidenceKind, WorkflowDecisionRisk};
+}
+
+/// `crate::workflow::*` compatibility alias carrying the checkpoint-retention
+/// default the moved `WorkflowConfig` types reference. Mirrors the kernel's
+/// `orchestrator_config::workflow` module.
+pub mod workflow {
+    /// Default number of checkpoints retained per phase. Mirrors
+    /// `orchestrator_config::DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE`.
+    pub const DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE: usize = 3;
+}
+
+/// Compatibility alias so moved code that referenced
+/// `crate::workflow_config::WorktreeConfig` keeps resolving inside this crate.
+pub mod workflow_config {
+    pub use crate::workflow_types::*;
+}
+
+/// Re-export of `crate::PhaseExecutionDefinition` (the kernel referenced this
+/// type as `crate::PhaseExecutionDefinition` via its top-level `pub use
+/// agent_runtime_config::*`).
+pub use agent_types::PhaseExecutionDefinition;
 
 // =====================================================================
 // Plugin kind

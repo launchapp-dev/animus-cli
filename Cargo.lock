@@ -71,9 +71,13 @@ dependencies = [
 name = "animus-config-protocol"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "protocol",
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "serde_yaml",
+ "sha2",
  "tempfile",
 ]
 

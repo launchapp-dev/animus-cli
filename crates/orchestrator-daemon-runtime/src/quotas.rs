@@ -259,47 +259,6 @@ pub fn install_keychain_secret_provider_for(project_root: &std::path::Path) -> b
     ))
 }
 
-/// Adapter that bridges a [`orchestrator_core::SecretStore`] behind the
-/// workflow-YAML `WorkflowSecretResolver` hook. Lets `${VAR}`
-/// interpolation fall back to the keychain when an env var is not set
-/// in the daemon's process environment.
-pub struct KeychainWorkflowResolver<S: orchestrator_core::SecretStore + 'static> {
-    store: S,
-}
-
-impl<S: orchestrator_core::SecretStore + 'static> KeychainWorkflowResolver<S> {
-    pub fn new(store: S) -> Self {
-        Self { store }
-    }
-}
-
-impl<S: orchestrator_core::SecretStore + 'static> orchestrator_config::WorkflowSecretResolver
-    for KeychainWorkflowResolver<S>
-{
-    fn resolve(&self, key: &str) -> Option<String> {
-        // Index is authoritative — a key that's missing from the
-        // per-scope index counts as not-stored even if the OS
-        // keychain still has a stale entry. (codex round-6 P2.)
-        let indexed: std::collections::BTreeSet<String> = self.store.list_keys().ok()?.into_iter().collect();
-        if !indexed.contains(key) {
-            return None;
-        }
-        self.store.get(key).ok().flatten()
-    }
-}
-
-/// Install the keychain-backed `WorkflowSecretResolver` so workflow YAML
-/// `${VAR}` falls back to the keychain when the env var is unset.
-/// First-installer-wins.
-pub fn install_keychain_workflow_resolver_for(project_root: &std::path::Path) -> bool {
-    let Some(scoped_root) = protocol::repository_scope::scoped_state_root(project_root) else {
-        return false;
-    };
-    let scope = scope_label_for_scoped_root(project_root, &scoped_root);
-    let store = orchestrator_core::build_secret_store(&scope, scoped_root);
-    orchestrator_config::install_workflow_secret_resolver(std::sync::Arc::new(KeychainWorkflowResolver::new(store)))
-}
-
 /// Prefer the adopted scope directory name when it's present and UTF-8;
 /// fall back to a freshly-derived `repo-scope`. Keeps the keychain
 /// service name aligned with the index file even when

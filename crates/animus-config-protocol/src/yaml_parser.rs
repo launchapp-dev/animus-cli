@@ -4,18 +4,18 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 
-use crate::agent_runtime_config::{
+use crate::agent_types::PhaseExecutionDefinition;
+use crate::agent_types::{
     AgentProfileOverlay, CommandCwdMode, EvalCheck, EvalsConfig, PhaseCommandDefinition, PhaseExecutionMode,
     PhaseManualDefinition,
 };
-use crate::PhaseExecutionDefinition;
 
-use super::builtins::builtin_workflow_config;
-use super::types::*;
-use super::yaml_compiler::merge_yaml_into_config;
-use super::yaml_diagnostic::wrap_serde_yaml_error;
-use super::yaml_scaffold::title_case_phase_id;
-use super::yaml_types::*;
+use crate::builtins::builtin_workflow_config;
+use crate::parse::merge_yaml_into_config;
+use crate::workflow_types::*;
+use crate::yaml_diagnostic::wrap_serde_yaml_error;
+use crate::yaml_types::title_case_phase_id;
+use crate::yaml_types::*;
 
 const SYSTEM_PROMPT_FILE_MAX_BYTES: u64 = 1024 * 1024;
 
@@ -30,7 +30,7 @@ const SYSTEM_PROMPT_FILE_MAX_BYTES: u64 = 1024 * 1024;
 /// When `models` is empty, existing `model`/`fallback_models` are left intact.
 pub fn resolve_agent_model_references(
     profile: &mut AgentProfileOverlay,
-    registry: &BTreeMap<String, super::yaml_types::ModelRegistryEntry>,
+    registry: &BTreeMap<String, crate::yaml_types::ModelRegistryEntry>,
 ) {
     let models = profile.models.as_deref().unwrap_or_default();
     if models.is_empty() {
@@ -255,7 +255,7 @@ pub(super) fn workflow_phase_entry_to_yaml(entry: &WorkflowPhaseEntry) -> YamlPh
     }
 }
 
-pub(super) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> YamlWorkflowDefinition {
+pub(crate) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> YamlWorkflowDefinition {
     YamlWorkflowDefinition {
         id: definition.id.clone(),
         name: Some(definition.name.clone()),
@@ -267,7 +267,7 @@ pub(super) fn workflow_definition_to_yaml(definition: &WorkflowDefinition) -> Ya
     }
 }
 
-pub(super) fn phase_execution_definition_to_yaml(definition: &PhaseExecutionDefinition) -> YamlPhaseDefinition {
+pub(crate) fn phase_execution_definition_to_yaml(definition: &PhaseExecutionDefinition) -> YamlPhaseDefinition {
     YamlPhaseDefinition {
         mode: definition.mode.clone(),
         agent: definition.agent_id.clone(),
@@ -315,7 +315,7 @@ pub(super) fn phase_execution_definition_to_yaml(definition: &PhaseExecutionDefi
     }
 }
 
-pub(super) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkflowFile {
+pub(crate) fn workflow_config_to_yaml_file(config: &WorkflowConfig) -> YamlWorkflowFile {
     YamlWorkflowFile {
         default_workflow_ref: Some(config.default_workflow_ref.clone()),
         phase_catalog: if config.phase_catalog.is_empty() { None } else { Some(config.phase_catalog.clone()) },
@@ -503,7 +503,7 @@ fn find_field_line_in_agent(yaml_str: &str, agent_id: &str, field_name: &str) ->
     None
 }
 
-pub(crate) fn resolve_agent_system_prompt_files_confined_to_pack(
+pub fn resolve_agent_system_prompt_files_confined_to_pack(
     agent_profiles: &mut BTreeMap<String, AgentProfileOverlay>,
     yaml_str: &str,
     source_path: &Path,
@@ -742,10 +742,10 @@ const KNOWN_FIELD_KEYS: &[&str] = &[
 /// with a more specific code, an expected-shape list, and (when possible)
 /// a "did you mean" suggestion derived from Levenshtein distance.
 fn enrich_diagnostic(
-    mut diag: super::yaml_diagnostic::YamlDiagnostic,
+    mut diag: crate::yaml_diagnostic::YamlDiagnostic,
     yaml_str: &str,
-) -> super::yaml_diagnostic::YamlDiagnostic {
-    use super::yaml_diagnostic::closest_match;
+) -> crate::yaml_diagnostic::YamlDiagnostic {
+    use crate::yaml_diagnostic::closest_match;
     let msg = diag.message.clone();
     if let Some(field) = parse_unknown_field_name(&msg) {
         diag.code = "yaml.unknown_field".to_string();
@@ -858,11 +858,11 @@ fn parse_did_you_mean_from_message(msg: &str) -> Option<String> {
 }
 
 fn widen_excerpt_to_value(
-    mut diag: super::yaml_diagnostic::YamlDiagnostic,
+    mut diag: crate::yaml_diagnostic::YamlDiagnostic,
     yaml_str: &str,
     line: usize,
     col: usize,
-) -> super::yaml_diagnostic::YamlDiagnostic {
+) -> crate::yaml_diagnostic::YamlDiagnostic {
     let Some(focal_line) = yaml_str.lines().nth(line.saturating_sub(1)) else {
         return diag;
     };
@@ -881,9 +881,9 @@ fn widen_excerpt_to_value(
 /// newlines, but excerpt lines always show the raw `${VAR}` / `${secret.X}`
 /// references instead of resolved values.
 fn rebuild_excerpt_from_original(
-    mut diag: super::yaml_diagnostic::YamlDiagnostic,
+    mut diag: crate::yaml_diagnostic::YamlDiagnostic,
     original: &str,
-) -> super::yaml_diagnostic::YamlDiagnostic {
+) -> crate::yaml_diagnostic::YamlDiagnostic {
     diag.excerpt = None;
     let Some(line) = diag.line else {
         return diag;
@@ -1044,27 +1044,24 @@ pub fn parse_yaml_workflow_config(yaml_str: &str) -> Result<WorkflowConfig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent_runtime_config::AgentProfileOverlay;
+    use crate::agent_types::AgentProfileOverlay;
 
-    fn make_test_registry() -> BTreeMap<String, super::super::yaml_types::ModelRegistryEntry> {
+    fn make_test_registry() -> BTreeMap<String, crate::yaml_types::ModelRegistryEntry> {
         let mut registry = BTreeMap::new();
         registry.insert(
             "claude-opus".to_string(),
-            super::super::yaml_types::ModelRegistryEntry {
+            crate::yaml_types::ModelRegistryEntry {
                 model: "claude-sonnet-4-20250514".to_string(),
                 tool: Some("claude".to_string()),
             },
         );
         registry.insert(
             "gpt4o".to_string(),
-            super::super::yaml_types::ModelRegistryEntry {
-                model: "gpt-4o".to_string(),
-                tool: Some("oai-runner".to_string()),
-            },
+            crate::yaml_types::ModelRegistryEntry { model: "gpt-4o".to_string(), tool: Some("oai-runner".to_string()) },
         );
         registry.insert(
             "o4-mini".to_string(),
-            super::super::yaml_types::ModelRegistryEntry { model: "o4-mini".to_string(), tool: None },
+            crate::yaml_types::ModelRegistryEntry { model: "o4-mini".to_string(), tool: None },
         );
         registry
     }
@@ -1269,7 +1266,7 @@ phases:
         let policy = swe.approval_policy.clone().expect("approval policy");
         assert_eq!(policy.auto_allow, vec!["git.*".to_string(), "cargo *".to_string()]);
         assert_eq!(policy.auto_deny, vec!["*force*".to_string()]);
-        assert_eq!(policy.default, crate::agent_runtime_config::ApprovalPolicyDefault::Ask);
+        assert_eq!(policy.default, crate::agent_types::ApprovalPolicyDefault::Ask);
     }
 
     #[test]

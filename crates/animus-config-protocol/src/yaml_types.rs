@@ -4,14 +4,14 @@ use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::yaml_diagnostic::closest_match;
+use crate::yaml_diagnostic::closest_match;
 
-use crate::agent_runtime_config::{
+use crate::agent_types::{
     default_eval_expected_exit, default_eval_pass_threshold, AgentProfileOverlay, EvalKind, EvalOnFail, Idempotency,
     PhaseExecutionMode,
 };
 
-use super::types::*;
+use crate::workflow_types::*;
 
 pub const YAML_WORKFLOWS_DIR: &str = "workflows";
 pub const GENERATED_WORKFLOW_OVERLAY_FILE_NAME: &str = "generated-workflow.yaml";
@@ -351,17 +351,17 @@ pub(super) struct YamlPhaseDefinition {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(super) skills: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) runtime: Option<crate::agent_runtime_config::AgentRuntimeOverrides>,
+    pub(super) runtime: Option<crate::agent_types::AgentRuntimeOverrides>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) capabilities: Option<protocol::PhaseCapabilities>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) output_contract: Option<crate::agent_runtime_config::PhaseOutputContract>,
+    pub(super) output_contract: Option<crate::agent_types::PhaseOutputContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) output_json_schema: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) decision_contract: Option<crate::agent_runtime_config::PhaseDecisionContract>,
+    pub(super) decision_contract: Option<crate::agent_types::PhaseDecisionContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) retry: Option<crate::agent_runtime_config::PhaseRetryConfig>,
+    pub(super) retry: Option<crate::agent_types::PhaseRetryConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) default_tool: Option<String>,
     #[serde(default)]
@@ -410,4 +410,25 @@ pub(super) struct YamlWorkflowFile {
     /// `${secret.<name>}` in any YAML scalar.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(super) secrets: BTreeMap<String, SecretRef>,
+}
+
+/// Title-case a phase id (`code-review` -> `Code Review`) for default UI labels.
+/// Pure helper used by the YAML parser; the kernel's `yaml_scaffold` re-exports it.
+pub fn title_case_phase_id(phase_id: &str) -> String {
+    phase_id
+        .split(['-', '_'])
+        .filter(|part| !part.trim().is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => {
+                    let mut label = first.to_ascii_uppercase().to_string();
+                    label.push_str(chars.as_str());
+                    label
+                }
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }

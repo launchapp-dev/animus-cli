@@ -3,8 +3,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use super::yaml_compiler::yaml_workflows_dir;
-use super::yaml_types::*;
+use animus_config_protocol::parse::yaml_workflows_dir;
+use animus_config_protocol::yaml_types::{
+    DEFAULT_WORKFLOW_TEMPLATE_FILE_NAME, HOTFIX_WORKFLOW_TEMPLATE_FILE_NAME, RESEARCH_WORKFLOW_TEMPLATE_FILE_NAME,
+    STANDARD_WORKFLOW_TEMPLATE_FILE_NAME,
+};
 
 pub fn default_workflow_template_files() -> [(&'static str, &'static str); 4] {
     [
@@ -78,23 +81,4 @@ pub fn ensure_workflow_yaml_scaffold(project_root: &Path) -> Result<Vec<PathBuf>
         created.push(path);
     }
     Ok(created)
-}
-
-pub fn title_case_phase_id(phase_id: &str) -> String {
-    phase_id
-        .split(['-', '_'])
-        .filter(|part| !part.trim().is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            match chars.next() {
-                Some(first) => {
-                    let mut label = first.to_ascii_uppercase().to_string();
-                    label.push_str(chars.as_str());
-                    label
-                }
-                None => String::new(),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }

@@ -229,7 +229,9 @@ async fn run(cli: Cli) -> Result<()> {
     static KEYCHAIN_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     KEYCHAIN_INSTALLED.get_or_init(|| {
         let project_root_for_secrets = std::path::Path::new(&project_root);
-        let _ = orchestrator_daemon_runtime::quotas::install_keychain_workflow_resolver_for(project_root_for_secrets);
+        // v0.6: the workflow-YAML interpolator is env-only; the keychain
+        // resolver for `${secret.*}` at config-parse time was removed. Only the
+        // plugin-spawn secret snapshot provider is installed here.
         let _ = orchestrator_daemon_runtime::quotas::install_keychain_secret_provider_for(project_root_for_secrets);
     });
     match cli.command {

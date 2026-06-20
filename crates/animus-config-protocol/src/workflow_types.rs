@@ -4,8 +4,8 @@ use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::agent_runtime_config::AgentProfileOverlay;
-use crate::PhaseExecutionDefinition;
+use crate::agent_types::AgentProfileOverlay;
+use crate::agent_types::PhaseExecutionDefinition;
 
 pub const WORKFLOW_CONFIG_SCHEMA_ID: &str = "animus.workflow-config.v2";
 pub const WORKFLOW_CONFIG_VERSION: u32 = 2;
@@ -39,7 +39,7 @@ pub struct PhaseTransitionConfig {
     pub allowed_targets: Vec<String>,
 }
 
-pub(crate) fn default_max_rework_attempts() -> u32 {
+pub fn default_max_rework_attempts() -> u32 {
     3
 }
 
@@ -248,17 +248,17 @@ impl WorktreeConfig {
     /// Convert the permissive YAML representation (`YamlPhaseWorktree`) into
     /// the canonical `WorktreeConfig`. Accepts a short-form scalar
     /// (`worktree: skip`) or a long-form map.
-    pub(crate) fn from_yaml(yaml: super::yaml_types::YamlPhaseWorktree) -> Result<Self> {
+    pub(crate) fn from_yaml(yaml: crate::yaml_types::YamlPhaseWorktree) -> Result<Self> {
         match yaml {
-            super::yaml_types::YamlPhaseWorktree::Bool(flag) => {
+            crate::yaml_types::YamlPhaseWorktree::Bool(flag) => {
                 let mode = if flag { WorktreeMode::Auto } else { WorktreeMode::Skip };
                 Ok(Self { mode, cleanup: default_worktree_cleanup(), base_ref: None })
             }
-            super::yaml_types::YamlPhaseWorktree::Mode(scalar) => {
+            crate::yaml_types::YamlPhaseWorktree::Mode(scalar) => {
                 let mode = Self::parse_mode(&scalar)?;
                 Ok(Self { mode, cleanup: default_worktree_cleanup(), base_ref: None })
             }
-            super::yaml_types::YamlPhaseWorktree::Full(config) => Ok(config),
+            crate::yaml_types::YamlPhaseWorktree::Full(config) => Ok(config),
         }
     }
 }
@@ -844,7 +844,7 @@ pub struct WorkflowConfig {
 
 impl Default for WorkflowConfig {
     fn default() -> Self {
-        super::builtins::builtin_workflow_config()
+        crate::builtins::builtin_workflow_config()
     }
 }
 

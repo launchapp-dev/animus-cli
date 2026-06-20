@@ -3,15 +3,15 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
 
-use super::builtins::builtin_workflow_config_base;
 use super::types::*;
 use super::validation::validate_workflow_config_with_project_root;
-use super::yaml_compiler::merge_yaml_into_config;
 use super::yaml_scaffold::ensure_workflow_yaml_scaffold;
-use super::yaml_types::GENERATED_WORKFLOW_OVERLAY_FILE_NAME;
 use crate::{
     load_pack_workflow_overlay, resolve_pack_registry, validate_active_pack_configuration, PackRegistrySource,
 };
+use animus_config_protocol::builtins::builtin_workflow_config_base;
+use animus_config_protocol::parse::merge_yaml_into_config;
+use animus_config_protocol::yaml_types::GENERATED_WORKFLOW_OVERLAY_FILE_NAME;
 
 pub fn workflow_config_path(project_root: &Path) -> PathBuf {
     let base = protocol::scoped_state_root(project_root).unwrap_or_else(|| project_root.join(".animus"));
@@ -129,6 +129,72 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
     Ok(loaded)
 }
 
+/// Bootstrap / dev compile path: source the project's base `WorkflowConfig`
+/// from the in-tree YAML library parser (`compile_yaml_workflow_files`) instead
+/// of requiring an installed `config_source` plugin, then run the SAME kernel
+/// compiler (pack-overlay merge + validate). This is what `animus workflow
+/// config compile` and `animus init` use so they work with no plugin installed.
+///
+/// The DAEMON RUNTIME load path (`load_workflow_config_with_metadata`) still
+/// requires a `config_source` plugin — only this dev/bootstrap/pack path uses
+/// the library parser directly. Returns `Ok(None)` when the project has no
+/// `.animus` YAML sources (and no pack overlays would apply on the empty base).
+pub fn compile_workflow_config_from_library(project_root: &Path) -> Result<Option<LoadedWorkflowConfig>> {
+    let Some(library_base) = super::compile_yaml_workflow_files(project_root)? else {
+        return Ok(None);
+    };
+    let loaded = compile_workflow_config_onto_base(project_root, library_base)?;
+    Ok(Some(loaded))
+}
+
+/// Shared compiler tail: merge installed + project-override pack overlays onto
+/// `base_overlay` (layered on the runtime base), then validate. Used by both the
+/// plugin-sourced runtime path and the library-sourced bootstrap path.
+fn compile_workflow_config_onto_base(
+    project_root: &Path,
+    base_overlay: WorkflowConfig,
+) -> Result<LoadedWorkflowConfig> {
+    let registry = resolve_pack_registry(project_root)?;
+    validate_active_pack_configuration(&registry)?;
+
+    let (mut config, _base_path) = build_installed_pack_workflow_config_base(project_root)?;
+
+    for entry in registry.entries_for_source(PackRegistrySource::Installed) {
+        let Some(pack) = entry.loaded_manifest() else {
+            continue;
+        };
+        if let Some(overlay) = load_pack_workflow_overlay(pack, &config)? {
+            config = merge_yaml_into_config(config, overlay);
+        }
+    }
+
+    config = merge_yaml_into_config(config, base_overlay);
+    let mut path = project_root.to_path_buf();
+
+    for entry in registry.entries_for_source(PackRegistrySource::ProjectOverride) {
+        let Some(pack) = entry.loaded_manifest() else {
+            continue;
+        };
+        if let Some(overlay) = load_pack_workflow_overlay(pack, &config)? {
+            config = merge_yaml_into_config(config, overlay);
+            path = entry.pack_root.clone().unwrap_or_else(|| project_root.join(".animus").join("plugins"));
+        }
+    }
+
+    validate_workflow_config_with_project_root(&config, Some(project_root))?;
+
+    Ok(LoadedWorkflowConfig {
+        metadata: WorkflowConfigMetadata {
+            schema: config.schema.clone(),
+            version: config.version,
+            hash: workflow_config_hash(&config),
+            source: WorkflowConfigSource::Yaml,
+        },
+        config,
+        path,
+    })
+}
+
 pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowConfig {
     match load_workflow_config_with_metadata(project_root) {
         Ok(loaded) => loaded,
@@ -150,8 +216,12 @@ pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowCon
 
 pub fn write_workflow_config(project_root: &Path, config: &WorkflowConfig) -> Result<()> {
     validate_workflow_config_with_project_root(config, Some(project_root))?;
-    super::yaml_compiler::write_workflow_yaml_overlay(project_root, GENERATED_WORKFLOW_OVERLAY_FILE_NAME, config)
-        .map(|_| ())
+    animus_config_protocol::overlay::write_workflow_yaml_overlay(
+        project_root,
+        GENERATED_WORKFLOW_OVERLAY_FILE_NAME,
+        config,
+    )
+    .map(|_| ())
 }
 
 fn build_installed_pack_workflow_config_base(project_root: &Path) -> Result<(WorkflowConfig, PathBuf)> {

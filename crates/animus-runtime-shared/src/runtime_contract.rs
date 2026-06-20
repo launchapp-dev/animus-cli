@@ -1003,7 +1003,8 @@ pub fn inject_workflow_mcp_servers_with_project_root(
         if (scope_is_restrictive || !allowed_servers.is_empty()) && !allowed_servers.contains(name) {
             continue;
         }
-        let entry_json = build_additional_mcp_server_entry(name, definition, project_root);
+        let entry_json =
+            build_additional_mcp_server_entry(name, definition, &ctx.workflow_config.config.secrets, project_root);
         servers.insert(name.clone(), entry_json);
     }
     let servers = remove_additional_mcp_server_collisions(runtime_contract, servers);
@@ -1102,18 +1103,119 @@ fn build_oauth_proxy_entry(
 /// `animus-mcp-proxy` stdio bridge, which resolves the live credential at
 /// connect time. No resolved bearer token ever rides the contract, so the
 /// `.mcp.json` / wire channels can carry the same entry verbatim.
+/// Resolve `${secret.<name>}` MCP env values at spawn time.
+///
+/// v0.6: config parsing no longer resolves `${secret.*}` (the placeholder
+/// survives verbatim into the compiled `WorkflowConfig`). Secrets are resolved
+/// HERE, at consume/spawn time: a `${secret.<name>}` value is mapped through the
+/// workflow's `secrets:` declaration (name -> env var) and read env-first, then
+/// from the installed keychain snapshot provider. The resolved value rides only
+/// the in-memory runtime contract; `.mcp.json` materialization strips literal
+/// env values, so no resolved secret lands on disk.
+///
+/// Plain `${VAR}` values are left verbatim — the provider CLI / child process
+/// environment expands those itself, matching the existing passthrough contract.
+fn resolve_secret_mcp_env(
+    env: &std::collections::BTreeMap<String, String>,
+    secret_decls: &std::collections::BTreeMap<String, orchestrator_config::SecretRef>,
+) -> std::collections::BTreeMap<String, String> {
+    if secret_decls.is_empty() {
+        return env.clone();
+    }
+    let snapshot = orchestrator_plugin_host::current_secret_snapshot_provider();
+    let mut resolved = std::collections::BTreeMap::new();
+    for (key, value) in env {
+        resolved.insert(key.clone(), resolve_secret_placeholder(value, secret_decls, snapshot.as_deref()));
+    }
+    resolved
+}
+
+/// Replace every `${secret.<name>}` occurrence in `value` (anywhere in the
+/// scalar — e.g. `Bearer ${secret.api}` or a DSN embedding `${secret.password}`)
+/// with the resolved credential, mapping each through the `secrets:` declaration
+/// and reading env-first then the keychain snapshot. An undeclared, empty-mapped,
+/// or unresolved reference is left verbatim so the failure surfaces at the MCP
+/// server rather than silently emitting an empty credential. Plain `${VAR}`
+/// references are left untouched (the provider CLI / child env expands those).
+fn resolve_secret_placeholder(
+    value: &str,
+    secret_decls: &std::collections::BTreeMap<String, orchestrator_config::SecretRef>,
+    snapshot: Option<&dyn orchestrator_plugin_host::SecretSnapshotProvider>,
+) -> String {
+    const PREFIX: &str = "${secret.";
+    if !value.contains(PREFIX) {
+        return value.to_string();
+    }
+    let mut out = String::with_capacity(value.len());
+    let mut rest = value;
+    while let Some(start) = rest.find(PREFIX) {
+        out.push_str(&rest[..start]);
+        let after = &rest[start + PREFIX.len()..];
+        let Some(end) = after.find('}') else {
+            // Unterminated — emit the remainder verbatim and stop.
+            out.push_str(&rest[start..]);
+            return out;
+        };
+        // Honor the `$$` escape the env interpolator preserves: when the match
+        // begins at the second `$` of a `$${secret.X}` literal, the author
+        // explicitly escaped it — collapse `$$` -> `$` and emit the reference
+        // VERBATIM (no resolution), so an escaped placeholder never leaks the
+        // credential.
+        if out.ends_with('$') {
+            // `out` ends with the leading `$` of the `$$`. Drop it so the two
+            // `$$` collapse to one, then emit the reference VERBATIM. PREFIX
+            // already supplies the single `${`, so the net result is the
+            // literal `${secret.<name>}` with exactly one `$`.
+            out.pop();
+            out.push_str(PREFIX);
+            out.push_str(&after[..end]);
+            out.push('}');
+            rest = &after[end + 1..];
+            continue;
+        }
+        let secret_name = after[..end].trim();
+        let replacement = resolve_one_secret(secret_name, secret_decls, snapshot)
+            .unwrap_or_else(|| format!("{PREFIX}{}}}", &after[..end]));
+        out.push_str(&replacement);
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Resolve a single declared secret name to its credential value (env-first,
+/// then keychain snapshot). Returns `None` when the secret is undeclared, has an
+/// empty env mapping, or is unresolved in both env and keychain.
+fn resolve_one_secret(
+    secret_name: &str,
+    secret_decls: &std::collections::BTreeMap<String, orchestrator_config::SecretRef>,
+    snapshot: Option<&dyn orchestrator_plugin_host::SecretSnapshotProvider>,
+) -> Option<String> {
+    let decl = secret_decls.get(secret_name)?;
+    let env_var = decl.env.trim();
+    if env_var.is_empty() {
+        return None;
+    }
+    if let Ok(v) = std::env::var(env_var) {
+        return Some(v);
+    }
+    snapshot.and_then(|provider| provider.snapshot_filtered(std::slice::from_ref(&env_var.to_string())).remove(env_var))
+}
+
 fn build_additional_mcp_server_entry(
     name: &str,
     definition: &orchestrator_config::McpServerDefinition,
+    secret_decls: &std::collections::BTreeMap<String, orchestrator_config::SecretRef>,
     project_root: &str,
 ) -> Value {
+    let resolved_env = resolve_secret_mcp_env(&definition.env, secret_decls);
     if definition.oauth.is_some() {
-        return build_oauth_proxy_entry(name, definition.url.as_deref(), &definition.env, project_root);
+        return build_oauth_proxy_entry(name, definition.url.as_deref(), &resolved_env, project_root);
     }
     let mut entry_json = serde_json::json!({
         "command": definition.command,
         "args": definition.args,
-        "env": definition.env,
+        "env": resolved_env,
     });
     if let Some(transport) = &definition.transport {
         entry_json["transport"] = serde_json::Value::String(transport.clone());
@@ -1181,7 +1283,8 @@ pub fn inject_named_mcp_servers(
         }
 
         if let Some(definition) = ctx.workflow_config.config.mcp_servers.get(name) {
-            let entry_json = build_additional_mcp_server_entry(name, definition, project_root);
+            let entry_json =
+                build_additional_mcp_server_entry(name, definition, &ctx.workflow_config.config.secrets, project_root);
             servers.insert(name.to_string(), entry_json);
             continue;
         }
@@ -1279,7 +1382,95 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    use orchestrator_config::McpServerDefinition;
+    use orchestrator_config::{McpServerDefinition, SecretRef};
+
+    #[test]
+    fn resolve_secret_mcp_env_resolves_declared_secret_from_env_at_spawn() {
+        // v0.6: `${secret.api}` is resolved at spawn time (not parse). With the
+        // declared env var set in-process, the placeholder resolves to its value
+        // and rides only the in-memory contract.
+        let mut env = BTreeMap::new();
+        env.insert("TOKEN".to_string(), "${secret.api}".to_string());
+        env.insert("PLAIN".to_string(), "${OTHER_VAR}".to_string());
+        let mut secrets = BTreeMap::new();
+        secrets.insert(
+            "api".to_string(),
+            SecretRef { env: "ANIMUS_TEST_SPAWN_SECRET_ENV".to_string(), required: true, description: None },
+        );
+
+        // SAFETY: single-threaded test; restored immediately after the call.
+        std::env::set_var("ANIMUS_TEST_SPAWN_SECRET_ENV", "resolved-at-spawn");
+        let resolved = super::resolve_secret_mcp_env(&env, &secrets);
+        std::env::remove_var("ANIMUS_TEST_SPAWN_SECRET_ENV");
+
+        assert_eq!(resolved.get("TOKEN").map(String::as_str), Some("resolved-at-spawn"));
+        // Plain `${VAR}` passes through untouched (provider CLI expands it).
+        assert_eq!(resolved.get("PLAIN").map(String::as_str), Some("${OTHER_VAR}"));
+    }
+
+    #[test]
+    fn resolve_secret_mcp_env_leaves_undeclared_or_unresolved_placeholder_verbatim() {
+        let mut env = BTreeMap::new();
+        env.insert("A".to_string(), "${secret.undeclared}".to_string());
+        let mut secrets = BTreeMap::new();
+        secrets.insert(
+            "known".to_string(),
+            SecretRef { env: "ANIMUS_TEST_DEFINITELY_UNSET_SPAWN".to_string(), required: false, description: None },
+        );
+        // Undeclared secret -> verbatim. Declared-but-unset would also stay
+        // verbatim (failure surfaces at the MCP server, not as an empty value).
+        let resolved = super::resolve_secret_mcp_env(&env, &secrets);
+        assert_eq!(resolved.get("A").map(String::as_str), Some("${secret.undeclared}"));
+    }
+
+    #[test]
+    fn resolve_secret_mcp_env_resolves_embedded_secret_inside_larger_scalar() {
+        // A secret embedded inside a larger value (auth header, DSN) must be
+        // substituted in place, not only the exact-placeholder case.
+        let mut env = BTreeMap::new();
+        env.insert("AUTH".to_string(), "Bearer ${secret.api}".to_string());
+        env.insert("DSN".to_string(), "postgres://u:${secret.pw}@h/db".to_string());
+        let mut secrets = BTreeMap::new();
+        secrets.insert(
+            "api".to_string(),
+            SecretRef { env: "ANIMUS_TEST_EMB_API".to_string(), required: true, description: None },
+        );
+        secrets.insert(
+            "pw".to_string(),
+            SecretRef { env: "ANIMUS_TEST_EMB_PW".to_string(), required: true, description: None },
+        );
+
+        // SAFETY: single-threaded test; vars removed immediately after.
+        std::env::set_var("ANIMUS_TEST_EMB_API", "tok123");
+        std::env::set_var("ANIMUS_TEST_EMB_PW", "p@ss");
+        let resolved = super::resolve_secret_mcp_env(&env, &secrets);
+        std::env::remove_var("ANIMUS_TEST_EMB_API");
+        std::env::remove_var("ANIMUS_TEST_EMB_PW");
+
+        assert_eq!(resolved.get("AUTH").map(String::as_str), Some("Bearer tok123"));
+        assert_eq!(resolved.get("DSN").map(String::as_str), Some("postgres://u:p@ss@h/db"));
+    }
+
+    #[test]
+    fn resolve_secret_mcp_env_preserves_escaped_literal_secret_reference() {
+        // An escaped `$${secret.api}` is the author's literal — it must collapse
+        // to `${secret.api}` and NEVER resolve the credential.
+        let mut env = BTreeMap::new();
+        env.insert("LITERAL".to_string(), "$${secret.api}".to_string());
+        let mut secrets = BTreeMap::new();
+        secrets.insert(
+            "api".to_string(),
+            SecretRef { env: "ANIMUS_TEST_ESC_API".to_string(), required: true, description: None },
+        );
+
+        // SAFETY: single-threaded test; var removed immediately after.
+        std::env::set_var("ANIMUS_TEST_ESC_API", "should-not-leak");
+        let resolved = super::resolve_secret_mcp_env(&env, &secrets);
+        std::env::remove_var("ANIMUS_TEST_ESC_API");
+
+        assert_eq!(resolved.get("LITERAL").map(String::as_str), Some("${secret.api}"));
+    }
+
     use orchestrator_core::{
         builtin_agent_runtime_config, builtin_workflow_config, workflow_config_hash, LoadedWorkflowConfig,
         PhaseMcpBinding, WorkflowConfigMetadata, WorkflowConfigSource,
@@ -2111,7 +2302,12 @@ mod tests {
             }),
         };
 
-        let entry = build_additional_mcp_server_entry("cc-api", &definition, "/tmp/proj-cc");
+        let entry = build_additional_mcp_server_entry(
+            "cc-api",
+            &definition,
+            &std::collections::BTreeMap::new(),
+            "/tmp/proj-cc",
+        );
 
         assert_eq!(entry.pointer("/transport").and_then(Value::as_str), Some("stdio"));
         assert!(entry.get("url").is_none(), "proxy entry must not carry the upstream url");
@@ -2184,7 +2380,8 @@ mod tests {
             }),
         };
 
-        let entry = build_additional_mcp_server_entry("github", &definition, "/tmp/proj");
+        let entry =
+            build_additional_mcp_server_entry("github", &definition, &std::collections::BTreeMap::new(), "/tmp/proj");
 
         // Repointed at the proxy over stdio; upstream URL is dropped so the
         // agent never talks to the OAuth endpoint directly.

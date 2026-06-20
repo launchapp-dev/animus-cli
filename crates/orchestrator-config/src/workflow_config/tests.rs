@@ -5,7 +5,6 @@ use crate::agent_runtime_config::{CommandCwdMode, Idempotency, PhaseCommandDefin
 use crate::test_support::{env_lock, EnvVarGuard};
 use crate::PhaseExecutionDefinition;
 
-use super::builtins::{builtin_workflow_config, builtin_workflow_config_base};
 use super::loading::load_workflow_config;
 use super::resolution::{resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards};
 use super::types::*;
@@ -13,8 +12,12 @@ use super::validation::{
     validate_workflow_and_runtime_configs, validate_workflow_and_runtime_configs_with_project_root,
     validate_workflow_config,
 };
-use super::yaml_compiler::{compile_yaml_workflow_files, merge_yaml_into_config, validate_and_compile_yaml_workflows};
-use super::yaml_parser::{parse_yaml_workflow_config, parse_yaml_workflow_config_with_base_and_source};
+use super::yaml_compiler::validate_and_compile_yaml_workflows;
+use animus_config_protocol::builtins::{builtin_workflow_config, builtin_workflow_config_base};
+use animus_config_protocol::parse::{compile_yaml_workflow_files, merge_yaml_into_config};
+use animus_config_protocol::yaml_parser::{
+    parse_yaml_workflow_config, parse_yaml_workflow_config_with_base_and_source,
+};
 
 fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
     let mut config = builtin_workflow_config();
@@ -1194,9 +1197,11 @@ workflows:
 "#;
     let config = parse_yaml_workflow_config(yaml).expect("parse yaml");
     let temp = tempfile::tempdir().expect("tempdir");
-    super::yaml_compiler::write_workflow_yaml_overlay(temp.path(), "roundtrip.yaml", &config).expect("write overlay");
-    let written = fs::read_to_string(super::yaml_compiler::yaml_workflows_dir(temp.path()).join("roundtrip.yaml"))
-        .expect("read overlay");
+    animus_config_protocol::overlay::write_workflow_yaml_overlay(temp.path(), "roundtrip.yaml", &config)
+        .expect("write overlay");
+    let written =
+        fs::read_to_string(animus_config_protocol::parse::yaml_workflows_dir(temp.path()).join("roundtrip.yaml"))
+            .expect("read overlay");
     assert!(written.contains("skills:"), "round-tripped yaml should contain skills: {written}");
     let reparsed = parse_yaml_workflow_config(&written).expect("reparse round-tripped yaml");
     assert_eq!(reparsed.phase_definitions["research"].skills, vec!["deep-search"]);
@@ -2514,7 +2519,8 @@ mcp_servers:
     transport: "http"
     url: "${ROBINHOOD_MCP_URL}"
 "#;
-    let substituted = super::env_interp::interpolate_env(yaml_raw, "test.yaml").expect("env interp ok");
+    let substituted =
+        animus_config_protocol::env_interp::interpolate_env(yaml_raw, "test.yaml").expect("env interp ok");
     let config = parse_yaml_workflow_config(&substituted).expect("should parse after interp");
     let server = config.mcp_servers.get("robinhood-trading").expect("server should exist");
     assert_eq!(server.url.as_deref(), Some("https://agent.robinhood.com/mcp/trading"));
@@ -2738,90 +2744,6 @@ workflows:
 }
 
 #[test]
-fn secret_interpolation_resolves_against_declared_env_var() {
-    use super::env_interp::interpolate_secrets;
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _v = EnvVarGuard::set("ANIMUS_TEST_LINEAR_TOKEN", "lnk_test_value");
-
-    let mut secrets = BTreeMap::new();
-    secrets.insert(
-        "linear_token".to_string(),
-        SecretRef { env: "ANIMUS_TEST_LINEAR_TOKEN".to_string(), required: true, description: None },
-    );
-
-    let yaml = "value: ${secret.linear_token}\n";
-    let out = interpolate_secrets(yaml, "test.yaml", &secrets).expect("interp ok");
-    assert_eq!(out, "value: lnk_test_value\n");
-}
-
-#[test]
-fn secret_interpolation_errors_on_undeclared_key() {
-    use super::env_interp::interpolate_secrets;
-    let secrets: BTreeMap<String, SecretRef> = BTreeMap::new();
-    let yaml = "a: 1\nb: 2\nval: ${secret.missing}\n";
-    let err = interpolate_secrets(yaml, ".animus/workflows.yaml", &secrets).expect_err("undeclared should error");
-    let msg = format!("{:#}", err);
-    assert!(msg.contains("line 3"), "missing line number: {msg}");
-    assert!(msg.contains("missing"), "missing key name: {msg}");
-    assert!(msg.contains("secrets:"), "should hint at secrets block: {msg}");
-}
-
-#[test]
-fn secret_interpolation_errors_on_required_unset_env() {
-    use super::env_interp::interpolate_secrets;
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _v = EnvVarGuard::unset("ANIMUS_TEST_DEFINITELY_UNSET_TOKEN");
-
-    let mut secrets = BTreeMap::new();
-    secrets.insert(
-        "tok".to_string(),
-        SecretRef { env: "ANIMUS_TEST_DEFINITELY_UNSET_TOKEN".to_string(), required: true, description: None },
-    );
-    let yaml = "val: ${secret.tok}\n";
-    let err = interpolate_secrets(yaml, "test.yaml", &secrets).expect_err("required unset should fail");
-    let msg = format!("{:#}", err);
-    assert!(msg.contains("ANIMUS_TEST_DEFINITELY_UNSET_TOKEN"), "should name env var: {msg}");
-    assert!(msg.contains("tok"), "should name secret: {msg}");
-}
-
-#[test]
-fn optional_unset_secret_resolves_to_empty_string() {
-    use super::env_interp::interpolate_secrets;
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _v = EnvVarGuard::unset("ANIMUS_TEST_OPTIONAL_SECRET");
-
-    let mut secrets = BTreeMap::new();
-    secrets.insert(
-        "opt".to_string(),
-        SecretRef { env: "ANIMUS_TEST_OPTIONAL_SECRET".to_string(), required: false, description: None },
-    );
-    let yaml = "val: \"${secret.opt}\"\n";
-    let out = interpolate_secrets(yaml, "test.yaml", &secrets).expect("optional should not fail");
-    assert_eq!(out, "val: \"\"\n");
-}
-
-#[test]
-fn double_dollar_preserves_literal_secret_reference_through_both_passes() {
-    // A user who wants the literal string `${secret.api}` in YAML output
-    // (e.g. inside a prompt or example) writes `$${secret.api}`. The env
-    // pass must hand the `$$` through to the secrets pass, which collapses
-    // it back to `$` — yielding a literal that is NOT resolved.
-    use super::env_interp::{interpolate_env, interpolate_secrets};
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _v = EnvVarGuard::set("ANIMUS_TEST_DOLLAR_DOLLAR", "should-not-leak");
-    let mut secrets = BTreeMap::new();
-    secrets.insert(
-        "api".to_string(),
-        SecretRef { env: "ANIMUS_TEST_DOLLAR_DOLLAR".to_string(), required: true, description: None },
-    );
-
-    let src = "prompt: $${secret.api}\n";
-    let after_env = interpolate_env(src, "test.yaml").expect("env interp");
-    let after_secrets = interpolate_secrets(&after_env, "test.yaml", &secrets).expect("secret interp");
-    assert_eq!(after_secrets, "prompt: ${secret.api}\n");
-}
-
-#[test]
 fn env_interpolation_passes_secret_references_through_untouched() {
     // The env interp pass must leave ${secret.X} references alone so the
     // secret pass can handle them; otherwise it would error on the `.` in
@@ -2829,13 +2751,13 @@ fn env_interpolation_passes_secret_references_through_untouched() {
     let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
     let _v = EnvVarGuard::set("ANIMUS_TEST_SOMETHING", "hello");
     let src = "a: ${ANIMUS_TEST_SOMETHING}\nb: ${secret.foo}\n";
-    let out = super::env_interp::interpolate_env(src, "test.yaml").expect("env interp ok");
+    let out = animus_config_protocol::env_interp::interpolate_env(src, "test.yaml").expect("env interp ok");
     assert_eq!(out, "a: hello\nb: ${secret.foo}\n");
 }
 
 #[test]
 fn lint_flags_sensitive_var_outside_secrets_block() {
-    use super::env_interp::lint_sensitive_interpolations;
+    use animus_config_protocol::env_interp::lint_sensitive_interpolations;
     let yaml = r#"
 mcp_servers:
   linear:
@@ -2853,7 +2775,7 @@ mcp_servers:
 
 #[test]
 fn lint_skips_references_inside_secrets_block() {
-    use super::env_interp::lint_sensitive_interpolations;
+    use animus_config_protocol::env_interp::lint_sensitive_interpolations;
     let yaml = r#"
 secrets:
   api:
@@ -2874,7 +2796,7 @@ fn lint_skips_secret_env_field_names() {
     // The webhook trigger config has a `secret_env: SOMETHING_TOKEN` field
     // — that is a declaration, not an interpolation. The lint should leave
     // it alone.
-    use super::env_interp::lint_sensitive_interpolations;
+    use animus_config_protocol::env_interp::lint_sensitive_interpolations;
     let yaml = r#"
 triggers:
 - id: github
@@ -2920,62 +2842,11 @@ fn worktree_and_secrets_serde_roundtrip_through_workflow_config() {
 }
 
 #[test]
-fn yaml_compile_resolves_secret_declared_in_earlier_overlay() {
-    // Multi-file workflow configs are merged in lexicographic order. A
-    // later file must be able to reference a secret declared in an
-    // earlier file.
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
-    let _v = EnvVarGuard::set("ANIMUS_TEST_OVERLAY_SECRET", "overlay-value");
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    let workflows_dir = temp.path().join(".animus").join("workflows");
-    fs::create_dir_all(&workflows_dir).expect("mkdir");
-    fs::write(
-        workflows_dir.join("01-base.yaml"),
-        r#"
-secrets:
-  api:
-    env: ANIMUS_TEST_OVERLAY_SECRET
-"#,
-    )
-    .expect("write base");
-    fs::write(
-        workflows_dir.join("02-mcp.yaml"),
-        r#"
-mcp_servers:
-  linear:
-    transport: stdio
-    command: linear-mcp
-    env:
-      LINEAR_API_TOKEN: "${secret.api}"
-phases:
-  build:
-    mode: agent
-    agent: swe
-    directive: "Build."
-agents:
-  swe:
-    description: "SWE"
-    system_prompt: "Be a SWE."
-workflows:
-- id: flow
-  phases: [build]
-"#,
-    )
-    .expect("write mcp");
-
-    let compiled = compile_yaml_workflow_files(temp.path()).expect("compile").expect("Some");
-    let server = compiled.mcp_servers.get("linear").expect("linear server present");
-    assert_eq!(server.env.get("LINEAR_API_TOKEN").map(|s| s.as_str()), Some("overlay-value"));
-}
-
-#[test]
-fn yaml_compile_resolves_secret_interpolation_end_to_end() {
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
-    let _v = EnvVarGuard::set("ANIMUS_TEST_E2E_SECRET", "resolved-value");
-
+fn yaml_compile_leaves_secret_references_verbatim_and_keeps_declaration() {
+    // v0.6: `${secret.*}` is NOT resolved at config-parse time anymore. The
+    // reference survives verbatim into the compiled config (it is resolved
+    // later, at consume/spawn time, from the keychain), and the `secrets:`
+    // declaration is preserved so the consumer can map the name to an env var.
     let temp = tempfile::tempdir().expect("tempdir");
     fs::create_dir_all(temp.path().join(".animus").join("workflows")).expect("mkdir");
     let yaml = r#"
@@ -3005,7 +2876,7 @@ workflows:
 
     let compiled = compile_yaml_workflow_files(temp.path()).expect("compile").expect("Some");
     let server = compiled.mcp_servers.get("linear").expect("linear server present");
-    assert_eq!(server.env.get("LINEAR_API_TOKEN").map(|s| s.as_str()), Some("resolved-value"));
+    assert_eq!(server.env.get("LINEAR_API_TOKEN").map(|s| s.as_str()), Some("${secret.api}"));
     assert_eq!(compiled.secrets.get("api").map(|s| s.env.as_str()), Some("ANIMUS_TEST_E2E_SECRET"));
 }
 
@@ -3058,127 +2929,6 @@ workflows:
 }
 
 #[test]
-fn yaml_parse_error_excerpt_shows_original_reference_not_resolved_secret() {
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
-    // A secret value that, once substituted, produces a YAML scan error on
-    // the line carrying the reference. The rustc-style excerpt must render
-    // the original `${secret.api}` reference, not the resolved value.
-    let _v = EnvVarGuard::set("ANIMUS_TEST_EXCERPT_SECRET", "zzz-leak-zzz: x: y");
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
-    let yaml = r#"
-secrets:
-  api:
-    env: ANIMUS_TEST_EXCERPT_SECRET
-default_workflow_ref: ${secret.api}
-"#;
-    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
-
-    let err = compile_yaml_workflow_files(temp.path()).expect_err("compile should fail");
-    let display = format!("{:#}", err);
-    assert!(!display.contains("zzz-leak-zzz"), "resolved secret leaked into diagnostics: {display}");
-    let debug = format!("{:#?}", err);
-    assert!(!debug.contains("zzz-leak-zzz"), "resolved secret leaked into diagnostics: {debug}");
-}
-
-#[test]
-fn yaml_parse_error_message_redacts_secret_resolved_into_typed_field() {
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
-    // A secret resolved into an int-typed position makes serde_yaml quote the
-    // offending scalar in its own error message ("invalid type: string ...").
-    // The surfaced error must name the secret instead of echoing its value.
-    let _v = EnvVarGuard::set("ANIMUS_TEST_TYPED_SECRET", "zzz-typed-leak-zzz");
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
-    let yaml = r#"
-secrets:
-  api_token:
-    env: ANIMUS_TEST_TYPED_SECRET
-daemon:
-  budget:
-    max_cost_usd_per_day: ${secret.api_token}
-"#;
-    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
-
-    let err = compile_yaml_workflow_files(temp.path()).expect_err("compile should fail");
-    let display = format!("{:#}", err);
-    assert!(!display.contains("zzz-typed-leak-zzz"), "resolved secret leaked into diagnostics: {display}");
-    assert!(display.contains("[redacted:api_token]"), "redaction marker should name the secret: {display}");
-    let debug = format!("{:#?}", err);
-    assert!(!debug.contains("zzz-typed-leak-zzz"), "resolved secret leaked into diagnostics: {debug}");
-}
-
-#[test]
-fn yaml_parse_error_message_redacts_escaped_secret_rendering() {
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
-    // serde quotes offending scalars with `{:?}` escaping, so a secret
-    // containing backslashes or quotes appears in the message in escaped
-    // form; the redactor must catch that rendering too.
-    let secret_value = r#"zzz\esc"leak-zzz"#;
-    let _v = EnvVarGuard::set("ANIMUS_TEST_ESCAPED_SECRET", secret_value);
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
-    let yaml = r#"
-secrets:
-  api_token:
-    env: ANIMUS_TEST_ESCAPED_SECRET
-daemon:
-  budget:
-    max_cost_usd_per_day: ${secret.api_token}
-"#;
-    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
-
-    let err = compile_yaml_workflow_files(temp.path()).expect_err("compile should fail");
-    let display = format!("{:#}", err);
-    assert!(!display.contains(secret_value), "raw secret leaked into diagnostics: {display}");
-    assert!(!display.contains(r#"zzz\\esc\"leak-zzz"#), "escaped secret leaked into diagnostics: {display}");
-    assert!(display.contains("[redacted:api_token]"), "redaction marker should name the secret: {display}");
-}
-
-#[test]
-fn yaml_parse_error_message_redacts_keychain_resolved_env_value() {
-    let _g = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-    let _home = EnvVarGuard::set("HOME", tempfile::tempdir().unwrap().path());
-    // A plain `${VAR}` resolved from the keychain fallback into an int-typed
-    // position makes serde_yaml quote the offending scalar. The surfaced
-    // error must redact the keychain-resolved value just like declared
-    // secrets.
-    let _v = EnvVarGuard::unset("ANIMUS_TEST_KEYCHAIN_REDACT");
-    struct StubResolver;
-    impl super::env_interp::WorkflowSecretResolver for StubResolver {
-        fn resolve(&self, key: &str) -> Option<String> {
-            (key == "ANIMUS_TEST_KEYCHAIN_REDACT").then(|| "zzz-keychain-leak-zzz".to_string())
-        }
-    }
-    super::env_interp::install_workflow_secret_resolver_for_test(std::sync::Arc::new(StubResolver));
-
-    let temp = tempfile::tempdir().expect("tempdir");
-    fs::create_dir_all(temp.path().join(".animus")).expect("mkdir");
-    let yaml = r#"
-daemon:
-  budget:
-    max_cost_usd_per_day: ${ANIMUS_TEST_KEYCHAIN_REDACT}
-"#;
-    fs::write(temp.path().join(".animus").join("workflows.yaml"), yaml).expect("write yaml");
-
-    let result = compile_yaml_workflow_files(temp.path());
-    super::env_interp::clear_workflow_secret_resolver_for_test();
-    let err = result.expect_err("compile should fail");
-    let display = format!("{:#}", err);
-    assert!(!display.contains("zzz-keychain-leak-zzz"), "keychain value leaked into diagnostics: {display}");
-    assert!(
-        display.contains("[redacted:ANIMUS_TEST_KEYCHAIN_REDACT]"),
-        "redaction marker should name the env var: {display}"
-    );
-}
-
-#[test]
 fn upsert_generated_workflow_phase_drops_legacy_compiled_blocks() {
     // Pre-fix releases dumped the entire COMPILED config (resolved `${VAR}` /
     // `${secret.X}` values included) into generated-workflow.yaml. A post-fix
@@ -3212,7 +2962,7 @@ workflows:
         "directive": "New phase."
     }))
     .expect("definition should parse");
-    super::yaml_compiler::upsert_generated_workflow_phase(temp.path(), "new-phase", &definition, None)
+    animus_config_protocol::overlay::upsert_generated_workflow_phase(temp.path(), "new-phase", &definition, None)
         .expect("upsert should succeed");
 
     let content = fs::read_to_string(workflows_dir.join("generated-workflow.yaml")).expect("read overlay");
@@ -4134,7 +3884,7 @@ workflows:
     let err = parse_yaml_workflow_config(yaml).expect_err("typo must error");
     let diag = err
         .chain()
-        .find_map(|source| source.downcast_ref::<super::yaml_diagnostic::YamlDiagnostic>())
+        .find_map(|source| source.downcast_ref::<animus_config_protocol::yaml_diagnostic::YamlDiagnostic>())
         .expect("a YamlDiagnostic must be present in the chain");
     let line = diag.line.expect("diagnostic must carry a line");
     let offending_line = yaml.lines().nth(line.saturating_sub(1)).unwrap_or_default();
