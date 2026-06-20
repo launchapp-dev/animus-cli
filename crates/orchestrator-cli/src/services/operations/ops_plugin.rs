@@ -576,8 +576,8 @@ fn handle_plugin_cache(cmd: crate::cli_types::PluginCacheCommand, json: bool) ->
 /// command resolve identical `(owner/repo, tag)` pairs. Bump tags in
 /// `crates/orchestrator-core/src/plugin_registry.rs`, not here.
 use orchestrator_core::plugin_registry::{
-    DEFAULT_OAI_AGENT_PLUGINS as DEFAULT_OAI_AGENT_PLUGIN, DEFAULT_PROVIDER_PLUGINS, DEFAULT_QUEUE_PLUGINS,
-    DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+    DEFAULT_CONFIG_SOURCE_PLUGINS, DEFAULT_OAI_AGENT_PLUGINS as DEFAULT_OAI_AGENT_PLUGIN, DEFAULT_PROVIDER_PLUGINS,
+    DEFAULT_QUEUE_PLUGINS, DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 
 #[derive(Debug, Serialize)]
@@ -710,6 +710,12 @@ fn build_install_defaults_targets(
         targets.push(((*s).to_string(), (*t).to_string()));
     }
     for (s, t) in DEFAULT_QUEUE_PLUGINS {
+        targets.push(((*s).to_string(), (*t).to_string()));
+    }
+    // v0.6: config_source is required by daemon preflight — the kernel sources
+    // its workflow/agent config from this plugin. Install unconditionally on the
+    // broken-manifest fallback path so `install-defaults` unblocks `daemon start`.
+    for (s, t) in DEFAULT_CONFIG_SOURCE_PLUGINS {
         targets.push(((*s).to_string(), (*t).to_string()));
     }
     if args.include_oai_agent {
@@ -8271,8 +8277,8 @@ required = ["launchapp-dev/animus-queue-default"]
         let task_role = spec
             .required_roles
             .iter()
-            .find(|r| matches!(r, RequiredRole::SubjectKind(k) if k == "task"))
-            .expect("subject_kind:task role present in daemon default spec");
+            .find(|r| matches!(r, RequiredRole::AtLeastOneSubjectBackend))
+            .expect("at_least_one_subject_backend role present in daemon default spec");
         let claims: Vec<&str> = summaries
             .iter()
             .filter(|s| s.is_subject_backend() && s.covers_subject_kind("task"))

@@ -864,6 +864,9 @@ mod tests {
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
         let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
+        // v0.6: stand in for the config_source plugin after the hub scaffolds.
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(primary.path());
 
         let task = primary_hub
             .tasks()
@@ -973,6 +976,9 @@ mod tests {
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
         let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
+        // v0.6: stand in for the config_source plugin after the hub scaffolds.
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(primary.path());
 
         let task = primary_hub
             .tasks()
@@ -1803,6 +1809,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             let (hub, workflow_id, phase_id) =
@@ -1858,6 +1868,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             let (hub, workflow_id, phase_id) =
@@ -1922,6 +1936,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             let (hub, workflow_id, phase_id) =
@@ -1982,6 +2000,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             let (hub, workflow_id, target_phase) = seed_workflow_and_checkpoint_on_phase(
@@ -2071,6 +2093,12 @@ mod tests {
       - wireframe
 "#;
             std::fs::write(workflows_dir.join("research-then-wireframe.yaml"), custom_yaml).expect("write yaml");
+            // v0.6: install the config_source seam AFTER the custom workflow YAML
+            // is written so the compiled base includes `research-then-wireframe`.
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
 
             let (hub, workflow_id, phase_id) = seed_workflow_and_checkpoint_on_phase(
                 &project_root,
@@ -2118,6 +2146,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             // Seed a decision-gated checkpoint (standard pipeline's
@@ -2299,6 +2331,10 @@ phases:
       allow_missing_decision: false
 "#;
             std::fs::write(workflows_dir.join("audit-workflow.yaml"), yaml).expect("write yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
 
             assert!(
                 phase_requires_explicit_decision_for_resume(&root, "security-audit"),
@@ -2341,6 +2377,10 @@ phases:
               target: research
 "#;
             std::fs::write(workflows_dir.join("gated-research.yaml"), yaml).expect("write yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
 
             // Without the workflow_ref, the phase appears safe to advance.
             assert!(

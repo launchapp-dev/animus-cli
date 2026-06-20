@@ -99,7 +99,9 @@ fn missing_v2_file_reports_actionable_error() {
     let temp = tempfile::tempdir().expect("tempdir");
     let _home_guard = crate::test_support::EnvVarGuard::set("HOME", temp.path());
     let error = load_workflow_config(temp.path()).expect_err("missing workflow config should fail");
-    assert!(error.to_string().contains("workflow config is missing"));
+    // v0.6: with no config_source plugin installed (the unit-test case), the
+    // kernel load path has no base to source and errors actionably.
+    assert!(error.to_string().contains("no config_source plugin installed"), "got: {error}");
 }
 
 #[test]
@@ -726,11 +728,18 @@ workflows:
     )
     .expect("write yaml");
 
+    // v0.6: `validate_and_compile_yaml_workflows` produces the fully merged +
+    // validated config via the kernel load path, which sources its base from an
+    // installed config_source plugin. Install the test seam to stand in for it.
+    let _base = crate::test_support::install_yaml_config_source_base(temp.path());
     let result = validate_and_compile_yaml_workflows(temp.path()).expect("validate and compile should succeed");
     let compile_result = result.expect("should have result");
     assert_eq!(compile_result.source_files.len(), 1);
 
-    let reloaded = load_workflow_config(temp.path()).expect("reload config");
+    // v0.6: the kernel no longer parses .animus/*.yaml in its runtime load path
+    // (a config_source plugin owns base acquisition). Reload through the public
+    // library compiler the `animus-config-yaml` plugin uses.
+    let reloaded = compile_yaml_workflow_files(temp.path()).expect("reload config").expect("compiled config");
     let standard = reloaded.workflows.iter().find(|p| p.id == "standard").expect("standard workflow");
     assert_eq!(standard.name, "Compiled Standard");
 }
@@ -4198,125 +4207,12 @@ workflows:
     assert!(matches!(workflow.phases.first().unwrap(), super::WorkflowPhaseEntry::Rich(_)));
 }
 
-mod cache_tests {
-    use super::*;
-    use crate::workflow_config::loading::load_workflow_config_with_metadata;
-
-    fn write_simple_yaml(temp: &std::path::Path, content: &str) {
-        let ao_dir = temp.join(".animus");
-        std::fs::create_dir_all(&ao_dir).expect("create .animus dir");
-        std::fs::write(ao_dir.join("workflows.yaml"), content).expect("write yaml");
-    }
-
-    const SAMPLE_YAML: &str = r#"
-workflows:
-  - id: standard
-    name: Cache Test
-    phases:
-      - requirements
-      - implementation
-      - code-review
-      - testing
-"#;
-
-    const ALT_YAML: &str = r#"
-workflows:
-  - id: standard
-    name: Cache Test Updated
-    phases:
-      - requirements
-      - implementation
-      - code-review
-      - testing
-"#;
-
-    #[test]
-    fn workflow_cache_round_trip_returns_same_compiled_output() {
-        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", temp.path());
-        write_simple_yaml(temp.path(), SAMPLE_YAML);
-
-        let first = load_workflow_config_with_metadata(temp.path()).expect("first compile");
-        let cache_path = crate::cache::workflow_cache_path(temp.path());
-        assert!(cache_path.exists(), "cache file should be written");
-
-        let second = load_workflow_config_with_metadata(temp.path()).expect("second compile (cached)");
-        assert_eq!(first.metadata.hash, second.metadata.hash, "cached compile must match fresh compile");
-        assert_eq!(first.config.workflows.len(), second.config.workflows.len());
-    }
-
-    #[test]
-    fn workflow_cache_invalidates_when_yaml_changes() {
-        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", temp.path());
-        write_simple_yaml(temp.path(), SAMPLE_YAML);
-        let first = load_workflow_config_with_metadata(temp.path()).expect("first compile");
-        let original_name =
-            first.config.workflows.iter().find(|w| w.id == "standard").map(|w| w.name.clone()).unwrap_or_default();
-        assert_eq!(original_name, "Cache Test");
-
-        // Sleep briefly so mtime ticks past 1s granularity on slow FSes
-        std::thread::sleep(std::time::Duration::from_millis(1100));
-        write_simple_yaml(temp.path(), ALT_YAML);
-
-        let second = load_workflow_config_with_metadata(temp.path()).expect("second compile after edit");
-        let new_name =
-            second.config.workflows.iter().find(|w| w.id == "standard").map(|w| w.name.clone()).unwrap_or_default();
-        assert_eq!(new_name, "Cache Test Updated", "cache must invalidate on YAML change");
-    }
-
-    #[test]
-    fn workflow_cache_corrupt_file_falls_through_to_fresh_compile() {
-        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", temp.path());
-        write_simple_yaml(temp.path(), SAMPLE_YAML);
-
-        let cache_path = crate::cache::workflow_cache_path(temp.path());
-        std::fs::create_dir_all(cache_path.parent().unwrap()).expect("mkdir cache dir");
-        std::fs::write(&cache_path, b"not json at all").expect("write corrupt cache");
-
-        let loaded = load_workflow_config_with_metadata(temp.path()).expect("corrupt cache must fall through");
-        assert!(loaded.config.workflows.iter().any(|w| w.id == "standard"));
-    }
-
-    #[test]
-    fn workflow_cache_disabled_by_env_skips_read_and_write() {
-        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", temp.path());
-        let _disable = EnvVarGuard::set("ANIMUS_DISABLE_WORKFLOW_CACHE", "1");
-        write_simple_yaml(temp.path(), SAMPLE_YAML);
-
-        let _ = load_workflow_config_with_metadata(temp.path()).expect("compile");
-        let cache_path = crate::cache::workflow_cache_path(temp.path());
-        assert!(!cache_path.exists(), "cache write must be skipped when disabled");
-    }
-
-    #[test]
-    fn workflow_cache_bypassed_when_sources_reference_env_vars() {
-        let _lock = env_lock().lock().unwrap_or_else(|p| p.into_inner());
-        let temp = tempfile::tempdir().expect("tempdir");
-        let _home_guard = EnvVarGuard::set("HOME", temp.path());
-        let _probe = EnvVarGuard::set("WF_CACHE_PROBE_NAME", "EnvDriven");
-        let yaml = r#"
-workflows:
-  - id: standard
-    name: ${WF_CACHE_PROBE_NAME:-Fallback}
-    phases:
-      - requirements
-      - implementation
-      - code-review
-      - testing
-"#;
-        write_simple_yaml(temp.path(), yaml);
-        let _ = load_workflow_config_with_metadata(temp.path()).expect("compile");
-        let cache_path = crate::cache::workflow_cache_path(temp.path());
-        assert!(!cache_path.exists(), "cache must not be written when YAML references ${{VAR}} env interpolation");
-    }
-}
+// v0.6: the kernel's in-tree YAML disk cache was removed from the runtime load
+// path. The base `WorkflowConfig` is now sourced by an installed `config_source`
+// plugin, which owns its own caching via the protocol `CacheToken`. The former
+// `cache_tests` module exercised `load_workflow_config_with_metadata`'s
+// read/write of `crate::cache` on the YAML path, which no longer exists. The
+// cache module retains its own round-trip coverage in `crate::cache::tests`.
 
 mod unenforced_field_warnings {
     use super::super::validation::{unenforced_project_yaml_warnings, unenforced_yaml_field_warnings};

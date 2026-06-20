@@ -27,9 +27,19 @@ pub fn config_source_installed(project_root: &Path) -> bool {
 }
 
 /// Resolve a `config_source` plugin (if installed) and load the base config.
-/// `Ok(None)` => no plugin installed; the caller uses the in-tree YAML path.
+/// `Ok(None)` => no plugin installed and (in tests) no injected base; the
+/// caller surfaces an actionable "no config_source plugin installed" error.
 /// Returns `(base WorkflowConfig, cache_token_version)`.
 pub fn resolve_plugin_base(project_root: &Path) -> Result<Option<(WorkflowConfig, String)>> {
+    // Test-only seam: a synthetic base config injected via
+    // `set_test_plugin_base` stands in for an installed config_source plugin so
+    // unit tests can exercise the kernel's pack-merge + validate pipeline (which
+    // it still owns) without spawning a real plugin process.
+    #[cfg(any(test, feature = "test-utils"))]
+    if let Some(base) = test_seam::base_for(project_root) {
+        return Ok(Some((base, "test-seam".to_string())));
+    }
+
     let plugins = discover_by_kind(project_root.to_path_buf(), CONFIG_SOURCE_KIND)
         .with_context(|| format!("discovering config_source plugins for {}", project_root.display()))?;
     let Some(plugin) = plugins.into_iter().next() else {
@@ -94,4 +104,87 @@ fn run_blocking<F: Future>(fut: F) -> Result<F::Output> {
             Ok(rt.block_on(fut))
         }
     }
+}
+
+/// Test-only seam that lets unit tests inject a synthetic base
+/// [`WorkflowConfig`], standing in for an installed `config_source` plugin so
+/// the kernel's pack-merge + validate pipeline (which it still owns) can be
+/// exercised without spawning a plugin process. Scoped per-thread; the returned
+/// guard clears the override on drop so tests stay isolated.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_seam {
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+    use std::sync::{Mutex, OnceLock};
+
+    use super::WorkflowConfig;
+
+    // Process-global registry keyed by project root, so the seam is safe under
+    // cargo's parallel test execution (daemon/runtime tests load config on
+    // worker threads, and many tests run concurrently against distinct temp
+    // project roots). Keying by root means a test only ever sees the base it
+    // installed for its own project.
+    fn registry() -> &'static Mutex<HashMap<PathBuf, WorkflowConfig>> {
+        static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, WorkflowConfig>>> = OnceLock::new();
+        REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    // Normalize the key so a test that installs against `tempdir().path()` is
+    // still found when the loader resolves the project root via git-common-root
+    // (which canonicalizes, e.g. /var -> /private/var on macOS). Falls back to
+    // the raw path when canonicalization fails (path may not exist yet).
+    fn normalize(project_root: &Path) -> PathBuf {
+        std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf())
+    }
+
+    /// Install a synthetic base config for `project_root`. The override is
+    /// active until the returned guard is dropped.
+    #[must_use]
+    pub fn install(project_root: &Path, base: WorkflowConfig) -> TestBaseGuard {
+        let key = normalize(project_root);
+        registry().lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), base);
+        TestBaseGuard { key }
+    }
+
+    /// Clone the synthetic base installed for `project_root`, if any.
+    pub fn base_for(project_root: &Path) -> Option<WorkflowConfig> {
+        registry().lock().unwrap_or_else(|p| p.into_inner()).get(&normalize(project_root)).cloned()
+    }
+
+    /// RAII guard that removes the installed base for its project root on drop.
+    pub struct TestBaseGuard {
+        key: PathBuf,
+    }
+
+    impl Drop for TestBaseGuard {
+        fn drop(&mut self) {
+            registry().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
+        }
+    }
+}
+
+/// v0.6 cross-crate test seam: stand in for an installed `config_source` plugin
+/// by compiling the project's `.animus/*.yaml` into a base [`WorkflowConfig`]
+/// (the same `compile_yaml_workflow_files` library call the `animus-config-yaml`
+/// plugin makes) and injecting it as the plugin-sourced base. When the project
+/// has no YAML sources, the builtin base is injected instead — a real
+/// config_source plugin would still produce *some* canonical base. The kernel's
+/// `load_workflow_config*` / `load_agent_runtime_config*` paths then merge pack
+/// overlays onto it and validate, exactly as with a real plugin installed.
+///
+/// Returns a guard that clears the injected base on drop; hold it for the
+/// duration of the load call. Gated behind the `test-utils` feature so it is
+/// available to dependent crates' test builds but never compiled into release.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn install_yaml_config_source_base(project_root: &Path) -> test_seam::TestBaseGuard {
+    // Mirror what `animus-config-yaml` does on first contact with a project:
+    // ensure the `.animus/workflows.yaml` scaffold exists, then compile it. This
+    // matches the historical kernel behavior where `FileServiceHub::new` wrote
+    // the scaffold and the in-tree loader compiled it, so tests that create a
+    // hub (which still scaffolds) and rely on the standard workflow keep working.
+    let _ = super::ensure_workflow_yaml_scaffold(project_root);
+    let base = super::compile_yaml_workflow_files(project_root)
+        .expect("compile project yaml base")
+        .unwrap_or_else(super::builtin_workflow_config);
+    test_seam::install(project_root, base)
 }

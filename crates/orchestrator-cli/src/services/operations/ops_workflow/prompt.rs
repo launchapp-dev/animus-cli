@@ -463,6 +463,8 @@ mod tests {
     async fn render_ad_hoc_prompts_includes_explicit_inputs_and_expands_vars() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_prompt_test_config(temp.path());
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let hub = Arc::new(InMemoryServiceHub::new());
         let mut args = base_args();
         args.title = Some("Release Preview".to_string());
@@ -491,6 +493,8 @@ mod tests {
     async fn render_existing_workflow_prompts_uses_persisted_vars_and_input() {
         let temp = tempfile::tempdir().expect("tempdir");
         write_prompt_test_config(temp.path());
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let hub = Arc::new(InMemoryServiceHub::new());
         let workflow = hub
             .workflows()

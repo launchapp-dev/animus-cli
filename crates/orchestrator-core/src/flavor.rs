@@ -80,6 +80,11 @@ pub struct FlavorManifest {
     pub workflow_runner: FlavorRoleSection,
     #[serde(default)]
     pub queue: FlavorRoleSection,
+    /// v0.6: the `config_source` role — the plugin that sources the
+    /// workflow/agent config (YAML on disk, Postgres, API). Required, since the
+    /// kernel no longer parses `.animus/*.yaml` in its load path.
+    #[serde(default)]
+    pub config_source: FlavorRoleSection,
     #[serde(default)]
     pub durable_store: FlavorRoleSection,
     #[serde(default)]
@@ -107,10 +112,11 @@ impl FlavorManifest {
     /// `animus flavor install`, and the `animus flavor current` drift
     /// report all walk these sections, so the install plan and the drift
     /// report can never disagree.
-    pub fn role_sections(&self) -> [(&'static str, &FlavorRoleSection); 9] {
+    pub fn role_sections(&self) -> [(&'static str, &FlavorRoleSection); 10] {
         [
             ("workflow_runner", &self.workflow_runner),
             ("queue", &self.queue),
+            ("config_source", &self.config_source),
             ("providers", &self.providers),
             ("subjects", &self.subjects),
             ("transports", &self.transports),
@@ -380,6 +386,7 @@ recommended = ["launchapp-dev/animus-provider-codex"]
         assert!(has("animus-subject-default"), "required set must cover at_least_one_subject_backend");
         assert!(has("animus-workflow-runner-default"), "required set must include the workflow runner");
         assert!(has("animus-queue-default"), "required set must include the queue plugin");
+        assert!(has("animus-config-yaml"), "required set must include the config_source plugin (v0.6)");
     }
 
     #[test]

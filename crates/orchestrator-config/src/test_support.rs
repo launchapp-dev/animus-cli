@@ -34,3 +34,7 @@ impl Drop for EnvVarGuard {
         }
     }
 }
+
+/// Re-export of the v0.6 config_source test seam for this crate's own tests.
+/// See [`crate::workflow_config::config_source_client::install_yaml_config_source_base`].
+pub(crate) use crate::workflow_config::config_source_client::install_yaml_config_source_base;

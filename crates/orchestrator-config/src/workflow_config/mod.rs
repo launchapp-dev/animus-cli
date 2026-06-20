@@ -36,9 +36,7 @@ pub use validation::{
     validate_workflow_config, validate_workflow_config_with_project_root, SkillReferenceWarning,
     UnenforcedFieldWarning,
 };
-pub(crate) use yaml_compiler::{
-    collect_project_yaml_workflow_sources, compile_yaml_sources_confined_to_pack, compile_yaml_sources_with_base,
-};
+pub(crate) use yaml_compiler::compile_yaml_sources_confined_to_pack;
 pub use yaml_compiler::{
     compile_yaml_workflow_files, generated_workflow_phase_is_defined, merge_yaml_into_config,
     remove_generated_workflow_phase, upsert_generated_workflow_phase, upsert_generated_workflow_pipeline,

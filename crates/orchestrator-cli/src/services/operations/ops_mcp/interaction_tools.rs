@@ -1450,6 +1450,10 @@ phases:
 "#,
             )
             .expect("write workflows.yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let server = new_ao_mcp_server(&project_root);
 
             let allowed = server
@@ -1547,6 +1551,10 @@ phases:
 "#,
                 )
                 .expect("write workflows.yaml");
+                let _config_source_seam =
+                    orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                        project.path(),
+                    );
                 let server = new_ao_mcp_server(&project_root);
 
                 let result = server
@@ -1606,6 +1614,10 @@ phases:
 "#,
                 )
                 .expect("write workflows.yaml");
+                let _config_source_seam =
+                    orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                        project.path(),
+                    );
                 let server = new_ao_mcp_server_with_options(&project_root, false, Some("restricted".to_string()), None);
 
                 let result = server
@@ -1840,6 +1852,10 @@ phases:
             let project = tempdir().expect("tempdir");
             init_git_repo(project.path());
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let workflow = bootstrap_running_workflow(&project_root).await;
             assert_eq!(workflow.status, orchestrator_core::WorkflowStatus::Running);
 
@@ -2251,6 +2267,10 @@ phases:
 "#,
             )
             .expect("write workflows.yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let server = new_ao_mcp_server_with_options(&project_root, false, Some("swe".to_string()), None);
             let original_input = serde_json::json!({ "command": "cargo test" });
 
@@ -2410,6 +2430,10 @@ phases:
             let project = tempdir().expect("tempdir");
             init_git_repo(project.path());
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let workflow = bootstrap_running_workflow(&project_root).await;
 
             let created = animus_runtime_shared::create_question_interaction(

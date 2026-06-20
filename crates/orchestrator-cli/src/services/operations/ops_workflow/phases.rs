@@ -838,6 +838,45 @@ workflows:
         temp.path().join(".animus").join("workflows").join(file_name)
     }
 
+    /// Write a minimal `.animus/workflows.yaml` defining the `standard-workflow`
+    /// pipeline so the config_source seam compiles a base that the FileServiceHub
+    /// run/resume paths can resolve a phase plan from. v0.6 sources the base
+    /// config from the config_source plugin (the seam), so tests that bootstrap a
+    /// workflow must provide authored YAML for the seam to compile.
+    fn write_standard_workflow_yaml(temp: &TempDir) {
+        let animus_dir = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus_dir).expect(".animus dir should be created");
+        let yaml = r#"
+default_workflow_ref: standard-workflow
+phases:
+  requirements:
+    mode: agent
+    agent: swe
+    directive: "Gather requirements."
+  implementation:
+    mode: agent
+    agent: swe
+    directive: "Implement."
+  code-review:
+    mode: agent
+    agent: swe
+    directive: "Review."
+  testing:
+    mode: agent
+    agent: swe
+    directive: "Test."
+agents:
+  swe:
+    description: "SWE"
+    system_prompt: "Be a SWE."
+workflows:
+- id: standard-workflow
+  name: Standard Workflow
+  phases: [requirements, implementation, code-review, testing]
+"#;
+        std::fs::write(animus_dir.join("workflows.yaml"), yaml).expect("workflows.yaml should be written");
+    }
+
     #[test]
     fn upsert_phase_definition_keeps_resolved_secrets_out_of_generated_overlay() {
         let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
@@ -846,6 +885,8 @@ workflows:
         let _secret_guard = EnvVarGuard::set("ANIMUS_TEST_UPSERT_SECRET", Some(UPSERT_SECRET_VALUE));
         init_git_repo(&temp);
         write_secret_using_workflows_yaml(&temp);
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let project_root = temp.path().to_string_lossy().to_string();
         let definition: orchestrator_core::PhaseExecutionDefinition = serde_json::from_value(serde_json::json!({
@@ -866,6 +907,8 @@ workflows:
             "upsert must not dump the merged runtime config"
         );
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let recompiled = orchestrator_core::load_workflow_config(temp.path()).expect("recompile should succeed");
         assert!(recompiled.phase_definitions.contains_key("custom-phase"), "phase should survive recompile");
         let runtime = load_agent_runtime_config(temp.path()).expect("runtime should load");
@@ -880,6 +923,8 @@ workflows:
         let _secret_guard = EnvVarGuard::set("ANIMUS_TEST_UPSERT_SECRET", Some(UPSERT_SECRET_VALUE));
         init_git_repo(&temp);
         write_secret_using_workflows_yaml(&temp);
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let project_root = temp.path().to_string_lossy().to_string();
         let pipeline: orchestrator_core::WorkflowDefinition = serde_json::from_value(serde_json::json!({
@@ -898,6 +943,8 @@ workflows:
         assert!(!content.contains(UPSERT_SECRET_VALUE), "resolved secret leaked into generated overlay: {content}");
         assert!(!content.contains("mcp_servers"), "compiled mcp_servers must not be dumped: {content}");
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let recompiled = orchestrator_core::load_workflow_config(temp.path()).expect("recompile should succeed");
         assert!(
             recompiled.workflows.iter().any(|workflow| workflow.id == "custom-pipeline"),
@@ -913,6 +960,8 @@ workflows:
         let _secret_guard = EnvVarGuard::set("ANIMUS_TEST_UPSERT_SECRET", Some(UPSERT_SECRET_VALUE));
         init_git_repo(&temp);
         write_secret_using_workflows_yaml(&temp);
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let project_root = temp.path().to_string_lossy().to_string();
         let definition: orchestrator_core::PhaseExecutionDefinition = serde_json::from_value(serde_json::json!({
@@ -923,12 +972,16 @@ workflows:
         .expect("definition should parse");
         upsert_phase_definition(&project_root, "custom-phase", definition).expect("upsert should succeed");
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         remove_phase_definition(&project_root, "custom-phase").expect("remove should succeed");
         let generated = generated_overlay_path(&temp, "generated-workflow.yaml");
         let content = std::fs::read_to_string(&generated).expect("generated overlay should exist");
         assert!(!content.contains("custom-phase"), "removed phase should be pruned from overlay: {content}");
         assert!(!content.contains(UPSERT_SECRET_VALUE), "resolved secret leaked into generated overlay: {content}");
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let err = remove_phase_definition(&project_root, "lint").expect_err("yaml-sourced phase should not remove");
         assert!(
             format!("{err:#}").contains("generated overlays"),
@@ -1005,7 +1058,10 @@ workflows:
         let temp = TempDir::new().expect("temp dir");
         let _guards = isolate_plugin_discovery(&temp);
         init_git_repo(&temp);
+        write_standard_workflow_yaml(&temp);
         let project_root = temp.path().to_string_lossy().to_string();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
         let task = create_test_task(&hub, "resume without plugin").await;
 
@@ -1063,7 +1119,10 @@ workflows:
         let _guards = isolate_plugin_discovery(&temp);
         init_git_repo(&temp);
         install_fake_workflow_runner_plugin(&temp);
+        write_standard_workflow_yaml(&temp);
         let project_root = temp.path().to_string_lossy().to_string();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
         let task = create_test_task(&hub, "async run with plugin").await;
         hub.tasks().set_status(&task.id, TaskStatus::Ready, false).await.expect("task should be ready");
@@ -1093,7 +1152,10 @@ workflows:
         let temp = TempDir::new().expect("temp dir");
         let _guards = isolate_plugin_discovery(&temp);
         init_git_repo(&temp);
+        write_standard_workflow_yaml(&temp);
         let project_root = temp.path().to_string_lossy().to_string();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
         let task = create_test_task(&hub, "resume guards").await;
 
@@ -1209,6 +1271,9 @@ workflows:
         let temp = TempDir::new().expect("temp dir");
         let _home_guard = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         init_git_repo(&temp);
+        write_standard_workflow_yaml(&temp);
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
         let project_root = temp.path().to_string_lossy().to_string();
         let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
 
@@ -1247,6 +1312,8 @@ workflows:
         });
         runtime.phases.insert(current_phase.clone(), definition);
         write_agent_runtime_config(temp.path(), &runtime).expect("runtime config should write");
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let paused = hub.workflows().pause(&workflow.id).await.expect("workflow should pause");
         assert_eq!(paused.status, WorkflowStatus::Paused);

@@ -233,6 +233,10 @@ mod tests {
         init_git_repo(&temp);
         let project_root = temp.path().to_string_lossy().to_string();
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+        // v0.6: the kernel sources its base workflow config from a config_source
+        // plugin; in tests, stand in for it after the hub scaffolds .animus/.
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let task = hub
             .tasks()
@@ -288,6 +292,10 @@ mod tests {
         init_git_repo(&temp);
         let project_root = temp.path().to_string_lossy().to_string();
         let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+        // v0.6: the kernel sources its base workflow config from a config_source
+        // plugin; in tests, stand in for it after the hub scaffolds .animus/.
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let task = hub
             .tasks()

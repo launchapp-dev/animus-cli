@@ -292,6 +292,8 @@ workflows:
         let temp = tempfile::tempdir().expect("tempdir");
 
         crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config()).expect("write workflow config");
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let err = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("does-not-exist"))
             .expect_err("missing pipeline should return error");
@@ -315,6 +317,8 @@ workflows:
             vec!["requirements".to_string().into(), "testing".to_string().into(), "implementation".to_string().into()];
 
         crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some(STANDARD_WORKFLOW_REF))
             .expect("resolver should use configured standard pipeline phases");
@@ -330,6 +334,8 @@ workflows:
         workflow_config.default_workflow_ref = UI_UX_WORKFLOW_REF.to_string();
 
         crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), None)
             .expect("resolver should use configured default pipeline");
@@ -353,6 +359,8 @@ workflows:
         workflow_config.workflows.push(explicit_ui_ux_pipeline);
 
         crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("ui-ux"))
             .expect("resolver should use explicit configured pipeline id");
@@ -365,6 +373,8 @@ workflows:
         let temp = tempfile::tempdir().expect("tempdir");
 
         crate::write_workflow_config(temp.path(), &crate::builtin_workflow_config()).expect("write workflow config");
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let error = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("animus.requirement/execute"))
             .expect_err("requirement pack workflow should not resolve until the pack is installed");
@@ -382,6 +392,8 @@ workflows:
             "0.2.0",
             "review-pack",
         );
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         let phases = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("review-pack"))
             .expect("resolver should use installed pack workflow");

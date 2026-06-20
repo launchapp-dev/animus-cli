@@ -467,6 +467,8 @@ mod tests {
             "workflows: []\ndaemon:\n  budget:\n    max_cost_usd_per_day: 12.5\n",
         )
         .unwrap();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&project_root);
         assert_eq!(read_max_daily_usd(&project_root), Some(12.5));
     }
 

@@ -35,8 +35,7 @@ pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queu
 
 /// v0.6 config-source plugin (the default YAML source, once config-sourcing is a
 /// plugin role). Tag is a placeholder until `animus-config-yaml` is published.
-pub const DEFAULT_CONFIG_SOURCE_PLUGINS: &[(&str, &str)] =
-    &[("launchapp-dev/animus-config-yaml", "v0.1.0")];
+pub const DEFAULT_CONFIG_SOURCE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-config-yaml", "v0.1.0")];
 
 /// v0.5 durable-store plugin (DBOS Option A). The `animus-step-durable-dbos`
 /// repository has not shipped a tagged release yet; until it does this list
@@ -95,6 +94,7 @@ pub fn resolve_tag_for_slug(slug: &str) -> Option<&'static str> {
         DEFAULT_TRANSPORT_PLUGINS,
         DEFAULT_WORKFLOW_RUNNER_PLUGINS,
         DEFAULT_QUEUE_PLUGINS,
+        DEFAULT_CONFIG_SOURCE_PLUGINS,
         DEFAULT_DURABLE_STORE_PLUGINS,
         DEFAULT_MEMORY_STORE_PLUGINS,
         DEFAULT_NOTIFIER_PLUGINS,

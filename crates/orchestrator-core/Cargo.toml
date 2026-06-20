@@ -35,5 +35,10 @@ rand = "0.8"
 hex = "0.4"
 base64 = "0.22"
 
+[dev-dependencies]
+# v0.6: enable the config_source test seam so unit tests can inject a base
+# WorkflowConfig in place of an installed config_source plugin.
+orchestrator-config = { workspace = true, features = ["test-utils"] }
+
 [lints]
 workspace = true

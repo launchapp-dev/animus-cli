@@ -823,6 +823,8 @@ agents:
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("trader".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");
@@ -890,6 +892,8 @@ agents:
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("cautious".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");
@@ -917,6 +921,8 @@ agents:
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("cautious".to_string());
         args.permission_mode = Some("bypassPermissions".to_string());
@@ -985,6 +991,8 @@ agents:
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("gated".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");
@@ -1024,6 +1032,8 @@ agents:
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("guarded".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");

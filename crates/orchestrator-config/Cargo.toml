@@ -24,5 +24,13 @@ uuid = { version = "1", features = ["v4"] }
 [dev-dependencies]
 tempfile = "3"
 
+[features]
+# Exposes the v0.6 config_source test seam (`install_yaml_config_source_base`)
+# to OTHER crates' test builds. The kernel sources its base WorkflowConfig from
+# an installed config_source plugin; unit tests in dependent crates can't spawn
+# one, so this feature lets them inject a synthetic base. Never enable in
+# production builds.
+test-utils = []
+
 [lints]
 workspace = true

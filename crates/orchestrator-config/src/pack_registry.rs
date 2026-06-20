@@ -853,7 +853,7 @@ fn read_child_directories(root: &Path) -> Result<Vec<PathBuf>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{env_lock, EnvVarGuard};
+    use crate::test_support::{env_lock, install_yaml_config_source_base, EnvVarGuard};
 
     fn write_pack_fixture(root: &Path, pack_id: &str, version: &str, description: &str, extra_workflow: &str) {
         fs::create_dir_all(root.join("workflows")).expect("create workflows");
@@ -1145,6 +1145,7 @@ workflows:
         )
         .expect("write project workflows");
 
+        let _base = install_yaml_config_source_base(project.path());
         let loaded = crate::load_workflow_config_with_metadata(project.path()).expect("load effective workflow config");
         let workflows = loaded.config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
         let standard = loaded
@@ -1191,6 +1192,7 @@ workflows:
         )
         .expect("write project workflows");
 
+        let _base = install_yaml_config_source_base(project.path());
         let loaded = crate::load_workflow_config_with_metadata(project.path()).expect("load effective workflow config");
         let standard = loaded
             .config
@@ -1314,6 +1316,7 @@ version = ">=1.0.0"
         )
         .expect("write workflow overlay");
 
+        let _base = install_yaml_config_source_base(project.path());
         let error =
             crate::load_workflow_config_with_metadata(project.path()).expect_err("missing dependency should fail");
         assert!(error.to_string().contains("requires dependency 'animus.missing'"));
@@ -1368,6 +1371,7 @@ tools = ["cargo"]
         )
         .expect("write workflow overlay");
 
+        let _base = install_yaml_config_source_base(project.path());
         let error = crate::load_workflow_config_with_metadata(project.path())
             .expect_err("undeclared tool permission should fail");
         assert!(error.to_string().contains("without declaring it in permissions.tools"));
@@ -1434,6 +1438,7 @@ required_env = ["PACK_SECRET_TOKEN"]
 
         let registry = resolve_pack_registry(project.path()).expect("registry resolution should not require secrets");
         assert!(registry.resolve("animus.secret").is_some(), "secret pack should still be active");
+        let _base = install_yaml_config_source_base(project.path());
         crate::load_workflow_config_with_metadata(project.path())
             .expect("workflow config loading should not require secrets");
     }
@@ -1499,6 +1504,7 @@ workflows:
 
         let registry = resolve_pack_registry(project.path()).expect("registry resolution should not probe runtimes");
         assert!(registry.resolve("animus.runtime").is_some(), "runtime pack should still be active");
+        let _base = install_yaml_config_source_base(project.path());
         crate::load_workflow_config_with_metadata(project.path())
             .expect("workflow config loading should not probe runtimes");
     }

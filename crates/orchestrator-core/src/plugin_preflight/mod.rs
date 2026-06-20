@@ -9,9 +9,8 @@ use animus_plugin_protocol::{PLUGIN_KIND_PROVIDER, PLUGIN_KIND_SUBJECT_BACKEND};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin_registry::{
-    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec,
-    DEFAULT_CONFIG_SOURCE_PLUGINS, DEFAULT_QUEUE_PLUGINS,
-    DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, DEFAULT_CONFIG_SOURCE_PLUGINS,
+    DEFAULT_QUEUE_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 
 /// Plugin-kind wire value for `workflow_runner`. Kept local because the
@@ -140,10 +139,8 @@ pub fn default_queue_repo() -> String {
 /// Default repo spec preflight should auto-install when the `config_source`
 /// role is unsatisfied (v0.6).
 pub fn default_config_source_repo() -> String {
-    let first = DEFAULT_CONFIG_SOURCE_PLUGINS
-        .first()
-        .copied()
-        .expect("DEFAULT_CONFIG_SOURCE_PLUGINS must be non-empty");
+    let first =
+        DEFAULT_CONFIG_SOURCE_PLUGINS.first().copied().expect("DEFAULT_CONFIG_SOURCE_PLUGINS must be non-empty");
     format_repo_spec(first)
 }
 
@@ -219,6 +216,10 @@ impl PluginPreflightSpec {
                 RequiredRole::AtLeastOneSubjectBackend,
                 RequiredRole::WorkflowRunner,
                 RequiredRole::Queue,
+                // v0.6: the kernel sources its workflow/agent config exclusively
+                // from an installed `config_source` plugin (the in-tree YAML load
+                // path was removed). The daemon refuses to start without one.
+                RequiredRole::ConfigSource,
             ],
             auto_install: false,
             auto_install_defaults: vec![
@@ -228,6 +229,7 @@ impl PluginPreflightSpec {
                 ("at_least_one_subject_backend".to_string(), default_task_backend_repo()),
                 ("workflow_runner".to_string(), default_workflow_runner_repo()),
                 ("queue".to_string(), default_queue_repo()),
+                ("config_source".to_string(), default_config_source_repo()),
             ],
         }
     }

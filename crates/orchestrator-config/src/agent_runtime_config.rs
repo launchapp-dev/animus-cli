@@ -2780,7 +2780,7 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{env_lock, EnvVarGuard};
+    use crate::test_support::{env_lock, install_yaml_config_source_base, EnvVarGuard};
     use std::fs;
 
     #[test]
@@ -3167,6 +3167,7 @@ cli_tools:
         );
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
 
+        let _base = install_yaml_config_source_base(temp.path());
         let resolved = load_agent_runtime_config_or_default(temp.path());
         let phase = resolved.phase_decision_contract("workflow-test-phase").expect("workflow phase contract");
         assert!(!phase.allow_missing_decision);
@@ -3185,6 +3186,7 @@ cli_tools:
             "0.2.0",
         );
 
+        let _base = install_yaml_config_source_base(temp.path());
         crate::workflow_config::load_workflow_config_with_metadata(temp.path()).expect("workflow config should load");
         let resolved = load_agent_runtime_config_with_metadata(temp.path()).expect("load runtime config");
         let command = resolved.config.phase_command("pack-review").expect("pack review command");
@@ -3262,6 +3264,7 @@ cli_tools:
         });
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
 
+        let _base = install_yaml_config_source_base(temp.path());
         let resolved = load_agent_runtime_config_with_metadata(temp.path()).expect("load runtime config");
         let phase = resolved.config.phase_execution("pack-review").expect("pack-review phase should exist");
         assert_eq!(phase.mode, PhaseExecutionMode::Agent);
@@ -4714,6 +4717,7 @@ phases:
         );
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
 
+        let _base = install_yaml_config_source_base(temp.path());
         let resolved = load_agent_runtime_config_or_default(temp.path());
         let tool = resolved.cli_tools.get("full-tool").expect("full-tool should exist in cli_tools");
         assert_eq!(tool.executable.as_deref(), Some("full-tool-bin"));

@@ -982,6 +982,8 @@ workflows:
 "#,
         )
         .unwrap();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&project_root);
         // Hand-build a CostState already over budget.
         let mut state = CostState::default();
         let mut wf = WorkflowCost::new("flow", Utc::now());

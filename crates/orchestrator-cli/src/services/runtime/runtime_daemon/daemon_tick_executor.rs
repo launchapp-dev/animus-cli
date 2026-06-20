@@ -431,6 +431,8 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let (hub, task_id) = hub_with_task(&temp, "crashed workflow residue").await;
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -498,6 +500,8 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let (hub, task_id) = hub_with_task(&temp, "cancelled workflow residue").await;
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -522,6 +526,8 @@ mod tests {
         let temp = TempDir::new().expect("temp dir");
         let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
         let (hub, task_id) = hub_with_task(&temp, "manually worked task").await;
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
         hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
         let workflow = hub

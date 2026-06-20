@@ -1004,6 +1004,10 @@ mod tests {
                 init_git_repo(project.path());
                 let project_root = project.path().to_string_lossy().to_string();
                 let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+                let _config_source_seam =
+                    orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                        project.path(),
+                    );
                 let workflow = bootstrap_workflow(&hub).await;
                 hub.workflows().pause(&workflow.id).await.expect("workflow pauses");
 
@@ -1065,6 +1069,10 @@ mod tests {
                 init_git_repo(project.path());
                 let project_root = project.path().to_string_lossy().to_string();
                 let hub: Arc<dyn ServiceHub> = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+                let _config_source_seam =
+                    orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                        project.path(),
+                    );
                 let workflow = bootstrap_workflow(&hub).await;
                 assert_eq!(workflow.status, WorkflowStatus::Running);
 
