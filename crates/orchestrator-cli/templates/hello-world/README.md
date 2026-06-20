@@ -27,7 +27,7 @@ animus workflow run hello-world
 ```bash
 animus workflow list
 animus output tail
-animus output run --workflow-id <id>
+animus output read --workflow-id <id>
 ```
 
 ## What to do next
