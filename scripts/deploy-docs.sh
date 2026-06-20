@@ -10,18 +10,12 @@ npm run docs:check-sync
 npm run docs:build
 echo "Deploying docs with Vercel..."
 echo "Prerequisites: npm registry access and a valid Vercel login."
-if [ -x "./node_modules/.bin/vercel" ]; then
-  ./node_modules/.bin/vercel --yes --prod
-elif command -v vercel >/dev/null 2>&1; then
-  vercel --yes --prod
-else
-  npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
-  trap 'rm -rf "$npx_cache_dir"' EXIT
-  echo "Local vercel CLI not found in node_modules/.bin; npx will download it from npm."
-  echo "Using temporary npm cache at $npx_cache_dir."
-  npm_config_cache="$npx_cache_dir" \
-  npm_config_fetch_retries=0 \
-  npm_config_fetch_timeout=10000 \
-  npm_config_fetch_retry_maxtimeout=10000 \
-    npx vercel --yes --prod
-fi
+npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
+trap 'rm -rf "$npx_cache_dir"' EXIT
+echo "Using npx vercel for the production deploy."
+echo "Using temporary npm cache at $npx_cache_dir."
+npm_config_cache="$npx_cache_dir" \
+npm_config_fetch_retries=0 \
+npm_config_fetch_timeout=10000 \
+npm_config_fetch_retry_maxtimeout=10000 \
+  npx vercel --yes --prod

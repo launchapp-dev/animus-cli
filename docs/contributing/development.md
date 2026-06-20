@@ -99,17 +99,14 @@ tool table match the live clap/MCP registries before deploying the docs site
 to Vercel.
 
 `npm run docs:deploy` wraps the required preflight in order: sync check,
-production site build, then a Vercel production deploy. If a local CLI exists
-at `node_modules/.bin/vercel`, the script uses it directly. Otherwise it tries
-an already-installed global `vercel` binary before falling back to
-`npx vercel --yes --prod` using a temporary npm cache directory so the fallback
-does not depend on a writable `~/.npm/`.
+production site build, then a Vercel production deploy. The deploy helper
+always runs `npx vercel --yes --prod` and points npm at a temporary cache
+directory so the command does not depend on a writable `~/.npm/`.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
-the local CLI is absent, it also assumes the runner can reach
-`registry.npmjs.org` to resolve `vercel` through `npx`. In restricted
-environments, expect the deploy phase to stall or fail even when the docs are
-otherwise in sync.
+running through `npx`, it also assumes the runner can reach
+`registry.npmjs.org` to resolve `vercel`. In restricted environments, expect
+the deploy phase to stall or fail even when the docs are otherwise in sync.
 
 Protocol schema exports live at the repo root:
 
