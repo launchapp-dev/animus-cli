@@ -709,6 +709,12 @@ mod tests {
         )
         .expect("write workflows.yaml");
 
+        // v0.6: config is plugin-sourced; register the compiled project YAML as
+        // the base in place of an installed config_source plugin for this load.
+        let _seam = orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+            std::path::Path::new(project_root),
+        );
+
         let payload = resolve_workflow_skills_payload(project_root);
         let research = payload.phases.get("research").expect("research phase resolved");
         assert!(research.requested.contains(&"deep-search".to_string()));
