@@ -952,6 +952,67 @@ Pause/resume gating is unchanged: `animus daemon pause` still gates
 dispatch on event wakes, not just heartbeat ticks — a nudge while paused
 wakes the loop but dispatches nothing.
 
+## Config sources (v0.6)
+
+By default the daemon reads workflow and agent config from the in-tree YAML files
+(`.animus/workflows.yaml` and `.animus/workflows/*.yaml`). As of v0.6 this
+acquisition step is optionally handled by an installed `config_source` plugin
+instead.
+
+### How it works
+
+The kernel's `ConfigSourceClient` calls `orchestrator_plugin_host::discover_by_kind`
+for `"config_source"` on each config load. If a plugin is found, the kernel spawns it
+and issues a `config/load` JSON-RPC call with `{ project_root, repo_scope }`. The
+plugin returns a `ConfigLoadResponse` containing:
+
+- `config` — a `ConfigModel` envelope: `{ schema: "animus.workflow-config.v2", version: 2,
+  config: <WorkflowConfig as opaque JSON> }`
+- `cache_token` — `{ version: "<opaque string>", external_inputs: bool }`. The kernel
+  keys its compiled-config disk cache on `version` and bypasses the cache when
+  `external_inputs` is true.
+
+When **no** `config_source` plugin is installed, `resolve_plugin_base` returns `Ok(None)`
+and the kernel falls back to the in-tree YAML scan. Existing projects are completely
+unaffected.
+
+The kernel owns the compiler in both paths: pack-overlay merge, agent-runtime derivation,
+state-machine compilation, validation, and disk caching all stay in-kernel regardless of
+which source produced the base `WorkflowConfig`.
+
+### Hot-reload
+
+When a `config_source` plugin advertises the `config_watch` capability, the daemon
+subscribes to its `config/changed` notifications. On receipt it re-issues `config/load`,
+recompiles, and broadcasts the standard `config_reloaded` event on `workflow/events`.
+When the plugin does not advertise `config_watch` (or when no plugin is installed), the
+daemon falls back to its existing interval-heartbeat / filesystem-watcher reload path —
+no behavioral regression for YAML-backed projects.
+
+### Optional `config/validate`
+
+A plugin may implement the optional `config/validate` method, which runs a plugin-side
+syntactic pre-check (e.g. YAML diagnostics with file + line numbers) and returns
+structured `ConfigDiagnostic` entries. The kernel still runs the authoritative
+`validate_workflow_config_with_project_root`; `config/validate` is for richer error
+locality at the source. Plugins that do not implement it return
+`METHOD_NOT_SUPPORTED` — the kernel ignores the response and compiles on.
+
+### Preflight
+
+`RequiredRole::ConfigSource` is defined in the preflight enum (v0.6) and is satisfied
+by any installed `config_source` plugin. It is **not yet required** by the daemon's
+default preflight set (`daemon_default()`) — the in-tree YAML path remains the default
+acquisition and no `config_source` plugin is required for an existing project to start.
+The role will be added to `daemon_default()` once a reference `animus-config-yaml`
+plugin is published as the default-flavor impl. In the meantime `animus daemon preflight`
+does not report this role as missing, and `--skip-preflight` is not needed for
+YAML-only projects.
+
+`animus-config-postgres` (the LaunchApp portal, running a from-source v0.6 binary) is
+the first production `config_source` plugin. The general-audience release of the role
+tracks the publication of `launchapp-dev/animus-config-yaml`.
+
 ## Notes
 
 - Project YAML is the authored workflow surface.

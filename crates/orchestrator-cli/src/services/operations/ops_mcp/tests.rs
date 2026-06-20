@@ -1654,6 +1654,7 @@ fn mcp_subject_update_requires_at_least_one_field_args() {
         status: Some("in_progress".to_string()),
         priority: None,
         labels: vec![],
+        body: None,
         project_root: None,
     };
     let args = build_subject_update_args(&input);

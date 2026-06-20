@@ -315,6 +315,33 @@ VS Code, and every other long-lived plugin-host architecture.
 - Web UI
 - Log storage
 
+### Config sourcing is now a pluggable role (v0.6)
+
+As of v0.6, workflow/agent config sourcing is a `config_source` plugin role. The boundary is:
+**plugins source, the kernel compiles.** A `config_source` plugin parses, reads, or fetches
+config from its backing store and returns one normalized canonical model (the parsed
+`WorkflowConfig`, schema `animus.workflow-config.v2`). The kernel keeps the heavy compiler —
+pack-overlay merge, agent-runtime derivation, state-machine compilation, validation, and
+caching. The compiler is not duplicated per plugin.
+
+The default source remains the in-tree YAML scan (`.animus/workflows/*.yaml`). When no
+`config_source` plugin is installed, `ConfigSourceClient::resolve_plugin_base` returns
+`Ok(None)` and the kernel falls back to the in-tree YAML acquisition path, so existing
+projects are completely unaffected.
+
+`animus-config-postgres` (the LaunchApp portal) is the first production `config_source`
+plugin. It lets the portal daemon read team/workflow definitions straight from a Postgres
+metadata DB, removing the YAML-on-disk intermediary entirely. The same protocol supports
+any future source (API, GitOps, remote control plane) without kernel changes.
+
+The `config_source` role is defined and its load path is wired (the `ConfigSourceClient`
+in `orchestrator-config` resolves and calls an installed plugin), but the role is **not
+yet required by the daemon preflight** (`daemon_default()`). Existing daemons continue
+to satisfy preflight with no config plugin installed; the role will be added to
+`daemon_default()` once `animus-config-yaml` is published as the default-flavor reference
+impl (phase v0.6.x-b). Until then, `--skip-preflight` is not needed for YAML-only
+projects.
+
 ### What should become a plugin kind (candidates, not v0.5 scope)
 
 Each of these is currently kernel or workspace-internal code. None of them is

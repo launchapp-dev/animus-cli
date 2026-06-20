@@ -111,8 +111,13 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
     if !args.labels.is_empty() {
         patch.insert("labels".to_string(), json!(args.labels));
     }
+    if let Some(body) = args.body.as_deref() {
+        patch.insert("body".to_string(), json!(body));
+    }
     if patch.is_empty() {
-        return Err(invalid_input_error("subject update requires at least one of --status / --priority / --labels"));
+        return Err(invalid_input_error(
+            "subject update requires at least one of --status / --priority / --labels / --body",
+        ));
     }
     let params = Some(json!({ "id": id, "patch": Value::Object(patch) }));
     dispatch(&kind, "update", params, project_root, json).await

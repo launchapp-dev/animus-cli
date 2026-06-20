@@ -8,6 +8,13 @@ describes the authored YAML surface.
 For the target direction of phase output contracts, universal verdicts, and
 YAML-defined phase-local fields, see [Phase Contracts](../architecture/phase-contracts.md).
 
+> **YAML is the default config source.** As of v0.6 the daemon can read
+> workflow and agent config from an installed `config_source` plugin instead
+> of these YAML files (e.g. `animus-config-postgres` for the LaunchApp portal).
+> This document describes the YAML surface, which remains the default for all
+> projects that do not have a `config_source` plugin installed.
+> See [Config sources (v0.6)](configuration.md#config-sources-v06) for details.
+
 ## Top-Level Structure
 
 A workflow YAML file can contain any combination of these top-level sections:

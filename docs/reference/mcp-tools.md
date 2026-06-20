@@ -159,7 +159,7 @@ plugin (e.g. `linear`, `jira`, `github-issue`).
 | `animus.subject.list` | List subjects for a kind via the active `subject_backend` plugin | `kind`, `status`, `limit`, `project_root` |
 | `animus.subject.get` | Fetch a subject by wire id (`<kind>:<native_id>`) | `kind`, `id`, `project_root` |
 | `animus.subject.create` | Create a subject through the active `subject_backend` plugin | `kind`, `title`, `priority`, `status`, `labels[]`, `body`, `project_root` |
-| `animus.subject.update` | Update a subject through the active `subject_backend` plugin | `kind`, `id`, `priority`, `status`, `labels[]`, `project_root` |
+| `animus.subject.update` | Update a subject through the active `subject_backend` plugin | `kind`, `id`, `priority`, `status`, `labels[]`, `body`, `project_root` |
 | `animus.subject.next` | Return the highest-priority Ready subject for the given kind | `kind`, `project_root` |
 | `animus.subject.status` | Set the status of a subject by id through the active `subject_backend` | `kind`, `id`, `status`, `project_root` |
 | `animus.subject.batch-create` | Create up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`title`, `status`, `priority`, `labels[]`, `body`), `on_error`, `project_root` |

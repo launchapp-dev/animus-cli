@@ -45,6 +45,11 @@ pub(super) struct SubjectUpdateInput {
     pub(super) priority: Option<String>,
     #[serde(default)]
     pub(super) labels: Vec<String>,
+    /// Free-form body / description (markdown). Set this to write long-form
+    /// content onto the subject (e.g. an agent's findings) — it renders in
+    /// detail views.
+    #[serde(default)]
+    pub(super) body: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }

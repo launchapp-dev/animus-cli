@@ -40,7 +40,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.subject.update",
-        description = "Apply a patch to a subject through the active subject_backend. Purpose: Mutate status, priority, or labels. Prerequisites: Subject must exist; at least one of --status / --priority / --labels must be provided. Example: {\"kind\": \"task\", \"id\": \"TASK-1\", \"status\": \"in_progress\"}. Sequencing: Use animus.subject.get afterwards to confirm.",
+        description = "Apply a patch to a subject through the active subject_backend. Purpose: Mutate status, priority, labels, or the free-form body/description (markdown). Use `body` to write long-form content onto a subject (e.g. an agent's findings) — it renders in detail views. Prerequisites: Subject must exist; at least one of status / priority / labels / body must be provided. Example: {\"kind\": \"task\", \"id\": \"TASK-1\", \"status\": \"in_progress\"} or {\"kind\": \"task\", \"id\": \"TASK-1\", \"labels\": [\"researched\"], \"body\": \"## Findings\\n...\"}. Sequencing: Use animus.subject.get afterwards to confirm.",
         input_schema = ao_schema_for_type::<SubjectUpdateInput>()
     )]
     async fn ao_subject_update(&self, params: Parameters<SubjectUpdateInput>) -> Result<CallToolResult, McpError> {
