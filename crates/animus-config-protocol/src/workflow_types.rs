@@ -751,18 +751,6 @@ pub(crate) fn default_keep_last_per_phase() -> usize {
     crate::workflow::DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE
 }
 
-pub(crate) fn phase_ui_definition(label: &str, description: &str, category: &str, tags: &[&str]) -> PhaseUiDefinition {
-    PhaseUiDefinition {
-        label: label.to_string(),
-        description: description.to_string(),
-        category: category.to_string(),
-        icon: None,
-        docs_url: None,
-        tags: tags.iter().map(|tag| tag.to_string()).collect(),
-        visible: true,
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DaemonConfig {
     #[serde(default)]

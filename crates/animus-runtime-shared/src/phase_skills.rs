@@ -422,8 +422,8 @@ mod tests {
         AgentProfileOverlay, PhaseExecutionDefinition, PhaseExecutionMode,
     };
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, workflow_config_hash, LoadedWorkflowConfig,
-        WorkflowConfigMetadata, WorkflowConfigSource,
+        builtin_workflow_config, workflow_config_hash, LoadedWorkflowConfig, WorkflowConfigMetadata,
+        WorkflowConfigSource,
     };
     use std::path::PathBuf;
 
@@ -453,7 +453,9 @@ mod tests {
         mutate: impl FnOnce(&mut orchestrator_core::WorkflowConfig, &mut orchestrator_core::AgentRuntimeConfig),
     ) -> RuntimeConfigContext {
         let mut workflow = builtin_workflow_config();
-        let mut agent_runtime_config = builtin_agent_runtime_config();
+        // v0.6 kernel-purification: the kernel builtin is empty. Seed the
+        // standard personas/phases these tests mutate/read.
+        let mut agent_runtime_config = crate::test_fixtures::seeded_agent_runtime_config();
         mutate(&mut workflow, &mut agent_runtime_config);
         let metadata = WorkflowConfigMetadata {
             schema: workflow.schema.clone(),

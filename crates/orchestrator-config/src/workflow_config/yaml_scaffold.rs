@@ -18,6 +18,62 @@ pub fn default_workflow_template_files() -> [(&'static str, &'static str); 4] {
 # Project-local workflow extensions and overrides.
 tools_allowlist:
   - cargo
+
+# v0.6 kernel-purification: the kernel ships ZERO baked agents/phases. This
+# scaffold defines a minimal, self-contained starter set so a fresh project is
+# valid and runnable; installed packs and your own edits extend or override it.
+agents:
+  default:
+    description: Default workflow phase agent profile
+    system_prompt: >-
+      You are the workflow phase execution agent. Produce deterministic,
+      repository-safe outputs and keep changes scoped to the active phase.
+
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+    directive: Clarify implementation scope, constraints, and acceptance criteria.
+  research:
+    mode: agent
+    agent_id: default
+    directive: Gather codebase and external evidence to de-risk the next step.
+  implementation:
+    mode: agent
+    agent_id: default
+    directive: Implement production-quality code for this task. Keep changes focused and executable.
+  code-review:
+    mode: agent
+    agent_id: default
+    directive: Review quality, risks, and maintainability before completion.
+  testing:
+    mode: agent
+    agent_id: default
+    directive: Run and update test coverage for the delivered changes.
+
+# UI/metadata registry mirrored from `phases:` so `animus workflow phases list`
+# can display the scaffolded phases. Packs and edits can extend this.
+phase_catalog:
+  requirements:
+    label: Requirements
+    description: Clarify scope, constraints, and acceptance criteria.
+    category: planning
+  research:
+    label: Research
+    description: Gather implementation evidence and references.
+    category: planning
+  implementation:
+    label: Implementation
+    description: Deliver production-quality implementation changes.
+    category: build
+  code-review:
+    label: Code Review
+    description: Review quality, risks, and maintainability before completion.
+    category: review
+  testing:
+    label: Testing
+    description: Run and update test coverage for the delivered changes.
+    category: qa
 "#,
         ),
         (

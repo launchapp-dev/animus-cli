@@ -196,15 +196,16 @@ pub fn validate_workflow_and_runtime_configs_with_project_root(
                 continue;
             }
 
-            if workflow.phase_catalog.keys().all(|candidate| !candidate.eq_ignore_ascii_case(phase_id)) {
-                errors
-                    .push(format!("workflow '{}' phase '{}' is missing from phase_catalog", workflow_def.id, phase_id));
-            }
-
+            // Kernel-purification (v0.6) + Codex round-1 P2: a workflow phase
+            // must have an EXECUTION definition (workflow phase_definitions or
+            // agent-runtime phases). `phase_catalog` is UI/metadata only and does
+            // NOT make a phase runnable, so a catalog-only entry must not satisfy
+            // the cross-validation executability check. The kernel bakes neither
+            // map; packs and the config_source overlay populate them.
             let in_workflow = workflow.phase_definitions.keys().any(|k| k.eq_ignore_ascii_case(phase_id));
             if !in_workflow && !runtime.has_phase_definition(phase_id) {
                 errors.push(format!(
-                    "workflow '{}' phase '{}' is missing from agent-runtime phases and workflow phase_definitions",
+                    "workflow '{}' phase '{}' has no executable definition; define it under `phases` (workflow phase_definitions) or the agent-runtime config",
                     workflow_def.id, phase_id
                 ));
             }
@@ -472,10 +473,11 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
         errors.push("checkpoint_retention.keep_last_per_phase must be greater than zero".to_string());
     }
 
-    if config.phase_catalog.is_empty() {
-        errors.push("phase_catalog must include at least one phase".to_string());
-    }
-
+    // Kernel-purification (v0.6): the kernel ships an EMPTY phase_catalog; packs
+    // and the config_source-sourced workflow overlay populate it. An empty
+    // catalog is therefore valid on its own. Workflows that reference phases are
+    // still required to reference catalog (or workflow-defined) phases — that
+    // cross-check happens below per-workflow.
     for (phase_id, definition) in &config.phase_catalog {
         if phase_id.trim().is_empty() {
             errors.push("phase_catalog contains an empty phase id".to_string());
@@ -536,9 +538,18 @@ pub fn validate_workflow_config_with_project_root(config: &WorkflowConfig, proje
                 continue;
             }
 
-            if config.phase_catalog.keys().all(|candidate| !candidate.eq_ignore_ascii_case(phase_id)) {
+            // Kernel-purification (v0.6): a referenced phase is resolvable when
+            // it appears in the phase_catalog (UI/metadata registry) OR has an
+            // execution definition in phase_definitions. Packs and the
+            // config_source-sourced overlay populate either map; the kernel no
+            // longer bakes a catalog, so resolving against phase_definitions too
+            // keeps execution-defined phases valid without a catalog entry.
+            let in_catalog = config.phase_catalog.keys().any(|candidate| candidate.eq_ignore_ascii_case(phase_id));
+            let in_definitions =
+                config.phase_definitions.keys().any(|candidate| candidate.eq_ignore_ascii_case(phase_id));
+            if !in_catalog && !in_definitions {
                 errors.push(format!(
-                    "workflow '{}' references unknown phase '{}'; add it to phase_catalog",
+                    "workflow '{}' references unknown phase '{}'; add it to phase_catalog or define it under phases",
                     workflow_ref, phase_id
                 ));
             }

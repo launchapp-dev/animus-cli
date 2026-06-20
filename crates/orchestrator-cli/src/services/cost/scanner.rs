@@ -971,6 +971,16 @@ mod tests {
         fs::write(
             project_root.join(".animus").join("workflows.yaml"),
             r#"
+tools_allowlist:
+  - cargo
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  implementation:
+    mode: agent
+    agent_id: default
 workflows:
   - id: flow
     name: Flow

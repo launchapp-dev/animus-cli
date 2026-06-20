@@ -1033,7 +1033,7 @@ tracks the publication of `launchapp-dev/animus-config-yaml`.
 ## Notes
 
 - Project YAML is the authored workflow surface.
-- Animus still ships the `hello-world` walkthrough template plus kernel baseline config for phases and MCP defaults, but current builds do not ship built-in workflow definitions, bundled pack content, or bundled skill fallback.
+- As of v0.6 (kernel purification) the kernel ships ZERO built-in pack/workflow content: no baked agent-runtime defaults (the merge base is structurally empty), an empty workflow `phase_catalog`, and no `hello-world` walkthrough template. The kernel keeps only its OWN `mcp_servers["animus"]` structural entry. All phases/agents/workflows come from installed packs and the `config_source`-sourced workflow overlay. A fresh `animus init` walkthrough installs the recommended packs to become functional. The project-local `.animus/workflows/*.yaml` scaffold written by init defines a minimal, self-contained starter set you can edit or replace.
 - `animus init --json` now includes a `recommended_install` object sourced from `crates/orchestrator-cli/config/default-install.json` so callers can surface the default pack and plugin set explicitly.
 - Mutable runtime state lives under `~/.animus/<repo-scope>/`.
 - The daemon schedules and supervises work; workflow and pack content still define behavior.

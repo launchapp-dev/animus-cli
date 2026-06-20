@@ -719,6 +719,23 @@ fn validate_and_compile_yaml_validates_and_reloads() {
     fs::write(
         workflows_dir.join("workflows.yaml"),
         r#"
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
+  code-review:
+    mode: agent
+    agent_id: default
+  testing:
+    mode: agent
+    agent_id: default
 workflows:
   - id: standard
     name: Compiled Standard
@@ -1456,6 +1473,17 @@ agents:
     mcp_servers:
       - ao
 
+phases:
+  requirements:
+    mode: agent
+    agent_id: researcher
+  implementation:
+    mode: agent
+    agent_id: researcher
+  testing:
+    mode: agent
+    agent_id: researcher
+
 default_workflow_ref: standard
 workflows:
   - id: standard
@@ -1655,14 +1683,33 @@ tools_allowlist:
 
 #[test]
 fn cross_validation_accepts_workflow_defined_phases() {
+    // Kernel-purification (v0.6): no phases are baked. The workflow must
+    // therefore define (under `phases:`) every phase it references; an
+    // execution definition satisfies the workflow phase-reference check.
     let yaml = r#"
 tools_allowlist: ["cargo"]
 phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
   build:
     mode: command
     command:
       program: cargo
       args: ["build"]
+  testing:
+    mode: command
+    command:
+      program: cargo
+      args: ["test"]
+
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
 
 default_workflow_ref: standard
 workflows:
@@ -1707,6 +1754,17 @@ agents:
     model: claude-sonnet-4-6
     tool_profile: overflow
 
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
+  testing:
+    mode: agent
+    agent_id: default
+
 default_workflow_ref: standard
 workflows:
   - id: standard
@@ -1735,6 +1793,17 @@ agents:
     tool: codex
     model: gpt-5.4
     tool_profile: overflow
+
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
+  testing:
+    mode: agent
+    agent_id: default
 
 default_workflow_ref: standard
 workflows:

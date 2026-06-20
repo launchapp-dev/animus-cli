@@ -123,9 +123,45 @@ mod tests {
     use crate::test_env::pack_fixture_lock;
 
     fn test_workflow_config_with_standard_pipeline() -> orchestrator_config::WorkflowConfig {
-        use orchestrator_config::{WorkflowDefinition, WorkflowPhaseEntry};
+        use orchestrator_config::{
+            AgentProfileOverlay, PhaseExecutionDefinition, PhaseExecutionMode, WorkflowDefinition, WorkflowPhaseEntry,
+        };
         let mut config = crate::builtin_workflow_config();
         config.default_workflow_ref = STANDARD_WORKFLOW_REF.to_string();
+        // v0.6 kernel-purification: the kernel bakes no agents/phases. The
+        // fixture defines everything the pipelines reference so the config
+        // validates.
+        config.tools_allowlist = vec!["cargo".to_string()];
+        config.agent_profiles.insert(
+            "default".to_string(),
+            AgentProfileOverlay { description: Some("Default".to_string()), ..Default::default() },
+        );
+        for phase_id in
+            ["requirements", "ux-research", "wireframe", "mockup-review", "implementation", "code-review", "testing"]
+        {
+            config.phase_definitions.insert(
+                phase_id.to_string(),
+                PhaseExecutionDefinition {
+                    mode: PhaseExecutionMode::Agent,
+                    agent_id: Some("default".to_string()),
+                    directive: None,
+                    system_prompt: None,
+                    runtime: None,
+                    capabilities: None,
+                    output_contract: None,
+                    output_json_schema: None,
+                    decision_contract: None,
+                    retry: None,
+                    skills: Vec::new(),
+                    command: None,
+                    manual: None,
+                    default_tool: None,
+                    idempotency: orchestrator_config::Idempotency::Unknown,
+                    worktree: None,
+                    evals: None,
+                },
+            );
+        }
         config.workflows = vec![
             WorkflowDefinition {
                 id: STANDARD_WORKFLOW_REF.to_string(),

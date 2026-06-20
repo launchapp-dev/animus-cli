@@ -520,7 +520,9 @@ mod tests {
     fn write_minimal_overlay(dir: &Path) {
         let animus = dir.join(".animus");
         fs::create_dir_all(animus.join("workflows")).unwrap();
-        let yaml = "phases:\n  alpha:\n    mode: agent\n    agent_id: hot-reload-agent\nagents:\n  hot-reload-agent:\n    description: hot-reload fixture\n    system_prompt: hot-reload prompt\n    skills: []\nworkflows:\n  - id: hot-reload-workflow\n    name: Hot Reload\n    phases:\n      - alpha\n";
+        // v0.6 kernel-purification: the kernel ships an empty tools_allowlist, so
+        // a self-contained overlay must declare at least one command itself.
+        let yaml = "tools_allowlist:\n  - cargo\nphases:\n  alpha:\n    mode: agent\n    agent_id: hot-reload-agent\nagents:\n  hot-reload-agent:\n    description: hot-reload fixture\n    system_prompt: hot-reload prompt\n    skills: []\nworkflows:\n  - id: hot-reload-workflow\n    name: Hot Reload\n    phases:\n      - alpha\n";
         fs::write(animus.join("workflows.yaml"), yaml).unwrap();
     }
 

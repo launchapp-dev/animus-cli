@@ -805,6 +805,8 @@ mod tests {
         let animus_dir = temp.path().join(".animus");
         std::fs::create_dir_all(&animus_dir).expect(".animus dir should be created");
         let yaml = r#"
+tools_allowlist:
+  - cargo
 secrets:
   api:
     env: ANIMUS_TEST_UPSERT_SECRET
@@ -848,6 +850,8 @@ workflows:
         std::fs::create_dir_all(&animus_dir).expect(".animus dir should be created");
         let yaml = r#"
 default_workflow_ref: standard-workflow
+tools_allowlist:
+  - cargo
 phases:
   requirements:
     mode: agent

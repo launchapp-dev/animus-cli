@@ -568,10 +568,31 @@ mod tests {
     }
 
     #[test]
-    fn cli_tool_flags_fall_back_to_builtin_when_project_config_omits_tool_metadata() {
-        let config = AgentRuntimeConfig::default();
+    fn cli_tool_flags_resolve_from_config_supplied_tool_metadata() {
+        // v0.6 kernel-purification: the kernel no longer bakes cli_tools metadata
+        // (read_only_flag / response_schema_flag). Those arrive from the
+        // config_source-sourced runtime config / packs. Seed the oai-runner tool
+        // metadata and assert the accessors read it.
+        let mut config = AgentRuntimeConfig::default();
+        config.cli_tools.insert(
+            "oai-runner".to_string(),
+            crate::agent_runtime_config::CliToolConfig {
+                executable: None,
+                supports_file_editing: None,
+                supports_streaming: None,
+                supports_tool_use: None,
+                supports_vision: None,
+                supports_long_context: None,
+                max_context_tokens: None,
+                supports_mcp: None,
+                read_only_flag: Some("--read-only".to_string()),
+                response_schema_flag: Some("--response-schema".to_string()),
+            },
+        );
 
-        let executable = cli_tool_executable("oai-runner", &config);
+        // The oai-runner executable is resolved by a dedicated binary locator,
+        // not from cli_tools metadata, so it still resolves with no entry.
+        let executable = cli_tool_executable("oai-runner", &AgentRuntimeConfig::default());
         let basename = std::path::Path::new(&executable).file_name().and_then(|n| n.to_str()).unwrap_or("");
         assert_eq!(
             basename,

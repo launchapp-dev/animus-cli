@@ -57,10 +57,38 @@ fn file_hub_recompiles_repo_workflow_yaml_on_startup() {
 
     let workflows_dir = temp.path().join(".animus").join("workflows");
     std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+    // v0.6 kernel-purification: this overwrites the scaffold's custom.yaml
+    // (which holds the agent/phase definitions the scaffold workflows
+    // reference), so it must redeclare them to keep the merged config valid.
     std::fs::write(
         workflows_dir.join("custom.yaml"),
         r#"
 default_workflow_ref: yaml-standard
+
+tools_allowlist:
+  - cargo
+
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  research:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
+  code-review:
+    mode: agent
+    agent_id: default
+  testing:
+    mode: agent
+    agent_id: default
 
 workflows:
   - id: yaml-standard
@@ -586,9 +614,33 @@ async fn file_hub_yaml_only_repo_executes_workflow_without_json_config() {
 
     let workflows_dir = temp.path().join(".animus").join("workflows");
     std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+    // v0.6 kernel-purification: overwriting the scaffold's custom.yaml drops the
+    // agent/phase definitions it carried, so redeclare them here.
     std::fs::write(
         workflows_dir.join("custom.yaml"),
         r#"
+tools_allowlist:
+  - cargo
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  research:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
+  code-review:
+    mode: agent
+    agent_id: default
+  testing:
+    mode: agent
+    agent_id: default
 workflows:
   - id: yaml-only-workflow
     name: YAML Only
@@ -651,6 +703,14 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
     ensure_test_config_env();
     let temp = tempfile::tempdir().expect("tempdir");
     let mut workflow_config = crate::load_workflow_config_or_default(temp.path()).config;
+    // v0.6 kernel-purification: cross-validation requires an EXECUTABLE phase
+    // definition (phase_catalog is UI metadata only). Seed an agent + phase
+    // definitions alongside the catalog entries.
+    workflow_config.tools_allowlist = vec!["cargo".to_string()];
+    workflow_config.agent_profiles.insert(
+        "default".to_string(),
+        orchestrator_config::AgentProfileOverlay { description: Some("Default".to_string()), ..Default::default() },
+    );
     for (phase_id, label, category) in
         [("implement", "Implement", "build"), ("qa-review", "QA Review", "qa"), ("push-branch", "Push Branch", "git")]
     {
@@ -664,6 +724,28 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
                 docs_url: None,
                 tags: Vec::new(),
                 visible: true,
+            },
+        );
+        workflow_config.phase_definitions.insert(
+            phase_id.to_string(),
+            crate::PhaseExecutionDefinition {
+                mode: crate::PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+                idempotency: crate::Idempotency::Unknown,
+                worktree: None,
+                evals: None,
             },
         );
     }
@@ -808,6 +890,23 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
     ensure_test_config_env();
     let mut workflow_config = crate::builtin_workflow_config();
     workflow_config.default_workflow_ref = "xhigh-dev".to_string();
+    workflow_config.tools_allowlist = vec!["cargo".to_string()];
+    // v0.6 kernel-purification: the kernel ships an empty phase_catalog. Declare
+    // the phases this custom pipeline references so the workflow config validates.
+    for phase_id in ["requirements", "implementation", "code-review", "testing"] {
+        workflow_config.phase_catalog.insert(
+            phase_id.to_string(),
+            crate::PhaseUiDefinition {
+                label: phase_id.to_string(),
+                description: String::new(),
+                category: "build".to_string(),
+                icon: None,
+                docs_url: None,
+                tags: Vec::new(),
+                visible: true,
+            },
+        );
+    }
     workflow_config.phase_catalog.insert(
         "qa-signoff".to_string(),
         crate::PhaseUiDefinition {
@@ -2511,6 +2610,17 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
 
     let mut runtime_config = crate::load_agent_runtime_config_or_default(temp.path());
+    // v0.6 kernel-purification: the kernel builtin runtime config is empty, so
+    // the seam returns nothing. Seed the minimum a valid runtime config needs.
+    runtime_config.tools_allowlist = vec!["cargo".to_string()];
+    runtime_config.agents.insert(
+        "default".to_string(),
+        crate::AgentProfile {
+            description: "Default".to_string(),
+            system_prompt: "Default agent".to_string(),
+            ..Default::default()
+        },
+    );
     runtime_config.phases.insert(
         "qa-signoff".to_string(),
         crate::PhaseExecutionDefinition {

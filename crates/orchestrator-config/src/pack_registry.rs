@@ -893,6 +893,23 @@ workflow_overlay = "runtime/workflow-runtime.overlay.yaml"
             root.join("runtime/workflow-runtime.overlay.yaml"),
             format!(
                 r#"
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
+  code-review:
+    mode: agent
+    agent_id: default
+  testing:
+    mode: agent
+    agent_id: default
 workflows:
   - id: {pack_id}/standard
     name: "{pack_id}/standard"
@@ -1438,6 +1455,11 @@ required_env = ["PACK_SECRET_TOKEN"]
 
         let registry = resolve_pack_registry(project.path()).expect("registry resolution should not require secrets");
         assert!(registry.resolve("animus.secret").is_some(), "secret pack should still be active");
+        // v0.6 kernel-purification: the kernel scaffold's standard/hotfix/research
+        // workflows reference phases that only packs define. Provide a minimal,
+        // self-contained project workflow so `install_yaml_config_source_base`
+        // skips the scaffold and the merged config validates without those phases.
+        write_minimal_project_workflow(project.path());
         let _base = install_yaml_config_source_base(project.path());
         crate::load_workflow_config_with_metadata(project.path())
             .expect("workflow config loading should not require secrets");
@@ -1504,8 +1526,40 @@ workflows:
 
         let registry = resolve_pack_registry(project.path()).expect("registry resolution should not probe runtimes");
         assert!(registry.resolve("animus.runtime").is_some(), "runtime pack should still be active");
+        // v0.6 kernel-purification: skip the kernel scaffold (whose workflows
+        // reference pack-provided phases) by supplying a self-contained project
+        // workflow, so the merged config validates without those phases.
+        write_minimal_project_workflow(project.path());
         let _base = install_yaml_config_source_base(project.path());
         crate::load_workflow_config_with_metadata(project.path())
             .expect("workflow config loading should not probe runtimes");
+    }
+
+    /// Write a minimal, self-contained project workflow so
+    /// `install_yaml_config_source_base` finds existing project YAML and skips
+    /// generating the kernel scaffold (whose canonical phases are pack-provided
+    /// in the v0.6 kernel-purification model).
+    fn write_minimal_project_workflow(project_root: &Path) {
+        fs::create_dir_all(project_root.join(".animus")).expect("create project .animus");
+        fs::write(
+            project_root.join(".animus").join("workflows.yaml"),
+            r#"
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  noop:
+    mode: agent
+    agent_id: default
+default_workflow_ref: project-noop
+workflows:
+  - id: project-noop
+    name: Project Noop
+    phases:
+      - noop
+"#,
+        )
+        .expect("write minimal project workflow");
     }
 }

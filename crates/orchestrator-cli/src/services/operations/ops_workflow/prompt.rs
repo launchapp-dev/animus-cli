@@ -406,15 +406,18 @@ fn print_named_section(title: &str, content: Option<&str>) {
 mod tests {
     use super::*;
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
-        InMemoryServiceHub, WorkflowRunInput,
+        builtin_workflow_config, write_agent_runtime_config, write_workflow_config, InMemoryServiceHub,
+        WorkflowRunInput,
     };
     use std::collections::HashMap;
 
     fn write_prompt_test_config(project_root: &Path) {
+        // v0.6 kernel-purification: the kernel ships an empty runtime config.
+        // Seed the standard personas/phases the prompt-render path expects.
+        let seeded = crate::shared::seeded_agent_runtime_config();
         let mut workflow_config = builtin_workflow_config();
-        let default_agent =
-            builtin_agent_runtime_config().agent_profile("default").expect("default agent profile").clone();
+        workflow_config.tools_allowlist = seeded.tools_allowlist.clone();
+        let default_agent = seeded.agent_profile("default").expect("default agent profile").clone();
         workflow_config.agent_profiles.insert("default".to_string(), default_agent.into());
         let phase = workflow_config.phase_definitions.entry("implementation".to_string()).or_insert(
             orchestrator_core::PhaseExecutionDefinition {
@@ -440,7 +443,7 @@ mod tests {
         phase.directive = Some("Implement {{release_name}} safely.".to_string());
         phase.system_prompt = Some("System guidance for {{release_name}}.".to_string());
         write_workflow_config(project_root, &workflow_config).expect("write workflow config");
-        write_agent_runtime_config(project_root, &builtin_agent_runtime_config()).expect("write runtime config");
+        write_agent_runtime_config(project_root, &seeded).expect("write runtime config");
     }
 
     fn base_args() -> WorkflowPromptRenderArgs {

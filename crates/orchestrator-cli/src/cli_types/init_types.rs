@@ -35,7 +35,7 @@ pub(crate) struct InitArgs {
     // ---------------------------------------------------------------
     #[arg(
         long,
-        help = "Run the onboarding walkthrough: detect CLIs, install default plugins, copy the hello-world workflow.",
+        help = "Run the onboarding walkthrough: detect CLIs, install default plugins, and install the recommended workflow packs.",
         conflicts_with_all = ["template", "path"]
     )]
     pub(crate) walkthrough: bool,
@@ -56,7 +56,7 @@ pub(crate) struct InitArgs {
     pub(crate) no_packs: bool,
     #[arg(
         long = "no-template",
-        help = "Walkthrough only: skip copying the hello-world workflow template into .animus/workflows/."
+        help = "Deprecated no-op (kept for back-compat). The walkthrough no longer scaffolds a built-in workflow; a fresh project becomes functional via the recommended pack install."
     )]
     pub(crate) no_template: bool,
     #[arg(
@@ -67,8 +67,9 @@ pub(crate) struct InitArgs {
     #[arg(
         long = "walkthrough-template",
         value_name = "NAME",
-        default_value = "hello-world",
-        help = "Walkthrough only: which bundled workflow template to copy. Currently only `hello-world` is shipped."
+        default_value = "",
+        hide = true,
+        help = "Deprecated no-op (kept for back-compat). The walkthrough no longer copies a bundled workflow template."
     )]
     pub(crate) walkthrough_template: String,
 }

@@ -2084,7 +2084,20 @@ mod tests {
             let _ = FileServiceHub::new(&project_root).expect("bootstrap hub");
             let workflows_dir = project.path().join(".animus").join("workflows");
             std::fs::create_dir_all(&workflows_dir).expect("create dir");
-            let custom_yaml = r#"workflows:
+            // v0.6 kernel-purification: the kernel bakes no phases. The scaffold
+            // defines `research` but not `wireframe`, so define both here.
+            let custom_yaml = r#"agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  research:
+    mode: agent
+    agent_id: default
+  wireframe:
+    mode: agent
+    agent_id: default
+workflows:
   - id: research-then-wireframe
     name: Research Then Wireframe
     description: Two safe-to-advance phases for resume-pause testing.
@@ -2277,9 +2290,45 @@ mod tests {
             let project = empty_project();
             let root = project.path().to_string_lossy().to_string();
 
+            // v0.6 kernel-purification: the kernel no longer bakes a
+            // decision_contract onto `requirements`. Packs / config_source
+            // supply it. Seed a config that declares `requirements` WITH a
+            // decision_contract, then assert the resume safety predicate honors
+            // it (the merge-into-runtime-config behavior under test).
+            std::fs::create_dir_all(project.path().join(".animus")).expect("mkdir .animus");
+            std::fs::write(
+                project.path().join(".animus").join("workflows.yaml"),
+                r#"
+tools_allowlist:
+  - cargo
+agents:
+  po:
+    description: Product Owner
+    system_prompt: Refine requirements.
+phases:
+  requirements:
+    mode: agent
+    agent_id: po
+    decision_contract:
+      min_confidence: 0.6
+      max_risk: medium
+      allow_missing_decision: true
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+"#,
+            )
+            .expect("write workflows.yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
+
             assert!(
                 phase_requires_explicit_decision_for_resume(&root, "requirements"),
-                "requirements has decision_contract in built-in runtime config and MUST be honored"
+                "a config-source-supplied decision_contract on `requirements` MUST be honored by the resume predicate"
             );
         }
 

@@ -36,6 +36,9 @@ pub mod workflow_event_emitter;
 pub mod workflow_helpers;
 pub mod workflow_merge_recovery;
 
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 pub use agent_state::{
     append_agent_memory, append_agent_memory_capped, clear_agent_memory, delete_agent_memory_entry,
     list_agent_messages, load_agent_memory, send_agent_message, AgentMemoryDocument, AgentMemoryEntry, AgentMessage,

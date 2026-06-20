@@ -9,80 +9,10 @@ pub fn builtin_workflow_config_base() -> WorkflowConfig {
         version: WORKFLOW_CONFIG_VERSION,
         default_workflow_ref: String::new(),
         checkpoint_retention: WorkflowCheckpointRetentionConfig::default(),
-        phase_catalog: BTreeMap::from([
-            (
-                "requirements".to_string(),
-                phase_ui_definition(
-                    "Requirements",
-                    "Clarify scope, constraints, and acceptance criteria.",
-                    "planning",
-                    &["planning", "scope"],
-                ),
-            ),
-            (
-                "research".to_string(),
-                phase_ui_definition(
-                    "Research",
-                    "Gather implementation evidence and references for execution.",
-                    "planning",
-                    &["research"],
-                ),
-            ),
-            (
-                "ux-research".to_string(),
-                phase_ui_definition(
-                    "UX Research",
-                    "Document interaction patterns, user journeys, and accessibility constraints.",
-                    "design",
-                    &["design", "ux"],
-                ),
-            ),
-            (
-                "wireframe".to_string(),
-                phase_ui_definition(
-                    "Wireframe",
-                    "Produce concrete wireframes and interaction states.",
-                    "design",
-                    &["design", "wireframe"],
-                ),
-            ),
-            (
-                "mockup-review".to_string(),
-                phase_ui_definition(
-                    "Mockup Review",
-                    "Validate mockups against requirements and UX constraints.",
-                    "review",
-                    &["design", "review"],
-                ),
-            ),
-            (
-                "implementation".to_string(),
-                phase_ui_definition(
-                    "Implementation",
-                    "Deliver production-quality implementation changes.",
-                    "build",
-                    &["build", "code"],
-                ),
-            ),
-            (
-                "code-review".to_string(),
-                phase_ui_definition(
-                    "Code Review",
-                    "Review quality, risks, and maintainability before completion.",
-                    "review",
-                    &["review", "quality"],
-                ),
-            ),
-            (
-                "testing".to_string(),
-                phase_ui_definition(
-                    "Testing",
-                    "Run and update test coverage for the delivered changes.",
-                    "qa",
-                    &["qa", "testing"],
-                ),
-            ),
-        ]),
+        // Kernel-purification (v0.6): the kernel ships ZERO baked phase UI
+        // definitions. Pack overlays + the config_source-sourced workflow
+        // overlay populate the catalog.
+        phase_catalog: BTreeMap::new(),
         workflows: Vec::new(),
         phase_definitions: BTreeMap::new(),
         agent_profiles: BTreeMap::new(),

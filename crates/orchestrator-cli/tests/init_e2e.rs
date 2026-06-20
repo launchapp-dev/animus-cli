@@ -139,7 +139,7 @@ fn create_template_registry_repo() -> Result<tempfile::TempDir> {
         &[
             (
                 ".animus/workflows/custom.yaml",
-                "default_workflow_ref: standard-workflow\n\ntools_allowlist:\n  - cargo\n  - animus\n",
+                "default_workflow_ref: standard-workflow\n\ntools_allowlist:\n  - cargo\n  - animus\nagents:\n  default:\n    description: Default\n    system_prompt: Default agent\nphases:\n  implementation:\n    mode: agent\n    agent_id: default\n",
             ),
             (
                 ".animus/workflows/standard-workflow.yaml",
@@ -159,7 +159,7 @@ fn create_template_registry_repo() -> Result<tempfile::TempDir> {
         &[
             (
                 ".animus/workflows/custom.yaml",
-                "default_workflow_ref: conductor-workflow\n\ntools_allowlist:\n  - cargo\n  - animus\n",
+                "default_workflow_ref: conductor-workflow\n\ntools_allowlist:\n  - cargo\n  - animus\nagents:\n  default:\n    description: Default\n    system_prompt: Default agent\nphases:\n  implementation:\n    mode: agent\n    agent_id: default\n",
             ),
             (
                 ".animus/workflows/conductor-workflow.yaml",
@@ -183,7 +183,7 @@ fn create_template_registry_repo() -> Result<tempfile::TempDir> {
         &[
             (
                 ".animus/workflows/custom.yaml",
-                "default_workflow_ref: standard-workflow\n\ntools_allowlist:\n  - cargo\n  - animus\n",
+                "default_workflow_ref: standard-workflow\n\ntools_allowlist:\n  - cargo\n  - animus\nagents:\n  default:\n    description: Default\n    system_prompt: Default agent\nphases:\n  implementation:\n    mode: agent\n    agent_id: default\n",
             ),
             (
                 ".animus/workflows/standard-workflow.yaml",

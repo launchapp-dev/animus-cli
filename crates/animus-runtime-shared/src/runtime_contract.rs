@@ -1843,7 +1843,7 @@ mod tests {
             path: PathBuf::from("builtin"),
         };
         let ctx = RuntimeConfigContext {
-            agent_runtime_config: builtin_agent_runtime_config(),
+            agent_runtime_config: crate::test_fixtures::seeded_agent_runtime_config(),
             workflow_config: loaded_workflow_config,
         };
 
@@ -1887,7 +1887,7 @@ mod tests {
             path: PathBuf::from("builtin"),
         };
         let ctx = RuntimeConfigContext {
-            agent_runtime_config: builtin_agent_runtime_config(),
+            agent_runtime_config: crate::test_fixtures::seeded_agent_runtime_config(),
             workflow_config: loaded_workflow_config,
         };
 
@@ -1938,7 +1938,7 @@ mod tests {
             path: PathBuf::from("builtin"),
         };
         let ctx = RuntimeConfigContext {
-            agent_runtime_config: builtin_agent_runtime_config(),
+            agent_runtime_config: crate::test_fixtures::seeded_agent_runtime_config(),
             workflow_config: loaded_workflow_config,
         };
 

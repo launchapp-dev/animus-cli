@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 // v0.6: the agent-runtime *type definitions* moved to the canonical
@@ -18,8 +18,6 @@ pub use animus_config_protocol::agent_types::*;
 pub const AGENT_RUNTIME_CONFIG_SCHEMA_ID: &str = "animus.agent-runtime-config.v2";
 pub const AGENT_RUNTIME_CONFIG_VERSION: u32 = 2;
 pub const AGENT_RUNTIME_CONFIG_FILE_NAME: &str = "agent-runtime-config.v2.json";
-const BUILTIN_AGENT_RUNTIME_CONFIG_JSON: &str =
-    include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/config/agent-runtime-config.v2.json"));
 
 fn validate_phase_field_definition(path: String, field: &PhaseFieldDefinition) -> Result<()> {
     let field_type = field.field_type.trim();
@@ -434,504 +432,26 @@ impl AgentRuntimeConfig {
     }
 }
 
+/// The kernel ships ZERO baked agents/phases as of the v0.6 kernel-purification
+/// refactor. This returns a STRUCTURAL EMPTY base: only the schema id and
+/// version, with empty `tools_allowlist`/`agents`/`phases`/`cli_tools`. All
+/// runtime content (personas, phases, tool definitions) is sourced from
+/// installed packs and the `config_source`-sourced workflow overlay, merged on
+/// top of this base by `load_agent_runtime_config_with_metadata`. An empty
+/// project with no packs and no config_source content therefore yields an empty
+/// runtime config.
 pub fn builtin_agent_runtime_config() -> AgentRuntimeConfig {
     static BUILTIN_CONFIG: OnceLock<AgentRuntimeConfig> = OnceLock::new();
     BUILTIN_CONFIG
-        .get_or_init(|| match serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON) {
-            Ok(config) if validate_agent_runtime_config(&config).is_ok() => config,
-            _ => hardcoded_builtin_agent_runtime_config(),
+        .get_or_init(|| AgentRuntimeConfig {
+            schema: AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
+            version: AGENT_RUNTIME_CONFIG_VERSION,
+            tools_allowlist: Vec::new(),
+            agents: BTreeMap::new(),
+            phases: BTreeMap::new(),
+            cli_tools: BTreeMap::new(),
         })
         .clone()
-}
-
-fn hardcoded_builtin_agent_runtime_config() -> AgentRuntimeConfig {
-    let implementation_output_contract = PhaseOutputContract {
-        kind: "implementation_result".to_string(),
-        required_fields: vec!["commit_message".to_string()],
-        fields: BTreeMap::new(),
-    };
-    let swe_mcp_servers = vec!["animus".to_string()];
-    let swe_tool_policy = AgentToolPolicy {
-        allow: vec![
-            "task.*".to_string(),
-            "workflow.*".to_string(),
-            "output.*".to_string(),
-            "history.*".to_string(),
-            "errors.*".to_string(),
-        ],
-        deny: vec!["project.remove".to_string(), "daemon.stop".to_string(), "requirements.delete".to_string()],
-    };
-    let swe_capabilities = BTreeMap::from([
-        ("planning".to_string(), false),
-        ("queue_management".to_string(), false),
-        ("scheduling".to_string(), false),
-        ("requirements_authoring".to_string(), false),
-        ("acceptance_validation".to_string(), false),
-        ("implementation".to_string(), true),
-        ("testing".to_string(), true),
-        ("code_review".to_string(), true),
-    ]);
-
-    AgentRuntimeConfig {
-        schema: AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
-        version: AGENT_RUNTIME_CONFIG_VERSION,
-        tools_allowlist: vec![
-            "cargo".to_string(),
-            "npm".to_string(),
-            "pnpm".to_string(),
-            "yarn".to_string(),
-            "bun".to_string(),
-            "pytest".to_string(),
-            "go".to_string(),
-            "bash".to_string(),
-            "sh".to_string(),
-            "make".to_string(),
-            "just".to_string(),
-        ],
-        agents: BTreeMap::from([
-            (
-                "default".to_string(),
-                AgentProfile {
-                    name: None,
-                    description: "Default workflow phase agent profile".to_string(),
-                    system_prompt: "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.".to_string(),
-                    system_prompt_file: None,
-                    role: None,
-                    persona: None,
-                    memory: AgentMemoryConfig::default(),
-                    communication: AgentCommunicationConfig::default(),
-                    mcp_servers: Vec::new(),
-                    tool_policy: AgentToolPolicy::default(),
-                    skills: vec![],
-                    capabilities: BTreeMap::new(),
-                    tool: None,
-                    tool_profile: None,
-                    model: None,
-                    fallback_models: vec![],
-                    models: vec![],
-                    fallback_tools: vec![],
-                    reasoning_effort: None,
-                    permission_mode: None,
-                    web_search: None,
-                    network_access: None,
-                    timeout_secs: None,
-                    max_attempts: None,
-                    extra_args: vec![],
-                    codex_config_overrides: vec![],
-                    max_continuations: None,
-                    approval_policy: None,
-                    hooks: AgentHooksConfig::default(),
-                    mcp_server_configs: None,
-                    structured_capabilities: None,
-                    project_overrides: None,
-                },
-            ),
-            (
-                "implementation".to_string(),
-                AgentProfile {
-                    name: None,
-                    description: "Compatibility alias for the software engineer persona.".to_string(),
-                    system_prompt: "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.".to_string(),
-                    system_prompt_file: None,
-                    role: Some("software_engineer".to_string()),
-                    persona: None,
-                    memory: AgentMemoryConfig::default(),
-                    communication: AgentCommunicationConfig::default(),
-                    mcp_servers: swe_mcp_servers.clone(),
-                    tool_policy: swe_tool_policy.clone(),
-                    skills: vec![
-                        "implementation".to_string(),
-                        "testing".to_string(),
-                        "code-review".to_string(),
-                        "debugging".to_string(),
-                    ],
-                    capabilities: swe_capabilities.clone(),
-                    tool: None,
-                    tool_profile: None,
-                    model: None,
-                    fallback_models: vec![],
-                    models: vec![],
-                    fallback_tools: vec![],
-                    reasoning_effort: None,
-                    permission_mode: None,
-                    web_search: None,
-                    network_access: None,
-                    timeout_secs: None,
-                    max_attempts: None,
-                    extra_args: vec![],
-                    codex_config_overrides: vec![],
-                    max_continuations: None,
-                    approval_policy: None,
-                    hooks: AgentHooksConfig::default(),
-                    mcp_server_configs: None,
-                    structured_capabilities: None,
-                    project_overrides: None,
-                },
-            ),
-            (
-                "em".to_string(),
-                AgentProfile {
-                    name: None,
-                    description: "Engineering Manager persona for prioritization, queue management, and scheduling.".to_string(),
-                    system_prompt: "You are the Engineering Manager agent. Prioritize work, manage queue health, sequence delivery safely, and keep execution plans realistic and dependency-aware.".to_string(),
-                    system_prompt_file: None,
-                    role: Some("engineering_manager".to_string()),
-                    persona: None,
-                    memory: AgentMemoryConfig::default(),
-                    communication: AgentCommunicationConfig::default(),
-                    mcp_servers: vec!["animus".to_string()],
-                    tool_policy: AgentToolPolicy {
-                        allow: vec![
-                            "task.*".to_string(),
-                            "workflow.*".to_string(),
-                            "history.*".to_string(),
-                        ],
-                        deny: vec![
-                            "task.delete".to_string(),
-                            "requirements.delete".to_string(),
-                            "project.remove".to_string(),
-                            "git.*".to_string(),
-                        ],
-                    },
-                    skills: vec![
-                        "prioritization".to_string(),
-                        "queue-management".to_string(),
-                        "scheduling".to_string(),
-                        "risk-management".to_string(),
-                    ],
-                    capabilities: BTreeMap::from([
-                        ("planning".to_string(), true),
-                        ("queue_management".to_string(), true),
-                        ("scheduling".to_string(), true),
-                        ("requirements_authoring".to_string(), false),
-                        ("acceptance_validation".to_string(), true),
-                        ("implementation".to_string(), false),
-                        ("testing".to_string(), false),
-                        ("code_review".to_string(), true),
-                    ]),
-                    tool: None,
-                    tool_profile: None,
-                    model: None,
-                    fallback_models: vec![],
-                    models: vec![],
-                    fallback_tools: vec![],
-                    reasoning_effort: None,
-                    permission_mode: None,
-                    web_search: None,
-                    network_access: None,
-                    timeout_secs: None,
-                    max_attempts: None,
-                    extra_args: vec![],
-                    codex_config_overrides: vec![],
-                    max_continuations: None,
-                    approval_policy: None,
-                    hooks: AgentHooksConfig::default(),
-                    mcp_server_configs: None,
-                    structured_capabilities: None,
-                    project_overrides: None,
-                },
-            ),
-            (
-                "po".to_string(),
-                AgentProfile {
-                    name: None,
-                    description: "Product Owner persona for requirements, vision, acceptance criteria, and deliverable validation.".to_string(),
-                    system_prompt: "You are the Product Owner agent. Refine requirements into clear acceptance criteria, align work to product vision, and validate deliverables against user outcomes.".to_string(),
-                    system_prompt_file: None,
-                    role: Some("product_owner".to_string()),
-                    persona: None,
-                    memory: AgentMemoryConfig::default(),
-                    communication: AgentCommunicationConfig::default(),
-                    mcp_servers: vec!["animus".to_string()],
-                    tool_policy: AgentToolPolicy {
-                        allow: vec![
-                            "vision.*".to_string(),
-                            "requirements.*".to_string(),
-                            "task.*".to_string(),
-                            "review.*".to_string(),
-                            "qa.*".to_string(),
-                            "workflow.*".to_string(),
-                        ],
-                        deny: vec![
-                            "task.delete".to_string(),
-                            "project.remove".to_string(),
-                            "git.*".to_string(),
-                        ],
-                    },
-                    skills: vec![
-                        "vision-alignment".to_string(),
-                        "requirements-management".to_string(),
-                        "acceptance-criteria".to_string(),
-                        "deliverable-validation".to_string(),
-                    ],
-                    capabilities: BTreeMap::from([
-                        ("planning".to_string(), true),
-                        ("queue_management".to_string(), false),
-                        ("scheduling".to_string(), false),
-                        ("requirements_authoring".to_string(), true),
-                        ("acceptance_validation".to_string(), true),
-                        ("implementation".to_string(), false),
-                        ("testing".to_string(), false),
-                        ("code_review".to_string(), true),
-                    ]),
-                    tool: None,
-                    tool_profile: None,
-                    model: None,
-                    fallback_models: vec![],
-                    models: vec![],
-                    fallback_tools: vec![],
-                    reasoning_effort: None,
-                    permission_mode: None,
-                    web_search: None,
-                    network_access: None,
-                    timeout_secs: None,
-                    max_attempts: None,
-                    extra_args: vec![],
-                    codex_config_overrides: vec![],
-                    max_continuations: None,
-                    approval_policy: None,
-                    hooks: AgentHooksConfig::default(),
-                    mcp_server_configs: None,
-                    structured_capabilities: None,
-                    project_overrides: None,
-                },
-            ),
-            (
-                "swe".to_string(),
-                AgentProfile {
-                    name: None,
-                    description: "Software Engineer persona for implementation, testing, and code review.".to_string(),
-                    system_prompt: "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.".to_string(),
-                    system_prompt_file: None,
-                    role: Some("software_engineer".to_string()),
-                    persona: None,
-                    memory: AgentMemoryConfig::default(),
-                    communication: AgentCommunicationConfig::default(),
-                    mcp_servers: swe_mcp_servers,
-                    tool_policy: swe_tool_policy,
-                    skills: vec![
-                        "implementation".to_string(),
-                        "testing".to_string(),
-                        "code-review".to_string(),
-                        "debugging".to_string(),
-                    ],
-                    capabilities: swe_capabilities,
-                    tool: None,
-                    tool_profile: None,
-                    model: None,
-                    fallback_models: vec![],
-                    models: vec![],
-                    fallback_tools: vec![],
-                    reasoning_effort: None,
-                    permission_mode: None,
-                    web_search: None,
-                    network_access: None,
-                    timeout_secs: None,
-                    max_attempts: None,
-                    extra_args: vec![],
-                    codex_config_overrides: vec![],
-                    max_continuations: None,
-                    approval_policy: None,
-                    hooks: AgentHooksConfig::default(),
-                    mcp_server_configs: None,
-                    structured_capabilities: None,
-                    project_overrides: None,
-                },
-            ),
-        ]),
-        phases: BTreeMap::from([
-            (
-                "default".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("default".to_string()),
-                    directive: Some(
-                        "Execute the current workflow phase with production-quality output."
-                            .to_string(),
-                    ),
-                    system_prompt: None,
-                    runtime: None,
-                    capabilities: None,
-                    output_contract: None,
-                    output_json_schema: None,
-                    decision_contract: None,
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                    idempotency: Idempotency::Unknown,
-                    worktree: None,
-                evals: None,
-                },
-            ),
-            (
-                "requirements".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("po".to_string()),
-                    directive: Some("Clarify implementation scope, constraints, and acceptance criteria. Update docs and implementation notes as needed.".to_string()),
-                    system_prompt: None,
-                    runtime: None,
-                    capabilities: None,
-                    output_contract: None,
-                    output_json_schema: None,
-                    decision_contract: Some(PhaseDecisionContract {
-                        required_evidence: Vec::new(),
-                        min_confidence: 0.6,
-                        max_risk: crate::types::WorkflowDecisionRisk::Medium,
-                        allow_missing_decision: true,
-                        extra_json_schema: None,
-                        fields: BTreeMap::new(),
-                    }),
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                    idempotency: Idempotency::Unknown,
-                    worktree: None,
-                evals: None,
-                },
-            ),
-            (
-                "research".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("default".to_string()),
-                    directive: Some(
-                        "Gather external and codebase evidence needed to de-risk the next implementation step. Treat greenfield repositories as valid and provide assumptions/plan artifacts when source is sparse. Keep discovery targeted to first-party code and active requirement/task docs; avoid broad scans of dependency or workflow checkpoint directories."
-                            .to_string(),
-                    ),
-                    system_prompt: None,
-                    runtime: Some(AgentRuntimeOverrides {
-                        web_search: Some(true),
-                        timeout_secs: Some(900),
-                        ..AgentRuntimeOverrides::default()
-                    }),
-                    capabilities: None,
-                    output_contract: None,
-                    output_json_schema: None,
-                    decision_contract: None,
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                    idempotency: Idempotency::Unknown,
-                    worktree: None,
-                evals: None,
-                },
-            ),
-            (
-                "ux-research".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("default".to_string()),
-                    directive: Some("Produce a UX brief from requirements and user flows. Identify key screens, interactions, and accessibility constraints.".to_string()),
-                    system_prompt: None,
-                    runtime: None,
-                    capabilities: None,
-                    output_contract: None,
-                    output_json_schema: None,
-                    decision_contract: None,
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                    idempotency: Idempotency::Unknown,
-                    worktree: None,
-                evals: None,
-                },
-            ),
-            (
-                "wireframe".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("default".to_string()),
-                    directive: Some("Create concrete UI mockups/wireframes in the repository under mockups/. Prefer production-like React-oriented layouts and realistic states.".to_string()),
-                    system_prompt: None,
-                    runtime: None,
-                    capabilities: None,
-                    output_contract: None,
-                    output_json_schema: None,
-                    decision_contract: None,
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                    idempotency: Idempotency::Unknown,
-                    worktree: None,
-                evals: None,
-                },
-            ),
-            (
-                "mockup-review".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("default".to_string()),
-                    directive: Some("Review mockups against linked requirements. Resolve mismatches, improve usability, and ensure acceptance criteria traceability.".to_string()),
-                    system_prompt: None,
-                    runtime: None,
-                    capabilities: None,
-                    output_contract: None,
-                    output_json_schema: None,
-                    decision_contract: None,
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                    idempotency: Idempotency::Unknown,
-                    worktree: None,
-                evals: None,
-                },
-            ),
-            (
-                "implementation".to_string(),
-                PhaseExecutionDefinition {
-                    mode: PhaseExecutionMode::Agent,
-                    agent_id: Some("swe".to_string()),
-                    directive: Some(
-                        "Implement production-quality code for this task. Keep changes focused and executable."
-                            .to_string(),
-                    ),
-                    system_prompt: None,
-                    runtime: None,
-                    capabilities: None,
-                    output_contract: Some(implementation_output_contract.clone()),
-                    output_json_schema: Some(json!({
-                        "type": "object",
-                        "required": ["kind", "commit_message"],
-                        "properties": {
-                            "kind": {"const": "implementation_result"},
-                            "commit_message": {"type": "string", "minLength": 1}
-                        },
-                        "additionalProperties": true
-                    })),
-                    decision_contract: Some(PhaseDecisionContract {
-                        required_evidence: Vec::new(),
-                        min_confidence: 0.7,
-                        max_risk: crate::types::WorkflowDecisionRisk::Medium,
-                        allow_missing_decision: true,
-                        extra_json_schema: None,
-                        fields: BTreeMap::new(),
-                    }),
-                    retry: None,
-                    skills: Vec::new(),
-                    command: None,
-                    manual: None,
-                    default_tool: None,
-                    idempotency: Idempotency::Unknown,
-                    worktree: None,
-                evals: None,
-                },
-            ),
-        ]),
-        cli_tools: BTreeMap::new(),
-    }
 }
 
 pub fn agent_runtime_config_path(project_root: &Path) -> PathBuf {
@@ -1018,7 +538,7 @@ fn merge_workflow_runtime_overlay(base: &mut AgentRuntimeConfig, workflow: &crat
         }
     }
     for (phase_id, definition) in &workflow.phase_definitions {
-        base.phases.insert(phase_id.clone(), definition.clone());
+        merge_phase_definition_into(&mut base.phases, phase_id, definition);
     }
     for (tool_id, definition) in &workflow.tools {
         let entry = base.cli_tools.entry(tool_id.clone()).or_insert_with(|| CliToolConfig {
@@ -1080,7 +600,7 @@ pub(crate) fn merge_agent_runtime_overlay(base: &mut AgentRuntimeConfig, overlay
         }
     }
     for (phase_id, definition) in &overlay.phases {
-        base.phases.insert(phase_id.clone(), definition.clone());
+        merge_phase_definition_into(&mut base.phases, phase_id, definition);
     }
     for (tool_id, definition) in &overlay.cli_tools {
         match base.cli_tools.get_mut(tool_id) {
@@ -1089,6 +609,171 @@ pub(crate) fn merge_agent_runtime_overlay(base: &mut AgentRuntimeConfig, overlay
                 base.cli_tools.insert(tool_id.clone(), definition.clone());
             }
         }
+    }
+}
+
+/// Merge a workflow/pack phase definition onto whatever the base map already
+/// holds for `phase_id`.
+///
+/// v0.6 kernel-purification removed the non-empty builtin agent-runtime config,
+/// so the old "full-replace then re-graft from the builtin" behavior would
+/// silently drop a pack/base phase's structured-output and decision contracts
+/// whenever a project supplied a SPARSE override (e.g. only
+/// `implementation.runtime.model`). To preserve those guarantees the overlay now
+/// merges field-by-field: the overlay owns the phase MODE and its mode-specific
+/// blocks (`command`/`manual`) plus any field it explicitly sets; fields the
+/// overlay omits fall back to the base phase. When the base has no entry the
+/// overlay is inserted verbatim.
+fn merge_phase_definition_into(
+    base: &mut BTreeMap<String, PhaseExecutionDefinition>,
+    phase_id: &str,
+    overlay: &PhaseExecutionDefinition,
+) {
+    let Some(existing) = base.get_mut(phase_id) else {
+        base.insert(phase_id.to_string(), overlay.clone());
+        return;
+    };
+
+    // The overlay's mode is authoritative; mode-specific blocks follow it.
+    let mode_changed = existing.mode != overlay.mode;
+    existing.mode = overlay.mode.clone();
+    match overlay.mode {
+        PhaseExecutionMode::Agent => {
+            // Agent phases must not carry command/manual blocks. The overlay's
+            // agent_id wins when set; when the overlay OMITS it, keep the base
+            // phase's agent_id so a sparse override (e.g. only `runtime.model`)
+            // stays a valid agent phase. If the base wasn't an agent phase, it
+            // had no agent_id to inherit, so the overlay must supply one.
+            existing.command = None;
+            existing.manual = None;
+            if overlay.agent_id.is_some() {
+                existing.agent_id = overlay.agent_id.clone();
+            } else if mode_changed {
+                // Switching INTO agent mode without an agent_id leaves it unset,
+                // which validation will reject with an actionable error.
+                existing.agent_id = None;
+            }
+        }
+        PhaseExecutionMode::Command => {
+            existing.agent_id = None;
+            existing.manual = None;
+            existing.command = overlay.command.clone();
+        }
+        PhaseExecutionMode::Manual => {
+            existing.agent_id = None;
+            existing.command = None;
+            existing.manual = overlay.manual.clone();
+        }
+    }
+
+    // Codex round-2 P2: contract/schema fields only make sense for agent phases
+    // and are inherited from the base ONLY when the override keeps the same mode
+    // (a true sparse override). When the override CHANGES the mode (e.g.
+    // agent -> command/manual) the base's agent-only structured fields must not
+    // leak onto the new phase — there is no YAML way to clear them otherwise
+    // (omitted/null both deserialize to None). Reset them so only the overlay's
+    // own values (applied below) survive a mode change.
+    if mode_changed {
+        existing.output_contract = None;
+        existing.output_json_schema = None;
+        existing.decision_contract = None;
+        existing.evals = None;
+    }
+
+    // Scalar/optional fields: the overlay wins when it explicitly sets them,
+    // otherwise the base value survives (this is what preserves pack-provided
+    // contracts under a sparse model-only override).
+    if overlay.directive.is_some() {
+        existing.directive = overlay.directive.clone();
+    }
+    if overlay.system_prompt.is_some() {
+        existing.system_prompt = overlay.system_prompt.clone();
+    }
+    if let Some(overlay_runtime) = overlay.runtime.as_ref() {
+        match existing.runtime.as_mut() {
+            Some(base_runtime) => merge_runtime_overrides(base_runtime, overlay_runtime),
+            None => existing.runtime = Some(overlay_runtime.clone()),
+        }
+    }
+    if overlay.capabilities.is_some() {
+        existing.capabilities = overlay.capabilities.clone();
+    }
+    if overlay.output_contract.is_some() {
+        existing.output_contract = overlay.output_contract.clone();
+    }
+    if overlay.output_json_schema.is_some() {
+        existing.output_json_schema = overlay.output_json_schema.clone();
+    }
+    if overlay.decision_contract.is_some() {
+        existing.decision_contract = overlay.decision_contract.clone();
+    }
+    if overlay.retry.is_some() {
+        existing.retry = overlay.retry.clone();
+    }
+    if overlay.default_tool.is_some() {
+        existing.default_tool = overlay.default_tool.clone();
+    }
+    if overlay.worktree.is_some() {
+        existing.worktree = overlay.worktree.clone();
+    }
+    if overlay.evals.is_some() {
+        existing.evals = overlay.evals.clone();
+    }
+    if !overlay.skills.is_empty() {
+        existing.skills = overlay.skills.clone();
+    }
+    if overlay.idempotency != Idempotency::Unknown {
+        existing.idempotency = overlay.idempotency.clone();
+    }
+}
+
+/// Codex round-3 P2: merge `AgentRuntimeOverrides` field-by-field so a SPARSE
+/// override (e.g. only `runtime.model`) does not wipe the base/pack phase's other
+/// runtime defaults (web_search, timeout_secs, fallback models, permission mode,
+/// etc.). The overlay wins per-field when it explicitly sets a value; Vec fields
+/// override only when non-empty.
+fn merge_runtime_overrides(base: &mut AgentRuntimeOverrides, overlay: &AgentRuntimeOverrides) {
+    if overlay.tool.is_some() {
+        base.tool = overlay.tool.clone();
+    }
+    if overlay.tool_profile.is_some() {
+        base.tool_profile = overlay.tool_profile.clone();
+    }
+    if overlay.model.is_some() {
+        base.model = overlay.model.clone();
+    }
+    if !overlay.fallback_models.is_empty() {
+        base.fallback_models = overlay.fallback_models.clone();
+    }
+    if !overlay.fallback_tools.is_empty() {
+        base.fallback_tools = overlay.fallback_tools.clone();
+    }
+    if overlay.reasoning_effort.is_some() {
+        base.reasoning_effort = overlay.reasoning_effort.clone();
+    }
+    if overlay.permission_mode.is_some() {
+        base.permission_mode = overlay.permission_mode.clone();
+    }
+    if overlay.web_search.is_some() {
+        base.web_search = overlay.web_search;
+    }
+    if overlay.network_access.is_some() {
+        base.network_access = overlay.network_access;
+    }
+    if overlay.timeout_secs.is_some() {
+        base.timeout_secs = overlay.timeout_secs;
+    }
+    if overlay.max_attempts.is_some() {
+        base.max_attempts = overlay.max_attempts;
+    }
+    if !overlay.extra_args.is_empty() {
+        base.extra_args = overlay.extra_args.clone();
+    }
+    if !overlay.codex_config_overrides.is_empty() {
+        base.codex_config_overrides = overlay.codex_config_overrides.clone();
+    }
+    if overlay.max_continuations.is_some() {
+        base.max_continuations = overlay.max_continuations;
     }
 }
 
@@ -1762,7 +1447,587 @@ fn validate_agent_runtime_config(config: &AgentRuntimeConfig) -> Result<()> {
 mod tests {
     use super::*;
     use crate::test_support::{env_lock, install_yaml_config_source_base, EnvVarGuard};
+    use serde_json::json;
     use std::fs;
+
+    /// Test fixture reproducing the personas/phases that the kernel used to bake
+    /// in before the v0.6 kernel-purification refactor. The kernel now ships an
+    /// EMPTY `seeded_agent_runtime_config()`; these agents/phases are supplied
+    /// by packs and the config_source-sourced workflow overlay at runtime. Tests
+    /// that exercise MERGE/derivation/lookup behavior seed this base instead of
+    /// relying on the (now empty) builtin.
+    fn seeded_agent_runtime_config() -> AgentRuntimeConfig {
+        let implementation_output_contract = PhaseOutputContract {
+            kind: "implementation_result".to_string(),
+            required_fields: vec!["commit_message".to_string()],
+            fields: BTreeMap::new(),
+        };
+        let swe_mcp_servers = vec!["animus".to_string()];
+        let swe_tool_policy = AgentToolPolicy {
+            allow: vec![
+                "task.*".to_string(),
+                "workflow.*".to_string(),
+                "output.*".to_string(),
+                "history.*".to_string(),
+                "errors.*".to_string(),
+            ],
+            deny: vec!["project.remove".to_string(), "daemon.stop".to_string(), "requirements.delete".to_string()],
+        };
+        let swe_capabilities = BTreeMap::from([
+            ("planning".to_string(), false),
+            ("queue_management".to_string(), false),
+            ("scheduling".to_string(), false),
+            ("requirements_authoring".to_string(), false),
+            ("acceptance_validation".to_string(), false),
+            ("implementation".to_string(), true),
+            ("testing".to_string(), true),
+            ("code_review".to_string(), true),
+        ]);
+
+        let make_profile = |description: &str,
+                            system_prompt: &str,
+                            role: Option<&str>,
+                            mcp_servers: Vec<String>,
+                            tool_policy: AgentToolPolicy,
+                            skills: Vec<String>,
+                            capabilities: BTreeMap<String, bool>| {
+            AgentProfile {
+                name: None,
+                description: description.to_string(),
+                system_prompt: system_prompt.to_string(),
+                system_prompt_file: None,
+                role: role.map(ToOwned::to_owned),
+                persona: None,
+                memory: AgentMemoryConfig::default(),
+                communication: AgentCommunicationConfig::default(),
+                mcp_servers,
+                tool_policy,
+                skills,
+                capabilities,
+                tool: None,
+                tool_profile: None,
+                model: None,
+                fallback_models: vec![],
+                models: vec![],
+                fallback_tools: vec![],
+                reasoning_effort: None,
+                permission_mode: None,
+                web_search: None,
+                network_access: None,
+                timeout_secs: None,
+                max_attempts: None,
+                extra_args: vec![],
+                codex_config_overrides: vec![],
+                max_continuations: None,
+                approval_policy: None,
+                hooks: AgentHooksConfig::default(),
+                mcp_server_configs: None,
+                structured_capabilities: None,
+                project_overrides: None,
+            }
+        };
+
+        let make_agent_phase = |agent_id: &str, directive: &str| PhaseExecutionDefinition {
+            mode: PhaseExecutionMode::Agent,
+            agent_id: Some(agent_id.to_string()),
+            directive: Some(directive.to_string()),
+            system_prompt: None,
+            runtime: None,
+            capabilities: None,
+            output_contract: None,
+            output_json_schema: None,
+            decision_contract: None,
+            retry: None,
+            skills: Vec::new(),
+            command: None,
+            manual: None,
+            default_tool: None,
+            idempotency: Idempotency::Unknown,
+            worktree: None,
+            evals: None,
+        };
+
+        AgentRuntimeConfig {
+            schema: AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
+            version: AGENT_RUNTIME_CONFIG_VERSION,
+            tools_allowlist: vec![
+                "cargo".to_string(),
+                "npm".to_string(),
+                "pnpm".to_string(),
+                "yarn".to_string(),
+                "bun".to_string(),
+                "pytest".to_string(),
+                "go".to_string(),
+                "bash".to_string(),
+                "sh".to_string(),
+                "make".to_string(),
+                "just".to_string(),
+            ],
+            agents: BTreeMap::from([
+                (
+                    "default".to_string(),
+                    make_profile(
+                        "Default workflow phase agent profile",
+                        "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.",
+                        None,
+                        Vec::new(),
+                        AgentToolPolicy::default(),
+                        vec![],
+                        BTreeMap::new(),
+                    ),
+                ),
+                (
+                    "implementation".to_string(),
+                    make_profile(
+                        "Compatibility alias for the software engineer persona.",
+                        "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.",
+                        Some("software_engineer"),
+                        swe_mcp_servers.clone(),
+                        swe_tool_policy.clone(),
+                        vec![
+                            "implementation".to_string(),
+                            "testing".to_string(),
+                            "code-review".to_string(),
+                            "debugging".to_string(),
+                        ],
+                        swe_capabilities.clone(),
+                    ),
+                ),
+                (
+                    "em".to_string(),
+                    make_profile(
+                        "Engineering Manager persona for prioritization, queue management, and scheduling.",
+                        "You are the Engineering Manager agent. Prioritize work, manage queue health, sequence delivery safely, and keep execution plans realistic and dependency-aware.",
+                        Some("engineering_manager"),
+                        vec!["animus".to_string()],
+                        AgentToolPolicy {
+                            allow: vec!["task.*".to_string(), "workflow.*".to_string(), "history.*".to_string()],
+                            deny: vec![
+                                "task.delete".to_string(),
+                                "requirements.delete".to_string(),
+                                "project.remove".to_string(),
+                                "git.*".to_string(),
+                            ],
+                        },
+                        vec![
+                            "prioritization".to_string(),
+                            "queue-management".to_string(),
+                            "scheduling".to_string(),
+                            "risk-management".to_string(),
+                        ],
+                        BTreeMap::from([
+                            ("planning".to_string(), true),
+                            ("queue_management".to_string(), true),
+                            ("scheduling".to_string(), true),
+                            ("requirements_authoring".to_string(), false),
+                            ("acceptance_validation".to_string(), true),
+                            ("implementation".to_string(), false),
+                            ("testing".to_string(), false),
+                            ("code_review".to_string(), true),
+                        ]),
+                    ),
+                ),
+                (
+                    "po".to_string(),
+                    make_profile(
+                        "Product Owner persona for requirements, vision, acceptance criteria, and deliverable validation.",
+                        "You are the Product Owner agent. Refine requirements into clear acceptance criteria, align work to product vision, and validate deliverables against user outcomes.",
+                        Some("product_owner"),
+                        vec!["animus".to_string()],
+                        AgentToolPolicy {
+                            allow: vec![
+                                "vision.*".to_string(),
+                                "requirements.*".to_string(),
+                                "task.*".to_string(),
+                                "review.*".to_string(),
+                                "qa.*".to_string(),
+                                "workflow.*".to_string(),
+                            ],
+                            deny: vec!["task.delete".to_string(), "project.remove".to_string(), "git.*".to_string()],
+                        },
+                        vec![
+                            "vision-alignment".to_string(),
+                            "requirements-management".to_string(),
+                            "acceptance-criteria".to_string(),
+                            "deliverable-validation".to_string(),
+                        ],
+                        BTreeMap::from([
+                            ("planning".to_string(), true),
+                            ("queue_management".to_string(), false),
+                            ("scheduling".to_string(), false),
+                            ("requirements_authoring".to_string(), true),
+                            ("acceptance_validation".to_string(), true),
+                            ("implementation".to_string(), false),
+                            ("testing".to_string(), false),
+                            ("code_review".to_string(), true),
+                        ]),
+                    ),
+                ),
+                (
+                    "swe".to_string(),
+                    make_profile(
+                        "Software Engineer persona for implementation, testing, and code review.",
+                        "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.",
+                        Some("software_engineer"),
+                        swe_mcp_servers,
+                        swe_tool_policy,
+                        vec![
+                            "implementation".to_string(),
+                            "testing".to_string(),
+                            "code-review".to_string(),
+                            "debugging".to_string(),
+                        ],
+                        swe_capabilities,
+                    ),
+                ),
+            ]),
+            phases: BTreeMap::from([
+                (
+                    "default".to_string(),
+                    make_agent_phase(
+                        "default",
+                        "Execute the current workflow phase with production-quality output.",
+                    ),
+                ),
+                (
+                    "requirements".to_string(),
+                    PhaseExecutionDefinition {
+                        decision_contract: Some(PhaseDecisionContract {
+                            required_evidence: Vec::new(),
+                            min_confidence: 0.6,
+                            max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                            allow_missing_decision: true,
+                            extra_json_schema: None,
+                            fields: BTreeMap::new(),
+                        }),
+                        ..make_agent_phase(
+                            "po",
+                            "Clarify implementation scope, constraints, and acceptance criteria. Update docs and implementation notes as needed.",
+                        )
+                    },
+                ),
+                (
+                    "research".to_string(),
+                    PhaseExecutionDefinition {
+                        runtime: Some(AgentRuntimeOverrides {
+                            web_search: Some(true),
+                            timeout_secs: Some(900),
+                            ..AgentRuntimeOverrides::default()
+                        }),
+                        ..make_agent_phase(
+                            "default",
+                            "Gather external and codebase evidence needed to de-risk the next implementation step. Treat greenfield repositories as valid and provide assumptions/plan artifacts when source is sparse. Keep discovery targeted to first-party code and active requirement/task docs; avoid broad scans of dependency or workflow checkpoint directories.",
+                        )
+                    },
+                ),
+                (
+                    "ux-research".to_string(),
+                    make_agent_phase(
+                        "default",
+                        "Produce a UX brief from requirements and user flows. Identify key screens, interactions, and accessibility constraints.",
+                    ),
+                ),
+                (
+                    "wireframe".to_string(),
+                    make_agent_phase(
+                        "default",
+                        "Create concrete UI mockups/wireframes in the repository under mockups/. Prefer production-like React-oriented layouts and realistic states.",
+                    ),
+                ),
+                (
+                    "mockup-review".to_string(),
+                    make_agent_phase(
+                        "default",
+                        "Review mockups against linked requirements. Resolve mismatches, improve usability, and ensure acceptance criteria traceability.",
+                    ),
+                ),
+                (
+                    "implementation".to_string(),
+                    PhaseExecutionDefinition {
+                        output_contract: Some(implementation_output_contract),
+                        output_json_schema: Some(json!({
+                            "type": "object",
+                            "required": ["kind", "commit_message"],
+                            "properties": {
+                                "kind": {"const": "implementation_result"},
+                                "commit_message": {"type": "string", "minLength": 1}
+                            },
+                            "additionalProperties": true
+                        })),
+                        decision_contract: Some(PhaseDecisionContract {
+                            required_evidence: Vec::new(),
+                            min_confidence: 0.7,
+                            max_risk: crate::types::WorkflowDecisionRisk::Medium,
+                            allow_missing_decision: true,
+                            extra_json_schema: None,
+                            fields: BTreeMap::new(),
+                        }),
+                        ..make_agent_phase(
+                            "swe",
+                            "Implement production-quality code for this task. Keep changes focused and executable.",
+                        )
+                    },
+                ),
+            ]),
+            cli_tools: BTreeMap::new(),
+        }
+    }
+
+    /// Write a minimal, self-contained project workflow so
+    /// `install_yaml_config_source_base` finds existing project YAML and skips
+    /// generating the kernel scaffold. The kernel scaffold's canonical phases
+    /// (requirements/implementation/...) are pack-provided in the v0.6
+    /// kernel-purification model, so the scaffold no longer validates standalone.
+    fn write_minimal_project_workflow(project_root: &std::path::Path) {
+        fs::create_dir_all(project_root.join(".animus")).expect("create project .animus");
+        fs::write(
+            project_root.join(".animus").join("workflows.yaml"),
+            r#"
+tools_allowlist:
+  - cargo
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  noop:
+    mode: agent
+    agent_id: default
+default_workflow_ref: project-noop
+workflows:
+  - id: project-noop
+    name: Project Noop
+    phases:
+      - noop
+"#,
+        )
+        .expect("write minimal project workflow");
+    }
+
+    /// Install a config_source base for `project_root` carrying the seeded
+    /// personas/phases, standing in for the packs/config that supply runtime
+    /// content in production. Tests that previously relied on the kernel baking
+    /// these defaults now inject them through this seam, then assert the loader
+    /// merges + resolves them.
+    #[must_use]
+    fn install_seeded_config_source_base(
+        project_root: &std::path::Path,
+    ) -> crate::workflow_config::config_source_client::test_seam::TestBaseGuard {
+        use crate::workflow_config::config_source_client::test_seam;
+        let seeded = seeded_agent_runtime_config();
+        let mut base = crate::workflow_config::builtin_workflow_config();
+        base.tools_allowlist = seeded.tools_allowlist.clone();
+        base.agent_profiles = seeded
+            .agents
+            .iter()
+            .map(|(agent_id, profile)| (agent_id.clone(), AgentProfileOverlay::from(profile.clone())))
+            .collect();
+        base.phase_definitions = seeded.phases.clone();
+        test_seam::install(project_root, base)
+    }
+
+    #[test]
+    fn sparse_phase_overlay_preserves_base_contracts() {
+        // Codex round-1 P1: a SPARSE override (only the model changes) must NOT
+        // drop the base/pack-provided output/decision contracts. v0.6 removed
+        // the builtin re-graft fallback, so the overlay merge itself has to
+        // preserve unspecified fields.
+        let mut base = seeded_agent_runtime_config();
+        // Give the base implementation phase a richer runtime block so we can
+        // assert sparse runtime fields survive a model-only override.
+        {
+            let impl_phase = base.phases.get_mut("implementation").expect("seeded implementation phase");
+            impl_phase.runtime = Some(AgentRuntimeOverrides {
+                model: Some("base-model".to_string()),
+                web_search: Some(true),
+                timeout_secs: Some(900),
+                fallback_models: vec!["base-fallback".to_string()],
+                ..AgentRuntimeOverrides::default()
+            });
+        }
+
+        let mut overlay = AgentRuntimeOverlay::default();
+        overlay.phases.insert(
+            "implementation".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                // Omit agent_id: a sparse override must keep the base agent.
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: Some(AgentRuntimeOverrides {
+                    model: Some("claude-sonnet-4-6".to_string()),
+                    ..AgentRuntimeOverrides::default()
+                }),
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+                idempotency: Idempotency::Unknown,
+                worktree: None,
+                evals: None,
+            },
+        );
+
+        merge_agent_runtime_overlay(&mut base, &overlay);
+
+        let phase = base.phases.get("implementation").expect("implementation phase survives merge");
+        // Codex round-3 P2: agent_id preserved when the sparse overlay omits it.
+        assert_eq!(phase.agent_id.as_deref(), Some("swe"), "base agent_id must survive a sparse runtime-only override");
+        let runtime = phase.runtime.as_ref().expect("runtime survives");
+        assert_eq!(runtime.model.as_deref(), Some("claude-sonnet-4-6"), "the sparse override's model must win");
+        // Codex round-3 P2: other base runtime fields survive a model-only override.
+        assert_eq!(runtime.web_search, Some(true), "base runtime web_search must survive");
+        assert_eq!(runtime.timeout_secs, Some(900), "base runtime timeout_secs must survive");
+        assert_eq!(runtime.fallback_models, vec!["base-fallback".to_string()], "base fallback_models must survive");
+        assert!(phase.output_contract.is_some(), "base output_contract must survive a sparse model-only override");
+        assert!(phase.decision_contract.is_some(), "base decision_contract must survive a sparse model-only override");
+        assert!(
+            phase.output_json_schema.is_some(),
+            "base output_json_schema must survive a sparse model-only override"
+        );
+    }
+
+    #[test]
+    fn agent_overlay_mode_switch_clears_stale_command_block() {
+        // The overlay's MODE is authoritative: switching a base command phase to
+        // an agent phase must clear the stale command block.
+        let mut base = seeded_agent_runtime_config();
+        base.phases.insert(
+            "build".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec!["build".to_string()],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+                idempotency: Idempotency::Unknown,
+                worktree: None,
+                evals: None,
+            },
+        );
+
+        let mut overlay = AgentRuntimeOverlay::default();
+        overlay.phases.insert(
+            "build".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: Some("now an agent phase".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+                idempotency: Idempotency::Unknown,
+                worktree: None,
+                evals: None,
+            },
+        );
+        merge_agent_runtime_overlay(&mut base, &overlay);
+
+        let phase = base.phases.get("build").expect("build phase survives");
+        assert_eq!(phase.mode, PhaseExecutionMode::Agent);
+        assert_eq!(phase.agent_id.as_deref(), Some("default"));
+        assert!(phase.command.is_none(), "switching to agent mode must clear the stale command block");
+    }
+
+    #[test]
+    fn overlay_mode_change_clears_inherited_agent_contracts() {
+        // Codex round-2 P2: switching a base AGENT phase (which carries
+        // output/decision contracts) to a command phase must NOT leak those
+        // agent-only contracts onto the command phase.
+        let mut base = seeded_agent_runtime_config();
+        assert!(base.phases.get("implementation").and_then(|p| p.output_contract.as_ref()).is_some());
+
+        let mut overlay = AgentRuntimeOverlay::default();
+        overlay.phases.insert(
+            "implementation".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Command,
+                agent_id: None,
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: Some(PhaseCommandDefinition {
+                    program: "cargo".to_string(),
+                    args: vec!["test".to_string()],
+                    env: BTreeMap::new(),
+                    cwd_mode: CommandCwdMode::ProjectRoot,
+                    cwd_path: None,
+                    timeout_secs: None,
+                    success_exit_codes: vec![0],
+                    parse_json_output: false,
+                    expected_result_kind: None,
+                    expected_schema: None,
+                    category: None,
+                    failure_pattern: None,
+                    excerpt_max_chars: None,
+                    on_success_verdict: None,
+                    on_failure_verdict: None,
+                    confidence: None,
+                    failure_risk: None,
+                }),
+                manual: None,
+                default_tool: None,
+                idempotency: Idempotency::Unknown,
+                worktree: None,
+                evals: None,
+            },
+        );
+        merge_agent_runtime_overlay(&mut base, &overlay);
+
+        let phase = base.phases.get("implementation").expect("implementation phase survives");
+        assert_eq!(phase.mode, PhaseExecutionMode::Command);
+        assert!(phase.command.is_some());
+        assert!(phase.output_contract.is_none(), "mode change must drop inherited output_contract");
+        assert!(phase.output_json_schema.is_none(), "mode change must drop inherited output_json_schema");
+        assert!(phase.decision_contract.is_none(), "mode change must drop inherited decision_contract");
+    }
 
     #[test]
     fn approval_policy_deny_wins_over_allow_and_default_applies() {
@@ -1888,7 +2153,7 @@ mod tests {
 
     #[test]
     fn workflow_tool_redeclare_with_executable_only_preserves_capabilities() {
-        let mut base = builtin_agent_runtime_config();
+        let mut base = seeded_agent_runtime_config();
         base.cli_tools.insert(
             "claude".to_string(),
             CliToolConfig {
@@ -1933,7 +2198,7 @@ mod tests {
 
     #[test]
     fn phase_execution_prefers_exact_key_and_falls_back_to_default_case_insensitively() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let template = config.phases.values().next().expect("builtin has phases").clone();
         config.phases.clear();
         let mut exact = template.clone();
@@ -2065,16 +2330,77 @@ cli_tools:
     }
 
     #[test]
-    fn empty_project_loads_bundled_pack_runtime_defaults() {
+    fn empty_project_yields_empty_runtime_config() {
+        // Kernel-purification (v0.6): the kernel bakes ZERO agents/phases. An
+        // empty project (no packs, no config_source content) therefore resolves
+        // to the empty builtin base.
+        let builtin = builtin_agent_runtime_config();
+        assert!(builtin.agents.is_empty(), "builtin base must ship no baked agents");
+        assert!(builtin.phases.is_empty(), "builtin base must ship no baked phases");
+        assert!(builtin.tools_allowlist.is_empty(), "builtin base must ship no baked tools_allowlist");
+        assert!(builtin.cli_tools.is_empty(), "builtin base must ship no baked cli_tools");
+        assert_eq!(builtin.schema, AGENT_RUNTIME_CONFIG_SCHEMA_ID);
+        assert_eq!(builtin.version, AGENT_RUNTIME_CONFIG_VERSION);
+
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
+        // With no config_source plugin installed, the load path falls back to
+        // the empty builtin base.
         let config = load_agent_runtime_config_or_default(temp.path());
+        assert!(config.agents.is_empty(), "empty project must yield no agents");
+        assert!(config.phases.is_empty(), "empty project must yield no phases");
+    }
 
-        // Verify builtin phases are present with expected agent IDs
-        assert_eq!(config.phase_agent_id("requirements"), Some("po"));
-        assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
+    #[test]
+    fn config_source_base_phases_survive_load() {
+        // A project whose config_source base declares phase definitions yields
+        // exactly those phases merged onto the (empty) builtin base.
+        use crate::workflow_config::config_source_client::test_seam;
+
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", home.path());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let mut base = crate::workflow_config::builtin_workflow_config();
+        base.tools_allowlist = vec!["cargo".to_string()];
+        base.agent_profiles.insert(
+            "seeded-agent".to_string(),
+            AgentProfileOverlay::from(seeded_agent_runtime_config().agent_profile("po").expect("po").clone()),
+        );
+        base.phase_definitions.insert(
+            "seeded-phase".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("seeded-agent".to_string()),
+                directive: Some("seeded".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+                idempotency: Idempotency::Unknown,
+                worktree: None,
+                evals: None,
+            },
+        );
+        let _guard = test_seam::install(temp.path(), base);
+
+        let config = load_agent_runtime_config_with_metadata(temp.path()).expect("load runtime config").config;
+        assert!(config.has_phase_definition("seeded-phase"), "config_source base phases must survive the merge");
+        assert_eq!(config.phase_agent_id("seeded-phase"), Some("seeded-agent"));
+        assert!(
+            config.agent_profile("seeded-agent").is_some(),
+            "config_source base agent profiles must survive the merge"
+        );
     }
 
     #[test]
@@ -2096,7 +2422,10 @@ cli_tools:
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
         let mut workflow = crate::workflow_config::builtin_workflow_config();
-        let builtin = builtin_agent_runtime_config();
+        // Kernel ships an empty tools_allowlist now; supply one via the config
+        // source base so the merged runtime config validates.
+        workflow.tools_allowlist = vec!["cargo".to_string()];
+        let builtin = seeded_agent_runtime_config();
         let mut overlay_agent = builtin.agent_profile("po").expect("builtin po profile should exist").clone();
         overlay_agent.mcp_servers.clear();
         overlay_agent.skills.clear();
@@ -2167,6 +2496,7 @@ cli_tools:
             "0.2.0",
         );
 
+        write_minimal_project_workflow(temp.path());
         let _base = install_yaml_config_source_base(temp.path());
         crate::workflow_config::load_workflow_config_with_metadata(temp.path()).expect("workflow config should load");
         let resolved = load_agent_runtime_config_with_metadata(temp.path()).expect("load runtime config");
@@ -2205,7 +2535,7 @@ cli_tools:
                 visible: true,
             },
         );
-        let mut project_agent = builtin_agent_runtime_config().agent_profile("po").expect("builtin po profile").clone();
+        let mut project_agent = seeded_agent_runtime_config().agent_profile("po").expect("builtin po profile").clone();
         project_agent.description = "Project agent".to_string();
         project_agent.system_prompt = "Project prompt".to_string();
         project_agent.mcp_servers.clear();
@@ -2255,7 +2585,7 @@ cli_tools:
 
     #[test]
     fn builtin_defaults_expose_phase_definitions() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
         assert_eq!(config.phase_agent_id("requirements"), Some("po"));
         assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
         assert!(!config.phases.contains_key("code-review"));
@@ -2265,7 +2595,7 @@ cli_tools:
 
     #[test]
     fn builtin_phase_prompts_resolve_to_expected_personas() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
         for (phase_id, agent_id) in [("requirements", "po"), ("implementation", "swe")] {
             let expected_prompt = config
                 .agent_profile(agent_id)
@@ -2280,7 +2610,7 @@ cli_tools:
 
     #[test]
     fn builtin_phase_decision_contracts_match_expected_evidence_requirements() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
 
         assert_eq!(
             config.phase_decision_contract("requirements").map(|contract| contract.required_evidence.clone()),
@@ -2294,7 +2624,7 @@ cli_tools:
 
     #[test]
     fn builtin_defaults_include_em_po_and_swe_profiles() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
         for agent_id in ["em", "po", "swe"] {
             let profile = config.agent_profile(agent_id).expect("builtin profile should exist");
             assert!(!profile.description.trim().is_empty());
@@ -2307,7 +2637,7 @@ cli_tools:
 
     #[test]
     fn builtin_persona_capabilities_and_tool_patterns_are_role_specific() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
         let em = config.agent_profile("em").expect("em profile should exist");
         let po = config.agent_profile("po").expect("po profile should exist");
         let swe = config.agent_profile("swe").expect("swe profile should exist");
@@ -2331,46 +2661,8 @@ cli_tools:
     }
 
     #[test]
-    fn builtin_json_and_fallback_match_persona_phase_defaults() {
-        let from_json = serde_json::from_str::<AgentRuntimeConfig>(BUILTIN_AGENT_RUNTIME_CONFIG_JSON)
-            .expect("builtin json should deserialize");
-        validate_agent_runtime_config(&from_json).expect("builtin json should validate");
-        let fallback = hardcoded_builtin_agent_runtime_config();
-
-        for phase_id in ["requirements", "implementation"] {
-            assert_eq!(from_json.phase_agent_id(phase_id), fallback.phase_agent_id(phase_id));
-            assert_eq!(
-                from_json.phase_decision_contract(phase_id).map(|contract| (
-                    contract.required_evidence.clone(),
-                    contract.min_confidence,
-                    contract.max_risk.clone(),
-                    contract.allow_missing_decision,
-                    contract.extra_json_schema.clone()
-                )),
-                fallback.phase_decision_contract(phase_id).map(|contract| (
-                    contract.required_evidence.clone(),
-                    contract.min_confidence,
-                    contract.max_risk.clone(),
-                    contract.allow_missing_decision,
-                    contract.extra_json_schema.clone()
-                ))
-            );
-        }
-
-        for agent_id in ["em", "po", "swe"] {
-            let json_profile = from_json.agent_profile(agent_id).expect("json profile should exist");
-            let fallback_profile = fallback.agent_profile(agent_id).expect("fallback profile should exist");
-            assert_eq!(json_profile.role, fallback_profile.role);
-            assert_eq!(json_profile.mcp_servers, fallback_profile.mcp_servers);
-            assert_eq!(json_profile.tool_policy, fallback_profile.tool_policy);
-            assert_eq!(json_profile.skills, fallback_profile.skills);
-            assert_eq!(json_profile.capabilities, fallback_profile.capabilities);
-        }
-    }
-
-    #[test]
     fn phase_decision_contract_lookup_is_case_insensitive() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
         assert!(config.phase_decision_contract("implementation").is_some());
         assert!(config.phase_decision_contract("IMPLEMENTATION").is_some());
     }
@@ -2381,6 +2673,9 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
+        // Runtime content (the implementation phase + its structured contract)
+        // is supplied by the config_source base, not baked into the kernel.
+        let _base = install_seeded_config_source_base(temp.path());
         let config = load_agent_runtime_config_or_default(temp.path());
         // Verify that structured output phases are marked correctly
         assert!(config.is_structured_output_phase("implementation"));
@@ -2392,6 +2687,7 @@ cli_tools:
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
+        let _base = install_seeded_config_source_base(temp.path());
         let config = load_agent_runtime_config_or_default(temp.path());
         // Verify that phase IDs are trimmed and case-insensitive
         assert!(config.is_structured_output_phase(" implementation "));
@@ -2399,21 +2695,24 @@ cli_tools:
     }
 
     #[test]
-    fn bundled_pack_runtime_supports_extended_task_requirement_and_review_phases() {
+    fn config_source_runtime_supports_extended_task_requirement_and_review_phases() {
         let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let home = tempfile::tempdir().expect("home tempdir");
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
+        // Phases/personas now arrive from the config_source base + packs, not
+        // from baked kernel defaults.
+        let _base = install_seeded_config_source_base(temp.path());
         let config = load_agent_runtime_config_or_default(temp.path());
 
-        // Verify builtin phases are available
+        // Verify the injected phases are available
         assert_eq!(config.phase_agent_id("requirements"), Some("po"));
         assert_eq!(config.phase_agent_id("implementation"), Some("swe"));
     }
 
     #[test]
     fn structured_output_phase_rejects_empty_phase_even_with_structured_default() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let default_phase = config.phases.get_mut("default").expect("builtin config includes default phase");
         default_phase.output_contract = Some(PhaseOutputContract {
             kind: "phase_result".to_string(),
@@ -2426,7 +2725,7 @@ cli_tools:
     }
 
     fn make_minimal_config_with_phase(phase_id: &str, definition: PhaseExecutionDefinition) -> AgentRuntimeConfig {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         config.phases.insert(phase_id.to_string(), definition);
         config
     }
@@ -2920,7 +3219,7 @@ cli_tools:
 
     #[test]
     fn builtin_kernel_config_all_phases_are_agent_mode() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
         for (phase_id, definition) in &config.phases {
             assert_eq!(definition.mode, PhaseExecutionMode::Agent, "builtin phase '{}' should be agent mode", phase_id);
             assert!(definition.command.is_none(), "builtin phase '{}' should have no command block", phase_id);
@@ -3137,7 +3436,7 @@ cli_tools:
 
     #[test]
     fn profile_with_new_fields_roundtrips_through_json() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("default").expect("default profile");
         profile.mcp_server_configs = Some(BTreeMap::from([(
             "animus".to_string(),
@@ -3180,7 +3479,7 @@ cli_tools:
 
     #[test]
     fn new_fields_skipped_in_serialization_when_none() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
         let json = serde_json::to_string_pretty(&config).expect("serialize");
         assert!(!json.contains("mcp_server_configs"));
         assert!(!json.contains("structured_capabilities"));
@@ -3301,7 +3600,7 @@ cli_tools:
 
     #[test]
     fn phase_system_prompt_override_takes_precedence_over_agent_profile() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
         config.phases.insert(
             "custom-phase".to_string(),
@@ -3330,7 +3629,7 @@ cli_tools:
 
     #[test]
     fn phase_system_prompt_falls_back_to_agent_profile() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
         config.phases.insert(
             "custom-phase".to_string(),
@@ -3359,7 +3658,7 @@ cli_tools:
 
     #[test]
     fn phase_system_prompt_ignores_empty_override() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         config.agents.insert("test-agent".to_string(), make_agent_profile_with_system_prompt("Agent profile prompt"));
         config.phases.insert(
             "custom-phase".to_string(),
@@ -3680,6 +3979,35 @@ phases:
         let _home_guard = EnvVarGuard::set("HOME", home.path());
         let temp = tempfile::tempdir().expect("tempdir");
         let mut workflow = crate::workflow_config::builtin_workflow_config();
+        // The kernel ships empty agents/phases/tools_allowlist now; supply the
+        // minimum the merged runtime config needs to validate.
+        workflow.tools_allowlist = vec!["cargo".to_string()];
+        workflow.agent_profiles.insert(
+            "default".to_string(),
+            AgentProfileOverlay::from(seeded_agent_runtime_config().agent_profile("default").expect("default").clone()),
+        );
+        workflow.phase_definitions.insert(
+            "noop".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: Some("noop".to_string()),
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+                idempotency: Idempotency::Unknown,
+                worktree: None,
+                evals: None,
+            },
+        );
         workflow.tools.insert(
             "full-tool".to_string(),
             crate::workflow_config::ToolDefinition {
@@ -3712,7 +4040,7 @@ phases:
 
     #[test]
     fn phase_fallback_tools_resolves_from_agent_profile() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("swe").expect("swe profile");
         profile.fallback_models = vec!["gpt-4o".to_string(), "o4-mini".to_string()];
         profile.fallback_tools = vec!["oai-runner".to_string()];
@@ -3723,7 +4051,7 @@ phases:
 
     #[test]
     fn phase_fallback_tools_resolves_from_phase_runtime() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let phase = config.phases.get_mut("implementation").expect("implementation phase");
         phase.runtime = Some(AgentRuntimeOverrides {
             fallback_models: vec!["gpt-4o".to_string(), "o4-mini".to_string()],
@@ -3737,7 +4065,7 @@ phases:
 
     #[test]
     fn phase_fallback_tools_phase_runtime_takes_precedence_over_agent_profile() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("swe").expect("swe profile");
         profile.fallback_models = vec!["gpt-4o".to_string()];
         profile.fallback_tools = vec!["claude".to_string()];
@@ -3754,7 +4082,7 @@ phases:
 
     #[test]
     fn phase_fallback_tools_defaults_to_empty() {
-        let config = builtin_agent_runtime_config();
+        let config = seeded_agent_runtime_config();
         let tools = config.phase_fallback_tools("implementation");
         assert!(tools.is_empty());
     }
@@ -3789,7 +4117,7 @@ phases:
 
     #[test]
     fn validate_agent_runtime_config_rejects_evals_with_empty_check_list() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let phase = config.phases.get_mut("implementation").expect("phase exists");
         phase.evals =
             Some(EvalsConfig { pass_threshold: 1.0, on_fail: EvalOnFail::Block, max_reworks: 0, checks: Vec::new() });
@@ -3800,7 +4128,7 @@ phases:
 
     #[test]
     fn validate_agent_runtime_config_rejects_invalid_agent_reasoning_effort() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("default").expect("profile exists");
         profile.reasoning_effort = Some("turbo".to_string());
         let err = validate_agent_runtime_config(&config).expect_err("invalid effort must fail");
@@ -3810,7 +4138,7 @@ phases:
 
     #[test]
     fn validate_agent_runtime_config_accepts_valid_agent_reasoning_effort() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("default").expect("profile exists");
         profile.reasoning_effort = Some("High".to_string());
         validate_agent_runtime_config(&config).expect("case-insensitive valid effort must pass");
@@ -3818,7 +4146,7 @@ phases:
 
     #[test]
     fn validate_agent_runtime_config_rejects_invalid_phase_reasoning_effort() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let phase = config.phases.get_mut("implementation").expect("phase exists");
         phase.runtime = Some(AgentRuntimeOverrides { reasoning_effort: Some("max".to_string()), ..Default::default() });
         let err = validate_agent_runtime_config(&config).expect_err("invalid phase effort must fail");
@@ -3838,7 +4166,7 @@ agents:
         let overlay = config.agent_profiles.get("cautious").expect("cautious profile parsed");
         assert_eq!(overlay.permission_mode.as_deref(), Some("plan"));
 
-        let mut runtime = builtin_agent_runtime_config();
+        let mut runtime = seeded_agent_runtime_config();
         merge_workflow_runtime_overlay(&mut runtime, &config);
         let profile = runtime.agent_profile("cautious").expect("cautious profile compiled");
         assert_eq!(profile.permission_mode.as_deref(), Some("plan"));
@@ -3872,7 +4200,7 @@ agents:
 
     #[test]
     fn phase_permission_mode_phase_runtime_takes_precedence_over_agent_profile() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("swe").expect("swe profile");
         profile.permission_mode = Some("plan".to_string());
 
@@ -3886,7 +4214,7 @@ agents:
 
     #[test]
     fn validate_agent_runtime_config_rejects_empty_permission_mode() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("default").expect("profile exists");
         profile.permission_mode = Some("   ".to_string());
         let err = validate_agent_runtime_config(&config).expect_err("empty permission_mode must fail");
@@ -3896,7 +4224,7 @@ agents:
 
     #[test]
     fn validate_agent_runtime_config_accepts_unknown_permission_mode() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("default").expect("profile exists");
         profile.permission_mode = Some("totally-custom".to_string());
         validate_agent_runtime_config(&config).expect("unknown permission_mode must pass through, not block");
@@ -3913,7 +4241,7 @@ agents:
 
     #[test]
     fn validate_agent_runtime_config_rejects_rework_with_zero_budget() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let phase = config.phases.get_mut("implementation").expect("phase exists");
         phase.evals = Some(EvalsConfig {
             pass_threshold: 1.0,
@@ -3928,7 +4256,7 @@ agents:
 
     #[test]
     fn validate_agent_runtime_config_rejects_llm_judge_timeout_secs() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let phase = config.phases.get_mut("implementation").expect("phase exists");
         phase.evals = Some(EvalsConfig {
             pass_threshold: 1.0,
@@ -3953,7 +4281,7 @@ agents:
 
     #[test]
     fn validate_agent_runtime_config_rejects_system_prompt_file_in_compiled_config() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let default_profile = config.agents.get_mut("default").expect("default agent");
         default_profile.system_prompt_file = Some("prompts/whatever.md".to_string());
 
@@ -4247,7 +4575,7 @@ agents:
 
     #[test]
     fn memory_max_entries_zero_is_rejected_by_validation() {
-        let mut config = builtin_agent_runtime_config();
+        let mut config = seeded_agent_runtime_config();
         let profile = config.agents.get_mut("default").expect("profile exists");
         profile.memory.max_entries = Some(0);
         let err = validate_agent_runtime_config(&config).expect_err("max_entries: 0 must fail validation");

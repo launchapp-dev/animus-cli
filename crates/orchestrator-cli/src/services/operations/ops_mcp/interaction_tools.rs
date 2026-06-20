@@ -1681,6 +1681,8 @@ mod interaction_tool_tests {
             std::fs::write(
                 project.path().join(".animus").join("workflows.yaml"),
                 r#"
+tools_allowlist:
+  - cargo
 agents:
   swe:
     system_prompt: Build the change.
@@ -1780,6 +1782,8 @@ phases:
                 std::fs::write(
                     project.path().join(".animus").join("workflows.yaml"),
                     r#"
+tools_allowlist:
+  - cargo
 agents:
   restricted:
     system_prompt: Restricted agent.
@@ -1843,6 +1847,8 @@ phases:
                 std::fs::write(
                     project.path().join(".animus").join("workflows.yaml"),
                     r#"
+tools_allowlist:
+  - cargo
 agents:
   restricted:
     system_prompt: Restricted agent.
@@ -2499,6 +2505,8 @@ phases:
             std::fs::write(
                 project.path().join(".animus").join("workflows.yaml"),
                 r#"
+tools_allowlist:
+  - cargo
 agents:
   swe:
     system_prompt: Build the change.

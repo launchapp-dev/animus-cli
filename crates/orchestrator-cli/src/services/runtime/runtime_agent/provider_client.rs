@@ -884,10 +884,16 @@ agents:
         std::fs::write(
             root.join(".animus").join("workflows.yaml"),
             r#"
+tools_allowlist:
+  - cargo
 agents:
   cautious:
     description: "Cautious agent"
     permission_mode: plan
+phases:
+  work:
+    mode: agent
+    agent_id: cautious
 "#,
         )
         .unwrap();
@@ -982,11 +988,17 @@ agents:
         std::fs::write(
             root.join(".animus").join("workflows.yaml"),
             r#"
+tools_allowlist:
+  - cargo
 agents:
   gated:
     description: "Gated agent"
     approval_policy:
       default: ask
+phases:
+  work:
+    mode: agent
+    agent_id: gated
 "#,
         )
         .unwrap();
@@ -1021,6 +1033,8 @@ agents:
         std::fs::write(
             root.join(".animus").join("workflows.yaml"),
             r#"
+tools_allowlist:
+  - cargo
 agents:
   guarded:
     description: "Both-layer agent"
@@ -1028,6 +1042,10 @@ agents:
     approval_policy:
       default: ask
       auto_deny: ["git.push*"]
+phases:
+  work:
+    mode: agent
+    agent_id: guarded
 "#,
         )
         .unwrap();
