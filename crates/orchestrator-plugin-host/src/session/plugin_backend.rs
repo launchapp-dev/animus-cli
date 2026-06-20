@@ -325,6 +325,7 @@ impl PluginSessionBackend {
             "response_schema",
             "runtime_contract",
             "reasoning_effort",
+            "approvals",
         ] {
             if let Some(value) = extras.get(key) {
                 params[key] = value.clone();
@@ -1483,6 +1484,40 @@ mod tests {
         let bare = SessionRequest { extras: json!({}), ..request };
         let bare_params = backend.build_run_params(&bare, None, "ctrl-test");
         assert!(bare_params.get("reasoning_effort").is_none(), "absent reasoning_effort must not inject the key");
+    }
+
+    /// `extras.approvals` placed on the `SessionRequest` must reach the plugin
+    /// as a top-level RPC param. The claude transport reads `extras.approvals`
+    /// to wire `--permission-prompt-tool` (and strip
+    /// `--dangerously-skip-permissions`). If `build_run_params` drops the key,
+    /// kernel-mediated approvals are a silent no-op for plugin-backed runs and
+    /// the gate fails OPEN — claude runs every tool unprompted.
+    #[test]
+    fn build_run_params_forwards_approvals() {
+        let backend = fresh_backend();
+        let request = SessionRequest {
+            tool: "claude".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+            prompt: "hi".to_string(),
+            cwd: PathBuf::from("/tmp"),
+            project_root: None,
+            mcp_endpoint: None,
+            permission_mode: None,
+            timeout_secs: None,
+            env_vars: Vec::new(),
+            extras: json!({ "approvals": true }),
+        };
+        let params = backend.build_run_params(&request, None, "ctrl-test");
+        assert_eq!(
+            params.get("approvals").and_then(Value::as_bool),
+            Some(true),
+            "approvals must be forwarded as a top-level RPC param so the gate wires"
+        );
+
+        // Absent => the key must not appear at all.
+        let bare = SessionRequest { extras: json!({}), ..request };
+        let bare_params = backend.build_run_params(&bare, None, "ctrl-test");
+        assert!(bare_params.get("approvals").is_none(), "absent approvals must not inject the key");
     }
 
     /// The host-minted control_session_id must ride along on every
