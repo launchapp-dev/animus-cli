@@ -338,6 +338,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
             &project_root_path,
             args.agent.as_deref(),
         );
+    crate::services::runtime::runtime_agent::provider_client::warn_if_claude_autoapprove_bypass(&args.tool, approvals);
 
     let producer = ResolverTurnProducer::for_project(&project_root_path);
 
