@@ -903,8 +903,6 @@ fn spawn_autonomous_daemon_run(project_root: &str, args: &DaemonStartArgs) -> Re
         .arg("run")
         .arg("--startup-cleanup")
         .arg(args.scheduler.startup_cleanup.to_string())
-        .arg("--resume-interrupted")
-        .arg(args.scheduler.resume_interrupted.to_string())
         .arg("--reconcile-stale")
         .arg(args.scheduler.reconcile_stale.to_string());
     if let Some(pool_size) = args.scheduler.pool_size {

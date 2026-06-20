@@ -28,7 +28,6 @@
 //!   for any internal synchronization they need.
 
 use async_trait::async_trait;
-use serde_json::Value;
 
 use animus_control_protocol::{
     types::{
@@ -170,15 +169,3 @@ pub trait QueueRouting: Send + Sync {
     async fn queue_stats(&self) -> Result<QueueStats, ControlError>;
 }
 
-/// Marker used by integration tests that need to assert "the surface
-/// received this exact JSON params payload" without spinning up a full
-/// transport stack.
-///
-/// Not used in production code paths.
-#[derive(Debug, Clone, Default)]
-pub struct LastCallSpy {
-    /// JSON-RPC method that was last invoked, if any.
-    pub method: Option<String>,
-    /// Params payload from the last invocation.
-    pub params: Option<Value>,
-}

@@ -15,8 +15,6 @@ pub(super) struct DaemonStartInput {
     #[serde(default)]
     pub(super) startup_cleanup: Option<bool>,
     #[serde(default)]
-    pub(super) resume_interrupted: Option<bool>,
-    #[serde(default)]
     pub(super) reconcile_stale: Option<bool>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
