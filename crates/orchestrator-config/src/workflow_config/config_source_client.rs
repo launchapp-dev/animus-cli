@@ -40,14 +40,18 @@ pub fn resolve_plugin_base(project_root: &Path) -> Result<Option<(WorkflowConfig
 }
 
 async fn load_from_plugin(plugin: DiscoveredPlugin, project_root: PathBuf) -> Result<(WorkflowConfig, String)> {
-    // The host spawns plugins with a CLEAN env; forward the plugin's
-    // manifest-declared env (e.g. DATABASE_URL for animus-config-postgres).
-    let options = PluginSpawnOptions::for_manifest(
-        plugin.name.clone(),
-        &plugin.manifest.env_required,
-        Vec::<String>::new(),
-        None,
-    );
+    // The host spawns plugins with a CLEAN env. Unlike other plugin roles, a
+    // config_source plugin REPLACES the kernel's in-process YAML parsing, which
+    // read the daemon's full process environment for non-secret `${VAR}`
+    // interpolation (team ids, URLs, feature flags). To preserve that behavior
+    // we forward the full parent env to the config_source plugin, in addition
+    // to the manifest-declared secret env (e.g. DATABASE_URL). config_source is
+    // a trusted, required-role plugin in the config pipeline, so this matches
+    // the capability the kernel itself had — secret-backed `${secret.*}` still
+    // resolves via the plugin's own keychain resolver, repo-scope aware.
+    let forwarded_env: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
+    let options =
+        PluginSpawnOptions::for_manifest(plugin.name.clone(), &plugin.manifest.env_required, forwarded_env, None);
     let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
         .await
         .with_context(|| format!("spawning config_source plugin {}", plugin.name))?;

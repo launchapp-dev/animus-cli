@@ -2789,6 +2789,7 @@ mod tests {
             auto_allow: vec!["git.*".to_string(), "cargo test".to_string()],
             auto_deny: vec!["git.push*".to_string(), "*prod*".to_string()],
             default: ApprovalPolicyDefault::Ask,
+            ..Default::default()
         };
         assert_eq!(policy.evaluate("git.commit"), ApprovalPolicyDecision::Allow);
         assert_eq!(policy.evaluate("git.push --force"), ApprovalPolicyDecision::Deny);

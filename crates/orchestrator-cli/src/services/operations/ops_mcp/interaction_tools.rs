@@ -524,7 +524,10 @@ fn build_judge_user_prompt(action: &str, tool_name: Option<&str>, arguments: Opt
     if let Some(args) = arguments {
         let mut rendered = serde_json::to_string_pretty(args).unwrap_or_else(|_| args.to_string());
         if rendered.len() > APPROVAL_JUDGE_MAX_ARG_CHARS {
-            rendered.truncate(APPROVAL_JUDGE_MAX_ARG_CHARS);
+            // Truncate on a char boundary (arbitrary JSON may carry non-ASCII;
+            // a byte-index truncate would panic mid-codepoint).
+            let cut = (0..=APPROVAL_JUDGE_MAX_ARG_CHARS).rev().find(|&i| rendered.is_char_boundary(i)).unwrap_or(0);
+            rendered.truncate(cut);
             rendered.push_str("\n…(truncated)");
         }
         prompt.push_str(&format!("Tool input:\n{rendered}\n"));
@@ -2879,6 +2882,15 @@ mod approval_judge_tests {
         );
         assert!(super::parse_answer_text("I'm not sure").is_none());
         assert!(super::parse_answer_text(r#"{"answer":""}"#).is_none());
+    }
+
+    #[test]
+    fn judge_user_prompt_truncates_long_non_ascii_without_panicking() {
+        // A long multibyte string would panic a byte-index truncate mid-codepoint.
+        let big = "日本語".repeat(5000);
+        let user = build_judge_user_prompt("act", Some("Bash"), Some(&json!({ "command": big })));
+        assert!(user.contains("(truncated)"));
+        assert!(user.len() < 6000);
     }
 
     #[test]
