@@ -954,40 +954,57 @@ wakes the loop but dispatches nothing.
 
 ## Config sources (v0.6)
 
-By default the daemon reads workflow and agent config from the in-tree YAML files
-(`.animus/workflows.yaml` and `.animus/workflows/*.yaml`). As of v0.6 this
-acquisition step is optionally handled by an installed `config_source` plugin
-instead.
+As of v0.6 the kernel does **not** parse `.animus/*.yaml` in its runtime load path.
+The project's base `WorkflowConfig` (and therefore the agent-runtime config derived
+from it) is sourced **exclusively** by an installed `config_source` plugin. The
+daemon **requires** one (`RequiredRole::ConfigSource` is part of `daemon_default()`):
+
+- `launchapp-dev/animus-config-yaml` — the default, reads `.animus/workflows.yaml`
+  + `.animus/workflows/*.yaml` exactly as the kernel used to (env/secret interpolation,
+  multi-file merge). Installed by `animus plugin install-defaults`.
+- `launchapp-dev/animus-config-postgres` (or any other) — sources the config from a
+  database / API instead of files.
+
+This is the v0.6 "config sourcing is a plugin" thesis: the YAML parser still ships in
+`orchestrator-config` as a library (the `animus-config-yaml` plugin links it), but the
+kernel's daemon/CLI load path no longer calls it directly.
 
 ### How it works
 
 The kernel's `ConfigSourceClient` calls `orchestrator_plugin_host::discover_by_kind`
-for `"config_source"` on each config load. If a plugin is found, the kernel spawns it
-and issues a `config/load` JSON-RPC call with `{ project_root, repo_scope }`. The
-plugin returns a `ConfigLoadResponse` containing:
+for `"config_source"` on each config load, spawns the plugin (forwarding the daemon's
+full environment so non-secret `${VAR}` interpolation still resolves, plus the
+manifest-declared secret env), and issues a `config/load` JSON-RPC call with
+`{ project_root, repo_scope }`. The plugin returns a `ConfigLoadResponse`:
 
 - `config` — a `ConfigModel` envelope: `{ schema: "animus.workflow-config.v2", version: 2,
   config: <WorkflowConfig as opaque JSON> }`
-- `cache_token` — `{ version: "<opaque string>", external_inputs: bool }`. The kernel
-  keys its compiled-config disk cache on `version` and bypasses the cache when
-  `external_inputs` is true.
+- `cache_token` — `{ version: "<opaque string>", external_inputs: bool }`. The plugin
+  owns its own cache token; the kernel re-issues `config/load` on each reload.
 
 When **no** `config_source` plugin is installed, `resolve_plugin_base` returns `Ok(None)`
-and the kernel falls back to the in-tree YAML scan. Existing projects are completely
-unaffected.
+and `load_workflow_config_with_metadata` returns an actionable error instructing the
+operator to `animus plugin install launchapp-dev/animus-config-yaml` (or
+`animus plugin install-defaults`). The daemon refuses to start in this state (preflight).
 
-The kernel owns the compiler in both paths: pack-overlay merge, agent-runtime derivation,
-state-machine compilation, validation, and disk caching all stay in-kernel regardless of
-which source produced the base `WorkflowConfig`.
+The kernel still owns the **compiler**: pack-overlay merge, agent-runtime derivation,
+state-machine compilation, and validation all stay in-kernel regardless of which source
+produced the base `WorkflowConfig`.
 
-### Hot-reload
+### Hot-reload / reload model
 
-When a `config_source` plugin advertises the `config_watch` capability, the daemon
-subscribes to its `config/changed` notifications. On receipt it re-issues `config/load`,
-recompiles, and broadcasts the standard `config_reloaded` event on `workflow/events`.
-When the plugin does not advertise `config_watch` (or when no plugin is installed), the
-daemon falls back to its existing interval-heartbeat / filesystem-watcher reload path —
-no behavioral regression for YAML-backed projects.
+Hot-reload works today for every config source, including DB/API-backed ones: the daemon
+re-issues `config/load` on its reload cadence (interval heartbeat, `daemon/nudge`, an
+explicit `animus workflow config reload`, or a config edit), so a changed Postgres/API
+source is picked up on the next reload pass without any file to watch — then recompiled
+and broadcast as the standard `config_reloaded` event on `workflow/events`.
+
+For **instant** reload, a `config_source` plugin may advertise the optional `config_watch`
+capability and push `config/changed` notifications when its source mutates; the daemon
+subscribes and reloads on receipt instead of waiting for the next cadence pass. Neither
+`animus-config-yaml` nor `animus-config-postgres` advertises `config_watch` today (they
+rely on the cadence re-issue above); the push path is available for future watch-capable
+sources.
 
 ### Optional `config/validate`
 

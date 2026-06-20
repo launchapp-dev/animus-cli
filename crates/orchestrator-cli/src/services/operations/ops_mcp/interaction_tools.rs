@@ -780,6 +780,121 @@ async fn answer_question_with_llm(
     answer
 }
 
+/// Extract `{"answers": { "<question>": <label | [labels] | text> }}` from
+/// possibly-fenced/prose-wrapped model output. Returns the answers map.
+fn parse_structured_answers(text: &str) -> Option<BTreeMap<String, Value>> {
+    let bytes = text.as_bytes();
+    let mut candidates: Vec<&str> = Vec::new();
+    let mut depth = 0i32;
+    let mut start = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'{' => {
+                if depth == 0 {
+                    start = Some(i);
+                }
+                depth += 1;
+            }
+            b'}' => {
+                if depth > 0 {
+                    depth -= 1;
+                    if depth == 0 {
+                        if let Some(s) = start.take() {
+                            candidates.push(&text[s..=i]);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for candidate in candidates.iter().rev() {
+        if let Ok(value) = serde_json::from_str::<Value>(candidate) {
+            if let Some(Value::Object(map)) = value.get("answers") {
+                if !map.is_empty() {
+                    return Some(map.clone().into_iter().collect());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// LLM autopilot for the STRUCTURED `animus.agent.ask` path: answer every
+/// `questions[]` entry on the human's behalf, returning an answers map keyed by
+/// exact question text (value = a chosen option label, an array of labels for
+/// multi-select, or free text). `None` => caller escalates to a human.
+async fn answer_structured_with_llm(
+    project_root: &str,
+    judge_tool: &str,
+    judge_model: &str,
+    questions: &[InteractionQuestion],
+    extra_instructions: Option<&str>,
+) -> Option<BTreeMap<String, Value>> {
+    use crate::services::runtime::runtime_agent::provider_client;
+    use animus_session_backend::session::{SessionEvent, SessionRequest};
+
+    let mut system = String::from(
+        "You are answering, on behalf of a human operator, structured questions from an autonomous coding \
+         agent. For EACH question: if it lists options, choose option label(s) verbatim (a single label, or an \
+         array of labels when the question is multi-select); otherwise give a concise free-text answer. Use the \
+         operator's likely intent and the safest sensible default. Respond with ONLY a single JSON object and \
+         nothing else: {\"answers\": {\"<exact question text>\": <label | [labels] | text>}}.",
+    );
+    if let Some(extra) = extra_instructions.map(str::trim).filter(|value| !value.is_empty()) {
+        system.push_str("\n\nOperator guidance:\n");
+        system.push_str(extra);
+    }
+    let mut user = String::from("Questions:\n");
+    for q in questions {
+        user.push_str(&format!("- {}", q.question));
+        if q.multi_select {
+            user.push_str(" (choose one or more)");
+        }
+        user.push('\n');
+        for option in &q.options {
+            user.push_str(&format!("    * {}\n", option.label));
+        }
+    }
+    user.push_str("\nReturn your JSON answers now.");
+
+    let request = SessionRequest {
+        tool: judge_tool.to_string(),
+        model: judge_model.to_string(),
+        prompt: user,
+        cwd: std::path::PathBuf::from(project_root),
+        project_root: Some(std::path::PathBuf::from(project_root)),
+        mcp_endpoint: None,
+        permission_mode: None,
+        timeout_secs: Some(APPROVAL_JUDGE_TIMEOUT_SECS),
+        env_vars: Vec::new(),
+        extras: json!({ "system_prompt": system }),
+    };
+    let mut run = match provider_client::start_session(std::path::Path::new(project_root), request).await {
+        Ok(run) => run,
+        Err(err) => {
+            tracing::warn!(error = %err, "ask LLM autopilot (structured): session start failed; escalating to a human");
+            return None;
+        }
+    };
+    let mut final_text = String::new();
+    let mut deltas = String::new();
+    while let Some(event) = run.events.recv().await {
+        match event {
+            SessionEvent::FinalText { text } => final_text = text,
+            SessionEvent::TextDelta { text } => deltas.push_str(&text),
+            SessionEvent::Finished { .. } => break,
+            _ => {}
+        }
+    }
+    let text = if !final_text.trim().is_empty() { final_text } else { deltas };
+    let answers = parse_structured_answers(&text);
+    if answers.is_none() {
+        tracing::warn!("ask LLM autopilot (structured): could not parse answers; escalating to a human");
+    }
+    answers
+}
+
 #[tool_router(router = interaction_tool_router, vis = "pub(super)")]
 impl AoMcpServer {
     #[tool(
@@ -839,6 +954,50 @@ impl AoMcpServer {
                 Err(err) => return structured_err(TOOL, err.to_string()),
             };
             emit_interaction_event("interaction_created", &project_root, &created);
+
+            // LLM autopilot (approval_policy default: llm): answer the structured
+            // questions with a model and record them in the inbox (answered_by
+            // "llm") instead of escalating. Any failure falls through to normal
+            // human escalation.
+            if let Some((judge_tool, judge_model, instructions)) = &autopilot {
+                if let Some(answers) = answer_structured_with_llm(
+                    &project_root,
+                    judge_tool,
+                    judge_model,
+                    &created.questions,
+                    instructions.as_deref(),
+                )
+                .await
+                {
+                    let outcome = answer_interaction_op_with_resume(
+                        &project_root,
+                        &created.id,
+                        AnswerOptions {
+                            text: None,
+                            allow: false,
+                            deny: false,
+                            message: None,
+                            answered_by: Some("llm".to_string()),
+                            selects: Vec::new(),
+                            answers: Some(answers),
+                            response: None,
+                            remember: false,
+                            updated_input: None,
+                            updated_permissions: None,
+                        },
+                    )
+                    .await;
+                    match outcome {
+                        Ok((record, _resume)) => {
+                            emit_interaction_event("interaction_answered", &project_root, &record);
+                            return structured_ok(TOOL, ask_structured_answered_payload(&record));
+                        }
+                        Err(err) => {
+                            tracing::warn!(error = %err, "ask LLM autopilot (structured): failed to record answers; escalating to a human");
+                        }
+                    }
+                }
+            }
 
             if wait_mode == InteractionWaitMode::Suspend {
                 return suspend_pending_response(TOOL, &project_root, &created, false).await;
@@ -2895,6 +3054,16 @@ mod approval_judge_tests {
         assert_eq!(policy.evaluate("git.push --force"), ApprovalPolicyDecision::Deny);
         // Everything else defers to the evaluator.
         assert_eq!(policy.evaluate("Bash"), ApprovalPolicyDecision::Evaluate);
+    }
+
+    #[test]
+    fn parses_structured_answers_map() {
+        let text = "Here you go:\n```json\n{\"answers\": {\"Which sections?\": [\"Intro\",\"Outro\"], \"Tone?\": \"formal\"}}\n```";
+        let map = super::parse_structured_answers(text).expect("answers");
+        assert_eq!(map.get("Tone?").and_then(|v| v.as_str()), Some("formal"));
+        assert_eq!(map.get("Which sections?").and_then(|v| v.as_array()).map(|a| a.len()), Some(2));
+        assert!(super::parse_structured_answers("no json here").is_none());
+        assert!(super::parse_structured_answers(r#"{"answers":{}}"#).is_none());
     }
 
     #[test]
