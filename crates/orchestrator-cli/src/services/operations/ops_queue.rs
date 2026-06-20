@@ -650,8 +650,7 @@ mod tests {
     use std::sync::Arc;
 
     use orchestrator_core::{
-        builtin_agent_runtime_config, builtin_workflow_config, write_agent_runtime_config, write_workflow_config,
-        InMemoryServiceHub,
+        builtin_workflow_config, write_agent_runtime_config, write_workflow_config, InMemoryServiceHub,
     };
 
     use super::*;
@@ -676,7 +675,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let workflow_config = builtin_workflow_config();
         write_workflow_config(temp.path(), &workflow_config).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
+        write_agent_runtime_config(temp.path(), &crate::shared::seeded_agent_runtime_config())
+            .expect("write runtime config");
 
         let hub = Arc::new(InMemoryServiceHub::new());
         let err =
@@ -696,7 +696,8 @@ mod tests {
         let temp = tempfile::tempdir().expect("tempdir");
         let workflow_config = builtin_workflow_config();
         write_workflow_config(temp.path(), &workflow_config).expect("write config");
-        write_agent_runtime_config(temp.path(), &builtin_agent_runtime_config()).expect("write runtime config");
+        write_agent_runtime_config(temp.path(), &crate::shared::seeded_agent_runtime_config())
+            .expect("write runtime config");
 
         let hub = Arc::new(InMemoryServiceHub::new());
         let err = resolve_enqueue_dispatch(

@@ -14,8 +14,6 @@ fn daemon_run_once_completes_single_tick_with_no_work() -> Result<()> {
         "run",
         "--once",
         "--skip-preflight",
-        "--auto-run-ready",
-        "false",
         "--startup-cleanup",
         "false",
         "--reconcile-stale",

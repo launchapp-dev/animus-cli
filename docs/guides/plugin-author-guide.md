@@ -196,7 +196,7 @@ maps to exactly one backend per project.
 cargo build --release
 ./target/release/animus-subject-my-tickets --manifest
 animus plugin install --path ./target/release/animus-subject-my-tickets --name animus-subject-my-tickets --force
-animus plugin info --name animus-subject-my-tickets
+animus plugin info animus-subject-my-tickets
 animus plugin ping --name animus-subject-my-tickets
 ```
 

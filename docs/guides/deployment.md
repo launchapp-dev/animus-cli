@@ -551,10 +551,10 @@ The following specifics are not verifiable without a running instance:
 - Exact bound port (check `animus web serve` output).
 - Exact field names and types (introspect via the running endpoint).
 - Auth model for the GraphQL endpoint (likely the same `ANIMUS_WEBAPI_TOKEN`
-  bearer pattern; confirm with `animus plugin info --name animus-transport-graphql`).
+  bearer pattern; confirm with `animus plugin info animus-transport-graphql`).
 - Subscription transport type (WebSocket vs SSE).
 
-Use `animus plugin info --name animus-transport-graphql` and schema
+Use `animus plugin info animus-transport-graphql` and schema
 introspection to ground your client implementation against the installed version.
 
 ---

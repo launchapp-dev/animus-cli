@@ -522,9 +522,6 @@ mod tests {
             "src",
             Utc::now(),
         );
-        assert_eq!(
-            task.to_workflow_run_input().subject().kind(),
-            protocol::orchestrator::SUBJECT_KIND_TASK
-        );
+        assert_eq!(task.to_workflow_run_input().subject().kind(), protocol::orchestrator::SUBJECT_KIND_TASK);
     }
 }

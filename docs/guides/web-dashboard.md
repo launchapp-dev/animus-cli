@@ -46,7 +46,7 @@ falls back to the API URL; adding `animus-web-ui` (or another plugin that
 advertises the `$ui/web` capability) upgrades that fallback to the browser UI.
 If an installed transport or UI plugin declares required env vars in its
 manifest, those vars must also be set before `animus web` will spawn it.
-Use `animus plugin info --name <plugin-name>` to inspect `env_required`
+Use `animus plugin info <plugin-name>` to inspect `env_required`
 when startup fails before a URL is reported.
 
 ## URL Override

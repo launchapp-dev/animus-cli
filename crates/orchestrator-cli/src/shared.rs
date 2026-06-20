@@ -16,6 +16,336 @@ pub(crate) fn test_env_lock() -> &'static std::sync::Mutex<()> {
     LOCK.get_or_init(|| std::sync::Mutex::new(()))
 }
 
+/// Test fixture reproducing the personas/phases the kernel used to bake in
+/// before the v0.6 kernel-purification refactor. The kernel now ships an EMPTY
+/// `builtin_agent_runtime_config()`; these agents/phases are supplied by packs
+/// and the config_source-sourced workflow overlay at runtime. CLI tests that
+/// exercise merge/derivation/lookup/runtime behavior seed this valid base
+/// instead of relying on the (now empty, and thus invalid) builtin.
+#[cfg(test)]
+pub(crate) fn seeded_agent_runtime_config() -> orchestrator_config::AgentRuntimeConfig {
+    use orchestrator_config::types::WorkflowDecisionRisk;
+    use orchestrator_config::{
+        AgentCommunicationConfig, AgentHooksConfig, AgentMemoryConfig, AgentProfile, AgentRuntimeConfig,
+        AgentRuntimeOverrides, AgentToolPolicy, Idempotency, PhaseDecisionContract, PhaseExecutionDefinition,
+        PhaseExecutionMode, PhaseOutputContract, AGENT_RUNTIME_CONFIG_SCHEMA_ID, AGENT_RUNTIME_CONFIG_VERSION,
+    };
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    let implementation_output_contract = PhaseOutputContract {
+        kind: "implementation_result".to_string(),
+        required_fields: vec!["commit_message".to_string()],
+        fields: BTreeMap::new(),
+    };
+    let swe_mcp_servers = vec!["animus".to_string()];
+    let swe_tool_policy = AgentToolPolicy {
+        allow: vec![
+            "task.*".to_string(),
+            "workflow.*".to_string(),
+            "output.*".to_string(),
+            "history.*".to_string(),
+            "errors.*".to_string(),
+        ],
+        deny: vec!["project.remove".to_string(), "daemon.stop".to_string(), "requirements.delete".to_string()],
+    };
+    let swe_capabilities = BTreeMap::from([
+        ("planning".to_string(), false),
+        ("queue_management".to_string(), false),
+        ("scheduling".to_string(), false),
+        ("requirements_authoring".to_string(), false),
+        ("acceptance_validation".to_string(), false),
+        ("implementation".to_string(), true),
+        ("testing".to_string(), true),
+        ("code_review".to_string(), true),
+    ]);
+
+    let make_profile = |description: &str,
+                        system_prompt: &str,
+                        role: Option<&str>,
+                        mcp_servers: Vec<String>,
+                        tool_policy: AgentToolPolicy,
+                        skills: Vec<String>,
+                        capabilities: BTreeMap<String, bool>| {
+        AgentProfile {
+            name: None,
+            description: description.to_string(),
+            system_prompt: system_prompt.to_string(),
+            system_prompt_file: None,
+            role: role.map(ToOwned::to_owned),
+            persona: None,
+            memory: AgentMemoryConfig::default(),
+            communication: AgentCommunicationConfig::default(),
+            mcp_servers,
+            tool_policy,
+            skills,
+            capabilities,
+            tool: None,
+            tool_profile: None,
+            model: None,
+            fallback_models: vec![],
+            models: vec![],
+            fallback_tools: vec![],
+            reasoning_effort: None,
+            permission_mode: None,
+            web_search: None,
+            network_access: None,
+            timeout_secs: None,
+            max_attempts: None,
+            extra_args: vec![],
+            codex_config_overrides: vec![],
+            max_continuations: None,
+            approval_policy: None,
+            hooks: AgentHooksConfig::default(),
+            mcp_server_configs: None,
+            structured_capabilities: None,
+            project_overrides: None,
+        }
+    };
+
+    let make_agent_phase = |agent_id: &str, directive: &str| PhaseExecutionDefinition {
+        mode: PhaseExecutionMode::Agent,
+        agent_id: Some(agent_id.to_string()),
+        directive: Some(directive.to_string()),
+        system_prompt: None,
+        runtime: None,
+        capabilities: None,
+        output_contract: None,
+        output_json_schema: None,
+        decision_contract: None,
+        retry: None,
+        skills: Vec::new(),
+        command: None,
+        manual: None,
+        default_tool: None,
+        idempotency: Idempotency::Unknown,
+        worktree: None,
+        evals: None,
+    };
+
+    AgentRuntimeConfig {
+        schema: AGENT_RUNTIME_CONFIG_SCHEMA_ID.to_string(),
+        version: AGENT_RUNTIME_CONFIG_VERSION,
+        tools_allowlist: vec![
+            "cargo".to_string(),
+            "npm".to_string(),
+            "pnpm".to_string(),
+            "yarn".to_string(),
+            "bun".to_string(),
+            "pytest".to_string(),
+            "go".to_string(),
+            "bash".to_string(),
+            "sh".to_string(),
+            "make".to_string(),
+            "just".to_string(),
+        ],
+        agents: BTreeMap::from([
+            (
+                "default".to_string(),
+                make_profile(
+                    "Default workflow phase agent profile",
+                    "You are the workflow phase execution agent. Produce deterministic, repository-safe outputs and keep changes scoped to the active phase.",
+                    None,
+                    Vec::new(),
+                    AgentToolPolicy::default(),
+                    vec![],
+                    BTreeMap::new(),
+                ),
+            ),
+            (
+                "implementation".to_string(),
+                make_profile(
+                    "Compatibility alias for the software engineer persona.",
+                    "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.",
+                    Some("software_engineer"),
+                    swe_mcp_servers.clone(),
+                    swe_tool_policy.clone(),
+                    vec![
+                        "implementation".to_string(),
+                        "testing".to_string(),
+                        "code-review".to_string(),
+                        "debugging".to_string(),
+                    ],
+                    swe_capabilities.clone(),
+                ),
+            ),
+            (
+                "em".to_string(),
+                make_profile(
+                    "Engineering Manager persona for prioritization, queue management, and scheduling.",
+                    "You are the Engineering Manager agent. Prioritize work, manage queue health, sequence delivery safely, and keep execution plans realistic and dependency-aware.",
+                    Some("engineering_manager"),
+                    vec!["animus".to_string()],
+                    AgentToolPolicy {
+                        allow: vec!["task.*".to_string(), "workflow.*".to_string(), "history.*".to_string()],
+                        deny: vec![
+                            "task.delete".to_string(),
+                            "requirements.delete".to_string(),
+                            "project.remove".to_string(),
+                            "git.*".to_string(),
+                        ],
+                    },
+                    vec![
+                        "prioritization".to_string(),
+                        "queue-management".to_string(),
+                        "scheduling".to_string(),
+                        "risk-management".to_string(),
+                    ],
+                    BTreeMap::from([
+                        ("planning".to_string(), true),
+                        ("queue_management".to_string(), true),
+                        ("scheduling".to_string(), true),
+                        ("requirements_authoring".to_string(), false),
+                        ("acceptance_validation".to_string(), true),
+                        ("implementation".to_string(), false),
+                        ("testing".to_string(), false),
+                        ("code_review".to_string(), true),
+                    ]),
+                ),
+            ),
+            (
+                "po".to_string(),
+                make_profile(
+                    "Product Owner persona for requirements, vision, acceptance criteria, and deliverable validation.",
+                    "You are the Product Owner agent. Refine requirements into clear acceptance criteria, align work to product vision, and validate deliverables against user outcomes.",
+                    Some("product_owner"),
+                    vec!["animus".to_string()],
+                    AgentToolPolicy {
+                        allow: vec![
+                            "vision.*".to_string(),
+                            "requirements.*".to_string(),
+                            "task.*".to_string(),
+                            "review.*".to_string(),
+                            "qa.*".to_string(),
+                            "workflow.*".to_string(),
+                        ],
+                        deny: vec!["task.delete".to_string(), "project.remove".to_string(), "git.*".to_string()],
+                    },
+                    vec![
+                        "vision-alignment".to_string(),
+                        "requirements-management".to_string(),
+                        "acceptance-criteria".to_string(),
+                        "deliverable-validation".to_string(),
+                    ],
+                    BTreeMap::from([
+                        ("planning".to_string(), true),
+                        ("queue_management".to_string(), false),
+                        ("scheduling".to_string(), false),
+                        ("requirements_authoring".to_string(), true),
+                        ("acceptance_validation".to_string(), true),
+                        ("implementation".to_string(), false),
+                        ("testing".to_string(), false),
+                        ("code_review".to_string(), true),
+                    ]),
+                ),
+            ),
+            (
+                "swe".to_string(),
+                make_profile(
+                    "Software Engineer persona for implementation, testing, and code review.",
+                    "You are the software engineer execution agent. Implement production-ready code changes, add or update tests, and perform rigorous code review while keeping edits minimal and verifiable.",
+                    Some("software_engineer"),
+                    swe_mcp_servers,
+                    swe_tool_policy,
+                    vec![
+                        "implementation".to_string(),
+                        "testing".to_string(),
+                        "code-review".to_string(),
+                        "debugging".to_string(),
+                    ],
+                    swe_capabilities,
+                ),
+            ),
+        ]),
+        phases: BTreeMap::from([
+            (
+                "default".to_string(),
+                make_agent_phase("default", "Execute the current workflow phase with production-quality output."),
+            ),
+            (
+                "requirements".to_string(),
+                PhaseExecutionDefinition {
+                    decision_contract: Some(PhaseDecisionContract {
+                        required_evidence: Vec::new(),
+                        min_confidence: 0.6,
+                        max_risk: WorkflowDecisionRisk::Medium,
+                        allow_missing_decision: true,
+                        extra_json_schema: None,
+                        fields: BTreeMap::new(),
+                    }),
+                    ..make_agent_phase(
+                        "po",
+                        "Clarify implementation scope, constraints, and acceptance criteria. Update docs and implementation notes as needed.",
+                    )
+                },
+            ),
+            (
+                "research".to_string(),
+                PhaseExecutionDefinition {
+                    runtime: Some(AgentRuntimeOverrides {
+                        web_search: Some(true),
+                        timeout_secs: Some(900),
+                        ..AgentRuntimeOverrides::default()
+                    }),
+                    ..make_agent_phase(
+                        "default",
+                        "Gather external and codebase evidence needed to de-risk the next implementation step.",
+                    )
+                },
+            ),
+            (
+                "ux-research".to_string(),
+                make_agent_phase(
+                    "default",
+                    "Produce a UX brief from requirements and user flows. Identify key screens, interactions, and accessibility constraints.",
+                ),
+            ),
+            (
+                "wireframe".to_string(),
+                make_agent_phase(
+                    "default",
+                    "Create concrete UI mockups/wireframes in the repository under mockups/. Prefer production-like React-oriented layouts and realistic states.",
+                ),
+            ),
+            (
+                "mockup-review".to_string(),
+                make_agent_phase(
+                    "default",
+                    "Review mockups against linked requirements. Resolve mismatches, improve usability, and ensure acceptance criteria traceability.",
+                ),
+            ),
+            (
+                "implementation".to_string(),
+                PhaseExecutionDefinition {
+                    output_contract: Some(implementation_output_contract),
+                    output_json_schema: Some(json!({
+                        "type": "object",
+                        "required": ["kind", "commit_message"],
+                        "properties": {
+                            "kind": {"const": "implementation_result"},
+                            "commit_message": {"type": "string", "minLength": 1}
+                        },
+                        "additionalProperties": true
+                    })),
+                    decision_contract: Some(PhaseDecisionContract {
+                        required_evidence: Vec::new(),
+                        min_confidence: 0.7,
+                        max_risk: WorkflowDecisionRisk::Medium,
+                        allow_missing_decision: true,
+                        extra_json_schema: None,
+                        fields: BTreeMap::new(),
+                    }),
+                    ..make_agent_phase(
+                        "swe",
+                        "Implement production-quality code for this task. Keep changes focused and executable.",
+                    )
+                },
+            ),
+        ]),
+        cli_tools: BTreeMap::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
