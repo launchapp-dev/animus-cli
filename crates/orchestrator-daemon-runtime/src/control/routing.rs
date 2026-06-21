@@ -168,4 +168,3 @@ pub trait QueueRouting: Send + Sync {
     /// `queue/stats` — per-status counts and recent throughput.
     async fn queue_stats(&self) -> Result<QueueStats, ControlError>;
 }
-

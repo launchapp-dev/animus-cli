@@ -11,7 +11,10 @@ pub(crate) mod provider_client;
 mod run;
 mod status;
 
-use interactions::{handle_agent_interactions_answer, handle_agent_interactions_list, handle_agent_interactions_show};
+use interactions::{
+    handle_agent_approve_hook, handle_agent_interactions_answer, handle_agent_interactions_list,
+    handle_agent_interactions_show,
+};
 use profiles::{
     handle_agent_get, handle_agent_list, handle_agent_memory_append, handle_agent_memory_clear,
     handle_agent_memory_get, handle_agent_message_list, handle_agent_message_send,
@@ -47,5 +50,6 @@ pub(crate) async fn handle_agent(
                 handle_agent_interactions_answer(args, project_root, json).await
             }
         },
+        AgentCommand::ApproveHook(args) => handle_agent_approve_hook(args, project_root).await,
     }
 }

@@ -572,10 +572,356 @@ pub(crate) async fn pause_workflow_for_suspended_interaction(project_root: &str,
     true
 }
 
+// --- External provider-CLI approval hook (`animus agent approve-hook`) ------
+//
+// Lets non-claude provider CLIs (gemini BeforeTool command hook, an opencode
+// plugin, our oai harness) obtain an approval decision from the SAME logic that
+// backs the MCP `animus.agent.request_approval` tool: `decide_approval` resolves
+// the agent profile's `approval_policy` (auto_allow / auto_deny / default), the
+// LLM judge, and the human-escalation/inbox path. claude already routes through
+// the MCP tool natively via `--permission-prompt-tool`; this verb is the parity
+// on-ramp for everyone else.
+//
+// NOTE: these outputs are deliberately NOT the `animus.cli.v1` envelope. Each
+// provider's command hook parses a fixed raw JSON contract on stdout (gemini in
+// particular treats ANY stray stdout as a parse failure and then defaults to
+// ALLOW), so the verb must emit exactly the provider's shape on stdout and send
+// all diagnostics to stderr. Every failure path FAILS SAFE = deny.
+
+/// The decision the verb resolved, normalized away from the
+/// `interaction_tools::ApprovalDecision` type so this module owns its render.
+struct HookDecision {
+    allow: bool,
+    reason: Option<String>,
+    updated_input: Option<Value>,
+    /// Where the decision came from (policy / llm / human / timeout / error),
+    /// surfaced on the generic contract for auditability.
+    source: &'static str,
+}
+
+/// Parse the stdin payload for the requested format into `(tool_name, input)`.
+fn parse_hook_stdin(format: &crate::ApproveHookFormat, stdin: &str) -> Result<(String, Option<Value>)> {
+    let value: Value = serde_json::from_str(stdin.trim()).map_err(|err| anyhow!("invalid stdin JSON: {err}"))?;
+    let tool_name = value
+        .get("tool_name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| anyhow!("stdin is missing a non-empty `tool_name`"))?
+        .to_string();
+    let input = match format {
+        // Gemini BeforeTool payload nests the tool input under `tool_input`.
+        crate::ApproveHookFormat::Gemini => value.get("tool_input").cloned(),
+        crate::ApproveHookFormat::Generic => value.get("input").cloned(),
+    };
+    // Treat an explicit JSON `null` the same as absent.
+    let input = input.filter(|value| !value.is_null());
+    Ok((tool_name, input))
+}
+
+/// Render the resolved decision into the requested provider's JSON contract.
+/// The caller serializes the returned value to stdout (and nothing else).
+fn render_hook_decision(format: &crate::ApproveHookFormat, decision: &HookDecision) -> Value {
+    match format {
+        // Gemini: allow = `{}` (empty object), deny = `{ decision, reason }`.
+        crate::ApproveHookFormat::Gemini => {
+            if decision.allow {
+                json!({})
+            } else {
+                json!({ "decision": "deny", "reason": decision.reason.clone().unwrap_or_default() })
+            }
+        }
+        // Generic: always `{ decision, source, reason, updated_input? }`.
+        crate::ApproveHookFormat::Generic => {
+            let mut payload = json!({
+                "decision": if decision.allow { "allow" } else { "deny" },
+                "source": decision.source,
+                "reason": decision.reason.clone().unwrap_or_default(),
+            });
+            if let (Value::Object(map), true, Some(updated)) = (&mut payload, decision.allow, &decision.updated_input) {
+                map.insert("updated_input".to_string(), updated.clone());
+            }
+            payload
+        }
+    }
+}
+
+/// Extract the shell command a shell-style provider hook is asking to run, so
+/// the approval policy can match deny-list patterns against the COMMAND (not
+/// just the stable tool name). Provider hooks for shell tools (claude `Bash`,
+/// gemini `run_shell_command`, opencode `bash`) all carry the command under one
+/// of these input keys. Returns the trimmed command, or `None` when the input
+/// is not a shell-runner shape (a structured tool with a `{file_path, ...}`
+/// input has no single "command" to match and is governed by the tool name).
+fn hook_command_subject(input: Option<&Value>) -> Option<String> {
+    let input = input?.as_object()?;
+    for key in ["command", "cmd", "script", "shell_command"] {
+        if let Some(command) = input.get(key).and_then(Value::as_str).map(str::trim).filter(|c| !c.is_empty()) {
+            return Some(command.to_string());
+        }
+    }
+    None
+}
+
+/// Resolve a single gated tool call into a `HookDecision` by routing through the
+/// shared `decide_approval` core. `wait` defaults to "block" (an Ask policy
+/// escalates to the inbox and blocks until a human decides, fail-closed on
+/// timeout) — same posture as the native prompt-tool default for ad-hoc runs.
+async fn resolve_hook_decision(
+    project_root: &str,
+    args: &crate::AgentApproveHookArgs,
+    tool_name: String,
+    input: Option<Value>,
+) -> HookDecision {
+    use crate::services::operations::interaction_tools::{
+        approval_decision_from_outcome, decide_approval, effective_timeout_secs, evaluate_policy_subject,
+    };
+    use orchestrator_config::agent_runtime_config::ApprovalPolicyDecision;
+
+    let timeout_secs = effective_timeout_secs(args.timeout_secs);
+
+    // SAFETY pre-check: shell-style hooks report a stable tool name (`Bash`,
+    // `run_shell_command`) with the real command buried in the input.
+    // `decide_approval` only matches the tool name, so evaluate the policy
+    // against the command too and let the most-restrictive verdict win (deny
+    // precedence). Without this, `auto_deny: ["git push*"]` + `default: allow`
+    // would let `Bash{command:"git push --force"}` straight through. We only
+    // honor the COMMAND's deny here; an allow/ask on the command still defers to
+    // the full tool-name flow (policy + LLM + human escalation) below.
+    if let Some(command) = hook_command_subject(input.as_ref()) {
+        if let Some(ApprovalPolicyDecision::Deny) = evaluate_policy_subject(project_root, &args.agent_id, &command) {
+            return HookDecision {
+                allow: false,
+                reason: Some(format!("denied by the agent profile's approval_policy (command: {command})")),
+                updated_input: None,
+                source: "policy",
+            };
+        }
+    }
+
+    let action = format!("use tool {tool_name}");
+    let outcome = decide_approval(
+        project_root,
+        &args.agent_id,
+        &action,
+        Some(&tool_name),
+        input,
+        None,
+        timeout_secs,
+        args.workflow_id.as_deref(),
+        args.task_id.as_deref(),
+    )
+    .await;
+    let decision = approval_decision_from_outcome(outcome, timeout_secs);
+    HookDecision {
+        allow: decision.is_allow(),
+        reason: decision.message().map(ToOwned::to_owned),
+        updated_input: decision.updated_input().cloned(),
+        source: decision.source().as_str(),
+    }
+}
+
+/// Read stdin to a string; an empty/closed stdin is an error (fail-safe deny).
+fn read_hook_stdin() -> Result<String> {
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).map_err(|err| anyhow!("failed to read stdin: {err}"))?;
+    if buf.trim().is_empty() {
+        return Err(anyhow!("stdin was empty"));
+    }
+    Ok(buf)
+}
+
+/// `animus agent approve-hook` entry point. Always exits 0 and always prints a
+/// well-formed decision in the requested format; any internal error is rendered
+/// as a fail-safe DENY (with the reason on stderr).
+pub(super) async fn handle_agent_approve_hook(args: crate::AgentApproveHookArgs, project_root: &str) -> Result<()> {
+    let decision = match read_hook_stdin().and_then(|stdin| parse_hook_stdin(&args.format, &stdin)) {
+        Ok((tool_name, input)) => resolve_hook_decision(project_root, &args, tool_name, input).await,
+        Err(err) => {
+            // FAIL SAFE: malformed/absent input denies. Diagnostics to stderr
+            // only — stdout must carry exactly the decision JSON.
+            eprintln!("animus agent approve-hook: {err}; denying (fail safe)");
+            HookDecision {
+                allow: false,
+                reason: Some(format!("approval hook error: {err}")),
+                updated_input: None,
+                source: "error",
+            }
+        }
+    };
+    let payload = render_hook_decision(&args.format, &decision);
+    // Compact single-line JSON on stdout; nothing else.
+    println!("{}", serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string()));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use animus_runtime_shared::InteractionStatus;
+
+    use crate::ApproveHookFormat;
+
+    #[test]
+    fn hook_parse_gemini_reads_tool_input() {
+        let (tool, input) =
+            parse_hook_stdin(&ApproveHookFormat::Gemini, r#"{"tool_name":"Bash","tool_input":{"cmd":"ls"}}"#)
+                .expect("parse");
+        assert_eq!(tool, "Bash");
+        assert_eq!(input, Some(json!({"cmd":"ls"})));
+    }
+
+    #[test]
+    fn hook_parse_generic_reads_input_and_tolerates_absent() {
+        let (tool, input) = parse_hook_stdin(&ApproveHookFormat::Generic, r#"{"tool_name":"echo"}"#).expect("parse");
+        assert_eq!(tool, "echo");
+        assert_eq!(input, None);
+    }
+
+    #[test]
+    fn hook_parse_rejects_missing_tool_name() {
+        assert!(parse_hook_stdin(&ApproveHookFormat::Generic, r#"{"input":{}}"#).is_err());
+        assert!(parse_hook_stdin(&ApproveHookFormat::Gemini, "not json").is_err());
+    }
+
+    #[test]
+    fn hook_render_gemini_allow_is_empty_object() {
+        let allow = HookDecision { allow: true, reason: Some("ok".into()), updated_input: None, source: "policy" };
+        // Gemini ALLOW must be exactly `{}` — any extra field risks the CLI
+        // mis-parsing and defaulting to allow anyway, but we keep it strict.
+        assert_eq!(render_hook_decision(&ApproveHookFormat::Gemini, &allow), json!({}));
+    }
+
+    #[test]
+    fn hook_render_gemini_deny_carries_reason() {
+        let deny =
+            HookDecision { allow: false, reason: Some("too risky".into()), updated_input: None, source: "policy" };
+        assert_eq!(
+            render_hook_decision(&ApproveHookFormat::Gemini, &deny),
+            json!({ "decision": "deny", "reason": "too risky" })
+        );
+    }
+
+    #[test]
+    fn hook_render_generic_both_ways() {
+        let allow = HookDecision {
+            allow: true,
+            reason: Some("policy allow".into()),
+            updated_input: Some(json!({"cmd":"ls"})),
+            source: "policy",
+        };
+        assert_eq!(
+            render_hook_decision(&ApproveHookFormat::Generic, &allow),
+            json!({ "decision": "allow", "source": "policy", "reason": "policy allow", "updated_input": {"cmd":"ls"} })
+        );
+
+        let deny = HookDecision { allow: false, reason: Some("nope".into()), updated_input: None, source: "timeout" };
+        assert_eq!(
+            render_hook_decision(&ApproveHookFormat::Generic, &deny),
+            json!({ "decision": "deny", "source": "timeout", "reason": "nope" })
+        );
+    }
+
+    #[test]
+    fn hook_command_subject_extracts_shell_command() {
+        assert_eq!(
+            hook_command_subject(Some(&json!({"command":"git push --force"}))),
+            Some("git push --force".to_string())
+        );
+        assert_eq!(hook_command_subject(Some(&json!({"cmd":" ls "}))), Some("ls".to_string()));
+        // Structured (non-shell) tool input -> no single command to match.
+        assert_eq!(hook_command_subject(Some(&json!({"file_path":"/x","content":"y"}))), None);
+        // Empty / absent.
+        assert_eq!(hook_command_subject(Some(&json!({"command":"  "}))), None);
+        assert_eq!(hook_command_subject(None), None);
+    }
+
+    #[test]
+    fn hook_render_generic_omits_updated_input_on_deny() {
+        // A deny never carries updated_input even if one was somehow present.
+        let deny = HookDecision {
+            allow: false,
+            reason: Some("nope".into()),
+            updated_input: Some(json!({"x":1})),
+            source: "policy",
+        };
+        let rendered = render_hook_decision(&ApproveHookFormat::Generic, &deny);
+        assert!(rendered.get("updated_input").is_none());
+    }
+
+    // Regression for the codex [P1]: a shell-style hook reports a stable tool
+    // name (`Bash`) with the dangerous command in the input. The COMMAND must
+    // be matched against the deny list even when the tool name is allowed and
+    // the policy default is `allow`.
+    #[test]
+    fn resolve_hook_denies_shell_command_matching_deny_list_under_default_allow() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let home = tempfile::tempdir().expect("home tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(home.path().to_string_lossy().as_ref()));
+        tokio::runtime::Builder::new_current_thread().enable_all().build().expect("current-thread runtime").block_on(
+            async {
+                let project = tempfile::tempdir().expect("project tempdir");
+                init_git_repo(project.path());
+                let project_root = project.path().to_string_lossy().to_string();
+                std::fs::create_dir_all(project.path().join(".animus")).expect("create .animus");
+                std::fs::write(
+                    project.path().join(".animus").join("workflows.yaml"),
+                    r#"
+tools_allowlist:
+  - ls
+agents:
+  swe:
+    system_prompt: Build the change.
+    approval_policy:
+      auto_allow: []
+      auto_deny: ["git push*", "rm *"]
+      default: allow
+phases:
+  impl:
+    mode: agent
+    agent: swe
+"#,
+                )
+                .expect("write workflows.yaml");
+                let _config_source_seam =
+                    orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                        project.path(),
+                    );
+
+                let args = crate::AgentApproveHookArgs {
+                    agent_id: "swe".to_string(),
+                    format: crate::ApproveHookFormat::Generic,
+                    workflow_id: None,
+                    task_id: None,
+                    timeout_secs: Some(1),
+                };
+
+                // Bash tool name is NOT in the deny list, default is allow, but
+                // the command IS denied -> the command pre-check must win.
+                let denied = resolve_hook_decision(
+                    &project_root,
+                    &args,
+                    "Bash".to_string(),
+                    Some(json!({"command":"git push --force origin main"})),
+                )
+                .await;
+                assert!(!denied.allow, "command-level deny must override an allowed tool name");
+                assert_eq!(denied.source, "policy");
+
+                // A benign command falls through to the (default: allow) flow.
+                let allowed =
+                    resolve_hook_decision(&project_root, &args, "Bash".to_string(), Some(json!({"command":"ls -la"})))
+                        .await;
+                assert!(allowed.allow, "a non-denied command defers to the default-allow policy");
+                assert_eq!(allowed.source, "policy");
+
+                // No pending interaction was written for either short-circuit.
+                let pending = animus_runtime_shared::list_interactions(&project_root, true, None).expect("list");
+                assert!(pending.is_empty(), "policy short-circuits must not escalate");
+            },
+        );
+    }
 
     #[test]
     fn answer_op_round_trips_question_and_approval() {

@@ -429,7 +429,7 @@ fn interaction_project_root(default: &str, override_value: Option<String>) -> St
         .unwrap_or_else(|| default.to_string())
 }
 
-fn effective_timeout_secs(timeout_secs: Option<u64>) -> u64 {
+pub(crate) fn effective_timeout_secs(timeout_secs: Option<u64>) -> u64 {
     timeout_secs.unwrap_or(DEFAULT_INTERACTION_TIMEOUT_SECS).clamp(1, MAX_INTERACTION_TIMEOUT_SECS)
 }
 
@@ -447,7 +447,7 @@ fn structured_err(tool_name: &str, message: String) -> Result<CallToolResult, Mc
     })))
 }
 
-enum InteractionWait {
+pub(crate) enum InteractionWait {
     Answered(Box<InteractionRecord>),
     TimedOut,
     Lost(String),
@@ -548,6 +548,7 @@ fn build_judge_user_prompt(action: &str, tool_name: Option<&str>, arguments: Opt
 ///   than letting a "last object wins" scan pick the attacker's `allow`.
 /// - `decision` must equal exactly `allow` or `deny` — NO synonyms
 ///   (`approve`/`yes`/...), which a model could be coaxed into emitting.
+///
 /// Anything ambiguous returns `None`, which the caller treats as "escalate to a
 /// human" (fail safe — never auto-allow on doubt).
 fn parse_judge_verdict(text: &str) -> Option<(bool, String)> {
@@ -682,13 +683,11 @@ fn parse_answer_text(text: &str) -> Option<String> {
                 }
                 depth += 1;
             }
-            b'}' => {
-                if depth > 0 {
-                    depth -= 1;
-                    if depth == 0 {
-                        if let Some(s) = start.take() {
-                            candidates.push(&text[s..=i]);
-                        }
+            b'}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(s) = start.take() {
+                        candidates.push(&text[s..=i]);
                     }
                 }
             }
@@ -807,13 +806,11 @@ fn parse_structured_answers(text: &str) -> Option<BTreeMap<String, Value>> {
                 }
                 depth += 1;
             }
-            b'}' => {
-                if depth > 0 {
-                    depth -= 1;
-                    if depth == 0 {
-                        if let Some(s) = start.take() {
-                            candidates.push(&text[s..=i]);
-                        }
+            b'}' if depth > 0 => {
+                depth -= 1;
+                if depth == 0 {
+                    if let Some(s) = start.take() {
+                        candidates.push(&text[s..=i]);
                     }
                 }
             }
@@ -983,6 +980,321 @@ async fn record_llm_approval_decision(
             false
         }
     }
+}
+
+// --- Shared approval decision core --------------------------------------
+//
+// The post-identity approval logic (policy evaluate -> LLM judge ->
+// human escalation/inbox) extracted out of `ao_agent_request_approval` so
+// BOTH the MCP `--permission-prompt-tool` path (claude) AND the external
+// provider-CLI hook verb (`animus agent approve-hook`, used by gemini's
+// BeforeTool command hook, an opencode plugin, and our oai harness) resolve
+// approvals through ONE code path. The MCP method keeps identity pinning
+// (`bound_agent_id`) and renders its own SDK `behavior:allow/deny` envelopes;
+// the verb passes `--agent-id` explicitly and renders the provider's hook
+// format. Behavior here MUST stay identical to the pre-extraction inline
+// flow (the `request_approval_*` / `approval_judge_*` tests guard that).
+
+/// Where an approval decision came from. Mirrors the `source` field the MCP
+/// tool already emits on its legacy `{ tool, result }` envelope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApprovalSource {
+    Policy,
+    Llm,
+    Human,
+    Timeout,
+}
+
+impl ApprovalSource {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            ApprovalSource::Policy => "policy",
+            ApprovalSource::Llm => "llm",
+            ApprovalSource::Human => "human",
+            ApprovalSource::Timeout => "timeout",
+        }
+    }
+}
+
+/// A resolved allow/deny verdict for a single gated tool call.
+#[derive(Debug, Clone)]
+pub(crate) enum ApprovalDecision {
+    Allow {
+        /// The (possibly operator-modified) tool input to run with; defaults
+        /// to the original input passed in.
+        updated_input: Value,
+        source: ApprovalSource,
+        /// Optional human-readable reason (LLM/human supply one).
+        message: Option<String>,
+    },
+    Deny {
+        message: String,
+        source: ApprovalSource,
+    },
+}
+
+impl ApprovalDecision {
+    pub(crate) fn is_allow(&self) -> bool {
+        matches!(self, ApprovalDecision::Allow { .. })
+    }
+
+    pub(crate) fn source(&self) -> ApprovalSource {
+        match self {
+            ApprovalDecision::Allow { source, .. } | ApprovalDecision::Deny { source, .. } => *source,
+        }
+    }
+
+    pub(crate) fn message(&self) -> Option<&str> {
+        match self {
+            ApprovalDecision::Allow { message, .. } => message.as_deref(),
+            ApprovalDecision::Deny { message, .. } => Some(message.as_str()),
+        }
+    }
+
+    /// The updated tool input for an allow; `None` for a deny.
+    pub(crate) fn updated_input(&self) -> Option<&Value> {
+        match self {
+            ApprovalDecision::Allow { updated_input, .. } => Some(updated_input),
+            ApprovalDecision::Deny { .. } => None,
+        }
+    }
+}
+
+/// Outcome of `decide_approval`. Short-circuit verdicts (policy / LLM) come
+/// back as `Decided`; a human escalation returns the raw wait result so the
+/// MCP method can reuse `sdk_answered_payload` for byte-identical SDK envelopes
+/// while the hook verb renders the verdict generically.
+pub(crate) enum DecideApprovalOutcome {
+    Decided(ApprovalDecision),
+    Escalated(InteractionWait),
+}
+
+/// Build the audit/escalation record's original-input echo: the SDK allow
+/// pass-through default is the original input (or `{}` when absent).
+fn approval_input_or_empty(original_input: Option<Value>) -> Value {
+    original_input.unwrap_or_else(|| json!({}))
+}
+
+/// Render an answered approval `InteractionRecord` (human path) into a uniform
+/// `ApprovalDecision`. NOT used by the MCP method (which keeps
+/// `sdk_answered_payload` for SDK-envelope compat) — this is the hook verb's
+/// renderer for the escalated branch.
+pub(crate) fn approval_decision_from_record(record: &InteractionRecord) -> ApprovalDecision {
+    if record.answer.as_deref() == Some(animus_runtime_shared::INTERACTION_ANSWER_ALLOW) {
+        let updated_input =
+            record.updated_input.clone().or_else(|| record.arguments.clone()).unwrap_or_else(|| json!({}));
+        ApprovalDecision::Allow { updated_input, source: ApprovalSource::Human, message: record.answer_message.clone() }
+    } else {
+        let message = record
+            .answer_message
+            .clone()
+            .unwrap_or_else(|| format!("denied by {}", record.answered_by.as_deref().unwrap_or("human")));
+        ApprovalDecision::Deny { message, source: ApprovalSource::Human }
+    }
+}
+
+/// Collapse a `DecideApprovalOutcome` into a uniform `ApprovalDecision` for
+/// callers (the hook verb) that do not need the SDK Question envelope. A
+/// timeout fails CLOSED (deny). `Lost` also denies (fail safe) — the message
+/// carries the underlying error.
+pub(crate) fn approval_decision_from_outcome(outcome: DecideApprovalOutcome, timeout_secs: u64) -> ApprovalDecision {
+    match outcome {
+        DecideApprovalOutcome::Decided(decision) => decision,
+        DecideApprovalOutcome::Escalated(InteractionWait::Answered(record)) => approval_decision_from_record(&record),
+        DecideApprovalOutcome::Escalated(InteractionWait::TimedOut) => ApprovalDecision::Deny {
+            message: format!(
+                "no human decided within {timeout_secs}s; denied (fail closed). Do not perform the action."
+            ),
+            source: ApprovalSource::Timeout,
+        },
+        DecideApprovalOutcome::Escalated(InteractionWait::Lost(message)) => {
+            ApprovalDecision::Deny { message, source: ApprovalSource::Timeout }
+        }
+    }
+}
+
+/// Evaluate the agent profile's `approval_policy` against an arbitrary subject
+/// string, returning the raw `ApprovalPolicyDecision` (or `None` when the
+/// profile declares no `approval_policy`).
+///
+/// The hook verb uses this to additionally evaluate the *command* carried in a
+/// shell-style provider hook's input (e.g. gemini `run_shell_command` →
+/// `{ command: "git push --force" }`). `decide_approval` only matches the
+/// provider tool name, so without this a deny-list like
+/// `auto_deny: ["git push*", "rm *"]` would never see the command and dangerous
+/// shell calls would slip through under `default: allow`. The verb runs this
+/// command pre-check with deny precedence so the most-restrictive verdict wins.
+pub(crate) fn evaluate_policy_subject(
+    project_root: &str,
+    agent_id: &str,
+    subject: &str,
+) -> Option<ApprovalPolicyDecision> {
+    let runtime_config = orchestrator_core::agent_runtime_config::load_agent_runtime_config_or_default(
+        std::path::Path::new(project_root),
+    );
+    let profile = runtime_config.agent_profile(agent_id);
+    profile.and_then(|profile| profile.approval_policy.as_ref()).map(|policy| policy.evaluate(subject))
+}
+
+/// The post-identity approval decision core shared by the MCP
+/// `request_approval` tool and the `animus agent approve-hook` verb.
+///
+/// Resolves the agent profile's `approval_policy` for `agent_id` and returns:
+/// - `Decided(Allow/Deny)` for a policy short-circuit (`auto_allow`/`auto_deny`
+///   /`default`) or an LLM-judge verdict (audited allow / fail-safe deny);
+/// - `Escalated(InteractionWait)` when the policy says Ask (or the LLM judge
+///   could not produce an auditable verdict): a pending approval is written to
+///   the inbox and this BLOCKS until a human decides or the timeout fires.
+///
+/// Identity is the caller's responsibility: the MCP method pins via
+/// `bound_agent_id`; the verb passes `--agent-id` verbatim. `action` is the
+/// human-readable description (derived from `tool_name` when omitted).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn decide_approval(
+    project_root: &str,
+    agent_id: &str,
+    action: &str,
+    tool_name: Option<&str>,
+    original_input: Option<Value>,
+    suggestions: Option<Value>,
+    timeout_secs: u64,
+    workflow_id: Option<&str>,
+    task_id: Option<&str>,
+) -> DecideApprovalOutcome {
+    let runtime_config = orchestrator_core::agent_runtime_config::load_agent_runtime_config_or_default(
+        std::path::Path::new(project_root),
+    );
+    let profile = runtime_config.agent_profile(agent_id);
+    if let Some(policy) = profile.and_then(|profile| profile.approval_policy.as_ref()) {
+        let subject = tool_name.unwrap_or(action);
+        match policy.evaluate(subject) {
+            ApprovalPolicyDecision::Allow => {
+                return DecideApprovalOutcome::Decided(ApprovalDecision::Allow {
+                    updated_input: approval_input_or_empty(original_input),
+                    source: ApprovalSource::Policy,
+                    message: None,
+                });
+            }
+            ApprovalPolicyDecision::Deny => {
+                return DecideApprovalOutcome::Decided(ApprovalDecision::Deny {
+                    message: "denied by the agent profile's approval_policy".to_string(),
+                    source: ApprovalSource::Policy,
+                });
+            }
+            // LLM auto-approve mode: judge the call with a model. A missing
+            // model/tool or any evaluator failure falls through to the manual
+            // human escalation below (fail safe).
+            ApprovalPolicyDecision::Evaluate => {
+                let judge_tool = profile.and_then(|profile| profile.tool.clone());
+                let judge_model =
+                    policy.evaluator_model.clone().or_else(|| profile.and_then(|profile| profile.model.clone()));
+                let judge_instructions = policy.evaluator_instructions.clone();
+                match (judge_tool, judge_model) {
+                    (Some(judge_tool), Some(judge_model)) => {
+                        let verdict = evaluate_approval_with_llm(
+                            project_root,
+                            &judge_tool,
+                            &judge_model,
+                            action,
+                            tool_name,
+                            original_input.as_ref(),
+                            judge_instructions.as_deref(),
+                        )
+                        .await;
+                        match verdict {
+                            Some((true, reason)) => {
+                                // GATE the auto-allow on a durable audit record: an
+                                // allow that can't be written to the inbox escalates
+                                // to a human instead of executing unaudited.
+                                let audited = record_llm_approval_decision(
+                                    project_root,
+                                    agent_id,
+                                    action,
+                                    tool_name,
+                                    original_input.clone(),
+                                    timeout_secs,
+                                    workflow_id,
+                                    task_id,
+                                    true,
+                                    &reason,
+                                )
+                                .await;
+                                if audited {
+                                    return DecideApprovalOutcome::Decided(ApprovalDecision::Allow {
+                                        updated_input: approval_input_or_empty(original_input),
+                                        source: ApprovalSource::Llm,
+                                        message: Some(reason),
+                                    });
+                                }
+                                tracing::warn!(
+                                    agent = agent_id,
+                                    "approval llm mode: allow could not be audited; escalating to a human"
+                                );
+                                // fall through to manual escalation below
+                            }
+                            Some((false, reason)) => {
+                                // Deny is fail-safe regardless of audit success.
+                                let _ = record_llm_approval_decision(
+                                    project_root,
+                                    agent_id,
+                                    action,
+                                    tool_name,
+                                    original_input.clone(),
+                                    timeout_secs,
+                                    workflow_id,
+                                    task_id,
+                                    false,
+                                    &reason,
+                                )
+                                .await;
+                                return DecideApprovalOutcome::Decided(ApprovalDecision::Deny {
+                                    message: reason,
+                                    source: ApprovalSource::Llm,
+                                });
+                            }
+                            None => {
+                                tracing::warn!(
+                                    agent = agent_id,
+                                    "approval llm mode: evaluator returned no verdict; escalating to a human"
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        tracing::warn!(
+                            agent = agent_id,
+                            "approval llm mode: no evaluator_model and no agent model/tool; escalating to a human"
+                        );
+                    }
+                }
+            }
+            ApprovalPolicyDecision::Ask => {}
+        }
+    }
+
+    let created = match animus_runtime_shared::create_approval_interaction(
+        project_root,
+        agent_id,
+        action,
+        tool_name,
+        original_input,
+        suggestions,
+        Some(timeout_secs),
+        workflow_id,
+        task_id,
+    ) {
+        Ok(record) => record,
+        Err(err) => return DecideApprovalOutcome::Escalated(InteractionWait::Lost(err.to_string())),
+    };
+    emit_interaction_event("interaction_created", project_root, &created);
+
+    let wait = wait_for_answer(project_root, &created.id, timeout_secs).await;
+    if matches!(wait, InteractionWait::TimedOut) {
+        if let Ok(Some(expired)) = animus_runtime_shared::load_interaction(project_root, &created.id) {
+            emit_interaction_event("interaction_expired", project_root, &expired);
+        }
+    }
+    DecideApprovalOutcome::Escalated(wait)
 }
 
 #[tool_router(router = interaction_tool_router, vis = "pub(super)")]
@@ -1803,6 +2115,91 @@ phases:
             let payload = data(&default_denied);
             assert_eq!(payload.pointer("/decision").and_then(Value::as_str), Some("deny"));
             assert_eq!(payload.pointer("/source").and_then(Value::as_str), Some("policy"));
+
+            let pending = animus_runtime_shared::list_interactions(&project_root, true, None).expect("list");
+            assert!(pending.is_empty(), "policy short-circuits must not write pending interactions");
+        });
+    }
+
+    #[test]
+    fn decide_approval_short_circuits_for_policy_lists() {
+        with_isolated_scope(async {
+            let project = tempdir().expect("tempdir");
+            let project_root = project.path().to_string_lossy().to_string();
+            std::fs::create_dir_all(project.path().join(".animus")).expect("create .animus");
+            std::fs::write(
+                project.path().join(".animus").join("workflows.yaml"),
+                r#"
+tools_allowlist:
+  - cargo
+agents:
+  swe:
+    system_prompt: Build the change.
+    approval_policy:
+      auto_allow: ["cargo *"]
+      auto_deny: ["git.push*"]
+      default: deny
+phases:
+  impl:
+    mode: agent
+    agent: swe
+"#,
+            )
+            .expect("write workflows.yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
+
+            // auto_allow list hit -> Allow{source: policy}.
+            let allow = decide_approval(
+                &project_root,
+                "swe",
+                "run the test suite",
+                Some("cargo test"),
+                None,
+                None,
+                1,
+                None,
+                None,
+            )
+            .await;
+            match allow {
+                DecideApprovalOutcome::Decided(ApprovalDecision::Allow { source, .. }) => {
+                    assert_eq!(source, ApprovalSource::Policy);
+                }
+                _ => panic!("expected policy allow"),
+            }
+
+            // auto_deny list hit -> Deny{source: policy}.
+            let deny = decide_approval(
+                &project_root,
+                "swe",
+                "force push",
+                Some("git.push --force"),
+                None,
+                None,
+                1,
+                None,
+                None,
+            )
+            .await;
+            match deny {
+                DecideApprovalOutcome::Decided(ApprovalDecision::Deny { source, .. }) => {
+                    assert_eq!(source, ApprovalSource::Policy);
+                }
+                _ => panic!("expected policy deny"),
+            }
+
+            // No list match -> default: deny (still a policy short-circuit, no
+            // pending interaction written).
+            let default_deny =
+                decide_approval(&project_root, "swe", "anything else", Some("rm -rf /"), None, None, 1, None, None)
+                    .await;
+            assert!(matches!(
+                default_deny,
+                DecideApprovalOutcome::Decided(ApprovalDecision::Deny { source: ApprovalSource::Policy, .. })
+            ));
 
             let pending = animus_runtime_shared::list_interactions(&project_root, true, None).expect("list");
             assert!(pending.is_empty(), "policy short-circuits must not write pending interactions");
