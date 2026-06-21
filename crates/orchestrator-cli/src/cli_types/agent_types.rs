@@ -48,6 +48,14 @@ pub(crate) enum ApproveHookFormat {
     /// deny prints `{"decision":"deny","reason":"..."}`. Any stray stdout makes
     /// gemini default to ALLOW, so only the decision JSON goes to stdout.
     Gemini,
+    /// Claude PreToolUse command-hook contract: stdin is
+    /// `{ tool_name, tool_input, session_id, cwd, ... }` (same input nesting as
+    /// gemini's BeforeTool); both decisions emit
+    /// `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"|"deny","permissionDecisionReason":"<reason>"}}`.
+    /// An explicit `allow` auto-approves the tool call rather than falling
+    /// through to claude's normal permission flow (mirrors the in-tree
+    /// `animus-hook` PreToolUse contract).
+    Claude,
     /// Generic contract for the opencode plugin / oai harness: stdin is
     /// `{ tool_name, input? }`; stdout is
     /// `{"decision":"allow"|"deny","reason":"...","updated_input"?:<json>}`.
@@ -68,7 +76,7 @@ pub(crate) struct AgentApproveHookArgs {
         value_enum,
         value_name = "FORMAT",
         default_value_t = ApproveHookFormat::Generic,
-        help = "stdin/stdout contract: gemini (BeforeTool) or generic (opencode/oai)."
+        help = "stdin/stdout contract: claude (PreToolUse), gemini (BeforeTool), or generic (opencode/oai)."
     )]
     pub(crate) format: ApproveHookFormat,
     #[arg(long, value_name = "WORKFLOW_ID", help = "Optional workflow id context recorded on any escalation.")]

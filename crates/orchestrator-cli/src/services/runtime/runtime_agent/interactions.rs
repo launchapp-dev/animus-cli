@@ -610,8 +610,9 @@ fn parse_hook_stdin(format: &crate::ApproveHookFormat, stdin: &str) -> Result<(S
         .ok_or_else(|| anyhow!("stdin is missing a non-empty `tool_name`"))?
         .to_string();
     let input = match format {
-        // Gemini BeforeTool payload nests the tool input under `tool_input`.
-        crate::ApproveHookFormat::Gemini => value.get("tool_input").cloned(),
+        // Gemini BeforeTool and claude PreToolUse payloads both nest the tool
+        // input under `tool_input`.
+        crate::ApproveHookFormat::Gemini | crate::ApproveHookFormat::Claude => value.get("tool_input").cloned(),
         crate::ApproveHookFormat::Generic => value.get("input").cloned(),
     };
     // Treat an explicit JSON `null` the same as absent.
@@ -630,6 +631,20 @@ fn render_hook_decision(format: &crate::ApproveHookFormat, decision: &HookDecisi
             } else {
                 json!({ "decision": "deny", "reason": decision.reason.clone().unwrap_or_default() })
             }
+        }
+        // Claude PreToolUse: both allow and deny emit an explicit
+        // `hookSpecificOutput.permissionDecision` so an Animus-approved tool
+        // call auto-approves instead of falling through to claude's normal
+        // permission flow (which could still prompt or block). Mirrors the
+        // in-tree `animus-hook` PreToolUse contract.
+        crate::ApproveHookFormat::Claude => {
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": if decision.allow { "allow" } else { "deny" },
+                    "permissionDecisionReason": decision.reason.clone().unwrap_or_default(),
+                }
+            })
         }
         // Generic: always `{ decision, source, reason, updated_input? }`.
         crate::ApproveHookFormat::Generic => {
@@ -800,6 +815,67 @@ mod tests {
         assert_eq!(
             render_hook_decision(&ApproveHookFormat::Gemini, &deny),
             json!({ "decision": "deny", "reason": "too risky" })
+        );
+    }
+
+    #[test]
+    fn hook_parse_claude_reads_tool_input() {
+        let (tool, input) =
+            parse_hook_stdin(&ApproveHookFormat::Claude, r#"{"tool_name":"Bash","tool_input":{"command":"echo hi"}}"#)
+                .expect("parse");
+        assert_eq!(tool, "Bash");
+        assert_eq!(input, Some(json!({"command":"echo hi"})));
+    }
+
+    #[test]
+    fn hook_render_claude_deny_shape() {
+        let deny = HookDecision { allow: false, reason: Some("nope".into()), updated_input: None, source: "policy" };
+        assert_eq!(
+            render_hook_decision(&ApproveHookFormat::Claude, &deny),
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "nope"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn hook_render_claude_allow_emits_explicit_allow() {
+        let allow = HookDecision { allow: true, reason: Some("ok".into()), updated_input: None, source: "policy" };
+        assert_eq!(
+            render_hook_decision(&ApproveHookFormat::Claude, &allow),
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "allow",
+                    "permissionDecisionReason": "ok"
+                }
+            })
+        );
+    }
+
+    // An error-source fail-safe deny (allow:false) must render to claude's
+    // deny shape just like a policy deny.
+    #[test]
+    fn hook_render_claude_failsafe_error_deny_shape() {
+        let deny = HookDecision {
+            allow: false,
+            reason: Some("approval hook error: stdin was empty".into()),
+            updated_input: None,
+            source: "error",
+        };
+        assert_eq!(
+            render_hook_decision(&ApproveHookFormat::Claude, &deny),
+            json!({
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": "approval hook error: stdin was empty"
+                }
+            })
         );
     }
 
