@@ -4,6 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-21
+
+**v0.6.2 — bootable Docker image + current default plugin pins.**
+
+- **Docker image rebuilt for v0.6** (the published image had been stale since
+  v0.4.4 and no longer built): builder bumped `rust:1.89` → `rust:1.96` to match
+  `rust-toolchain.toml`; added `libdbus-1-dev`/`pkg-config` (builder) and
+  `libdbus-1-3` (runtime) for the `libdbus-sys` dep behind `animus secret`;
+  COPY the root-level `flavors/` + the RBAC doc embedded via `include_str!`
+  (with a `.dockerignore` exception); install the full required-role plugin set
+  via `install-defaults` (incl. the now-published `config_source`); run the
+  foreground `daemon run` instead of the detaching `daemon start`.
+- **Refreshed curated default plugin pins:** `animus-workflow-runner-default`
+  v0.4.5 → **v0.4.8** (brings the autonomous approval gate into default
+  installs) and `animus-queue-default` v0.3.0 → **v0.3.3**.
+
 ## [0.6.1] - 2026-06-21
 
 **v0.6.1 — protocol crates leave the CLI; config-yaml ships.**
