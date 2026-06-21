@@ -952,10 +952,88 @@ Pause/resume gating is unchanged: `animus daemon pause` still gates
 dispatch on event wakes, not just heartbeat ticks — a nudge while paused
 wakes the loop but dispatches nothing.
 
+## Config sources (v0.6)
+
+As of v0.6 the kernel does **not** parse `.animus/*.yaml` in its runtime load path.
+The project's base `WorkflowConfig` (and therefore the agent-runtime config derived
+from it) is sourced **exclusively** by an installed `config_source` plugin. The
+daemon **requires** one (`RequiredRole::ConfigSource` is part of `daemon_default()`):
+
+- `launchapp-dev/animus-config-yaml` — the default, reads `.animus/workflows.yaml`
+  + `.animus/workflows/*.yaml` exactly as the kernel used to (env/secret interpolation,
+  multi-file merge). Installed by `animus plugin install-defaults`.
+- `launchapp-dev/animus-config-postgres` (or any other) — sources the config from a
+  database / API instead of files.
+
+This is the v0.6 "config sourcing is a plugin" thesis: the YAML parser still ships in
+`orchestrator-config` as a library (the `animus-config-yaml` plugin links it), but the
+kernel's daemon/CLI load path no longer calls it directly.
+
+### How it works
+
+The kernel's `ConfigSourceClient` calls `orchestrator_plugin_host::discover_by_kind`
+for `"config_source"` on each config load, spawns the plugin (forwarding the daemon's
+full environment so non-secret `${VAR}` interpolation still resolves, plus the
+manifest-declared secret env), and issues a `config/load` JSON-RPC call with
+`{ project_root, repo_scope }`. The plugin returns a `ConfigLoadResponse`:
+
+- `config` — a `ConfigModel` envelope: `{ schema: "animus.workflow-config.v2", version: 2,
+  config: <WorkflowConfig as opaque JSON> }`
+- `cache_token` — `{ version: "<opaque string>", external_inputs: bool }`. The plugin
+  owns its own cache token; the kernel re-issues `config/load` on each reload.
+
+When **no** `config_source` plugin is installed, `resolve_plugin_base` returns `Ok(None)`
+and `load_workflow_config_with_metadata` returns an actionable error instructing the
+operator to `animus plugin install launchapp-dev/animus-config-yaml` (or
+`animus plugin install-defaults`). The daemon refuses to start in this state (preflight).
+
+The kernel still owns the **compiler**: pack-overlay merge, agent-runtime derivation,
+state-machine compilation, and validation all stay in-kernel regardless of which source
+produced the base `WorkflowConfig`.
+
+### Hot-reload / reload model
+
+Hot-reload works today for every config source, including DB/API-backed ones: the daemon
+re-issues `config/load` on its reload cadence (interval heartbeat, `daemon/nudge`, an
+explicit `animus workflow config reload`, or a config edit), so a changed Postgres/API
+source is picked up on the next reload pass without any file to watch — then recompiled
+and broadcast as the standard `config_reloaded` event on `workflow/events`.
+
+For **instant** reload, a `config_source` plugin may advertise the optional `config_watch`
+capability and push `config/changed` notifications when its source mutates; the daemon
+subscribes and reloads on receipt instead of waiting for the next cadence pass. Neither
+`animus-config-yaml` nor `animus-config-postgres` advertises `config_watch` today (they
+rely on the cadence re-issue above); the push path is available for future watch-capable
+sources.
+
+### Optional `config/validate`
+
+A plugin may implement the optional `config/validate` method, which runs a plugin-side
+syntactic pre-check (e.g. YAML diagnostics with file + line numbers) and returns
+structured `ConfigDiagnostic` entries. The kernel still runs the authoritative
+`validate_workflow_config_with_project_root`; `config/validate` is for richer error
+locality at the source. Plugins that do not implement it return
+`METHOD_NOT_SUPPORTED` — the kernel ignores the response and compiles on.
+
+### Preflight
+
+`RequiredRole::ConfigSource` is defined in the preflight enum (v0.6) and is satisfied
+by any installed `config_source` plugin. It is **not yet required** by the daemon's
+default preflight set (`daemon_default()`) — the in-tree YAML path remains the default
+acquisition and no `config_source` plugin is required for an existing project to start.
+The role will be added to `daemon_default()` once a reference `animus-config-yaml`
+plugin is published as the default-flavor impl. In the meantime `animus daemon preflight`
+does not report this role as missing, and `--skip-preflight` is not needed for
+YAML-only projects.
+
+`animus-config-postgres` (the LaunchApp portal, running a from-source v0.6 binary) is
+the first production `config_source` plugin. The general-audience release of the role
+tracks the publication of `launchapp-dev/animus-config-yaml`.
+
 ## Notes
 
 - Project YAML is the authored workflow surface.
-- Animus still ships the `hello-world` walkthrough template plus kernel baseline config for phases and MCP defaults, but current builds do not ship built-in workflow definitions, bundled pack content, or bundled skill fallback.
+- As of v0.6 (kernel purification) the kernel ships ZERO built-in pack/workflow content: no baked agent-runtime defaults (the merge base is structurally empty), an empty workflow `phase_catalog`, and no `hello-world` walkthrough template. The kernel keeps only its OWN `mcp_servers["animus"]` structural entry. All phases/agents/workflows come from installed packs and the `config_source`-sourced workflow overlay. A fresh `animus init` walkthrough installs the recommended packs to become functional. The project-local `.animus/workflows/*.yaml` scaffold written by init defines a minimal, self-contained starter set you can edit or replace.
 - `animus init --json` now includes a `recommended_install` object sourced from `crates/orchestrator-cli/config/default-install.json` so callers can surface the default pack and plugin set explicitly.
 - Mutable runtime state lives under `~/.animus/<repo-scope>/`.
 - The daemon schedules and supervises work; workflow and pack content still define behavior.

@@ -1,6 +1,6 @@
 [package]
 name = "orchestrator-cli"
-version = "0.5.23"
+version = "0.6.0"
 edition = "2021"
 license = "Elastic-2.0"
 default-run = "animus"
@@ -75,6 +75,9 @@ toml = "1.0"
 assert_cmd = "2"
 fs2 = "0.4"
 protocol = { path = "../protocol", features = ["test-utils"] }
+# v0.6: enable the config_source test seam so unit tests can inject a base
+# WorkflowConfig in place of an installed config_source plugin.
+orchestrator-config = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
 toml = "1.0"
 

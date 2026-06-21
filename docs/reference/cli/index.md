@@ -972,12 +972,12 @@ Initialize an Animus project from a template registry or a local template direct
 | `--plan` | Preview init changes without writing project files |
 | `--force` | Overwrite existing project files targeted by the template |
 | `--update-registry` | Fetch the latest commit from the template registry and re-pin the local cache before loading the template (v0.4.0 supply-chain hardening — by default the registry uses the pinned cache) |
-| `--walkthrough` | Run the onboarding walkthrough: detect CLIs, install default plugins, and copy the bundled hello-world workflow |
+| `--walkthrough` | Run the onboarding walkthrough: detect CLIs, install default plugins, and install the recommended workflow packs. As of v0.6 the walkthrough no longer scaffolds a built-in workflow; a fresh project becomes functional via the recommended pack install (which provide workflows/phases/agents) |
 | `--no-install` | Walkthrough only: skip `animus plugin install-defaults` |
 | `--install-packs` | Install and activate the recommended workflow packs (`animus.core-skills`, `animus.task`, `animus.requirement`, `animus.review`) from their pinned GitHub release tags in `default-install.json`. Works with both the walkthrough and the `--template`/`--path` flows. In the interactive walkthrough this is offered automatically (default yes); non-interactive runs must pass the flag explicitly |
-| `--no-template` | Walkthrough only: skip copying the hello-world workflow template into `.animus/workflows/` |
+| `--no-template` | Deprecated no-op (kept for back-compat). The walkthrough no longer scaffolds a built-in workflow |
 | `--auto-start` | Walkthrough only: start the autonomous daemon after init completes |
-| `--walkthrough-template <NAME>` | Walkthrough only: choose the bundled workflow template. Current default is `hello-world` |
+| `--walkthrough-template <NAME>` | Deprecated no-op (kept for back-compat, hidden). The walkthrough no longer copies a bundled workflow template |
 
 The template registry URL can be overridden globally via `ANIMUS_TEMPLATE_REGISTRY_URL`.
 In `--json` mode, `animus init` also returns `recommended_install`, sourced from

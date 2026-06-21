@@ -9,8 +9,8 @@ use animus_plugin_protocol::{PLUGIN_KIND_PROVIDER, PLUGIN_KIND_SUBJECT_BACKEND};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin_registry::{
-    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, DEFAULT_QUEUE_PLUGINS,
-    DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, DEFAULT_CONFIG_SOURCE_PLUGINS,
+    DEFAULT_QUEUE_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 
 /// Plugin-kind wire value for `workflow_runner`. Kept local because the
@@ -20,6 +20,8 @@ use crate::plugin_registry::{
 const PLUGIN_KIND_WORKFLOW_RUNNER: &str = "workflow_runner";
 /// Plugin-kind wire value for `queue`. See [`PLUGIN_KIND_WORKFLOW_RUNNER`].
 const PLUGIN_KIND_QUEUE: &str = "queue";
+/// Plugin-kind wire value for `config_source` (v0.6). See [`PLUGIN_KIND_QUEUE`].
+const PLUGIN_KIND_CONFIG_SOURCE: &str = "config_source";
 
 /// Minimum `workflow_runner` plugin version that consumes phase skill
 /// payloads. The reference runner
@@ -134,6 +136,14 @@ pub fn default_queue_repo() -> String {
     format_repo_spec(first)
 }
 
+/// Default repo spec preflight should auto-install when the `config_source`
+/// role is unsatisfied (v0.6).
+pub fn default_config_source_repo() -> String {
+    let first =
+        DEFAULT_CONFIG_SOURCE_PLUGINS.first().copied().expect("DEFAULT_CONFIG_SOURCE_PLUGINS must be non-empty");
+    format_repo_spec(first)
+}
+
 /// Compatibility shim: legacy string-typed export still pinned at the
 /// historical Claude provider tag for any out-of-tree code that imported
 /// `DEFAULT_PROVIDER_REPO` directly. New code should call
@@ -161,6 +171,11 @@ pub enum RequiredRole {
     TransportEnabled,
     WorkflowRunner,
     Queue,
+    /// Satisfied by ANY installed `config_source` plugin — the source of the
+    /// workflow/agent config (YAML, Postgres, API). v0.6: kept OUT of the
+    /// daemon default required-roles until the load path resolves it (else
+    /// existing daemons fail preflight on upgrade).
+    ConfigSource,
 }
 
 impl RequiredRole {
@@ -172,6 +187,7 @@ impl RequiredRole {
             RequiredRole::TransportEnabled => "transport_enabled".to_string(),
             RequiredRole::WorkflowRunner => "workflow_runner".to_string(),
             RequiredRole::Queue => "queue".to_string(),
+            RequiredRole::ConfigSource => "config_source".to_string(),
         }
     }
 }
@@ -200,6 +216,10 @@ impl PluginPreflightSpec {
                 RequiredRole::AtLeastOneSubjectBackend,
                 RequiredRole::WorkflowRunner,
                 RequiredRole::Queue,
+                // v0.6: the kernel sources its workflow/agent config exclusively
+                // from an installed `config_source` plugin (the in-tree YAML load
+                // path was removed). The daemon refuses to start without one.
+                RequiredRole::ConfigSource,
             ],
             auto_install: false,
             auto_install_defaults: vec![
@@ -209,6 +229,7 @@ impl PluginPreflightSpec {
                 ("at_least_one_subject_backend".to_string(), default_task_backend_repo()),
                 ("workflow_runner".to_string(), default_workflow_runner_repo()),
                 ("queue".to_string(), default_queue_repo()),
+                ("config_source".to_string(), default_config_source_repo()),
             ],
         }
     }
@@ -324,6 +345,10 @@ impl InstalledPluginSummary {
 
     pub fn is_queue(&self) -> bool {
         self.plugin_kind == PLUGIN_KIND_QUEUE
+    }
+
+    pub fn is_config_source(&self) -> bool {
+        self.plugin_kind == PLUGIN_KIND_CONFIG_SOURCE
     }
 
     pub fn covers_subject_kind(&self, kind: &str) -> bool {

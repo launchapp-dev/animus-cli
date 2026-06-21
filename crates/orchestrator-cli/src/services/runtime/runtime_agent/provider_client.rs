@@ -181,6 +181,10 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         .or_else(|| context_str(context_object.as_ref(), "tool"))
         .unwrap_or_else(|| args.tool.clone());
 
+    // Surface (read-only) when approvals can't be guaranteed because the
+    // operator's global claude config auto-approves tool calls.
+    warn_if_claude_autoapprove_bypass(&tool, extras.get("approvals").and_then(Value::as_bool).unwrap_or(false));
+
     // Resolve the agent/skill scope once (the same resolution feeds the MCP
     // contract assembly AND the full skill application). Skipped entirely
     // when the caller supplied a runtime_contract — a hand-built contract is
@@ -462,6 +466,65 @@ pub(crate) fn warn_unknown_permission_mode(mode: &str) {
     }
 }
 
+/// Best-effort, READ-ONLY warning when kernel-mediated approvals are requested
+/// for a `claude` run but the operator's GLOBAL claude config would bypass the
+/// gate. The claude CLI consults `--permission-prompt-tool` only for tools that
+/// reach an "ask" state; a `permissions.defaultMode` other than `default`/`plan`
+/// (e.g. `auto`, `acceptEdits`, `bypassPermissions`) pre-approves tools, and
+/// `skipAutoPermissionPrompt: true` skips the prompt in headless — either way
+/// claude never calls the approval tool and the gate silently fails open.
+///
+/// Animus deliberately does NOT override the operator's claude config (no
+/// `CLAUDE_CONFIG_DIR`/settings hijack), so the only safe action is to surface
+/// the risk. Approvals remain authoritative wherever claude runs without a
+/// global auto-approve posture (e.g. production / api-key). Only inspects
+/// `$CLAUDE_CONFIG_DIR/settings.json` (or `~/.claude/settings.json`); never
+/// writes. No-ops silently when the file is absent or unreadable.
+pub(crate) fn warn_if_claude_autoapprove_bypass(tool: &str, approvals_enabled: bool) {
+    if !approvals_enabled || tool != "claude" {
+        return;
+    }
+    let Some(settings) = read_claude_user_settings() else {
+        return;
+    };
+    let Some(cause) = claude_autoapprove_cause(&settings) else {
+        return;
+    };
+    eprintln!(
+        "warning: approvals are enabled, but your global claude config ({cause}) auto-approves \
+         tool calls, so claude may not consult the approval gate (request_approval). The gate is \
+         authoritative when claude runs without a global auto-approve posture (e.g. production / \
+         api-key auth). Animus does not modify your claude config."
+    );
+}
+
+/// Decide whether the operator's claude `settings.json` would bypass the
+/// approval gate, returning the human-readable cause (or `None` when the gate
+/// would be respected). A `permissions.defaultMode` other than `default`/`plan`
+/// pre-approves tools; `skipAutoPermissionPrompt: true` skips the headless
+/// prompt. Pure so it can be unit-tested without touching the filesystem.
+fn claude_autoapprove_cause(settings: &Value) -> Option<String> {
+    let mode = settings.pointer("/permissions/defaultMode").and_then(Value::as_str);
+    if let Some(m) = mode {
+        if !matches!(m, "default" | "plan") {
+            return Some(format!("permissions.defaultMode = \"{m}\""));
+        }
+    }
+    if settings.get("skipAutoPermissionPrompt").and_then(Value::as_bool).unwrap_or(false) {
+        return Some("skipAutoPermissionPrompt = true".to_string());
+    }
+    None
+}
+
+/// Read the operator's claude `settings.json` (read-only, best-effort).
+fn read_claude_user_settings() -> Option<Value> {
+    let dir = std::env::var_os("CLAUDE_CONFIG_DIR")
+        .map(std::path::PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".claude")))?;
+    let content = std::fs::read_to_string(dir.join("settings.json")).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
 /// Start a session through the resolver for the supplied request.
 ///
 /// A missing provider plugin is surfaced as a typed error carrying a
@@ -621,6 +684,29 @@ mod tests {
     use crate::shared::test_env_lock;
     use crate::AgentRunArgs;
     use protocol::test_utils::EnvVarGuard;
+    use serde_json::json;
+
+    #[test]
+    fn claude_autoapprove_cause_flags_bypassing_modes() {
+        // Prompting modes => gate respected => no warning.
+        assert!(claude_autoapprove_cause(&json!({"permissions": {"defaultMode": "default"}})).is_none());
+        assert!(claude_autoapprove_cause(&json!({"permissions": {"defaultMode": "plan"}})).is_none());
+        assert!(claude_autoapprove_cause(&json!({})).is_none());
+
+        // Auto-approving modes => warn, naming the cause.
+        for mode in ["auto", "acceptEdits", "bypassPermissions"] {
+            let cause = claude_autoapprove_cause(&json!({"permissions": {"defaultMode": mode}}))
+                .unwrap_or_else(|| panic!("mode {mode} must warn"));
+            assert!(cause.contains(mode), "cause must name the mode: {cause}");
+        }
+
+        // skipAutoPermissionPrompt bypasses even with a prompting defaultMode.
+        let cause = claude_autoapprove_cause(
+            &json!({"permissions": {"defaultMode": "default"}, "skipAutoPermissionPrompt": true}),
+        )
+        .expect("skip flag must warn");
+        assert!(cause.contains("skipAutoPermissionPrompt"), "cause: {cause}");
+    }
 
     fn base_args(project_root: &str) -> AgentRunArgs {
         AgentRunArgs {
@@ -823,6 +909,8 @@ agents:
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("trader".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");
@@ -882,14 +970,22 @@ agents:
         std::fs::write(
             root.join(".animus").join("workflows.yaml"),
             r#"
+tools_allowlist:
+  - cargo
 agents:
   cautious:
     description: "Cautious agent"
     permission_mode: plan
+phases:
+  work:
+    mode: agent
+    agent_id: cautious
 "#,
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("cautious".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");
@@ -917,6 +1013,8 @@ agents:
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("cautious".to_string());
         args.permission_mode = Some("bypassPermissions".to_string());
@@ -976,15 +1074,23 @@ agents:
         std::fs::write(
             root.join(".animus").join("workflows.yaml"),
             r#"
+tools_allowlist:
+  - cargo
 agents:
   gated:
     description: "Gated agent"
     approval_policy:
       default: ask
+phases:
+  work:
+    mode: agent
+    agent_id: gated
 "#,
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("gated".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");
@@ -1013,6 +1119,8 @@ agents:
         std::fs::write(
             root.join(".animus").join("workflows.yaml"),
             r#"
+tools_allowlist:
+  - cargo
 agents:
   guarded:
     description: "Both-layer agent"
@@ -1020,10 +1128,16 @@ agents:
     approval_policy:
       default: ask
       auto_deny: ["git.push*"]
+phases:
+  work:
+    mode: agent
+    agent_id: guarded
 "#,
         )
         .unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
         args.agent = Some("guarded".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");

@@ -576,8 +576,8 @@ fn handle_plugin_cache(cmd: crate::cli_types::PluginCacheCommand, json: bool) ->
 /// command resolve identical `(owner/repo, tag)` pairs. Bump tags in
 /// `crates/orchestrator-core/src/plugin_registry.rs`, not here.
 use orchestrator_core::plugin_registry::{
-    DEFAULT_OAI_AGENT_PLUGINS as DEFAULT_OAI_AGENT_PLUGIN, DEFAULT_PROVIDER_PLUGINS, DEFAULT_QUEUE_PLUGINS,
-    DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+    DEFAULT_CONFIG_SOURCE_PLUGINS, DEFAULT_OAI_AGENT_PLUGINS as DEFAULT_OAI_AGENT_PLUGIN, DEFAULT_PROVIDER_PLUGINS,
+    DEFAULT_QUEUE_PLUGINS, DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 
 #[derive(Debug, Serialize)]
@@ -710,6 +710,12 @@ fn build_install_defaults_targets(
         targets.push(((*s).to_string(), (*t).to_string()));
     }
     for (s, t) in DEFAULT_QUEUE_PLUGINS {
+        targets.push(((*s).to_string(), (*t).to_string()));
+    }
+    // v0.6: config_source is required by daemon preflight — the kernel sources
+    // its workflow/agent config from this plugin. Install unconditionally on the
+    // broken-manifest fallback path so `install-defaults` unblocks `daemon start`.
+    for (s, t) in DEFAULT_CONFIG_SOURCE_PLUGINS {
         targets.push(((*s).to_string(), (*t).to_string()));
     }
     if args.include_oai_agent {
@@ -5126,6 +5132,7 @@ async fn handle_plugin_doctor(args: PluginDoctorArgs, project_root: &str, json: 
                 }
                 (RequiredRole::WorkflowRunner, s) if s.is_workflow_runner() => Some(summary.plugin_kind.clone()),
                 (RequiredRole::Queue, s) if s.is_queue() => Some(summary.plugin_kind.clone()),
+                (RequiredRole::ConfigSource, s) if s.is_config_source() => Some(summary.plugin_kind.clone()),
                 (RequiredRole::TransportEnabled, _) => None,
                 _ => None,
             };

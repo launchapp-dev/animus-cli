@@ -68,6 +68,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "animus-config-protocol"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "protocol",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "animus-control-protocol"
 version = "0.1.13"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
@@ -2783,7 +2797,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchestrator-cli"
-version = "0.5.23"
+version = "0.6.0"
 dependencies = [
  "animus-control-protocol",
  "animus-log-storage-protocol",
@@ -2835,9 +2849,11 @@ dependencies = [
 name = "orchestrator-config"
 version = "0.1.0"
 dependencies = [
+ "animus-config-protocol",
  "anyhow",
  "croner",
  "dirs 6.0.0",
+ "orchestrator-plugin-host",
  "protocol",
  "semver",
  "serde",
@@ -2845,6 +2861,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "tempfile",
+ "tokio",
  "toml 1.1.2+spec-1.1.0",
  "uuid",
 ]

@@ -143,6 +143,10 @@ pub(crate) struct SubjectUpdateArgs {
     /// Replace labels with this comma-separated list.
     #[arg(long, value_name = "L1,L2", value_delimiter = ',')]
     pub labels: Vec<String>,
+    /// Replace the free-form body / description (markdown). Use this to write
+    /// long-form content onto a subject (e.g. an agent's findings).
+    #[arg(long, value_name = "BODY")]
+    pub body: Option<String>,
 }
 
 #[derive(Debug, Args)]

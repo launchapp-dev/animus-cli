@@ -29,6 +29,67 @@ pub(crate) enum AgentCommand {
         #[command(subcommand)]
         command: AgentInteractionsCommand,
     },
+    /// Resolve an approval decision for an external provider-CLI hook (gemini
+    /// BeforeTool, opencode plugin, oai harness). Reads ONE tool call as JSON
+    /// on stdin and routes it through the same approval logic that backs the
+    /// MCP `animus.agent.request_approval` tool. Hidden: this is a machine
+    /// integration point, not an interactive verb.
+    #[command(hide = true)]
+    ApproveHook(AgentApproveHookArgs),
+}
+
+/// Output format for `animus agent approve-hook`. Each provider's command hook
+/// expects a different stdout shape, so the verb renders the resolved decision
+/// in the requested contract.
+#[derive(Clone, Debug, Default, ValueEnum)]
+pub(crate) enum ApproveHookFormat {
+    /// Gemini BeforeTool command-hook contract: stdin is
+    /// `{ tool_name, tool_input, cwd?, session_id? }`; allow prints `{}` and
+    /// deny prints `{"decision":"deny","reason":"..."}`. Any stray stdout makes
+    /// gemini default to ALLOW, so only the decision JSON goes to stdout.
+    Gemini,
+    /// Claude PreToolUse command-hook contract: stdin is
+    /// `{ tool_name, tool_input, session_id, cwd, ... }` (same input nesting as
+    /// gemini's BeforeTool); both decisions emit
+    /// `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"|"deny","permissionDecisionReason":"<reason>"}}`.
+    /// An explicit `allow` auto-approves the tool call rather than falling
+    /// through to claude's normal permission flow (mirrors the in-tree
+    /// `animus-hook` PreToolUse contract).
+    Claude,
+    /// Generic contract for the opencode plugin / oai harness: stdin is
+    /// `{ tool_name, input? }`; stdout is
+    /// `{"decision":"allow"|"deny","reason":"...","updated_input"?:<json>}`.
+    #[default]
+    Generic,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct AgentApproveHookArgs {
+    #[arg(
+        long,
+        value_name = "AGENT_ID",
+        help = "Agent profile whose approval_policy governs the decision. Required: the hook supplies no pinned identity."
+    )]
+    pub(crate) agent_id: String,
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        default_value_t = ApproveHookFormat::Generic,
+        help = "stdin/stdout contract: claude (PreToolUse), gemini (BeforeTool), or generic (opencode/oai)."
+    )]
+    pub(crate) format: ApproveHookFormat,
+    #[arg(long, value_name = "WORKFLOW_ID", help = "Optional workflow id context recorded on any escalation.")]
+    pub(crate) workflow_id: Option<String>,
+    #[arg(long, value_name = "TASK_ID", help = "Optional task id context recorded on any escalation.")]
+    pub(crate) task_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        value_parser = parse_positive_u64,
+        help = "Timeout in seconds for a human escalation (Ask policy). On timeout the decision fails closed (deny)."
+    )]
+    pub(crate) timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Subcommand)]

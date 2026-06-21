@@ -64,6 +64,10 @@ test-fault = []
 
 [dev-dependencies]
 tempfile = "3.10"
+# v0.6: enable the config_source test seam so tests that compile project YAML
+# (config is now plugin-sourced) can register a base in place of an installed
+# plugin. Keep in sync with the out-of-tree mirror if it grows the same test.
+orchestrator-config = { workspace = true, features = ["test-utils"] }
 
 [lints.rust]
 unsafe_code = "deny"

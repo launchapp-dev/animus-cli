@@ -152,13 +152,6 @@ pub(crate) struct DaemonSchedulerArgs {
         long,
         action = ArgAction::Set,
         default_value_t = true,
-        help = "Attempt to resume interrupted workflows."
-    )]
-    pub(crate) resume_interrupted: bool,
-    #[arg(
-        long,
-        action = ArgAction::Set,
-        default_value_t = true,
         help = "On startup, recover tasks stuck in-progress and workflow runs left behind by an interrupted daemon."
     )]
     pub(crate) reconcile_stale: bool,
@@ -214,7 +207,6 @@ impl DaemonStartArgs {
                 pool_size: None,
                 interval_secs: None,
                 startup_cleanup: true,
-                resume_interrupted: true,
                 reconcile_stale: true,
                 stale_threshold_hours: None,
                 max_tasks_per_tick: None,

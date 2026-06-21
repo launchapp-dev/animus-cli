@@ -21,7 +21,6 @@ pub(super) fn runtime_options_from_cli(args: &DaemonRunArgs, project_root: &str)
         options.interval_secs = v;
     }
     options.startup_cleanup = args.scheduler.startup_cleanup;
-    options.resume_interrupted = args.scheduler.resume_interrupted;
     options.reconcile_stale = args.scheduler.reconcile_stale;
     if let Some(v) = args.scheduler.stale_threshold_hours {
         options.stale_threshold_hours = v;

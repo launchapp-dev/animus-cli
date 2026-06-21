@@ -53,7 +53,7 @@ mod exec_errors;
 #[path = "ops_mcp/exec_types.rs"]
 mod exec_types;
 #[path = "ops_mcp/interaction_tools.rs"]
-mod interaction_tools;
+pub(crate) mod interaction_tools;
 #[path = "ops_mcp/list_guard.rs"]
 mod list_guard;
 #[path = "ops_mcp/list_profiles.rs"]

@@ -17,10 +17,7 @@
 //! - Cross-provider safety: every recording must open with a session header
 //!   ([`DecisionEvent::Metadata`] tagged `kind="session_header"`) that carries
 //!   the `provider_id`. [`ReplaySource`] surfaces it and the runner refuses
-//!   to replay across providers (see [`recording::fence`] integration).
-//! - Idempotency-key fence integration ([`fence`] submodule): retries inside
-//!   a durable workflow consult the recorded outcome instead of re-calling
-//!   the model.
+//!   to replay across providers.
 //! - Race-safe tail reader for gap reconstruction ([`tail`] submodule): the
 //!   daemon can stream events that the runner wrote during a daemon-restart
 //!   gap by tailing `decisions.jsonl`.
@@ -28,14 +25,6 @@
 //!   [`archive_decision_log`] before starting a new one.
 //!
 //! v0.5.1 production hardening (this round):
-//! - **Real DBOS plugin client**: [`dbos_client::DbosDurableStoreClient`]
-//!   is the single production-facing [`fence::DurableStoreClient`] impl.
-//!   It discovers the installed `launchapp-dev/animus-step-durable-dbos`
-//!   plugin and speaks its `durable/*` JSON-RPC surface
-//!   (`begin_workflow_run` / `begin_step` / `commit_step` /
-//!   `abandon_step` / `query_run`). The in-memory `MockDurableStore`
-//!   that used to live next to the trait is now gated behind `#[cfg(test)]`
-//!   inside `fence::test_doubles` — no production caller can reach it.
 //! - **Out-of-boundary side-effect re-assertion on replay**: [`side_effect`]
 //!   submodule. Producers can record a `DecisionEvent::ToolSideEffect`
 //!   alongside `ToolResult` for tools that mutate state outside the
@@ -81,8 +70,6 @@
 //! `provider_id` so a Claude-recorded session is never fed to a Codex
 //! reader expecting OpenAI delta shape.
 
-pub mod dbos_client;
-pub mod fence;
 pub mod side_effect;
 pub mod sweeper;
 pub mod tail;

@@ -1427,10 +1427,21 @@ mod tests {
 
     #[test]
     fn known_agent_profile_resolves_its_servers() {
-        // The builtin agent runtime config defines a `default` profile.
+        // v0.6 kernel-purification: the kernel ships no baked agents. Seed a
+        // project config defining a `default` profile (as packs / config_source
+        // would in production) and install the config_source seam so the loader
+        // resolves it, then assert the known profile resolves.
         let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".animus")).unwrap();
+        std::fs::write(
+            tmp.path().join(".animus").join("workflows.yaml"),
+            "tools_allowlist:\n  - cargo\nagents:\n  default:\n    description: Default\n    system_prompt: Default agent\nphases:\n  work:\n    mode: agent\n    agent_id: default\n",
+        )
+        .unwrap();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(tmp.path());
         let scope = resolve_agent_scope(tmp.path(), "claude", Some("default"), None)
-            .expect("a known builtin profile must resolve without error");
+            .expect("a known profile must resolve without error");
         // We don't assert specific servers (config-defined), only that the
         // known profile path does not error.
         let _ = scope.profile_servers;

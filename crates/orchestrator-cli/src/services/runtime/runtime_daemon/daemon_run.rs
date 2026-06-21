@@ -806,7 +806,6 @@ mod tests {
                 pool_size: None,
                 interval_secs: Some(1),
                 startup_cleanup: true,
-                resume_interrupted: false,
                 reconcile_stale: false,
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(1),
@@ -864,6 +863,9 @@ mod tests {
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
         let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
+        // v0.6: stand in for the config_source plugin after the hub scaffolds.
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(primary.path());
 
         let task = primary_hub
             .tasks()
@@ -909,7 +911,6 @@ mod tests {
                 pool_size: None,
                 interval_secs: Some(1),
                 startup_cleanup: false,
-                resume_interrupted: false,
                 reconcile_stale: true,
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(1),
@@ -973,6 +974,9 @@ mod tests {
         let primary = TempDir::new().expect("primary project dir");
         let primary_root = primary.path().to_string_lossy().to_string();
         let primary_hub = Arc::new(FileServiceHub::new(&primary_root).expect("primary hub"));
+        // v0.6: stand in for the config_source plugin after the hub scaffolds.
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(primary.path());
 
         let task = primary_hub
             .tasks()
@@ -999,7 +1003,6 @@ mod tests {
                 pool_size: None,
                 interval_secs: Some(1),
                 startup_cleanup: false,
-                resume_interrupted: false,
                 reconcile_stale: false,
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(1),
@@ -1103,7 +1106,6 @@ mod tests {
                 pool_size: None,
                 interval_secs: Some(1),
                 startup_cleanup: true,
-                resume_interrupted: false,
                 reconcile_stale: false,
                 stale_threshold_hours: Some(24),
                 max_tasks_per_tick: Some(1),
@@ -1156,7 +1158,6 @@ mod tests {
                 pool_size: None,
                 interval_secs: None,
                 startup_cleanup: true,
-                resume_interrupted: true,
                 reconcile_stale: true,
                 stale_threshold_hours: None,
                 max_tasks_per_tick: None,
@@ -1803,6 +1804,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             let (hub, workflow_id, phase_id) =
@@ -1858,6 +1863,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             let (hub, workflow_id, phase_id) =
@@ -1922,6 +1931,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             let (hub, workflow_id, phase_id) =
@@ -1982,6 +1995,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             let (hub, workflow_id, target_phase) = seed_workflow_and_checkpoint_on_phase(
@@ -2062,7 +2079,20 @@ mod tests {
             let _ = FileServiceHub::new(&project_root).expect("bootstrap hub");
             let workflows_dir = project.path().join(".animus").join("workflows");
             std::fs::create_dir_all(&workflows_dir).expect("create dir");
-            let custom_yaml = r#"workflows:
+            // v0.6 kernel-purification: the kernel bakes no phases. The scaffold
+            // defines `research` but not `wireframe`, so define both here.
+            let custom_yaml = r#"agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  research:
+    mode: agent
+    agent_id: default
+  wireframe:
+    mode: agent
+    agent_id: default
+workflows:
   - id: research-then-wireframe
     name: Research Then Wireframe
     description: Two safe-to-advance phases for resume-pause testing.
@@ -2071,6 +2101,12 @@ mod tests {
       - wireframe
 "#;
             std::fs::write(workflows_dir.join("research-then-wireframe.yaml"), custom_yaml).expect("write yaml");
+            // v0.6: install the config_source seam AFTER the custom workflow YAML
+            // is written so the compiled base includes `research-then-wireframe`.
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
 
             let (hub, workflow_id, phase_id) = seed_workflow_and_checkpoint_on_phase(
                 &project_root,
@@ -2118,6 +2154,10 @@ mod tests {
 
             let project = TempDir::new().expect("project temp dir");
             let project_root = project.path().to_string_lossy().to_string();
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
             let scoped_root = protocol::repository_scope::scoped_state_root(project.path()).expect("scoped root");
 
             // Seed a decision-gated checkpoint (standard pipeline's
@@ -2245,9 +2285,45 @@ mod tests {
             let project = empty_project();
             let root = project.path().to_string_lossy().to_string();
 
+            // v0.6 kernel-purification: the kernel no longer bakes a
+            // decision_contract onto `requirements`. Packs / config_source
+            // supply it. Seed a config that declares `requirements` WITH a
+            // decision_contract, then assert the resume safety predicate honors
+            // it (the merge-into-runtime-config behavior under test).
+            std::fs::create_dir_all(project.path().join(".animus")).expect("mkdir .animus");
+            std::fs::write(
+                project.path().join(".animus").join("workflows.yaml"),
+                r#"
+tools_allowlist:
+  - cargo
+agents:
+  po:
+    description: Product Owner
+    system_prompt: Refine requirements.
+phases:
+  requirements:
+    mode: agent
+    agent_id: po
+    decision_contract:
+      min_confidence: 0.6
+      max_risk: medium
+      allow_missing_decision: true
+workflows:
+  - id: standard
+    name: Standard
+    phases:
+      - requirements
+"#,
+            )
+            .expect("write workflows.yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
+
             assert!(
                 phase_requires_explicit_decision_for_resume(&root, "requirements"),
-                "requirements has decision_contract in built-in runtime config and MUST be honored"
+                "a config-source-supplied decision_contract on `requirements` MUST be honored by the resume predicate"
             );
         }
 
@@ -2299,6 +2375,10 @@ phases:
       allow_missing_decision: false
 "#;
             std::fs::write(workflows_dir.join("audit-workflow.yaml"), yaml).expect("write yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
 
             assert!(
                 phase_requires_explicit_decision_for_resume(&root, "security-audit"),
@@ -2341,6 +2421,10 @@ phases:
               target: research
 "#;
             std::fs::write(workflows_dir.join("gated-research.yaml"), yaml).expect("write yaml");
+            let _config_source_seam =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+                    project.path(),
+                );
 
             // Without the workflow_ref, the phase appears safe to advance.
             assert!(

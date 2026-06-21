@@ -153,6 +153,7 @@ fn json_error_envelope_maps_subject_invalid_input() -> Result<()> {
 fn json_error_envelope_maps_plugin_not_installed() -> Result<()> {
     let harness = CliHarness::new()?;
 
+    // `plugin info` takes NAME as a positional arg (not `--name`).
     let (payload, status) = harness.run_json_err_with_exit(&["plugin", "info", "no-such-plugin"])?;
     assert_eq!(status, 3, "missing plugin should exit with code 3");
     assert_error_envelope(&payload, "not_found", 3);

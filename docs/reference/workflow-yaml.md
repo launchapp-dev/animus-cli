@@ -8,6 +8,13 @@ describes the authored YAML surface.
 For the target direction of phase output contracts, universal verdicts, and
 YAML-defined phase-local fields, see [Phase Contracts](../architecture/phase-contracts.md).
 
+> **YAML is the default config source.** As of v0.6 the daemon can read
+> workflow and agent config from an installed `config_source` plugin instead
+> of these YAML files (e.g. `animus-config-postgres` for the LaunchApp portal).
+> This document describes the YAML surface, which remains the default for all
+> projects that do not have a `config_source` plugin installed.
+> See [Config sources (v0.6)](configuration.md#config-sources-v06) for details.
+
 ## Top-Level Structure
 
 A workflow YAML file can contain any combination of these top-level sections:
@@ -314,7 +321,9 @@ agents:
     approval_policy:             # Optional. animus.agent.request_approval routing.
       auto_allow: ["cargo *", "git.commit"]
       auto_deny: ["git.push*"]
-      default: ask               # ask (escalate to a human) | allow | deny
+      default: ask               # ask (manual) | allow (approve everything) | deny | llm (auto-approve)
+      evaluator_model: anthropic/claude-haiku-4-5   # for default: llm — judge model (falls back to the agent's model)
+      evaluator_instructions: "Deny anything touching billing or prod." # optional extra rubric for the judge
     hooks:                       # Optional. Author-controlled harness-hook config.
       policy_rules:              #   Guardrail rules merged into the compiled hook policy.
         - id: no-prod-deploy
@@ -350,7 +359,7 @@ agents:
 | `skills` | string[] | no | Skill identifiers to attach. Skills resolve from built-ins, `.animus/config/skill_definitions/*.yml`, and Markdown skills such as `.animus/skills/<name>/SKILL.md` or `.animus/skills/<name>.md` |
 | `capabilities` | map\<string, bool\> | no | Capability flags |
 | `tool_policy` | object | no | Tool access control policy |
-| `approval_policy` | object | no | Routing for `animus.agent.request_approval` MCP calls. `auto_allow` / `auto_deny` are `*`-glob pattern lists matched against the request's `tool_name` when present, otherwise its `action`; `auto_deny` wins on overlap (fail closed). `default` is `ask` (escalate to a pending human interaction — the default), `allow`, or `deny` |
+| `approval_policy` | object | no | Routing for `animus.agent.request_approval` MCP calls. `auto_allow` / `auto_deny` are `*`-glob pattern lists matched against the request's `tool_name` when present, otherwise its `action`; `auto_deny` wins on overlap (fail closed). `default` selects the mode when no list matches: `ask` (manual — escalate to a pending human interaction, the default), `allow` (approve everything / "dangerous" mode), `deny`, or `llm` (auto-approve: a judge model reads the tool call and returns allow/deny). For `llm` mode, `evaluator_model` picks the judge model (defaults to the agent's own model) and `evaluator_instructions` appends an operator rubric to the built-in judge prompt; the judge runs with no MCP tools (cannot recurse), and any evaluator failure falls back to manual `ask` so an LLM outage never silently auto-approves. Allow/deny decisions are recorded with `source: "llm"` and the judge's reason |
 | `hooks` | object | no | Author-controlled harness-hook config. `policy_rules` are guardrail rules (`protocol::HookPolicyRule` shape) merged into the compiled hook policy; `observers` route extra harness events to `animus-hook` (constrained to a named built-in `action` — only `record` this wave — never an arbitrary command). An author rule can only **add** restriction: `deny` always wins over `allow` regardless of source. claude-only this wave; gated behind `ANIMUS_DISABLE_HARNESS_HOOKS`. See [harness-hooks.md](harness-hooks.md) |
 
 Agent profiles defined in YAML are merged into the agent runtime config during compilation. Phase definitions reference agents by profile name.

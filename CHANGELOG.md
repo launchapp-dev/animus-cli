@@ -4,6 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-20
+
+**v0.6 — config sourcing is a plugin, and approval is protocol-layer infrastructure.**
+The first minor: two load-bearing, intentionally breaking changes.
+
+- **config_source plugin role (the YAML-is-a-plugin thesis).** The kernel no
+  longer parses `.animus/*.yaml` in its runtime load path. The base
+  `WorkflowConfig` (and the agent-runtime config derived from it) is sourced
+  **exclusively** by an installed `config_source` plugin; the daemon now
+  *requires* one (`RequiredRole::ConfigSource` in `daemon_default`). The YAML
+  parser still ships in `orchestrator-config` as a library that the reference
+  plugin `launchapp-dev/animus-config-yaml` links. The kernel keeps the
+  compiler (pack overlays + validate + state-machine derivation). New
+  `animus-config-protocol` crate (`config/load|validate|changed`, `ConfigModel`,
+  `CacheToken`). The config_source plugin is spawned with the daemon's full env
+  forwarded so non-secret `${VAR}` interpolation still resolves.
+  **BREAKING:** a daemon without a config_source plugin fails preflight —
+  `animus plugin install launchapp-dev/animus-config-yaml` (or
+  `animus plugin install-defaults`) before upgrading.
+- **Approval infrastructure + LLM auto-approve.** `ApprovalPolicy` gains an
+  `llm` mode (plus `evaluator_model` / `evaluator_instructions`) alongside
+  `ask` (manual) / `allow` (approve-everything) / `deny`. In `llm` mode a judge
+  model reads the gated tool call and returns allow/deny; it also auto-answers
+  `animus.agent.ask` questions (flat + structured) from context, recorded in the
+  unified inbox. The judge runs as a one-shot provider session with no MCP
+  (cannot recurse); any failure falls back to manual escalation (never silently
+  allows). Provider plugins own per-tool-call interception (claude natively via
+  `--permission-prompt-tool`; others route through `request_approval`). See
+  `docs/architecture/RFC-v0.6-approval-protocol.md`.
 ## [0.5.23] - 2026-06-21
 
 **`oai-runner` routes to the agentic multi-step provider; robust reasoning-model result capture.**

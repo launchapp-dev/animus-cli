@@ -229,7 +229,9 @@ async fn run(cli: Cli) -> Result<()> {
     static KEYCHAIN_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     KEYCHAIN_INSTALLED.get_or_init(|| {
         let project_root_for_secrets = std::path::Path::new(&project_root);
-        let _ = orchestrator_daemon_runtime::quotas::install_keychain_workflow_resolver_for(project_root_for_secrets);
+        // v0.6: the workflow-YAML interpolator is env-only; the keychain
+        // resolver for `${secret.*}` at config-parse time was removed. Only the
+        // plugin-spawn secret snapshot provider is installed here.
         let _ = orchestrator_daemon_runtime::quotas::install_keychain_secret_provider_for(project_root_for_secrets);
     });
     match cli.command {
@@ -268,6 +270,16 @@ async fn run(cli: Cli) -> Result<()> {
         Command::State { command } => services::operations::handle_state(command, &project_root, cli.json).await,
         Command::Secret { command } => {
             services::operations::handle_secret(command, &project_root, cli.as_principal.clone(), cli.json).await
+        }
+        // The approval hook is invoked by provider CLIs per tool call and MUST
+        // always emit a fail-closed decision on stdout. Dispatch it BEFORE the
+        // FileServiceHub bootstrap (which creates/migrates `.animus` and can
+        // error on a bad/unwritable --project-root) so a bootstrap failure can
+        // never make the hook exit without a deny verdict — providers treat
+        // missing output as ALLOW. The handler itself never returns Err (it
+        // prints the decision and returns Ok), so this arm is fail-closed.
+        Command::Agent { command: crate::AgentCommand::ApproveHook(args) } => {
+            services::runtime::handle_agent_approve_hook(args, &project_root).await
         }
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);

@@ -971,6 +971,16 @@ mod tests {
         fs::write(
             project_root.join(".animus").join("workflows.yaml"),
             r#"
+tools_allowlist:
+  - cargo
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  implementation:
+    mode: agent
+    agent_id: default
 workflows:
   - id: flow
     name: Flow
@@ -982,6 +992,8 @@ workflows:
 "#,
         )
         .unwrap();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&project_root);
         // Hand-build a CostState already over budget.
         let mut state = CostState::default();
         let mut wf = WorkflowCost::new("flow", Utc::now());

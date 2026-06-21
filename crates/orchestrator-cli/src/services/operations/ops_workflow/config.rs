@@ -520,7 +520,9 @@ mod tests {
     fn write_minimal_overlay(dir: &Path) {
         let animus = dir.join(".animus");
         fs::create_dir_all(animus.join("workflows")).unwrap();
-        let yaml = "phases:\n  alpha:\n    mode: agent\n    agent_id: hot-reload-agent\nagents:\n  hot-reload-agent:\n    description: hot-reload fixture\n    system_prompt: hot-reload prompt\n    skills: []\nworkflows:\n  - id: hot-reload-workflow\n    name: Hot Reload\n    phases:\n      - alpha\n";
+        // v0.6 kernel-purification: the kernel ships an empty tools_allowlist, so
+        // a self-contained overlay must declare at least one command itself.
+        let yaml = "tools_allowlist:\n  - cargo\nphases:\n  alpha:\n    mode: agent\n    agent_id: hot-reload-agent\nagents:\n  hot-reload-agent:\n    description: hot-reload fixture\n    system_prompt: hot-reload prompt\n    skills: []\nworkflows:\n  - id: hot-reload-workflow\n    name: Hot Reload\n    phases:\n      - alpha\n";
         fs::write(animus.join("workflows.yaml"), yaml).unwrap();
     }
 
@@ -528,6 +530,8 @@ mod tests {
     fn reload_payload_reports_reloaded_true_for_valid_overlay() {
         let dir = tempdir().unwrap();
         write_minimal_overlay(dir.path());
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(dir.path());
         let project_root = dir.path().to_string_lossy().to_string();
         let value = reload_workflow_config_payload(&project_root);
         assert_eq!(value["reloaded"], serde_json::json!(true), "valid overlay must reload");
@@ -544,6 +548,8 @@ mod tests {
         yaml.push_str("daemon:\n  pool_size: 4\n");
         fs::write(&yaml_path, yaml).unwrap();
 
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(dir.path());
         let project_root = dir.path().to_string_lossy().to_string();
         let value = validate_workflow_config_payload(&project_root);
         assert_eq!(value["valid"], serde_json::json!(true), "warnings must never fail validation: {value}");
@@ -576,6 +582,8 @@ mod tests {
     fn validate_payload_carries_summary_on_success() {
         let dir = tempdir().unwrap();
         write_minimal_overlay(dir.path());
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(dir.path());
         let project_root = dir.path().to_string_lossy().to_string();
         let value = validate_workflow_config_payload(&project_root);
         assert_eq!(value["valid"], serde_json::json!(true), "minimal overlay must validate: {value}");
@@ -598,19 +606,16 @@ mod tests {
         fs::write(animus.join("workflows.yaml"), yaml).unwrap();
         let project_root = dir.path().to_string_lossy().to_string();
 
-        let value = validate_workflow_config_payload(&project_root);
-        assert_eq!(value["valid"], serde_json::json!(false), "post_success.merge must fail: {value}");
-        let errors = value["errors"].as_array().expect("errors array");
-        let first = &errors[0];
-        let message = first["message"].as_str().unwrap_or_default();
-        let rendered = first["rendered"].as_str().unwrap_or_default();
-        assert!(
-            message.contains("`post_success.merge` was removed")
-                || rendered.contains("`post_success.merge` was removed"),
-            "error must mention the removal: {first}"
-        );
-
-        let human = render_validate_human(&value);
-        assert!(human.contains("invalid:"), "human failure must summarize counts: {human}");
+        // v0.6: the kernel sources its base config from the config_source
+        // plugin, which compiles the project YAML. The `post_success.merge`
+        // removal is therefore surfaced at compile time (the same boundary the
+        // `animus-config-yaml` plugin hits) rather than from the kernel's
+        // validate pass. Assert the rejection error carries the removal note.
+        let error = match orchestrator_core::compile_yaml_workflow_files(Path::new(&project_root)) {
+            Err(error) => error,
+            Ok(_) => panic!("post_success.merge must be rejected at compile time"),
+        };
+        let message = format!("{error:#}");
+        assert!(message.contains("`post_success.merge` was removed"), "error must mention the removal: {message}");
     }
 }

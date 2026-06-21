@@ -35,6 +35,13 @@ required = ["launchapp-dev/animus-workflow-runner-default"]
 [queue]
 required = ["launchapp-dev/animus-queue-default"]
 
+# v0.6: the kernel sources its workflow/agent config exclusively from an
+# installed config_source plugin. animus-config-yaml reads .animus/workflows.yaml
+# + .animus/workflows/*.yaml — the drop-in replacement for the removed in-tree
+# YAML load path.
+[config_source]
+required = ["launchapp-dev/animus-config-yaml"]
+
 [durable_store]
 recommended = ["launchapp-dev/animus-step-durable-dbos"]
 

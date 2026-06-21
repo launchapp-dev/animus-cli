@@ -409,29 +409,49 @@ mod tests {
     /// `output_json_schema`) must fall back to the unmerged builtin so
     /// real defaults are not silently dropped.
     #[test]
-    fn sparse_yaml_override_falls_back_to_builtin_for_unspecified_contracts() {
-        let mut agent_runtime_config = builtin_agent_runtime_config();
-        let sparse = PhaseExecutionDefinition {
-            mode: PhaseExecutionMode::Agent,
-            agent_id: Some("swe".to_string()),
-            directive: None,
-            system_prompt: None,
-            runtime: Some(AgentRuntimeOverrides { model: Some("claude-sonnet-4-6".to_string()), ..Default::default() }),
-            capabilities: None,
-            output_contract: None,
-            output_json_schema: None,
-            decision_contract: None,
-            retry: None,
-            skills: Vec::new(),
-            command: None,
-            manual: None,
-            default_tool: None,
-            idempotency: Default::default(),
-            worktree: None,
-            evals: None,
-        };
-        agent_runtime_config.phases.insert("implementation".to_string(), sparse);
-        let workflow = builtin_workflow_config();
+    fn sparse_runtime_override_keeps_base_contracts_when_only_model_changes() {
+        // v0.6 kernel-purification: there are NO kernel-baked contracts to fall
+        // back to anymore — the implementation phase's output/decision contracts
+        // come from the config_source-sourced runtime config (here the seeded
+        // base). This test verifies the seeded base's contracts survive when a
+        // sparse RUNTIME override only changes the model, and that the global
+        // (now empty) kernel builtin contributes no graft.
+        let agent_runtime_config = crate::test_fixtures::seeded_agent_runtime_config();
+        // Confirm the kernel builtin truly ships no implementation contract, so
+        // any contract observed below comes from the seeded base, not a graft.
+        assert!(
+            orchestrator_core::builtin_agent_runtime_config().phase_output_contract("implementation").is_none(),
+            "kernel builtin must ship no baked implementation contract post-purification"
+        );
+
+        let mut workflow = builtin_workflow_config();
+        // Sparse workflow override of `implementation` that only changes the
+        // model and omits every contract field.
+        workflow.phase_definitions.insert(
+            "implementation".to_string(),
+            PhaseExecutionDefinition {
+                mode: PhaseExecutionMode::Agent,
+                agent_id: Some("swe".to_string()),
+                directive: None,
+                system_prompt: None,
+                runtime: Some(AgentRuntimeOverrides {
+                    model: Some("claude-sonnet-4-6".to_string()),
+                    ..Default::default()
+                }),
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+                idempotency: Default::default(),
+                worktree: None,
+                evals: None,
+            },
+        );
         let metadata = WorkflowConfigMetadata {
             schema: workflow.schema.clone(),
             version: workflow.version,
@@ -446,15 +466,15 @@ mod tests {
         assert_eq!(ctx.phase_model_override("implementation").as_deref(), Some("claude-sonnet-4-6"));
         assert!(
             ctx.phase_output_contract("implementation").is_some(),
-            "sparse YAML override must not drop the builtin implementation output_contract"
+            "the seeded base implementation output_contract must survive a sparse model-only override"
         );
         assert!(
             ctx.phase_decision_contract("implementation").is_some(),
-            "sparse YAML override must not drop the builtin implementation decision_contract"
+            "the seeded base implementation decision_contract must survive a sparse model-only override"
         );
         assert!(
             ctx.phase_output_json_schema("implementation").is_some(),
-            "sparse YAML override must not drop the builtin implementation output_json_schema"
+            "the seeded base implementation output_json_schema must survive a sparse model-only override"
         );
     }
 
@@ -572,7 +592,7 @@ mod tests {
         // way `phase_command` does.
         use orchestrator_config::agent_runtime_config::{EvalCheck, EvalKind, EvalOnFail, EvalsConfig};
 
-        let mut agent_runtime_config = builtin_agent_runtime_config();
+        let mut agent_runtime_config = crate::test_fixtures::seeded_agent_runtime_config();
         let evals = EvalsConfig {
             pass_threshold: 1.0,
             on_fail: EvalOnFail::Block,

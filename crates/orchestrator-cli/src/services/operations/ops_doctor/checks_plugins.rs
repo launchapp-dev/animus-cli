@@ -50,6 +50,7 @@ pub(crate) fn run(ctx: &CheckContext) -> Vec<DiagnosticCheck> {
             RequiredRole::TransportEnabled => true,
             RequiredRole::WorkflowRunner => summaries.iter().any(|s| s.is_workflow_runner()),
             RequiredRole::Queue => summaries.iter().any(|s| s.is_queue()),
+            RequiredRole::ConfigSource => summaries.iter().any(|s| s.is_config_source()),
         };
         if !satisfied {
             missing_roles.push(label);

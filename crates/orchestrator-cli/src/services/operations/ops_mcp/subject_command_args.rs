@@ -58,6 +58,7 @@ pub(super) fn build_subject_update_args(input: &SubjectUpdateInput) -> Vec<Strin
         args.push("--labels".to_string());
         args.push(input.labels.join(","));
     }
+    push_opt(&mut args, "--body", input.body.clone());
     args
 }
 
@@ -80,6 +81,8 @@ pub(super) fn build_subject_batch_update_item_args(kind: &str, item: &SubjectBat
         status: item.status.clone(),
         priority: item.priority.clone(),
         labels: item.labels.clone(),
+        // batch-update doesn't carry a body field; single-update only.
+        body: None,
         project_root: None,
     })
 }

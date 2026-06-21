@@ -15,7 +15,6 @@ pub(super) fn build_daemon_start_args(input: &DaemonStartInput) -> Vec<String> {
     push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
     push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
     push_bool_set(&mut args, "--startup-cleanup", input.startup_cleanup);
-    push_bool_set(&mut args, "--resume-interrupted", input.resume_interrupted);
     push_bool_set(&mut args, "--reconcile-stale", input.reconcile_stale);
     args
 }

@@ -57,10 +57,38 @@ fn file_hub_recompiles_repo_workflow_yaml_on_startup() {
 
     let workflows_dir = temp.path().join(".animus").join("workflows");
     std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+    // v0.6 kernel-purification: this overwrites the scaffold's custom.yaml
+    // (which holds the agent/phase definitions the scaffold workflows
+    // reference), so it must redeclare them to keep the merged config valid.
     std::fs::write(
         workflows_dir.join("custom.yaml"),
         r#"
 default_workflow_ref: yaml-standard
+
+tools_allowlist:
+  - cargo
+
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  research:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
+  code-review:
+    mode: agent
+    agent_id: default
+  testing:
+    mode: agent
+    agent_id: default
 
 workflows:
   - id: yaml-standard
@@ -74,6 +102,8 @@ workflows:
     .expect("write workflow yaml");
 
     let _reloaded = file_hub(temp.path()).expect("reload hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
     let config = crate::load_workflow_config(temp.path()).expect("workflow config should load");
 
     assert_eq!(config.default_workflow_ref.as_str(), "yaml-standard");
@@ -168,6 +198,8 @@ fn file_hub_bootstraps_workflow_yaml_with_phase_catalog() {
     let project_path = temp.path().join("configured-project");
 
     let _hub = file_hub(&project_path).expect("create hub at project path");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&project_path);
 
     let config = crate::load_workflow_config(&project_path).expect("workflow config should load");
 
@@ -582,9 +614,33 @@ async fn file_hub_yaml_only_repo_executes_workflow_without_json_config() {
 
     let workflows_dir = temp.path().join(".animus").join("workflows");
     std::fs::create_dir_all(&workflows_dir).expect("create workflows dir");
+    // v0.6 kernel-purification: overwriting the scaffold's custom.yaml drops the
+    // agent/phase definitions it carried, so redeclare them here.
     std::fs::write(
         workflows_dir.join("custom.yaml"),
         r#"
+tools_allowlist:
+  - cargo
+agents:
+  default:
+    description: Default
+    system_prompt: Default agent
+phases:
+  requirements:
+    mode: agent
+    agent_id: default
+  research:
+    mode: agent
+    agent_id: default
+  implementation:
+    mode: agent
+    agent_id: default
+  code-review:
+    mode: agent
+    agent_id: default
+  testing:
+    mode: agent
+    agent_id: default
 workflows:
   - id: yaml-only-workflow
     name: YAML Only
@@ -594,6 +650,8 @@ workflows:
 "#,
     )
     .expect("write yaml workflow");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     let scoped = scoped_ao_root(temp.path());
     assert!(!scoped.join("state").join("workflow-config.v2.json").exists(), "no JSON config should exist");
@@ -621,6 +679,8 @@ workflows:
 async fn file_hub_persists_workflows_with_machine_state() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
     let workflow =
         WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard".to_string())))
             .await
@@ -643,6 +703,14 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
     ensure_test_config_env();
     let temp = tempfile::tempdir().expect("tempdir");
     let mut workflow_config = crate::load_workflow_config_or_default(temp.path()).config;
+    // v0.6 kernel-purification: cross-validation requires an EXECUTABLE phase
+    // definition (phase_catalog is UI metadata only). Seed an agent + phase
+    // definitions alongside the catalog entries.
+    workflow_config.tools_allowlist = vec!["cargo".to_string()];
+    workflow_config.agent_profiles.insert(
+        "default".to_string(),
+        orchestrator_config::AgentProfileOverlay { description: Some("Default".to_string()), ..Default::default() },
+    );
     for (phase_id, label, category) in
         [("implement", "Implement", "build"), ("qa-review", "QA Review", "qa"), ("push-branch", "Push Branch", "git")]
     {
@@ -656,6 +724,28 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
                 docs_url: None,
                 tags: Vec::new(),
                 visible: true,
+            },
+        );
+        workflow_config.phase_definitions.insert(
+            phase_id.to_string(),
+            crate::PhaseExecutionDefinition {
+                mode: crate::PhaseExecutionMode::Agent,
+                agent_id: Some("default".to_string()),
+                directive: None,
+                system_prompt: None,
+                runtime: None,
+                capabilities: None,
+                output_contract: None,
+                output_json_schema: None,
+                decision_contract: None,
+                retry: None,
+                skills: Vec::new(),
+                command: None,
+                manual: None,
+                default_tool: None,
+                idempotency: crate::Idempotency::Unknown,
+                worktree: None,
+                evals: None,
             },
         );
     }
@@ -689,6 +779,8 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
 
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
     let workflow = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput::for_task("TASK-routed-rework".to_string(), Some("routed-rework".to_string())),
@@ -731,12 +823,16 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
 async fn file_hub_auto_prunes_checkpoints_on_completion_when_enabled() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     let mut config = crate::load_workflow_config(temp.path()).expect("load workflow config");
     config.checkpoint_retention.keep_last_per_phase = 1;
     config.checkpoint_retention.max_age_hours = None;
     config.checkpoint_retention.auto_prune_on_completion = true;
     crate::write_workflow_config(temp.path(), &config).expect("write workflow config");
+    let _config_source_seam_after_write =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     let mut workflow = WorkflowServiceApi::run(
         &hub,
@@ -759,12 +855,16 @@ async fn file_hub_auto_prunes_checkpoints_on_completion_when_enabled() {
 async fn file_hub_completion_remains_successful_when_auto_prune_errors() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     let mut config = crate::load_workflow_config(temp.path()).expect("load workflow config");
     config.checkpoint_retention.keep_last_per_phase = 1;
     config.checkpoint_retention.max_age_hours = Some(u64::MAX);
     config.checkpoint_retention.auto_prune_on_completion = true;
     crate::write_workflow_config(temp.path(), &config).expect("write workflow config");
+    let _config_source_seam_after_write =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     let mut workflow = WorkflowServiceApi::run(
         &hub,
@@ -790,6 +890,23 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
     ensure_test_config_env();
     let mut workflow_config = crate::builtin_workflow_config();
     workflow_config.default_workflow_ref = "xhigh-dev".to_string();
+    workflow_config.tools_allowlist = vec!["cargo".to_string()];
+    // v0.6 kernel-purification: the kernel ships an empty phase_catalog. Declare
+    // the phases this custom pipeline references so the workflow config validates.
+    for phase_id in ["requirements", "implementation", "code-review", "testing"] {
+        workflow_config.phase_catalog.insert(
+            phase_id.to_string(),
+            crate::PhaseUiDefinition {
+                label: phase_id.to_string(),
+                description: String::new(),
+                category: "build".to_string(),
+                icon: None,
+                docs_url: None,
+                tags: Vec::new(),
+                visible: true,
+            },
+        );
+    }
     workflow_config.phase_catalog.insert(
         "qa-signoff".to_string(),
         crate::PhaseUiDefinition {
@@ -923,6 +1040,8 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
     crate::write_agent_runtime_config(temp.path(), &runtime_config).expect("agent runtime config should be written");
 
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
     let workflow =
         WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-1".to_string(), Some("xhigh-dev".to_string())))
             .await
@@ -947,6 +1066,8 @@ async fn file_hub_errors_when_requested_pipeline_is_missing_from_config() {
     }
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     let err = WorkflowServiceApi::run(
         &hub,
@@ -957,13 +1078,19 @@ async fn file_hub_errors_when_requested_pipeline_is_missing_from_config() {
 
     let message = err.to_string();
     assert!(message.contains("missing-pipeline"));
-    assert!(message.contains(".animus/workflows"));
+    // With a config_source base present (the scaffolded workflows), the requested
+    // ref is resolved against a real config and fails on the not-found path rather
+    // than the "project defines no workflows" path. The intent — an unknown
+    // pipeline fails when a workflow config exists — is preserved.
+    assert!(message.contains("not found in workflow config"));
 }
 
 #[tokio::test]
 async fn planning_execute_starts_workflows_with_config_phase_plan() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     let mut workflow_config = crate::load_workflow_config(temp.path()).expect("load config");
     workflow_config.workflows.push(crate::WorkflowDefinition {
@@ -980,6 +1107,8 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
         budget: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write config");
+    let _config_source_seam_after_write =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     PlanningServiceApi::draft_vision(
         &hub,
@@ -1440,6 +1569,8 @@ async fn task_filter_supports_linked_architecture_entity() {
 async fn workflow_service_exposes_decisions_and_checkpoints() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
     let workflow =
         WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-123".to_string(), Some("standard".to_string())))
             .await
@@ -2371,6 +2502,8 @@ async fn file_hub_delete_requirement_removes_sqlite_row_and_does_not_resurrect()
 async fn execute_requirements_skips_tasks_with_active_workflow_on_file_hub() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
     let task = TaskServiceApi::create(
         &hub,
@@ -2477,6 +2610,17 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
 
     let mut runtime_config = crate::load_agent_runtime_config_or_default(temp.path());
+    // v0.6 kernel-purification: the kernel builtin runtime config is empty, so
+    // the seam returns nothing. Seed the minimum a valid runtime config needs.
+    runtime_config.tools_allowlist = vec!["cargo".to_string()];
+    runtime_config.agents.insert(
+        "default".to_string(),
+        crate::AgentProfile {
+            description: "Default".to_string(),
+            system_prompt: "Default agent".to_string(),
+            ..Default::default()
+        },
+    );
     runtime_config.phases.insert(
         "qa-signoff".to_string(),
         crate::PhaseExecutionDefinition {
@@ -2506,6 +2650,8 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
     crate::write_agent_runtime_config(temp.path(), &runtime_config).expect("write runtime config");
 
     let hub: std::sync::Arc<dyn ServiceHub> = std::sync::Arc::new(file_hub(temp.path()).expect("create hub"));
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
     let task = hub
         .tasks()
         .create(TaskCreateInput {

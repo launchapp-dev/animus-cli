@@ -15,7 +15,7 @@ time so the container boots without network access.
 ```dockerfile
 # ---- stage 1: fetch the prebuilt animus binary ----
 FROM debian:bookworm-slim AS animus-fetch
-ARG ANIMUS_VERSION=v0.5.23
+ARG ANIMUS_VERSION=v0.6.0
 ARG ANIMUS_TARGET=x86_64-unknown-linux-gnu
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
@@ -82,7 +82,7 @@ CMD ["/app/deploy/start.sh"]
 
 | ARG | Default | Description |
 |---|---|---|
-| `ANIMUS_VERSION` | `v0.5.23` | Release tag to download from `launchapp-dev/animus-cli` |
+| `ANIMUS_VERSION` | `v0.6.0` | Release tag to download from `launchapp-dev/animus-cli` |
 | `ANIMUS_TARGET` | `x86_64-unknown-linux-gnu` | Target triple; must match the container's glibc |
 | `SIG` | `--signature-policy=disabled` | Signature policy flag passed to every `plugin install` |
 
@@ -551,10 +551,10 @@ The following specifics are not verifiable without a running instance:
 - Exact bound port (check `animus web serve` output).
 - Exact field names and types (introspect via the running endpoint).
 - Auth model for the GraphQL endpoint (likely the same `ANIMUS_WEBAPI_TOKEN`
-  bearer pattern; confirm with `animus plugin info animus-transport-graphql`).
+  bearer pattern; confirm with `animus plugin info --name animus-transport-graphql`).
 - Subscription transport type (WebSocket vs SSE).
 
-Use `animus plugin info animus-transport-graphql` and schema
+Use `animus plugin info --name animus-transport-graphql` and schema
 introspection to ground your client implementation against the installed version.
 
 ---

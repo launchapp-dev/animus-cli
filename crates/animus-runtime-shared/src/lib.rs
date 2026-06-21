@@ -15,7 +15,6 @@
 pub mod agent_state;
 pub mod config_context;
 pub mod ensure_execution_cwd;
-pub mod evals;
 pub mod interactions;
 pub mod ipc;
 pub mod metrics_hook;
@@ -36,16 +35,14 @@ pub mod workflow_event_emitter;
 pub mod workflow_helpers;
 pub mod workflow_merge_recovery;
 
+#[cfg(test)]
+pub(crate) mod test_fixtures;
+
 pub use agent_state::{
     append_agent_memory, append_agent_memory_capped, clear_agent_memory, delete_agent_memory_entry,
     list_agent_messages, load_agent_memory, send_agent_message, AgentMemoryDocument, AgentMemoryEntry, AgentMessage,
 };
 pub use ensure_execution_cwd::ensure_execution_cwd;
-pub use evals::llm_judge_runner::{JudgeError, JudgeRequest, JudgeResponse};
-pub use evals::{
-    evaluate_outcome, run_evals, EvalCheckResult, EvalContext, EvalsDecision, EvalsOutcome, JudgeBackend,
-    EVAL_RESULT_SCHEMA_ID,
-};
 pub use interactions::{
     answer_interaction, apply_interaction_answer, create_approval_interaction, create_native_question_interaction,
     create_question_interaction, create_structured_question_interaction, expire_interaction, list_interactions,

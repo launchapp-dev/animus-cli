@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "crates/animus-plugin-protocol",
+  "crates/animus-config-protocol",
   "crates/animus-plugin-runtime",
   "crates/protocol",
   "crates/orchestrator-daemon-runtime",
@@ -27,6 +28,7 @@ categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
 animus-plugin-protocol = { path = "crates/animus-plugin-protocol" }
+animus-config-protocol = { path = "crates/animus-config-protocol" }
 animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
 animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
 animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.7" }
