@@ -3,7 +3,8 @@ services:
     build: .
     image: ghcr.io/launchapp-dev/animus:latest
     entrypoint: ["animus"]
-    command: ["daemon", "start"]
+    # Foreground daemon (daemon start detaches and would exit the container).
+    command: ["daemon", "run"]
     volumes:
       - animus-data:/root/.animus
       - ./:/workspace
