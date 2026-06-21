@@ -18,7 +18,7 @@ webbrowser = "1"
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs"] }
-protocol = { path = "../protocol" }
+protocol = { workspace = true }
 orchestrator-core = { path = "../orchestrator-core" }
 orchestrator-config = { workspace = true }
 rmcp = { version = "1.7", features = [
@@ -31,7 +31,7 @@ rmcp = { version = "1.7", features = [
 ] }
 
 [dev-dependencies]
-protocol = { path = "../protocol", features = ["test-utils"] }
+protocol = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
 axum = "0.8"
 http = "1"

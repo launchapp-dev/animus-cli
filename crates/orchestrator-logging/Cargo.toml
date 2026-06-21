@@ -6,12 +6,12 @@ edition = "2021"
 [dependencies]
 chrono = { version = "0.4", features = ["serde"] }
 fs2 = "0.4"
-protocol = { path = "../protocol" }
+protocol = { workspace = true }
 regex = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 
 [dev-dependencies]
-protocol = { path = "../protocol", features = ["test-utils"] }
+protocol = { workspace = true, features = ["test-utils"] }
 tempfile = "3"

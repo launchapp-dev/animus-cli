@@ -1,6 +1,9 @@
-# Animus daemon image — built for v0.4.4 (2026-05-21).
-# Bundles the CLI + runtime binaries; install provider plugins at runtime via
-# `animus plugin install launchapp-dev/animus-provider-<name>`.
+# Animus daemon image — built for v0.6.1 (2026-06-21).
+# Bundles the `animus` CLI binary and installs the curated default flavor's
+# REQUIRED-role plugins at build time so the daemon passes preflight and boots:
+# config_source (animus-config-yaml — required as of v0.6), workflow_runner,
+# queue, a provider (claude), and both subject backends. Extra providers/
+# subjects/transports can be added at runtime via `animus plugin install`.
 
 # ── Stage 1: Build all daemon binaries ─────────────────────────────────────────
 FROM rust:1.89-bookworm AS builder
@@ -69,20 +72,20 @@ RUN mkdir -p /root/.animus /root/.animus/plugins
 # Copy binaries from builder
 COPY --from=builder /src/target/release/animus /usr/local/bin/animus
 
-# Install the workflow runner plugin. As of v0.5.1 round-4 fold-in this
-# binary is the out-of-tree `animus-workflow-runner-default` plugin and
-# the daemon's `resolve_workflow_runner_binary` looks for it in
-# `~/.animus/plugins/`. The image MUST ship this plugin — without it the
-# daemon's preflight refuses to start. Fail the image build hard so a
-# transient release-download error never produces a broken image.
-# v0.5.2 surface-shrink: same pattern for `animus-provider-oai-agent`
-# (formerly bundled as the in-tree `animus-oai-runner` binary). Without
-# the plugin the runtime contract resolver falls back to a bare PATH
-# lookup that fails inside the slim base image.
-RUN animus plugin install launchapp-dev/animus-workflow-runner-default --yes \
-    && test -x /root/.animus/plugins/animus-workflow-runner-default \
-    && animus plugin install launchapp-dev/animus-provider-oai-agent --yes \
-    && test -x /root/.animus/plugins/animus-provider-oai-agent/bin/animus-oai-runner
+# Install the curated default flavor's REQUIRED-role plugins. As of v0.6 the
+# daemon refuses to start unless every required role is satisfied — including
+# `config_source` (the kernel no longer parses YAML in-process; it sources
+# WorkflowConfig from the `animus-config-yaml` plugin). `install-defaults`
+# reads `flavors/default.toml` and installs the required set: provider (claude),
+# both subject backends, transport-http, workflow_runner, queue, and
+# config_source. `--include-oai-agent` adds the OpenAI-compatible agent harness.
+# Fail the build hard if config_source or workflow_runner are absent so a
+# transient release-download error never produces an unbootable image.
+RUN animus plugin install-defaults --yes --include-oai-agent \
+    && animus plugin list | grep -q animus-config-yaml \
+    && animus plugin list | grep -q animus-workflow-runner-default \
+    && animus plugin list | grep -q animus-queue-default \
+    && animus plugin list | grep -q animus-subject-default
 
 # Create working directory
 WORKDIR /workspace
@@ -94,6 +97,9 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD animus status 2>/dev/null || exit 1
 
-# Default entrypoint
+# Default entrypoint. Use the FOREGROUND `daemon run` (not `daemon start`,
+# which detaches as a background process and would make the container exit
+# immediately). `daemon run` performs the same plugin preflight; the required
+# plugins were installed above so it boots.
 ENTRYPOINT ["animus"]
-CMD ["daemon", "start"]
+CMD ["daemon", "run"]

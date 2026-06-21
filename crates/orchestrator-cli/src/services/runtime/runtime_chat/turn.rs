@@ -123,6 +123,7 @@ impl ResolverTurnProducer {
             permission_mode: None,
             timeout_secs: None,
             env_vars: Vec::new(),
+            mcp_servers: None,
             extras: Value::Object(Default::default()),
         };
         self.resolver.resolve(&probe).ok()
@@ -484,6 +485,7 @@ async fn drive_once(
         // preference applies when declared.
         timeout_secs: ctx.skill.and_then(|skill| skill.timeout_secs),
         env_vars,
+        mcp_servers: extras.get("mcp_servers").cloned(),
         extras,
     };
 
@@ -621,6 +623,17 @@ async fn drain(run: &mut SessionRun, sink: &mut dyn ChatStreamSink) -> Result<Tu
                     }
                 }
                 sink.emit(&ChatStreamEvent::Metadata { cost_usd, tokens: usage.clone() })?;
+            }
+            // HITL interaction frames: the decision itself flows through the
+            // MCP request_approval / animus.agent.ask keystone. Surface them
+            // in the chat stream so the operator sees that the agent paused.
+            SessionEvent::InteractionRequested { id, kind } => {
+                sink.emit(&ChatStreamEvent::Warning {
+                    message: format!("agent requested {kind} interaction (id {id})"),
+                })?;
+            }
+            SessionEvent::InteractionResolved { id, decision } => {
+                sink.emit(&ChatStreamEvent::Warning { message: format!("interaction {id} resolved: {decision}") })?;
             }
             SessionEvent::Error { message, recoverable } => {
                 if recoverable {

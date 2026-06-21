@@ -70,15 +70,15 @@ dependencies = [
 [[package]]
 name = "animus-config-protocol"
 version = "0.1.0"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.19#f01a947d7dd15d364c6cb7958502fb429565999e"
 dependencies = [
  "anyhow",
  "protocol",
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha2",
- "tempfile",
 ]
 
 [[package]]
@@ -145,7 +145,7 @@ dependencies = [
 name = "animus-plugin-protocol"
 version = "0.1.0"
 dependencies = [
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
  "tempfile",
@@ -163,9 +163,19 @@ dependencies = [
 [[package]]
 name = "animus-plugin-protocol"
 version = "0.1.14"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.19#f01a947d7dd15d364c6cb7958502fb429565999e"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "animus-plugin-protocol"
+version = "0.1.14"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.10#a3b39dcbe02e8c3701f85b89aca55ae010193620"
 dependencies = [
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
 ]
@@ -175,17 +185,7 @@ name = "animus-plugin-protocol"
 version = "0.1.14"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.3#6b114186adc16a2b59a47702b578c0138a33241c"
 dependencies = [
- "schemars 1.2.1",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "animus-plugin-protocol"
-version = "0.1.14"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.7#6b98095bdc59b2a6f5aaaffe9f07693332210e19"
-dependencies = [
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
 ]
@@ -210,8 +210,8 @@ version = "0.3.2"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.10#a3b39dcbe02e8c3701f85b89aca55ae010193620"
 dependencies = [
  "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.10)",
- "animus-subject-protocol 0.1.15 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.10)",
- "schemars 1.2.1",
+ "animus-subject-protocol 0.1.15",
+ "schemars",
  "serde",
  "serde_json",
 ]
@@ -246,10 +246,10 @@ dependencies = [
 
 [[package]]
 name = "animus-session-backend"
-version = "0.1.13"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.13#1dc37a0db952e3805a28a904b9f6120837584752"
+version = "0.1.15"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.19#f01a947d7dd15d364c6cb7958502fb429565999e"
 dependencies = [
- "animus-plugin-protocol 0.1.13",
+ "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.19)",
  "anyhow",
  "async-trait",
  "serde",
@@ -285,7 +285,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-core",
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -301,7 +301,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-core",
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -309,15 +309,15 @@ dependencies = [
 
 [[package]]
 name = "animus-subject-protocol"
-version = "0.1.15"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.7#6b98095bdc59b2a6f5aaaffe9f07693332210e19"
+version = "0.1.16"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.19#f01a947d7dd15d364c6cb7958502fb429565999e"
 dependencies = [
- "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.7)",
+ "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.19)",
  "anyhow",
  "async-trait",
  "chrono",
  "futures-core",
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -345,7 +345,7 @@ source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.3#6b1141
 dependencies = [
  "animus-plugin-protocol 0.1.14 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.3)",
  "animus-subject-protocol 0.1.14",
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
 ]
@@ -2797,7 +2797,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchestrator-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "animus-control-protocol",
  "animus-log-storage-protocol",
@@ -2807,7 +2807,7 @@ dependencies = [
  "animus-runtime-shared",
  "animus-session-backend",
  "animus-subject-protocol 0.1.13",
- "animus-subject-protocol 0.1.15 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.10)",
+ "animus-subject-protocol 0.1.15",
  "animus-workflow-runner-protocol",
  "anyhow",
  "assert_cmd",
@@ -2827,7 +2827,7 @@ dependencies = [
  "protocol",
  "reqwest 0.12.28",
  "rmcp",
- "schemars 1.2.1",
+ "schemars",
  "semver",
  "serde",
  "serde_json",
@@ -3169,52 +3169,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "proptest"
-version = "1.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b45fcc2344c680f5025fe57779faef368840d0bd1f42f216291f0dc4ace4744"
-dependencies = [
- "bit-set",
- "bit-vec",
- "bitflags 2.11.1",
- "num-traits",
- "rand 0.9.4",
- "rand_chacha 0.9.0",
- "rand_xorshift",
- "regex-syntax",
- "rusty-fork",
- "tempfile",
- "unarray",
-]
-
-[[package]]
 name = "protocol"
 version = "0.1.0"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.19#f01a947d7dd15d364c6cb7958502fb429565999e"
 dependencies = [
- "animus-subject-protocol 0.1.15 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.5.7)",
+ "animus-subject-protocol 0.1.16",
  "anyhow",
  "chrono",
  "dirs 6.0.0",
  "nix 0.31.3",
- "proptest",
- "protocol",
  "regex",
- "schemars 0.8.22",
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "thiserror 2.0.18",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
-
-[[package]]
-name = "quick-error"
-version = "1.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a1d01941d82fa2ab50be1e79e6714289dd7cde78eba4c074bc5a4374f650dfe0"
 
 [[package]]
 name = "quinn"
@@ -3349,15 +3320,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "76afc826de14238e6e8c374ddcc1fa19e374fd8dd986b0d2af0d02377261d83c"
 dependencies = [
  "getrandom 0.3.4",
-]
-
-[[package]]
-name = "rand_xorshift"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "513962919efc330f829edb2535844d1b912b0fbe2ca165d613e4e8788bb05a5a"
-dependencies = [
- "rand_core 0.9.5",
 ]
 
 [[package]]
@@ -3578,7 +3540,7 @@ dependencies = [
  "pin-project-lite",
  "reqwest 0.13.4",
  "rmcp-macros",
- "schemars 1.2.1",
+ "schemars",
  "serde",
  "serde_json",
  "sse-stream",
@@ -3728,18 +3690,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
-name = "rusty-fork"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cc6bf79ff24e648f6da1f8d1f011e9cac26491b619e6b9280f2b47f1774e6ee2"
-dependencies = [
- "fnv",
- "quick-error",
- "tempfile",
- "wait-timeout",
-]
-
-[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3765,18 +3715,6 @@ dependencies = [
 
 [[package]]
 name = "schemars"
-version = "0.8.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
-dependencies = [
- "dyn-clone",
- "schemars_derive 0.8.22",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "schemars"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2b42f36aa1cd011945615b92222f6bf73c599a102a300334cd7f8dbeec726cc"
@@ -3784,21 +3722,9 @@ dependencies = [
  "chrono",
  "dyn-clone",
  "ref-cast",
- "schemars_derive 1.2.1",
+ "schemars_derive",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "schemars_derive"
-version = "0.8.22"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde_derive_internals",
- "syn",
 ]
 
 [[package]]
@@ -4654,12 +4580,6 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "unarray"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "unicode-general-category"

@@ -256,12 +256,10 @@ fn balanced_object_end(bytes: &[u8], start: usize) -> Option<usize> {
 /// the last *complete* match (not the first JSON line) is what makes capture
 /// robust against those shapes.
 pub fn extract_result_payload(text: &str, expected_kind: &str, required_fields: &[&str]) -> Option<Value> {
-    collect_balanced_json_objects(text)
-        .into_iter()
-        .rfind(|value| {
-            value.get("kind").and_then(Value::as_str) == Some(expected_kind)
-                && required_fields.iter().all(|field| field_is_present(value, field))
-        })
+    collect_balanced_json_objects(text).into_iter().rfind(|value| {
+        value.get("kind").and_then(Value::as_str) == Some(expected_kind)
+            && required_fields.iter().all(|field| field_is_present(value, field))
+    })
 }
 
 fn field_is_present(value: &Value, field: &str) -> bool {

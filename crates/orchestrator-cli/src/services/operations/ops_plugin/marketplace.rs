@@ -462,10 +462,10 @@ pub(crate) fn normalize_kind_selector(kind: &str) -> String {
         "queue" => "queues".to_string(),
         "notifier" => "notifiers".to_string(),
         "transport_backend" | "transport" => "transports".to_string(),
+        "config_source" => "config_sources".to_string(),
         // Canonical section names plus a couple of forgivable plurals.
-        "providers" | "subjects" | "workflow_runners" | "queues" | "notifiers" | "transports" | "oai_agent" => {
-            kind.trim().to_ascii_lowercase()
-        }
+        "providers" | "subjects" | "workflow_runners" | "queues" | "notifiers" | "transports" | "oai_agent"
+        | "config_sources" => kind.trim().to_ascii_lowercase(),
         other => other.to_string(),
     }
 }

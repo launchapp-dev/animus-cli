@@ -322,6 +322,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         permission_mode,
         timeout_secs,
         env_vars,
+        mcp_servers: extras.get("mcp_servers").cloned(),
         extras: Value::Object(extras),
     })
 }
@@ -602,6 +603,21 @@ pub(crate) fn to_agent_event(event: SessionEvent, run_id: &RunId) -> AgentRunEve
         SessionEvent::Finished { exit_code } => {
             AgentRunEvent::Finished { run_id: run_id.clone(), exit_code, duration_ms: 0 }
         }
+        // HITL interaction frames are informational on the legacy event
+        // stream — the actual approval/question decision flows through the
+        // MCP `request_approval` / `animus.agent.ask` keystone, not here.
+        // Surface them as stderr output so they're auditable without
+        // affecting run status (Metadata-with-None would be dropped).
+        SessionEvent::InteractionRequested { id, kind } => AgentRunEvent::OutputChunk {
+            run_id: run_id.clone(),
+            stream_type: OutputStreamType::Stderr,
+            text: format!("[interaction requested] id={id} kind={kind}"),
+        },
+        SessionEvent::InteractionResolved { id, decision } => AgentRunEvent::OutputChunk {
+            run_id: run_id.clone(),
+            stream_type: OutputStreamType::Stderr,
+            text: format!("[interaction resolved] id={id} decision={decision}"),
+        },
     }
 }
 
@@ -746,6 +762,7 @@ mod tests {
             cwd: tmp.path().to_path_buf(),
             project_root: None,
             mcp_endpoint: None,
+            mcp_servers: None,
             permission_mode: None,
             timeout_secs: None,
             env_vars: Vec::new(),
