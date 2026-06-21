@@ -17,7 +17,7 @@
 /// first entry is the one preflight points users at for
 /// `at_least_one_provider`.
 pub const DEFAULT_PROVIDER_PLUGINS: &[(&str, &str)] = &[
-    ("launchapp-dev/animus-provider-claude", "v0.2.2"),
+    ("launchapp-dev/animus-provider-claude", "v0.2.8"),
     ("launchapp-dev/animus-provider-codex", "v0.2.3"),
     ("launchapp-dev/animus-provider-gemini", "v0.2.6"),
     ("launchapp-dev/animus-provider-opencode", "v0.2.6"),
@@ -28,10 +28,10 @@ pub const DEFAULT_PROVIDER_PLUGINS: &[(&str, &str)] = &[
 /// flavor. Required for `animus daemon start` once the plugin-only path
 /// is the default (deletion gate in Wave 3 "Out of scope").
 pub const DEFAULT_WORKFLOW_RUNNER_PLUGINS: &[(&str, &str)] =
-    &[("launchapp-dev/animus-workflow-runner-default", "v0.4.5")];
+    &[("launchapp-dev/animus-workflow-runner-default", "v0.4.8")];
 
 /// v0.5 queue plugin. See [`DEFAULT_WORKFLOW_RUNNER_PLUGINS`].
-pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.3.0")];
+pub const DEFAULT_QUEUE_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-queue-default", "v0.3.3")];
 
 /// v0.6 config-source plugin (the default YAML source for the `config_source`
 /// plugin role). Published as `launchapp-dev/animus-config-yaml` v0.1.0 in the
@@ -56,7 +56,7 @@ pub const DEFAULT_MEMORY_STORE_PLUGINS: &[(&str, &str)] = &[];
 pub const DEFAULT_NOTIFIER_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-notifier-http", "v0.1.0")];
 
 /// Optional add-on opted in by `--include-oai-agent`.
-pub const DEFAULT_OAI_AGENT_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-provider-oai-agent", "v0.1.4")];
+pub const DEFAULT_OAI_AGENT_PLUGINS: &[(&str, &str)] = &[("launchapp-dev/animus-provider-oai-agent", "v0.1.5")];
 
 /// Subject backends installed by `--include-subjects`. Indexed lookups
 /// below (`default_subject_repo_for_kind`) assume each entry is listed

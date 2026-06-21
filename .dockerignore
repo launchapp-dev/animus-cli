@@ -6,5 +6,8 @@ node_modules/
 mockups/
 memory/
 docs/
+# orchestrator-core/daemon-runtime embed this doc via include_str!; keep it in
+# the build context even though the rest of docs/ is ignored.
+!docs/architecture/multi-tenant-rbac-v0.5.5.md
 .agents/
 .claude/

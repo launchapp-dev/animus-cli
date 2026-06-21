@@ -6,17 +6,32 @@
 # subjects/transports can be added at runtime via `animus plugin install`.
 
 # ── Stage 1: Build all daemon binaries ─────────────────────────────────────────
-FROM rust:1.89-bookworm AS builder
+# Match rust-toolchain.toml (1.96.0). The kernel uses APIs (e.g.
+# Duration::from_mins) that are not available on older toolchains.
+FROM rust:1.96-bookworm AS builder
 
 ARG TARGETARCH=amd64
 ARG BUILDARCH=amd64
 
 WORKDIR /src
 
+# System build deps. `libdbus-sys` (pulled transitively by the keyring /
+# secret-service layer behind `animus secret`) needs the dbus dev headers +
+# pkg-config to compile on Linux.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libdbus-1-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 # Copy workspace and crates
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo .cargo
 COPY crates crates
+# Root-level files embedded into the binary via include_str!: the curated
+# flavor manifest (plugin_registry / scope) and the RBAC policy doc
+# (orchestrator-core principal + daemon-runtime policy).
+COPY flavors flavors
+COPY docs/architecture/multi-tenant-rbac-v0.5.5.md docs/architecture/multi-tenant-rbac-v0.5.5.md
 
 # Build daemon binaries with optimized release profile
 # Uses workspace settings: strip=true, lto=thin, codegen-units=1, opt-level=z.
@@ -39,13 +54,18 @@ RUN ls -lh \
     target/release/animus
 
 # ── Stage 2: Minimal runtime image ──────────────────────────────────────────────
-FROM debian:bookworm-slim
+# Trixie (glibc 2.41), not bookworm (glibc 2.36): several launchapp-dev plugin
+# release binaries are built against glibc 2.38/2.39 and won't load on bookworm.
+# The `animus` binary built on the bookworm builder (glibc 2.36) runs fine here
+# (glibc is backward compatible).
+FROM debian:trixie-slim
 
 # Install runtime dependencies + Node.js
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     git \
+    libdbus-1-3 \
     openssh-client \
     openssl \
     unzip \
