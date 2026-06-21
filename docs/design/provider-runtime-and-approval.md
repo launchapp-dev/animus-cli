@@ -34,11 +34,13 @@ This crate already centralizes the plugin shell (`run_provider(ProviderInfo, bac
 
 | Provider | Drive mode | Gating mechanism → `decide_approval` | Status |
 |---|---|---|---|
-| **claude** | `claude -p` (Agent SDK / print) — *or* **ACP** via an adapter | `--permission-prompt-tool` → MCP `request_approval`; *or* ACP `session/request_permission` | ✅ native shipped (`v0.1.16`); ACP = future consolidation |
-| **gemini** | **ACP** (`gemini --acp`) | `session/request_permission` | build via `animus-provider-acp` |
-| **opencode** | **ACP** (`opencode acp`) | `session/request_permission` | build via `animus-provider-acp` |
-| **codex** | `codex mcp-server` (persistent) | exec / apply-patch approval **elicitation** | rearchitect (exec can't gate) |
-| **oai** | our own harness | native in-process hook | build |
+| **claude** | `claude -p` (Agent SDK / print) — *or* **ACP** via an adapter | `--permission-prompt-tool` → MCP `request_approval`; *or* ACP `session/request_permission` | ✅ native shipped; ACP = future consolidation |
+| **gemini** | **ACP** (`gemini --acp`) | `session/request_permission` | ✅ built — `animus-provider-acp` (`848e80d`, 36 tests, live opencode + mock) |
+| **opencode** | **ACP** (`opencode acp`) | `session/request_permission` | ✅ built — `animus-provider-acp` (same), live opencode turn |
+| **codex** | `codex mcp-server` (persistent) | exec / apply-patch approval **elicitation** | ✅ built — `animus-provider-codex-mcp` (`8ff2404`, 39 tests, LIVE codex 0.140.0 deny/allow) |
+| **oai** | our own harness | native in-process hook | ✅ built — `animus-provider-oai` (`e92f8b3`, 29 tests, fail-closed) |
+
+**Status (2026-06-21): all five core providers gate, all fail-closed, all through the one `decide_approval` keystone.** Remaining is release/rollout (gated): create remotes + push the two new provider repos + the oai commit; cut a new `animus-protocol` tag bundling the logging port + the `run_provider` approvals-carry fix (`f6ce11f`) so providers repin to trunk; merge the ao-cli worktree keystone via a `release/v0.6.0` PR.
 
 claude can **also** be driven over ACP (so it joins the single ACP path with gemini/opencode), via one of two adapters that wrap the Claude Agent SDK and forward `session/request_permission`:
 - `zed-industries/claude-code-acp` — TypeScript, mature (the adapter Zed ships), adds a Node process hop.
