@@ -735,7 +735,7 @@ fn read_hook_stdin() -> Result<String> {
 /// `animus agent approve-hook` entry point. Always exits 0 and always prints a
 /// well-formed decision in the requested format; any internal error is rendered
 /// as a fail-safe DENY (with the reason on stderr).
-pub(super) async fn handle_agent_approve_hook(args: crate::AgentApproveHookArgs, project_root: &str) -> Result<()> {
+pub(crate) async fn handle_agent_approve_hook(args: crate::AgentApproveHookArgs, project_root: &str) -> Result<()> {
     let decision = match read_hook_stdin().and_then(|stdin| parse_hook_stdin(&args.format, &stdin)) {
         Ok((tool_name, input)) => resolve_hook_decision(project_root, &args, tool_name, input).await,
         Err(err) => {

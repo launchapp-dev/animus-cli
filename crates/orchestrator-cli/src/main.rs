@@ -271,6 +271,16 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Secret { command } => {
             services::operations::handle_secret(command, &project_root, cli.as_principal.clone(), cli.json).await
         }
+        // The approval hook is invoked by provider CLIs per tool call and MUST
+        // always emit a fail-closed decision on stdout. Dispatch it BEFORE the
+        // FileServiceHub bootstrap (which creates/migrates `.animus` and can
+        // error on a bad/unwritable --project-root) so a bootstrap failure can
+        // never make the hook exit without a deny verdict — providers treat
+        // missing output as ALLOW. The handler itself never returns Err (it
+        // prints the decision and returns Ok), so this arm is fail-closed.
+        Command::Agent { command: crate::AgentCommand::ApproveHook(args) } => {
+            services::runtime::handle_agent_approve_hook(args, &project_root).await
+        }
         command => {
             let hub = Arc::new(FileServiceHub::new(&project_root)?);
             match command {
