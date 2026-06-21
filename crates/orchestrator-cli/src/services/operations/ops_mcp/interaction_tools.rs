@@ -598,6 +598,7 @@ async fn evaluate_approval_with_llm(
         permission_mode: None,
         timeout_secs: Some(APPROVAL_JUDGE_TIMEOUT_SECS),
         env_vars: Vec::new(),
+        mcp_servers: None,
         extras: json!({ "system_prompt": build_judge_system_prompt(extra_instructions) }),
     };
 
@@ -753,6 +754,7 @@ async fn answer_question_with_llm(
         permission_mode: None,
         timeout_secs: Some(APPROVAL_JUDGE_TIMEOUT_SECS),
         env_vars: Vec::new(),
+        mcp_servers: None,
         extras: json!({ "system_prompt": system }),
     };
 
@@ -877,6 +879,7 @@ async fn answer_structured_with_llm(
         permission_mode: None,
         timeout_secs: Some(APPROVAL_JUDGE_TIMEOUT_SECS),
         env_vars: Vec::new(),
+        mcp_servers: None,
         extras: json!({ "system_prompt": system }),
     };
     let mut run = match provider_client::start_session(std::path::Path::new(project_root), request).await {

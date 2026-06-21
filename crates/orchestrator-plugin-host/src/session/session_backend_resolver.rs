@@ -150,6 +150,7 @@ mod tests {
             cwd: PathBuf::from("."),
             project_root: None,
             mcp_endpoint: None,
+            mcp_servers: None,
             permission_mode: None,
             timeout_secs: None,
             env_vars: Vec::new(),

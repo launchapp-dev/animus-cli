@@ -4,6 +4,27 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-21
+
+**v0.6.1 — protocol crates leave the CLI; config-yaml ships.**
+
+- **`protocol` + `animus-config-protocol` moved out of ao-cli into
+  `launchapp-dev/animus-protocol`** (tag `v0.1.19`), per the rule that no
+  protocol/wire-type crates live in the CLI. The workspace dropped from 12 to
+  10 members and now git-deps both crates; all `animus-protocol` deps
+  (`protocol`, `animus-config-protocol`, `animus-provider-protocol`,
+  `animus-session-backend`, `animus-subject-protocol`) are pinned to the same
+  `v0.1.19` tag so transitive `animus-subject-protocol` resolves to one source.
+  Bumping the session-backend pin (v0.1.13 → v0.1.19) pulled the typed
+  `SessionRequest.mcp_servers` field and the `SessionEvent::Interaction*`
+  variants; the kernel session drivers were updated to populate / handle them.
+- **`launchapp-dev/animus-config-yaml` published (v0.1.0).** v0.6.0 required a
+  `config_source` plugin to boot but the reference plugin was never released,
+  so a fresh `animus daemon start` failed preflight with no installable fix.
+  v0.6.1 publishes it; `DEFAULT_CONFIG_SOURCE_PLUGINS` (already pinned to
+  v0.1.0) and `default-install.json` now resolve. `daemon start --auto-install`
+  / `plugin install-defaults` install it automatically.
+
 ## [0.6.0] - 2026-06-20
 
 **v0.6 — config sourcing is a plugin, and approval is protocol-layer infrastructure.**

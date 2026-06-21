@@ -1,6 +1,6 @@
 [package]
 name = "orchestrator-cli"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "Elastic-2.0"
 default-run = "animus"
@@ -44,7 +44,7 @@ animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/anim
 # v0.5.10 (not v0.5.3): must share the same subject-protocol revision as
 # animus-queue-protocol so SubjectId unifies in QueueLeaseRequest.exclude_subjects.
 animus-subject-protocol-v05 = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.10" }
-protocol = { path = "../protocol" }
+protocol = { workspace = true }
 animus-session-backend = { workspace = true }
 which = "8"
 orchestrator-daemon-runtime = { workspace = true }
@@ -74,7 +74,7 @@ toml = "1.0"
 [dev-dependencies]
 assert_cmd = "2"
 fs2 = "0.4"
-protocol = { path = "../protocol", features = ["test-utils"] }
+protocol = { workspace = true, features = ["test-utils"] }
 # v0.6: enable the config_source test seam so unit tests can inject a base
 # WorkflowConfig in place of an installed config_source plugin.
 orchestrator-config = { workspace = true, features = ["test-utils"] }

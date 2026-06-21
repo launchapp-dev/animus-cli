@@ -1,9 +1,7 @@
 [workspace]
 members = [
   "crates/animus-plugin-protocol",
-  "crates/animus-config-protocol",
   "crates/animus-plugin-runtime",
-  "crates/protocol",
   "crates/orchestrator-daemon-runtime",
   "crates/orchestrator-logging",
   "crates/orchestrator-plugin-host",
@@ -27,12 +25,18 @@ keywords = ["ai-agent", "orchestrator", "llm", "cli", "mcp"]
 categories = ["command-line-utilities", "development-tools"]
 
 [workspace.dependencies]
+# Protocol/wire-type crates live in launchapp-dev/animus-protocol, never in
+# this repo. `protocol` + `animus-config-protocol` moved out in v0.6.1; all
+# animus-protocol git deps are pinned to the SAME tag (v0.1.19) so transitive
+# animus-subject-protocol resolves to one source (no duplicate-crate type
+# mismatches). animus-plugin-protocol/runtime remain in-tree pending a
+# follow-up move.
 animus-plugin-protocol = { path = "crates/animus-plugin-protocol" }
-animus-config-protocol = { path = "crates/animus-config-protocol" }
-animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
-animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.13" }
-animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.7" }
-protocol = { path = "crates/protocol" }
+animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19" }
+animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19" }
+animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19" }
+animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19" }
+protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19", package = "protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-plugin-host = { path = "crates/orchestrator-plugin-host" }

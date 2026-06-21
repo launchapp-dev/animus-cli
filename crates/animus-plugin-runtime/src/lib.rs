@@ -498,6 +498,22 @@ async fn handle_agent_run<P: ProviderBackend, W: AsyncWrite + Unpin>(
                 metadata.push(json!({ "artifact_id": artifact_id, "metadata": m }));
             }
             SessionEvent::Metadata { metadata: m } => metadata.push(m),
+            SessionEvent::InteractionRequested { id, kind } => {
+                send_notification(
+                    &stdout,
+                    "agent/interaction",
+                    json!({ "id": id, "kind": kind, "status": "requested", "session_id": session_id }),
+                )
+                .await;
+            }
+            SessionEvent::InteractionResolved { id, decision } => {
+                send_notification(
+                    &stdout,
+                    "agent/interaction",
+                    json!({ "id": id, "decision": decision, "status": "resolved", "session_id": session_id }),
+                )
+                .await;
+            }
             SessionEvent::Error { message, recoverable } => {
                 send_notification(
                     &stdout,
@@ -593,8 +609,11 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
     if let Some(profile) = params.claude_profile {
         extras.insert("claude_profile".to_string(), Value::String(profile));
     }
-    if let Some(mcp) = params.mcp_servers {
-        extras.insert("mcp_servers".to_string(), mcp);
+    if let Some(mcp) = &params.mcp_servers {
+        // Keep the extras copy for back-compat with transports that read it
+        // from there; the typed `SessionRequest.mcp_servers` field below is
+        // the canonical channel as of animus-protocol v0.1.19.
+        extras.insert("mcp_servers".to_string(), mcp.clone());
     }
     if let Some(tools) = params.tools {
         extras.insert("tools".to_string(), tools);
@@ -622,6 +641,7 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
         permission_mode: params.permission_mode,
         timeout_secs: params.timeout_secs,
         env_vars: params.env.into_iter().collect(),
+        mcp_servers: params.mcp_servers,
         extras: Value::Object(extras),
     }
 }

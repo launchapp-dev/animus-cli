@@ -31,6 +31,12 @@
     }
   ],
   "plugins": {
+    "config_sources": [
+      {
+        "repo": "launchapp-dev/animus-config-yaml",
+        "tag": "v0.1.0"
+      }
+    ],
     "providers": [
       {
         "repo": "launchapp-dev/animus-provider-claude",
