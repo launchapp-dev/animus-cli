@@ -186,6 +186,95 @@ pub fn collect_json_payload_lines(text: &str) -> Vec<(String, Value)> {
         .collect()
 }
 
+/// Scan `text` for every balanced `{...}` span and return those that parse as
+/// JSON objects, in document order. Unlike [`collect_json_payload_lines`] this
+/// tolerates prose around the JSON, pretty-printed / multi-line objects, and
+/// objects embedded mid-line — the shapes reasoning + tool-calling models emit
+/// (a chatty preamble or tool-call noise, then the real result object). Brace
+/// counting respects JSON string literals so `{` / `}` inside string values
+/// (e.g. song lyrics) don't throw off the span.
+pub fn collect_balanced_json_objects(text: &str) -> Vec<Value> {
+    let bytes = text.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            if let Some(end) = balanced_object_end(bytes, i) {
+                if let Ok(value) = serde_json::from_str::<Value>(&text[i..=end]) {
+                    if value.is_object() {
+                        out.push(value);
+                    }
+                }
+                i = end + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Index of the `}` that closes the object opened at `start`
+/// (`bytes[start] == b'{'`), or `None` if unbalanced. Skips braces inside JSON
+/// string literals (honoring `\` escapes).
+fn balanced_object_end(bytes: &[u8], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    let mut in_string = false;
+    let mut escaped = false;
+    for (offset, &c) in bytes.iter().enumerate().skip(start) {
+        if in_string {
+            if escaped {
+                escaped = false;
+            } else if c == b'\\' {
+                escaped = true;
+            } else if c == b'"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match c {
+            b'"' => in_string = true,
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Extract the authoritative result object from a model's full output `text`:
+/// the LAST balanced JSON object whose `kind` equals `expected_kind` and that
+/// carries every field in `required_fields` as a present, non-empty value.
+///
+/// Reasoning + tool-calling models routinely emit prose, a planning stub, or
+/// tool-call noise before the real answer, with the real object last. Selecting
+/// the last *complete* match (not the first JSON line) is what makes capture
+/// robust against those shapes.
+pub fn extract_result_payload(text: &str, expected_kind: &str, required_fields: &[&str]) -> Option<Value> {
+    collect_balanced_json_objects(text)
+        .into_iter()
+        .filter(|value| {
+            value.get("kind").and_then(Value::as_str) == Some(expected_kind)
+                && required_fields.iter().all(|field| field_is_present(value, field))
+        })
+        .last()
+}
+
+fn field_is_present(value: &Value, field: &str) -> bool {
+    match value.get(field) {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.trim().is_empty(),
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+        Some(_) => true,
+    }
+}
+
 pub fn append_line(path: &Path, line: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -246,6 +335,47 @@ mod tests {
         assert_eq!(pairs.len(), 2);
         assert!(pairs[0].0.contains("key"));
         assert!(pairs[1].0.contains('['));
+    }
+
+    #[test]
+    fn extract_result_payload_pulls_json_after_a_prose_preamble() {
+        // The exact shape a reasoning model emits: explanation, then the object.
+        let text = "The profile was empty so I wrote a generic song.\n\
+                    {\"kind\":\"lyrics_result\",\"lyrics\":\"la la la\",\"title\":\"Your Song\"}";
+        let got = extract_result_payload(text, "lyrics_result", &["lyrics", "title"]).unwrap();
+        assert_eq!(got.get("title").and_then(Value::as_str), Some("Your Song"));
+    }
+
+    #[test]
+    fn extract_result_payload_handles_pretty_printed_multiline_json() {
+        let text = "Here you go:\n{\n  \"kind\": \"lyrics_result\",\n  \"lyrics\": \"line one\\nline two\",\n  \"title\": \"Mia\"\n}\nDone!";
+        let got = extract_result_payload(text, "lyrics_result", &["lyrics", "title"]).unwrap();
+        assert_eq!(got.get("lyrics").and_then(Value::as_str), Some("line one\nline two"));
+    }
+
+    #[test]
+    fn extract_result_payload_prefers_last_valid_over_earlier_stub() {
+        // An early planning stub (missing fields) must lose to the final object.
+        let text = "Plan: {\"kind\":\"lyrics_result\"}\n\
+                    ...thinking...\n\
+                    {\"kind\":\"lyrics_result\",\"lyrics\":\"real lyrics\",\"title\":\"Real\"}";
+        let got = extract_result_payload(text, "lyrics_result", &["lyrics", "title"]).unwrap();
+        assert_eq!(got.get("title").and_then(Value::as_str), Some("Real"));
+    }
+
+    #[test]
+    fn extract_result_payload_survives_braces_inside_lyrics_and_tool_noise() {
+        let text = "<|tool_call|>functions.shell {\"command\":\"find /app\"}<|end|>\n\
+                    {\"kind\":\"lyrics_result\",\"lyrics\":\"use {happy} {braces}\",\"title\":\"Braces\"}";
+        let got = extract_result_payload(text, "lyrics_result", &["lyrics", "title"]).unwrap();
+        assert_eq!(got.get("lyrics").and_then(Value::as_str), Some("use {happy} {braces}"));
+    }
+
+    #[test]
+    fn extract_result_payload_rejects_missing_required_fields() {
+        let text = "{\"kind\":\"lyrics_result\",\"lyrics\":\"\",\"title\":\"   \"}";
+        // Empty strings count as absent — a blank result is not a valid capture.
+        assert!(extract_result_payload(text, "lyrics_result", &["lyrics", "title"]).is_none());
     }
 
     #[test]
