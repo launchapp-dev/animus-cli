@@ -4,6 +4,28 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.5.23] - 2026-06-21
+
+**`oai-runner` routes to the agentic multi-step provider; robust reasoning-model result capture.**
+
+`canonical_tool_alias` mapped `oai-runner` / `animus-oai-runner` to `oai` (the
+one-shot completion provider `animus-provider-oai`), and providers are keyed by
+name-derived `provider_tool`, so the multi-step agentic provider
+`animus-provider-oai-agent` (`provider_tool = "oai-agent"`, write-capable, MCP,
+agent loop) was unreachable. A one-shot completion provider cannot run a
+reasoning / tool-calling model — it emits tool calls and a prose-then-JSON answer
+the one-shot drops, so the result JSON is never captured. `oai-runner` now
+resolves to `oai-agent`; `oai-agent` is reserved; raw `tool: oai` still selects the
+one-shot provider for callers that want the simple single-turn path.
+
+Also adds `collect_balanced_json_objects` + `extract_result_payload` to
+`animus-runtime-shared` (balanced-brace scan honoring JSON string literals,
+last-object-by-kind) so a chatty model's prose-then-JSON / multi-line / tool-call
+output is captured reliably instead of dropped by the whole-line scan.
+
+**BREAKING:** workflows using `tool: oai-runner` now require
+`animus-provider-oai-agent` installed; switch to `tool: oai` for the one-shot path.
+
 ## [0.5.22] - 2026-06-19
 
 **Queue-enqueue stores the derived subject kind (completes the 0.5.21 fix).**
