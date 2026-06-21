@@ -8274,7 +8274,7 @@ required = ["launchapp-dev/animus-queue-default"]
         // Replicate the doctor's grouping logic locally to avoid invoking
         // the print path inside a multi-threaded test runner.
         let spec = PluginPreflightSpec::daemon_default();
-        let task_role = spec
+        let subject_role = spec
             .required_roles
             .iter()
             .find(|r| matches!(r, RequiredRole::AtLeastOneSubjectBackend))
@@ -8303,7 +8303,7 @@ required = ["launchapp-dev/animus-queue-default"]
         assert!(
             by_kind.values().any(|&v| v >= 2),
             "doctor must see at least one installed_kind claimed by two plugins for role {}",
-            task_role.label(),
+            subject_role.label(),
         );
     }
 

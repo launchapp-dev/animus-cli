@@ -119,7 +119,7 @@ Diagnose:
 ```bash
 animus daemon metrics --pretty | grep plugin_disabled_total
 animus daemon health
-animus plugin info --name <plugin-name>   # now also fails early on missing required env
+animus plugin info <plugin-name>          # now also fails early on missing required env
 animus daemon logs --limit 200            # look for restart-loop messages
 ```
 
@@ -284,7 +284,7 @@ log-storage plugins also run with cwd pinned to the resolved
 which shell launched the daemon. To isolate a specific plugin:
 
 ```bash
-animus plugin info --name <plugin-name>           # locate the binary
+animus plugin info <plugin-name>                  # locate the binary
 animus plugin ping --name <plugin-name>           # liveness + handshake; fails if env_required is missing
 animus plugin call --name <plugin-name> \         # send raw JSON-RPC
   --method health/check --params '{}'

@@ -247,7 +247,7 @@ file is modified.
 cd examples/triggers/fswatch
 cargo build --release
 animus plugin install --path target/release/animus-trigger-fswatch
-animus plugin info --name animus-trigger-fswatch
+animus plugin info animus-trigger-fswatch
 ```
 
 ### Workflow YAML wiring

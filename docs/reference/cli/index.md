@@ -1230,7 +1230,7 @@ before handshake instead of proceeding with a partially initialized process.
 | Command | Flags |
 |---|---|
 | `animus plugin list` | `--include-system-path`, `--verbose` |
-| `animus plugin info` | `--name <NAME>`, `--include-system-path` |
+| `animus plugin info <NAME>` | `--include-system-path` |
 | `animus plugin call` | `--name <NAME>`, `--method <METHOD>`, `--params <JSON>`, `--include-system-path` |
 | `animus plugin ping` | `--name <NAME>`, `--include-system-path` |
 | `animus plugin uninstall` | `--name <NAME>`, `--plugin-dir <PATH>`, `--project` (project-local root; mutually exclusive with `--plugin-dir`) |
@@ -1287,7 +1287,7 @@ plugins.
 
 If `animus web serve` or `animus web open` fails even though the transport
 plugins are installed, inspect the target plugin with
-`animus plugin info --name <plugin-name>` and set any missing `env_required`
+`animus plugin info <plugin-name>` and set any missing `env_required`
 entries first.
 
 ### `animus plugin search` / `browse` / `update` / `outdated`

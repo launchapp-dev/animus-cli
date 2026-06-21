@@ -77,11 +77,11 @@ delegates to installed `transport_backend` and `web_ui` plugins.
 ```bash
 npm install
 npm run docs:check-sync
-cargo test -p orchestrator-cli cli_reference_top_level_tree_matches_live_clap_commands
-cargo test -p orchestrator-cli agents_guide_top_level_commands_match_live_clap_commands
-cargo test -p orchestrator-cli crate_map_matches_live_workspace_members
-cargo test -p orchestrator-cli mcp_reference_table_matches_live_builtin_tools
-cargo test -p orchestrator-cli mcp_docs_publish_the_live_builtin_tool_count
+cargo test -p orchestrator-cli --bin animus cli_reference_top_level_tree_matches_live_clap_commands
+cargo test -p orchestrator-cli --bin animus agents_guide_top_level_commands_match_live_clap_commands
+cargo test -p orchestrator-cli --bin animus crate_map_matches_live_workspace_members
+cargo test -p orchestrator-cli --bin animus mcp_reference_table_matches_live_builtin_tools
+cargo test -p orchestrator-cli --bin animus mcp_docs_publish_the_live_builtin_tool_count
 npm run docs:dev
 npm run docs:build
 npm run docs:preview
@@ -99,17 +99,14 @@ tool table match the live clap/MCP registries before deploying the docs site
 to Vercel.
 
 `npm run docs:deploy` wraps the required preflight in order: sync check,
-production site build, then a Vercel production deploy. If a local CLI exists
-at `node_modules/.bin/vercel`, the script uses it directly. Otherwise it tries
-an already-installed global `vercel` binary before falling back to
-`npx vercel --yes --prod` using a temporary npm cache directory so the fallback
-does not depend on a writable `~/.npm/`.
+production site build, then a Vercel production deploy. The deploy helper
+always runs `npx vercel --yes --prod` and points npm at a temporary cache
+directory so the command does not depend on a writable `~/.npm/`.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
-the local CLI is absent, it also assumes the runner can reach
-`registry.npmjs.org` to resolve `vercel` through `npx`. In restricted
-environments, expect the deploy phase to stall or fail even when the docs are
-otherwise in sync.
+running through `npx`, it also assumes the runner can reach
+`registry.npmjs.org` to resolve `vercel`. In restricted environments, expect
+the deploy phase to stall or fail even when the docs are otherwise in sync.
 
 Protocol schema exports live at the repo root:
 

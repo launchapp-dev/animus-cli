@@ -346,7 +346,7 @@ Useful operator commands:
 ```bash
 animus plugin list
 animus plugin install-defaults --include-subjects --include-transports
-animus plugin info --name <name>
+animus plugin info <name>
 animus plugin call <name> health/check --json '{}'
 animus plugin lock verify
 animus daemon preflight

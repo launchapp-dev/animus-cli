@@ -19,7 +19,8 @@ use super::plugin_backend::{discover_provider_plugins, PluginSessionBackend};
 /// unless the operator passes `--allow-shadow-builtin`. The resolver no
 /// longer emits a runtime warning because there is no longer a built-in to
 /// shadow; the install-time gate is the sole defense.
-pub const RESERVED_PROVIDER_TOOLS: &[&str] = &["claude", "codex", "gemini", "opencode", "oai", "oai-runner"];
+pub const RESERVED_PROVIDER_TOOLS: &[&str] =
+    &["claude", "codex", "gemini", "opencode", "oai", "oai-agent", "oai-runner"];
 
 /// Returns `true` when the supplied provider tool name collides with the
 /// canonical name of one of the externally-shipped first-party provider
@@ -30,15 +31,19 @@ pub fn is_reserved_provider_tool(tool: &str) -> bool {
 }
 
 /// Workflows historically named the OAI runner backend `oai-runner` or
-/// `animus-oai-runner`, but the published `launchapp-dev/animus-provider-oai`
-/// plugin registers under `provider_tool = "oai"` (plugin name minus the
-/// `animus-provider-` prefix). Normalize legacy aliases to the canonical
-/// plugin tool name before lookup so existing workflows keep resolving the
-/// first-party plugin without YAML rewrites.
+/// `animus-oai-runner`. The MULTI-STEP agentic provider
+/// `launchapp-dev/animus-provider-oai-agent` registers under
+/// `provider_tool = "oai-agent"` (plugin name minus the `animus-provider-`
+/// prefix) and is the canonical home of the `animus-oai-runner` agent loop
+/// (tool-calling, MCP client, multi-turn). Map the `oai-runner` aliases to it
+/// so `tool: oai-runner` reaches the multi-step runner — a one-shot completion
+/// provider cannot satisfy a reasoning/tool-calling model. Raw `tool: oai`
+/// still resolves to the one-shot completion provider `animus-provider-oai`
+/// for callers that explicitly want the simple, single-turn path.
 pub fn canonical_tool_alias(tool: &str) -> String {
     let lower = tool.trim().to_ascii_lowercase();
     match lower.as_str() {
-        "oai-runner" | "animus-oai-runner" => "oai".to_string(),
+        "oai-runner" | "animus-oai-runner" => "oai-agent".to_string(),
         _ => lower,
     }
 }
@@ -179,10 +184,10 @@ mod tests {
             super::provider_install_command("custom-tool"),
             "animus plugin install <publisher>/animus-provider-custom-tool --allow-shadow-builtin"
         );
-        // Legacy aliases normalize to the canonical plugin target.
+        // The oai-runner aliases now resolve to the multi-step agentic provider.
         assert_eq!(
             super::provider_install_command("oai-runner"),
-            "animus plugin install launchapp-dev/animus-provider-oai --allow-shadow-builtin"
+            "animus plugin install launchapp-dev/animus-provider-oai-agent --allow-shadow-builtin"
         );
         // The human-readable message embeds the same command verbatim.
         let resolver = SessionBackendResolver::new();
@@ -258,7 +263,7 @@ mod tests {
 
     #[test]
     fn reserved_provider_tools_includes_all_first_party_providers() {
-        for tool in ["claude", "codex", "gemini", "opencode", "oai", "oai-runner"] {
+        for tool in ["claude", "codex", "gemini", "opencode", "oai", "oai-agent", "oai-runner"] {
             assert!(super::is_reserved_provider_tool(tool), "{tool} should be reserved");
             assert!(super::is_reserved_provider_tool(&tool.to_ascii_uppercase()));
         }
@@ -267,11 +272,20 @@ mod tests {
     }
 
     #[test]
-    fn resolver_resolves_oai_runner_aliases_against_installed_oai_plugin() {
-        // The first-party plugin `launchapp-dev/animus-provider-oai` registers
-        // under provider_tool "oai", but historical workflows ask for tool
-        // "oai-runner" / "animus-oai-runner". The resolver must normalize.
+    fn resolver_routes_oai_runner_aliases_to_the_agentic_provider() {
+        // The `oai-runner` / `animus-oai-runner` aliases are the canonical
+        // workflow tool for the MULTI-STEP runner, which ships as
+        // `launchapp-dev/animus-provider-oai-agent` (provider_tool "oai-agent").
+        // Raw `tool: oai` stays pinned to the one-shot completion provider.
         let mut resolver = SessionBackendResolver::new();
+        resolver.plugin_providers.insert(
+            "oai-agent".to_string(),
+            std::sync::Arc::new(super::super::plugin_backend::PluginSessionBackend::new(
+                "animus-provider-oai-agent",
+                PathBuf::from("/tmp/animus-provider-oai-agent"),
+                "oai-agent",
+            )),
+        );
         resolver.plugin_providers.insert(
             "oai".to_string(),
             std::sync::Arc::new(super::super::plugin_backend::PluginSessionBackend::new(
@@ -281,20 +295,27 @@ mod tests {
             )),
         );
 
-        for alias in ["oai-runner", "animus-oai-runner", "OAI-Runner", "ANIMUS-OAI-RUNNER", "oai"] {
+        for alias in ["oai-runner", "animus-oai-runner", "OAI-Runner", "ANIMUS-OAI-RUNNER"] {
             let backend = expect_resolve_ok(&resolver, alias);
-            assert_eq!(backend.info().provider_tool, "oai", "alias {alias} should resolve to oai plugin");
+            assert_eq!(
+                backend.info().provider_tool,
+                "oai-agent",
+                "alias {alias} should resolve to the agentic multi-step provider"
+            );
         }
+        // Raw `oai` still resolves to the one-shot completion provider.
+        let oneshot = expect_resolve_ok(&resolver, "oai");
+        assert_eq!(oneshot.info().provider_tool, "oai", "raw oai must stay one-shot");
     }
 
     #[test]
-    fn missing_oai_runner_alias_hints_at_animus_provider_oai_install() {
+    fn missing_oai_runner_alias_hints_at_agentic_provider_install() {
         let resolver = SessionBackendResolver::new();
         for alias in ["oai-runner", "animus-oai-runner"] {
             let msg = expect_resolve_err(&resolver, alias);
             assert!(
-                msg.contains("animus plugin install launchapp-dev/animus-provider-oai"),
-                "alias {alias} should hint at the canonical animus-provider-oai install; got: {msg}"
+                msg.contains("animus plugin install launchapp-dev/animus-provider-oai-agent"),
+                "alias {alias} should hint at the agentic animus-provider-oai-agent install; got: {msg}"
             );
         }
     }

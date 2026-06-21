@@ -42,8 +42,8 @@ extend the daemon itself:
   `daemon start`); `max_task_retries` and `retry_cooldown_secs` had no runtime
   sink and were dropped entirely. The daemon git/merge policy keys (`auto_merge`,
   `auto_pr`, `auto_commit_before_merge`, `auto_prune_worktrees`) were removed
-  in v0.5.x — merge/PR behavior now lives in workflow `post_success.merge`,
-  executed by the workflow runner plugin. See
+  in v0.5.x, and workflow `post_success.merge` was removed too. Git/PR actions
+  now belong in explicit workflow command phases or external automation. See
   [Workflow YAML: daemon](workflow-yaml.md#daemon).
 
 All three are optional. They live at the top level of any
