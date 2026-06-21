@@ -34,6 +34,7 @@ The workspace is a Cargo workspace of 12 crates. The current workspace members a
 
 ```text
 crates/
+├── animus-config-protocol/
 ├── animus-plugin-protocol/
 ├── animus-plugin-runtime/
 ├── animus-runtime-shared/

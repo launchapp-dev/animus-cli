@@ -38,7 +38,7 @@ The core goals are:
 | Core services | `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config` |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared` |
 | Plugin foundation | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-protocol`, `animus-plugin-runtime` |
-| Support | `orchestrator-logging`, `protocol`, `animus-mcp-oauth` |
+| Support | `orchestrator-logging`, `protocol`, `animus-mcp-oauth`, `animus-config-protocol` |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
