@@ -372,6 +372,14 @@ fn protocol_public_surface_does_not_drift_against_standalone() {
         "PluginKind.WebUi",
         "PLUGIN_KIND_TRANSPORT_BACKEND",
         "PLUGIN_KIND_WEB_UI",
+        // v0.6.4 conversation_store plugin role (per-user + shared chat history).
+        // The in-tree crate added the role + wire contract; it is ALREADY
+        // published in the standalone repo at tag v0.1.20, but STANDALONE_TAG
+        // here is still pinned to v0.1.13. Drop these two entries once
+        // STANDALONE_TAG advances to >= v0.1.20 (the PluginKind.ConversationStore
+        // variant is already covered by the blanket "PluginKind" entry above).
+        "PLUGIN_KIND_CONVERSATION_STORE",
+        "conversation_store",
     ];
 
     let unexpected_findings: Vec<&DriftFinding> =
