@@ -7,6 +7,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cli_source="$repo_root/crates/orchestrator-cli/src/cli_types/root_types.rs"
 cli_docs="$repo_root/docs/reference/cli/index.md"
 agents_guide="$repo_root/AGENTS.md"
+readme="$repo_root/README.md"
 mcp_source_dir="$repo_root/crates/orchestrator-cli/src/services/operations/ops_mcp"
 mcp_docs="$repo_root/docs/reference/mcp-tools.md"
 cargo_manifest="$repo_root/Cargo.toml"
@@ -82,6 +83,34 @@ extract_agents_cli_docs() {
   ' "$agents_guide" | sort -u
 }
 
+extract_readme_cli_docs() {
+  python3 - <<'PY' "$readme"
+from pathlib import Path
+import sys
+
+lines = Path(sys.argv[1]).read_text().splitlines()
+current = []
+last = []
+in_block = False
+for line in lines:
+    if line.strip() == "Run `animus --help` for the full surface.":
+        break
+    if line.strip() == "```":
+        if in_block and current:
+            last = current[:]
+        in_block = not in_block
+        current = []
+        continue
+    if in_block and line.startswith("animus "):
+        parts = line.split()
+        if len(parts) > 1:
+            current.append(parts[1])
+
+for command in sorted(set(last)):
+    print(command)
+PY
+}
+
 extract_mcp_source() {
   rg -o 'name = "animus\.[^"]+"' "$mcp_source_dir" -N \
     | sed 's/^.*name = "//' \
@@ -154,11 +183,13 @@ check_surface() {
 extract_cli_source > "$tmp_dir/cli-source.txt"
 extract_cli_docs > "$tmp_dir/cli-docs.txt"
 extract_agents_cli_docs > "$tmp_dir/agents-cli-docs.txt"
+extract_readme_cli_docs > "$tmp_dir/readme-cli-docs.txt"
 extract_mcp_source > "$tmp_dir/mcp-source.txt"
 extract_mcp_docs > "$tmp_dir/mcp-docs.txt"
 
 check_surface "CLI command tree" "$tmp_dir/cli-source.txt" "$tmp_dir/cli-docs.txt"
 check_surface "AGENTS top-level command list" "$tmp_dir/cli-source.txt" "$tmp_dir/agents-cli-docs.txt"
+check_surface "README top-level command list" "$tmp_dir/cli-source.txt" "$tmp_dir/readme-cli-docs.txt"
 check_surface "MCP tool reference" "$tmp_dir/mcp-source.txt" "$tmp_dir/mcp-docs.txt"
 
 assert_contains() {

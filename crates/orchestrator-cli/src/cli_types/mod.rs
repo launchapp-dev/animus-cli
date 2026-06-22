@@ -104,6 +104,35 @@ mod tests {
             .collect()
     }
 
+    fn documented_readme_top_level_commands() -> Vec<String> {
+        let mut current_block = Vec::new();
+        let mut last_command_block = Vec::new();
+        let mut in_block = false;
+        for line in read_doc("README.md").lines() {
+            if line.trim() == "Run `animus --help` for the full surface." {
+                return last_command_block;
+            }
+            if line.trim() == "```" {
+                if in_block && !current_block.is_empty() {
+                    last_command_block = current_block.clone();
+                }
+                in_block = !in_block;
+                current_block.clear();
+                continue;
+            }
+            if !in_block {
+                continue;
+            }
+            let trimmed = line.trim_start();
+            if let Some(command) =
+                trimmed.strip_prefix("animus ").and_then(|entry| entry.split_whitespace().next()).map(str::to_string)
+            {
+                current_block.push(command);
+            }
+        }
+        last_command_block
+    }
+
     fn live_workspace_crates() -> Vec<String> {
         let mut in_members = false;
         let mut crates = Vec::new();
@@ -1271,6 +1300,22 @@ mod tests {
         documented.sort();
 
         assert_eq!(documented, actual, "AGENTS.md top-level command list drifted from Cli::command()");
+    }
+
+    #[test]
+    fn readme_top_level_commands_match_live_clap_commands() {
+        let mut command = Cli::command();
+        command.build();
+
+        let mut actual: Vec<String> =
+            command.get_subcommands().map(|subcommand| subcommand.get_name().to_string()).collect();
+        actual.retain(|name| name != "help");
+        let mut documented = documented_readme_top_level_commands();
+
+        actual.sort();
+        documented.sort();
+
+        assert_eq!(documented, actual, "README.md top-level command list drifted from Cli::command()");
     }
 
     #[test]

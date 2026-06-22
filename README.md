@@ -463,8 +463,10 @@ animus subject       Unified subject surface: list/get/create/update/next/status
                      (kind=task and kind=requirement are served by installed subject_backend plugins)
 animus workflow      Run and manage multi-phase workflows
 animus daemon        Start/stop the autonomous scheduler (start, stop, health, stream)
+animus version       Show the installed animus version
 animus queue         Inspect and manage the dispatch queue
 animus agent         Control agent runner processes
+animus chat          Hold multi-turn conversations with a provider tool
 animus output        Stream and inspect agent output
 animus logs          Tail daemon events.jsonl or whichever log-storage plugin is active
 animus trigger       Manage event triggers (file_watcher, webhook, github_webhook, slack)
@@ -478,6 +480,9 @@ animus mcp           Start Animus as an MCP server
 animus web           Launch installed web dashboard/transport plugins
 animus status        Project overview at a glance
 animus approval      Manage approvals for destructive operations
+animus flavor        Inspect and install flavor manifests
+animus update        Check for and install a newer animus release
+animus cost          Inspect token and USD spend across workflow runs
 animus auth          Inspect identity and permissions
 animus events        Stream workflow lifecycle events
 animus state         Export and import scoped runtime state
