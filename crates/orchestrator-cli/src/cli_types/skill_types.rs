@@ -101,6 +101,19 @@ pub(crate) struct SkillSearchArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SkillInstallArgs {
+    #[arg(
+        value_name = "SOURCE",
+        conflicts_with_all = ["path", "name", "github_flag"],
+        help = "GitHub-hosted skill to import and install: OWNER/REPO[@ref], a repo/tree URL, or a raw SKILL.md URL."
+    )]
+    pub(crate) github: Option<String>,
+    #[arg(
+        long = "github",
+        value_name = "SOURCE",
+        conflicts_with_all = ["path", "name"],
+        help = "Same as the positional SOURCE: a GitHub-hosted skill to import and install."
+    )]
+    pub(crate) github_flag: Option<String>,
     #[arg(long, help = "Skill name to resolve and install; optional with --path.")]
     pub(crate) name: Option<String>,
     #[arg(long, help = "Install a local Markdown skill file, skill folder, or directory of skill folders.")]

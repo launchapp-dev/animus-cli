@@ -926,6 +926,79 @@ animus skill create --name rust-tips --description "Rust guidance" --prompt-file
 animus skill create --name pr-reviewer --description "v2" --prompt "..." --force
 ```
 
+### `animus skill install`
+
+Install a skill from a local path, a registry, or a GitHub-hosted source. The
+GitHub form **imports and normalizes** any Anthropic "Agent Skills"
+`SKILL.md` — the same standard used by Claude Code, Hermes, OpenClaw, and
+others — into an Animus skill before installing it.
+
+| Flag | Description |
+|---|---|
+| `<SOURCE>` (positional) or `--github <SOURCE>` | GitHub-hosted skill to import. Mutually exclusive with `--path`/`--name` |
+| `--path <PATH>` | Install a local Markdown skill file, skill folder, or directory of skill folders |
+| `--name <NAME>` | Resolve and install a named skill from the registry catalog |
+| `--version <REQ>` | Optional semver constraint (registry installs) |
+| `--source <SOURCE>` / `--registry <ID>` | Optional registry constraints |
+| `--allow-prerelease` | Allow pre-release versions during registry resolution |
+
+Accepted GitHub source shapes:
+
+- `OWNER/REPO` and `OWNER/REPO@REF` (branch, tag, or commit sha)
+- `https://github.com/OWNER/REPO[.git]`
+- `https://github.com/OWNER/REPO/tree/<ref>/<subpath>`
+- `https://github.com/OWNER/REPO/blob/<ref>/<path>/SKILL.md`
+- raw `https://raw.githubusercontent.com/OWNER/REPO/<ref>/<path>/SKILL.md`
+
+The `<ref>` may be a branch, tag, or commit sha; it is resolved to a commit sha
+before fetching so refs work even on private-default-branch repos. A branch name
+that itself contains `/` (e.g. `feature/foo`) is ambiguous inside a
+`/tree/<ref>/<path>` URL — use the unambiguous `OWNER/REPO@feature/foo` slug
+form for those.
+
+Discovery: a subpath pointing at a single `SKILL.md` (or its folder) installs
+that one skill; a directory containing multiple `skills/<name>/SKILL.md`
+folders installs every skill found. Bundled `scripts/`, `references/`, and
+other assets next to a `SKILL.md` are downloaded alongside it so the
+instructions' relative references resolve.
+
+Supported formats and the import mapping:
+
+- **Anthropic "Agent Skills" `SKILL.md`** (the primary target, shared by Claude
+  Code / Hermes / OpenClaw): frontmatter `name` → skill name, `description` →
+  description, `allowed-tools` → the Animus `tool_policy.allow` permission
+  list, and the **markdown body becomes the Animus `system` prompt** (this is
+  where the instructions live). Model/agent routing stays at Animus defaults.
+- **Animus-native `SKILL.md`** (frontmatter carries an `animus:` runtime
+  namespace): installed as-is — its explicit `tool_policy`, `model`, adapters,
+  etc. flow through unchanged and are never overwritten by a stray
+  `allowed-tools` key.
+
+Detection picks Animus-native when an `animus:` namespace is present; otherwise
+the file is imported under Anthropic semantics (non-empty body as instructions).
+Content with neither a `name` nor an instruction body is rejected with an
+"unsupported skill format" error.
+
+Each installed GitHub skill records provenance — its `origin` (`OWNER/REPO@ref`)
+and detected `format` (`anthropic-agent-skill` or `animus-native`) — surfaced by
+`animus skill list` and `animus skill info`. Public repos only; set
+`GITHUB_TOKEN` to lift API rate limits.
+
+```bash
+# Import a whole repo of skills (e.g. Anthropic's skills repo)
+animus skill install anthropics/skills
+
+# One skill folder at a tag (positional source or --github)
+animus skill install anthropics/skills@v1.0.0
+animus skill install --github https://github.com/anthropics/skills/tree/main/document-skills/pdf
+
+# A single raw SKILL.md
+animus skill install https://raw.githubusercontent.com/owner/repo/main/skills/foo/SKILL.md
+
+# Local install (unchanged)
+animus skill install --path ./my-skill
+```
+
 ### `animus logs tail`
 
 Tail recent persisted log entries from the active log storage backend. This is

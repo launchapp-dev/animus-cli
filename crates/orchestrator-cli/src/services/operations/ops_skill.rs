@@ -22,6 +22,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod github;
 mod model;
 mod resolver;
 mod store;
@@ -35,6 +36,13 @@ use self::store::{
     load_skill_lock_state, load_skill_registry_state, save_skill_lock_state_if_changed,
     save_skill_registry_state_if_changed,
 };
+
+/// Reserved `source` value for skills imported via `animus skill install
+/// <github source>`. Distinct from any user/catalog source named `github` so an
+/// import never collides with a registry-resolved install, and so the
+/// registry-update sweep can recognize and skip imports (they refresh via
+/// re-install, not catalog resolution).
+const GITHUB_IMPORT_SOURCE: &str = "github-import";
 
 fn compare_semver_desc(left: &str, right: &str) -> std::cmp::Ordering {
     match (Version::parse(left), Version::parse(right)) {
@@ -141,6 +149,8 @@ fn upsert_installed(state: &mut SkillRegistryStateV1, selected: &SkillVersionRec
         integrity: selected.integrity.clone(),
         artifact: selected.artifact.clone(),
         definition: selected.definition.clone(),
+        origin: None,
+        format: None,
     };
     state.installed.retain(|item| !(item.name == entry.name && item.source == entry.source));
     state.installed.push(entry);
@@ -489,7 +499,11 @@ fn handle_search(args: SkillSearchArgs, project_root: &str, json: bool) -> Resul
     print_value(combined, json)
 }
 
-fn handle_install(args: SkillInstallArgs, project_root: &str, json: bool) -> Result<()> {
+async fn handle_install(args: SkillInstallArgs, project_root: &str, json: bool) -> Result<()> {
+    if let Some(source) = args.github.as_deref().or(args.github_flag.as_deref()) {
+        return handle_install_github(source, project_root, json).await;
+    }
+
     if let Some(path) = args.path.as_deref() {
         let installed = install_local_markdown_skills(path, args.name.as_deref(), project_root)?;
         return print_value(
@@ -551,6 +565,83 @@ fn handle_install(args: SkillInstallArgs, project_root: &str, json: bool) -> Res
             "registry_changed": registry_changed,
             "lock_changed": lock_changed,
             "skill_file_changed": skill_file_changed,
+        }),
+        json,
+    )
+}
+
+async fn handle_install_github(source: &str, project_root: &str, json: bool) -> Result<()> {
+    use self::github::{discover_and_import, materialize_to_dir, parse_github_skill_source, HttpRepoFetcher};
+
+    let parsed = parse_github_skill_source(source)?;
+    let origin = format!(
+        "{}/{}{}",
+        parsed.owner,
+        parsed.repo,
+        parsed.git_ref.as_deref().map(|r| format!("@{r}")).unwrap_or_default()
+    );
+
+    // Fetch + normalize off the async runtime: the GitHub client is blocking.
+    let parsed_for_fetch = parsed.clone();
+    let discovered = tokio::task::spawn_blocking(move || -> Result<Vec<github::DiscoveredSkill>> {
+        let fetcher = HttpRepoFetcher::new()?;
+        discover_and_import(&parsed_for_fetch, &fetcher)
+    })
+    .await
+    .context("github skill fetch task panicked")??;
+
+    // Stage the normalized skills, then install through the SAME local
+    // path-install pipeline `--path` uses (scoping, materialization identical).
+    let staging = tempfile::tempdir().context("failed to create staging directory")?;
+    materialize_to_dir(&discovered, staging.path())?;
+    let installed = install_local_markdown_skills(staging.path(), None, project_root)?;
+
+    // Record provenance (github origin + detected source format) into the
+    // registry so `skill list` / `skill info` surface where each skill came
+    // from. Mirrors the path install's file materialization, plus a registry
+    // snapshot keyed by `source = GITHUB_IMPORT_SOURCE`.
+    //
+    // NOTE: deliberately no skill-LOCK entry is written. The lockfile drives
+    // registry version resolution (`find_lock_pin` / `resolve_skill_version`),
+    // and an import lock with no catalog record would hijack a later
+    // `animus skill install --name <same>` registry resolve. GitHub provenance
+    // lives only in the `installed` registry snapshot, keyed by the reserved
+    // `GITHUB_IMPORT_SOURCE` so it never collides with a catalog `github` source.
+    let mut registry_state = load_skill_registry_state(project_root)?;
+    let mut provenance = Vec::new();
+    for skill in &discovered {
+        let version = skill.definition.version.clone().unwrap_or_else(|| "0.0.0".to_string());
+        let artifact = skill.skill_md_repo_path.clone();
+        let integrity = build_integrity(&skill.name, &version, GITHUB_IMPORT_SOURCE, &artifact);
+        ensure_registry_registered(&mut registry_state, GITHUB_IMPORT_SOURCE);
+        registry_state.installed.retain(|entry| !(entry.name == skill.name && entry.source == GITHUB_IMPORT_SOURCE));
+        registry_state.installed.push(ResolvedSkillEntry {
+            name: skill.name.clone(),
+            version,
+            source: GITHUB_IMPORT_SOURCE.to_string(),
+            registry: GITHUB_IMPORT_SOURCE.to_string(),
+            integrity,
+            artifact,
+            definition: Some(skill.definition.clone()),
+            origin: Some(origin.clone()),
+            format: Some(skill.format.as_str().to_string()),
+        });
+        provenance.push(serde_json::json!({
+            "name": skill.name,
+            "format": skill.format.as_str(),
+            "origin": origin,
+            "repo_path": skill.skill_md_repo_path,
+        }));
+    }
+    let registry_changed = save_skill_registry_state_if_changed(project_root, &registry_state)?;
+
+    print_value(
+        serde_json::json!({
+            "installed": installed,
+            "provenance": provenance,
+            "origin": origin,
+            "install_root": skill_install_root(project_root),
+            "registry_changed": registry_changed,
         }),
         json,
     )
@@ -719,6 +810,8 @@ fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()
                 "registry": entry.registry,
                 "integrity": entry.integrity,
                 "artifact": entry.artifact,
+                "origin": entry.origin,
+                "format": entry.format,
                 "definition_snapshot": entry.definition.is_some(),
                 "lock_status": lock_status_for(entry, &lock_state),
                 "type": "installed",
@@ -781,6 +874,12 @@ fn resolve_update_targets(
             if entry.source != source {
                 continue;
             }
+        } else if entry.source == GITHUB_IMPORT_SOURCE {
+            // GitHub imports are not registry-resolvable (no catalog record).
+            // A bare update-all sweep skips them rather than failing at
+            // resolution; an explicit `--name` target is handled separately in
+            // `handle_update` with a "re-run install" error.
+            continue;
         }
         targets.insert((entry.name.clone(), entry.source.clone()));
     }
@@ -796,8 +895,20 @@ fn handle_update(args: SkillUpdateArgs, project_root: &str, json: bool) -> Resul
     let target_source = args.source.as_deref().map(str::trim).filter(|value| !value.is_empty());
     let targets = resolve_update_targets(&registry_state, target_name, target_source);
 
-    if target_name.is_some() && targets.is_empty() {
-        return Err(not_found_error(format!("skill not found: {}", target_name.unwrap_or_default())));
+    if let Some(name) = target_name {
+        if targets.is_empty() {
+            // A named target that exists only as a GitHub import gets an
+            // actionable error rather than a misleading "not found": imports
+            // refresh by re-running the install, not via registry resolution.
+            let is_github_import =
+                registry_state.installed.iter().any(|entry| entry.name == name && entry.source == GITHUB_IMPORT_SOURCE);
+            if is_github_import {
+                return Err(invalid_input_error(format!(
+                    "'{name}' was imported from GitHub and is not registry-updatable; re-run `animus skill install <github source>` to refresh it"
+                )));
+            }
+            return Err(not_found_error(format!("skill not found: {name}")));
+        }
     }
 
     let mut updated_entries = Vec::new();
@@ -979,6 +1090,18 @@ fn handle_show(args: SkillShowArgs, project_root: &str, json: bool) -> Result<()
             if !warnings.is_empty() {
                 payload.as_object_mut().unwrap().insert("warnings".to_string(), serde_json::json!(warnings));
             }
+            // A resolved skill that is also a registry-tracked install (e.g. a
+            // GitHub import materialized into the project) carries provenance
+            // the resolved definition alone does not; surface it here.
+            if let Ok(state) = load_skill_registry_state(project_root) {
+                if let Some(entry) =
+                    state.installed.iter().find(|e| e.name == args.name && (e.origin.is_some() || e.format.is_some()))
+                {
+                    let object = payload.as_object_mut().unwrap();
+                    object.insert("origin".to_string(), serde_json::json!(entry.origin));
+                    object.insert("format".to_string(), serde_json::json!(entry.format));
+                }
+            }
             print_value(payload, json)
         }
         Err(_) => {
@@ -993,6 +1116,8 @@ fn handle_show(args: SkillShowArgs, project_root: &str, json: bool) -> Result<()
                         "registry": entry.registry,
                         "integrity": entry.integrity,
                         "artifact": entry.artifact,
+                        "origin": entry.origin,
+                        "format": entry.format,
                         "definition_snapshot": entry.definition.is_some(),
                         "definition": entry.definition.clone(),
                         "type": "installed",
@@ -1092,6 +1217,8 @@ mod tests {
             integrity: "sha256:abc".to_string(),
             artifact: format!("{name}-1.0.0.tgz"),
             definition: None,
+            origin: None,
+            format: None,
         });
         registry.defaults.push(SkillProjectConstraint {
             name: name.to_string(),
@@ -1326,6 +1453,8 @@ mod tests {
             integrity: "sha256:def".to_string(),
             artifact: "alpha-1.1.0.tgz".to_string(),
             definition: None,
+            origin: None,
+            format: None,
         });
         save_skill_registry_state_if_changed(root, &registry).expect("save registry state");
 
@@ -1363,6 +1492,8 @@ mod tests {
             integrity: "sha256:def".to_string(),
             artifact: "alpha-1.1.0.tgz".to_string(),
             definition: Some(definition),
+            origin: None,
+            format: None,
         });
         save_skill_registry_state_if_changed(root, &registry).expect("save registry state");
 
@@ -1411,7 +1542,7 @@ pub(crate) async fn handle_skill(command: SkillCommand, project_root: &str, json
     match command {
         SkillCommand::Create(args) => handle_create(args, project_root, json),
         SkillCommand::Search(args) => handle_search(args, project_root, json),
-        SkillCommand::Install(args) => handle_install(args, project_root, json),
+        SkillCommand::Install(args) => handle_install(args, project_root, json).await,
         SkillCommand::List(args) => handle_list(args, project_root, json),
         SkillCommand::Info(args) => handle_show(args, project_root, json),
         SkillCommand::Update(args) => handle_update(args, project_root, json),
