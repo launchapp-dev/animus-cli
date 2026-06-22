@@ -4,6 +4,23 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-06-22
+
+**v0.6.7 — platform-aware plugin lock + resident config_source.**
+
+- **Platform-aware `plugins.lock`** (schema 1.0→2.0): each entry records integrity
+  per target triple (`targets: {triple → {archive_sha256, signature_bundle_sha256,
+  installed_binary_sha256}}`). Install fetches each release's `SHA256SUMS.txt` and
+  records the tarball sha for EVERY published platform, so a lock generated on one
+  machine drives a verified `--locked` install on another (macOS → linux container).
+  `--locked` verifies the current platform's tarball before extract; `lock verify`/
+  `list` are target-aware; 1.0 locks migrate to empty targets (re-install to upgrade).
+- **Resident config_source host**: the daemon spawns the `config_source` plugin
+  ONCE and reuses it (process-global cache, re-spawn only on ConnectionLost, reaped
+  at shutdown) instead of forking it per `config/load` (~50-60 forks/min → ~0). A
+  CacheToken short-circuit skips the pack-overlay merge + validate when the source
+  config is unchanged. Eliminates the fork churn amplified by v0.6.5's config/write.
+
 - **Resident config_source host.** The daemon no longer spawns + reaps a fresh
   `config_source` plugin process on every `config/load` / `config/write`
   (~4-5 forks per scheduler-loop pass under v0.6.3's leak fix). It now keeps
