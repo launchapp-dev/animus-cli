@@ -575,6 +575,14 @@ pub(crate) struct PluginInstallArgs {
     /// overwriting it.
     #[arg(long, default_value_t = false)]
     pub(crate) force_rewrite_lockfile: bool,
+    /// Install EXACTLY the set pinned in `.animus/plugins.lock` (ignores any
+    /// positional source). Resolves each locked entry to its recorded tag,
+    /// reinstalls, and verifies the installed artifact's sha256 against the
+    /// lockfile. Fails if the lockfile is missing or any entry cannot be
+    /// satisfied. The reproducible-CI / fresh-machine path. Mutually exclusive
+    /// with a positional source, `--path`, `--url`, and `--tag`.
+    #[arg(long, default_value_t = false)]
+    pub(crate) locked: bool,
     /// (v0.5.7) Override the installed-kind assigned to a subject_backend
     /// plugin at install time. The supplied KIND becomes the user-facing
     /// prefix the SubjectRouter dispatches against (e.g. `archive` for a

@@ -115,9 +115,12 @@ pub async fn run_plugin_preflight<H: DaemonRunHooks>(
     if !result.is_ok() && result.flavor_manifest_error.is_none() {
         annotate_missing_with_scope_excludes(project_root, &mut result);
     }
-    // Non-fatal advisories (e.g. under-pinned workflow runner). Never
-    // affect the OK verdict or abort startup.
-    result.warnings = workflow_runner_warnings(project_root);
+    // Non-fatal advisories (under-pinned workflow runner / queue, plugin
+    // lockfile drift). Never affect the OK verdict or abort startup.
+    let mut warnings = workflow_runner_warnings(project_root);
+    warnings.extend(queue_warnings(project_root));
+    warnings.extend(lock_drift_warnings(project_root));
+    result.warnings = warnings;
     for warning in &result.warnings {
         tracing::warn!("plugin preflight: {warning}");
     }
@@ -196,6 +199,76 @@ pub fn queue_warnings(project_root: &str) -> Vec<String> {
         .filter(|p| p.manifest.plugin_kind == "queue")
         .filter_map(|p| orchestrator_core::queue_underpin_warning(&p.name, &p.manifest.version))
         .collect()
+}
+
+/// Non-fatal preflight advisories derived from comparing the plugin lockfile
+/// against the installed/discovered plugin set. Two drift directions are
+/// surfaced as WARNINGS (never failures): a lockfile entry whose installed
+/// binary is missing or whose sha256 no longer matches the pin, and a
+/// discovered plugin that is absent from the lockfile ("extra"). All errors
+/// are swallowed (returns an empty list): a warning probe must never abort
+/// startup. Operators resolve drift with `animus plugin lock verify`.
+pub fn lock_drift_warnings(project_root: &str) -> Vec<String> {
+    let root = Path::new(project_root);
+    // Discover UNSCOPED: lockfile entries pin INSTALLED binaries regardless of
+    // the project's flavor/`plugin-scope.yaml` filter, so a globally locked
+    // plugin that the active scope happens to exclude is still installed and
+    // must not be reported as "missing" drift (codex P2). The scoped set is the
+    // runtime dispatch view, not the install-integrity view.
+    let Ok(discovered) =
+        PluginDiscovery::new().with_project_root(root).with_scope(PluginScope::unrestricted()).discover()
+    else {
+        return Vec::new();
+    };
+
+    // Sweep BOTH lockfile roots — the project `.animus/plugins.lock` and the
+    // global `~/.animus/plugins.lock` — so a globally locked plugin that
+    // discovery surfaces is not falsely flagged "extra" (matches the
+    // `plugin lock verify` both-roots sweep; codex P3). A missing/unreadable
+    // root is treated as empty (the probe must never abort startup).
+    let project_lock = PluginLockfile::load_or_empty(&orchestrator_plugin_host::project_lockfile_path(root)).ok();
+    let global_lock = PluginLockfile::load_or_empty(&orchestrator_plugin_host::global_lockfile_path()).ok();
+    let mut entries: Vec<orchestrator_plugin_host::LockEntry> = Vec::new();
+    let mut locked: BTreeSet<String> = BTreeSet::new();
+    for lock in [project_lock.as_ref(), global_lock.as_ref()].into_iter().flatten() {
+        for entry in &lock.plugins {
+            if locked.insert(entry.name.clone()) {
+                entries.push(entry.clone());
+            }
+        }
+    }
+    // NB: do NOT early-return when `entries` is empty — an installed plugin
+    // with no lockfile entry at all is still "extra" drift, and the
+    // extra-detection pass below must run to match `plugin lock verify`
+    // (codex P3).
+    let mut warnings = Vec::new();
+    for entry in &entries {
+        match discovered.iter().find(|p| p.name == entry.name) {
+            None => warnings.push(format!(
+                "plugin lock drift: {} installed binary missing; run `animus plugin lock verify`",
+                entry.name
+            )),
+            Some(plugin) => {
+                if let Ok(actual) = orchestrator_plugin_host::sha256_of_file(&plugin.path) {
+                    if !actual.eq_ignore_ascii_case(&entry.artifact_sha256) {
+                        warnings.push(format!(
+                            "plugin lock drift: {} sha256 mismatch; run `animus plugin lock verify`",
+                            entry.name
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    for plugin in &discovered {
+        if !locked.contains(&plugin.name) {
+            warnings.push(format!(
+                "plugin lock drift: {} installed but not in lockfile (extra); run `animus plugin lock verify`",
+                plugin.name
+            ));
+        }
+    }
+    warnings
 }
 
 /// Render the scope's recorded flavor-manifest failure when (and only
@@ -425,6 +498,53 @@ required = ["launchapp-dev/animus-provider-claude"]
         let path = flavors.join("default.toml");
         std::fs::write(&path, body).expect("write flavor");
         path
+    }
+
+    #[test]
+    fn lock_drift_warnings_never_warns_about_a_locked_and_present_plugin() {
+        // The probe must never abort startup, and a project whose lockfile
+        // entries are all satisfied (or which has no project lockfile of its
+        // own) must not produce a SPURIOUS warning naming a plugin this
+        // project tracks. We assert the function returns cleanly and never
+        // emits a "missing"/"mismatch" warning for a plugin we never locked.
+        // (Mutating $HOME to fully isolate the global lockfile is avoided
+        // here: it would race the parallel `stable_test_home()` pin used by
+        // other tests in this crate.)
+        let temp = tempfile::tempdir().expect("tempdir");
+        let warnings = lock_drift_warnings(temp.path().to_string_lossy().as_ref());
+        assert!(
+            !warnings.iter().any(|w| w.contains("plugin-that-this-project-never-locked")),
+            "probe must not invent warnings: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn lock_drift_warnings_flags_missing_binary() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let animus = temp.path().join(".animus");
+        std::fs::create_dir_all(&animus).expect("mkdir .animus");
+        let lock_path = animus.join("plugins.lock");
+        let mut lock = PluginLockfile::empty_at(&lock_path);
+        lock.upsert(orchestrator_plugin_host::LockEntry {
+            name: "animus-provider-ghost".to_string(),
+            version: "v0.1.0".to_string(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: chrono::Utc::now().to_rfc3339(),
+            installed_kind: None,
+            native_kind: None,
+            source_repo: Some("launchapp-dev/animus-provider-ghost".to_string()),
+            resolved_commit: None,
+        });
+        lock.save().expect("save lock");
+
+        // The binary was never installed, so discovery will not find it: the
+        // lockfile entry is drift.
+        let warnings = lock_drift_warnings(temp.path().to_string_lossy().as_ref());
+        assert!(
+            warnings.iter().any(|w| w.contains("animus-provider-ghost") && w.contains("missing")),
+            "a locked entry with no installed binary must warn: {warnings:?}"
+        );
     }
 
     #[test]

@@ -1563,6 +1563,8 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             bundle_path: release.bundle_path.clone(),
             owner: Some(release.owner.clone()),
             repo: Some(release.repo.clone()),
+            source_repo: Some(format!("{}/{}", release.owner, release.repo)),
+            resolved_commit: release.resolved_commit.clone(),
         };
         let release_assets = release.release_assets.clone();
         (release.binary_path, release.plugin_name_hint, provenance, Some(release._temp_dir), Some(release_assets))
@@ -1570,7 +1572,11 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         (
             PathBuf::from(p),
             String::new(),
-            InstallProvenance { source_kind: Some("path"), ..Default::default() },
+            InstallProvenance {
+                source_kind: Some("path"),
+                source_repo: Some(format!("path:{p}")),
+                ..Default::default()
+            },
             None,
             None,
         )
@@ -1584,6 +1590,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             source_kind: Some("url"),
             origin: Some(u.to_string()),
             sha256_verified: Some(true),
+            source_repo: Some(u.to_string()),
             ..Default::default()
         };
         (path, String::new(), provenance, Some(temp_dir), None)
@@ -1880,10 +1887,18 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
                         )
                     })?;
                     ensure_executable(&secondary_install_path)?;
+                    // Record the EXTRACTED BINARY's sha256 (not the archive's
+                    // `computed_secondary` checked against the release sidecar
+                    // above) so the lockfile pin matches the on-disk binary.
+                    // Every consumer — `plugin lock verify`, `install --locked`,
+                    // and the daemon lock-drift warning — hashes the installed
+                    // binary, so the pin must be the binary hash to stay
+                    // verifiable for archived secondary assets.
+                    let secondary_binary_sha = sha256_of_file(&secondary_install_path)?;
                     secondary_installed.push((
                         descriptor.name.clone(),
                         secondary_install_path,
-                        computed_secondary,
+                        secondary_binary_sha,
                         Some(secondary_temp),
                     ));
                     installed_binary_names.push(descriptor.name.clone());
@@ -2040,8 +2055,12 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         installed_at: recorded_at.clone(),
         installed_kind: assigned_kind.clone(),
         native_kind: native_kind_for_lock.clone(),
+        source_repo: provenance.source_repo.clone(),
+        resolved_commit: provenance.resolved_commit.clone(),
     }];
     for (secondary_name, _path, secondary_sha, _temp) in &secondary_installed {
+        // Secondary (multi-binary) entries ship in the same release, so they
+        // inherit the primary's source + resolved commit.
         new_lock_entries.push(LockEntry {
             name: secondary_name.clone(),
             version: provenance.release_tag.clone().unwrap_or_default(),
@@ -2050,6 +2069,8 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             installed_at: recorded_at.clone(),
             installed_kind: None,
             native_kind: None,
+            source_repo: provenance.source_repo.clone(),
+            resolved_commit: provenance.resolved_commit.clone(),
         });
     }
     // Multi-binary follow-up to the primary-name routing above: secondary
@@ -3502,8 +3523,22 @@ fn current_platform_label() -> String {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct GithubRelease {
     tag_name: String,
+    /// The commitish the release tag points at. For a tag created directly on
+    /// a commit this is the 40-hex sha; for a tag created against a branch the
+    /// GitHub API returns the branch name. Only recorded as `resolved_commit`
+    /// when it is a real sha (see [`is_commit_sha`]).
+    #[serde(default)]
+    target_commitish: Option<String>,
     #[serde(default)]
     assets: Vec<GithubReleaseAsset>,
+}
+
+/// Returns `true` when `s` is a 40-char lowercase-hex git commit sha. GitHub's
+/// release `target_commitish` is a sha only when the tag was created on a
+/// commit; tags created against a branch return the branch name instead, which
+/// must NOT be recorded as a resolved commit.
+fn is_commit_sha(s: &str) -> bool {
+    s.len() == 40 && s.chars().all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c))
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -3734,6 +3769,9 @@ struct ReleaseInstall {
     plugin_name_hint: String,
     asset_name: String,
     release_tag: String,
+    /// 40-hex commit sha the release resolved to, when its `target_commitish`
+    /// was a sha (not a branch name). `None` otherwise.
+    resolved_commit: Option<String>,
     origin: String,
     sha256_verified: bool,
     /// Downloaded asset archive (`.tar.gz` etc.) — what cosign signed.
@@ -3898,6 +3936,7 @@ async fn resolve_release_install(spec: RepoSpec, explicit_tag: Option<String>) -
         plugin_name_hint,
         asset_name: asset.name.clone(),
         release_tag: release.tag_name.clone(),
+        resolved_commit: release.target_commitish.as_deref().filter(|c| is_commit_sha(c)).map(str::to_string),
         origin: format!("{}/{}@{}", spec.owner, spec.repo, release.tag_name),
         sha256_verified,
         asset_archive_path: Some(asset_path.clone()),
@@ -4300,6 +4339,14 @@ struct InstallProvenance {
     owner: Option<String>,
     /// `<repo>` for identity-regex construction.
     repo: Option<String>,
+    /// Where this install came from, recorded into the lockfile's
+    /// `source_repo`: an `owner/repo` slug for release installs, the URL for
+    /// `--url`, or `path:<...>` for `--path`. Drives `plugin install --locked`
+    /// reproducibility.
+    source_repo: Option<String>,
+    /// 40-hex commit sha the release resolved to (release source only),
+    /// recorded into the lockfile's `resolved_commit`.
+    resolved_commit: Option<String>,
 }
 
 /// Probe a plugin binary's `--manifest` output without touching the install
@@ -4654,6 +4701,15 @@ fn enforce_org_trust(owner: &str, req: &PluginInstallRequest) -> Result<Option<T
 }
 
 async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json: bool) -> Result<()> {
+    if args.locked {
+        if args.source.is_some() || args.path.is_some() || args.url.is_some() || args.tag.is_some() || args.latest {
+            return Err(invalid_input_error(
+                "--locked installs the set pinned in `.animus/plugins.lock` and is mutually exclusive with a \
+                 positional source, --path, --url, --tag, and --latest",
+            ));
+        }
+        return run_locked_install(args, project_root, json).await;
+    }
     if args.latest && args.tag.is_some() {
         return Err(invalid_input_error("--latest and --tag are mutually exclusive"));
     }
@@ -4703,6 +4759,319 @@ async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json
         crate::services::metrics::EventTags::PluginInstalled { plugin_kind: role },
     );
     print_value(output, json)
+}
+
+#[derive(Debug, Serialize)]
+struct LockedInstallRow {
+    name: String,
+    source_repo: String,
+    version: String,
+    expected_sha256: String,
+    /// `installed` | `verified` | `failed`.
+    status: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct LockedInstallOutput {
+    schema: &'static str,
+    lockfile: String,
+    installed: usize,
+    failed: usize,
+    rows: Vec<LockedInstallRow>,
+}
+
+/// Reproducible install: reinstall EXACTLY the set pinned in
+/// `.animus/plugins.lock`, then verify each freshly installed artifact's
+/// sha256 against the lockfile. Used by the CI / fresh-machine path
+/// (`animus plugin install --locked`). Fails the whole run if the lockfile is
+/// missing/empty, an entry cannot be reconstructed, or any installed artifact
+/// hash drifts from the pin (the published release changed under the pin).
+async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: bool) -> Result<()> {
+    let root = std::path::Path::new(project_root);
+    // Carry the operator's install-security flags through to every reinstall
+    // so e.g. `--locked --signature-policy strict` actually enforces strict
+    // signatures in CI rather than silently falling back to the default warn
+    // policy (codex P2). The legacy `require_signature` / `skip_signature` are
+    // folded into the resolved policy; resolution also validates conflicting
+    // flag combinations up front.
+    let signature_policy = resolve_cli_signature_policy(&args)?;
+    let trusted_signers = args.trusted_signers.clone();
+    let allow_shadow_builtin = args.allow_shadow_builtin;
+    let lock_path = PluginLockfile::default_path(Some(root));
+    if !lock_path.exists() {
+        return Err(invalid_input_error(format!(
+            "no plugin lockfile at {} — `--locked` reproduces a previously recorded set, so the lockfile must \
+             exist. Install plugins normally first (e.g. `animus plugin install-defaults`) to record it.",
+            lock_path.display()
+        )));
+    }
+    let lockfile = PluginLockfile::load_or_empty(&lock_path)?;
+    if lockfile.plugins.is_empty() {
+        return Err(invalid_input_error(format!(
+            "plugin lockfile {} is empty — nothing to install",
+            lock_path.display()
+        )));
+    }
+
+    // `--locked` REPRODUCES the committed pin; it must never rewrite it. The
+    // reinstalls below route through `run_plugin_install`, which re-saves the
+    // lockfile (including new secondary-binary entries) on success — so if a
+    // secondary asset changed under the same tag, the pin would be silently
+    // overwritten before verification fails (codex P1). Capture the committed
+    // entries now and re-assert them afterward through the locked
+    // `PluginLockfile::save()` path so the restore is serialized + merged with
+    // any concurrent installer instead of clobbering its entry with a raw
+    // byte rewrite (codex P2).
+    let original_entries = lockfile.plugins.clone();
+    let lock_path_for_restore = lock_path.clone();
+    let restore_lock = move |entries: &[LockEntry]| {
+        // Reload under the save-lock and re-assert ONLY the entries this
+        // locked run owns, reverting any drifted values the reinstalls wrote.
+        // `save()` holds the fs2 sidecar lock and merges on-disk entries this
+        // snapshot never saw, so a concurrent installer's unrelated new entry
+        // survives.
+        match PluginLockfile::load_or_empty(&lock_path_for_restore) {
+            Ok(mut reloaded) => {
+                for entry in entries {
+                    reloaded.upsert(entry.clone());
+                }
+                if let Err(err) = reloaded.save() {
+                    tracing::warn!(path = %lock_path_for_restore.display(), %err, "failed to restore lockfile pins after --locked install");
+                }
+            }
+            Err(err) => {
+                tracing::warn!(path = %lock_path_for_restore.display(), %err, "failed to reload lockfile to restore pins after --locked install");
+            }
+        }
+    };
+
+    // Infer project scope when reproducing a PROJECT lockfile: a
+    // `.animus/plugins.lock` committed by `animus plugin install --project`
+    // must reinstall into `<project>/.animus/plugins/`, otherwise the locked
+    // binaries land in the global dir while the committed project
+    // `plugins.yaml` still points at the project dir — leaving daemon preflight
+    // unsatisfied after a "verified" run (codex P2). An explicit
+    // `--plugin-dir` override opts out (the operator chose the dir). `--project`
+    // forces it regardless.
+    let resolves_project_lock = lock_path == project_lockfile_path(root);
+    let effective_project = args.project || (resolves_project_lock && args.plugin_dir.is_none());
+
+    // Install dir the reinstalled binaries land in — verification re-hashes
+    // each locked binary here against its pin.
+    let install_dir =
+        if effective_project { project_plugin_install_dir(root) } else { install_root(args.plugin_dir.as_deref())? };
+
+    // A release reinstall reproduces ALL of its sibling binaries (multi-binary
+    // releases publish secondary archives in the same release), so installing
+    // once per `(source_repo, version)` group reproduces every locked entry
+    // from that release. Reinstalling each row independently would replay the
+    // PRIMARY release asset under a secondary entry's name and clobber it
+    // (codex P1). `--url` / `path:` sources install per-entry. We track which
+    // groups were already installed so secondary rows don't reinstall.
+    //
+    // TODO(codex-p2): the `(source_repo, version)` group key cannot tell a
+    // multi-binary release's SECONDARY entry apart from a SEPARATE primary
+    // install of the same release under a different `--name`/`--as-kind`. In
+    // the latter (rare) case the second row is skipped and then fails
+    // verification as "missing". Distinguishing them needs the release's
+    // declared binary set (`plugin.toml`), which is not recorded in the lock;
+    // deferred.
+    let mut installed_release_groups: BTreeSet<(String, String)> = BTreeSet::new();
+    let mut rows: Vec<LockedInstallRow> = Vec::with_capacity(lockfile.plugins.len());
+    let mut failed = 0_usize;
+    let mut installed = 0_usize;
+
+    for entry in &lockfile.plugins {
+        let Some(source_repo) = entry.source_repo.as_deref().filter(|s| !s.is_empty()) else {
+            failed += 1;
+            rows.push(LockedInstallRow {
+                name: entry.name.clone(),
+                source_repo: String::new(),
+                version: entry.version.clone(),
+                expected_sha256: entry.artifact_sha256.clone(),
+                status: "failed",
+                detail: Some("lockfile entry records no source_repo — installed before source provenance was tracked; reinstall it once to record the source".to_string()),
+            });
+            continue;
+        };
+
+        let is_url = source_repo.starts_with("https://");
+        let is_path = source_repo.starts_with("path:");
+        let is_release = !is_url && !is_path;
+        let group_key = (source_repo.to_string(), entry.version.clone());
+        let already_installed = is_release && installed_release_groups.contains(&group_key);
+
+        let install_err = if already_installed {
+            // A sibling row from the same release already triggered the
+            // reinstall; this row only needs verification below.
+            None
+        } else {
+            // Carry the locked dispatch alias through so a fresh-machine
+            // `--locked` reinstall keeps the recorded `installed_kind`. Without
+            // this, a subject backend locked as e.g. `archive` would be
+            // recomputed to its native/auto-incremented kind and silently break
+            // workflows that dispatch to the locked alias (codex P2). Only set
+            // it for a TRUE rename (installed_kind != native_kind) — passing
+            // `--as-kind` on a non-renamed / non-subject plugin is an error.
+            let locked_as_kind = match (entry.effective_installed_kind(), entry.effective_native_kind()) {
+                (Some(installed), Some(native)) if installed != native => Some(installed.to_string()),
+                _ => None,
+            };
+            let mut req = PluginInstallRequest {
+                name: Some(entry.name.clone()),
+                force: true,
+                project_root: Some(project_root.to_string()),
+                project: effective_project,
+                plugin_dir: args.plugin_dir.clone(),
+                yes: true,
+                allow_org: vec![],
+                allow_shadow_builtin,
+                as_kind: locked_as_kind,
+                signature_policy: Some(signature_policy),
+                trusted_signers: trusted_signers.clone(),
+                ..Default::default()
+            };
+            if is_url {
+                req.url = Some(source_repo.to_string());
+                req.sha256 = Some(entry.artifact_sha256.clone());
+            } else if let Some(path) = source_repo.strip_prefix("path:") {
+                req.path = Some(path.to_string());
+                req.sha256 = Some(entry.artifact_sha256.clone());
+            } else {
+                req.source = Some(source_repo.to_string());
+                req.tag = if entry.version.is_empty() { None } else { Some(entry.version.clone()) };
+                // Pin the release asset's checksum so the install pipeline's
+                // PRE-manifest checksum gate aborts before executing a binary
+                // whose hash drifted from the lock — never run unpinned code
+                // (codex P1). The primary entry is written to the lockfile
+                // first, so it is the first row of each release group and its
+                // `artifact_sha256` matches the primary release asset.
+                //
+                // TODO(codex-p2): the install pipeline only pins the PRIMARY
+                // asset via `req.sha256`; a multi-binary release's SECONDARY
+                // assets are checked against the release sidecar/digest, not
+                // the lock, so a drifted secondary is copied to disk and only
+                // flagged when this `--locked` run verifies it below. The lock
+                // pin is preserved (a re-run re-detects the drift), but the
+                // drifted secondary binary is left installed. Removing it would
+                // need per-binary rollback in the install pipeline; deferred.
+                req.sha256 = Some(entry.artifact_sha256.clone());
+            }
+            match run_plugin_install(req).await {
+                Ok(_) => {
+                    if is_release {
+                        installed_release_groups.insert(group_key);
+                    }
+                    None
+                }
+                Err(err) => Some(format!("{err:#}")),
+            }
+        };
+
+        if let Some(err) = install_err {
+            failed += 1;
+            rows.push(LockedInstallRow {
+                name: entry.name.clone(),
+                source_repo: source_repo.to_string(),
+                version: entry.version.clone(),
+                expected_sha256: entry.artifact_sha256.clone(),
+                status: "failed",
+                detail: Some(format!("reinstall failed: {err}")),
+            });
+            continue;
+        }
+
+        // Verify THIS entry's installed binary against its pin. The lockfile
+        // `artifact_sha256` is the installed BINARY's hash for every entry —
+        // primary AND secondary (multi-binary releases record the extracted
+        // binary sha, not the archive sha) — so hashing `install_dir/<name>`
+        // and comparing is correct for all entries. A drift here means the
+        // published source changed under the pin; `--locked` then fails the
+        // CI / fresh-machine reproducibility gate rather than rewriting the
+        // pin (codex P1).
+        let binary = install_dir.join(&entry.name);
+        match lockfile.verify_entry(&entry.name, &sha256_of_file(&binary).unwrap_or_default()) {
+            LockVerifyResult::Match => {
+                installed += 1;
+                rows.push(LockedInstallRow {
+                    name: entry.name.clone(),
+                    source_repo: source_repo.to_string(),
+                    version: entry.version.clone(),
+                    expected_sha256: entry.artifact_sha256.clone(),
+                    status: "verified",
+                    detail: None,
+                });
+            }
+            LockVerifyResult::Mismatch { expected, actual } => {
+                failed += 1;
+                rows.push(LockedInstallRow {
+                    name: entry.name.clone(),
+                    source_repo: source_repo.to_string(),
+                    version: entry.version.clone(),
+                    expected_sha256: entry.artifact_sha256.clone(),
+                    status: "failed",
+                    detail: Some(format!(
+                        "artifact sha256 drifted from the pin: lockfile expected {expected} but the installed binary \
+                         at {} hashes to {actual} — the published source changed under the pin",
+                        binary.display()
+                    )),
+                });
+            }
+            LockVerifyResult::Missing => {
+                failed += 1;
+                rows.push(LockedInstallRow {
+                    name: entry.name.clone(),
+                    source_repo: source_repo.to_string(),
+                    version: entry.version.clone(),
+                    expected_sha256: entry.artifact_sha256.clone(),
+                    status: "failed",
+                    detail: Some(format!("installed binary not found at {} after reinstall", binary.display())),
+                });
+            }
+        }
+    }
+
+    // Restore the committed pins: the reinstalls above may have re-saved the
+    // lockfile with drifted secondary entries; `--locked` must leave the
+    // entries it owns exactly as committed so a later CI run cannot pass
+    // against drift.
+    restore_lock(&original_entries);
+
+    let output = LockedInstallOutput {
+        schema: "animus.plugin.install-locked.v1",
+        lockfile: lock_path.to_string_lossy().to_string(),
+        installed,
+        failed,
+        rows,
+    };
+
+    if json {
+        print_value(output, true)?;
+    } else {
+        println!("plugin install --locked (lockfile: {})", output.lockfile);
+        for row in &output.rows {
+            match row.status {
+                "verified" => println!("  [ok] {} {} (sha verified)", row.name, row.version),
+                _ => println!(
+                    "  [FAIL] {} {} — {}",
+                    row.name,
+                    row.version,
+                    row.detail.as_deref().unwrap_or("unknown error")
+                ),
+            }
+        }
+        println!("summary: {} verified, {} failed", output.installed, output.failed);
+    }
+
+    if failed > 0 {
+        return Err(anyhow!(
+            "plugin install --locked failed: {failed} of {} entries could not be reproduced",
+            lockfile.plugins.len()
+        ));
+    }
+    Ok(())
 }
 
 /// Maps a plugin manifest `plugin_kind` string into the bounded
@@ -5047,6 +5416,9 @@ struct PluginLockVerifyOutput {
     matched: usize,
     mismatched: usize,
     missing_binary: usize,
+    /// Installed plugins discovered on disk that are absent from every swept
+    /// lockfile. Like mismatch/missing this is drift and fails the verify gate.
+    extra: usize,
 }
 
 // ===== `plugin doctor` =====
@@ -5316,14 +5688,16 @@ fn run_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result<()>
     let json = args.json;
     let output = compute_lock_verify(args, project_root)?;
     // `animus plugin lock verify` is meant to be wired into CI / cron as a
-    // tamper-detection gate. Both a hash mismatch AND a missing on-disk binary
-    // for a tracked entry indicate the install state has drifted from the
-    // lockfile, so either condition must exit non-zero.
-    let exit_err = if output.mismatched > 0 || output.missing_binary > 0 {
+    // tamper-detection gate. A hash mismatch, a missing on-disk binary for a
+    // tracked entry, AND an installed plugin absent from the lockfile ("extra")
+    // all indicate the install state has drifted from the lockfile, so any of
+    // them must exit non-zero.
+    let exit_err = if output.mismatched > 0 || output.missing_binary > 0 || output.extra > 0 {
         Some(anyhow!(
-            "plugin lock verify failed: {} mismatched, {} missing binary, {} matched",
+            "plugin lock verify failed: {} mismatched, {} missing binary, {} extra (not in lockfile), {} matched",
             output.mismatched,
             output.missing_binary,
+            output.extra,
             output.matched
         ))
     } else {
@@ -5340,6 +5714,12 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
     let project_root_path = std::path::Path::new(project_root);
     let global_dir = install_root(args.plugin_dir.as_deref())?;
     let project_dir = project_plugin_install_dir(project_root_path);
+    // Extra-detection (installed-but-unlocked) only makes sense for the default
+    // both-roots sweep against the normal discovery locations. An explicit
+    // `--lockfile` or `--plugin-dir` scopes the verify to a subset, so the
+    // unscoped `discover_plugins` set would falsely flag unrelated default /
+    // global plugins as `extra` (codex P2) — skip it in those modes.
+    let detect_extra = args.lockfile.is_none() && args.plugin_dir.is_none();
 
     // The verify targets: (lockfile path, scope, candidate install dirs in
     // probe order). With an explicit `--lockfile` override only that file is
@@ -5396,10 +5776,16 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
     let mut matched = 0_usize;
     let mut mismatched = 0_usize;
     let mut missing_binary = 0_usize;
+    // Every name claimed by any swept lockfile — used below to flag installed
+    // plugins that are absent from the lockfile ("extra" drift).
+    let mut locked_names: BTreeSet<String> = BTreeSet::new();
     for (path, scope, candidate_dirs) in &targets {
         let lockfile = PluginLockfile::load_or_empty(path)?;
         let lockfile_display = path.to_string_lossy().to_string();
         lockfiles.push(lockfile_display.clone());
+        for entry in &lockfile.plugins {
+            locked_names.insert(entry.name.clone());
+        }
         // An explicit `--lockfile` pointing at the project lockfile carries
         // the same project-scope semantics (CI verifying the committed
         // lock) — pin its project-registry entries to the project dir too.
@@ -5499,6 +5885,48 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
             }
         }
     }
+    // Drift the other direction: installed plugins absent from every swept
+    // lockfile. Discovery failure is non-fatal here — the integrity sweep
+    // above already ran, and extra-detection is an additive signal.
+    //
+    // Discover UNRESTRICTED (bypassing the project's flavor/`plugin-scope.yaml`
+    // filter): an installed plugin that the runtime scope excludes is still
+    // on disk and unpinned, so the integrity gate must still flag it as extra
+    // (codex P2) — matching the daemon lock-drift probe.
+    //
+    // TODO(codex-p2): scope/path-aware extra-detection. A project-local binary
+    // that SHADOWS a same-named globally-locked plugin while having NO project
+    // lock entry is not flagged here because `locked_names` (union of both
+    // roots, keyed by name) contains the global name. Distinguishing this
+    // needs path/scope matching against the existing project-shadow logic
+    // above (see `pin_to_project_dir`); deferred as a rare edge case.
+    let mut extra = 0_usize;
+    if detect_extra {
+        if let Ok(discovered) = PluginDiscovery::new()
+            .with_project_root(project_root_path)
+            .with_scope(orchestrator_plugin_host::PluginScope::unrestricted())
+            .discover()
+        {
+            let mut seen: BTreeSet<String> = BTreeSet::new();
+            for plugin in &discovered {
+                if locked_names.contains(&plugin.name) || !seen.insert(plugin.name.clone()) {
+                    continue;
+                }
+                extra += 1;
+                entries.push(PluginLockVerifyEntry {
+                    name: plugin.name.clone(),
+                    status: "extra",
+                    expected_sha256: String::new(),
+                    actual_sha256: None,
+                    installed_path: None,
+                    detail: Some("installed plugin is not recorded in any lockfile".to_string()),
+                    scope: "discovered",
+                    lockfile: String::new(),
+                });
+            }
+        }
+    }
+
     Ok(PluginLockVerifyOutput {
         lockfile: primary_path.to_string_lossy().to_string(),
         lockfiles,
@@ -5506,6 +5934,7 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
         matched,
         mismatched,
         missing_binary,
+        extra,
     })
 }
 
@@ -6151,6 +6580,8 @@ name = "same"
             bundle_path: bundle,
             owner: Some("launchapp-dev".to_string()),
             repo: Some("animus-provider-claude".to_string()),
+            source_repo: Some("launchapp-dev/animus-provider-claude".to_string()),
+            resolved_commit: None,
         }
     }
 
@@ -7411,6 +7842,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: chrono::Utc::now().to_rfc3339(),
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
         concurrent_lock.save().expect("seed concurrent entry");
 
@@ -8010,6 +8443,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now.clone(),
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         let chosen_b =
             pick_installed_kind_for_install(&lock, &[], "plugin-b", "task", None, &[]).expect("second install");
@@ -8023,6 +8458,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now.clone(),
             installed_kind: Some(chosen_b.clone()),
             native_kind: Some("task".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         let chosen_c =
             pick_installed_kind_for_install(&lock, &[], "plugin-c", "task", None, &[]).expect("third install");
@@ -8048,6 +8485,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now,
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
         let live_claims = vec!["task".to_string()];
         let chosen = pick_installed_kind_for_install(&lock, &live_claims, "new-task", "task", None, &[])
@@ -8073,6 +8512,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now,
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
         let chosen = pick_installed_kind_for_install(&lock, &[], "new-task", "task", None, &[])
             .expect("legacy unrelated row must not block first subject install");
@@ -8092,6 +8533,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now,
             installed_kind: Some("archive".into()),
             native_kind: Some("task".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-archive", "task", None, &[])
             .expect("upgrade must keep prior alias");
@@ -8111,6 +8554,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now,
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         let chosen = pick_installed_kind_for_install(&lock, &[], "plugin-a", "task", None, &[])
             .expect("upgrade must not collide with itself");
@@ -8246,6 +8691,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now.clone(),
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         lock.upsert(LockEntry {
             name: "animus-plugin-collide-b".into(),
@@ -8255,6 +8702,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now,
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         lock.save().expect("save lockfile");
 
@@ -8366,6 +8815,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now,
             installed_kind: Some("requirement".into()),
             native_kind: Some("requirement".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         let manifest = PluginManifest {
             name: "subject-multi".into(),
@@ -8401,6 +8852,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now,
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         let chosen = pick_installed_kind_for_install(&lock, &[], "multi-plugin", "task", None, &["task-2".to_string()])
             .expect("auto-increment must skip own secondary kind");
@@ -8440,6 +8893,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: now,
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
+            source_repo: None,
+            resolved_commit: None,
         });
         let manifest = PluginManifest {
             name: "subject-multi".into(),
@@ -8477,6 +8932,8 @@ required = ["launchapp-dev/animus-queue-default"]
             installed_at: chrono::Utc::now().to_rfc3339(),
             installed_kind: Some(installed.to_string()),
             native_kind: Some(native.to_string()),
+            source_repo: None,
+            resolved_commit: None,
         }
     }
 
@@ -8955,6 +9412,50 @@ required = ["launchapp-dev/animus-queue-default"]
         let bad = tampered.entries.iter().find(|e| e.name == "animus-plugin-projroot").unwrap();
         assert_eq!(bad.scope, "project");
         assert_eq!(bad.status, "mismatch");
+    }
+
+    #[test]
+    fn is_commit_sha_accepts_only_40_hex_lowercase() {
+        assert!(is_commit_sha(&"a".repeat(40)));
+        assert!(is_commit_sha("0123456789abcdef0123456789abcdef01234567"));
+        // Wrong length.
+        assert!(!is_commit_sha(&"a".repeat(39)));
+        assert!(!is_commit_sha(&"a".repeat(41)));
+        // Branch name / non-hex.
+        assert!(!is_commit_sha("main"));
+        // Uppercase hex must be rejected (GitHub returns lowercase shas).
+        assert!(!is_commit_sha(&"A".repeat(40)));
+        assert!(!is_commit_sha(""));
+    }
+
+    /// `plugin lock verify` flags an installed plugin that is absent from the
+    /// lockfile as "extra" drift and exits the gate non-zero.
+    #[cfg(unix)]
+    #[tokio::test(flavor = "multi_thread")]
+    #[allow(clippy::await_holding_lock)]
+    async fn lock_verify_flags_extra_plugin_not_in_lockfile() {
+        let _guard = INSTALL_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let env = project_scope_env();
+        install_for_test(&env, "animus-plugin-tracked", false).await;
+
+        // Drop the lockfile entry but leave the binary on disk: it is now
+        // installed-but-unlocked, i.e. "extra".
+        let mut global = PluginLockfile::load_or_empty(&global_lockfile_path()).unwrap();
+        global.remove("animus-plugin-tracked");
+        global.save().unwrap();
+
+        let output = compute_lock_verify(
+            PluginLockVerifyArgs { lockfile: None, plugin_dir: None, json: true },
+            env.project_root.to_string_lossy().as_ref(),
+        )
+        .expect("verify must compute");
+        assert!(output.extra >= 1, "an installed-but-unlocked plugin must be flagged extra: {:?}", output.entries);
+        let extra = output
+            .entries
+            .iter()
+            .find(|e| e.name == "animus-plugin-tracked")
+            .expect("extra entry for the unlocked plugin");
+        assert_eq!(extra.status, "extra");
     }
 
     /// A global-scope install/uninstall of a name that is ALSO

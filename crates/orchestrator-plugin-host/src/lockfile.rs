@@ -1,11 +1,18 @@
 //! Plugin lockfile (`.animus/plugins.lock`).
 //!
-//! Records `(name, version, artifact_sha256, signature_bundle_sha256,
-//! installed_at)` for every plugin install so a later upgrade can refuse to
-//! silently overwrite a binary whose hash no longer matches what the operator
-//! originally approved. The lockfile is the user-visible audit + rollback
-//! anchor for plugin installs; the install pipeline writes it on success and
-//! removes the entry on uninstall.
+//! `plugins.lock` IS the animus plugin lockfile: it records
+//! `(name, version, artifact_sha256, signature_bundle_sha256, installed_at,
+//! source_repo, resolved_commit)` for every plugin install so a later upgrade
+//! can refuse to silently overwrite a binary whose hash no longer matches what
+//! the operator originally approved, and so `animus plugin install --locked`
+//! can reproduce the exact pinned set on a fresh machine. The lockfile is the
+//! user-visible audit + rollback anchor for plugin installs; the install
+//! pipeline writes it on success and removes the entry on uninstall.
+//!
+//! Tool-managed: do NOT hand-edit. Use `animus plugin install` /
+//! `plugin update` / `plugin uninstall` to mutate it; gitignore keeps the
+//! installed binaries out of version control but the lockfile itself is meant
+//! to be committed so the pinned set travels with the repo.
 //!
 //! Format (TOML, matches the rest of the manifest surface):
 //!
@@ -19,7 +26,16 @@
 //! artifact_sha256 = "abc123..."
 //! signature_bundle_sha256 = "def456..."
 //! installed_at = "2026-05-26T..."
+//! source_repo = "launchapp-dev/animus-provider-claude"
+//! resolved_commit = "0123abc...40-hex..."
 //! ```
+//!
+//! `source_repo` records where the plugin came from — an `owner/repo` slug for
+//! release installs, the URL for `--url` installs, or `path:<...>` for
+//! `--path` installs. `resolved_commit` is the exact 40-hex commit sha when
+//! the GitHub release resolved to one (releases tagged at a branch have no sha
+//! and leave it unset). Both are optional and back-compat: legacy files
+//! lacking them still parse.
 //!
 //! Resolution order (`PluginLockfile::default_path`):
 //! 1. Project-local `<project_root>/.animus/plugins.lock` when `project_root`
@@ -79,6 +95,21 @@ pub struct LockEntry {
     /// lockfile and the consumer treats it as `installed_kind == native_kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_kind: Option<String>,
+    /// Where this plugin was installed from. For release-source installs this
+    /// is the `owner/repo` slug (e.g. `launchapp-dev/animus-provider-claude`)
+    /// so `animus plugin install --locked` can reconstruct the pin. For
+    /// `--url` installs it is the URL; for `--path` installs it is
+    /// `path:<absolute-or-supplied-path>`. `None` for pre-source-provenance
+    /// lockfile rows. The resolved tag for release installs lives in
+    /// [`Self::version`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_repo: Option<String>,
+    /// Exact commit sha the install resolved to, when the GitHub release
+    /// pointed at a 40-char lowercase-hex sha (`target_commitish`). Releases
+    /// tagged at a branch return a branch name, not a sha, and leave this
+    /// `None`. `None` for non-release installs and pre-source-provenance rows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_commit: Option<String>,
 }
 
 impl LockEntry {
@@ -389,6 +420,8 @@ mod tests {
             installed_at: now_str(),
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
         lock.save().unwrap();
 
@@ -414,6 +447,8 @@ mod tests {
             installed_at: now_str(),
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
         let prior = lock.upsert(LockEntry {
             name: "x".into(),
@@ -423,6 +458,8 @@ mod tests {
             installed_at: now_str(),
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
         assert!(prior.is_some());
         assert_eq!(lock.plugins.len(), 1);
@@ -443,6 +480,8 @@ mod tests {
             installed_at: now_str(),
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
         assert_eq!(lock.verify_entry("x", &sha), LockVerifyResult::Match);
         assert_eq!(lock.verify_entry("x", &sha.to_ascii_uppercase()), LockVerifyResult::Match);
@@ -473,6 +512,8 @@ mod tests {
             installed_at: now_str(),
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
 
         // No tamper — should match.
@@ -502,6 +543,8 @@ mod tests {
             installed_at: now_str(),
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         });
         let removed = lock.remove("drop-me").expect("expected entry");
         assert_eq!(removed.name, "drop-me");
@@ -518,6 +561,8 @@ mod tests {
             installed_at: now_str(),
             installed_kind: None,
             native_kind: None,
+            source_repo: None,
+            resolved_commit: None,
         }
     }
 
@@ -634,6 +679,8 @@ mod tests {
             installed_at: now_str(),
             installed_kind: Some("archive".to_string()),
             native_kind: Some("task".to_string()),
+            source_repo: None,
+            resolved_commit: None,
         });
         lock.save().unwrap();
         let reloaded = PluginLockfile::load_or_empty(&path).unwrap();
@@ -642,5 +689,40 @@ mod tests {
         assert_eq!(entry.native_kind.as_deref(), Some("task"));
         assert_eq!(entry.effective_installed_kind(), Some("archive"));
         assert_eq!(entry.effective_native_kind(), Some("task"));
+    }
+
+    #[test]
+    fn lockfile_roundtrips_source_repo_and_resolved_commit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("plugins.lock");
+        let mut lock = PluginLockfile::empty_at(&path);
+        lock.upsert(LockEntry {
+            name: "launchapp-dev/animus-provider-claude".to_string(),
+            version: "v0.2.2".to_string(),
+            artifact_sha256: "a".repeat(64),
+            signature_bundle_sha256: None,
+            installed_at: now_str(),
+            installed_kind: None,
+            native_kind: None,
+            source_repo: Some("launchapp-dev/animus-provider-claude".to_string()),
+            resolved_commit: Some("9".repeat(40)),
+        });
+        lock.save().unwrap();
+        let reloaded = PluginLockfile::load_or_empty(&path).unwrap();
+        let entry = &reloaded.plugins[0];
+        assert_eq!(entry.source_repo.as_deref(), Some("launchapp-dev/animus-provider-claude"));
+        assert_eq!(entry.resolved_commit.as_deref(), Some("9".repeat(40).as_str()));
+    }
+
+    #[test]
+    fn legacy_lockfile_without_source_fields_parses_with_defaults() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("plugins.lock");
+        let legacy = "schema_version = \"1.0\"\ngenerated_at = \"2026-05-26T00:00:00Z\"\n\n[[plugins]]\nname = \"launchapp-dev/animus-subject-default\"\nversion = \"v0.1.1\"\nartifact_sha256 = \"a\"\ninstalled_at = \"2026-05-26T00:00:00Z\"\n";
+        fs::write(&path, legacy).unwrap();
+        let lock = PluginLockfile::load_or_empty(&path).expect("legacy lockfile parses");
+        let entry = &lock.plugins[0];
+        assert_eq!(entry.source_repo, None);
+        assert_eq!(entry.resolved_commit, None);
     }
 }
