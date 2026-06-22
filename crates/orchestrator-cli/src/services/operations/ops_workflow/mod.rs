@@ -736,6 +736,21 @@ pub(crate) async fn handle_workflow(
             }
             WorkflowConfigCommand::Compile => print_value(config::compile_yaml_workflows_payload(project_root)?, json),
             WorkflowConfigCommand::Reload => print_value(config::reload_workflow_config_payload(project_root), json),
+            WorkflowConfigCommand::Set(args) => {
+                print_value(config::set_workflow_config_payload(project_root, args.file.as_deref())?, json)
+            }
+            WorkflowConfigCommand::AgentSet(args) => {
+                print_value(config::set_config_agent_payload(project_root, &args.id, &args.input_json)?, json)
+            }
+            WorkflowConfigCommand::AgentRemove(args) => {
+                print_value(config::remove_config_agent_payload(project_root, &args.id)?, json)
+            }
+            WorkflowConfigCommand::WorkflowSet(args) => {
+                print_value(config::set_config_workflow_payload(project_root, &args.input_json)?, json)
+            }
+            WorkflowConfigCommand::WorkflowRemove(args) => {
+                print_value(config::remove_config_workflow_payload(project_root, &args.id)?, json)
+            }
         },
         WorkflowCommand::StateMachine { command } => match command {
             WorkflowStateMachineCommand::Get => print_value(config::get_state_machine_payload(project_root)?, json),

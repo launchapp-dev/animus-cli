@@ -157,6 +157,49 @@ pub(crate) enum WorkflowConfigCommand {
     /// running) swap the in-memory config snapshot. Useful when filesystem
     /// notifications are unreliable on the host filesystem.
     Reload,
+    /// Replace the entire workflow config by writing it through the installed
+    /// writable config_source plugin. Validates before writing; rejected when
+    /// the source is read-only (e.g. YAML).
+    Set(WorkflowConfigSetArgs),
+    /// Create or replace one agent definition (read-modify-write the full
+    /// config). Does not collide with runtime `animus agent` verbs.
+    AgentSet(WorkflowConfigAgentSetArgs),
+    /// Remove one agent definition (read-modify-write the full config).
+    AgentRemove(WorkflowConfigEntityIdArgs),
+    /// Create or replace one workflow definition (read-modify-write).
+    WorkflowSet(WorkflowConfigWorkflowSetArgs),
+    /// Remove one workflow definition (read-modify-write).
+    WorkflowRemove(WorkflowConfigEntityIdArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowConfigSetArgs {
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Path to a JSON file with the full WorkflowConfig. Use '-' or omit to read JSON from stdin."
+    )]
+    pub(crate) file: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowConfigAgentSetArgs {
+    #[arg(long, value_name = "AGENT_ID", help = "Agent definition id to create or replace.")]
+    pub(crate) id: String,
+    #[arg(long, value_name = "JSON", help = "Agent profile overlay JSON payload (the value of agent_profiles.<id>).")]
+    pub(crate) input_json: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowConfigWorkflowSetArgs {
+    #[arg(long, value_name = "JSON", help = "Workflow definition JSON payload (must include an 'id' field).")]
+    pub(crate) input_json: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowConfigEntityIdArgs {
+    #[arg(long, value_name = "ID", help = "Entity id (agent id or workflow id) to remove.")]
+    pub(crate) id: String,
 }
 
 #[derive(Debug, Subcommand)]

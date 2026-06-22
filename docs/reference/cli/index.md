@@ -182,7 +182,12 @@ animus
 │   │   ├── get              Read resolved workflow config
 │   │   ├── validate         Validate workflow config shape and references (also reports declared-but-unenforced fields in `warnings`)
 │   │   ├── compile          Validate and resolve YAML workflow files (also reports declared-but-unenforced fields in `warnings`)
-│   │   └── reload           Re-run YAML compile pipeline (hot-reload fallback)
+│   │   ├── reload           Re-run YAML compile pipeline (hot-reload fallback)
+│   │   ├── set              Replace the full config via the writable config_source plugin (validates first; rejected on read-only sources)
+│   │   ├── agent-set        Create or replace one agent definition (read-modify-write the full config)
+│   │   ├── agent-remove     Remove one agent definition (read-modify-write the full config)
+│   │   ├── workflow-set     Create or replace one workflow definition (read-modify-write)
+│   │   └── workflow-remove  Remove one workflow definition (read-modify-write)
 │   ├── state-machine
 │   │   ├── get              Read workflow state-machine config
 │   │   ├── validate         Validate workflow state-machine config
@@ -1604,12 +1609,46 @@ validation errors with rich caret-style line/column indicators. Under
 compile`. The `warnings[]` array reports declared-but-unenforced fields in
 both modes.
 
+### `animus workflow config set` / entity write-back
+
+The `set` family persists config back through the installed **writable**
+`config_source` plugin (the kernel ships the entire validated canonical model;
+the plugin handles storage). The kernel validates the post-pack-merge result
+before writing but persists only the RAW source model, and a read-only source
+(e.g. the default `animus-config-yaml`, which does not advertise the
+`config_write` capability) is rejected up front with an actionable error naming
+the plugin — nothing is partially written.
+
+- `animus workflow config set --file <path>` (or stdin) — replace the entire
+  RAW source `WorkflowConfig`. **Do NOT round-trip `animus workflow config get`
+  into this.** `config get` returns the EFFECTIVE config (after pack overlays
+  are merged); feeding it back would bake pack-provided agents/workflows/phases
+  into your source and shadow later pack updates. Use `set` only with an
+  externally-authored raw model; for edits, use the entity verbs below (they
+  load and rewrite the raw source for you).
+- `animus workflow config agent-set --id <id> --input-json <json>` — upsert one
+  agent definition. Read-modify-write: the kernel loads the RAW source config,
+  upserts the agent, validates the post-merge result, and writes the full raw
+  model back. This is the **definition**-management verb; it does not collide
+  with the runtime `animus agent {list,get,run,...}` surface.
+- `animus workflow config agent-remove --id <id>` — remove one agent.
+- `animus workflow config workflow-set --input-json <json>` — upsert one
+  workflow definition (the JSON must include an `id`).
+- `animus workflow config workflow-remove --id <id>` — remove one workflow.
+
+After each write the kernel re-runs the config_source load+compile pipeline to
+confirm the source round-trips the new model; the result envelope carries the
+written config's `hash`, a `summary` of entity counts, and a `refreshed` block
+with the freshly-loaded compiled hash/source. A separate running daemon
+refreshes its own in-memory snapshot through the plugin's `config/changed`
+watch (gated on the `config_watch` capability).
+
 ## Summary
 
 | Metric | Count |
 |---|---|
 | Top-level commands | 28 |
-| Nested command entries (all levels) | 209 |
+| Nested command entries (all levels) | 214 |
 
 Counting basis: counts are derived from the command tree above. "Top-level
 commands" counts the column-0 tree roots (`animus <command>`); "Nested

@@ -27,16 +27,16 @@ categories = ["command-line-utilities", "development-tools"]
 [workspace.dependencies]
 # Protocol/wire-type crates live in launchapp-dev/animus-protocol, never in
 # this repo. `protocol` + `animus-config-protocol` moved out in v0.6.1; all
-# animus-protocol git deps are pinned to the SAME tag (v0.1.19) so transitive
+# animus-protocol git deps are pinned to the SAME tag (v0.1.21) so transitive
 # animus-subject-protocol resolves to one source (no duplicate-crate type
 # mismatches). animus-plugin-protocol/runtime remain in-tree pending a
 # follow-up move.
 animus-plugin-protocol = { path = "crates/animus-plugin-protocol" }
-animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19" }
-animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19" }
-animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19" }
-animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19" }
-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.19", package = "protocol" }
+animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.21" }
+animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.21" }
+animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.21" }
+animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.21" }
+protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.21", package = "protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-plugin-host = { path = "crates/orchestrator-plugin-host" }

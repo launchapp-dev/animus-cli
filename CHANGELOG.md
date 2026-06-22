@@ -4,6 +4,26 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+**Config write-back — manage agents/workflows/config through Animus.**
+
+- New OPTIONAL `config_source` write path: the kernel ships the entire
+  validated canonical `WorkflowConfig` to the installed writable
+  `config_source` plugin via `config/write` (animus-protocol v0.1.21), which
+  persists it however it wants. Coarse full-model write only — no granular
+  per-entity wire methods.
+- A source advertises writability with the `config_write` manifest capability.
+  A read-only source (the default `animus-config-yaml`) omits it and the kernel
+  refuses the write up front with an actionable error naming the plugin —
+  never a partial write.
+- New CLI verbs under `animus workflow config`: `set` (full model from
+  `--file`/stdin), plus entity read-modify-write `agent-set` / `agent-remove` /
+  `workflow-set` / `workflow-remove` (load the RAW source model, mutate one
+  entity, validate, write the full model back — pack overlays are NOT baked in).
+  Validation is mandatory before any write. The DEFINITION-management surface;
+  does not collide with the runtime `animus agent` verbs.
+- Matching MCP tools: `animus.workflow.config.set`, `.agent-set`,
+  `.agent-remove`, `.workflow-set`, `.workflow-remove`.
+
 ## [0.6.4] - 2026-06-22
 
 **v0.6.4 — pluggable chat conversation store (per-user + shared history).**

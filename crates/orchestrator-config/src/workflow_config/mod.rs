@@ -7,6 +7,7 @@
 //! sites keep compiling unchanged.
 
 pub mod config_source_client;
+pub mod config_write;
 pub mod loading;
 pub mod resolution;
 pub mod validation;
@@ -58,6 +59,10 @@ pub use animus_config_protocol::overlay::{
 // Kernel-owned compiler / loading / validation surface.
 // ---------------------------------------------------------------------------
 
+pub use config_write::{
+    remove_agent_profile, remove_workflow_definition, upsert_agent_profile, upsert_workflow_definition,
+    write_full_workflow_config,
+};
 pub use loading::{
     ensure_workflow_config_compiled, ensure_workflow_config_file, legacy_workflow_config_paths, load_workflow_config,
     load_workflow_config_or_default, load_workflow_config_with_metadata, workflow_config_hash, workflow_config_path,

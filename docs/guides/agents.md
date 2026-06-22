@@ -7,7 +7,7 @@ For the full parameter table, see [MCP Tools Reference](../reference/mcp-tools.m
 
 ## Overview
 
-Animus currently exposes **86 built-in MCP tools** across these families:
+Animus currently exposes **91 built-in MCP tools** across these families:
 
 | Group | Tools | Purpose |
 |---|---:|---|
@@ -15,7 +15,7 @@ Animus currently exposes **86 built-in MCP tools** across these families:
 | `animus.daemon.*` | 12 | Daemon lifecycle, health, events, config, and the `observe` observability front-door |
 | `animus.cost.*` | 1 | Budget-cap breach inspection from the scoped breach log |
 | `animus.subject.*` | 8 | Task, requirement, and external subject backends, including bulk create/update |
-| `animus.workflow.*` | 17 | Workflow execution, control (incl. gate approve/reject), and definition inspection |
+| `animus.workflow.*` | 22 | Workflow execution, control (incl. gate approve/reject), definition inspection, and config write-back (`config.set` + entity `agent-set`/`workflow-set`/`*-remove`) |
 | `animus.queue.*` | 7 | Dispatch queue inspection and mutation |
 | `animus.output.*` | 6 | Run output, artifacts, JSONL, and live monitoring |
 | `animus.skill.*` | 5 | Skill discovery, inspection, and authoring at project or user scope |
@@ -26,7 +26,7 @@ Animus currently exposes **86 built-in MCP tools** across these families:
 | `animus.tools.*` | 2 | Tool discovery over the live registry: ranked keyword search plus a grouped one-line catalog |
 
 **Tool discovery.** When you are unsure which tool fits an intent — or your
-context budget is too tight to carry all 86 schemas — start with
+context budget is too tight to carry all 91 schemas — start with
 `animus.tools.search` (e.g. `{"query": "pause workflow"}`). It searches the
 server's live registry (tool names, descriptions, and parameter names), ranks
 matches (name hits outrank description hits outrank parameter hits; an exact
@@ -163,6 +163,28 @@ Inspection and control:
 { "status": "running", "limit": 10 }       // animus.workflow.list
 { "id": "wf-abc123" }                       // pause / resume / cancel / decisions
 { "workflow_id": "wf-abc123", "phase_id": "po-review" } // phase.approve / phase.reject
+```
+
+Config write-back (manage agents/workflows through Animus). These persist the
+config through the installed **writable** `config_source` plugin; the kernel
+validates the post-pack-merge result before writing, and a read-only source
+(the default `animus-config-yaml`) is rejected with an actionable error. The
+`agent-set` / `workflow-set` verbs are read-modify-write on the RAW source model
+and are the **definition**-management surface — distinct from the runtime
+`animus.agent.*` tools. Prefer them for single-entity edits.
+
+`config.set` takes a full RAW SOURCE model. Do NOT round-trip
+`animus.workflow.config.get` into it: `config.get` returns the EFFECTIVE config
+(after pack overlays are merged), so writing it back would bake pack-provided
+entities into your source and shadow later pack updates. Use `config.set` only
+with an externally-authored raw model; for edits, use the entity verbs.
+
+```json
+{ "file": "/tmp/config.json" }                           // animus.workflow.config.set (full model)
+{ "id": "reviewer", "input_json": "{...}" }              // animus.workflow.config.agent-set
+{ "id": "reviewer" }                                      // animus.workflow.config.agent-remove
+{ "input_json": "{\"id\":\"ship\",\"name\":\"Ship\",\"phases\":[\"impl\"]}" } // animus.workflow.config.workflow-set
+{ "id": "ship" }                                          // animus.workflow.config.workflow-remove
 ```
 
 ## Daemon and Queue Operations

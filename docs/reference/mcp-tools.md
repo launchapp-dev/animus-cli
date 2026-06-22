@@ -1,14 +1,14 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 86 built-in tools across daemon, cost, queue, agent, output,
+registers 91 built-in tools across daemon, cost, queue, agent, output,
 workflow, plugin, skill, subject, logs, tool-discovery, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
 and returning structured results.
 
-That headline 86 counts the full management-mode surface. A default
-agent-injected server (`animus mcp serve` without `--management`) exposes 84:
+That headline 91 counts the full management-mode surface. A default
+agent-injected server (`animus mcp serve` without `--management`) exposes 89:
 the two `animus.interactions.*` management tools are gated behind
 `--management` so an agent can never list or answer its own pending approvals.
 
@@ -182,7 +182,7 @@ bounded fetch for recent entries, not a live stream.
 
 ---
 
-## Workflow Operations (17 tools)
+## Workflow Operations (22 tools)
 
 ### Runtime & Inspection Tools (12)
 
@@ -210,6 +210,11 @@ bounded fetch for recent entries, not a live stream.
 | `animus.workflow.definitions.list` | List workflow definitions | `project_root` |
 | `animus.workflow.config.get` | Read effective workflow configuration | `project_root` |
 | `animus.workflow.config.validate` | Validate workflow config for shape errors and broken references | `project_root` |
+| `animus.workflow.config.set` | Replace the full config via the writable config_source plugin (validates first; rejected on read-only sources) | `file`, `project_root` |
+| `animus.workflow.config.agent-set` | Create or replace one agent definition (read-modify-write the full config) | `id`, `input_json`, `project_root` |
+| `animus.workflow.config.agent-remove` | Remove one agent definition | `id`, `project_root` |
+| `animus.workflow.config.workflow-set` | Create or replace one workflow definition (read-modify-write) | `input_json`, `project_root` |
+| `animus.workflow.config.workflow-remove` | Remove one workflow definition | `id`, `project_root` |
 
 ---
 
