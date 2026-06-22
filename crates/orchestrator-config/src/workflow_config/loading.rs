@@ -150,7 +150,7 @@ pub fn compile_workflow_config_from_library(project_root: &Path) -> Result<Optio
 /// Shared compiler tail: merge installed + project-override pack overlays onto
 /// `base_overlay` (layered on the runtime base), then validate. Used by both the
 /// plugin-sourced runtime path and the library-sourced bootstrap path.
-fn compile_workflow_config_onto_base(
+pub(crate) fn compile_workflow_config_onto_base(
     project_root: &Path,
     base_overlay: WorkflowConfig,
 ) -> Result<LoadedWorkflowConfig> {

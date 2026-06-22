@@ -19,6 +19,7 @@ use super::types::WorkflowConfig;
 
 const CONFIG_SOURCE_KIND: &str = "config_source";
 const CONFIG_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
+const CONFIG_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// True if a `config_source` plugin is installed (cheap discovery, no spawn).
 /// Used by callers that early-return when there's nothing to compile.
@@ -47,6 +48,100 @@ pub fn resolve_plugin_base(project_root: &Path) -> Result<Option<(WorkflowConfig
     };
     let loaded = run_blocking(load_from_plugin(plugin, project_root.to_path_buf()))?;
     Ok(Some(loaded?))
+}
+
+/// Persist `config` through the installed `config_source` plugin's
+/// `config/write`. The kernel is the validator: callers MUST have already run
+/// `validate_workflow_config_with_project_root` against `config` before calling
+/// this — the plugin trusts the model and only enforces its own storage
+/// constraints.
+///
+/// Errors (each surfaces an actionable message, never panics or corrupts):
+/// - no `config_source` plugin installed;
+/// - the installed source does not advertise [`CAPABILITY_CONFIG_WRITE`]
+///   (e.g. the read-only YAML source) — refused up front, no RPC issued;
+/// - the plugin's `config/write` RPC fails.
+///
+/// On success the host is always reaped (`shutdown`), mirroring the load path's
+/// v0.6.3 leak fix. The caller is responsible for triggering a reload so the
+/// daemon's in-memory snapshot refreshes.
+pub fn write_plugin_config(project_root: &Path, config: &WorkflowConfig) -> Result<()> {
+    let plugins = discover_by_kind(project_root.to_path_buf(), CONFIG_SOURCE_KIND)
+        .with_context(|| format!("discovering config_source plugins for {}", project_root.display()))?;
+    let Some(plugin) = plugins.into_iter().next() else {
+        return Err(anyhow!(
+            "no config_source plugin is installed, so there is nothing to write the config to; install one with `animus plugin install-defaults` (the default `animus-config-yaml` is read-only — a writable source such as `animus-config-postgres` is required to manage config through animus)"
+        ));
+    };
+
+    if !plugin.manifest.capabilities.iter().any(|c| c == animus_config_protocol::CAPABILITY_CONFIG_WRITE) {
+        return Err(anyhow!(
+            "the installed config_source plugin '{}' does not support writes (it does not advertise the '{}' capability); config managed by this source must be edited at its origin (e.g. the `.animus/workflows.yaml` files for the YAML source), or install a writable source such as `animus-config-postgres`",
+            plugin.name,
+            animus_config_protocol::CAPABILITY_CONFIG_WRITE,
+        ));
+    }
+
+    let model = config_to_model(config)?;
+    run_blocking(write_to_plugin(plugin, project_root.to_path_buf(), model))?
+}
+
+/// Serialize a [`WorkflowConfig`] into the wire [`ConfigModel`] envelope,
+/// tagged with the current schema id / version.
+fn config_to_model(config: &WorkflowConfig) -> Result<animus_config_protocol::ConfigModel> {
+    let value = serde_json::to_value(config).context("serializing WorkflowConfig for config/write")?;
+    Ok(animus_config_protocol::ConfigModel::new(value))
+}
+
+async fn write_to_plugin(
+    plugin: DiscoveredPlugin,
+    project_root: PathBuf,
+    model: animus_config_protocol::ConfigModel,
+) -> Result<()> {
+    // Same env-forwarding rationale as `load_from_plugin`: a config_source
+    // plugin replaces the kernel's in-process config handling and may need the
+    // full parent env (non-secret `${VAR}` inputs) plus its manifest-declared
+    // secret env (DATABASE_URL, ...).
+    let forwarded_env: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
+    let options =
+        PluginSpawnOptions::for_manifest(plugin.name.clone(), &plugin.manifest.env_required, forwarded_env, None);
+    let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
+        .await
+        .with_context(|| format!("spawning config_source plugin {}", plugin.name))?;
+
+    // ALWAYS reap the host (v0.6.3 leak lesson): the spawned process lives in
+    // the host's background reader state and is not dropped with this handle.
+    let written = write_via_host(&host, &plugin, &project_root, model).await;
+    let _ = host.shutdown().await;
+    written
+}
+
+/// Handshake + `config/write` against an already-spawned host. Split out so the
+/// host is reaped on every exit path, not just success.
+async fn write_via_host(
+    host: &PluginHost,
+    plugin: &DiscoveredPlugin,
+    project_root: &Path,
+    model: animus_config_protocol::ConfigModel,
+) -> Result<()> {
+    host.handshake().await.with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
+
+    let request = animus_config_protocol::ConfigWriteRequest {
+        project_root: project_root.display().to_string(),
+        repo_scope: Some(protocol::repository_scope_for_path(project_root)),
+        config: model,
+    };
+    let params = serde_json::to_value(&request).context("serializing ConfigWriteRequest")?;
+    let value = host
+        .request_typed_with_timeout("config/write", Some(params), CONFIG_WRITE_TIMEOUT)
+        .await
+        .with_context(|| format!("config/write on config_source plugin {}", plugin.name))?;
+
+    // Decode for validation/forward-compat, even though the current kernel only
+    // needs to know the call succeeded (it re-issues config/load on reload).
+    let _resp: animus_config_protocol::ConfigWriteResponse =
+        serde_json::from_value(value).context("decoding ConfigWriteResponse")?;
+    Ok(())
 }
 
 async fn load_from_plugin(plugin: DiscoveredPlugin, project_root: PathBuf) -> Result<(WorkflowConfig, String)> {

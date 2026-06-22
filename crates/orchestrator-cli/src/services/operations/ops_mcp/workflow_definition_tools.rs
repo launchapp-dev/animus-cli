@@ -78,4 +78,101 @@ impl AoMcpServer {
         )
         .await
     }
+
+    #[tool(
+        name = "animus.workflow.config.set",
+        description = "Replace the entire workflow config. Purpose: Persist a full RAW source WorkflowConfig through the installed writable config_source plugin (validates the post-pack-merge result before writing). Prerequisites: a writable config_source plugin must be installed. IMPORTANT: the payload must be the RAW SOURCE model, NOT the effective config from animus.workflow.config.get (that is post-pack-merge; feeding it back would bake pack-provided entities into the source). For single-entity edits prefer the entity verbs (agent-set / workflow-set), which read the raw source model and read-modify-write it for you. Use config.set only with an externally-authored raw model. Fails cleanly when the source is read-only (e.g. YAML). Example: {\"file\": \"/tmp/config.json\"}.",
+        input_schema = ao_schema_for_type::<WorkflowConfigSetInput>()
+    )]
+    async fn ao_workflow_config_set(
+        &self,
+        params: Parameters<WorkflowConfigSetInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args =
+            vec!["workflow".to_string(), "config".to_string(), "set".to_string(), "--file".to_string(), input.file];
+        self.run_tool("animus.workflow.config.set", args, input.project_root).await
+    }
+
+    #[tool(
+        name = "animus.workflow.config.agent-set",
+        description = "Create or replace one agent definition. Purpose: Manage a single agent in the workflow config via read-modify-write (loads the current config, upserts the agent, validates, writes the full model). Prerequisites: a writable config_source plugin. This is the DEFINITION-management verb and does NOT collide with the runtime animus.agent.* tools. Example: {\"id\": \"reviewer\", \"input_json\": \"{\\\"description\\\":\\\"...\\\",\\\"system_prompt\\\":\\\"...\\\"}\"}. Sequencing: inspect existing entities with animus.workflow.config.get (read-only; do NOT feed its effective output back into config.set).",
+        input_schema = ao_schema_for_type::<WorkflowConfigAgentSetInput>()
+    )]
+    async fn ao_workflow_config_agent_set(
+        &self,
+        params: Parameters<WorkflowConfigAgentSetInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "config".to_string(),
+            "agent-set".to_string(),
+            "--id".to_string(),
+            input.id,
+            "--input-json".to_string(),
+            input.input_json,
+        ];
+        self.run_tool("animus.workflow.config.agent-set", args, input.project_root).await
+    }
+
+    #[tool(
+        name = "animus.workflow.config.agent-remove",
+        description = "Remove one agent definition. Purpose: Delete a single agent from the workflow config via read-modify-write (validates and writes the full model). Prerequisites: a writable config_source plugin; the agent must exist. Example: {\"id\": \"reviewer\"}. Sequencing: inspect agents via animus.workflow.config.get (read-only).",
+        input_schema = ao_schema_for_type::<WorkflowConfigEntityRemoveInput>()
+    )]
+    async fn ao_workflow_config_agent_remove(
+        &self,
+        params: Parameters<WorkflowConfigEntityRemoveInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "config".to_string(),
+            "agent-remove".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("animus.workflow.config.agent-remove", args, input.project_root).await
+    }
+
+    #[tool(
+        name = "animus.workflow.config.workflow-set",
+        description = "Create or replace one workflow definition. Purpose: Manage a single workflow in the config via read-modify-write (validates and writes the full model). Prerequisites: a writable config_source plugin; the JSON must include an 'id'. Example: {\"input_json\": \"{\\\"id\\\":\\\"ship\\\",\\\"name\\\":\\\"Ship\\\",\\\"phases\\\":[\\\"impl\\\"]}\"}. Sequencing: inspect existing entities with animus.workflow.config.get (read-only; do NOT feed its effective output back into config.set).",
+        input_schema = ao_schema_for_type::<WorkflowConfigWorkflowSetInput>()
+    )]
+    async fn ao_workflow_config_workflow_set(
+        &self,
+        params: Parameters<WorkflowConfigWorkflowSetInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "config".to_string(),
+            "workflow-set".to_string(),
+            "--input-json".to_string(),
+            input.input_json,
+        ];
+        self.run_tool("animus.workflow.config.workflow-set", args, input.project_root).await
+    }
+
+    #[tool(
+        name = "animus.workflow.config.workflow-remove",
+        description = "Remove one workflow definition. Purpose: Delete a single workflow from the config via read-modify-write (validates and writes the full model). Prerequisites: a writable config_source plugin; the workflow must exist. Example: {\"id\": \"ship\"}. Sequencing: inspect via animus.workflow.config.get (read-only).",
+        input_schema = ao_schema_for_type::<WorkflowConfigEntityRemoveInput>()
+    )]
+    async fn ao_workflow_config_workflow_remove(
+        &self,
+        params: Parameters<WorkflowConfigEntityRemoveInput>,
+    ) -> Result<CallToolResult, McpError> {
+        let input = params.0;
+        let args = vec![
+            "workflow".to_string(),
+            "config".to_string(),
+            "workflow-remove".to_string(),
+            "--id".to_string(),
+            input.id,
+        ];
+        self.run_tool("animus.workflow.config.workflow-remove", args, input.project_root).await
+    }
 }

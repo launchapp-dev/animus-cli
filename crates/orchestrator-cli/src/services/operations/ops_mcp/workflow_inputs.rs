@@ -79,6 +79,37 @@ pub(super) struct WorkflowPhaseGetInput {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct WorkflowConfigSetInput {
+    /// Path to a JSON file with the full WorkflowConfig. Omit to read from stdin
+    /// (not available over MCP — a file path is required here).
+    pub(super) file: String,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct WorkflowConfigAgentSetInput {
+    pub(super) id: String,
+    pub(super) input_json: String,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct WorkflowConfigWorkflowSetInput {
+    pub(super) input_json: String,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
+pub(super) struct WorkflowConfigEntityRemoveInput {
+    pub(super) id: String,
+    #[serde(default)]
+    pub(super) project_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct WorkflowExecuteInput {
     pub(super) task_id: String,
     #[serde(default)]

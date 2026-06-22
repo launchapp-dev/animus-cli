@@ -492,6 +492,102 @@ pub(crate) fn compile_yaml_workflows_payload(project_root: &str) -> Result<Value
     }
 }
 
+/// Shared success payload for the config write-back verbs.
+///
+/// After the plugin write we re-run the kernel's config_source load+compile
+/// pipeline (`load_workflow_config_with_metadata`) so the reported model is the
+/// one the source now serves back (post pack-overlay merge) — NOT a YAML
+/// recompile, which would be wrong for a Postgres/API source.
+///
+/// If that post-write reload FAILS (the plugin persisted a model the kernel
+/// can't reload — e.g. an incompatible model, or a pack-merge validation
+/// failure that only surfaces on load), we return an ERROR rather than a
+/// `written: true` payload, so CLI/MCP callers don't proceed on an unusable
+/// effective config. The write already happened, so the error makes the bad
+/// state explicit instead of burying it in a success field.
+///
+/// A separate running daemon refreshes its own in-memory snapshot through the
+/// config_source plugin's `config/changed` watch (the plugin emits it on write,
+/// gated on its `config_watch` capability); this CLI path does not nudge the
+/// daemon's YAML watcher, which would not observe a non-file source.
+fn write_back_payload(project_root: &str, config: &orchestrator_core::WorkflowConfig) -> Result<Value> {
+    let written_hash = orchestrator_core::workflow_config_hash(config);
+    let loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root)).with_context(|| {
+        "config was written but reloading it from the config_source plugin failed; the persisted config may be unusable"
+    })?;
+    Ok(serde_json::json!({
+        "written": true,
+        "hash": written_hash,
+        "summary": {
+            "workflows": config.workflows.len(),
+            "phases": config.phase_definitions.len(),
+            "agents": config.agent_profiles.len(),
+        },
+        "refreshed": {
+            "ok": true,
+            "hash": loaded.metadata.hash,
+            "source": loaded.metadata.source,
+            "workflows": loaded.config.workflows.len(),
+            "phases": loaded.config.phase_definitions.len(),
+            "agents": loaded.config.agent_profiles.len(),
+        },
+    }))
+}
+
+/// `animus workflow config set` — replace the entire config from a JSON file or
+/// stdin. The kernel validates before writing and rejects a read-only source.
+pub(crate) fn set_workflow_config_payload(project_root: &str, file: Option<&str>) -> Result<Value> {
+    let raw = read_json_source(file)?;
+    let config: orchestrator_core::WorkflowConfig = serde_json::from_str(&raw)
+        .context("invalid WorkflowConfig JSON for workflow config set; expected a full config model")?;
+    orchestrator_core::write_full_workflow_config(Path::new(project_root), &config)?;
+    write_back_payload(project_root, &config)
+}
+
+/// `animus workflow config agent-set` — upsert one agent definition.
+pub(crate) fn set_config_agent_payload(project_root: &str, id: &str, input_json: &str) -> Result<Value> {
+    let profile: orchestrator_config::AgentProfileOverlay =
+        serde_json::from_str(input_json).context("invalid agent profile JSON for workflow config agent-set")?;
+    let config = orchestrator_core::upsert_agent_profile(Path::new(project_root), id, profile)?;
+    write_back_payload(project_root, &config)
+}
+
+/// `animus workflow config agent-remove` — remove one agent definition.
+pub(crate) fn remove_config_agent_payload(project_root: &str, id: &str) -> Result<Value> {
+    let config = orchestrator_core::remove_agent_profile(Path::new(project_root), id)?;
+    write_back_payload(project_root, &config)
+}
+
+/// `animus workflow config workflow-set` — upsert one workflow definition.
+pub(crate) fn set_config_workflow_payload(project_root: &str, input_json: &str) -> Result<Value> {
+    let definition: orchestrator_core::WorkflowDefinition = serde_json::from_str(input_json)
+        .context("invalid workflow definition JSON for workflow config workflow-set; must include an 'id' field")?;
+    let config = orchestrator_core::upsert_workflow_definition(Path::new(project_root), definition)?;
+    write_back_payload(project_root, &config)
+}
+
+/// `animus workflow config workflow-remove` — remove one workflow definition.
+pub(crate) fn remove_config_workflow_payload(project_root: &str, id: &str) -> Result<Value> {
+    let config = orchestrator_core::remove_workflow_definition(Path::new(project_root), id)?;
+    write_back_payload(project_root, &config)
+}
+
+/// Read a JSON document from a file path, or from stdin when the path is `None`
+/// or `-`. Used by `workflow config set` so callers can pipe a generated config.
+fn read_json_source(file: Option<&str>) -> Result<String> {
+    match file {
+        Some(path) if path != "-" => {
+            std::fs::read_to_string(path).with_context(|| format!("reading config JSON from {path}"))
+        }
+        _ => {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin().read_to_string(&mut buf).context("reading config JSON from stdin")?;
+            Ok(buf)
+        }
+    }
+}
+
 pub(super) fn title_case_phase_id(phase_id: &str) -> String {
     phase_id
         .split(['-', '_'])
