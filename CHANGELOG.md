@@ -4,7 +4,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-## [0.6.5] - 2026-06-22
+## [0.6.6] - 2026-06-22
+
+**v0.6.6 — cap plugin tokio runtimes to stop PID/thread exhaustion.**
+
+- **Plugin thread cap.** Every Animus stdio plugin uses a bare `#[tokio::main]`,
+  which sizes its worker pool to *all* CPU cores. With v0.6's resident-plugin fleet
+  (config_source + subject backends + queue + workflow_runner + providers +
+  transport) that is hundreds of threads on a many-core host, exhausting the
+  PID/thread budget — new forks (including the provider CLI an agent phase spawns)
+  fail with `EAGAIN` and the run hangs at the agent phase. The daemon now injects
+  `TOKIO_WORKER_THREADS=2` into every spawned plugin (`PluginHost::spawn_with_options`,
+  after `env_clear()`) and into the workflow-runner subprocess, honoring an operator
+  override set on the daemon env. Plugins are I/O-bound stdio RPC servers, so a small
+  pool is sufficient. Fixes agent phases stalling on PID-capped hosts (e.g. Railway).
+  Follow-up (tracked): make `config_source` resident to remove the per-tick respawn
+  churn, and switch the plugin scaffold to a `current_thread` runtime for new plugins.
 
 **v0.6.5 — config write-back + reproducible plugin pinning.**
 
