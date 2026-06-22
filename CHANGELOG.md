@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-06-22
+
+**v0.6.5 — config write-back + reproducible plugin pinning.**
+
+- **Config write-back** (`config/write`): the kernel can now push the full
+  validated canonical config to the installed `config_source` plugin, which
+  resolves persistence. New `ConfigSourceClient::write`, CLI `animus workflow
+  config {set,agent-set,agent-remove,workflow-set,workflow-remove}`, and MCP
+  `animus.workflow.config.{set,agent-set,agent-remove,workflow-set,workflow-remove}`.
+  Entity verbs are kernel-side read-modify-write (load → mutate → validate →
+  write); writes are gated on the source advertising `config_write` and always
+  validated before persist. Contract in `animus-config-protocol` v0.1.21.
+- **`animus.lock`** (`.animus/plugins.lock`): per-plugin integrity pinning
+  (name, resolved version, artifact sha256, cosign signature-bundle sha256).
+  `plugin install`/`update`/`uninstall` maintain it; `plugin install --locked`
+  reinstalls + verifies the exact pinned set; `plugin lock {list,verify}`
+  inspects + drift-checks; daemon preflight runs a non-fatal lock drift check.
+
 **Config write-back — manage agents/workflows/config through Animus.**
 
 - New OPTIONAL `config_source` write path: the kernel ships the entire
