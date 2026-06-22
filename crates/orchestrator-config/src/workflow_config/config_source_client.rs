@@ -8,18 +8,147 @@
 //! owns the compiler (pack overlays + validate + cache + state-machine
 //! derivation) — the plugin only produces the canonical base.
 
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, PluginHost, PluginSpawnOptions};
+use orchestrator_plugin_host::session::plugin_supervisor::{classify, RetryDecision};
+use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, HostError, PluginHost, PluginSpawnOptions};
 
-use super::types::WorkflowConfig;
+use super::types::{LoadedWorkflowConfig, WorkflowConfig};
 
 const CONFIG_SOURCE_KIND: &str = "config_source";
 const CONFIG_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 const CONFIG_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// One resident `config_source` plugin host, kept warm across `config/load`
+/// and `config/write` calls for a single project root.
+///
+/// v0.6.6 replaces the v0.6.3 spawn+reap-per-call model (one fork on every
+/// scheduler-loop config load, ~50-60/min) with EXACTLY ONE host per root,
+/// reused for the life of the process. The host is reaped only when it dies
+/// (re-spawn) or on explicit teardown via [`shutdown_resident_hosts`].
+struct ResidentHost {
+    host: PluginHost,
+    /// Path the host was spawned from. A re-spawn re-discovers, so this lets a
+    /// caller confirm the cached host still matches the installed plugin.
+    plugin_path: PathBuf,
+    /// Binary mtime (nanos) at spawn time. If the plugin is upgraded/replaced
+    /// in place (same path, new bytes) while the daemon runs, the mtime changes
+    /// and the cached host is dropped + re-spawned so loads/writes never keep
+    /// using the stale binary/capabilities until a daemon restart.
+    binary_mtime_nanos: u128,
+    /// Monotonic id assigned at insert. Lets a death-like retry reap ONLY the
+    /// exact host that failed: a concurrent caller may have already replaced the
+    /// dead host with a fresh one, and we must not shut down that healthy
+    /// replacement.
+    generation: u64,
+}
+
+/// Source of monotonic [`ResidentHost::generation`] ids.
+fn next_generation() -> u64 {
+    static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Best-effort binary mtime (nanos since epoch); `0` when unavailable. Used only
+/// as a resident-host invalidation signal (an unreadable mtime collides to `0`,
+/// and a later successful read differs and forces a re-spawn).
+fn binary_mtime_nanos(path: &Path) -> u128 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+/// Process-global resident-host cache keyed by project root. The daemon is one
+/// root; the CLI may target several, so a map (not a single slot) is required.
+fn resident_hosts() -> &'static Mutex<HashMap<PathBuf, ResidentHost>> {
+    static HOSTS: OnceLock<Mutex<HashMap<PathBuf, ResidentHost>>> = OnceLock::new();
+    HOSTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Last compiled config served for a root, keyed by the plugin's CacheToken
+/// version. A `config/load` whose token matches `version` can skip the whole
+/// pack-overlay merge + validate compile and reuse `compiled`. Invalidated on
+/// `config/write` and on host re-spawn so a real config change always
+/// recompiles. Lives here (not in `loading.rs`) so write + load share one
+/// invalidation point.
+fn compiled_cache() -> &'static Mutex<HashMap<PathBuf, (String, LoadedWorkflowConfig)>> {
+    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (String, LoadedWorkflowConfig)>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Return the cached compiled config for `project_root` iff its stored
+/// CacheToken `version` matches `cache_version`. The kernel's `loading.rs`
+/// calls this to short-circuit recompilation when the source is unchanged.
+pub(crate) fn cached_compiled(project_root: &Path, cache_version: &str) -> Option<LoadedWorkflowConfig> {
+    let key = normalize_root(project_root);
+    let guard = compiled_cache().lock().unwrap_or_else(|p| p.into_inner());
+    match guard.get(&key) {
+        Some((version, loaded)) if version == cache_version => Some(loaded.clone()),
+        _ => None,
+    }
+}
+
+/// Store the compiled config for `project_root` under its CacheToken `version`.
+pub(crate) fn store_compiled(project_root: &Path, cache_version: String, loaded: LoadedWorkflowConfig) {
+    let key = normalize_root(project_root);
+    compiled_cache().lock().unwrap_or_else(|p| p.into_inner()).insert(key, (cache_version, loaded));
+}
+
+/// Drop the cached compiled config for `project_root` so the next load
+/// recompiles. Called after a `config/write` (the source changed under us).
+fn invalidate_compiled(project_root: &Path) {
+    let key = normalize_root(project_root);
+    compiled_cache().lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
+}
+
+/// Normalize a project root the same way the test seam does, so the resident
+/// host / compiled cache keys line up regardless of symlink canonicalization
+/// (e.g. /var -> /private/var on macOS).
+fn normalize_root(project_root: &Path) -> PathBuf {
+    std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf())
+}
+
+/// Reap every resident `config_source` host and clear the compiled cache.
+/// Wired into the daemon's graceful-shutdown teardown so the warm plugin
+/// processes are terminated cleanly (and the CLI's short-lived processes do
+/// not leak a host on exit). Idempotent.
+pub async fn shutdown_resident_hosts() {
+    let hosts: Vec<ResidentHost> = {
+        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
+        guard.drain().map(|(_, v)| v).collect()
+    };
+    for resident in hosts {
+        let _ = resident.host.shutdown().await;
+    }
+    compiled_cache().lock().unwrap_or_else(|p| p.into_inner()).clear();
+}
+
+/// Drop + reap the resident host for `project_root` ONLY if the cached entry is
+/// still the generation `failed_gen` that failed. A concurrent caller may have
+/// already reaped that dead host and installed a fresh replacement; reaping by
+/// generation guarantees we never shut down that healthy replacement out from
+/// under the other caller.
+async fn drop_resident_host_if_current(project_root: &Path, failed_gen: u64) {
+    let key = normalize_root(project_root);
+    let resident = {
+        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
+        match guard.get(&key) {
+            Some(existing) if existing.generation == failed_gen => guard.remove(&key),
+            _ => None,
+        }
+    };
+    if let Some(resident) = resident {
+        let _ = resident.host.shutdown().await;
+    }
+}
 
 /// True if a `config_source` plugin is installed (cheap discovery, no spawn).
 /// Used by callers that early-return when there's nothing to compile.
@@ -38,7 +167,12 @@ pub fn resolve_plugin_base(project_root: &Path) -> Result<Option<(WorkflowConfig
     // it still owns) without spawning a real plugin process.
     #[cfg(any(test, feature = "test-utils"))]
     if let Some(base) = test_seam::base_for(project_root) {
-        return Ok(Some((base, "test-seam".to_string())));
+        // Derive the CacheToken from the base content so the compiled-config
+        // short-circuit in `loading.rs` recompiles when a test reinstalls a
+        // DIFFERENT base for the same root. A constant token would serve a
+        // stale compile across a real change.
+        let token = super::loading::workflow_config_hash(&base);
+        return Ok(Some((base, token)));
     }
 
     let plugins = discover_by_kind(project_root.to_path_buf(), CONFIG_SOURCE_KIND)
@@ -46,8 +180,170 @@ pub fn resolve_plugin_base(project_root: &Path) -> Result<Option<(WorkflowConfig
     let Some(plugin) = plugins.into_iter().next() else {
         return Ok(None);
     };
-    let loaded = run_blocking(load_from_plugin(plugin, project_root.to_path_buf()))?;
+    let loaded = run_blocking(load_via_resident(plugin, project_root.to_path_buf()))?;
     Ok(Some(loaded?))
+}
+
+/// A failure running an RPC against a resident host. Distinguishes a death-like
+/// host failure (presume the process is dead → reap + re-spawn + retry once)
+/// from any other error (a structured plugin RPC error, or a decode/validation
+/// failure on a live host) which must propagate without burning a re-spawn.
+enum ResidentCallError {
+    /// The host's process is presumed dead; the call may succeed on a fresh
+    /// spawn. Carries the original error for the message if re-spawn also fails.
+    Death(anyhow::Error),
+    /// A live-host error (structured plugin error or response decode failure);
+    /// re-spawning would not help.
+    Other(anyhow::Error),
+}
+
+impl ResidentCallError {
+    /// Classify a `HostError` returned by an RPC into death-like vs other.
+    fn from_host_error(err: HostError) -> Self {
+        match classify(&err) {
+            RetryDecision::DeathLike => ResidentCallError::Death(anyhow!(err)),
+            RetryDecision::StructuredError => ResidentCallError::Other(anyhow!(err)),
+        }
+    }
+}
+
+/// Acquire the resident host for `project_root` (spawning it once if absent),
+/// then run `call` against a clone of it. On a death-like failure (the warm
+/// host's process is presumed dead), reap it, re-spawn exactly once, and retry
+/// the call. All other errors propagate without a re-spawn.
+///
+/// The map lock is never held across the RPC `.await`: we take a clone of the
+/// `PluginHost` (cheap — it is `Arc`-backed) while holding the lock, then drop
+/// the lock before calling. Distinct roots therefore never serialize on each
+/// other's RPCs.
+async fn with_resident_host<T, F, Fut>(plugin: DiscoveredPlugin, project_root: &Path, mut call: F) -> Result<T>
+where
+    F: FnMut(PluginHost) -> Fut,
+    Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
+{
+    let (host, generation) = acquire_resident_host(&plugin, project_root).await?;
+    match call(host).await {
+        Ok(value) => Ok(value),
+        Err(ResidentCallError::Other(err)) => Err(err),
+        Err(ResidentCallError::Death(err)) => {
+            // The warm host is presumed dead: reap it (only if it's still the
+            // generation that failed — a concurrent caller may have already
+            // replaced it), re-spawn once, retry.
+            drop_resident_host_if_current(project_root, generation).await;
+            let (host, _gen) = acquire_resident_host(&plugin, project_root).await?;
+            match call(host).await {
+                Ok(value) => Ok(value),
+                Err(ResidentCallError::Other(retry_err)) => Err(retry_err),
+                Err(ResidentCallError::Death(retry_err)) => Err(retry_err.context(format!(
+                    "config_source plugin {} still failing after one re-spawn (first error: {err})",
+                    plugin.name
+                ))),
+            }
+        }
+    }
+}
+
+/// Return a clone of the resident host for `project_root` plus its generation
+/// id, spawning + handshaking it if none is cached (or the cached one was
+/// spawned from a different path / a changed binary).
+async fn acquire_resident_host(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<(PluginHost, u64)> {
+    let key = normalize_root(project_root);
+    // A cached host is only reused when it was spawned from the SAME path AND
+    // the binary's mtime is unchanged — so an in-place plugin upgrade/replace
+    // (new bytes at the same path) drops the stale host and re-spawns.
+    let current_mtime = binary_mtime_nanos(&plugin.path);
+    {
+        let guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(resident) = guard.get(&key) {
+            if resident.plugin_path == plugin.path && resident.binary_mtime_nanos == current_mtime {
+                return Ok((resident.host.clone(), resident.generation));
+            }
+        }
+    }
+
+    // Spawn + handshake OUTSIDE the map lock so a slow spawn for one root never
+    // blocks another root's cache lookups.
+    let host = spawn_config_source_host(plugin).await?;
+    host.handshake().await.with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
+
+    // Decide the outcome WITHOUT holding the std Mutex across an `.await`: take
+    // any host that needs reaping out under the lock, drop the guard, then await
+    // the shutdown. (`acquire_resident_host` is the only place that mutates the
+    // map besides shutdown/drop, so the brief window between unlock and reap is
+    // benign — the loser host is owned solely by this stack frame.)
+    enum Outcome {
+        /// A concurrent caller already inserted a matching host: keep theirs,
+        /// reap ours.
+        UseExisting { winner: PluginHost, generation: u64, reap_ours: PluginHost },
+        /// We installed ours; reap the (stale-path) host it replaced, if any.
+        Installed { ours: PluginHost, generation: u64, reap_old: Option<PluginHost> },
+    }
+    let outcome = {
+        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
+        match guard.get(&key) {
+            Some(existing) if existing.plugin_path == plugin.path && existing.binary_mtime_nanos == current_mtime => {
+                Outcome::UseExisting { winner: existing.host.clone(), generation: existing.generation, reap_ours: host }
+            }
+            _ => {
+                let ours = host.clone();
+                let generation = next_generation();
+                let replaced = guard.insert(
+                    key,
+                    ResidentHost {
+                        host,
+                        plugin_path: plugin.path.clone(),
+                        binary_mtime_nanos: current_mtime,
+                        generation,
+                    },
+                );
+                Outcome::Installed { ours, generation, reap_old: replaced.map(|r| r.host) }
+            }
+        }
+    };
+
+    match outcome {
+        Outcome::UseExisting { winner, generation, reap_ours } => {
+            let _ = reap_ours.shutdown().await;
+            Ok((winner, generation))
+        }
+        Outcome::Installed { ours, generation, reap_old } => {
+            if let Some(old) = reap_old {
+                let _ = old.shutdown().await;
+            }
+            Ok((ours, generation))
+        }
+    }
+}
+
+/// Spawn a `config_source` plugin host with the full parent env forwarded.
+///
+/// Unlike other plugin roles, a config_source plugin REPLACES the kernel's
+/// in-process YAML parsing, which read the daemon's full process environment
+/// for non-secret `${VAR}` interpolation (team ids, URLs, feature flags). We
+/// forward the full parent env plus the manifest-declared secret env (e.g.
+/// DATABASE_URL); secret-backed `${secret.*}` still resolves via the plugin's
+/// own keychain resolver, repo-scope aware.
+async fn spawn_config_source_host(plugin: &DiscoveredPlugin) -> Result<PluginHost> {
+    let forwarded_env: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
+    let options =
+        PluginSpawnOptions::for_manifest(plugin.name.clone(), &plugin.manifest.env_required, forwarded_env, None);
+    PluginHost::spawn_with_options(&plugin.path, &[], options)
+        .await
+        .with_context(|| format!("spawning config_source plugin {}", plugin.name))
+}
+
+/// Reuse the resident host to run `config/load`. The host is NOT reaped after
+/// the call (the v0.6.6 resident model) — only on death-like failure or at
+/// shutdown via [`shutdown_resident_hosts`].
+async fn load_via_resident(plugin: DiscoveredPlugin, project_root: PathBuf) -> Result<(WorkflowConfig, String)> {
+    let name = plugin.name.clone();
+    let call_root = project_root.clone();
+    with_resident_host(plugin, &project_root, move |host| {
+        let project_root = call_root.clone();
+        let name = name.clone();
+        async move { config_load_call(&host, &name, &project_root).await }
+    })
+    .await
 }
 
 /// Persist `config` through the installed `config_source` plugin's
@@ -62,9 +358,10 @@ pub fn resolve_plugin_base(project_root: &Path) -> Result<Option<(WorkflowConfig
 ///   (e.g. the read-only YAML source) — refused up front, no RPC issued;
 /// - the plugin's `config/write` RPC fails.
 ///
-/// On success the host is always reaped (`shutdown`), mirroring the load path's
-/// v0.6.3 leak fix. The caller is responsible for triggering a reload so the
-/// daemon's in-memory snapshot refreshes.
+/// On success the resident host is REUSED (not reaped — v0.6.6 resident model)
+/// and the compiled-config cache for this root is invalidated so the next load
+/// recompiles from the freshly-written source. The caller is responsible for
+/// triggering a reload so the daemon's in-memory snapshot refreshes.
 pub fn write_plugin_config(project_root: &Path, config: &WorkflowConfig) -> Result<()> {
     let plugins = discover_by_kind(project_root.to_path_buf(), CONFIG_SOURCE_KIND)
         .with_context(|| format!("discovering config_source plugins for {}", project_root.display()))?;
@@ -83,7 +380,7 @@ pub fn write_plugin_config(project_root: &Path, config: &WorkflowConfig) -> Resu
     }
 
     let model = config_to_model(config)?;
-    run_blocking(write_to_plugin(plugin, project_root.to_path_buf(), model))?
+    run_blocking(write_via_resident(plugin, project_root.to_path_buf(), model))?
 }
 
 /// Serialize a [`WorkflowConfig`] into the wire [`ConfigModel`] envelope,
@@ -93,101 +390,66 @@ fn config_to_model(config: &WorkflowConfig) -> Result<animus_config_protocol::Co
     Ok(animus_config_protocol::ConfigModel::new(value))
 }
 
-async fn write_to_plugin(
+/// Reuse the resident host to run `config/write`, then invalidate the
+/// compiled-config cache so the next load recompiles from the new source.
+async fn write_via_resident(
     plugin: DiscoveredPlugin,
     project_root: PathBuf,
     model: animus_config_protocol::ConfigModel,
 ) -> Result<()> {
-    // Same env-forwarding rationale as `load_from_plugin`: a config_source
-    // plugin replaces the kernel's in-process config handling and may need the
-    // full parent env (non-secret `${VAR}` inputs) plus its manifest-declared
-    // secret env (DATABASE_URL, ...).
-    let forwarded_env: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
-    let options =
-        PluginSpawnOptions::for_manifest(plugin.name.clone(), &plugin.manifest.env_required, forwarded_env, None);
-    let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
-        .await
-        .with_context(|| format!("spawning config_source plugin {}", plugin.name))?;
-
-    // ALWAYS reap the host (v0.6.3 leak lesson): the spawned process lives in
-    // the host's background reader state and is not dropped with this handle.
-    let written = write_via_host(&host, &plugin, &project_root, model).await;
-    let _ = host.shutdown().await;
-    written
+    let name = plugin.name.clone();
+    let call_root = project_root.clone();
+    let result = with_resident_host(plugin, &project_root, move |host| {
+        let project_root = call_root.clone();
+        let name = name.clone();
+        let model = model.clone();
+        async move { config_write_call(&host, &name, &project_root, model).await }
+    })
+    .await;
+    if result.is_ok() {
+        // The source changed under us; force the next load to recompile.
+        invalidate_compiled(&project_root);
+    }
+    result
 }
 
-/// Handshake + `config/write` against an already-spawned host. Split out so the
-/// host is reaped on every exit path, not just success.
-async fn write_via_host(
+/// `config/write` against a resident host clone. Returns a [`ResidentCallError`]
+/// so the caller can reap + re-spawn on a death-like failure.
+async fn config_write_call(
     host: &PluginHost,
-    plugin: &DiscoveredPlugin,
+    plugin_name: &str,
     project_root: &Path,
     model: animus_config_protocol::ConfigModel,
-) -> Result<()> {
-    host.handshake().await.with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
-
+) -> std::result::Result<(), ResidentCallError> {
     let request = animus_config_protocol::ConfigWriteRequest {
         project_root: project_root.display().to_string(),
         repo_scope: Some(protocol::repository_scope_for_path(project_root)),
         config: model,
     };
-    let params = serde_json::to_value(&request).context("serializing ConfigWriteRequest")?;
+    let params = match serde_json::to_value(&request).context("serializing ConfigWriteRequest") {
+        Ok(params) => params,
+        Err(err) => return Err(ResidentCallError::Other(err)),
+    };
     let value = host
         .request_typed_with_timeout("config/write", Some(params), CONFIG_WRITE_TIMEOUT)
         .await
-        .with_context(|| format!("config/write on config_source plugin {}", plugin.name))?;
+        .map_err(ResidentCallError::from_host_error)?;
 
     // Decode for validation/forward-compat, even though the current kernel only
     // needs to know the call succeeded (it re-issues config/load on reload).
-    let _resp: animus_config_protocol::ConfigWriteResponse =
-        serde_json::from_value(value).context("decoding ConfigWriteResponse")?;
+    let _resp: animus_config_protocol::ConfigWriteResponse = serde_json::from_value(value)
+        .context(format!("decoding ConfigWriteResponse from config_source plugin {plugin_name}"))
+        .map_err(ResidentCallError::Other)?;
     Ok(())
 }
 
-async fn load_from_plugin(plugin: DiscoveredPlugin, project_root: PathBuf) -> Result<(WorkflowConfig, String)> {
-    // The host spawns plugins with a CLEAN env. Unlike other plugin roles, a
-    // config_source plugin REPLACES the kernel's in-process YAML parsing, which
-    // read the daemon's full process environment for non-secret `${VAR}`
-    // interpolation (team ids, URLs, feature flags). To preserve that behavior
-    // we forward the full parent env to the config_source plugin, in addition
-    // to the manifest-declared secret env (e.g. DATABASE_URL). config_source is
-    // a trusted, required-role plugin in the config pipeline, so this matches
-    // the capability the kernel itself had — secret-backed `${secret.*}` still
-    // resolves via the plugin's own keychain resolver, repo-scope aware.
-    let forwarded_env: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
-    let options =
-        PluginSpawnOptions::for_manifest(plugin.name.clone(), &plugin.manifest.env_required, forwarded_env, None);
-    let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
-        .await
-        .with_context(|| format!("spawning config_source plugin {}", plugin.name))?;
-
-    // Borrow the host for the handshake + config/load, then ALWAYS shut it down
-    // so the spawned config_source process is reaped. `spawn_with_options` sets
-    // `kill_on_drop(true)`, but the `Child` lives inside shared state held by the
-    // host's background reader task, so dropping THIS handle does not drop the
-    // child — the bg task keeps it alive until the plugin's stdout EOFs, which a
-    // persistent stdio plugin never does. The daemon calls this on every config
-    // reload, so without an explicit `shutdown()` each reload leaks one process
-    // (and, for DB-backed sources like config-postgres, an open connection pool),
-    // exhausting `pids` / Postgres `max_connections` over time.
-    let loaded = load_via_host(&host, &plugin, &project_root).await;
-    // Best-effort reap. `shutdown` always `start_kill`s the child internally
-    // (even when it returns Err on the graceful-drain leg), so ignoring the
-    // result still terminates the process — we just must CALL it.
-    let _ = host.shutdown().await;
-    loaded
-}
-
-/// Handshake + `config/load` against an already-spawned config_source host,
-/// returning the compiled base config. Split out from [`load_from_plugin`] so
-/// the host is reaped (`shutdown`) on every exit path, not just success.
-async fn load_via_host(
+/// `config/load` against a resident host clone. Returns a [`ResidentCallError`]
+/// so the caller can reap + re-spawn on a death-like failure.
+async fn config_load_call(
     host: &PluginHost,
-    plugin: &DiscoveredPlugin,
+    plugin_name: &str,
     project_root: &Path,
-) -> Result<(WorkflowConfig, String)> {
-    host.handshake().await.with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
-
+) -> std::result::Result<(WorkflowConfig, String), ResidentCallError> {
     // Compute the repo-scope id from the project root so config_source plugins
     // that select config rows / repo-scoped secrets by scope (e.g. postgres)
     // get a real scope, not null.
@@ -198,26 +460,33 @@ async fn load_via_host(
     let value = host
         .request_typed_with_timeout("config/load", Some(params), CONFIG_LOAD_TIMEOUT)
         .await
-        .with_context(|| format!("config/load on config_source plugin {}", plugin.name))?;
+        .map_err(ResidentCallError::from_host_error)?;
 
-    let resp: animus_config_protocol::ConfigLoadResponse =
-        serde_json::from_value(value).context("decoding ConfigLoadResponse")?;
+    let resp: animus_config_protocol::ConfigLoadResponse = match serde_json::from_value(value)
+        .context(format!("decoding ConfigLoadResponse from config_source plugin {plugin_name}"))
+    {
+        Ok(resp) => resp,
+        Err(err) => return Err(ResidentCallError::Other(err)),
+    };
     // Reject incompatible models: wrong schema OR a newer version this kernel
     // can't safely interpret (`ConfigModel::is_compatible` = schema match AND
     // version <= CONFIG_MODEL_VERSION).
     if !resp.config.is_compatible() {
-        return Err(anyhow!(
+        return Err(ResidentCallError::Other(anyhow!(
             "config_source plugin {} returned an incompatible config model (schema '{}', version {}); this kernel supports schema '{}' up to version {}",
-            plugin.name,
+            plugin_name,
             resp.config.schema,
             resp.config.version,
             animus_config_protocol::CONFIG_MODEL_SCHEMA_ID,
             animus_config_protocol::CONFIG_MODEL_VERSION,
-        ));
+        )));
     }
-    let config: WorkflowConfig = serde_json::from_value(resp.config.config)
-        .with_context(|| format!("deserializing {}'s config into WorkflowConfig", plugin.name))?;
-    Ok((config, resp.cache_token.version))
+    match serde_json::from_value(resp.config.config)
+        .with_context(|| format!("deserializing {plugin_name}'s config into WorkflowConfig"))
+    {
+        Ok(config) => Ok((config, resp.cache_token.version)),
+        Err(err) => Err(ResidentCallError::Other(err)),
+    }
 }
 
 /// Bridge an async future into the sync config-load path. Works whether or not
@@ -316,4 +585,68 @@ pub fn install_yaml_config_source_base(project_root: &Path) -> test_seam::TestBa
         .expect("compile project yaml base")
         .unwrap_or_else(super::builtin_workflow_config);
     test_seam::install(project_root, base)
+}
+
+#[cfg(test)]
+mod resident_cache_tests {
+    use super::*;
+    use animus_config_protocol::builtins::builtin_workflow_config;
+
+    fn loaded(root: &Path) -> LoadedWorkflowConfig {
+        LoadedWorkflowConfig {
+            config: builtin_workflow_config(),
+            metadata: super::super::types::WorkflowConfigMetadata {
+                schema: String::new(),
+                version: 0,
+                hash: String::new(),
+                source: super::super::types::WorkflowConfigSource::Yaml,
+            },
+            path: root.to_path_buf(),
+        }
+    }
+
+    #[test]
+    fn compiled_cache_hits_on_matching_token_and_misses_otherwise() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        // Cold: nothing cached.
+        assert!(cached_compiled(root, "tok-1").is_none());
+
+        store_compiled(root, "tok-1".to_string(), loaded(root));
+        // Same token: hit.
+        assert!(cached_compiled(root, "tok-1").is_some());
+        // Different token (source changed): miss => caller recompiles.
+        assert!(cached_compiled(root, "tok-2").is_none());
+    }
+
+    #[test]
+    fn invalidate_compiled_forces_recompile() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        store_compiled(root, "tok".to_string(), loaded(root));
+        assert!(cached_compiled(root, "tok").is_some());
+        invalidate_compiled(root);
+        assert!(cached_compiled(root, "tok").is_none(), "write must invalidate the compiled cache");
+    }
+
+    #[test]
+    fn death_like_host_errors_trigger_respawn_decision() {
+        // ConnectionLost / Timeout / ProcessExited are death-like => the
+        // resident cache reaps + re-spawns + retries once.
+        assert!(matches!(ResidentCallError::from_host_error(HostError::ConnectionLost), ResidentCallError::Death(_)));
+        assert!(matches!(
+            ResidentCallError::from_host_error(HostError::Timeout(Duration::from_secs(1))),
+            ResidentCallError::Death(_)
+        ));
+    }
+
+    #[test]
+    fn incompatible_protocol_is_death_like_not_silently_dropped() {
+        // Pre-request handshake failures are conservatively death-like (the
+        // dispatcher burns a restart slot rather than dropping the failure).
+        assert!(matches!(
+            ResidentCallError::from_host_error(HostError::IncompatibleProtocol("x".into())),
+            ResidentCallError::Death(_)
+        ));
+    }
 }

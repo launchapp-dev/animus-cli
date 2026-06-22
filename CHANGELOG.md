@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **Resident config_source host.** The daemon no longer spawns + reaps a fresh
+  `config_source` plugin process on every `config/load` / `config/write`
+  (~4-5 forks per scheduler-loop pass under v0.6.3's leak fix). It now keeps
+  EXACTLY ONE warm host per project root, reused for the life of the process and
+  reaped only on a death-like failure (re-spawn once via the typed
+  `HostError`/`classify` API), an in-place plugin-binary upgrade (mtime change),
+  or graceful daemon shutdown. A CacheToken short-circuit additionally skips the
+  pack-overlay merge + validate compile when the source token AND the resolved
+  pack registry are both unchanged; a `config/write` or any token/pack change
+  invalidates it so a real config change always recompiles. Net live-process
+  count drops versus v0.6.5; correctness is preserved (never serves a stale
+  compiled config across a real change).
+
 ## [0.6.6] - 2026-06-22
 
 **v0.6.6 — cap plugin tokio runtimes to stop PID/thread exhaustion.**

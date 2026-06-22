@@ -4033,6 +4033,59 @@ workflows:
 // read/write of `crate::cache` on the YAML path, which no longer exists. The
 // cache module retains its own round-trip coverage in `crate::cache::tests`.
 
+// v0.6.6: the resident config_source host caches the COMPILED config keyed by
+// the plugin's CacheToken. Exercise the short-circuit + invalidation through
+// the test seam (whose token is a content hash of the injected base, so a
+// changed base yields a new token and recompiles).
+mod cache_token_short_circuit {
+    use super::*;
+    use crate::workflow_config::config_source_client::test_seam;
+    use crate::workflow_config::loading::load_workflow_config_with_metadata;
+
+    // A valid base whose `tools_allowlist` carries a marker so we can observe
+    // which base a load served. `merge_yaml_into_config` carries a non-empty
+    // overlay `tools_allowlist` through, and `builtin_workflow_config()`
+    // self-validates, so the merged config stays valid while the content hash
+    // (and thus the seam's content-derived CacheToken) changes per marker.
+    fn base_with_marker(marker: &str) -> WorkflowConfig {
+        let mut config = builtin_workflow_config();
+        config.tools_allowlist = vec![marker.to_string()];
+        config
+    }
+
+    #[test]
+    fn unchanged_token_serves_cached_compile_changed_token_recompiles() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let root = temp.path();
+
+        // First base => first load compiles and caches under the content token.
+        let base_a = base_with_marker("marker-a");
+        let guard_a = test_seam::install(root, base_a);
+        let loaded_a = load_workflow_config_with_metadata(root).expect("first load");
+        assert!(loaded_a.config.tools_allowlist.contains(&"marker-a".to_string()));
+
+        // Same base again: the cached compile is served (token unchanged). The
+        // result is identical, proving the short-circuit returns the right value.
+        let loaded_a2 = load_workflow_config_with_metadata(root).expect("second load");
+        assert_eq!(loaded_a2.metadata.hash, loaded_a.metadata.hash, "unchanged source must serve the cached compile");
+        drop(guard_a);
+
+        // Change the base => new content token => the short-circuit MUST miss and
+        // recompile, never serving the stale compile.
+        let base_b = base_with_marker("marker-b");
+        let _guard_b = test_seam::install(root, base_b);
+        let loaded_b = load_workflow_config_with_metadata(root).expect("third load after change");
+        assert!(
+            loaded_b.config.tools_allowlist.contains(&"marker-b".to_string()),
+            "a changed source token must recompile, not serve the stale cached config"
+        );
+        assert!(!loaded_b.config.tools_allowlist.contains(&"marker-a".to_string()));
+        assert_ne!(loaded_b.metadata.hash, loaded_a.metadata.hash);
+    }
+}
+
 mod unenforced_field_warnings {
     use super::super::validation::{unenforced_project_yaml_warnings, unenforced_yaml_field_warnings};
     use std::fs;
