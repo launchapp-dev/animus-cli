@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationAppendMessageRequest",
+  "description": "`conversation/append_message` request.",
+  "type": "object",
+  "properties": {
+    "as_user": {
+      "description": "Acting user id, when known. A backend MAY use it to authorize the\nmutation. `None` for unscoped/admin access.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "Conversation id to append to.",
+      "type": "string"
+    },
+    "message": {
+      "description": "The turn to append.",
+      "$ref": "#/$defs/ChatMessage"
+    },
+    "project_root": {
+      "description": "Absolute project root path of the calling CLI/daemon.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repo_scope": {
+      "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id",
+    "message"
+  ],
+  "$defs": {
+    "ChatMessage": {
+      "description": "One persisted turn in a conversation, in the kernel's portable\nprovider-agnostic shape. The plugin persists and returns it verbatim;\n`usage` / `blocks` are opaque JSON to this crate (their schema lives in\nthe kernel's chat store) so the protocol stays free of a `protocol`\ncrate dependency.",
+      "type": "object",
+      "properties": {
+        "blocks": {
+          "description": "Ordered timeline of the assistant turn (opaque JSON array).",
+          "type": "array",
+          "items": true
+        },
+        "content": {
+          "description": "Aggregated text content of the turn.",
+          "type": "string"
+        },
+        "cost_usd": {
+          "description": "Provider-reported USD cost for an assistant turn.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "model": {
+          "description": "Model that produced an assistant turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recorded_at": {
+          "description": "RFC 3339 timestamp when the turn was recorded.",
+          "type": "string"
+        },
+        "role": {
+          "description": "`\"user\"` or `\"assistant\"`.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Monotonic 0-based index within the conversation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tool": {
+          "description": "Provider tool that produced an assistant turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "description": "Token usage reported by the provider (opaque JSON object)."
+        }
+      },
+      "required": [
+        "seq",
+        "role",
+        "content",
+        "recorded_at"
+      ]
+    }
+  }
+}

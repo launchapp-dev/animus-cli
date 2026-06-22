@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationSummary",
+  "description": "One-line summary returned by [`METHOD_CONVERSATION_LIST`].",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "Conversation id.",
+      "type": "string"
+    },
+    "message_count": {
+      "description": "Persisted turn count.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "model": {
+      "description": "Model used on the most recent turn, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "owner": {
+      "description": "Owner of the conversation, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "Title, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tool": {
+      "description": "Tool that owns the native session, if any.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "description": "RFC 3339 timestamp of the most recent turn.",
+      "type": "string"
+    },
+    "visibility": {
+      "description": "Visibility of the conversation.",
+      "$ref": "#/$defs/Visibility",
+      "default": "private"
+    }
+  },
+  "required": [
+    "id",
+    "message_count",
+    "updated_at"
+  ],
+  "$defs": {
+    "Visibility": {
+      "description": "Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]\nfiltering surfaces it to users other than its `owner`.",
+      "oneOf": [
+        {
+          "description": "Visible only to the conversation's `owner` (and to unscoped/admin\nqueries that pass no `as_user`). The default.",
+          "type": "string",
+          "const": "private"
+        },
+        {
+          "description": "Visible to every user, in addition to its owner.",
+          "type": "string",
+          "const": "shared"
+        }
+      ]
+    }
+  }
+}

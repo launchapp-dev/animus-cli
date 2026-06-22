@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationLoadMessagesResponse",
+  "description": "`conversation/load_messages` response.",
+  "type": "object",
+  "properties": {
+    "messages": {
+      "description": "The ordered turn history.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/ChatMessage"
+      }
+    }
+  },
+  "$defs": {
+    "ChatMessage": {
+      "description": "One persisted turn in a conversation, in the kernel's portable\nprovider-agnostic shape. The plugin persists and returns it verbatim;\n`usage` / `blocks` are opaque JSON to this crate (their schema lives in\nthe kernel's chat store) so the protocol stays free of a `protocol`\ncrate dependency.",
+      "type": "object",
+      "properties": {
+        "blocks": {
+          "description": "Ordered timeline of the assistant turn (opaque JSON array).",
+          "type": "array",
+          "items": true
+        },
+        "content": {
+          "description": "Aggregated text content of the turn.",
+          "type": "string"
+        },
+        "cost_usd": {
+          "description": "Provider-reported USD cost for an assistant turn.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double"
+        },
+        "model": {
+          "description": "Model that produced an assistant turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recorded_at": {
+          "description": "RFC 3339 timestamp when the turn was recorded.",
+          "type": "string"
+        },
+        "role": {
+          "description": "`\"user\"` or `\"assistant\"`.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Monotonic 0-based index within the conversation.",
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        },
+        "tool": {
+          "description": "Provider tool that produced an assistant turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "description": "Token usage reported by the provider (opaque JSON object)."
+        }
+      },
+      "required": [
+        "seq",
+        "role",
+        "content",
+        "recorded_at"
+      ]
+    }
+  }
+}

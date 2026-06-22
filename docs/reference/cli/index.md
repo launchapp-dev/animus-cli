@@ -1567,7 +1567,7 @@ mode. Pass `--json` to get the `animus.cli.v1` envelope instead.
 | `animus workflow list` | Table; empty set prints a "Start one with:" hint |
 | `animus agent list` | Table of configured agent profiles |
 | `animus agent interactions list` | Table of pending interactions with answer-command hints |
-| `animus chat list` | Table, most-recently-updated first |
+| `animus chat list` | Table, most-recently-updated first; `--as-user <id>` limits to that user's own + shared conversations |
 | `animus pack list` | Table; active packs flagged |
 | `animus skill list` | Table; `--verbose` surfaces per-file unparseable-skill warnings (otherwise suppressed/aggregated) |
 | `animus daemon preflight` | Checklist (pass/fail per role), not a JSON blob |

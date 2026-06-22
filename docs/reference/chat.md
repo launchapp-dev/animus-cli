@@ -42,27 +42,28 @@ If a resume turn (case 1) comes back with an error indicating the native session
 
 ```bash
 # Start an empty conversation (prints the conversation id)
-animus chat new [--id <id>] [--title <title>]
+animus chat new [--id <id>] [--title <title>] \
+  [--as-user <user-id>] [--visibility private|shared]
 
 # Send a turn (creates a conversation if --conversation is omitted)
 animus chat send "your message" \
   [--conversation <id>] [--tool claude] [--model <model>] [--cwd <path>] \
-  [--stream] [--title <title>]
+  [--stream] [--title <title>] [--as-user <user-id>] [--visibility private|shared]
 
 # Read a full transcript
-animus chat get <id>
+animus chat get <id> [--as-user <user-id>]
 
 # List conversations, most-recently-updated first
-animus chat list
+animus chat list [--as-user <user-id>]
 
 # Set or clear a conversation title
-animus chat rename <id> --title <title>
+animus chat rename <id> --title <title> [--as-user <user-id>]
 
 # Permanently delete a conversation
-animus chat delete <id>
+animus chat delete <id> [--as-user <user-id>]
 
 # Export a conversation transcript as Markdown or JSON
-animus chat export <id> [--format markdown|json] [--output <path>]
+animus chat export <id> [--format markdown|json] [--output <path>] [--as-user <user-id>]
 ```
 
 `animus chat send --title` names a freshly-created conversation or renames the
@@ -90,9 +91,26 @@ animus cost conversation <id>   # token + USD spend for one conversation
 
 Per-turn `usage` and `cost_usd` are recorded on each assistant `ChatMessage` from the provider's metadata frames; `animus cost conversation` folds them into a per-conversation total.
 
+## Ownership and visibility
+
+Each conversation carries two optional identity fields on its `ConversationMeta`:
+
+- `owner` — the authenticated user id that owns the conversation. `None` for **unowned** conversations: legacy on-disk metas (the field is serde-defaulted, so existing conversations load unchanged) and ones created without `--as-user`.
+- `visibility` — `private` (the default) or `shared`.
+
+`--as-user <id>` stamps an owner on `animus chat new` and on an `animus chat send` that auto-creates a conversation; `--visibility` sets the initial visibility. `animus chat list --as-user <id>` returns that user's own conversations PLUS any `shared` ones; `animus chat list` with no `--as-user` returns everything (the legacy/admin view).
+
+Owner filtering is applied at the query layer (the in-tree store has no auth context and `list` always returns everything). Beyond `list`, the kernel also enforces the same owner/shared rule client-side on every **direct-id** verb when `--as-user` is given — `chat get`, `export`, `rename`, `delete`, and a `chat send` into an existing conversation: accessing another user's `private` conversation is rejected as `not found` (a uniform error, so a probe cannot tell a private conversation it may not see from one that does not exist). With no `--as-user`, all access is permitted (the legacy/admin view). When a `conversation_store` plugin is installed, the acting user from `--as-user` ALSO rides every per-conversation RPC (`load_meta`, `save_meta`, `append_message`, `load_messages`, `delete`) so the backend can authorize server-side; the client-side check is a backstop for backends that do not.
+
+## Pluggable conversation store
+
+Chat persistence is served by an **optional** `conversation_store` plugin role. With no plugin installed, the in-tree filesystem store (below) is used — chat works with zero plugins. When a `conversation_store` plugin is discovered, the chat data ops (`create` / `load_meta` / `save_meta` / `append_message` / `load_messages` / `list` / `delete`) route to it over JSON-RPC instead; this is how an out-of-tree Postgres backend serves chat history with real per-user ownership + sharing.
+
+The role is optional: it is **not** a required preflight role, and the daemon never refuses to start without it. The contract (method names + request/response types) lives in `crates/animus-plugin-protocol/src/lib.rs` under the `conversation_store` module; the `Visibility` enum, `ConversationMeta`, and `ChatMessage` wire shapes match the on-disk `meta.json` / `messages.jsonl` shapes exactly. Cross-process turn serialization (`try_lock_conversation`) is intentionally NOT on the wire — a DB-backed plugin uses a transaction or advisory lock per conversation instead. Each plugin call spawns a host, runs one RPC, and reaps the host (`host.shutdown().await`).
+
 ## State layout
 
-Conversations live under the scoped runtime root:
+When no `conversation_store` plugin is installed, conversations live under the scoped runtime root:
 
 - `~/.animus/<repo-scope>/chat/<conversation-id>/meta.json` — `ConversationMeta` (the continuity pointer: `session_id` + `tool` + `model`, plus counts and timestamps).
 - `~/.animus/<repo-scope>/chat/<conversation-id>/messages.jsonl` — append-only `ChatMessage` event log. Assistant turns carry both aggregated `content` and, when available, an ordered `blocks[]` timeline for text, thinking text, and tool activity.
@@ -100,5 +118,7 @@ Conversations live under the scoped runtime root:
 As with all Animus state, treat these as tool-managed — use the `animus chat` surface rather than hand-editing the JSON.
 
 ## Implementation notes
+
+Backend selection runs through `ConversationStoreClient` (`crates/orchestrator-cli/src/services/runtime/runtime_chat/client.rs`), which routes to a discovered `conversation_store` plugin or falls back to the in-tree `FileConversationStore`. Both implement the `ConversationStore` trait, so the turn loop and the CLI handlers are backend-agnostic.
 
 The turn loop is factored around a `TurnProducer` trait (`crates/orchestrator-cli/src/services/runtime/runtime_chat/turn.rs`). Production wires `ResolverTurnProducer`, which resolves the installed provider plugin and starts a session. The v0.5.11 `chat_provider` plugin role will slot in as an alternate `TurnProducer` without changing the continuity logic, and tests inject a scripted mock producer. The streaming sink is likewise abstracted behind `ChatStreamSink` so the same loop drives JSONL, text, and discard outputs.

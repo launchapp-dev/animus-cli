@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationListRequest",
+  "description": "`conversation/list` request.",
+  "type": "object",
+  "properties": {
+    "as_user": {
+      "description": "When set, the backend returns conversations owned by this user id\nPLUS any [`Visibility::Shared`] ones. When `None`, all\nconversations are returned (legacy/admin view). A backend without\nauth context may ignore this and return everything.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "project_root": {
+      "description": "Absolute project root path of the calling CLI/daemon.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repo_scope": {
+      "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

@@ -21,7 +21,8 @@ use crate::services::cost::{
     aggregator::{clamp_cost, COST_STATE_SCHEMA_ID},
     enforce_caps, read_decision_records, refresh_cost_state, CostState, PhaseCost, WorkflowCost,
 };
-use crate::services::runtime::runtime_chat::store::{ConversationStore, FileConversationStore};
+use crate::services::runtime::runtime_chat::client::ConversationStoreClient;
+use crate::services::runtime::runtime_chat::store::ConversationStore;
 use crate::{invalid_input_error, not_found_error, print_value};
 
 const SUMMARY_SCHEMA: &str = "animus.cost.summary.v1";
@@ -255,7 +256,7 @@ fn aggregate_conversation_cost(
 /// folding the `usage` / `cost_usd` fields recorded on each assistant
 /// [`ChatMessage`](crate::services::runtime::runtime_chat::store::ChatMessage).
 fn handle_conversation(project_path: &Path, args: CostConversationArgs, json: bool) -> Result<()> {
-    let store = FileConversationStore::for_project(project_path)?;
+    let store = ConversationStoreClient::for_project(project_path)?;
     if store.load_meta(&args.conversation_id)?.is_none() {
         return Err(not_found_error(format!("conversation '{}' not found", args.conversation_id)));
     }

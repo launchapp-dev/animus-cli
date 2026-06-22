@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationMeta",
+  "description": "Conversation metadata — the continuity pointer, identity, and the\nownership/visibility fields that power per-user history.\n\nThe shape matches the kernel's on-disk `meta.json` exactly so existing\nfilesystem conversations and plugin-backed ones are interchangeable.\n`owner` and `visibility` use serde defaults so legacy `meta.json`\nfiles (which lack both) still deserialize as unowned + private.",
+  "type": "object",
+  "properties": {
+    "created_at": {
+      "description": "RFC 3339 creation timestamp.",
+      "type": "string"
+    },
+    "id": {
+      "description": "Stable conversation id.",
+      "type": "string"
+    },
+    "message_count": {
+      "description": "Count of persisted turns (user + assistant).",
+      "type": "integer",
+      "format": "uint64",
+      "default": 0,
+      "minimum": 0
+    },
+    "model": {
+      "description": "Model used on the most recent turn.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "owner": {
+      "description": "Authenticated user id that owns this conversation. `None` = unowned\n(legacy on-disk conversations, or ones created without `--as-user`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "session_id": {
+      "description": "The wrapped tool's native session handle, for resume continuity.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "title": {
+      "description": "Optional human-facing title.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "tool": {
+      "description": "Wrapped tool that currently owns the native session. `None` until\nthe first turn completes.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "updated_at": {
+      "description": "RFC 3339 timestamp of the most recent turn.",
+      "type": "string"
+    },
+    "visibility": {
+      "description": "Visibility. Defaults to [`Visibility::Private`] for legacy metas.",
+      "$ref": "#/$defs/Visibility",
+      "default": "private"
+    }
+  },
+  "required": [
+    "id",
+    "created_at",
+    "updated_at"
+  ],
+  "$defs": {
+    "Visibility": {
+      "description": "Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]\nfiltering surfaces it to users other than its `owner`.",
+      "oneOf": [
+        {
+          "description": "Visible only to the conversation's `owner` (and to unscoped/admin\nqueries that pass no `as_user`). The default.",
+          "type": "string",
+          "const": "private"
+        },
+        {
+          "description": "Visible to every user, in addition to its owner.",
+          "type": "string",
+          "const": "shared"
+        }
+      ]
+    }
+  }
+}

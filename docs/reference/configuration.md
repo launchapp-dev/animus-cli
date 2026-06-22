@@ -1030,6 +1030,19 @@ YAML-only projects.
 the first production `config_source` plugin. The general-audience release of the role
 tracks the publication of `launchapp-dev/animus-config-yaml`.
 
+### Optional `conversation_store` role
+
+Chat history (`animus chat`) is served by an **optional** `conversation_store` plugin
+role. With no plugin installed, the in-tree filesystem store under
+`~/.animus/<repo-scope>/chat/` is used, so chat works with zero plugins. When a
+`conversation_store` plugin is discovered (`discover_by_kind(.., "conversation_store")`),
+the chat data ops route to it over JSON-RPC instead — this is how an out-of-tree
+Postgres backend serves chat history with per-user ownership (`owner`) and sharing
+(`visibility`). Unlike `config_source`, this role is **never** a `RequiredRole`: it is
+not in `daemon_default()`, `animus daemon preflight` never reports it, and the daemon
+never refuses to start without it. The contract lives in the `conversation_store` module
+of `crates/animus-plugin-protocol`. See `docs/reference/chat.md` for the full surface.
+
 ## Notes
 
 - Project YAML is the authored workflow surface.

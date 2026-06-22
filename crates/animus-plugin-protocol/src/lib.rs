@@ -92,6 +92,19 @@ pub const PLUGIN_KIND_TRANSPORT_BACKEND: &str = "transport_backend";
 /// [`PLUGIN_KIND_TRANSPORT_BACKEND`] by `animus web serve`.
 pub const PLUGIN_KIND_WEB_UI: &str = "web_ui";
 
+/// Plugin kind for conversation store backend plugins (Postgres, hosted
+/// SaaS, ...).
+///
+/// Conversation store backends own chat-history persistence: the data ops
+/// behind `animus chat new` / `send` / `get` / `list` / `delete`. They
+/// implement the `conversation/*` method family — see
+/// [`conversation_store`]. The role is **optional**: when no such plugin is
+/// installed the CLI falls back to the in-tree filesystem store, so chat
+/// works with zero plugins. A Postgres-backed implementation adds per-user
+/// ownership + sharing (the `owner` / `visibility` fields on
+/// [`conversation_store::ConversationMeta`]).
+pub const PLUGIN_KIND_CONVERSATION_STORE: &str = "conversation_store";
+
 /// Method name for the log-storage `log/entry` notification.
 ///
 /// Emitted by any supervised plugin to forward a structured log entry to
@@ -148,6 +161,9 @@ pub enum PluginKind {
     TransportBackend,
     /// Web UI plugin. See [`PLUGIN_KIND_WEB_UI`].
     WebUi,
+    /// Conversation store backend plugin. See
+    /// [`PLUGIN_KIND_CONVERSATION_STORE`].
+    ConversationStore,
     /// Generic custom plugin. See [`PLUGIN_KIND_CUSTOM`].
     Custom,
     /// Any kind not understood by this crate version. Preserves the wire
@@ -167,6 +183,7 @@ impl PluginKind {
             PluginKind::LogStorageBackend => PLUGIN_KIND_LOG_STORAGE_BACKEND,
             PluginKind::TransportBackend => PLUGIN_KIND_TRANSPORT_BACKEND,
             PluginKind::WebUi => PLUGIN_KIND_WEB_UI,
+            PluginKind::ConversationStore => PLUGIN_KIND_CONVERSATION_STORE,
             PluginKind::Custom => PLUGIN_KIND_CUSTOM,
             PluginKind::Other(value) => value.as_str(),
         }
@@ -198,6 +215,7 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_LOG_STORAGE_BACKEND => PluginKind::LogStorageBackend,
             PLUGIN_KIND_TRANSPORT_BACKEND => PluginKind::TransportBackend,
             PLUGIN_KIND_WEB_UI => PluginKind::WebUi,
+            PLUGIN_KIND_CONVERSATION_STORE => PluginKind::ConversationStore,
             PLUGIN_KIND_CUSTOM => PluginKind::Custom,
             _ => PluginKind::Other(value),
         }
@@ -858,6 +876,372 @@ impl From<TriggerAckStatus> for String {
     }
 }
 
+/// Wire contract for the optional `conversation_store` plugin role.
+///
+/// A conversation store backend owns chat-history persistence. The kernel's
+/// in-tree filesystem store is the default; when a
+/// [`PLUGIN_KIND_CONVERSATION_STORE`] plugin is installed the CLI routes the
+/// chat data ops to it over JSON-RPC instead. This mirrors the
+/// `subject_backend` and `config_source` roles: method-name string constants
+/// plus serde request/response envelopes the host and plugin agree on.
+///
+/// # Methods
+///
+/// Each method's `params` is the matching `*Request` and its `result` is the
+/// matching `*Response` from this module:
+///
+/// | Method                       | Request                      | Response                      |
+/// |------------------------------|------------------------------|-------------------------------|
+/// | [`METHOD_CONVERSATION_CREATE`]        | [`ConversationCreateRequest`]        | [`ConversationCreateResponse`]        |
+/// | [`METHOD_CONVERSATION_LOAD_META`]     | [`ConversationLoadMetaRequest`]      | [`ConversationLoadMetaResponse`]      |
+/// | [`METHOD_CONVERSATION_SAVE_META`]     | [`ConversationSaveMetaRequest`]      | [`ConversationSaveMetaResponse`]      |
+/// | [`METHOD_CONVERSATION_APPEND_MESSAGE`]| [`ConversationAppendMessageRequest`] | [`ConversationAppendMessageResponse`] |
+/// | [`METHOD_CONVERSATION_LOAD_MESSAGES`] | [`ConversationLoadMessagesRequest`]  | [`ConversationLoadMessagesResponse`]  |
+/// | [`METHOD_CONVERSATION_LIST`]          | [`ConversationListRequest`]          | [`ConversationListResponse`]          |
+/// | [`METHOD_CONVERSATION_DELETE`]        | [`ConversationDeleteRequest`]        | [`ConversationDeleteResponse`]        |
+///
+/// Cross-process serialization of concurrent turns (the in-tree store's
+/// `try_lock_conversation`) is intentionally **NOT** on the wire — it is a
+/// store-internal concern. A DB-backed plugin uses a transaction or advisory
+/// lock per conversation instead.
+///
+/// # Concurrency contract (REQUIRED for multi-host backends)
+///
+/// The kernel assigns each turn's `seq` client-side from the conversation's
+/// current `message_count`, then issues separate
+/// [`METHOD_CONVERSATION_APPEND_MESSAGE`] and
+/// [`METHOD_CONVERSATION_SAVE_META`] calls around the (slow) provider call.
+/// The `seq` is **client-authoritative**: the kernel filters the just-appended
+/// user turn by that exact `seq` on the replay path and saves counts from it,
+/// so a backend MUST persist messages at the `seq` it is given and MUST NOT
+/// renumber them (there is no server-assigned-seq field on
+/// [`ConversationAppendMessageResponse`] to feed a renumber back to the
+/// caller).
+///
+/// The kernel serializes concurrent turns to one conversation only with a
+/// **host-local** advisory file lock, which does NOT span multiple Animus
+/// hosts sharing one backend. Therefore a backend reachable from more than one
+/// host (the hosted Postgres case) **MUST** make turn writes safe under
+/// concurrency itself, by either:
+///
+/// 1. enforcing a `UNIQUE (conversation_id, seq)` constraint and rejecting a
+///    colliding [`METHOD_CONVERSATION_APPEND_MESSAGE`] with an error so the
+///    racing turn fails loudly instead of silently corrupting the log; or
+/// 2. holding a per-conversation advisory lock (e.g. Postgres
+///    `pg_advisory_xact_lock`) for the append+save pair.
+///
+/// Renumbering a colliding append to `MAX(seq)+1` is **not** a valid strategy:
+/// it would desync the kernel's replay filter and its saved `message_count`.
+/// A single-host deployment (the default in-tree store, and a Postgres backend
+/// used from one daemon) is fully serialized by the host-local lock and needs
+/// none of the above.
+///
+/// # Scope identity
+///
+/// Every request carries `project_root` and `repo_scope` (the repository
+/// scope id, as `config_source` does) so a multi-tenant backend can isolate
+/// conversations per scope.
+///
+/// # Ownership and visibility
+///
+/// [`ConversationMeta`] carries `owner` (the portal's authenticated user id;
+/// `None` = unowned/legacy) and `visibility` ([`Visibility`], default
+/// [`Visibility::Private`]). These are the foundation for per-user history
+/// with sharing. The query-layer filtering — "X's own conversations PLUS any
+/// `Shared` ones" — is requested via [`ConversationListRequest::as_user`];
+/// a backend that ignores it simply returns everything (the in-tree store's
+/// behavior, which has no auth context).
+pub mod conversation_store {
+    use super::*;
+
+    /// `conversation/create` — create a fresh conversation, return its meta.
+    pub const METHOD_CONVERSATION_CREATE: &str = "conversation/create";
+    /// `conversation/load_meta` — load one conversation's meta (or `None`).
+    pub const METHOD_CONVERSATION_LOAD_META: &str = "conversation/load_meta";
+    /// `conversation/save_meta` — persist updated meta.
+    pub const METHOD_CONVERSATION_SAVE_META: &str = "conversation/save_meta";
+    /// `conversation/append_message` — append one turn to the event log.
+    pub const METHOD_CONVERSATION_APPEND_MESSAGE: &str = "conversation/append_message";
+    /// `conversation/load_messages` — read the full ordered turn history.
+    pub const METHOD_CONVERSATION_LOAD_MESSAGES: &str = "conversation/load_messages";
+    /// `conversation/list` — list conversation summaries, newest-first.
+    pub const METHOD_CONVERSATION_LIST: &str = "conversation/list";
+    /// `conversation/delete` — permanently remove a conversation (idempotent).
+    pub const METHOD_CONVERSATION_DELETE: &str = "conversation/delete";
+
+    /// Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]
+    /// filtering surfaces it to users other than its `owner`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+    #[serde(rename_all = "snake_case")]
+    pub enum Visibility {
+        /// Visible only to the conversation's `owner` (and to unscoped/admin
+        /// queries that pass no `as_user`). The default.
+        #[default]
+        Private,
+        /// Visible to every user, in addition to its owner.
+        Shared,
+    }
+
+    /// Conversation metadata — the continuity pointer, identity, and the
+    /// ownership/visibility fields that power per-user history.
+    ///
+    /// The shape matches the kernel's on-disk `meta.json` exactly so existing
+    /// filesystem conversations and plugin-backed ones are interchangeable.
+    /// `owner` and `visibility` use serde defaults so legacy `meta.json`
+    /// files (which lack both) still deserialize as unowned + private.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationMeta {
+        /// Stable conversation id.
+        pub id: String,
+        /// Wrapped tool that currently owns the native session. `None` until
+        /// the first turn completes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tool: Option<String>,
+        /// Model used on the most recent turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub model: Option<String>,
+        /// The wrapped tool's native session handle, for resume continuity.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub session_id: Option<String>,
+        /// Optional human-facing title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub title: Option<String>,
+        /// RFC 3339 creation timestamp.
+        pub created_at: String,
+        /// RFC 3339 timestamp of the most recent turn.
+        pub updated_at: String,
+        /// Count of persisted turns (user + assistant).
+        #[serde(default)]
+        pub message_count: u64,
+        /// Authenticated user id that owns this conversation. `None` = unowned
+        /// (legacy on-disk conversations, or ones created without `--as-user`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub owner: Option<String>,
+        /// Visibility. Defaults to [`Visibility::Private`] for legacy metas.
+        #[serde(default)]
+        pub visibility: Visibility,
+    }
+
+    /// One persisted turn in a conversation, in the kernel's portable
+    /// provider-agnostic shape. The plugin persists and returns it verbatim;
+    /// `usage` / `blocks` are opaque JSON to this crate (their schema lives in
+    /// the kernel's chat store) so the protocol stays free of a `protocol`
+    /// crate dependency.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ChatMessage {
+        /// Monotonic 0-based index within the conversation.
+        pub seq: u64,
+        /// `"user"` or `"assistant"`.
+        pub role: String,
+        /// Aggregated text content of the turn.
+        pub content: String,
+        /// RFC 3339 timestamp when the turn was recorded.
+        pub recorded_at: String,
+        /// Provider tool that produced an assistant turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tool: Option<String>,
+        /// Model that produced an assistant turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub model: Option<String>,
+        /// Token usage reported by the provider (opaque JSON object).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub usage: Option<Value>,
+        /// Provider-reported USD cost for an assistant turn.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub cost_usd: Option<f64>,
+        /// Ordered timeline of the assistant turn (opaque JSON array).
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        pub blocks: Vec<Value>,
+    }
+
+    /// One-line summary returned by [`METHOD_CONVERSATION_LIST`].
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationSummary {
+        /// Conversation id.
+        pub id: String,
+        /// Title, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub title: Option<String>,
+        /// Tool that owns the native session, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tool: Option<String>,
+        /// Model used on the most recent turn, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub model: Option<String>,
+        /// Persisted turn count.
+        pub message_count: u64,
+        /// RFC 3339 timestamp of the most recent turn.
+        pub updated_at: String,
+        /// Owner of the conversation, if any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub owner: Option<String>,
+        /// Visibility of the conversation.
+        #[serde(default)]
+        pub visibility: Visibility,
+    }
+
+    /// Fields common to every conversation-store request: the project + scope
+    /// identity a multi-tenant backend partitions on. Flattened into each
+    /// request so the wire payload stays flat.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationScope {
+        /// Absolute project root path of the calling CLI/daemon.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub project_root: Option<String>,
+        /// Repository scope id (see `protocol::repository_scope_for_path`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub repo_scope: Option<String>,
+    }
+
+    /// `conversation/create` request.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationCreateRequest {
+        /// Scope identity.
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        /// Explicit conversation id; the backend assigns one when `None`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub id: Option<String>,
+        /// Owner to stamp onto the new conversation's meta.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub owner: Option<String>,
+        /// Initial visibility for the new conversation.
+        #[serde(default)]
+        pub visibility: Visibility,
+    }
+
+    /// `conversation/create` response.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationCreateResponse {
+        /// Meta of the freshly-created conversation.
+        pub meta: ConversationMeta,
+    }
+
+    /// `conversation/load_meta` request.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationLoadMetaRequest {
+        /// Scope identity.
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        /// Conversation id to load.
+        pub id: String,
+        /// Acting user id, when known. A backend MAY use it to authorize the
+        /// read (e.g. deny a private conversation owned by another user).
+        /// `None` for unscoped/admin access.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    /// `conversation/load_meta` response. `meta` is `None` when the
+    /// conversation does not exist.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationLoadMetaResponse {
+        /// The conversation meta, or `None` when not found.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub meta: Option<ConversationMeta>,
+    }
+
+    /// `conversation/save_meta` request.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationSaveMetaRequest {
+        /// Scope identity.
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        /// The meta to persist.
+        pub meta: ConversationMeta,
+        /// Acting user id, when known. A backend MAY use it to authorize the
+        /// mutation. `None` for unscoped/admin access.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    /// `conversation/save_meta` response (empty on success).
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationSaveMetaResponse {}
+
+    /// `conversation/append_message` request.
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationAppendMessageRequest {
+        /// Scope identity.
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        /// Conversation id to append to.
+        pub id: String,
+        /// The turn to append.
+        pub message: ChatMessage,
+        /// Acting user id, when known. A backend MAY use it to authorize the
+        /// mutation. `None` for unscoped/admin access.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    /// `conversation/append_message` response (empty on success).
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationAppendMessageResponse {}
+
+    /// `conversation/load_messages` request.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationLoadMessagesRequest {
+        /// Scope identity.
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        /// Conversation id whose messages to read.
+        pub id: String,
+        /// Acting user id, when known. A backend MAY use it to authorize the
+        /// read. `None` for unscoped/admin access.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    /// `conversation/load_messages` response.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationLoadMessagesResponse {
+        /// The ordered turn history.
+        #[serde(default)]
+        pub messages: Vec<ChatMessage>,
+    }
+
+    /// `conversation/list` request.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationListRequest {
+        /// Scope identity.
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        /// When set, the backend returns conversations owned by this user id
+        /// PLUS any [`Visibility::Shared`] ones. When `None`, all
+        /// conversations are returned (legacy/admin view). A backend without
+        /// auth context may ignore this and return everything.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    /// `conversation/list` response, summaries newest-first.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationListResponse {
+        /// Conversation summaries, most-recently-updated first.
+        #[serde(default)]
+        pub conversations: Vec<ConversationSummary>,
+    }
+
+    /// `conversation/delete` request.
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationDeleteRequest {
+        /// Scope identity.
+        #[serde(flatten)]
+        pub scope: ConversationScope,
+        /// Conversation id to delete.
+        pub id: String,
+        /// Acting user id, when known. A backend MAY use it to authorize the
+        /// delete. `None` for unscoped/admin access.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub as_user: Option<String>,
+    }
+
+    /// `conversation/delete` response (empty; delete is idempotent).
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+    pub struct ConversationDeleteResponse {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -996,6 +1380,7 @@ mod tests {
             (PluginKind::LogStorageBackend, "log_storage_backend"),
             (PluginKind::TransportBackend, "transport_backend"),
             (PluginKind::WebUi, "web_ui"),
+            (PluginKind::ConversationStore, "conversation_store"),
             (PluginKind::Custom, "custom"),
         ] {
             assert!(variant.is_known(), "{variant:?} should be known");
@@ -1061,5 +1446,48 @@ mod tests {
         let params = TriggerWatchParams::default();
         let encoded = serde_json::to_value(&params).unwrap();
         assert_eq!(encoded, serde_json::json!({}));
+    }
+
+    #[test]
+    fn conversation_store_kind_round_trips() {
+        let decoded: PluginKind = serde_json::from_value(serde_json::json!("conversation_store")).unwrap();
+        assert_eq!(decoded, PluginKind::ConversationStore);
+        assert!(decoded.is_known());
+        assert_eq!(decoded.as_str(), PLUGIN_KIND_CONVERSATION_STORE);
+    }
+
+    #[test]
+    fn legacy_conversation_meta_without_owner_or_visibility_defaults() {
+        use conversation_store::{ConversationMeta, Visibility};
+        // A pre-existing meta.json lacks `owner` and `visibility` entirely.
+        let legacy = r#"{"id":"conv-x","created_at":"2026-06-08T00:00:00Z","updated_at":"2026-06-08T00:00:00Z"}"#;
+        let meta: ConversationMeta = serde_json::from_str(legacy).expect("legacy meta must parse");
+        assert_eq!(meta.owner, None, "missing owner must default to None (unowned)");
+        assert_eq!(meta.visibility, Visibility::Private, "missing visibility must default to Private");
+    }
+
+    #[test]
+    fn conversation_visibility_serializes_snake_case() {
+        use conversation_store::Visibility;
+        assert_eq!(serde_json::to_value(Visibility::Shared).unwrap(), serde_json::json!("shared"));
+        assert_eq!(serde_json::to_value(Visibility::Private).unwrap(), serde_json::json!("private"));
+    }
+
+    #[test]
+    fn conversation_list_request_flattens_scope() {
+        use conversation_store::{ConversationListRequest, ConversationScope};
+        let req = ConversationListRequest {
+            scope: ConversationScope {
+                project_root: Some("/repo".to_string()),
+                repo_scope: Some("scope-1".to_string()),
+            },
+            as_user: Some("user-7".to_string()),
+        };
+        let encoded = serde_json::to_value(&req).unwrap();
+        // Scope fields are flattened to the top level, not nested under "scope".
+        assert_eq!(encoded.get("project_root"), Some(&serde_json::json!("/repo")));
+        assert_eq!(encoded.get("repo_scope"), Some(&serde_json::json!("scope-1")));
+        assert_eq!(encoded.get("as_user"), Some(&serde_json::json!("user-7")));
+        assert!(encoded.get("scope").is_none(), "scope must be flattened, not nested");
     }
 }
