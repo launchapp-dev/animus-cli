@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationSaveMetaResponse",
+  "description": "`conversation/save_meta` response (empty on success).",
+  "type": "object"
+}

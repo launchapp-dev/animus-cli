@@ -1,0 +1,6 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationAppendMessageResponse",
+  "description": "`conversation/append_message` response (empty on success).",
+  "type": "object"
+}

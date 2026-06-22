@@ -1,5 +1,521 @@
 {
   "$defs": {
+    "ChatMessage": {
+      "description": "One persisted turn in a conversation, in the kernel's portable\nprovider-agnostic shape. The plugin persists and returns it verbatim;\n`usage` / `blocks` are opaque JSON to this crate (their schema lives in\nthe kernel's chat store) so the protocol stays free of a `protocol`\ncrate dependency.",
+      "properties": {
+        "blocks": {
+          "description": "Ordered timeline of the assistant turn (opaque JSON array).",
+          "items": true,
+          "type": "array"
+        },
+        "content": {
+          "description": "Aggregated text content of the turn.",
+          "type": "string"
+        },
+        "cost_usd": {
+          "description": "Provider-reported USD cost for an assistant turn.",
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "model": {
+          "description": "Model that produced an assistant turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "recorded_at": {
+          "description": "RFC 3339 timestamp when the turn was recorded.",
+          "type": "string"
+        },
+        "role": {
+          "description": "`\"user\"` or `\"assistant\"`.",
+          "type": "string"
+        },
+        "seq": {
+          "description": "Monotonic 0-based index within the conversation.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "tool": {
+          "description": "Provider tool that produced an assistant turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "usage": {
+          "description": "Token usage reported by the provider (opaque JSON object)."
+        }
+      },
+      "required": [
+        "seq",
+        "role",
+        "content",
+        "recorded_at"
+      ],
+      "title": "ChatMessage",
+      "type": "object"
+    },
+    "ConversationAppendMessageRequest": {
+      "description": "`conversation/append_message` request.",
+      "properties": {
+        "as_user": {
+          "description": "Acting user id, when known. A backend MAY use it to authorize the\nmutation. `None` for unscoped/admin access.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Conversation id to append to.",
+          "type": "string"
+        },
+        "message": {
+          "$ref": "#/$defs/ChatMessage",
+          "description": "The turn to append."
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "message"
+      ],
+      "title": "ConversationAppendMessageRequest",
+      "type": "object"
+    },
+    "ConversationAppendMessageResponse": {
+      "description": "`conversation/append_message` response (empty on success).",
+      "title": "ConversationAppendMessageResponse",
+      "type": "object"
+    },
+    "ConversationCreateRequest": {
+      "description": "`conversation/create` request.",
+      "properties": {
+        "id": {
+          "description": "Explicit conversation id; the backend assigns one when `None`.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "description": "Owner to stamp onto the new conversation's meta.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "default": "private",
+          "description": "Initial visibility for the new conversation."
+        }
+      },
+      "title": "ConversationCreateRequest",
+      "type": "object"
+    },
+    "ConversationCreateResponse": {
+      "description": "`conversation/create` response.",
+      "properties": {
+        "meta": {
+          "$ref": "#/$defs/ConversationMeta",
+          "description": "Meta of the freshly-created conversation."
+        }
+      },
+      "required": [
+        "meta"
+      ],
+      "title": "ConversationCreateResponse",
+      "type": "object"
+    },
+    "ConversationDeleteRequest": {
+      "description": "`conversation/delete` request.",
+      "properties": {
+        "as_user": {
+          "description": "Acting user id, when known. A backend MAY use it to authorize the\ndelete. `None` for unscoped/admin access.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Conversation id to delete.",
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ConversationDeleteRequest",
+      "type": "object"
+    },
+    "ConversationDeleteResponse": {
+      "description": "`conversation/delete` response (empty; delete is idempotent).",
+      "title": "ConversationDeleteResponse",
+      "type": "object"
+    },
+    "ConversationListRequest": {
+      "description": "`conversation/list` request.",
+      "properties": {
+        "as_user": {
+          "description": "When set, the backend returns conversations owned by this user id\nPLUS any [`Visibility::Shared`] ones. When `None`, all\nconversations are returned (legacy/admin view). A backend without\nauth context may ignore this and return everything.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "title": "ConversationListRequest",
+      "type": "object"
+    },
+    "ConversationListResponse": {
+      "description": "`conversation/list` response, summaries newest-first.",
+      "properties": {
+        "conversations": {
+          "default": [],
+          "description": "Conversation summaries, most-recently-updated first.",
+          "items": {
+            "$ref": "#/$defs/ConversationSummary"
+          },
+          "type": "array"
+        }
+      },
+      "title": "ConversationListResponse",
+      "type": "object"
+    },
+    "ConversationLoadMessagesRequest": {
+      "description": "`conversation/load_messages` request.",
+      "properties": {
+        "as_user": {
+          "description": "Acting user id, when known. A backend MAY use it to authorize the\nread. `None` for unscoped/admin access.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Conversation id whose messages to read.",
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ConversationLoadMessagesRequest",
+      "type": "object"
+    },
+    "ConversationLoadMessagesResponse": {
+      "description": "`conversation/load_messages` response.",
+      "properties": {
+        "messages": {
+          "default": [],
+          "description": "The ordered turn history.",
+          "items": {
+            "$ref": "#/$defs/ChatMessage"
+          },
+          "type": "array"
+        }
+      },
+      "title": "ConversationLoadMessagesResponse",
+      "type": "object"
+    },
+    "ConversationLoadMetaRequest": {
+      "description": "`conversation/load_meta` request.",
+      "properties": {
+        "as_user": {
+          "description": "Acting user id, when known. A backend MAY use it to authorize the\nread (e.g. deny a private conversation owned by another user).\n`None` for unscoped/admin access.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "Conversation id to load.",
+          "type": "string"
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "ConversationLoadMetaRequest",
+      "type": "object"
+    },
+    "ConversationLoadMetaResponse": {
+      "description": "`conversation/load_meta` response. `meta` is `None` when the\nconversation does not exist.",
+      "properties": {
+        "meta": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConversationMeta"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The conversation meta, or `None` when not found."
+        }
+      },
+      "title": "ConversationLoadMetaResponse",
+      "type": "object"
+    },
+    "ConversationMeta": {
+      "description": "Conversation metadata — the continuity pointer, identity, and the\nownership/visibility fields that power per-user history.\n\nThe shape matches the kernel's on-disk `meta.json` exactly so existing\nfilesystem conversations and plugin-backed ones are interchangeable.\n`owner` and `visibility` use serde defaults so legacy `meta.json`\nfiles (which lack both) still deserialize as unowned + private.",
+      "properties": {
+        "created_at": {
+          "description": "RFC 3339 creation timestamp.",
+          "type": "string"
+        },
+        "id": {
+          "description": "Stable conversation id.",
+          "type": "string"
+        },
+        "message_count": {
+          "default": 0,
+          "description": "Count of persisted turns (user + assistant).",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Model used on the most recent turn.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "description": "Authenticated user id that owns this conversation. `None` = unowned\n(legacy on-disk conversations, or ones created without `--as-user`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "description": "The wrapped tool's native session handle, for resume continuity.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Optional human-facing title.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "Wrapped tool that currently owns the native session. `None` until\nthe first turn completes.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "RFC 3339 timestamp of the most recent turn.",
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "default": "private",
+          "description": "Visibility. Defaults to [`Visibility::Private`] for legacy metas."
+        }
+      },
+      "required": [
+        "id",
+        "created_at",
+        "updated_at"
+      ],
+      "title": "ConversationMeta",
+      "type": "object"
+    },
+    "ConversationSaveMetaRequest": {
+      "description": "`conversation/save_meta` request.",
+      "properties": {
+        "as_user": {
+          "description": "Acting user id, when known. A backend MAY use it to authorize the\nmutation. `None` for unscoped/admin access.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "meta": {
+          "$ref": "#/$defs/ConversationMeta",
+          "description": "The meta to persist."
+        },
+        "project_root": {
+          "description": "Absolute project root path of the calling CLI/daemon.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "repo_scope": {
+          "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "meta"
+      ],
+      "title": "ConversationSaveMetaRequest",
+      "type": "object"
+    },
+    "ConversationSaveMetaResponse": {
+      "description": "`conversation/save_meta` response (empty on success).",
+      "title": "ConversationSaveMetaResponse",
+      "type": "object"
+    },
+    "ConversationSummary": {
+      "description": "One-line summary returned by [`METHOD_CONVERSATION_LIST`].",
+      "properties": {
+        "id": {
+          "description": "Conversation id.",
+          "type": "string"
+        },
+        "message_count": {
+          "description": "Persisted turn count.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "model": {
+          "description": "Model used on the most recent turn, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner": {
+          "description": "Owner of the conversation, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "title": {
+          "description": "Title, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tool": {
+          "description": "Tool that owns the native session, if any.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updated_at": {
+          "description": "RFC 3339 timestamp of the most recent turn.",
+          "type": "string"
+        },
+        "visibility": {
+          "$ref": "#/$defs/Visibility",
+          "default": "private",
+          "description": "Visibility of the conversation."
+        }
+      },
+      "required": [
+        "id",
+        "message_count",
+        "updated_at"
+      ],
+      "title": "ConversationSummary",
+      "type": "object"
+    },
     "EnvRequirement": {
       "description": "One environment variable a plugin asks the host to forward at spawn time.\n\nThe host treats `name` as the source of truth: only matching variables are\npassed through the `env_clear()` boundary. `description` and `sensitive`\nare informational hints surfaced in `animus plugin info` and the install\nflow so operators can decide whether a plugin's secret requirements are\nreasonable before granting it access.\n\nWhen `required` is set, the host emits a warning at spawn time if the\nvariable isn't present in the daemon's own environment. The host never\nrefuses to spawn over a missing required var — that decision belongs to\nthe plugin itself, which sees the missing variable during its own startup.",
       "properties": {
@@ -540,6 +1056,21 @@
       },
       "title": "TriggerWatchParams",
       "type": "object"
+    },
+    "Visibility": {
+      "description": "Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]\nfiltering surfaces it to users other than its `owner`.",
+      "oneOf": [
+        {
+          "const": "private",
+          "description": "Visible only to the conversation's `owner` (and to unscoped/admin\nqueries that pass no `as_user`). The default.",
+          "type": "string"
+        },
+        {
+          "const": "shared",
+          "description": "Visible to every user, in addition to its owner.",
+          "type": "string"
+        }
+      ]
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",

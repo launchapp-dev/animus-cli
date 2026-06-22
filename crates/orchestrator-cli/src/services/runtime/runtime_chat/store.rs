@@ -109,6 +109,21 @@ pub(crate) struct ChatMessage {
     pub blocks: Vec<TurnBlock>,
 }
 
+/// Visibility of a conversation. Mirrors
+/// [`animus_plugin_protocol::conversation_store::Visibility`] on the wire.
+/// [`Visibility::Private`] is the default so legacy on-disk `meta.json` files
+/// (which predate this field) deserialize as private.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Visibility {
+    /// Visible only to the conversation's `owner` (and to unscoped/admin
+    /// `list` calls that pass no `--as-user`). The default.
+    #[default]
+    Private,
+    /// Visible to every user, in addition to its owner.
+    Shared,
+}
+
 /// Conversation metadata — the thin continuity pointer plus identity.
 ///
 /// `session_id` is the load-bearing field: it is the wrapped tool's native
@@ -145,6 +160,17 @@ pub(crate) struct ConversationMeta {
     /// Count of persisted turns (user + assistant).
     #[serde(default)]
     pub message_count: u64,
+    /// Authenticated user id that owns this conversation. `None` for unowned
+    /// conversations: legacy on-disk metas (the field is serde-defaulted) and
+    /// ones created without `--as-user`. Owner-aware filtering happens at the
+    /// query layer ([`crate::services::runtime::runtime_chat::client`]), not
+    /// in [`FileConversationStore::list`], which has no auth context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Conversation visibility. Defaults to [`Visibility::Private`] so legacy
+    /// metas without the field load as private.
+    #[serde(default)]
+    pub visibility: Visibility,
 }
 
 impl ConversationMeta {
@@ -159,6 +185,8 @@ impl ConversationMeta {
             created_at: now.clone(),
             updated_at: now,
             message_count: 0,
+            owner: None,
+            visibility: Visibility::Private,
         }
     }
 }
@@ -172,6 +200,12 @@ pub(crate) struct ConversationSummary {
     pub model: Option<String>,
     pub message_count: u64,
     pub updated_at: String,
+    /// Owner of the conversation, if any. Carried so the query layer can
+    /// apply `--as-user` filtering without re-loading each meta.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner: Option<String>,
+    /// Visibility of the conversation, used by `--as-user` filtering.
+    pub visibility: Visibility,
 }
 
 impl From<&ConversationMeta> for ConversationSummary {
@@ -183,6 +217,8 @@ impl From<&ConversationMeta> for ConversationSummary {
             model: meta.model.clone(),
             message_count: meta.message_count,
             updated_at: meta.updated_at.clone(),
+            owner: meta.owner.clone(),
+            visibility: meta.visibility,
         }
     }
 }

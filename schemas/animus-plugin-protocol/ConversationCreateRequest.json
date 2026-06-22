@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationCreateRequest",
+  "description": "`conversation/create` request.",
+  "type": "object",
+  "properties": {
+    "id": {
+      "description": "Explicit conversation id; the backend assigns one when `None`.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "owner": {
+      "description": "Owner to stamp onto the new conversation's meta.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "project_root": {
+      "description": "Absolute project root path of the calling CLI/daemon.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repo_scope": {
+      "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "visibility": {
+      "description": "Initial visibility for the new conversation.",
+      "$ref": "#/$defs/Visibility",
+      "default": "private"
+    }
+  },
+  "$defs": {
+    "Visibility": {
+      "description": "Visibility of a conversation. Controls whether [`ConversationListRequest::as_user`]\nfiltering surfaces it to users other than its `owner`.",
+      "oneOf": [
+        {
+          "description": "Visible only to the conversation's `owner` (and to unscoped/admin\nqueries that pass no `as_user`). The default.",
+          "type": "string",
+          "const": "private"
+        },
+        {
+          "description": "Visible to every user, in addition to its owner.",
+          "type": "string",
+          "const": "shared"
+        }
+      ]
+    }
+  }
+}

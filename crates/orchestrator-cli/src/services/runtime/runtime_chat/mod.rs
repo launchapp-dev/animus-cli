@@ -11,17 +11,19 @@ use anyhow::Context;
 
 use crate::shared::{canonicalize_cwd_in_project, format_age, print_ok, print_value, render_table};
 use crate::{
-    ChatCommand, ChatDeleteArgs, ChatExportArgs, ChatExportFormat, ChatGetArgs, ChatNewArgs, ChatRenameArgs,
-    ChatSearchArgs, ChatSendArgs,
+    ChatCommand, ChatDeleteArgs, ChatExportArgs, ChatExportFormat, ChatGetArgs, ChatListArgs, ChatNewArgs,
+    ChatRenameArgs, ChatSearchArgs, ChatSendArgs, ChatVisibilityArg,
 };
 use serde::Serialize;
 
+pub(crate) mod client;
 pub(crate) mod sink;
 pub(crate) mod store;
 pub(crate) mod turn;
 
+use client::ConversationStoreClient;
 use sink::{ChatStreamSink, JsonlStdoutSink, NullSink, TextStdoutSink};
-use store::{ChatMessage, ChatRole, ConversationMeta, ConversationStore, FileConversationStore, TurnBlock};
+use store::{ChatMessage, ChatRole, ConversationMeta, ConversationStore, TurnBlock, Visibility};
 use turn::{run_turn, ResolverTurnProducer, TurnContext};
 
 pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: bool) -> Result<()> {
@@ -29,7 +31,7 @@ pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: 
         ChatCommand::New(args) => handle_chat_new(args, project_root, json),
         ChatCommand::Send(args) => handle_chat_send(args, project_root, json).await,
         ChatCommand::Get(args) => handle_chat_get(args, project_root, json),
-        ChatCommand::List => handle_chat_list(project_root, json),
+        ChatCommand::List(args) => handle_chat_list(args, project_root, json),
         ChatCommand::Rename(args) => handle_chat_rename(args, project_root, json),
         ChatCommand::Delete(args) => handle_chat_delete(args, project_root, json),
         ChatCommand::Export(args) => handle_chat_export(args, project_root, json),
@@ -100,19 +102,23 @@ fn snippet_around(content: &str, query: &str, case_insensitive: bool) -> Option<
     Some(s)
 }
 
-/// Scan every conversation (newest-first) for `query`, collecting up to `limit`
-/// matches with a preview snippet.
+/// Scan conversations (newest-first) for `query`, collecting up to `limit`
+/// matches with a preview snippet. When `as_user` is `Some`, only that user's
+/// own conversations plus shared ones are searched, so a multi-user
+/// `conversation_store` backend never leaks snippets from another user's
+/// private conversations through search.
 fn search_conversations(
-    store: &impl ConversationStore,
+    store: &ConversationStoreClient,
     query: &str,
     case_insensitive: bool,
     limit: usize,
+    as_user: Option<&str>,
 ) -> Result<Vec<SearchMatch>> {
     let mut out = Vec::new();
     if query.is_empty() {
         return Ok(out);
     }
-    for summary in store.list()? {
+    for summary in store.list_for_user(as_user)? {
         if out.len() >= limit {
             break;
         }
@@ -135,8 +141,8 @@ fn search_conversations(
 }
 
 fn handle_chat_search(args: ChatSearchArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = FileConversationStore::for_project(Path::new(project_root))?;
-    let matches = search_conversations(&store, &args.query, !args.case_sensitive, args.limit)?;
+    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
+    let matches = search_conversations(&store, &args.query, !args.case_sensitive, args.limit, args.as_user.as_deref())?;
     print_value(matches, json)
 }
 
@@ -195,8 +201,9 @@ fn render_markdown(meta: &ConversationMeta, messages: &[ChatMessage]) -> String 
 }
 
 fn handle_chat_export(args: ChatExportArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = FileConversationStore::for_project(Path::new(project_root))?;
+    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
     let meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
+    client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
     let messages = store.load_messages(&args.id)?;
     let (content, format_label) = match args.format {
         ChatExportFormat::Json => {
@@ -238,8 +245,9 @@ fn apply_conversation_title(store: &impl ConversationStore, id: &str, title: Opt
 }
 
 fn handle_chat_rename(args: ChatRenameArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = FileConversationStore::for_project(Path::new(project_root))?;
+    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
     let mut meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
+    client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
     let trimmed = args.title.trim();
     meta.title = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
     store.save_meta(&meta)?;
@@ -247,35 +255,71 @@ fn handle_chat_rename(args: ChatRenameArgs, project_root: &str, json: bool) -> R
 }
 
 fn handle_chat_delete(args: ChatDeleteArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = FileConversationStore::for_project(Path::new(project_root))?;
-    let existed = store.load_meta(&args.id)?.is_some();
-    store.delete(&args.id)?;
+    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
+    // Authorize against the loaded meta before deleting: a user-scoped delete of
+    // another user's private conversation is rejected as "not found". A missing
+    // (or auth-hidden) conversation stays idempotent: with no meta there is
+    // nothing authorized to remove, so we skip the mutation entirely rather than
+    // issue a delete the backend might surface as a forbidden error.
+    let existed = match store.load_meta(&args.id)? {
+        Some(meta) => {
+            client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
+            store.delete(&args.id)?;
+            true
+        }
+        None => false,
+    };
     print_value(serde_json::json!({ "conversation_id": args.id, "deleted": existed }), json)
 }
 
+/// Map the CLI visibility flag to the store's [`Visibility`].
+fn visibility_from_arg(arg: ChatVisibilityArg) -> Visibility {
+    match arg {
+        ChatVisibilityArg::Private => Visibility::Private,
+        ChatVisibilityArg::Shared => Visibility::Shared,
+    }
+}
+
 fn handle_chat_new(args: ChatNewArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = FileConversationStore::for_project(Path::new(project_root))?;
-    let mut meta = store.create(args.id)?;
+    // Build the client with the acting user so a plugin backend authorizes the
+    // follow-up title `save_meta` as the same owner the create stamped, not as
+    // an unscoped/admin mutation.
+    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
+    let mut meta = store.create_with_ownership(args.id, args.as_user.clone(), visibility_from_arg(args.visibility))?;
     if args.title.is_some() {
         meta.title = args.title;
         store.save_meta(&meta)?;
     }
-    print_value(serde_json::json!({ "conversation_id": meta.id, "title": meta.title }), json)
+    print_value(
+        serde_json::json!({
+            "conversation_id": meta.id,
+            "title": meta.title,
+            "owner": meta.owner,
+            "visibility": meta.visibility,
+        }),
+        json,
+    )
 }
 
 async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) -> Result<()> {
     let project_root_path = PathBuf::from(project_root);
-    let store = FileConversationStore::for_project(&project_root_path)?;
+    let store = ConversationStoreClient::for_project_as_user(&project_root_path, args.as_user.as_deref())?;
 
     // Resolve (or create) the target conversation.
     let (conversation_id, auto_created) = match args.conversation {
         Some(id) => {
-            if store.load_meta(&id)?.is_none() {
-                return Err(anyhow!("conversation '{id}' not found; create it with `animus chat new`"));
+            match store.load_meta(&id)? {
+                // Authorize the actor before sending into an existing
+                // conversation: a user-scoped send into another user's private
+                // conversation is rejected as "not found".
+                Some(meta) => client::ensure_user_may_access(&meta, &id, args.as_user.as_deref())?,
+                None => return Err(anyhow!("conversation '{id}' not found; create it with `animus chat new`")),
             }
             (id, false)
         }
-        None => (store.create(None)?.id, true),
+        None => {
+            (store.create_with_ownership(None, args.as_user.clone(), visibility_from_arg(args.visibility))?.id, true)
+        }
     };
 
     // Apply an optional title — names a freshly-created conversation or renames
@@ -406,15 +450,16 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
 }
 
 fn handle_chat_get(args: ChatGetArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = FileConversationStore::for_project(Path::new(project_root))?;
+    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
     let meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
+    client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
     let messages = store.load_messages(&args.id)?;
     print_value(serde_json::json!({ "meta": meta, "messages": messages }), json)
 }
 
-fn handle_chat_list(project_root: &str, json: bool) -> Result<()> {
-    let store = FileConversationStore::for_project(Path::new(project_root))?;
-    let summaries = store.list()?;
+fn handle_chat_list(args: ChatListArgs, project_root: &str, json: bool) -> Result<()> {
+    let store = ConversationStoreClient::for_project(Path::new(project_root))?;
+    let summaries = store.list_for_user(args.as_user.as_deref())?;
     if !json {
         if summaries.is_empty() {
             println!("No chat conversations yet. Start one with: animus chat new");
@@ -442,6 +487,7 @@ fn handle_chat_list(project_root: &str, json: bool) -> Result<()> {
 #[cfg(test)]
 mod export_tests {
     use super::*;
+    use store::FileConversationStore;
 
     fn sample_meta() -> ConversationMeta {
         ConversationMeta {
@@ -453,6 +499,8 @@ mod export_tests {
             created_at: "2026-06-09T00:00:00Z".into(),
             updated_at: "2026-06-09T01:00:00Z".into(),
             message_count: 2,
+            owner: None,
+            visibility: Visibility::Private,
         }
     }
 
@@ -576,26 +624,26 @@ mod export_tests {
     #[test]
     fn search_conversations_finds_limits_and_respects_case() {
         let tmp = tempfile::tempdir().unwrap();
-        let store = FileConversationStore::with_root_for_test(tmp.path().join("chat"));
+        let store = ConversationStoreClient::with_root_for_test(tmp.path().join("chat"));
         store.create(Some("conv-s".into())).unwrap();
         store.append_message("conv-s", &msg(ChatRole::User, "Please fix the AUTH bug", vec![])).unwrap();
         store.append_message("conv-s", &msg(ChatRole::Assistant, "done, no issues", vec![])).unwrap();
 
         // case-insensitive hit on the user message
-        let m = search_conversations(&store, "auth", true, 20).unwrap();
+        let m = search_conversations(&store, "auth", true, 20, None).unwrap();
         assert_eq!(m.len(), 1);
         assert_eq!(m[0].conversation_id, "conv-s");
         assert_eq!(m[0].role, "user");
         assert!(m[0].snippet.to_lowercase().contains("auth"), "{}", m[0].snippet);
 
         // case-sensitive "auth" does not match "AUTH"
-        assert!(search_conversations(&store, "auth", false, 20).unwrap().is_empty());
+        assert!(search_conversations(&store, "auth", false, 20, None).unwrap().is_empty());
 
         // empty query → no matches
-        assert!(search_conversations(&store, "", true, 20).unwrap().is_empty());
+        assert!(search_conversations(&store, "", true, 20, None).unwrap().is_empty());
 
         // limit is respected
         store.append_message("conv-s", &msg(ChatRole::User, "auth again", vec![])).unwrap();
-        assert_eq!(search_conversations(&store, "auth", true, 1).unwrap().len(), 1);
+        assert_eq!(search_conversations(&store, "auth", true, 1, None).unwrap().len(), 1);
     }
 }

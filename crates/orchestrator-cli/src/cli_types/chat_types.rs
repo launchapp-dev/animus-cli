@@ -16,7 +16,7 @@ pub(crate) enum ChatCommand {
     /// Print a conversation's full transcript.
     Get(ChatGetArgs),
     /// List conversations, most-recently-updated first.
-    List,
+    List(ChatListArgs),
     /// Set or clear a conversation's title.
     Rename(ChatRenameArgs),
     /// Permanently delete a conversation.
@@ -36,6 +36,15 @@ pub(crate) enum ChatExportFormat {
     Json,
 }
 
+/// Conversation visibility for `animus chat new`.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub(crate) enum ChatVisibilityArg {
+    /// Visible only to the owner (and to admin/unscoped listings). Default.
+    Private,
+    /// Visible to every user, in addition to the owner.
+    Shared,
+}
+
 #[derive(Debug, Args)]
 pub(crate) struct ChatNewArgs {
     /// Explicit conversation id. Omit to auto-generate (`conv-<uuid>`).
@@ -44,6 +53,22 @@ pub(crate) struct ChatNewArgs {
     /// Optional human-facing title.
     #[arg(long)]
     pub(crate) title: Option<String>,
+    /// Owner (authenticated user id) to stamp onto the conversation. Used by a
+    /// `conversation_store` plugin for per-user history; advisory for the
+    /// in-tree filesystem store.
+    #[arg(long, value_name = "USER_ID")]
+    pub(crate) as_user: Option<String>,
+    /// Conversation visibility: private (owner-only) or shared.
+    #[arg(long, value_enum, default_value = "private")]
+    pub(crate) visibility: ChatVisibilityArg,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct ChatListArgs {
+    /// Limit the listing to conversations owned by this user id PLUS any
+    /// shared ones. Omit for the full (legacy/admin) listing.
+    #[arg(long, value_name = "USER_ID")]
+    pub(crate) as_user: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -104,6 +129,14 @@ pub(crate) struct ChatSendArgs {
     /// Drop the built-in `animus` MCP server from the resolved set.
     #[arg(long)]
     pub(crate) no_animus_mcp: bool,
+    /// Owner (authenticated user id) stamped onto a conversation created by
+    /// this send (when `--conversation` is omitted). Advisory for the in-tree
+    /// store; used by a `conversation_store` plugin for per-user history.
+    #[arg(long, value_name = "USER_ID")]
+    pub(crate) as_user: Option<String>,
+    /// Visibility for a conversation created by this send.
+    #[arg(long, value_enum, default_value = "private")]
+    pub(crate) visibility: ChatVisibilityArg,
 }
 
 #[derive(Debug, Args)]
@@ -111,6 +144,10 @@ pub(crate) struct ChatGetArgs {
     /// Conversation id to read.
     #[arg(value_name = "ID")]
     pub(crate) id: String,
+    /// Acting user id. Advisory for the in-tree store; a `conversation_store`
+    /// plugin may use it to enforce read access.
+    #[arg(long, value_name = "USER_ID")]
+    pub(crate) as_user: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -121,6 +158,10 @@ pub(crate) struct ChatRenameArgs {
     /// New title. Pass an empty string to clear it.
     #[arg(long)]
     pub(crate) title: String,
+    /// Acting user id. Advisory for the in-tree store; a `conversation_store`
+    /// plugin may use it to enforce rename (mutation) access.
+    #[arg(long, value_name = "USER_ID")]
+    pub(crate) as_user: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -128,6 +169,10 @@ pub(crate) struct ChatDeleteArgs {
     /// Conversation id to delete.
     #[arg(value_name = "ID")]
     pub(crate) id: String,
+    /// Acting user id. Advisory for the in-tree store; a `conversation_store`
+    /// plugin may use it to enforce delete access.
+    #[arg(long, value_name = "USER_ID")]
+    pub(crate) as_user: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -141,6 +186,10 @@ pub(crate) struct ChatExportArgs {
     /// Write to this file instead of stdout.
     #[arg(long, value_name = "PATH")]
     pub(crate) output: Option<String>,
+    /// Acting user id. Advisory for the in-tree store; a `conversation_store`
+    /// plugin may use it to enforce read access on the exported transcript.
+    #[arg(long, value_name = "USER_ID")]
+    pub(crate) as_user: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -154,4 +203,8 @@ pub(crate) struct ChatSearchArgs {
     /// Match case-sensitively (default is case-insensitive).
     #[arg(long)]
     pub(crate) case_sensitive: bool,
+    /// Limit the search to conversations owned by this user id PLUS any shared
+    /// ones. Omit for the full (legacy/admin) search.
+    #[arg(long, value_name = "USER_ID")]
+    pub(crate) as_user: Option<String>,
 }

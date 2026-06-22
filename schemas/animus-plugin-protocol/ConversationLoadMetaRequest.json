@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationLoadMetaRequest",
+  "description": "`conversation/load_meta` request.",
+  "type": "object",
+  "properties": {
+    "as_user": {
+      "description": "Acting user id, when known. A backend MAY use it to authorize the\nread (e.g. deny a private conversation owned by another user).\n`None` for unscoped/admin access.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "id": {
+      "description": "Conversation id to load.",
+      "type": "string"
+    },
+    "project_root": {
+      "description": "Absolute project root path of the calling CLI/daemon.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "repo_scope": {
+      "description": "Repository scope id (see `protocol::repository_scope_for_path`).",
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "id"
+  ]
+}
