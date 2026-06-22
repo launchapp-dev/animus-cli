@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-06-22
+
+**v0.6.4 — pluggable chat conversation store (per-user + shared history).**
+
+- New OPTIONAL kernel plugin role `conversation_store` (mirrors `config_source` /
+  `subject_backend`): when a `conversation_store` plugin is installed the CLI
+  routes chat persistence through it, else falls back to the in-tree
+  `FileConversationStore`. Not a required preflight role — chat works with zero
+  plugins installed.
+- `ConversationMeta` gains `owner: Option<String>` and `visibility {private,shared}`
+  (serde-defaulted, back-compatible with existing on-disk conversations).
+- `animus chat` gains `--as-user <id>` (new/send/list/get/delete/rename/export/
+  search) and `--visibility` (new). `list --as-user X` returns X's own + all
+  shared; direct-id denials return uniform "not found" to avoid existence leaks.
+- Wire contract in `animus-plugin-protocol::conversation_store`
+  (`conversation/{create,load_meta,save_meta,append_message,load_messages,list,delete}`);
+  `seq` is client-authoritative. Reference backend: `launchapp-dev/animus-chat-postgres`.
+
 ## [0.6.3] - 2026-06-22
 
 **v0.6.3 — fix the config_source plugin process/connection leak (fleet-wide).**
