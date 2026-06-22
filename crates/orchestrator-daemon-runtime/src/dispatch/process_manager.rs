@@ -286,6 +286,13 @@ impl ProcessManager {
         // `replay_gap_from_spawn_record` falls back to scanning runs/ for
         // the most recent decisions.jsonl matching the spawn time.
         command.env(ANIMUS_AGENT_RUN_ID_ENV, &pending_session_id);
+        // Bound the workflow-runner's tokio pool for the same reason we cap plugins
+        // (orchestrator-plugin-host host.rs): a bare `#[tokio::main]` otherwise sizes
+        // the worker pool to all CPU cores, compounding the PID/thread pressure. This
+        // path inherits the daemon env, so only impose the default when unset.
+        if std::env::var_os("TOKIO_WORKER_THREADS").is_none() {
+            command.env("TOKIO_WORKER_THREADS", "2");
+        }
         // Phase skills pass-down: resolve the union of phase-level `skills:`
         // and the executing agent profile's `skills:` daemon-side (scoped
         // sources + trust stripping, identical to the ad-hoc `--skill`
