@@ -17,7 +17,7 @@ pub(crate) use signing::{
     GITHUB_OIDC_ISSUER,
 };
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -27,11 +27,11 @@ use anyhow::{anyhow, Context, Result};
 use orchestrator_daemon_runtime::{Audit, AuditActor, AuditEvent, AuditEventKind};
 use orchestrator_plugin_host::session::is_reserved_provider_tool;
 use orchestrator_plugin_host::{
-    discover_plugins, global_lockfile_path, legacy_plugins_registry_path, plugin_install_dir, plugins_registry_path,
-    project_lockfile_path, project_plugin_install_dir, project_plugins_registry_path,
+    current_target_triple, discover_plugins, global_lockfile_path, legacy_plugins_registry_path, plugin_install_dir,
+    plugins_registry_path, project_lockfile_path, project_plugin_install_dir, project_plugins_registry_path,
     registered_skip_manifest_check_at_install_scoped, sha256_of_file as plugin_host_sha256_of_file, DiscoveredPlugin,
     DiscoverySource, DiscoveryWarning, LockEntry, LockVerifyResult, PluginDiscovery, PluginHost, PluginLockfile,
-    PluginSpawnOptions, PolicyMode as PluginPolicyMode,
+    PluginSpawnOptions, PolicyMode as PluginPolicyMode, TargetIntegrity,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -313,6 +313,21 @@ pub(crate) struct PluginInstallRequest {
     /// is mutually exclusive with `plugin_dir` (the CLI enforces the
     /// conflict via clap; this pipeline re-validates for non-CLI callers).
     pub(crate) project: bool,
+    /// Internal: for RELEASE sources, the expected sha256 of the downloaded
+    /// **tarball** (not the extracted binary). When set, `resolve_release_install`
+    /// hard-fails before extracting if the tarball drifts from it. Used by
+    /// `--locked` to gate a release reinstall against the lockfile's portable
+    /// per-target `archive_sha256` (the `req.sha256` field gates the extracted
+    /// BINARY, which differs from the tarball hash). `None` for normal installs.
+    pub(crate) expected_archive_sha256: Option<String>,
+    /// Internal: for `--locked` RELEASE reinstalls of multi-binary plugins,
+    /// the lockfile's expected per-SECONDARY tarball sha for the current target
+    /// (`secondary binary name -> archive sha256`). The multi-binary install
+    /// loop verifies each downloaded secondary tarball against this BEFORE
+    /// extracting, so a drifted secondary asset fails the reproducibility gate
+    /// even when the release's own SHA256SUMS was regenerated to match. Empty
+    /// for normal installs.
+    pub(crate) locked_secondary_archive_shas: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1552,7 +1567,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         Option<Vec<GithubReleaseAsset>>,
     ) = if let Some(slug) = req.source.as_deref() {
         let spec = parse_repo_spec(slug)?;
-        let release = resolve_release_install(spec, req.tag.clone()).await?;
+        let release = resolve_release_install(spec, req.tag.clone(), req.expected_archive_sha256.clone()).await?;
         let provenance = InstallProvenance {
             source_kind: Some("release"),
             origin: Some(release.origin.clone()),
@@ -1565,6 +1580,8 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
             repo: Some(release.repo.clone()),
             source_repo: Some(format!("{}/{}", release.owner, release.repo)),
             resolved_commit: release.resolved_commit.clone(),
+            sha256sums_targets: release.sha256sums_targets.clone(),
+            sha256sums_body: release.sha256sums_body.clone(),
         };
         let release_assets = release.release_assets.clone();
         (release.binary_path, release.plugin_name_hint, provenance, Some(release._temp_dir), Some(release_assets))
@@ -1703,38 +1720,41 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         load_or_refuse_lockfile(project_root_for_lock, effective_lock_override.as_deref(), req.force_rewrite_lockfile)?;
     let lockfile_path_for_log = lockfile.path().to_path_buf();
     let is_upgrade = installed_path.exists();
-    if is_upgrade {
-        if let Some(existing_entry) = lockfile.find(&plugin_name).cloned() {
-            match lockfile.verify_installed(&plugin_name, &installed_path) {
-                Ok(LockVerifyResult::Match) | Ok(LockVerifyResult::Missing) => {}
-                Ok(LockVerifyResult::Mismatch { expected, actual }) => {
-                    if let Some(root) = project_root_for_lock {
-                        if let Some(scoped) = protocol::repository_scope::scoped_state_root(root) {
-                            Audit::at_scoped_root(&scoped).log_event(AuditEvent::new(
-                                AuditActor::User,
-                                AuditEventKind::LockfileMismatch,
-                                serde_json::json!({
-                                    "plugin": plugin_name,
-                                    "expected_sha256": expected,
-                                    "actual_sha256": actual,
-                                    "force": req.force,
-                                    "lockfile": lockfile_path_for_log.display().to_string(),
-                                }),
-                            ));
-                        }
+    if is_upgrade && lockfile.find(&plugin_name).is_some() {
+        match lockfile.verify_installed(&plugin_name, &installed_path) {
+            // `Missing` (no entry) and `MissingTarget` (no host-only
+            // binary claim for this platform — a 1.0-migrated entry or a
+            // lock generated elsewhere) both mean "nothing to compare
+            // against here", so the upgrade proceeds and re-records.
+            Ok(LockVerifyResult::Match)
+            | Ok(LockVerifyResult::Missing)
+            | Ok(LockVerifyResult::MissingTarget { .. }) => {}
+            Ok(LockVerifyResult::Mismatch { expected, actual }) => {
+                if let Some(root) = project_root_for_lock {
+                    if let Some(scoped) = protocol::repository_scope::scoped_state_root(root) {
+                        Audit::at_scoped_root(&scoped).log_event(AuditEvent::new(
+                            AuditActor::User,
+                            AuditEventKind::LockfileMismatch,
+                            serde_json::json!({
+                                "plugin": plugin_name,
+                                "expected_sha256": expected,
+                                "actual_sha256": actual,
+                                "force": req.force,
+                                "lockfile": lockfile_path_for_log.display().to_string(),
+                            }),
+                        ));
                     }
-                    if !req.force {
-                        return Err(invalid_input_error(format!(
-                            "lockfile mismatch for plugin '{plugin_name}': recorded sha256 {} but on-disk binary hashes to {}. \
+                }
+                if !req.force {
+                    return Err(invalid_input_error(format!(
+                            "lockfile mismatch for plugin '{plugin_name}': recorded sha256 {expected} but on-disk binary hashes to {actual}. \
                              The installed binary appears to have been modified or replaced out of band. \
                              Re-run with --force to overwrite (and update the lockfile), or `animus plugin lock verify` to inspect.",
-                            existing_entry.artifact_sha256, actual,
                         )));
-                    }
                 }
-                Err(err) => {
-                    tracing::warn!(plugin = %plugin_name, %err, "failed to hash existing installed plugin during lockfile pre-check");
-                }
+            }
+            Err(err) => {
+                tracing::warn!(plugin = %plugin_name, %err, "failed to hash existing installed plugin during lockfile pre-check");
             }
         }
     }
@@ -1857,6 +1877,20 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
                         }
                     }
                     let computed_secondary = sha256_of_file(&secondary_asset_path)?;
+                    // `--locked` cross-platform gate: when the lockfile pins this
+                    // secondary's tarball for the current target, the downloaded
+                    // archive MUST match the LOCK (not just the release's own
+                    // SHA256SUMS) — closes the drifted-secondary-with-regenerated-
+                    // SHA256SUMS hole before we extract/execute it (codex P1).
+                    if let Some(locked) = req.locked_secondary_archive_shas.get(&descriptor.name) {
+                        if !locked.eq_ignore_ascii_case(&computed_secondary) {
+                            return Err(invalid_input_error(format!(
+                                "lockfile mismatch for secondary asset '{}': lock pins {locked} but the downloaded \
+                                 tarball hashes to {computed_secondary} — the published release changed under the pin",
+                                asset.name
+                            )));
+                        }
+                    }
                     if let Some(expected) = expected_sha.as_ref() {
                         if !expected.eq_ignore_ascii_case(&computed_secondary) {
                             return Err(invalid_input_error(format!(
@@ -2047,30 +2081,94 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     // ---- Lockfile: persist this install ----
     let bundle_sha = provenance.bundle_path.as_deref().and_then(|p| plugin_host_sha256_of_file(p).ok());
     let recorded_at = chrono::Utc::now().to_rfc3339();
+    let current_triple = current_target_triple();
+
+    // Build the PRIMARY entry's per-target claim. Start from the release
+    // `SHA256SUMS.txt` (every published platform's TARBALL sha → portable) and
+    // overlay the install platform with the cosign-bundle sha + the extracted
+    // BINARY sha (host-only tamper-check). For `--path`/`--url` sources the map
+    // is empty, so we record only the current target's verified archive sha.
+    let is_release_source = provenance.source_kind == Some("release");
+    let mut primary_targets: BTreeMap<String, TargetIntegrity> = BTreeMap::new();
+    for (triple, archive_sha) in &provenance.sha256sums_targets {
+        primary_targets
+            .insert(triple.clone(), TargetIntegrity { archive_sha256: archive_sha.clone(), ..Default::default() });
+    }
+    if let Some(triple) = current_triple {
+        // Attach the host-only fields (installed-binary sha + cosign bundle) to
+        // the current build target. For a RELEASE the archive sha for each
+        // target comes from `sha256sums_targets` (the TARBALL hash); `computed_sha`
+        // is the EXTRACTED-BINARY hash, so it must NOT seed a fresh
+        // `archive_sha256`. When the build triple has no recorded target —
+        // e.g. a `*-linux-musl` asset selected as a fallback on a `*-gnu` host —
+        // skip the host overlay rather than write a binary hash as a bogus
+        // tarball pin (codex P2); `lock verify` then reports MissingTarget for
+        // this platform until a native-asset reinstall.
+        let entry_for_target = if is_release_source {
+            primary_targets.get_mut(triple)
+        } else {
+            // `--path`/`--url`: the fetched artifact IS the archive, so its sha
+            // is both the archive and the installed-binary hash.
+            Some(
+                primary_targets
+                    .entry(triple.to_string())
+                    .or_insert_with(|| TargetIntegrity { archive_sha256: computed_sha.clone(), ..Default::default() }),
+            )
+        };
+        if let Some(integrity) = entry_for_target {
+            integrity.installed_binary_sha256 = Some(computed_sha.clone());
+            integrity.signature_bundle_sha256 = bundle_sha;
+        }
+    }
+
     let mut new_lock_entries: Vec<LockEntry> = vec![LockEntry {
         name: plugin_name.clone(),
         version: provenance.release_tag.clone().unwrap_or_default(),
-        artifact_sha256: computed_sha.clone(),
-        signature_bundle_sha256: bundle_sha,
+        targets: primary_targets,
         installed_at: recorded_at.clone(),
         installed_kind: assigned_kind.clone(),
         native_kind: native_kind_for_lock.clone(),
         source_repo: provenance.source_repo.clone(),
         resolved_commit: provenance.resolved_commit.clone(),
+        legacy_artifact_sha256: None,
+        legacy_signature_bundle_sha256: None,
     }];
     for (secondary_name, _path, secondary_sha, _temp) in &secondary_installed {
         // Secondary (multi-binary) entries ship in the same release, so they
-        // inherit the primary's source + resolved commit.
+        // inherit the primary's source + resolved commit. Derive their per-target
+        // TARBALL shas from the SAME `SHA256SUMS.txt` (keyed by the secondary's
+        // own `<name>-<triple>.tar.gz` archives) so the secondary entry is just
+        // as portable as the primary — `--locked` on a foreign platform can pin
+        // its tarball before extract. `secondary_sha` is the EXTRACTED-BINARY
+        // hash (NOT a tarball sha), so it only seeds the current target's
+        // host-only `installed_binary_sha256`.
+        let mut secondary_targets: BTreeMap<String, TargetIntegrity> = BTreeMap::new();
+        if let Some(body) = provenance.sha256sums_body.as_deref() {
+            for (triple, archive_sha) in parse_sha256sums_for_targets(body, secondary_name) {
+                secondary_targets.insert(triple, TargetIntegrity { archive_sha256: archive_sha, ..Default::default() });
+            }
+        }
+        if let Some(triple) = current_triple {
+            // Overlay the host-only binary hash on the current target. When the
+            // release has no SHA256SUMS, the secondary's archive sha is UNKNOWN
+            // (we only have the extracted-binary hash, which is NOT a tarball
+            // sha) — leave `archive_sha256` empty so the `--locked` secondary
+            // gate skips it rather than comparing a binary hash to a tarball
+            // and failing a valid reinstall (codex P2).
+            let integrity = secondary_targets.entry(triple.to_string()).or_default();
+            integrity.installed_binary_sha256 = Some(secondary_sha.clone());
+        }
         new_lock_entries.push(LockEntry {
             name: secondary_name.clone(),
             version: provenance.release_tag.clone().unwrap_or_default(),
-            artifact_sha256: secondary_sha.clone(),
-            signature_bundle_sha256: None,
+            targets: secondary_targets,
             installed_at: recorded_at.clone(),
             installed_kind: None,
             native_kind: None,
             source_repo: provenance.source_repo.clone(),
             resolved_commit: provenance.resolved_commit.clone(),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
         });
     }
     // Multi-binary follow-up to the primary-name routing above: secondary
@@ -3641,6 +3739,86 @@ fn parse_sha256_sidecar(body: &str) -> Option<String> {
     }
 }
 
+/// Every Rust target triple Animus releases publish assets for. Used to derive
+/// a per-asset target triple from a `SHA256SUMS.txt` filename so the lockfile
+/// can record a portable, per-platform integrity claim.
+const KNOWN_TARGET_TRIPLES: &[&str] = &[
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu",
+    "aarch64-unknown-linux-musl",
+    "x86_64-pc-windows-msvc",
+    "x86_64-pc-windows-gnu",
+];
+
+/// Derive the target triple a release asset filename targets, by scanning for a
+/// known triple substring (case-insensitive). `None` for non-archive assets
+/// (e.g. `SHA256SUMS.txt`, `.bundle`, `.sha256` sidecars) and any name with no
+/// recognizable triple.
+fn target_triple_from_asset_name(name: &str) -> Option<&'static str> {
+    let lower = name.to_ascii_lowercase();
+    // `lower` is already ASCII-lowercased, so these `ends_with` checks are
+    // case-insensitive by construction; clippy's heuristic doesn't see it.
+    #[allow(clippy::case_sensitive_file_extension_comparisons)]
+    let is_archive = lower.ends_with(".tar.gz") || lower.ends_with(".tgz");
+    if !is_archive {
+        return None;
+    }
+    KNOWN_TARGET_TRIPLES.iter().copied().find(|triple| lower.contains(&triple.to_ascii_lowercase()))
+}
+
+/// Parse a release `SHA256SUMS.txt` body into per-target archive shas for the
+/// archives belonging to `plugin`. Each line is `<hex>␠␠<filename>`; only
+/// archive filenames carrying a recognizable target triple contribute. When
+/// several archives map to the same triple (e.g. multi-binary releases
+/// publishing several `<bin>-<triple>.tar.gz`), the EXACT
+/// `<plugin>-<triple>.{tar.gz,tgz}` archive is preferred — an exact base match,
+/// not a prefix test, so a sibling like `<plugin>-helper-<triple>.tar.gz` is
+/// not mistaken for `<plugin>`'s archive. Otherwise the first seen is kept.
+fn parse_sha256sums_for_targets(body: &str, plugin: &str) -> BTreeMap<String, String> {
+    let plugin_lower = plugin.to_ascii_lowercase();
+    let mut out: BTreeMap<String, (String, bool)> = BTreeMap::new();
+    for line in body.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(hex) = parts.next() else { continue };
+        if hex.len() != 64 || !hex.chars().all(|c| c.is_ascii_hexdigit()) {
+            continue;
+        }
+        let Some(filename) = parts.next() else { continue };
+        // Strip a leading `*` (binary-mode marker some sha256sum tools emit).
+        let filename = filename.strip_prefix('*').unwrap_or(filename);
+        let Some(triple) = target_triple_from_asset_name(filename) else { continue };
+        // The archive belongs to `plugin` exactly when its name is
+        // `<plugin>-<triple>.<ext>`. Compared case-insensitively against the
+        // canonical archive names for this triple.
+        let lower = filename.to_ascii_lowercase();
+        let is_preferred =
+            lower == format!("{plugin_lower}-{triple}.tar.gz") || lower == format!("{plugin_lower}-{triple}.tgz");
+        match out.get(triple) {
+            Some((_, existing_preferred)) if *existing_preferred || !is_preferred => {}
+            _ => {
+                out.insert(triple.to_string(), (hex.to_ascii_lowercase(), is_preferred));
+            }
+        }
+    }
+    out.into_iter().map(|(triple, (hex, _))| (triple, hex)).collect()
+}
+
+/// Locate the release's `SHA256SUMS.txt` asset (case-insensitive; also accepts
+/// `SHA256SUMS`).
+fn find_sha256sums_asset(assets: &[GithubReleaseAsset]) -> Option<&GithubReleaseAsset> {
+    assets.iter().find(|a| {
+        let lower = a.name.to_ascii_lowercase();
+        lower == "sha256sums.txt" || lower == "sha256sums"
+    })
+}
+
 async fn download_to_path(url: &str, dest: &Path) -> Result<()> {
     let client =
         reqwest::Client::builder().user_agent(release_user_agent()).build().context("failed to build HTTP client")?;
@@ -3786,6 +3964,15 @@ struct ReleaseInstall {
     /// can pick sibling `<binary>-<target>.tar.gz` archives without a
     /// second API roundtrip. Populated only on the release source path.
     release_assets: Vec<GithubReleaseAsset>,
+    /// Per-target archive sha256, derived from the release `SHA256SUMS.txt`
+    /// (`triple -> tarball sha`). Records EVERY published platform so a lock
+    /// generated on one platform drives a verified `--locked` install on
+    /// another. Empty when the release publishes no `SHA256SUMS.txt`.
+    sha256sums_targets: BTreeMap<String, String>,
+    /// Raw `SHA256SUMS.txt` body, retained so secondary (multi-binary) installs
+    /// can derive THEIR per-target archive shas without a second fetch. `None`
+    /// when the release publishes no sums file.
+    sha256sums_body: Option<String>,
     /// RAII guard for the staging directory the asset was downloaded into.
     /// All paths above point inside this guard's directory; the caller
     /// must keep `_temp_dir` alive until the binary has been copied to
@@ -3794,7 +3981,11 @@ struct ReleaseInstall {
     _temp_dir: tempfile::TempDir,
 }
 
-async fn resolve_release_install(spec: RepoSpec, explicit_tag: Option<String>) -> Result<ReleaseInstall> {
+async fn resolve_release_install(
+    spec: RepoSpec,
+    explicit_tag: Option<String>,
+    expected_archive_sha256: Option<String>,
+) -> Result<ReleaseInstall> {
     let tag = match (spec.tag.clone(), explicit_tag) {
         (Some(spec_tag), Some(flag_tag)) => {
             if spec_tag != flag_tag {
@@ -3846,22 +4037,62 @@ async fn resolve_release_install(spec: RepoSpec, explicit_tag: Option<String>) -
     let asset_path = temp_path.join(&asset.name);
     download_to_path(&asset.browser_download_url, &asset_path).await?;
 
-    // Resolve expected SHA256: sidecar asset > release `digest` field.
-    let mut expected_sha: Option<String> = None;
-    if let Some(sidecar_asset) = find_sha256_sidecar(&release.assets, &asset.name) {
-        match download_text(&sidecar_asset.browser_download_url).await {
+    // Fetch the release `SHA256SUMS.txt` once and record the tarball sha for
+    // EVERY published platform. This is what makes the lockfile portable: a
+    // macOS install records the linux (etc.) tarball sha too, so `--locked`
+    // can verify on a fresh linux container before extracting. Best-effort: a
+    // release without `SHA256SUMS.txt` falls back to the per-asset
+    // sidecar/digest path below (and records only the current target).
+    let mut sha256sums_targets: BTreeMap<String, String> = BTreeMap::new();
+    let mut sha256sums_body: Option<String> = None;
+    if let Some(sums_asset) = find_sha256sums_asset(&release.assets) {
+        match download_text(&sums_asset.browser_download_url).await {
             Ok(body) => {
-                if let Some(hex) = parse_sha256_sidecar(&body) {
-                    expected_sha = Some(hex);
-                } else {
-                    eprintln!(
-                        "warning: sha256 sidecar '{}' had unexpected format; skipping verification",
-                        sidecar_asset.name
-                    );
-                }
+                sha256sums_targets = parse_sha256sums_for_targets(&body, &spec.repo);
+                sha256sums_body = Some(body);
             }
             Err(err) => {
-                eprintln!("warning: failed to download sha256 sidecar '{}': {}", sidecar_asset.name, err);
+                eprintln!(
+                    "warning: failed to download '{}': {}; recording only the current target",
+                    sums_asset.name, err
+                );
+            }
+        }
+    }
+
+    // The target triple the SELECTED asset actually targets. `current_platform_tokens`
+    // allows compatible fallbacks (e.g. a musl archive on a gnu host), so the
+    // selected asset's triple can differ from the build triple — key the
+    // SHA256SUMS lookup + the recorded claim off the asset that was downloaded,
+    // not the build triple, otherwise verification is skipped and the sha is
+    // recorded under the wrong target (codex P2).
+    let selected_target = target_triple_from_asset_name(&asset.name).or_else(current_target_triple);
+
+    // Resolve expected SHA256 for the CURRENT asset (the TARBALL):
+    // caller-pinned `expected_archive_sha256` (the `--locked` lock pin) >
+    // SHA256SUMS (selected target) > sidecar asset > release `digest` field.
+    // The caller pin wins so a `--locked` run aborts BEFORE extracting when
+    // the published tarball drifted from the committed archive sha — even if
+    // the release's own SHA256SUMS was regenerated to match the drift.
+    let mut expected_sha: Option<String> = expected_archive_sha256
+        .clone()
+        .or_else(|| selected_target.and_then(|triple| sha256sums_targets.get(triple).cloned()));
+    if expected_sha.is_none() {
+        if let Some(sidecar_asset) = find_sha256_sidecar(&release.assets, &asset.name) {
+            match download_text(&sidecar_asset.browser_download_url).await {
+                Ok(body) => {
+                    if let Some(hex) = parse_sha256_sidecar(&body) {
+                        expected_sha = Some(hex);
+                    } else {
+                        eprintln!(
+                            "warning: sha256 sidecar '{}' had unexpected format; skipping verification",
+                            sidecar_asset.name
+                        );
+                    }
+                }
+                Err(err) => {
+                    eprintln!("warning: failed to download sha256 sidecar '{}': {}", sidecar_asset.name, err);
+                }
             }
         }
     }
@@ -3888,6 +4119,16 @@ async fn resolve_release_install(spec: RepoSpec, explicit_tag: Option<String>) -
             "warning: no sha256 sidecar or digest for asset '{}'; install proceeding without checksum verification",
             asset.name
         );
+    }
+
+    // Guarantee the lockfile records at least the SELECTED asset's target
+    // archive sha, even for a release without a `SHA256SUMS.txt` (the
+    // per-target map is otherwise empty). The current asset is the tarball we
+    // just verified (or hashed), so its `computed` sha IS that target's
+    // archive sha. Keyed off the selected asset's triple so a fallback archive
+    // (e.g. musl on a gnu host) is recorded under the triple it actually is.
+    if let Some(triple) = selected_target {
+        sha256sums_targets.entry(triple.to_string()).or_insert_with(|| computed.clone());
     }
 
     // Extract if tarball; otherwise treat as a bare binary.
@@ -3944,6 +4185,8 @@ async fn resolve_release_install(spec: RepoSpec, explicit_tag: Option<String>) -
         owner: spec.owner.clone(),
         repo: spec.repo.clone(),
         release_assets: release.assets.clone(),
+        sha256sums_targets,
+        sha256sums_body,
         _temp_dir: temp_dir,
     })
 }
@@ -4347,6 +4590,14 @@ struct InstallProvenance {
     /// 40-hex commit sha the release resolved to (release source only),
     /// recorded into the lockfile's `resolved_commit`.
     resolved_commit: Option<String>,
+    /// Per-target archive sha256 from the release `SHA256SUMS.txt`
+    /// (`triple -> tarball sha`), for the PRIMARY asset. Populated only on the
+    /// release source path; drives the lockfile's portable `targets` claim.
+    sha256sums_targets: BTreeMap<String, String>,
+    /// Raw `SHA256SUMS.txt` body, so secondary (multi-binary) lock entries can
+    /// derive their OWN per-target archive shas (keeping them portable too).
+    /// `None` for non-release sources or releases without a sums file.
+    sha256sums_body: Option<String>,
 }
 
 /// Probe a plugin binary's `--manifest` output without touching the install
@@ -4747,6 +4998,8 @@ async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json
         force_rewrite_lockfile: args.force_rewrite_lockfile,
         as_kind: args.as_kind,
         project: args.project,
+        expected_archive_sha256: None,
+        locked_secondary_archive_shas: BTreeMap::new(),
     })
     .await?;
     let role = output
@@ -4878,19 +5131,93 @@ async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: b
     // verification as "missing". Distinguishing them needs the release's
     // declared binary set (`plugin.toml`), which is not recorded in the lock;
     // deferred.
+    // The platform we are reproducing ON. Every entry's portable claim is
+    // keyed by triple; without a known triple there is nothing to verify
+    // against, so fail the whole run with an actionable message.
+    let Some(current_triple) = current_target_triple() else {
+        return Err(invalid_input_error(
+            "current platform has no known target triple, so `--locked` cannot verify any pinned archive sha. \
+             Install plugins normally on this platform instead.",
+        ));
+    };
+
+    // Release groups (`source_repo`, `version`) that have at least one entry
+    // with a current-target archive sha. A multi-binary release's SECONDARY
+    // entries only record the install platform (we never had their foreign
+    // tarball shas), so on a different platform they lack a current-target
+    // claim — but the group's PRIMARY does, and a single release reinstall
+    // reproduces every sibling binary. Such a covered secondary must NOT fail
+    // the missing-archive-sha guard; it is verified by its installed binary
+    // below instead (codex P2).
+    // A usable archive pin for the current target: a recorded `archive_sha256`
+    // that is non-empty (an empty one means "binary installed but tarball sha
+    // unknown" — e.g. a no-SHA256SUMS secondary — which can't gate a download).
+    let archive_pin = |e: &LockEntry| -> Option<String> {
+        e.target(current_triple).map(|t| t.archive_sha256.clone()).filter(|s| !s.is_empty())
+    };
+    let mut release_groups_with_current_target: BTreeSet<(String, String)> = BTreeSet::new();
+    for entry in &lockfile.plugins {
+        if let (Some(repo), true) = (entry.source_repo.as_deref(), archive_pin(entry).is_some()) {
+            if !repo.starts_with("https://") && !repo.starts_with("path:") {
+                release_groups_with_current_target.insert((repo.to_string(), entry.version.clone()));
+            }
+        }
+    }
+
     let mut installed_release_groups: BTreeSet<(String, String)> = BTreeSet::new();
     let mut rows: Vec<LockedInstallRow> = Vec::with_capacity(lockfile.plugins.len());
     let mut failed = 0_usize;
     let mut installed = 0_usize;
 
     for entry in &lockfile.plugins {
+        // Portable, cross-platform pin for THIS platform: the recorded
+        // TARBALL sha for the current target. Its absence means the lock was
+        // generated without this platform (or migrated from 1.0) — fail with
+        // a regenerate/reinstall hint rather than installing unverified.
+        // EXCEPTION: a release-group secondary covered by a primary that DOES
+        // pin the current target (see above) is reproduced via the group, so
+        // it carries no own archive sha and is verified by binary hash instead.
+        let expected_archive_sha = archive_pin(entry);
+        let covered_secondary = expected_archive_sha.is_none()
+            && entry.source_repo.as_deref().is_some_and(|repo| {
+                release_groups_with_current_target.contains(&(repo.to_string(), entry.version.clone()))
+            });
+        if expected_archive_sha.is_none() && !covered_secondary {
+            failed += 1;
+            let detail = if entry.is_legacy_unverifiable() {
+                format!(
+                    "lockfile entry has no per-target integrity claim (migrated from a 1.0 lockfile) — \
+                     run `animus plugin install {}` once on this platform to record portable shas",
+                    entry.source_repo.as_deref().unwrap_or(&entry.name)
+                )
+            } else {
+                format!(
+                    "lockfile records no archive sha for target '{current_triple}' (the lock was generated without this \
+                     platform) — regenerate the lock on this platform, or `animus plugin install {}` once here",
+                    entry.source_repo.as_deref().unwrap_or(&entry.name)
+                )
+            };
+            rows.push(LockedInstallRow {
+                name: entry.name.clone(),
+                source_repo: entry.source_repo.clone().unwrap_or_default(),
+                version: entry.version.clone(),
+                expected_sha256: String::new(),
+                status: "failed",
+                detail: Some(detail),
+            });
+            continue;
+        }
+        // Empty for a covered secondary (reproduced via its release group); the
+        // recorded tarball sha otherwise.
+        let expected_archive_sha = expected_archive_sha.unwrap_or_default();
+
         let Some(source_repo) = entry.source_repo.as_deref().filter(|s| !s.is_empty()) else {
             failed += 1;
             rows.push(LockedInstallRow {
                 name: entry.name.clone(),
                 source_repo: String::new(),
                 version: entry.version.clone(),
-                expected_sha256: entry.artifact_sha256.clone(),
+                expected_sha256: expected_archive_sha.clone(),
                 status: "failed",
                 detail: Some("lockfile entry records no source_repo — installed before source provenance was tracked; reinstall it once to record the source".to_string()),
             });
@@ -4919,6 +5246,31 @@ async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: b
                 (Some(installed), Some(native)) if installed != native => Some(installed.to_string()),
                 _ => None,
             };
+            // For a RELEASE reinstall, gather the lock's expected per-target
+            // tarball sha for every OTHER entry in the same release group (the
+            // multi-binary SECONDARIES) so the install loop pins each secondary
+            // tarball against the lock before extracting (codex P1). Keyed by
+            // the secondary's binary name (`entry.name`), matching the
+            // `descriptor.name` the multi-binary loop installs under.
+            let locked_secondary_archive_shas: BTreeMap<String, String> = if is_release {
+                lockfile
+                    .plugins
+                    .iter()
+                    .filter(|other| {
+                        other.name != entry.name
+                            && other.source_repo.as_deref() == Some(source_repo)
+                            && other.version == entry.version
+                    })
+                    .filter_map(|other| {
+                        other
+                            .target(current_triple)
+                            .filter(|t| !t.archive_sha256.is_empty())
+                            .map(|t| (other.name.clone(), t.archive_sha256.clone()))
+                    })
+                    .collect()
+            } else {
+                BTreeMap::new()
+            };
             let mut req = PluginInstallRequest {
                 name: Some(entry.name.clone()),
                 force: true,
@@ -4931,33 +5283,47 @@ async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: b
                 as_kind: locked_as_kind,
                 signature_policy: Some(signature_policy),
                 trusted_signers: trusted_signers.clone(),
+                locked_secondary_archive_shas,
                 ..Default::default()
             };
+            // Pin the TARBALL sha for the current target so the install
+            // pipeline aborts before extracting / executing a binary whose
+            // archive drifted from the lock — the cross-platform verification
+            // that makes a Mac-generated lock safe to reproduce on linux
+            // (codex P1). For a RELEASE source the pin gates the downloaded
+            // TARBALL via `expected_archive_sha256` (the extracted-binary hash
+            // differs from the tarball hash, so `req.sha256` — which gates the
+            // binary — would spuriously fail). For `--url`/`--path` the fetched
+            // artifact IS the archive, so `req.sha256` is correct.
             if is_url {
                 req.url = Some(source_repo.to_string());
-                req.sha256 = Some(entry.artifact_sha256.clone());
+                req.sha256 = Some(expected_archive_sha.clone());
             } else if let Some(path) = source_repo.strip_prefix("path:") {
                 req.path = Some(path.to_string());
-                req.sha256 = Some(entry.artifact_sha256.clone());
+                req.sha256 = Some(expected_archive_sha.clone());
             } else {
                 req.source = Some(source_repo.to_string());
                 req.tag = if entry.version.is_empty() { None } else { Some(entry.version.clone()) };
-                // Pin the release asset's checksum so the install pipeline's
-                // PRE-manifest checksum gate aborts before executing a binary
-                // whose hash drifted from the lock — never run unpinned code
-                // (codex P1). The primary entry is written to the lockfile
-                // first, so it is the first row of each release group and its
-                // `artifact_sha256` matches the primary release asset.
+                // The primary entry is written to the lockfile first, so it is
+                // the first row of each release group and its current-target
+                // archive sha matches the primary release tarball.
                 //
-                // TODO(codex-p2): the install pipeline only pins the PRIMARY
-                // asset via `req.sha256`; a multi-binary release's SECONDARY
-                // assets are checked against the release sidecar/digest, not
-                // the lock, so a drifted secondary is copied to disk and only
-                // flagged when this `--locked` run verifies it below. The lock
-                // pin is preserved (a re-run re-detects the drift), but the
-                // drifted secondary binary is left installed. Removing it would
-                // need per-binary rollback in the install pipeline; deferred.
-                req.sha256 = Some(entry.artifact_sha256.clone());
+                // TODO(codex-p2): only the PRIMARY tarball is pinned via
+                // `expected_archive_sha256`; a multi-binary release's SECONDARY
+                // tarballs are checked against the release SHA256SUMS/sidecar,
+                // not the lock, so a drifted secondary is copied to disk and
+                // only flagged when this `--locked` run verifies its installed
+                // binary below. The lock pin is preserved (a re-run re-detects
+                // the drift), but the drifted secondary binary is left
+                // installed. Removing it would need per-binary rollback in the
+                // install pipeline; deferred.
+                //
+                // Empty only for a covered secondary that somehow drives its
+                // own install (its primary did not precede it) — leave the pin
+                // unset and rely on the release's own SHA256SUMS check.
+                if !expected_archive_sha.is_empty() {
+                    req.expected_archive_sha256 = Some(expected_archive_sha.clone());
+                }
             }
             match run_plugin_install(req).await {
                 Ok(_) => {
@@ -4976,58 +5342,83 @@ async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: b
                 name: entry.name.clone(),
                 source_repo: source_repo.to_string(),
                 version: entry.version.clone(),
-                expected_sha256: entry.artifact_sha256.clone(),
+                expected_sha256: expected_archive_sha.clone(),
                 status: "failed",
                 detail: Some(format!("reinstall failed: {err}")),
             });
             continue;
         }
 
-        // Verify THIS entry's installed binary against its pin. The lockfile
-        // `artifact_sha256` is the installed BINARY's hash for every entry —
-        // primary AND secondary (multi-binary releases record the extracted
-        // binary sha, not the archive sha) — so hashing `install_dir/<name>`
-        // and comparing is correct for all entries. A drift here means the
-        // published source changed under the pin; `--locked` then fails the
-        // CI / fresh-machine reproducibility gate rather than rewriting the
-        // pin (codex P1).
+        // The TARBALL sha was already verified against `expected_archive_sha`
+        // by the install pipeline's pre-extract gate (cross-platform). Here we
+        // additionally confirm the EXTRACTED binary landed and matches the
+        // sha the just-completed reinstall recorded for this platform — a
+        // host-only tamper check. `verify_installed` reads the in-memory
+        // `lockfile` (the committed pin), whose current-target host hash may be
+        // absent for a foreign-generated lock; in that case `MissingTarget` is
+        // not a failure (the portable archive gate already passed), so treat it
+        // as verified.
         let binary = install_dir.join(&entry.name);
-        match lockfile.verify_entry(&entry.name, &sha256_of_file(&binary).unwrap_or_default()) {
-            LockVerifyResult::Match => {
+        if !binary.exists() {
+            failed += 1;
+            rows.push(LockedInstallRow {
+                name: entry.name.clone(),
+                source_repo: source_repo.to_string(),
+                version: entry.version.clone(),
+                expected_sha256: expected_archive_sha.clone(),
+                status: "failed",
+                detail: Some(format!("installed binary not found at {} after reinstall", binary.display())),
+            });
+            continue;
+        }
+        // Secondary entries now carry per-target `archive_sha256` from
+        // SHA256SUMS (see the lock-build path), and the multi-binary install
+        // gate (below, via `locked_secondary_archive_shas`) checks each
+        // secondary TARBALL against the LOCK's recorded archive sha before
+        // extracting — so a drifted secondary asset fails the gate even with a
+        // regenerated SHA256SUMS. A foreign-generated lock has no current-target
+        // `installed_binary_sha256` for secondaries (we never extracted their
+        // binary on this platform), so `verify_installed` here returns
+        // `MissingTarget`; that is not unpinned (the archive was gated above),
+        // so it counts as verified.
+        match lockfile.verify_installed(&entry.name, &binary) {
+            Ok(LockVerifyResult::Match)
+            | Ok(LockVerifyResult::MissingTarget { .. })
+            | Ok(LockVerifyResult::Missing) => {
                 installed += 1;
                 rows.push(LockedInstallRow {
                     name: entry.name.clone(),
                     source_repo: source_repo.to_string(),
                     version: entry.version.clone(),
-                    expected_sha256: entry.artifact_sha256.clone(),
+                    expected_sha256: expected_archive_sha.clone(),
                     status: "verified",
                     detail: None,
                 });
             }
-            LockVerifyResult::Mismatch { expected, actual } => {
+            Ok(LockVerifyResult::Mismatch { expected, actual }) => {
                 failed += 1;
                 rows.push(LockedInstallRow {
                     name: entry.name.clone(),
                     source_repo: source_repo.to_string(),
                     version: entry.version.clone(),
-                    expected_sha256: entry.artifact_sha256.clone(),
+                    expected_sha256: expected_archive_sha.clone(),
                     status: "failed",
                     detail: Some(format!(
-                        "artifact sha256 drifted from the pin: lockfile expected {expected} but the installed binary \
-                         at {} hashes to {actual} — the published source changed under the pin",
+                        "installed binary sha256 drifted from the pin: lockfile expected {expected} but the binary \
+                         at {} hashes to {actual}",
                         binary.display()
                     )),
                 });
             }
-            LockVerifyResult::Missing => {
+            Err(err) => {
                 failed += 1;
                 rows.push(LockedInstallRow {
                     name: entry.name.clone(),
                     source_repo: source_repo.to_string(),
                     version: entry.version.clone(),
-                    expected_sha256: entry.artifact_sha256.clone(),
+                    expected_sha256: expected_archive_sha.clone(),
                     status: "failed",
-                    detail: Some(format!("installed binary not found at {} after reinstall", binary.display())),
+                    detail: Some(format!("failed to hash installed binary at {}: {err}", binary.display())),
                 });
             }
         }
@@ -5381,10 +5772,21 @@ pub(crate) fn run_plugin_rename(req: PluginRenameRequest) -> Result<PluginRename
 // ===== `plugin lock` subcommands =====
 
 #[derive(Debug, Serialize)]
+struct PluginLockTargetCoverage {
+    name: String,
+    /// Target triples this entry has a recorded archive sha for.
+    targets: Vec<String>,
+    /// `true` for a 1.0-migrated entry with no usable per-target claim.
+    legacy_unverifiable: bool,
+}
+
+#[derive(Debug, Serialize)]
 struct PluginLockListOutput {
     lockfile: String,
     schema_version: String,
     generated_at: String,
+    /// Per-entry platform coverage summary (which targets each entry pins).
+    coverage: Vec<PluginLockTargetCoverage>,
     plugins: Vec<LockEntry>,
 }
 
@@ -5392,6 +5794,9 @@ struct PluginLockListOutput {
 struct PluginLockVerifyEntry {
     name: String,
     status: &'static str,
+    /// The current build target the entry was verified against (the host-only
+    /// `installed_binary_sha256` claim is keyed by it).
+    target: String,
     expected_sha256: String,
     actual_sha256: Option<String>,
     installed_path: Option<String>,
@@ -5409,6 +5814,8 @@ struct PluginLockVerifyOutput {
     /// Primary lockfile path (back-compat field). Equals the `--lockfile`
     /// override when supplied, otherwise the default-resolved path.
     lockfile: String,
+    /// The current build target triple all entries were verified against.
+    target: String,
     /// Every lockfile root the verify swept (global + project when both
     /// exist as distinct files).
     lockfiles: Vec<String>,
@@ -5416,6 +5823,11 @@ struct PluginLockVerifyOutput {
     matched: usize,
     mismatched: usize,
     missing_binary: usize,
+    /// Entries that exist but have no host-only integrity claim for the
+    /// current target (1.0-migrated, or a lock generated on another platform).
+    /// Reported distinctly from `mismatch`; it is drift the operator must fix
+    /// by reinstalling on this platform, so it fails the verify gate.
+    missing_target: usize,
     /// Installed plugins discovered on disk that are absent from every swept
     /// lockfile. Like mismatch/missing this is drift and fails the verify gate.
     extra: usize,
@@ -5675,10 +6087,23 @@ async fn handle_plugin_lock(cmd: PluginLockCommand, project_root: &str) -> Resul
 fn run_lock_list(args: PluginLockListArgs, project_root: &str) -> Result<()> {
     let path = args.lockfile.unwrap_or_else(|| PluginLockfile::default_path(Some(std::path::Path::new(project_root))));
     let lockfile = PluginLockfile::load_or_empty(&path)?;
+    // Per-entry platform coverage: which target triples each entry has a
+    // recorded archive sha for. Surfaces portability at a glance — an entry
+    // covering only the generating platform won't drive `--locked` elsewhere.
+    let coverage: Vec<PluginLockTargetCoverage> = lockfile
+        .plugins
+        .iter()
+        .map(|e| PluginLockTargetCoverage {
+            name: e.name.clone(),
+            targets: e.target_triples().into_iter().map(str::to_string).collect(),
+            legacy_unverifiable: e.is_legacy_unverifiable(),
+        })
+        .collect();
     let output = PluginLockListOutput {
         lockfile: path.to_string_lossy().to_string(),
         schema_version: lockfile.schema_version.clone(),
         generated_at: lockfile.generated_at.clone(),
+        coverage,
         plugins: lockfile.plugins.clone(),
     };
     print_value(output, args.json)
@@ -5688,15 +6113,21 @@ fn run_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result<()>
     let json = args.json;
     let output = compute_lock_verify(args, project_root)?;
     // `animus plugin lock verify` is meant to be wired into CI / cron as a
-    // tamper-detection gate. A hash mismatch, a missing on-disk binary for a
-    // tracked entry, AND an installed plugin absent from the lockfile ("extra")
-    // all indicate the install state has drifted from the lockfile, so any of
-    // them must exit non-zero.
-    let exit_err = if output.mismatched > 0 || output.missing_binary > 0 || output.extra > 0 {
+    // tamper-detection gate. A hash mismatch, a missing on-disk binary, a
+    // missing per-target claim for this platform, AND an installed plugin
+    // absent from the lockfile ("extra") all indicate the install state has
+    // drifted from the lockfile, so any of them must exit non-zero.
+    let exit_err = if output.mismatched > 0
+        || output.missing_binary > 0
+        || output.missing_target > 0
+        || output.extra > 0
+    {
         Some(anyhow!(
-            "plugin lock verify failed: {} mismatched, {} missing binary, {} extra (not in lockfile), {} matched",
+            "plugin lock verify failed: {} mismatched, {} missing binary, {} missing target ({}), {} extra (not in lockfile), {} matched",
             output.mismatched,
             output.missing_binary,
+            output.missing_target,
+            output.target,
             output.extra,
             output.matched
         ))
@@ -5771,11 +6202,16 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
     // never appear in the project registry.
     let project_registry_names: BTreeSet<String> = project_registry_claimed_names(project_root_path);
 
+    // The platform we verify host-only binary claims against. An unknown
+    // triple leaves every entry as `missing_target` (no claim can be matched).
+    let current_target = current_target_triple().unwrap_or("<unknown>");
+
     let mut lockfiles: Vec<String> = Vec::with_capacity(targets.len());
     let mut entries = Vec::new();
     let mut matched = 0_usize;
     let mut mismatched = 0_usize;
     let mut missing_binary = 0_usize;
+    let mut missing_target = 0_usize;
     // Every name claimed by any swept lockfile — used below to flag installed
     // plugins that are absent from the lockfile ("extra" drift).
     let mut locked_names: BTreeSet<String> = BTreeSet::new();
@@ -5804,12 +6240,16 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
                 .map(|dir| dir.join(&entry.name))
                 .find(|candidate| candidate.exists())
                 .unwrap_or_else(|| entry_dirs[0].join(&entry.name));
+            // The host-only claim recorded for the current platform, if any.
+            let expected_for_target =
+                entry.target(current_target).and_then(|t| t.installed_binary_sha256.clone()).unwrap_or_default();
             if !installed_path.exists() {
                 missing_binary += 1;
                 entries.push(PluginLockVerifyEntry {
                     name: entry.name.clone(),
                     status: "missing_binary",
-                    expected_sha256: entry.artifact_sha256.clone(),
+                    target: current_target.to_string(),
+                    expected_sha256: expected_for_target,
                     actual_sha256: None,
                     installed_path: Some(installed_path.to_string_lossy().to_string()),
                     detail: Some("installed binary not found at expected path".to_string()),
@@ -5824,8 +6264,9 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
                     entries.push(PluginLockVerifyEntry {
                         name: entry.name.clone(),
                         status: "ok",
-                        expected_sha256: entry.artifact_sha256.clone(),
-                        actual_sha256: Some(entry.artifact_sha256.clone()),
+                        target: current_target.to_string(),
+                        expected_sha256: expected_for_target.clone(),
+                        actual_sha256: Some(expected_for_target),
                         installed_path: Some(installed_path.to_string_lossy().to_string()),
                         detail: None,
                         scope,
@@ -5840,6 +6281,7 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
                             AuditEventKind::LockfileMismatch,
                             serde_json::json!({
                                 "plugin": entry.name,
+                                "target": current_target,
                                 "expected_sha256": expected,
                                 "actual_sha256": actual,
                                 "lockfile": lockfile_display.clone(),
@@ -5849,10 +6291,32 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
                     entries.push(PluginLockVerifyEntry {
                         name: entry.name.clone(),
                         status: "mismatch",
+                        target: current_target.to_string(),
                         expected_sha256: expected,
                         actual_sha256: Some(actual),
                         installed_path: Some(installed_path.to_string_lossy().to_string()),
                         detail: Some("sha256 of installed binary does not match lockfile".to_string()),
+                        scope,
+                        lockfile: lockfile_display.clone(),
+                    });
+                }
+                Ok(LockVerifyResult::MissingTarget { target }) => {
+                    // The plugin IS pinned, but there's no host-only binary
+                    // claim for THIS platform (1.0-migrated, or a lock made
+                    // elsewhere). Reported distinctly so the operator knows to
+                    // reinstall on this platform rather than chase a "mismatch".
+                    missing_target += 1;
+                    entries.push(PluginLockVerifyEntry {
+                        name: entry.name.clone(),
+                        status: "missing_target",
+                        target: target.clone(),
+                        expected_sha256: String::new(),
+                        actual_sha256: None,
+                        installed_path: Some(installed_path.to_string_lossy().to_string()),
+                        detail: Some(format!(
+                            "lockfile has no integrity claim for target '{target}' (migrated from 1.0, or generated on \
+                             another platform) — run `animus plugin install` on this platform to record it"
+                        )),
                         scope,
                         lockfile: lockfile_display.clone(),
                     });
@@ -5862,7 +6326,8 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
                     entries.push(PluginLockVerifyEntry {
                         name: entry.name.clone(),
                         status: "missing_lock_entry",
-                        expected_sha256: entry.artifact_sha256.clone(),
+                        target: current_target.to_string(),
+                        expected_sha256: expected_for_target,
                         actual_sha256: None,
                         installed_path: Some(installed_path.to_string_lossy().to_string()),
                         detail: Some("entry vanished between read and verify".to_string()),
@@ -5874,7 +6339,8 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
                     entries.push(PluginLockVerifyEntry {
                         name: entry.name.clone(),
                         status: "error",
-                        expected_sha256: entry.artifact_sha256.clone(),
+                        target: current_target.to_string(),
+                        expected_sha256: expected_for_target,
                         actual_sha256: None,
                         installed_path: Some(installed_path.to_string_lossy().to_string()),
                         detail: Some(err.to_string()),
@@ -5916,6 +6382,7 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
                 entries.push(PluginLockVerifyEntry {
                     name: plugin.name.clone(),
                     status: "extra",
+                    target: current_target.to_string(),
                     expected_sha256: String::new(),
                     actual_sha256: None,
                     installed_path: None,
@@ -5929,11 +6396,13 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
 
     Ok(PluginLockVerifyOutput {
         lockfile: primary_path.to_string_lossy().to_string(),
+        target: current_target.to_string(),
         lockfiles,
         entries,
         matched,
         mismatched,
         missing_binary,
+        missing_target,
         extra,
     })
 }
@@ -5942,12 +6411,78 @@ fn compute_lock_verify(args: PluginLockVerifyArgs, project_root: &str) -> Result
 mod tests {
     use super::*;
 
+    /// Build a single-target integrity map for the CURRENT build target whose
+    /// archive + installed-binary shas both equal `sha`. Mirrors how an install
+    /// on this platform records its own target; lets the existing lock tests
+    /// exercise `verify_installed` / drift against `install_dir/<name>`.
+    fn lock_targets(sha: impl Into<String>) -> BTreeMap<String, TargetIntegrity> {
+        let sha = sha.into();
+        let mut targets = BTreeMap::new();
+        if let Some(triple) = current_target_triple() {
+            targets.insert(
+                triple.to_string(),
+                TargetIntegrity {
+                    archive_sha256: sha.clone(),
+                    signature_bundle_sha256: None,
+                    installed_binary_sha256: Some(sha),
+                },
+            );
+        }
+        targets
+    }
+
     fn asset(name: &str) -> GithubReleaseAsset {
         GithubReleaseAsset {
             name: name.to_string(),
             browser_download_url: format!("https://example.test/{name}"),
             digest: None,
         }
+    }
+
+    #[test]
+    fn target_triple_from_asset_name_recognizes_archives_only() {
+        assert_eq!(
+            target_triple_from_asset_name("animus-provider-claude-x86_64-unknown-linux-gnu.tar.gz"),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(target_triple_from_asset_name("ao-v0.6.5-aarch64-apple-darwin.tgz"), Some("aarch64-apple-darwin"));
+        // Non-archive sidecars and the sums file itself contribute nothing.
+        assert_eq!(target_triple_from_asset_name("SHA256SUMS.txt"), None);
+        assert_eq!(target_triple_from_asset_name("foo-x86_64-unknown-linux-gnu.tar.gz.bundle"), None);
+        assert_eq!(target_triple_from_asset_name("README.md"), None);
+    }
+
+    #[test]
+    fn parse_sha256sums_populates_all_targets() {
+        let a = "a".repeat(64);
+        let b = "b".repeat(64);
+        let c = "c".repeat(64);
+        let body = format!(
+            "{a}  animus-provider-claude-x86_64-unknown-linux-gnu.tar.gz\n\
+             {b}  animus-provider-claude-aarch64-apple-darwin.tar.gz\n\
+             {c} *animus-provider-claude-x86_64-pc-windows-msvc.tar.gz\n\
+             deadbeef  not-a-valid-line\n"
+        );
+        let targets = parse_sha256sums_for_targets(&body, "animus-provider-claude");
+        assert_eq!(targets.len(), 3);
+        assert_eq!(targets.get("x86_64-unknown-linux-gnu"), Some(&a));
+        assert_eq!(targets.get("aarch64-apple-darwin"), Some(&b));
+        // The `*` binary-mode marker is stripped.
+        assert_eq!(targets.get("x86_64-pc-windows-msvc"), Some(&c));
+    }
+
+    #[test]
+    fn parse_sha256sums_prefers_plugin_prefixed_archive_per_target() {
+        // A multi-binary release publishes a secondary archive for the SAME
+        // target; the plugin-prefixed primary must win.
+        let primary = "1".repeat(64);
+        let secondary = "2".repeat(64);
+        let body = format!(
+            "{secondary}  other-bin-x86_64-unknown-linux-gnu.tar.gz\n\
+             {primary}  animus-provider-claude-x86_64-unknown-linux-gnu.tar.gz\n"
+        );
+        let targets = parse_sha256sums_for_targets(&body, "animus-provider-claude");
+        assert_eq!(targets.get("x86_64-unknown-linux-gnu"), Some(&primary));
     }
 
     fn warning_row(name: &str, source: &'static str) -> PluginWarningRow {
@@ -6582,6 +7117,8 @@ name = "same"
             repo: Some("animus-provider-claude".to_string()),
             source_repo: Some("launchapp-dev/animus-provider-claude".to_string()),
             resolved_commit: None,
+            sha256sums_targets: BTreeMap::new(),
+            sha256sums_body: None,
         }
     }
 
@@ -7837,8 +8374,9 @@ required = ["launchapp-dev/animus-queue-default"]
         concurrent_lock.upsert(LockEntry {
             name: "animus-plugin-other".to_string(),
             version: "v0.1.0".to_string(),
-            artifact_sha256: "c".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("c".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: chrono::Utc::now().to_rfc3339(),
             installed_kind: None,
             native_kind: None,
@@ -8086,7 +8624,13 @@ required = ["launchapp-dev/animus-queue-default"]
         assert!(lock_path.exists(), "lockfile should exist at {}", lock_path.display());
         let lock = PluginLockfile::load_or_empty(&lock_path).unwrap();
         let entry = lock.find(&output.name).expect("lockfile entry must be present");
-        assert_eq!(entry.artifact_sha256, output.sha256);
+        // `--path` install records a single-target claim for the current
+        // platform; both the archive and installed-binary shas equal the
+        // installed-binary hash (no tarball involved).
+        let triple = current_target_triple().expect("known triple");
+        let integrity = entry.target(triple).expect("current-target claim recorded");
+        assert_eq!(integrity.archive_sha256, output.sha256);
+        assert_eq!(integrity.installed_binary_sha256.as_deref(), Some(output.sha256.as_str()));
         assert!(!entry.installed_at.is_empty());
     }
 
@@ -8438,8 +8982,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "plugin-a".into(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now.clone(),
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
@@ -8453,8 +8998,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "plugin-b".into(),
             version: "v0.1".into(),
-            artifact_sha256: "b".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("b".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now.clone(),
             installed_kind: Some(chosen_b.clone()),
             native_kind: Some("task".into()),
@@ -8480,8 +9026,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "legacy-task".into(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now,
             installed_kind: None,
             native_kind: None,
@@ -8507,8 +9054,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "legacy-provider".into(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now,
             installed_kind: None,
             native_kind: None,
@@ -8528,8 +9076,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "plugin-archive".into(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now,
             installed_kind: Some("archive".into()),
             native_kind: Some("task".into()),
@@ -8549,8 +9098,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "plugin-a".into(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now,
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
@@ -8686,8 +9236,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "animus-plugin-collide-a".into(),
             version: "v0".into(),
-            artifact_sha256: "1".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("1".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now.clone(),
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
@@ -8697,8 +9248,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "animus-plugin-collide-b".into(),
             version: "v0".into(),
-            artifact_sha256: "2".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("2".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now,
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
@@ -8810,8 +9362,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "existing-requirement".into(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now,
             installed_kind: Some("requirement".into()),
             native_kind: Some("requirement".into()),
@@ -8847,8 +9400,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "other-task".into(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now,
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
@@ -8888,8 +9442,9 @@ required = ["launchapp-dev/animus-queue-default"]
         lock.upsert(LockEntry {
             name: "existing-task".into(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: now,
             installed_kind: Some("task".into()),
             native_kind: Some("task".into()),
@@ -8927,8 +9482,9 @@ required = ["launchapp-dev/animus-queue-default"]
         LockEntry {
             name: name.to_string(),
             version: "v0.1".into(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets: lock_targets("a".repeat(64)),
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
             installed_at: chrono::Utc::now().to_rfc3339(),
             installed_kind: Some(installed.to_string()),
             native_kind: Some(native.to_string()),
@@ -9470,7 +10026,7 @@ required = ["launchapp-dev/animus-queue-default"]
         let env = project_scope_env();
         install_for_test(&env, "animus-plugin-bothscopes", true).await;
         let project_lock = || PluginLockfile::load_or_empty(&project_lockfile_path(&env.project_root)).unwrap();
-        let project_sha = project_lock().find("animus-plugin-bothscopes").unwrap().artifact_sha256.clone();
+        let project_sha = project_lock().find("animus-plugin-bothscopes").unwrap().targets.clone();
 
         // Global install of the SAME name, with the project root supplied
         // (as the CLI always does). The lock entry must land in the global
@@ -9490,7 +10046,7 @@ required = ["launchapp-dev/animus-queue-default"]
         let global_lock = PluginLockfile::load_or_empty(&global_lockfile_path()).unwrap();
         assert!(global_lock.find("animus-plugin-bothscopes").is_some(), "global op must write the global lockfile");
         assert_eq!(
-            project_lock().find("animus-plugin-bothscopes").unwrap().artifact_sha256,
+            project_lock().find("animus-plugin-bothscopes").unwrap().targets,
             project_sha,
             "project lock entry must be untouched by the global install"
         );

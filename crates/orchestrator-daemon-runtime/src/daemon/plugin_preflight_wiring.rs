@@ -249,13 +249,22 @@ pub fn lock_drift_warnings(project_root: &str) -> Vec<String> {
                 entry.name
             )),
             Some(plugin) => {
-                if let Ok(actual) = orchestrator_plugin_host::sha256_of_file(&plugin.path) {
-                    if !actual.eq_ignore_ascii_case(&entry.artifact_sha256) {
-                        warnings.push(format!(
-                            "plugin lock drift: {} sha256 mismatch; run `animus plugin lock verify`",
-                            entry.name
-                        ));
-                    }
+                // Target-aware (schema 2.0): compare the on-disk binary against
+                // the host-only `installed_binary_sha256` recorded for the
+                // CURRENT target. Only a `Mismatch` is drift; `MissingTarget` /
+                // `Missing` (1.0-migrated entry, or a lock generated on another
+                // platform) carries no comparable claim here, so it is left to
+                // `plugin lock verify` to report distinctly and not warned on.
+                let drift = [project_lock.as_ref(), global_lock.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .find(|lock| lock.find(&entry.name).is_some())
+                    .map(|lock| lock.verify_installed(&entry.name, &plugin.path));
+                if let Some(Ok(orchestrator_plugin_host::LockVerifyResult::Mismatch { .. })) = drift {
+                    warnings.push(format!(
+                        "plugin lock drift: {} sha256 mismatch; run `animus plugin lock verify`",
+                        entry.name
+                    ));
                 }
             }
         }
@@ -525,16 +534,28 @@ required = ["launchapp-dev/animus-provider-claude"]
         std::fs::create_dir_all(&animus).expect("mkdir .animus");
         let lock_path = animus.join("plugins.lock");
         let mut lock = PluginLockfile::empty_at(&lock_path);
+        let mut targets = std::collections::BTreeMap::new();
+        if let Some(triple) = orchestrator_plugin_host::current_target_triple() {
+            targets.insert(
+                triple.to_string(),
+                orchestrator_plugin_host::TargetIntegrity {
+                    archive_sha256: "a".repeat(64),
+                    signature_bundle_sha256: None,
+                    installed_binary_sha256: Some("a".repeat(64)),
+                },
+            );
+        }
         lock.upsert(orchestrator_plugin_host::LockEntry {
             name: "animus-provider-ghost".to_string(),
             version: "v0.1.0".to_string(),
-            artifact_sha256: "a".repeat(64),
-            signature_bundle_sha256: None,
+            targets,
             installed_at: chrono::Utc::now().to_rfc3339(),
             installed_kind: None,
             native_kind: None,
             source_repo: Some("launchapp-dev/animus-provider-ghost".to_string()),
             resolved_commit: None,
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
         });
         lock.save().expect("save lock");
 

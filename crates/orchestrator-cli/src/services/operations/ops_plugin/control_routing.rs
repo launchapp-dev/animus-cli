@@ -157,6 +157,8 @@ impl PluginRouting for PluginRoutingImpl {
             force_rewrite_lockfile: false,
             as_kind: None,
             project: false,
+            expected_archive_sha256: None,
+            locked_secondary_archive_shas: std::collections::BTreeMap::new(),
         };
         let output = run_plugin_install(install_req).await.map_err(internal)?;
         let plugin_kind = output.manifest.as_ref().map(|m| m.plugin_kind.clone()).unwrap_or_default();

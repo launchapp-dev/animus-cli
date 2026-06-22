@@ -303,13 +303,14 @@ fn summarize_with_lock_translates_native_subject_kind_to_installed_kind() {
     lock.upsert(LockEntry {
         name: "animus-plugin-archive".into(),
         version: "v0.1".into(),
-        artifact_sha256: "a".repeat(64),
-        signature_bundle_sha256: None,
+        targets: std::collections::BTreeMap::new(),
         installed_at: chrono::Utc::now().to_rfc3339(),
         installed_kind: Some("archive".into()),
         native_kind: Some("task".into()),
         source_repo: None,
         resolved_commit: None,
+        legacy_artifact_sha256: None,
+        legacy_signature_bundle_sha256: None,
     });
     let summaries = summarize_discovered_plugins_with_lock(&plugins, Some(&lock));
     assert_eq!(summaries.len(), 1);
