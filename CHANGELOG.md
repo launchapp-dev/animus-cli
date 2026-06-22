@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-06-22
+
+**v0.6.3 — fix the config_source plugin process/connection leak (fleet-wide).**
+
+- `orchestrator-config` `config_source_client::resolve_plugin_base` spawned a
+  fresh `config_source` plugin process for every `config/load` and **never shut
+  it down**: `spawn_with_options` sets `kill_on_drop(true)`, but the child lives
+  inside shared state held by the host's background reader task, so dropping the
+  `PluginHost` handle didn't drop (or kill) the child — and a persistent stdio
+  plugin never sees stdin EOF. The daemon calls this on **every config reload**,
+  so each reload leaked one process (and, for DB-backed sources like
+  `animus-config-postgres`, an open Postgres connection pool) — exhausting the
+  container `pids` cap / Postgres `max_connections` over time (observed: 51
+  lingering processes on the launchapp portal → `sorry, too many clients`).
+  Fix: borrow the host for handshake + `config/load`, then **always
+  `host.shutdown()`** on every exit path so the process is reaped. Affects every
+  v0.6 daemon (the default `animus-config-yaml` source leaked the same way,
+  without the Postgres amplifier).
+
 ## [0.6.2] - 2026-06-21
 
 **v0.6.2 — bootable Docker image + current default plugin pins.**

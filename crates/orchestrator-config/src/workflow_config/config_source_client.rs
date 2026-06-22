@@ -65,6 +65,32 @@ async fn load_from_plugin(plugin: DiscoveredPlugin, project_root: PathBuf) -> Re
     let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
         .await
         .with_context(|| format!("spawning config_source plugin {}", plugin.name))?;
+
+    // Borrow the host for the handshake + config/load, then ALWAYS shut it down
+    // so the spawned config_source process is reaped. `spawn_with_options` sets
+    // `kill_on_drop(true)`, but the `Child` lives inside shared state held by the
+    // host's background reader task, so dropping THIS handle does not drop the
+    // child — the bg task keeps it alive until the plugin's stdout EOFs, which a
+    // persistent stdio plugin never does. The daemon calls this on every config
+    // reload, so without an explicit `shutdown()` each reload leaks one process
+    // (and, for DB-backed sources like config-postgres, an open connection pool),
+    // exhausting `pids` / Postgres `max_connections` over time.
+    let loaded = load_via_host(&host, &plugin, &project_root).await;
+    // Best-effort reap. `shutdown` always `start_kill`s the child internally
+    // (even when it returns Err on the graceful-drain leg), so ignoring the
+    // result still terminates the process — we just must CALL it.
+    let _ = host.shutdown().await;
+    loaded
+}
+
+/// Handshake + `config/load` against an already-spawned config_source host,
+/// returning the compiled base config. Split out from [`load_from_plugin`] so
+/// the host is reaped (`shutdown`) on every exit path, not just success.
+async fn load_via_host(
+    host: &PluginHost,
+    plugin: &DiscoveredPlugin,
+    project_root: &Path,
+) -> Result<(WorkflowConfig, String)> {
     host.handshake().await.with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
 
     // Compute the repo-scope id from the project root so config_source plugins
@@ -72,7 +98,7 @@ async fn load_from_plugin(plugin: DiscoveredPlugin, project_root: PathBuf) -> Re
     // get a real scope, not null.
     let params = serde_json::json!({
         "project_root": project_root,
-        "repo_scope": protocol::repository_scope_for_path(&project_root),
+        "repo_scope": protocol::repository_scope_for_path(project_root),
     });
     let value = host
         .request_typed_with_timeout("config/load", Some(params), CONFIG_LOAD_TIMEOUT)
