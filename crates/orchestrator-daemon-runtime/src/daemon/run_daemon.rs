@@ -616,6 +616,11 @@ where
     clear_workflow_event_emitter();
     clear_workflow_event_broadcaster();
 
+    // Reap the resident config_source plugin host(s) kept warm across config
+    // loads/writes (v0.6.6). Without this the warm plugin process would survive
+    // daemon teardown until kill_on_drop fires at runtime exit.
+    orchestrator_config::workflow_config::config_source_client::shutdown_resident_hosts().await;
+
     if stop_daemon_on_exit {
         let _ = hooks.stop_daemon(&primary_root).await;
     }

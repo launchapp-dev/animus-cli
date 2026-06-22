@@ -71,7 +71,7 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
         ));
     }
 
-    let Some((plugin_config, _cache_version)) = plugin_base else {
+    let Some((plugin_config, cache_version)) = plugin_base else {
         return Err(anyhow!(
             "no config_source plugin installed: the kernel sources its workflow/agent config exclusively from an \
              installed `config_source` plugin. Install one with \
@@ -79,6 +79,20 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
              .animus/workflows/*.yaml) or run `animus plugin install-defaults`."
         ));
     };
+
+    // CacheToken short-circuit: if the config_source plugin's CacheToken
+    // version AND the resolved pack registry both match what we last compiled
+    // for this root, the inputs are unchanged, so skip the whole pack-overlay
+    // merge + validate and reuse the cached compiled config. A `config/write`
+    // (or a changed token / pack set) invalidates the entry, so a real config
+    // OR pack change always recompiles. Correctness over cleverness: any
+    // mismatch ALWAYS does the full compile below. The pack registry is folded
+    // into the key because the source token reflects ONLY the source, not which
+    // packs are installed/active.
+    let compile_token = format!("{cache_version}\u{1f}{}", pack_registry_fingerprint(&registry));
+    if let Some(cached) = super::config_source_client::cached_compiled(project_root, &compile_token) {
+        return Ok(cached);
+    }
 
     // The config_source plugin owns its own caching via the CacheToken it
     // returns; the kernel's YAML-bytes/mtime disk cache never applied to the
@@ -126,7 +140,57 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
         config,
         path,
     };
+
+    // Cache the compiled result under the source-token + pack-registry key so
+    // an unchanged source AND pack set on the next load short-circuits the
+    // merge + validate above.
+    super::config_source_client::store_compiled(project_root, compile_token, loaded.clone());
     Ok(loaded)
+}
+
+/// Stable fingerprint of the resolved pack registry — `(pack_id, version,
+/// source, manifest_path, manifest mtime)` per entry, hashed. Folded into the
+/// compiled-config cache key so installing/removing/re-pinning a pack
+/// invalidates the short-circuit even when the config_source token is
+/// unchanged. The manifest mtime also catches an in-place edit of an active
+/// pack (common for project-override packs) that keeps the same id/version/path.
+///
+/// TODO(codex-p2): the mtime covers the manifest file but not the pack's
+/// workflow-overlay YAML files that `load_pack_workflow_overlay` reads. An
+/// in-place edit of ONLY an overlay file (without touching the manifest) can
+/// still be served stale until some other token changes. A full fix hashes the
+/// overlay bytes, which reintroduces the per-load IO the resident cache was
+/// built to avoid; deferred as a P2 — pack overlays are rarely hot-edited in
+/// the daemon's lifetime, and `animus pack` operations rewrite the manifest.
+fn pack_registry_fingerprint(registry: &crate::ResolvedPackRegistry) -> String {
+    let mut hasher = Sha256::new();
+    for entry in &registry.entries {
+        hasher.update(entry.pack_id.as_bytes());
+        hasher.update([0x1f]);
+        hasher.update(entry.version.as_bytes());
+        hasher.update([0x1f]);
+        hasher.update(format!("{:?}", entry.source).as_bytes());
+        hasher.update([0x1f]);
+        if let Some(path) = &entry.manifest_path {
+            hasher.update(path.as_os_str().as_encoded_bytes());
+            hasher.update([0x1f]);
+            hasher.update(file_mtime_nanos(path).to_le_bytes());
+        }
+        hasher.update([0x1e]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+/// Best-effort mtime (nanos since epoch) for a path; `0` when unavailable. Used
+/// only as a cache-invalidation signal, so an unreadable mtime conservatively
+/// collides to `0` (a later successful read differs and invalidates).
+fn file_mtime_nanos(path: &Path) -> u128 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
 }
 
 /// Bootstrap / dev compile path: source the project's base `WorkflowConfig`
