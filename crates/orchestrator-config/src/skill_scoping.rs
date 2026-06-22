@@ -116,6 +116,13 @@ struct MarkdownSkillFrontmatter {
     description: Option<String>,
     #[serde(default)]
     version: Option<String>,
+    /// Anthropic "Agent Skills" tool permission list. Accepts the canonical
+    /// hyphenated `allowed-tools` and the underscored `allowed_tools` variant
+    /// some hosts emit. Mapped to `SkillDefinition.tool_policy.allow` during
+    /// import (the genuine tool-permission field) unless the `animus:`
+    /// namespace already declares an explicit `tool_policy`.
+    #[serde(default, alias = "allowed_tools", rename = "allowed-tools")]
+    allowed_tools: Option<AllowedTools>,
     #[serde(default)]
     metadata: MarkdownSkillMetadata,
     /// Animus-specific runtime configuration. Only fields nested under the
@@ -131,6 +138,26 @@ struct MarkdownSkillFrontmatter {
 struct MarkdownSkillMetadata {
     #[serde(default)]
     version: Option<String>,
+}
+
+/// `allowed-tools` in the Anthropic "Agent Skills" standard is loosely typed:
+/// some skills write a YAML sequence, others a single comma-separated string.
+/// Accept both and normalize to a `Vec<String>`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum AllowedTools {
+    List(Vec<String>),
+    Csv(String),
+}
+
+impl AllowedTools {
+    fn into_vec(self) -> Vec<String> {
+        let raw = match self {
+            AllowedTools::List(items) => items,
+            AllowedTools::Csv(value) => value.split(',').map(str::to_string).collect(),
+        };
+        raw.into_iter().map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect()
+    }
 }
 
 /// Vendor-namespaced runtime config inside SKILL.md frontmatter (Phase 3).
@@ -532,6 +559,71 @@ fn markdown_skill_default_name(path: &Path) -> String {
     candidate.filter(|name| !name.trim().is_empty()).unwrap_or("unknown").to_string()
 }
 
+/// The skill format an imported `SKILL.md` was recognized as. Recorded as
+/// install provenance so `skill list` / `skill info` show where a normalized
+/// skill came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DetectedSkillFormat {
+    /// Already an Animus-native skill: the frontmatter carries an `animus:`
+    /// runtime namespace. Imported as-is (the body still becomes `system`).
+    AnimusNative,
+    /// Anthropic "Agent Skills" `SKILL.md` (also the lingua franca for Claude
+    /// Code, Hermes, OpenClaw, ...): `name` + `description` frontmatter with the
+    /// instructions in the markdown body. `allowed-tools` maps to
+    /// `tool_policy.allow`, the body maps to `system`.
+    AnthropicAgentSkill,
+}
+
+impl DetectedSkillFormat {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DetectedSkillFormat::AnimusNative => "animus-native",
+            DetectedSkillFormat::AnthropicAgentSkill => "anthropic-agent-skill",
+        }
+    }
+}
+
+/// Parse a `SKILL.md` (or animus markdown skill) into a `SkillDefinition`,
+/// also reporting which foreign/native format it was recognized as.
+///
+/// Detection: a frontmatter that declares an `animus:` runtime namespace is
+/// treated as Animus-native (its structural fields flow through unmapped). Any
+/// other recognizable SKILL.md is imported under Anthropic "Agent Skills"
+/// semantics — the markdown body is the instruction source (`prompt.system`)
+/// and `allowed-tools` becomes `tool_policy.allow`. A file with neither a
+/// `name` nor a non-empty body is rejected as not a recognizable skill.
+pub fn import_skill_definition(content: &str, default_name: &str) -> Result<(SkillDefinition, DetectedSkillFormat)> {
+    let normalized = content.replace("\r\n", "\n");
+    let normalized = normalized.trim_start_matches('\u{feff}');
+    let (frontmatter, body) = split_markdown_frontmatter(normalized);
+    let metadata = match frontmatter {
+        Some(frontmatter) => serde_yaml::from_str::<MarkdownSkillFrontmatter>(frontmatter)?,
+        None => MarkdownSkillFrontmatter::default(),
+    };
+    let prompt_body = body.trim();
+    let has_name = metadata.name.as_deref().is_some_and(|value| !value.trim().is_empty());
+    let format = if metadata.animus.is_some() {
+        DetectedSkillFormat::AnimusNative
+    } else {
+        DetectedSkillFormat::AnthropicAgentSkill
+    };
+
+    // Reject content that resolves to neither an explicit name nor any
+    // instructions: there is nothing recognizable to import.
+    if !has_name && prompt_body.is_empty() {
+        anyhow::bail!(
+            "unsupported skill format: no `name` frontmatter and no instruction body found (expected an Anthropic/Animus SKILL.md)"
+        );
+    }
+
+    // Import does NOT enforce the strict animus name rules (no whitespace,
+    // slug shape). Foreign "Agent Skills" legitimately use display names like
+    // "PDF Processing"; the install caller normalizes the name to a safe slug
+    // afterwards. Skipping validation here lets such names import cleanly.
+    let skill = build_skill_from_markdown(metadata, prompt_body, default_name, false)?;
+    Ok((skill, format))
+}
+
 pub fn parse_markdown_skill_definition(content: &str, default_name: &str) -> Result<SkillDefinition> {
     let normalized = content.replace("\r\n", "\n");
     let normalized = normalized.trim_start_matches('\u{feff}');
@@ -540,12 +632,31 @@ pub fn parse_markdown_skill_definition(content: &str, default_name: &str) -> Res
         Some(frontmatter) => serde_yaml::from_str::<MarkdownSkillFrontmatter>(frontmatter)?,
         None => MarkdownSkillFrontmatter::default(),
     };
+    build_skill_from_markdown(metadata, body.trim(), default_name, true)
+}
 
+fn build_skill_from_markdown(
+    metadata: MarkdownSkillFrontmatter,
+    prompt_body: &str,
+    default_name: &str,
+    validate: bool,
+) -> Result<SkillDefinition> {
     let name =
         metadata.name.as_deref().map(str::trim).filter(|value| !value.is_empty()).unwrap_or(default_name).to_string();
     let description = metadata.description.unwrap_or_default().trim().to_string();
-    let prompt_body = body.trim();
     let animus = metadata.animus.unwrap_or_default();
+
+    // Map Anthropic `allowed-tools` to the genuine tool-permission field
+    // (`tool_policy.allow`). An explicit `animus.tool_policy` always wins so a
+    // native skill never has its policy silently rewritten by a stray
+    // `allowed-tools` key.
+    let tool_policy = animus.tool_policy.or_else(|| {
+        metadata
+            .allowed_tools
+            .map(AllowedTools::into_vec)
+            .filter(|allow| !allow.is_empty())
+            .map(|allow| crate::AgentToolPolicy { allow, deny: Vec::new() })
+    });
 
     let skill = SkillDefinition {
         name,
@@ -559,7 +670,7 @@ pub fn parse_markdown_skill_definition(content: &str, default_name: &str) -> Res
             suffix: None,
             directives: Vec::new(),
         },
-        tool_policy: animus.tool_policy,
+        tool_policy,
         model: animus.model,
         mcp_servers: animus.mcp_servers,
         timeout_secs: animus.timeout_secs,
@@ -570,7 +681,9 @@ pub fn parse_markdown_skill_definition(content: &str, default_name: &str) -> Res
         adapters: animus.adapters,
         tags: animus.tags,
     };
-    validate_skill_definition(&skill)?;
+    if validate {
+        validate_skill_definition(&skill)?;
+    }
     Ok(skill)
 }
 
@@ -1174,6 +1287,74 @@ mod tests {
     fn write_manifest_yaml(dir: &Path, filename: &str, content: &str) {
         fs::create_dir_all(dir).unwrap();
         fs::write(dir.join(filename), content).unwrap();
+    }
+
+    #[test]
+    fn import_anthropic_skill_maps_body_to_system_and_allowed_tools_to_policy() {
+        let content = "---\nname: pdf-helper\ndescription: Work with PDF files\nallowed-tools:\n  - Read\n  - Bash\n---\n\nUse pdftotext to extract text.\nThen summarize it.\n";
+        let (skill, format) = import_skill_definition(content, "fallback").expect("import");
+        assert_eq!(format, DetectedSkillFormat::AnthropicAgentSkill);
+        assert_eq!(skill.name, "pdf-helper");
+        assert_eq!(skill.description, "Work with PDF files");
+        // The markdown BODY becomes the instruction prompt.
+        assert_eq!(skill.prompt.system.as_deref(), Some("Use pdftotext to extract text.\nThen summarize it."));
+        // `allowed-tools` becomes the tool-permission allow-list.
+        let policy = skill.tool_policy.expect("allowed-tools should map to a tool_policy");
+        assert_eq!(policy.allow, vec!["Read".to_string(), "Bash".to_string()]);
+        assert!(policy.deny.is_empty());
+    }
+
+    #[test]
+    fn import_anthropic_allowed_tools_accepts_comma_separated_string() {
+        let content = "---\nname: csv-skill\ndescription: x\nallowed-tools: Read, Grep , Bash\n---\n\nbody\n";
+        let (skill, _) = import_skill_definition(content, "fallback").expect("import");
+        let policy = skill.tool_policy.expect("policy");
+        assert_eq!(policy.allow, vec!["Read".to_string(), "Grep".to_string(), "Bash".to_string()]);
+    }
+
+    #[test]
+    fn import_animus_native_skill_is_detected_and_not_remapped() {
+        let content = "---\nname: native\ndescription: native skill\nanimus:\n  tool_policy:\n    allow: [\"task.*\"]\n    deny: [\"task.delete\"]\n  model:\n    preferred: claude-sonnet-4-6\n---\n\nNative body becomes system.\n";
+        let (skill, format) = import_skill_definition(content, "fallback").expect("import");
+        assert_eq!(format, DetectedSkillFormat::AnimusNative);
+        assert_eq!(skill.prompt.system.as_deref(), Some("Native body becomes system."));
+        let policy = skill.tool_policy.expect("native policy preserved");
+        assert_eq!(policy.allow, vec!["task.*".to_string()]);
+        assert_eq!(policy.deny, vec!["task.delete".to_string()]);
+        assert_eq!(skill.model.preferred.as_deref(), Some("claude-sonnet-4-6"));
+    }
+
+    #[test]
+    fn import_animus_namespace_tool_policy_wins_over_allowed_tools() {
+        let content = "---\nname: both\ndescription: x\nallowed-tools:\n  - Read\nanimus:\n  tool_policy:\n    allow: [\"task.*\"]\n---\n\nbody\n";
+        let (skill, format) = import_skill_definition(content, "fallback").expect("import");
+        assert_eq!(format, DetectedSkillFormat::AnimusNative);
+        assert_eq!(skill.tool_policy.expect("policy").allow, vec!["task.*".to_string()]);
+    }
+
+    #[test]
+    fn import_rejects_content_with_no_name_and_empty_body() {
+        let content = "---\ndescription: only a description\n---\n\n   \n";
+        let err = import_skill_definition(content, "fallback").expect_err("should reject");
+        assert!(err.to_string().contains("unsupported skill format"), "got: {err}");
+    }
+
+    #[test]
+    fn import_accepts_display_name_with_whitespace() {
+        // Anthropic skills commonly use display names with spaces; import must
+        // not reject them (the install caller slugifies afterwards).
+        let content = "---\nname: PDF Processing\ndescription: x\n---\n\nbody\n";
+        let (skill, _) = import_skill_definition(content, "fallback").expect("import");
+        assert_eq!(skill.name, "PDF Processing");
+    }
+
+    #[test]
+    fn import_anthropic_without_frontmatter_keeps_body_and_default_name() {
+        let content = "Just an instruction body, no frontmatter at all.\n";
+        let (skill, format) = import_skill_definition(content, "my-skill").expect("import");
+        assert_eq!(format, DetectedSkillFormat::AnthropicAgentSkill);
+        assert_eq!(skill.name, "my-skill");
+        assert_eq!(skill.prompt.system.as_deref(), Some("Just an instruction body, no frontmatter at all."));
     }
 
     #[test]

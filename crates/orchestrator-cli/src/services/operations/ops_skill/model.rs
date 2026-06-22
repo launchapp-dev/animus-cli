@@ -40,6 +40,14 @@ pub(super) struct ResolvedSkillEntry {
     pub(super) artifact: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) definition: Option<SkillDefinition>,
+    /// Where the skill was imported from (e.g. `owner/repo@ref` for a GitHub
+    /// install). `None` for registry-resolved installs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) origin: Option<String>,
+    /// The detected source skill format the importer normalized from
+    /// (`anthropic-agent-skill`, `animus-native`). `None` for registry installs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) format: Option<String>,
 }
 
 fn compare_versions_desc(left: &str, right: &str) -> Ordering {
