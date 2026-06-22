@@ -293,6 +293,120 @@ repository.
 
 > **Aspiration: kernel + default flavor stays small enough for embedded/edge deployment.** Concrete Pi-runnability is gated on specialized lightweight harness plugins (a `provider-direct-api` variant that calls LLM APIs without spawning Node.js CLI wrappers) which are NOT in v0.5 scope. Track as roadmap, not as a v0.5 hard rule. Run a memory + cold-start budget on regular dev hardware as a kernel-cleanliness gate, not a Pi claim.
 
+## Dependency model: project manifest + lock (v0.6)
+
+> **Status:** v0.6 spec. Ships incrementally across v0.6.x patches (no minor bump —
+> breaking changes ship in patches per house style). Supersedes the implicit
+> imperative install model, the duplicate `default-install.json`, AND the separate
+> `FlavorManifest` / `flavors/*.toml` format. **A flavor is just an `animus.toml`.**
+
+### The problem (what was funky)
+
+Pre-v0.6, "what a project depends on" was scattered across **multiple overlapping
+declarations** and resolved into **two overlapping state files**:
+
+- `flavors/default.toml` (`FlavorManifest`, schema `animus.flavor.v1`) — the curated
+  bundle, in its own bespoke format with an `animus flavor` command surface.
+- `crates/orchestrator-cli/config/default-install.json` — a *separate* kernel-baked
+  list of the **same** packs + plugins, used by `animus init`. A second copy that drifts.
+- Pack manifests' `[[requires_plugins]]` / `[[dependencies]]` — transitive needs.
+- `.animus/plugins.yaml` (registry) — what discovery/the daemon actually read.
+- `.animus/plugins.lock` — an integrity pin layered on top.
+
+Three+ ways to declare intent, two ways to hold resolved state, two bespoke manifest
+formats (flavor vs default-install) for the same thing, and no single project manifest.
+
+### The model (Cargo / npm / pip shaped)
+
+Animus adopts the two-file pattern every package manager converged on: a **hand-edited
+manifest of intent** + a **generated lock of resolved truth**. There is no separate
+"flavor" format — **a flavor is simply an `animus.toml`** (a curated starting point).
+
+| Layer | File | Role | Analogy |
+|---|---|---|---|
+| Declared intent | **`animus.toml`** | project deps: kernel range, plugins, packs | `Cargo.toml` / `package.json` |
+| Dependency units | pack manifests | bundles that declare their own transitive deps | a crate / npm pkg with deps |
+| Resolved + pinned | **`animus.lock`** | exact versions + per-target sha + source; **source of truth** | `Cargo.lock` |
+| Materialized | `.animus/plugins.yaml` | discovery cache — **derived view of the lock** | a build cache |
+
+`animus.toml` example — self-contained, no flavor reference at runtime:
+
+```toml
+[project]
+kernel = ">=0.6.7"          # avm kernel range (subsumes .animus-version)
+
+[plugins]
+animus-provider-claude  = ">=0.2.8"
+animus-queue-default    = ">=0.3.0"
+animus-config-postgres  = { path = "deploy/plugin-src/animus-config-postgres" }  # vendored
+
+[packs]
+"animus.core-skills" = ">=0.1.0"
+"animus.task"        = ">=0.1.0"
+```
+
+### How the old pieces fold in
+
+- **`FlavorManifest` / `flavors/*.toml` / `animus flavor` → retired.** A flavor is no
+  longer a bespoke format or a resolution step. A flavor is just a curated `animus.toml`
+  — a **starter template** you `init` from and then own/edit. The "default flavor" is the
+  default `animus.toml` that `animus init` scaffolds. (The kernel+flavors *product*
+  concept survives — a flavor is still "a curated starting point for a vertical" — but it
+  has no separate implementation; it's a manifest.)
+- **`default-install.json` → deleted.** Its content becomes the default `animus.toml`
+  template `animus init` writes. One declaration, one format, no drift.
+- **Packs → ordinary `[packs]` deps** with their own transitive
+  `requires_plugins`/`dependencies` resolved into the lock.
+- **`plugins.yaml` registry → derived cache** regenerated from the lock on install.
+- **`.animus-version` → subsumed** by `[project] kernel` (avm reads the manifest); may
+  remain as an optional fast-path mirror for the avm shim.
+
+### Lock is the source of truth
+
+The lock — not the registry — is authoritative for the resolved set. Discovery and the
+daemon derive from it; `--locked` reconstructs the exact set (binaries + registry) from
+the lock alone. This is what makes "the container just installs the lock" true:
+`animus plugin install --locked` is the entire plugin provisioning step.
+
+The lock is **platform-aware** (v0.6.7): each entry records integrity per target triple
+(`target → archive_sha256`), populated from each GitHub release's `SHA256SUMS.txt`. One
+`install` on any machine records every published platform's hash, so a lock generated on
+macOS verifies on a linux container. (Vendored `--path` plugins have no `SHA256SUMS` and
+are single-target by nature; publishing them as releases makes them portably lockable.)
+
+### Command surface (package-manager-shaped)
+
+- `animus init [--template <name|url>]` — scaffold `animus.toml` from a starter template
+  (the default template = the old "default flavor"). **Replaces both `default-install.json`
+  and `animus flavor install`.**
+- `animus add <plugin|pack>` — manifest + resolve + lock + install (`cargo add`).
+- `animus install` — install from the manifest, update the lock; `--locked` installs
+  exactly the lock and fails on manifest↔lock drift (the CI / container path).
+- `animus remove` / `animus update [pkg]` — the obvious manifest + lock edits.
+
+### v0.6.x sequencing
+
+1. **v0.6.7** — platform-aware lock (per-target shas from `SHA256SUMS.txt`) + resident
+   `config_source` host (kill fork churn). *(in flight)*
+2. **v0.6.8** — lock = resolved source of truth; `plugins.yaml` becomes a derived view;
+   discovery/daemon read from the lock.
+3. **v0.6.9** — `animus.toml` manifest + `add`/`install`/`--locked` resolution; delete
+   `default-install.json`; retire `FlavorManifest`/`flavors/*.toml`/`animus flavor`
+   (flavors become `animus.toml` templates). The container redesigns to a single
+   `animus plugin install --locked`.
+
+### Open decisions (resolve before v0.6.9)
+
+- **Manifest/lock filenames:** `animus.toml` + rename `plugins.lock` → `animus.lock`
+  (Cargo parity). *(leaning yes)*
+- **Kernel-version home:** authoritative in `[project] kernel`, with `.animus-version`
+  as an optional avm fast-path mirror. *(leaning yes)*
+- **Registry:** keep `plugins.yaml` as a derived cache (hot-path discovery) vs. delete it
+  and derive from the lock every call. *(leaning: keep as derived cache)*
+- **Templates:** where the default `animus.toml` template lives (in-tree under
+  `templates/` vs. fetched) and whether `--template <url>` (community starters) ships in
+  v0.6.9 or later.
+
 ## Extensibility: keep moving things toward plugins
 
 The DBOS analysis ([animus-vs-dbos-transact.md](./animus-vs-dbos-transact.md))
