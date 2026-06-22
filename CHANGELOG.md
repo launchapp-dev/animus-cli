@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.8] - 2026-06-22
+
+**v0.6.8 — install Agent Skills from GitHub.**
+
+- `animus skill install <github>` imports & normalizes any GitHub-hosted Anthropic
+  "Agent Skills" `SKILL.md` (the standard Claude Code / Hermes / OpenClaw share)
+  into an Animus skill. Source forms: `OWNER/REPO[@ref]`, repo/`tree`/`blob` URLs,
+  raw `SKILL.md` URLs. Format detection: `animus:` frontmatter → native passthrough;
+  otherwise Anthropic semantics — `name`/`description` map over, the markdown BODY
+  → `prompt.system`, `allowed-tools` → `tool_policy.allow`. Handles single skills
+  and `skills/<name>/SKILL.md` trees (downloads sibling assets). Foreign names are
+  slugified (path-traversal-safe); provenance recorded under the `github-import`
+  source (origin + format), shown by `skill list`/`info`.
+
 ## [0.6.7] - 2026-06-22
 
 **v0.6.7 — platform-aware plugin lock + resident config_source.**
