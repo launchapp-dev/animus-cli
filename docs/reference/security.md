@@ -300,7 +300,7 @@ in-tree backend.
 | `~/.animus/trusted-signers.yaml`      | Optional glob allowlist for cosign cert identities. **Missing / empty = permissive** (any keyless signature whose cert chain validates is accepted, regardless of owner). Populate this file to scope the trust set down. |
 | `~/.animus/trusted-orgs.yaml`         | TOFU allowlist of GitHub orgs the operator has accepted (orthogonal to cosign trust). Rich per-entry records carry `trusted_at` / `decided_by` / `first_plugin`, plus `revoked_at` tombstones. Legacy bare-string entries still load. See [Trust lifecycle](#trust-lifecycle-trust--audit--revoke--re-trust). |
 | `~/.animus/plugins.yaml`              | Installed-plugin registry. Records `signature_status` per entry.                 |
-| `.animus/plugins.lock` (project) or `~/.animus/plugins.lock` (global) | Append-only integrity ledger pinning `sha256(artifact)` + `sha256(signature_bundle)` for every installed plugin. Project-local takes precedence when `<project_root>/.animus/` exists. |
+| `.animus/plugins.lock` (project) or `~/.animus/plugins.lock` (global) | The Animus plugin lockfile: a tool-managed TOML integrity + reproducibility ledger pinning `sha256(artifact)` + `sha256(signature_bundle)` per installed plugin, plus `version` (resolved tag), `source_repo` (the `owner/repo` slug, `--url`, or `path:<...>` it was installed from), and `resolved_commit` (the exact 40-hex commit sha when a release resolved to one). Do **not** hand-edit; commit it (binaries are gitignored, the lockfile is not). Project-local takes precedence when `<project_root>/.animus/` exists. |
 
 ### Lockfile fail-closed policy
 
@@ -330,6 +330,24 @@ The `--force-rewrite-lockfile` flag is **CLI-only**: MCP and control-plane
 install routes default to fail-closed with no override, on the
 principle that lockfile recovery is an operator decision that should be
 explicit and synchronous.
+
+### Reproducible installs and drift detection
+
+`animus plugin install --locked` reinstalls **exactly** the set pinned in
+`.animus/plugins.lock`: for each entry it resolves the recorded `source_repo`
+(release slug → recorded tag, `--url`, or `path:`), reinstalls, then verifies
+the freshly installed artifact's `sha256` against the lockfile pin. The run
+fails closed if the lockfile is missing/empty, an entry has no recorded source
+(reinstall it once to capture `source_repo`), or any artifact hash drifts from
+the pin (the published release changed under the pin). This is the fresh-machine
+/ CI reproducibility path — commit the lockfile and `install --locked`
+reconstructs the same pinned set.
+
+`animus plugin lock verify` is the drift gate in the other direction: it flags
+`mismatch` (sha changed), `missing_binary`, and `extra` (an installed plugin
+absent from the lockfile), and exits non-zero on any of them. The same drift
+is surfaced as a **non-fatal** warning by `animus daemon preflight` and at
+daemon start (in the preflight `warnings` array) — drift never blocks startup.
 
 `~/.animus/trusted-keys/` is no longer consulted as of v0.4.12 — the
 key-based PEM path it served is gone. Existing directories can be

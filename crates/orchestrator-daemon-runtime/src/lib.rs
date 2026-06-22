@@ -17,9 +17,9 @@ pub use audit::{
 
 pub use daemon::{
     current_scheduler_nudge, current_workflow_event_emitter, discover_installed_plugins,
-    discover_installed_plugins_with_flavor_error, nudge_scheduler_local, queue_warnings, run_daemon,
-    run_plugin_preflight, workflow_runner_warnings, DaemonEventLog, DaemonEventsPollResponse, DaemonRunEvent,
-    DaemonRunGuard, DaemonRunHooks, DaemonRuntimeOptions, DaemonRuntimeState, DiscoveredPluginSummary,
+    discover_installed_plugins_with_flavor_error, lock_drift_warnings, nudge_scheduler_local, queue_warnings,
+    run_daemon, run_plugin_preflight, workflow_runner_warnings, DaemonEventLog, DaemonEventsPollResponse,
+    DaemonRunEvent, DaemonRunGuard, DaemonRunHooks, DaemonRuntimeOptions, DaemonRuntimeState, DiscoveredPluginSummary,
     PreflightOutcome,
 };
 pub use dispatch::{

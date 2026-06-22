@@ -308,6 +308,8 @@ fn summarize_with_lock_translates_native_subject_kind_to_installed_kind() {
         installed_at: chrono::Utc::now().to_rfc3339(),
         installed_kind: Some("archive".into()),
         native_kind: Some("task".into()),
+        source_repo: None,
+        resolved_commit: None,
     });
     let summaries = summarize_discovered_plugins_with_lock(&plugins, Some(&lock));
     assert_eq!(summaries.len(), 1);

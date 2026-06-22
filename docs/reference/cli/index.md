@@ -264,7 +264,7 @@ animus
 │   ├── install-defaults     Install every plugin the flavor manifest (`--flavor <name>`, default `default`) marks `required` from public GitHub releases. `--include-recommended` adds the recommended set. Skips plugins that are already installed
 │   ├── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`). The lockfile records sha256 + version for every installed plugin so an `install --force` or tampered-binary scenario is visible to operators
 │   │   ├── list             List every entry currently recorded in the plugin lockfile
-│   │   └── verify           Re-hash every installed plugin binary and report mismatches against the lockfile
+│   │   └── verify           Re-hash every installed plugin binary and report drift against the lockfile: mismatch (sha changed), missing_binary, and extra (installed but not in the lockfile). Exits non-zero on any drift (CI gate)
 │   ├── doctor               Per-role view of installed plugins. Shows every preflight role with its installed plugins (by installed_kind + native_kind) and flags duplicates so collisions are visible without spelunking through the lockfile (v0.5.7)
 │   ├── rename               Rename an installed plugin's dispatch kind without touching the on-disk binary
 │   ├── status               Per-plugin runtime status (pid, state, last RPC, restart count, last error). Answers "why does this plugin feel stuck?" by surfacing the supervisor's restart counter for every discovered plugin (v0.5.8)
@@ -1021,6 +1021,10 @@ animus plugin install --path ./target/release/animus-provider-claude
 
 # 3. HTTPS URL with mandatory checksum
 animus plugin install --url https://example.com/plugin --sha256 a1b2c3d4...
+
+# 4. Reproducible install: reinstall exactly what `.animus/plugins.lock` pins
+#    and verify each artifact sha256 against the lock (fresh-machine / CI path)
+animus plugin install --locked
 ```
 
 | Argument / Flag | Description |
@@ -1046,6 +1050,7 @@ animus plugin install --url https://example.com/plugin --sha256 a1b2c3d4...
 | `--yes` | Auto-confirm the trust-on-first-use prompt for unknown orgs |
 | `--force-rewrite-lockfile` | Discard an unparseable / schema-incompatible `.animus/plugins.lock` (or `~/.animus/plugins.lock`) and rebuild a fresh lockfile starting from this install. Without this flag, an unreadable lockfile fails the install **closed** with an actionable error pointing at the corrupt path. **Security warning**: rewriting drops the recorded sha256 integrity history, so subsequent `--force` installs cannot detect pre-existing tamper. See [Security › Lockfile fail-closed policy](../security.md#lockfile-fail-closed-policy) |
 | `--as-kind <KIND>` | (v0.5.7) Override the user-facing `installed_kind` recorded in `plugins.lock` for a `subject_backend` plugin. The supplied `KIND` becomes the prefix the SubjectRouter dispatches against (e.g. `archive` for a second `subject_kind:task` backend). When omitted and the manifest-declared native kind collides with an existing install, the install pipeline auto-increments (`task` → `task-2` → `task-3`) and prints the assignment via the `animus.plugin.install.v1` envelope. When `--as-kind` is supplied and the explicit value also collides, the install fails with an actionable error. Only `subject_backend` plugins are eligible in v0.5.7; passing `--as-kind` on a provider, transport, workflow_runner, queue, or trigger plugin is rejected. See [Plugin kind translator (v0.5.7)](../../architecture/plugin-kind-translator-v0.5.7.md) |
+| `--locked` | Reproducible install: ignore any positional source and reinstall **exactly** the set pinned in `.animus/plugins.lock`. Each locked entry is resolved from its recorded `source_repo` + tag (release slug), `--url`, or `path:` source, reinstalled, then the freshly installed artifact's sha256 is verified against the lockfile pin. Fails the whole run if the lockfile is missing/empty, an entry has no recorded source (installed before source provenance was tracked — reinstall it once to record it), or any installed artifact hash drifts from the pin (the published release changed under the pin). The fresh-machine / CI path. Mutually exclusive with a positional source, `--path`, `--url`, `--tag`, and `--latest` |
 
 #### Signature verification (v0.4.x+)
 
@@ -1381,7 +1386,19 @@ Stale-entry warnings in `animus plugin list`, `animus plugin outdated`, and
 
 ### `animus plugin lock`
 
-The plugin lockfile records installed plugin version and SHA256 metadata.
+`.animus/plugins.lock` **is** the Animus plugin lockfile. It is a TOML file
+(`schema_version = "1.0"`, tool-managed — do **not** hand-edit) recording one
+entry per installed plugin: `name`, `version` (the resolved release tag),
+`artifact_sha256`, `signature_bundle_sha256`, `installed_at`,
+`installed_kind` / `native_kind` (v0.5.7 kind translator), and the
+source-provenance fields `source_repo` (the `owner/repo` slug, `--url`, or
+`path:<...>` the plugin was installed from) and `resolved_commit` (the exact
+40-hex commit sha when a release resolved to one — releases tagged at a branch
+leave it unset). The lockfile is the integrity + reproducibility anchor: the
+install pipeline writes it on success and uninstall removes the entry.
+`.gitignore` keeps the installed **binaries** out of version control, but the
+lockfile itself is meant to be committed so the pinned set travels with the
+repo and `animus plugin install --locked` can reproduce it on a fresh machine.
 Project-local installs use `.animus/plugins.lock`; otherwise commands fall back
 to `~/.animus/plugins.lock`.
 
@@ -1395,10 +1412,17 @@ global `~/.animus/plugins.lock` (entries hashed against the global install
 dir) and the project `<project>/.animus/plugins.lock` (entries hashed against
 `<project>/.animus/plugins/` first, falling back to the global dir for
 entries recorded by pre-`--project` installs). Each result entry carries a
-`scope` (`global` / `project` / `explicit`) and the lockfile path it came
-from; the envelope's `lockfiles` array lists every root swept. Passing
+`scope` (`global` / `project` / `explicit`, plus `discovered` for extras) and
+the lockfile path it came from; the envelope's `lockfiles` array lists every
+root swept. The verify reports drift in both directions: `mismatch` (sha256
+disagrees with the pin), `missing_binary` (a locked entry's binary is gone),
+and `extra` (a discovered installed plugin absent from every lockfile). Passing
 `--lockfile <PATH>` restricts the sweep to that single file (legacy
-behavior). Any mismatch or missing binary in either root exits non-zero.
+behavior). Any mismatch, missing binary, **or** extra in either root exits
+non-zero, so the command works as a CI drift gate. Plugin lockfile drift is
+**also** surfaced as a non-fatal warning by `animus daemon preflight` and at
+daemon start — it appears in the preflight `warnings` array and never blocks
+startup.
 
 ### `animus plugin doctor` (v0.5.7)
 

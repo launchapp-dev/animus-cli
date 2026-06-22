@@ -766,6 +766,7 @@ async fn handle_daemon_preflight(args: DaemonPreflightArgs, project_root: &str, 
     // — surfaced in the report but never affect the OK verdict / exit code.
     let mut warnings = orchestrator_daemon_runtime::workflow_runner_warnings(project_root);
     warnings.extend(orchestrator_daemon_runtime::queue_warnings(project_root));
+    warnings.extend(orchestrator_daemon_runtime::lock_drift_warnings(project_root));
     result.warnings = warnings;
 
     let payload = serde_json::json!({
