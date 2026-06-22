@@ -31,8 +31,8 @@ pub use host::{
     install_process_slot_factory_for_test, install_secret_snapshot_provider_for_test,
 };
 pub use lockfile::{
-    global_lockfile_path, project_lockfile_path, sha256_of_file, LockEntry, LockVerifyResult, PluginLockfile,
-    LOCKFILE_SCHEMA_VERSION,
+    current_target_triple, global_lockfile_path, project_lockfile_path, sha256_of_file, LockEntry, LockVerifyResult,
+    PluginLockfile, TargetIntegrity, LOCKFILE_SCHEMA_VERSION,
 };
 pub use manifest_cache::{CachedEntry, ManifestCache};
 

@@ -352,6 +352,8 @@ impl AoMcpServer {
             force_rewrite_lockfile: force_rewrite_lockfile.unwrap_or(false),
             as_kind: None,
             project: false,
+            expected_archive_sha256: None,
+            locked_secondary_archive_shas: std::collections::BTreeMap::new(),
         })
         .await
         .map_err(anyhow_to_mcp)?;
