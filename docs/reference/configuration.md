@@ -115,6 +115,20 @@ Project-local plugin integrity lockfile. When plugin install/update flows are
 scoped to the repository, Animus records installed plugin versions and sha256
 digests here instead of falling back to the global `~/.animus/plugins.lock`.
 
+**The lock is the SOURCE OF TRUTH for the installed plugin set.** Every
+mutating op (`plugin install` / `update` / `uninstall` / `install-defaults`,
+and `install --locked`) writes the lock as the authoritative record and then
+REGENERATES `plugins.yaml` (the registry) deterministically FROM the lock.
+The registry is therefore a DERIVED cache — a materialized projection of the
+lock that exists only so hot-path discovery can read plugin paths without
+re-deriving them. The two can never drift: a registry row whose name has no
+lock entry is dropped on the next regeneration, and a lock entry missing from
+the registry is added. `plugin lock verify` reports any drift (installed but
+unlocked, or pinned but missing on disk) so the next mutating op heals it; a
+project with an existing `plugins.yaml` but no lock (pre-v0.6.3) materializes
+a lock from the installed set on the next mutating op without losing any
+plugin (discovery keeps working off the registry until then).
+
 Each `[[plugins]]` entry records:
 
 - `name`, `version`, `artifact_sha256`, `signature_bundle_sha256`,
@@ -188,7 +202,11 @@ exists).
 its own plugin set, and `animus plugin lock verify` (which sweeps both the
 global and project lockfile roots by default) turns the committed lock into
 a CI tamper/drift gate. The project registry (`.animus/plugins.yaml`) is
-also safe to commit; it carries install provenance, not secrets.
+also safe to commit; it carries install provenance, not secrets. Note the
+registry is a DERIVED projection of the lock (regenerated on every mutating
+op — see [`.animus/plugins.lock`](#animusplugins-lock) above), so committing
+the lock is what actually pins the set; a committed registry that drifts from
+the lock is reconciled to the lock on the next install/update/uninstall.
 
 ## Repo-Scoped Runtime Config
 

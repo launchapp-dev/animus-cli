@@ -1206,6 +1206,27 @@ pub(crate) fn run_plugin_uninstall(req: PluginUninstallRequest) -> Result<Plugin
         }
     }
 
+    // Registry is a projection of the lock: regenerate `plugins.yaml` from
+    // the lock that governs this scope's discovery so the registry can never
+    // retain an entry the lock no longer pins (or drop one it still does). The
+    // governing lock is the project lock for a project-scope uninstall and the
+    // shared GLOBAL lock for a global-scope uninstall. Best-effort, like the
+    // lock saves above.
+    let governing_lock_path = if scope_paths.scope == "project" {
+        scope_paths.lockfile_override.clone().unwrap_or_else(|| PluginLockfile::default_path(project_root_for_lock))
+    } else {
+        // NOT `default_path`, which resolves to the PROJECT lock when this
+        // global uninstall ran inside an initialized project: regenerating the
+        // shared global registry from a project lock would drop unrelated
+        // globally-installed plugins for other projects.
+        global_lockfile_path()
+    };
+    if let Ok(governing_lock) = PluginLockfile::load_or_empty(&governing_lock_path) {
+        if let Err(err) = regenerate_registry_from_lock(&governing_lock, &yaml_path, &install_dir) {
+            tracing::warn!(path = %yaml_path.display(), %err, "failed to regenerate plugins.yaml from lockfile after uninstall");
+        }
+    }
+
     // Audit log.
     if let Some(root) = project_root_for_lock {
         if let Some(scoped) = protocol::repository_scope::scoped_state_root(root) {
@@ -1360,6 +1381,16 @@ pub(crate) fn run_plugin_prune(project_root: Option<&str>, apply: bool) -> Resul
         let default_lock_path = PluginLockfile::default_path(project_root_pb);
         if default_lock_path == global_lock_path {
             prune_lock_entries(&default_lock_path, &names);
+        }
+        // Registry is a projection of the lock: re-derive the GLOBAL
+        // `plugins.yaml` from the GLOBAL lock (`~/.animus/plugins.lock`) — the
+        // shared, cross-project record — so the two stay in lockstep after the
+        // prune. (The default-path lock may be a project lock here; using it
+        // would corrupt the shared global registry for other projects.)
+        if let Ok(governing_lock) = PluginLockfile::load_or_empty(&global_lock_path) {
+            if let Err(err) = regenerate_registry_from_lock(&governing_lock, &global_yaml, &plugin_install_dir()) {
+                tracing::warn!(path = %global_yaml.display(), %err, "failed to regenerate plugins.yaml from lockfile after prune");
+            }
         }
     }
 
@@ -1718,6 +1749,13 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     let effective_lock_override = scope_paths.lockfile_override.clone().or(global_shadow_override);
     let mut lockfile =
         load_or_refuse_lockfile(project_root_for_lock, effective_lock_override.as_deref(), req.force_rewrite_lockfile)?;
+    // Back-compat: a pre-v0.6.3 project may have a `plugins.yaml` registry but
+    // no (or an empty) lock. Before we add this install's entries, derive lock
+    // rows for the already-installed set so making the lock authoritative (and
+    // the registry a projection of it, below) does not drop those plugins.
+    if let Err(err) = materialize_lock_from_registry_if_absent(&mut lockfile, &scope_paths.registry_yaml) {
+        tracing::warn!(%err, "failed to materialize lock from registry before install; proceeding");
+    }
     let lockfile_path_for_log = lockfile.path().to_path_buf();
     let is_upgrade = installed_path.exists();
     if is_upgrade && lockfile.find(&plugin_name).is_some() {
@@ -2256,6 +2294,12 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     if scope_paths.scope == "global" && lockfile.path() != global_lockfile_path() {
         match PluginLockfile::load_or_empty(&global_lockfile_path()) {
             Ok(mut global_lock) => {
+                // Back-compat: seed the global lock from the global registry
+                // when it has none yet, so the global-registry projection
+                // (below) doesn't drop a pre-existing globally-installed set.
+                if let Err(err) = materialize_lock_from_registry_if_absent(&mut global_lock, &yaml_path) {
+                    tracing::warn!(%err, "failed to materialize global lock from registry before install mirror");
+                }
                 for entry in &new_lock_entries {
                     global_lock.upsert(entry.clone());
                 }
@@ -2267,6 +2311,52 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
                 tracing::warn!(%err, "failed to load global lockfile for post-install mirror");
             }
         }
+    }
+
+    // ---- Registry is a projection of the lock ----
+    //
+    // The lock is now the authoritative record of the installed set. Rebuild
+    // `plugins.yaml` from the lock that GOVERNS this registry's scope so the
+    // registry's membership can never drift from the lock. A PROJECT registry
+    // projects from the project lock (the `lockfile` written above); the
+    // shared GLOBAL registry must project from the GLOBAL lock
+    // (`~/.animus/plugins.lock`) — not the default-path lock, which is a
+    // project lock when this global install ran inside an initialized project.
+    // The rich provenance fields written into the registry entry above
+    // (manifest name, signature status, source kind, ...) are carried forward
+    // per-name by the regeneration; it only adds rows for lock entries the
+    // registry lacked and drops rows the lock no longer pins.
+    //
+    // We project from the IN-MEMORY governing lock (then upsert this install's
+    // entries on top) rather than re-reading the on-disk file: a best-effort
+    // lock `save()` above may have only logged on failure, and re-reading the
+    // stale on-disk lock would omit the just-installed entry and drop it from
+    // the registry while the command still reports success. The in-memory
+    // `lockfile` already merged concurrent on-disk entries during its `save()`.
+    // Best-effort: a registry write failure must not undo a successful install.
+    let mut registry_governing_lock = if scope_paths.scope == "global" && lockfile.path() != global_lockfile_path() {
+        // Shared global registry inside a project: project from the global lock
+        // (NOT the project default-path `lockfile`). The mirror block above
+        // wrote `new_lock_entries` into it; re-load + re-upsert so a failed
+        // mirror save still yields a registry that includes this install.
+        let mut global_lock = PluginLockfile::load_or_empty(&global_lockfile_path())
+            .unwrap_or_else(|_| PluginLockfile::empty_at(&global_lockfile_path()));
+        for entry in &new_lock_entries {
+            global_lock.upsert(entry.clone());
+        }
+        global_lock
+    } else {
+        // Project registry, or global-with-no-project: the in-memory `lockfile`
+        // IS the governing lock and already holds this install's entries.
+        lockfile.clone()
+    };
+    // Defensive: guarantee this install's entries are present regardless of
+    // which branch produced the governing lock.
+    for entry in &new_lock_entries {
+        registry_governing_lock.upsert(entry.clone());
+    }
+    if let Err(err) = regenerate_registry_from_lock(&registry_governing_lock, &yaml_path, &install_dir) {
+        tracing::warn!(path = %yaml_path.display(), %err, "failed to regenerate plugins.yaml from lockfile after install");
     }
 
     // ---- Audit log ----
@@ -3462,8 +3552,287 @@ fn load_plugins_yaml(path: &Path) -> Result<PluginsYamlConfig> {
 }
 
 fn save_plugins_yaml(path: &Path, config: &PluginsYamlConfig) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create registry dir {}", parent.display()))?;
+    }
     let serialized = serde_yaml::to_string(config).context("failed to serialize plugins.yaml")?;
     std::fs::write(path, serialized).with_context(|| format!("failed to write {}", path.display()))
+}
+
+/// `plugins.yaml` (the registry) is a DERIVED projection of the lockfile
+/// (`plugins.lock`), which is the authoritative record of the installed
+/// plugin set. This regenerates `registry_path` so its set of entries is a
+/// pure function of `lock`: every lock entry's name appears, and any registry
+/// entry whose name has no lock entry is dropped. Drift between the two can
+/// therefore never persist past a mutating op (`install` / `update` /
+/// `uninstall` / `install-defaults` / `--locked`) or a `lock verify` heal.
+///
+/// The lock owns the membership of the set; it does NOT carry the registry's
+/// install-time provenance (manifest `name`, `name_override`,
+/// `skip_manifest_check_at_install`, `signature_status`, `source_kind`,
+/// `origin`, `asset`, ...). Those cache-only fields are carried FORWARD
+/// per-name from the existing registry entry so a regeneration never loses
+/// install provenance. The lock-owned/discovery-critical fields (`binary`
+/// path under `install_dir`, plus the `binaries` list for multi-binary
+/// plugins) are always (re)derived from the lock + install dir.
+///
+/// Secondary (multi-binary) lock entries are folded into their primary's
+/// `binaries` list rather than emitted as standalone registry rows: the
+/// registry keys plugins by their primary install name, and the existing
+/// uninstall/discovery surfaces expect siblings only under the primary's
+/// `binaries`.
+///
+/// A registry row is emitted ONLY for a lock entry whose binary is present in
+/// THIS registry's scope: either at the canonical `install_dir/name`, OR at a
+/// prior registry row's recorded `binary` that still resolves (covering
+/// `--plugin-dir` / `$ANIMUS_PLUGIN_DIR` custom-location installs, whose path
+/// is preserved). This scopes the projection to plugins actually installed in
+/// this scope: a project lock can legitimately carry GLOBAL-scope entries (a
+/// global install run inside an initialized project lands in the project
+/// default-path lock; a project uninstall copies a global twin in), whose
+/// binaries live in the global dir — emitting a project-registry row pointing
+/// at the (nonexistent) project install dir would shadow the real global
+/// entry, since discovery scans the project registry first and reserves the
+/// name even when its configured binary is missing.
+fn regenerate_registry_from_lock(lock: &PluginLockfile, registry_path: &Path, install_dir: &Path) -> Result<()> {
+    let existing = load_plugins_yaml(registry_path)?;
+
+    // Names that are SECONDARY binaries of some other primary: they share a
+    // `(source_repo, version)` release group with an earlier entry and are
+    // listed under that primary's `binaries`, so they must not become their
+    // own top-level registry row. Build the primary→secondaries map from the
+    // existing registry's `binaries` lists (the lock has no explicit
+    // primary/secondary marker, only the per-release grouping the install
+    // pipeline recorded).
+    let mut secondary_of: BTreeMap<String, String> = BTreeMap::new();
+    let mut binaries_for: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for table in [&existing.plugins, &existing.providers] {
+        for (key, value) in table {
+            let Some(primary) = key.as_str() else { continue };
+            let serde_yaml::Value::Mapping(map) = value else { continue };
+            let binaries_key = serde_yaml::Value::String("binaries".to_string());
+            if let Some(serde_yaml::Value::Sequence(seq)) = map.get(&binaries_key) {
+                let names: Vec<String> = seq.iter().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                for name in &names {
+                    if name != primary {
+                        secondary_of.insert(name.clone(), primary.to_string());
+                    }
+                }
+                if names.len() > 1 {
+                    binaries_for.insert(primary.to_string(), names);
+                }
+            }
+        }
+    }
+
+    let lock_names: BTreeSet<&str> = lock.plugins.iter().map(|e| e.name.as_str()).collect();
+    let mut rebuilt = PluginsYamlConfig::default();
+    for entry in &lock.plugins {
+        // Skip secondaries — they ride along in their primary's `binaries`.
+        // Defensive: only treat as secondary when the primary itself is also
+        // present in the lock (a dangling secondary becomes its own row so it
+        // is not silently lost).
+        if let Some(primary) = secondary_of.get(&entry.name) {
+            if lock_names.contains(primary.as_str()) {
+                continue;
+            }
+        }
+
+        let key = serde_yaml::Value::String(entry.name.clone());
+        // Carry forward the cache-only provenance fields from the prior
+        // registry entry of the same name (if any), then (re)assert the
+        // lock-owned/discovery-critical fields on top.
+        let prior = existing.plugins.get(&key).or_else(|| existing.providers.get(&key)).and_then(|v| match v {
+            serde_yaml::Value::Mapping(m) => Some(m.clone()),
+            _ => None,
+        });
+
+        // Scope gate: only project a lock entry whose binary is actually
+        // present in THIS registry's scope (see fn docs — a project lock may
+        // carry global entries that must not become project-registry rows). The
+        // canonical scope location is `install_dir/name`; ALSO honor a prior
+        // registry row whose recorded `binary` (e.g. a `--plugin-dir` /
+        // `$ANIMUS_PLUGIN_DIR` custom location) still resolves, so a later op
+        // run without the same override does not drop the still-present
+        // custom-dir install. When kept via the recorded binary, preserve that
+        // path rather than rewriting it to the (nonexistent) `install_dir`.
+        let scope_path = install_dir.join(&entry.name);
+        let prior_binary = prior.as_ref().and_then(|m| {
+            m.get(serde_yaml::Value::String("binary".to_string()))
+                .and_then(serde_yaml::Value::as_str)
+                .map(str::to_string)
+        });
+        let prior_binary_resolves =
+            prior_binary.as_deref().is_some_and(|b| orchestrator_plugin_host::resolve_configured_binary(b).is_some());
+        let effective_binary = if scope_path.exists() {
+            scope_path.to_string_lossy().to_string()
+        } else if prior_binary_resolves {
+            prior_binary.clone().unwrap_or_default()
+        } else {
+            continue;
+        };
+
+        let mut map = prior.unwrap_or_default();
+        map.insert(serde_yaml::Value::String("binary".to_string()), serde_yaml::Value::String(effective_binary));
+        if let Some(names) = binaries_for.get(&entry.name) {
+            // Drop any sibling the lock no longer pins so the `binaries` list
+            // stays a projection of the lock too.
+            let live: Vec<String> = names.iter().filter(|n| lock_names.contains(n.as_str())).cloned().collect();
+            if live.len() > 1 {
+                let seq = live.into_iter().map(serde_yaml::Value::String).collect();
+                map.insert(serde_yaml::Value::String("binaries".to_string()), serde_yaml::Value::Sequence(seq));
+            } else {
+                map.remove(serde_yaml::Value::String("binaries".to_string()));
+            }
+        }
+
+        // Route into providers vs plugins, preserving where the prior entry
+        // lived; default to `plugins` for a freshly materialized row.
+        let into_providers = existing.providers.contains_key(&key) && !existing.plugins.contains_key(&key);
+        let table = if into_providers { &mut rebuilt.providers } else { &mut rebuilt.plugins };
+        table.insert(key, serde_yaml::Value::Mapping(map));
+    }
+
+    save_plugins_yaml(registry_path, &rebuilt)
+}
+
+/// Back-compat: a pre-v0.6.3 project may carry a `plugins.yaml` registry but
+/// NO (or an empty) `plugins.lock`. Make the lock authoritative going forward
+/// by DERIVING lock entries from the registry's recorded provenance so no
+/// installed plugin is lost when the registry later becomes a projection of
+/// the lock. Discovery keeps working off the registry until this runs, so a
+/// lock-less project never breaks; this just materializes the lock on the
+/// next mutating op (or `lock verify`).
+///
+/// Every PRESENT plugin (binary still on disk) gets a derived row so the
+/// later registry projection does not drop it; only stale rows whose binary is
+/// gone are skipped. The derived entry carries the recorded `sha256` as the
+/// current target's `installed_binary_sha256` (the registry's `sha256` was the
+/// installed-binary hash) so on-disk tamper detection keeps working; it does
+/// NOT seed a portable `archive_sha256` (the registry never stored the
+/// tarball hash), so `--locked` reports it as needing a reinstall on this
+/// platform, exactly like a 1.0-migrated lock entry. A binary-only legacy row
+/// with no recorded source leaves `source_repo` unset (not
+/// `--locked`-reproducible), but the entry still materializes so the install
+/// survives.
+///
+/// Returns the number of entries materialized. A no-op (returns 0) when the
+/// lock already has entries or the registry is empty.
+fn materialize_lock_from_registry_if_absent(lock: &mut PluginLockfile, registry_path: &Path) -> Result<usize> {
+    if !lock.plugins.is_empty() {
+        return Ok(0);
+    }
+    let installed = match marketplace::read_installed_index_at(registry_path) {
+        Ok(index) => index,
+        Err(_) => return Ok(0),
+    };
+    if installed.is_empty() {
+        return Ok(0);
+    }
+    // Secondary (multi-binary) names declared under each primary's `binaries`
+    // list. `read_installed_index_at` only yields top-level registry keys, so
+    // without this a legacy multi-binary install's secondaries would never get
+    // a lock row and the later registry projection (which filters `binaries`
+    // against the lock) would drop them. Maps secondary name → primary name.
+    let secondary_to_primary = registry_secondary_binaries(registry_path);
+
+    let current_triple = current_target_triple();
+    let mut materialized = 0_usize;
+    for (name, entry) in &installed {
+        // Skip stale rows whose binary is gone (discovery wouldn't load them;
+        // `plugin prune` cleans them up). Every PRESENT plugin must get a lock
+        // row so the subsequent registry regeneration — which projects from
+        // the lock — does not drop it from discovery.
+        if !entry.is_present() {
+            continue;
+        }
+        // `source_repo` may be `None` for a pre-source-provenance (binary-only)
+        // legacy row: the materialized entry is then NOT `--locked`-reproducible
+        // (like a 1.0-migrated lock row), but it MUST still exist so the
+        // installed plugin survives the registry projection.
+        let source_repo = entry.source_repo_for_lock();
+        let mut targets: BTreeMap<String, TargetIntegrity> = BTreeMap::new();
+        if let (Some(triple), Some(sha)) = (current_triple, entry.sha256.as_deref()) {
+            if !sha.is_empty() {
+                targets.insert(
+                    triple.to_string(),
+                    TargetIntegrity { installed_binary_sha256: Some(sha.to_string()), ..Default::default() },
+                );
+            }
+        }
+        let install_dir = entry.binary.as_deref().and_then(|b| Path::new(b).parent().map(Path::to_path_buf));
+        lock.upsert(LockEntry {
+            name: name.clone(),
+            version: entry.release_tag.clone().unwrap_or_default(),
+            targets,
+            installed_at: entry.installed_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+            installed_kind: None,
+            native_kind: None,
+            source_repo: source_repo.clone(),
+            resolved_commit: None,
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
+        });
+        materialized += 1;
+
+        // Materialize each PRESENT secondary binary declared under this
+        // primary's `binaries` list so it is pinned + survives the projection.
+        // Secondaries install in the same dir as the primary; inherit the
+        // primary's source + version (they ship in the same release).
+        if let Some(dir) = install_dir.as_deref() {
+            for (secondary, primary) in &secondary_to_primary {
+                if primary != name || secondary == name || lock.find(secondary).is_some() {
+                    continue;
+                }
+                if !dir.join(secondary).exists() {
+                    continue;
+                }
+                lock.upsert(LockEntry {
+                    name: secondary.clone(),
+                    version: entry.release_tag.clone().unwrap_or_default(),
+                    targets: BTreeMap::new(),
+                    installed_at: entry.installed_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+                    installed_kind: None,
+                    native_kind: None,
+                    source_repo: source_repo.clone(),
+                    resolved_commit: None,
+                    legacy_artifact_sha256: None,
+                    legacy_signature_bundle_sha256: None,
+                });
+                materialized += 1;
+            }
+        }
+    }
+    Ok(materialized)
+}
+
+/// Read each registry entry's `binaries` list and return a `secondary name →
+/// primary name` map (excluding the primary's own name). Used to materialize
+/// multi-binary secondaries from a lock-less legacy registry. A
+/// missing/unparseable registry yields an empty map.
+fn registry_secondary_binaries(registry_path: &Path) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    let Ok(config) = load_plugins_yaml(registry_path) else {
+        return out;
+    };
+    for table in [&config.plugins, &config.providers] {
+        for (key, value) in table {
+            let Some(primary) = key.as_str() else { continue };
+            let serde_yaml::Value::Mapping(map) = value else { continue };
+            let binaries_key = serde_yaml::Value::String("binaries".to_string());
+            if let Some(serde_yaml::Value::Sequence(seq)) = map.get(&binaries_key) {
+                for v in seq {
+                    if let Some(name) = v.as_str() {
+                        if name != primary {
+                            out.insert(name.to_string(), primary.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 fn sha256_of_file(path: &Path) -> Result<String> {
@@ -10273,5 +10642,324 @@ required = ["launchapp-dev/animus-queue-default"]
         let appended = std::fs::read_to_string(root.join(".animus/.gitignore")).unwrap();
         assert!(appended.starts_with("daemon.log\n"), "existing lines preserved: {appended}");
         assert!(appended.lines().any(|l| l.trim() == "plugins/"));
+    }
+
+    // ===== Registry-as-projection-of-lock (lock = source of truth) =====
+
+    /// Build a lock entry with a single current-target claim. `source_repo`
+    /// makes it look like a release install so back-compat materialization /
+    /// `--locked` paths accept it.
+    fn lock_entry_release(name: &str, version: &str, sha_char: char) -> LockEntry {
+        LockEntry {
+            name: name.to_string(),
+            version: version.to_string(),
+            targets: lock_targets(sha_char.to_string().repeat(64)),
+            installed_at: chrono::Utc::now().to_rfc3339(),
+            installed_kind: None,
+            native_kind: None,
+            source_repo: Some(format!("launchapp-dev/{name}")),
+            resolved_commit: None,
+            legacy_artifact_sha256: None,
+            legacy_signature_bundle_sha256: None,
+        }
+    }
+
+    fn yaml_entry_names(path: &Path) -> BTreeSet<String> {
+        let cfg = load_plugins_yaml(path).unwrap();
+        cfg.plugins.keys().chain(cfg.providers.keys()).filter_map(|k| k.as_str().map(str::to_string)).collect()
+    }
+
+    /// Regenerating from a lock makes the registry's membership a pure function
+    /// of the lock: a registry row with no lock entry is dropped, and a lock
+    /// entry missing from the registry is added.
+    #[test]
+    fn regenerate_registry_drops_orphans_and_adds_lock_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("plugins.yaml");
+        let install_dir = dir.path().join("plugins");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        // Binaries present in the scope's install dir for the lock-pinned set.
+        std::fs::write(install_dir.join("keep"), b"x").unwrap();
+        std::fs::write(install_dir.join("added"), b"x").unwrap();
+        // Drifted registry: `orphan` is not in the lock; `keep` is.
+        std::fs::write(
+            &registry,
+            "plugins:\n  keep:\n    binary: /old/keep\n    signature_status: verified\n  orphan:\n    binary: /old/orphan\n",
+        )
+        .unwrap();
+        let lock_path = dir.path().join("plugins.lock");
+        let mut lock = PluginLockfile::empty_at(&lock_path);
+        lock.upsert(lock_entry_release("keep", "v1", 'a'));
+        lock.upsert(lock_entry_release("added", "v1", 'b'));
+
+        regenerate_registry_from_lock(&lock, &registry, &install_dir).unwrap();
+
+        let names = yaml_entry_names(&registry);
+        assert!(names.contains("keep"), "lock-pinned entry survives: {names:?}");
+        assert!(names.contains("added"), "lock-only entry is added: {names:?}");
+        assert!(!names.contains("orphan"), "registry orphan (no lock entry) is dropped: {names:?}");
+
+        // Carry-forward: `keep` retains its cache-only provenance field, and its
+        // `binary` is re-derived from the install dir.
+        let cfg = load_plugins_yaml(&registry).unwrap();
+        let keep = cfg.plugins.get(serde_yaml::Value::String("keep".into())).unwrap().as_mapping().unwrap();
+        assert_eq!(
+            keep.get(serde_yaml::Value::String("signature_status".into())).and_then(|v| v.as_str()),
+            Some("verified"),
+            "cache-only provenance carried forward"
+        );
+        assert_eq!(
+            keep.get(serde_yaml::Value::String("binary".into())).and_then(|v| v.as_str()),
+            Some(install_dir.join("keep").to_string_lossy().as_ref()),
+            "binary re-derived from install dir"
+        );
+    }
+
+    /// A lock-less legacy project (registry but no lock) materializes a lock
+    /// from the registry's provenance without losing any installed plugin.
+    #[test]
+    fn materialize_lock_from_lockless_registry_preserves_plugins() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("plugins.yaml");
+        let bin_a = dir.path().join("animus-subject-default");
+        let bin_b = dir.path().join("animus-provider-claude");
+        std::fs::write(&bin_a, b"a").unwrap();
+        std::fs::write(&bin_b, b"b").unwrap();
+        std::fs::write(
+            &registry,
+            format!(
+                "plugins:\n  animus-subject-default:\n    binary: {a}\n    source_kind: release\n    origin: launchapp-dev/animus-subject-default@v0.1.1\n    release_tag: v0.1.1\n    sha256: {sha}\n    installed_at: 2026-05-01T00:00:00Z\nproviders:\n  animus-provider-claude:\n    binary: {b}\n    source_kind: release\n    origin: launchapp-dev/animus-provider-claude@v0.2.2\n    release_tag: v0.2.2\n",
+                a = bin_a.to_string_lossy(),
+                b = bin_b.to_string_lossy(),
+                sha = "c".repeat(64),
+            ),
+        )
+        .unwrap();
+
+        let lock_path = dir.path().join("plugins.lock");
+        let mut lock = PluginLockfile::empty_at(&lock_path);
+        let n = materialize_lock_from_registry_if_absent(&mut lock, &registry).unwrap();
+        assert_eq!(n, 2, "both installed plugins materialized");
+
+        let names: BTreeSet<&str> = lock.plugins.iter().map(|e| e.name.as_str()).collect();
+        assert!(names.contains("animus-subject-default"));
+        assert!(names.contains("animus-provider-claude"));
+
+        let subj = lock.find("animus-subject-default").unwrap();
+        assert_eq!(subj.source_repo.as_deref(), Some("launchapp-dev/animus-subject-default"));
+        assert_eq!(subj.version, "v0.1.1");
+        // The recorded registry sha seeds the host-only installed_binary claim.
+        if let Some(triple) = current_target_triple() {
+            assert_eq!(
+                subj.target(triple).and_then(|t| t.installed_binary_sha256.as_deref()),
+                Some("c".repeat(64).as_str()),
+            );
+        }
+        // No portable archive sha (registry never stored a tarball hash).
+        assert!(
+            subj.is_legacy_unverifiable()
+                || subj
+                    .target(current_target_triple().unwrap_or("x"))
+                    .map(|t| t.archive_sha256.is_empty())
+                    .unwrap_or(true)
+        );
+
+        // Idempotent: a non-empty lock is left untouched.
+        assert_eq!(materialize_lock_from_registry_if_absent(&mut lock, &registry).unwrap(), 0);
+    }
+
+    /// A pre-source-provenance, binary-only legacy registry row (no
+    /// `source_kind`/`origin`) whose binary is still on disk must STILL
+    /// materialize a lock entry — otherwise the subsequent registry projection
+    /// (which derives from the lock) would drop the installed plugin from
+    /// discovery. A stale row whose binary is gone is skipped.
+    #[test]
+    fn materialize_preserves_binary_only_legacy_row_but_skips_stale() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("plugins.yaml");
+        let present = dir.path().join("animus-plugin-legacy");
+        std::fs::write(&present, b"x").unwrap();
+        let gone = dir.path().join("animus-plugin-gone");
+        std::fs::write(
+            &registry,
+            format!(
+                "plugins:\n  animus-plugin-legacy:\n    binary: {p}\n  animus-plugin-gone:\n    binary: {g}\n",
+                p = present.to_string_lossy(),
+                g = gone.to_string_lossy(),
+            ),
+        )
+        .unwrap();
+
+        let lock_path = dir.path().join("plugins.lock");
+        let mut lock = PluginLockfile::empty_at(&lock_path);
+        let n = materialize_lock_from_registry_if_absent(&mut lock, &registry).unwrap();
+        assert_eq!(n, 1, "present binary-only row materialized; stale (binary gone) row skipped");
+        let legacy = lock.find("animus-plugin-legacy").expect("present legacy plugin materialized");
+        assert!(legacy.source_repo.is_none(), "binary-only legacy row has no source_repo");
+        assert!(lock.find("animus-plugin-gone").is_none(), "stale row (missing binary) not materialized");
+    }
+
+    /// A lock-less legacy multi-binary install (primary with a `binaries` list)
+    /// materializes lock rows for the primary AND each present secondary, so a
+    /// subsequent registry projection keeps the whole binary set.
+    #[test]
+    fn materialize_includes_present_secondary_binaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let plugins = dir.path().join("plugins");
+        std::fs::create_dir_all(&plugins).unwrap();
+        let primary = plugins.join("animus-provider-oai");
+        let secondary = plugins.join("animus-provider-oai-agent");
+        std::fs::write(&primary, b"p").unwrap();
+        std::fs::write(&secondary, b"s").unwrap();
+        let registry = dir.path().join("plugins.yaml");
+        std::fs::write(
+            &registry,
+            format!(
+                "providers:\n  animus-provider-oai:\n    binary: {p}\n    binaries:\n    - animus-provider-oai\n    - animus-provider-oai-agent\n    source_kind: release\n    origin: launchapp-dev/animus-provider-oai@v0.1.4\n    release_tag: v0.1.4\n",
+                p = primary.to_string_lossy(),
+            ),
+        )
+        .unwrap();
+
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        let n = materialize_lock_from_registry_if_absent(&mut lock, &registry).unwrap();
+        assert_eq!(n, 2, "primary + present secondary both materialized");
+        let agent = lock.find("animus-provider-oai-agent").expect("secondary materialized");
+        // Secondary inherits the primary's source + version.
+        assert_eq!(agent.source_repo.as_deref(), Some("launchapp-dev/animus-provider-oai"));
+        assert_eq!(agent.version, "v0.1.4");
+
+        // The regenerated registry then keeps the secondary under the primary's
+        // `binaries` (proving the projection no longer drops it).
+        regenerate_registry_from_lock(&lock, &registry, &plugins).unwrap();
+        let cfg = load_plugins_yaml(&registry).unwrap();
+        let prov =
+            cfg.providers.get(serde_yaml::Value::String("animus-provider-oai".into())).unwrap().as_mapping().unwrap();
+        let bins: Vec<&str> = prov
+            .get(serde_yaml::Value::String("binaries".into()))
+            .and_then(|v| v.as_sequence())
+            .unwrap()
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        assert!(bins.contains(&"animus-provider-oai-agent"), "secondary retained in projection: {bins:?}");
+    }
+
+    /// Round-trip the lock → registry → lock projection: regenerating the
+    /// registry then re-materializing a fresh lock from it yields the same
+    /// plugin set (the lock alone reconstructs the registry, as `--locked`
+    /// does via per-entry reinstall).
+    #[test]
+    fn lock_reconstructs_registry_set() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("plugins.yaml");
+        let install_dir = dir.path().join("plugins");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        for name in ["animus-subject-default", "animus-queue-default"] {
+            std::fs::write(install_dir.join(name), b"x").unwrap();
+        }
+        let lock_path = dir.path().join("plugins.lock");
+        let mut lock = PluginLockfile::empty_at(&lock_path);
+        lock.upsert(lock_entry_release("animus-subject-default", "v0.1.1", 'a'));
+        lock.upsert(lock_entry_release("animus-queue-default", "v0.3.1", 'b'));
+
+        // No registry yet — the lock alone produces it (the `--locked`
+        // fresh-machine path: discovery reads a registry materialized purely
+        // from the committed lock).
+        regenerate_registry_from_lock(&lock, &registry, &install_dir).unwrap();
+        let names = yaml_entry_names(&registry);
+        assert_eq!(names.len(), 2, "registry reconstructed from lock alone: {names:?}");
+        assert!(names.contains("animus-subject-default"));
+        assert!(names.contains("animus-queue-default"));
+
+        // Each derived entry's discovery-critical `binary` points at the
+        // install dir, so discovery can load it without any prior provenance.
+        let cfg = load_plugins_yaml(&registry).unwrap();
+        for name in ["animus-subject-default", "animus-queue-default"] {
+            let entry = cfg.plugins.get(serde_yaml::Value::String(name.into())).unwrap().as_mapping().unwrap();
+            assert_eq!(
+                entry.get(serde_yaml::Value::String("binary".into())).and_then(|v| v.as_str()),
+                Some(install_dir.join(name).to_string_lossy().as_ref()),
+            );
+        }
+    }
+
+    /// A prior registry row whose binary lives in a custom location
+    /// (`--plugin-dir` / `$ANIMUS_PLUGIN_DIR`) is NOT dropped when a later op
+    /// regenerates with a different `install_dir` — its still-resolving
+    /// recorded `binary` keeps it, and the custom path is preserved.
+    #[test]
+    fn regenerate_keeps_custom_plugin_dir_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("plugins.yaml");
+        let custom_dir = dir.path().join("custom");
+        std::fs::create_dir_all(&custom_dir).unwrap();
+        let custom_bin = custom_dir.join("animus-plugin-custom");
+        std::fs::write(&custom_bin, b"x").unwrap();
+        std::fs::write(
+            &registry,
+            format!(
+                "plugins:\n  animus-plugin-custom:\n    binary: {b}\n    signature_status: verified\n",
+                b = custom_bin.to_string_lossy(),
+            ),
+        )
+        .unwrap();
+        let mut lock = PluginLockfile::empty_at(&dir.path().join("plugins.lock"));
+        lock.upsert(lock_entry_release("animus-plugin-custom", "v1", 'a'));
+
+        // Regenerate against a DIFFERENT install dir (no binary there).
+        let other_dir = dir.path().join("plugins");
+        regenerate_registry_from_lock(&lock, &registry, &other_dir).unwrap();
+
+        let cfg = load_plugins_yaml(&registry).unwrap();
+        let entry = cfg
+            .plugins
+            .get(serde_yaml::Value::String("animus-plugin-custom".into()))
+            .expect("custom-dir install must survive the projection")
+            .as_mapping()
+            .unwrap();
+        assert_eq!(
+            entry.get(serde_yaml::Value::String("binary".into())).and_then(|v| v.as_str()),
+            Some(custom_bin.to_string_lossy().as_ref()),
+            "custom binary path preserved, not rewritten to the install_dir"
+        );
+    }
+
+    /// Multi-binary: a secondary lock entry is folded into its primary's
+    /// `binaries` list rather than emitted as a standalone registry row.
+    #[test]
+    fn regenerate_folds_secondaries_into_primary_binaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = dir.path().join("plugins.yaml");
+        let install_dir = dir.path().join("plugins");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::write(install_dir.join("animus-provider-oai"), b"x").unwrap();
+        std::fs::write(install_dir.join("animus-provider-oai-agent"), b"x").unwrap();
+        // Prior registry recorded the primary with a `binaries` list naming
+        // the secondary, the way a multi-binary install writes it.
+        std::fs::write(
+            &registry,
+            "providers:\n  animus-provider-oai:\n    binary: /old/oai\n    binaries:\n    - animus-provider-oai\n    - animus-provider-oai-agent\n",
+        )
+        .unwrap();
+        let lock_path = dir.path().join("plugins.lock");
+        let mut lock = PluginLockfile::empty_at(&lock_path);
+        lock.upsert(lock_entry_release("animus-provider-oai", "v0.1.4", 'a'));
+        lock.upsert(lock_entry_release("animus-provider-oai-agent", "v0.1.4", 'b'));
+
+        regenerate_registry_from_lock(&lock, &registry, &install_dir).unwrap();
+
+        let names = yaml_entry_names(&registry);
+        assert!(names.contains("animus-provider-oai"), "primary present: {names:?}");
+        assert!(
+            !names.contains("animus-provider-oai-agent"),
+            "secondary folded into primary, not a standalone row: {names:?}"
+        );
+        let cfg = load_plugins_yaml(&registry).unwrap();
+        let primary =
+            cfg.providers.get(serde_yaml::Value::String("animus-provider-oai".into())).unwrap().as_mapping().unwrap();
+        let bins = primary.get(serde_yaml::Value::String("binaries".into())).unwrap().as_sequence().unwrap();
+        let bin_names: Vec<&str> = bins.iter().filter_map(|v| v.as_str()).collect();
+        assert_eq!(bin_names, vec!["animus-provider-oai", "animus-provider-oai-agent"]);
     }
 }
