@@ -215,6 +215,19 @@ pub(crate) async fn handle_init(args: InitArgs, project_root: &str, json: bool) 
 
     let written_files = write_template_files(project_root_path, &loaded_template)?;
     FileServiceHub::new(project_root_path)?;
+    // Scaffold the dependency manifest, `.env.example`, and a merge-safe
+    // project `.gitignore` (ignores derived/secret/scratch, keeps animus.toml /
+    // animus.lock / .env.example / workflows committed). Best-effort: a
+    // scaffold failure must not abort an otherwise-successful init.
+    match super::ops_manifest::ensure_project_scaffold(project_root_path) {
+        Ok(files) if !files.is_empty() => {
+            if !json {
+                println!("Scaffolded: {}", files.join(", "));
+            }
+        }
+        Ok(_) => {}
+        Err(err) => tracing::warn!(%err, "failed to scaffold animus.toml/.env.example/.gitignore during init"),
+    }
     let pack_apply = apply_template_packs(project_root_path, &loaded_template)?;
     let daemon_config_updated = ensure_daemon_project_config(project_root_path, daemon_config_exists_before)?;
     let doctor_after = DoctorReport::run_for_project(project_root_path);
@@ -1052,6 +1065,13 @@ async fn run_walkthrough(args: &InitArgs, project_root: &Path, mode: InitMode, j
     // the lockfile is how a repo pins its own plugin set.
     if let Err(err) = super::ops_plugin::ensure_project_plugins_gitignore(project_root) {
         tracing::warn!(%err, "failed to write .animus/.gitignore during init");
+    }
+    // Scaffold the dependency manifest, `.env.example`, and the project-root
+    // `.gitignore` so a fresh project is `git clone && animus install`-ready.
+    match super::ops_manifest::ensure_project_scaffold(project_root) {
+        Ok(files) if !files.is_empty() && interactive => println!("Scaffolded: {}", files.join(", ")),
+        Ok(_) => {}
+        Err(err) => tracing::warn!(%err, "failed to scaffold animus.toml/.env.example/.gitignore during walkthrough"),
     }
 
     let plugin_step = if install_plugins {

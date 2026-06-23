@@ -5410,6 +5410,39 @@ struct LockedInstallOutput {
 /// (`animus plugin install --locked`). Fails the whole run if the lockfile is
 /// missing/empty, an entry cannot be reconstructed, or any installed artifact
 /// hash drifts from the pin (the published release changed under the pin).
+/// `animus install --locked` entry point: reproduce the committed lockfile
+/// using the same machinery as `animus plugin install --locked`, with default
+/// install-security posture. `force` is threaded so a re-pin reinstall can
+/// overwrite already-present binaries.
+pub(crate) async fn run_locked_install_default(project_root: &str, force: bool, json: bool) -> Result<()> {
+    let args = PluginInstallArgs {
+        source: None,
+        path: None,
+        url: None,
+        tag: None,
+        latest: false,
+        name: None,
+        sha256: None,
+        force,
+        skip_manifest_check: false,
+        plugin_dir: None,
+        project: false,
+        signature_policy: None,
+        trust_key: None,
+        allow_unsigned: false,
+        require_signature: false,
+        skip_signature: false,
+        trusted_signers: None,
+        allow_shadow_builtin: true,
+        allow_org: vec!["launchapp-dev".to_string()],
+        yes: true,
+        force_rewrite_lockfile: false,
+        locked: true,
+        as_kind: None,
+    };
+    run_locked_install(args, project_root, json).await
+}
+
 async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: bool) -> Result<()> {
     let root = std::path::Path::new(project_root);
     // Carry the operator's install-security flags through to every reinstall

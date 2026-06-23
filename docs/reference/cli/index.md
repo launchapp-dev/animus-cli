@@ -302,7 +302,16 @@ animus
 │   └── open                 Open the Animus web UI URL in a browser. Resolves the URL from an installed web_ui or transport_backend plugin unless --url is supplied
 │
 ├── init                     Initialize an Animus project from a template
-│   (no subcommands)         Supports registry-backed or local copy templates, plan mode, and daemon defaults
+│   (no subcommands)         Supports registry-backed or local copy templates, plan mode, and daemon defaults. Also scaffolds `animus.toml`, `.env.example`, and a merge-safe project `.gitignore`
+│
+├── install                  Resolve `animus.toml` into the lockfile and install the declared plugins + packs. `--locked` reproduces exactly the committed `.animus/plugins.lock` (npm-ci style; fails on manifest↔lock drift)
+│   (no subcommands)         `--force` reinstalls already-present dependencies
+│
+├── add                      Add a plugin (or pack with `--pack`) to `animus.toml` and install it. SPEC is `name[@version]`, `OWNER/REPO[@tag]`, or a bare `name`; `--path PATH` adds a local source dependency
+│   (no subcommands)
+│
+├── remove                   Remove a plugin (or pack with `--pack`) from `animus.toml` and uninstall it
+│   (no subcommands)
 │
 ├── doctor                   Run environment and configuration diagnostics. Exits non-zero (code 5, Unavailable) when any `[fail]` check remains after the run; `[warn]` findings do not affect the exit code. `--fix` applies safe remediations (stale daemon pid cleanup, zombie phase-session normalization, lock-file removal, chmod plugin binaries); `--fix` also prunes stale cli-tracker entries for exited CLI processes (absorbed from the removed `animus runner orphans` verbs; live tracked PIDs get a manual `kill` suggestion instead because the tracker is global across projects); `--fix --yes` additionally removes orphan worktrees via `git worktree remove --force`. `--check <id|category>` narrows to a single check; `--filter <substr>` keeps the legacy substring match. API-key checks are satisfied by a provider-CLI login session or an OS keychain entry, not just an environment variable.
 │
@@ -369,6 +378,67 @@ animus
 > `animus errors` into `animus history`. `animus cloud` was retired.
 > See the v0.4.4 entry in [CHANGELOG.md](../../../CHANGELOG.md) for the
 > full surface map.
+
+## Project manifest: `animus.toml` (`install` / `add` / `remove`)
+
+A committed `animus.toml` declares a project's intended kernel, plugins, and
+packs — the npm/cargo model. `animus install` resolves it into
+`.animus/plugins.lock` (the source of truth) and installs the set; the lock
+pins the exact per-platform artifacts. `animus init` scaffolds `animus.toml`,
+`.env.example`, and a merge-safe project `.gitignore`, so onboarding is:
+
+```bash
+git clone <repo> && cd <repo>
+animus install            # resolve animus.toml -> lock -> install plugins + packs
+# in CI / a container:
+animus install --locked   # reproduce EXACTLY the committed lockfile (npm ci)
+```
+
+### `animus.toml` format
+
+```toml
+[project]
+kernel = ">=0.6.8"
+
+[plugins]
+animus-provider-claude = ">=0.2.7"                                                        # curated: version req
+animus-queue-default   = { git = "launchapp-dev/animus-queue-default", tag = "v0.3.3" }   # explicit git pin
+animus-config-postgres = { path = "deploy/plugin-src/animus-config-postgres" }            # local/vendored
+
+[packs]
+"animus.core-skills" = ">=0.1.0"
+```
+
+A dependency value is one of: a bare version string (resolved against the
+curated plugin/pack tables at install time), `{ git = "OWNER/REPO", tag = "..." }`,
+or `{ path = "..." }`. Version requirements are advisory in v1 — the curated
+tag (or the explicit git tag) selects the release, and the lock records the
+installed sha. `animus init` emits explicit `{ git, tag }` pins for the default
+set so the scaffold is fully reproducible.
+
+- `animus install [--locked] [--force]` — resolve + install. `--locked`
+  refuses to proceed if the manifest declares a plugin the lockfile does not
+  pin (run `animus install` without `--locked` to refresh).
+- `animus add <spec> [--pack] [--path PATH] [--force]` — `spec` is
+  `name[@version]`, `OWNER/REPO@tag`, or a bare `name`. Updates `animus.toml`
+  and installs the one dependency. `--pack` targets `[packs]`.
+- `animus remove <name> [--pack]` — drop from `animus.toml` and uninstall
+  (plugins) or deactivate the project's pack selection (`--pack`).
+
+### What `animus init` commits vs ignores
+
+The scaffolded `.gitignore` keeps the reproducibility inputs committed and the
+derived/secret/scratch outputs ignored:
+
+| Committed | Ignored |
+| --- | --- |
+| `animus.toml`, `animus.lock` / `.animus/plugins.lock` | `.env` |
+| `.env.example` | `.animus/plugins/` (binaries), `.animus/plugins.yaml` |
+| `.animus-version` | `.animus/*.lock` sidecars (lock itself re-included) |
+| `.animus/workflows.yaml`, `.animus/workflows/*.yaml` | `.animus/runs/`, `.animus/artifacts/` |
+
+The merge is additive: an existing `.gitignore` is never rewritten — only the
+missing managed lines are appended.
 
 ## Selected Command Flags
 

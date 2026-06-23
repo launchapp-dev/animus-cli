@@ -107,6 +107,32 @@ pub fn resolve_tag_for_slug(slug: &str) -> Option<&'static str> {
     None
 }
 
+/// Resolve a curated `(owner/repo, tag)` pin from a bare plugin slug (the repo
+/// basename, e.g. `animus-provider-claude`). Used by `animus install` /
+/// `animus add` so a manifest's short-form dependency (`animus-provider-claude
+/// = ">=0.2.7"`) resolves to the full `launchapp-dev/animus-provider-claude`
+/// repo and its curated tag. Returns `None` for slugs no curated table pins —
+/// the caller then requires an explicit `{ git = "OWNER/REPO", tag = "..." }`.
+pub fn resolve_curated_plugin_by_basename(name: &str) -> Option<(&'static str, &'static str)> {
+    for table in [
+        DEFAULT_PROVIDER_PLUGINS,
+        DEFAULT_OAI_AGENT_PLUGINS,
+        DEFAULT_SUBJECT_PLUGINS,
+        DEFAULT_TRANSPORT_PLUGINS,
+        DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+        DEFAULT_QUEUE_PLUGINS,
+        DEFAULT_CONFIG_SOURCE_PLUGINS,
+        DEFAULT_DURABLE_STORE_PLUGINS,
+        DEFAULT_MEMORY_STORE_PLUGINS,
+        DEFAULT_NOTIFIER_PLUGINS,
+    ] {
+        if let Some((slug, tag)) = table.iter().find(|(slug, _)| slug.rsplit('/').next() == Some(name)) {
+            return Some((*slug, *tag));
+        }
+    }
+    None
+}
+
 /// Repo+tag spec for the default provider that preflight should install
 /// when `at_least_one_provider` is unsatisfied.
 pub fn default_provider_repo_spec() -> String {

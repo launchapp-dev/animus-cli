@@ -147,6 +147,9 @@ Visible top-level commands:
 - `mcp`
 - `web`
 - `init`
+- `install`
+- `add`
+- `remove`
 - `doctor`
 - `trigger`
 - `logs`
