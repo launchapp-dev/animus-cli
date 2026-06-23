@@ -7,6 +7,14 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
 
 npm run docs:check-sync
+node <<'EOF'
+const fs = require('fs');
+const path = require('path');
+
+for (const relative of ['docs/.vitepress/.temp', 'docs/.vitepress/dist']) {
+  fs.rmSync(path.join(process.cwd(), relative), { recursive: true, force: true });
+}
+EOF
 npm run docs:build
 echo "Deploying docs with Vercel..."
 echo "Prerequisites: npm registry access and a valid Vercel login."

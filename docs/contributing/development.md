@@ -100,6 +100,8 @@ tool table match the live clap/MCP registries before deploying the docs site
 to Vercel.
 
 `npm run docs:deploy` wraps the required preflight in order: sync check,
+cleanup of VitePress transient output (`docs/.vitepress/.temp` and
+`docs/.vitepress/dist`),
 production site build, then a Vercel production deploy. The deploy helper
 always runs `npx vercel --yes --prod` and points npm at a temporary cache
 directory so the command does not depend on a writable `~/.npm/`.
