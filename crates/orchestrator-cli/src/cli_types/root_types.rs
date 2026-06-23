@@ -119,6 +119,12 @@ pub(crate) enum Command {
     },
     /// Initialize an Animus project from a template.
     Init(InitArgs),
+    /// Resolve `animus.toml` into the lockfile and install the declared plugins + packs.
+    Install(InstallArgs),
+    /// Add a plugin or pack to `animus.toml` and install it.
+    Add(AddArgs),
+    /// Remove a plugin or pack from `animus.toml` and uninstall it.
+    Remove(RemoveArgs),
     /// Run environment and configuration diagnostics.
     Doctor(DoctorArgs),
     /// Inspect and manage event triggers.

@@ -5,6 +5,7 @@ pub mod pack_config;
 pub mod pack_marketplace;
 pub mod pack_registry;
 pub mod pack_selection;
+pub mod project_manifest;
 pub mod project_template;
 pub mod skill_definition;
 pub mod skill_resolution;

@@ -236,6 +236,9 @@ async fn run(cli: Cli) -> Result<()> {
     });
     match cli.command {
         Command::Init(args) => services::operations::handle_init(args, &project_root, cli.json).await,
+        Command::Install(args) => services::operations::handle_manifest_install(args, &project_root, cli.json).await,
+        Command::Add(args) => services::operations::handle_manifest_add(args, &project_root, cli.json).await,
+        Command::Remove(args) => services::operations::handle_manifest_remove(args, &project_root, cli.json).await,
         Command::Doctor(args) => services::operations::handle_doctor(&project_root, args, cli.json).await,
         Command::Pack { command } => services::operations::handle_pack(command, &project_root, cli.json).await,
         Command::Plugin { command } => services::operations::handle_plugin(command, &project_root, cli.json).await,
@@ -314,6 +317,9 @@ async fn run(cli: Cli) -> Result<()> {
                     unreachable!("command handled before runtime initialization")
                 }
                 Command::Init(_)
+                | Command::Install(_)
+                | Command::Add(_)
+                | Command::Remove(_)
                 | Command::Approval { .. }
                 | Command::Doctor(_)
                 | Command::Trigger { .. }
@@ -401,6 +407,9 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Mcp { .. } => CommandGroup::Mcp,
         Command::Web { .. } => CommandGroup::Web,
         Command::Init(_) => CommandGroup::Init,
+        Command::Install(_) => CommandGroup::Install,
+        Command::Add(_) => CommandGroup::Add,
+        Command::Remove(_) => CommandGroup::Remove,
         Command::Doctor(_) => CommandGroup::Doctor,
         Command::Trigger { .. } => CommandGroup::Trigger,
         Command::Logs { .. } => CommandGroup::Logs,
