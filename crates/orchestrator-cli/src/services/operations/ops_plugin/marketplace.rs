@@ -1254,6 +1254,10 @@ pub(crate) struct InstalledPlugin {
     pub(crate) release_tag: Option<String>,
     pub(crate) installed_at: Option<String>,
     pub(crate) binary: Option<String>,
+    /// The installed-BINARY sha256 the install pipeline recorded in the
+    /// registry. Used to seed the host-only `installed_binary_sha256` claim
+    /// when materializing a lock entry from a lock-less legacy project.
+    pub(crate) sha256: Option<String>,
     pub(crate) kind: Option<String>,
     /// Whether the recorded `binary` path still resolves to a file on disk.
     /// A `plugins.yaml` entry whose binary was deleted out of band is a stale
@@ -1270,6 +1274,24 @@ impl InstalledPlugin {
     /// command (`list`, `browse --installed`, `outdated`, `update`) shares.
     pub(crate) fn is_present(&self) -> bool {
         self.binary_present
+    }
+
+    /// Reconstruct the lockfile `source_repo` value from this registry entry's
+    /// recorded provenance, mirroring how `run_plugin_install` records it:
+    /// `owner/repo` for a release, the raw URL for `--url`, `path:<...>` for
+    /// `--path`. Returns `None` when the entry predates source-provenance
+    /// tracking (no `source_kind`, no usable `origin`) and therefore cannot be
+    /// re-installed from the lock.
+    pub(crate) fn source_repo_for_lock(&self) -> Option<String> {
+        let origin = self.origin.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        match self.source_kind.as_deref() {
+            Some("release") => origin_to_repo_slug(self.origin.as_deref()),
+            Some("url") => origin.map(str::to_string),
+            Some("path") => origin.map(|p| if p.starts_with("path:") { p.to_string() } else { format!("path:{p}") }),
+            // No recorded source_kind: fall back to an `owner/repo`-shaped
+            // origin (older release rows sometimes only carried `origin`).
+            _ => origin_to_repo_slug(self.origin.as_deref()),
+        }
     }
 }
 
@@ -1342,6 +1364,7 @@ fn parse_installed_entry(name: &str, value: &serde_yaml::Value, kind: Option<Str
                 "release_tag" => entry.release_tag = str_val,
                 "installed_at" => entry.installed_at = str_val,
                 "binary" => entry.binary = str_val,
+                "sha256" => entry.sha256 = str_val,
                 _ => {}
             }
         }
