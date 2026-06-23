@@ -18,9 +18,12 @@
 /// `at_least_one_provider`.
 pub const DEFAULT_PROVIDER_PLUGINS: &[(&str, &str)] = &[
     ("launchapp-dev/animus-provider-claude", "v0.2.8"),
-    ("launchapp-dev/animus-provider-codex", "v0.2.3"),
+    // Codex is driven over MCP (`codex mcp-server`) by animus-provider-codex-mcp,
+    // which advertises provider_tool = "codex" (drop-in for the old stdout
+    // provider). Gemini + OpenCode drive their harnesses over ACP internally.
+    ("launchapp-dev/animus-provider-codex-mcp", "v0.1.0"),
     ("launchapp-dev/animus-provider-gemini", "v0.3.0"),
-    ("launchapp-dev/animus-provider-opencode", "v0.2.6"),
+    ("launchapp-dev/animus-provider-opencode", "v0.3.0"),
     ("launchapp-dev/animus-provider-oai", "v0.2.2"),
 ];
 

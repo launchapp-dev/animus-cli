@@ -6,7 +6,7 @@ description = "Curated bundle for solo founders and small studios running a port
 
 [providers]
 required = ["launchapp-dev/animus-provider-claude"]
-recommended = ["launchapp-dev/animus-provider-codex", "launchapp-dev/animus-provider-ollama"]
+recommended = ["launchapp-dev/animus-provider-codex-mcp", "launchapp-dev/animus-provider-ollama"]
 
 # Both subject backends are required: daemon preflight refuses to start
 # unless `subject_kind:task` AND `subject_kind:requirement` are covered.
