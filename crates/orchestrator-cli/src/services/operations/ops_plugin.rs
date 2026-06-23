@@ -8631,7 +8631,7 @@ description = "Manifest-resolution test fixture."
 
 [providers]
 required = ["launchapp-dev/animus-provider-claude"]
-recommended = ["launchapp-dev/animus-provider-codex", "launchapp-dev/animus-provider-ollama"]
+recommended = ["launchapp-dev/animus-provider-codex-mcp", "launchapp-dev/animus-provider-ollama"]
 
 [subjects]
 required = ["launchapp-dev/animus-subject-default", "launchapp-dev/animus-subject-requirements"]
@@ -8690,7 +8690,7 @@ required = ["launchapp-dev/animus-queue-default"]
         args.include_recommended = true;
         let targets = build_install_defaults_targets(&args, &tmp.path().to_string_lossy()).unwrap();
         let slugs = target_slugs(&targets);
-        assert!(slugs.contains(&"launchapp-dev/animus-provider-codex"), "got: {slugs:?}");
+        assert!(slugs.contains(&"launchapp-dev/animus-provider-codex-mcp"), "got: {slugs:?}");
         assert!(slugs.contains(&"launchapp-dev/animus-subject-linear"), "got: {slugs:?}");
         assert!(slugs.contains(&"launchapp-dev/animus-transport-graphql"), "got: {slugs:?}");
         assert!(slugs.contains(&"launchapp-dev/animus-web-ui"), "got: {slugs:?}");
@@ -8713,7 +8713,7 @@ required = ["launchapp-dev/animus-queue-default"]
         assert!(slugs.contains(&"launchapp-dev/animus-transport-graphql"), "got: {slugs:?}");
         assert!(slugs.contains(&"launchapp-dev/animus-web-ui"), "got: {slugs:?}");
         assert!(
-            !slugs.contains(&"launchapp-dev/animus-provider-codex"),
+            !slugs.contains(&"launchapp-dev/animus-provider-codex-mcp"),
             "--include-subjects/--include-transports must not pull in recommended providers: {slugs:?}"
         );
         let unique: std::collections::HashSet<&str> = slugs.iter().copied().collect();
