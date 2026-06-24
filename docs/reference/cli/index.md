@@ -339,7 +339,7 @@ animus
 │   ├── info                 Print a parsed flavor manifest (TOML by default, JSON via `--json`)
 │   └── install              Install every plugin the named flavor's manifest marks `required` (delegates to `animus plugin install-defaults --flavor <name>`); `--include-recommended` adds the recommended set
 │
-├── update                   Manage the `animus` binary itself — check for, download, and atomically install a newer release (`--check / --yes / --channel / --force / --prerelease`)
+├── update                   Manage the `animus` binary itself — check for, download, and atomically install a newer release (`--check / --yes / --channel / --force / --prerelease`). When the binary is managed by [avm](https://github.com/launchapp-dev/avm) (running from `~/.avm/versions/`), `update` defers to avm and prints the `avm install` / `avm use` commands instead of self-replacing the managed binary
 │
 ├── cost                     Inspect token + USD spend across workflow runs (v0.5.5)
 │   ├── summary              Aggregate spend over `--since <DURATION>` (default 24h) + top spenders. Default reports spend incurred inside the window only; `--lifetime` reports each touched run's full lifetime spend instead (restores pre-v0.5.x semantics). Output splits reported vs estimated cost with `(est.)` markers. `--by provider|model|task` groups spend by tool, model, or subject/task with token/USD totals and percentages

@@ -436,6 +436,26 @@ pub(crate) fn current_binary_path() -> Result<PathBuf> {
     Ok(path.canonicalize().unwrap_or(path))
 }
 
+/// Detect whether the running `animus` binary is managed by avm (the Animus
+/// Version Manager). avm installs kernels under `<AVM_HOME>/versions/<version>/`
+/// and dispatches through an `animus` shim, so a managed binary's `current_exe`
+/// lives under `.avm/versions/`. Both the manual `animus update` path and the
+/// startup auto-update path must refuse to self-replace such a binary, or they
+/// corrupt avm's version directory. Returns the managed version when detected.
+pub(crate) fn avm_managed_version() -> Option<String> {
+    let exe = std::env::current_exe().ok()?;
+    avm_version_from_exe_path(exe.to_string_lossy().as_ref())
+}
+
+/// Pure path heuristic, split out for testing: extract the avm-managed version
+/// segment from an `animus` executable path (`.../.avm/versions/<version>/...`).
+pub(crate) fn avm_version_from_exe_path(exe_path: &str) -> Option<String> {
+    const MARKER: &str = "/.avm/versions/";
+    let idx = exe_path.find(MARKER)?;
+    let version = exe_path[idx + MARKER.len()..].split('/').next().unwrap_or_default();
+    (!version.is_empty()).then(|| version.to_string())
+}
+
 /// Decision returned by [`should_check_now`] — drives the startup flow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum StartupAction {
@@ -650,6 +670,17 @@ pub async fn run_manual_update(
 /// Download, verify, and atomically install the chosen release for the
 /// running host.
 pub async fn apply_update(release: &GithubReleaseRecord) -> Result<()> {
+    // Never self-replace an avm-managed binary — that would overwrite a file
+    // under `~/.avm/versions/<version>/` and corrupt avm's version directory.
+    // This guards BOTH the manual `animus update` path and the startup
+    // auto-update path (which both funnel through here). Use `avm install` /
+    // `avm use` to change versions instead.
+    if let Some(version) = avm_managed_version() {
+        anyhow::bail!(
+            "refusing to self-update an avm-managed animus ({version}); avm owns kernel \
+             versioning. Use `avm install <version>` then `avm use --global <version>` instead."
+        );
+    }
     let platform = current_platform_token();
     let asset = pick_asset_for_host(&release.assets, &platform).ok_or_else(|| {
         anyhow!(
@@ -785,6 +816,14 @@ pub async fn run_startup_check(
     current_version: String,
     state: AutoUpdateState,
 ) -> Result<Option<String>> {
+    // avm-managed binaries are versioned by avm, not by animus' self-updater.
+    // Skip the whole startup check (no network call, no `apply_update` bail) so
+    // an avm install never tries — and never nags — to self-update. Use
+    // `avm install` / `avm use` to change versions.
+    if avm_managed_version().is_some() {
+        return Ok(None);
+    }
+
     let mode = effective_mode(config_block.as_ref());
     if matches!(mode, AutoUpdateMode::Off) {
         return Ok(None);
@@ -866,6 +905,16 @@ pub async fn run_startup_check(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_avm_managed_binary_from_exe_path() {
+        // avm-managed: <home>/.avm/versions/<version>/animus — extract the version.
+        assert_eq!(avm_version_from_exe_path("/.avm/versions/v0.6.10/animus").as_deref(), Some("v0.6.10"));
+        // Plain installs (Cargo bin, ~/.local/bin, /usr/local/bin) are not managed.
+        assert_eq!(avm_version_from_exe_path("/usr/local/bin/animus"), None);
+        // The avm shim itself isn't a versioned install dir.
+        assert_eq!(avm_version_from_exe_path("/.avm/shims/animus"), None);
+    }
 
     fn current() -> &'static str {
         "0.5.3"
