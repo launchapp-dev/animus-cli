@@ -172,6 +172,98 @@ mod migrate_tests {
     }
 }
 
+/// Summary of an `.env` -> secret-store sync (the `animus install` provisioning
+/// step). `missing_declared` are keys declared (uncommented) in `.env.example`
+/// that are neither in `.env` nor already stored — i.e. what the operator still
+/// needs to supply.
+#[derive(Debug, Default, serde::Serialize)]
+pub(crate) struct EnvSyncSummary {
+    pub(crate) env_present: bool,
+    pub(crate) imported: Vec<String>,
+    pub(crate) skipped: Vec<String>,
+    pub(crate) missing_declared: Vec<String>,
+}
+
+/// Provision project secrets from `.env` into the device-encrypted store and
+/// report keys declared in `.env.example` that are still unset. Idempotent:
+/// keys already present are skipped unless `overwrite`. A missing `.env` is a
+/// no-op (still reports `.env.example` gaps). Used by `animus install` so a
+/// fresh `git clone && animus install` provisions secrets; commented example
+/// keys are NOT treated as declared, so the scaffolded `.env.example` produces
+/// no false "missing" noise until a project uncomments real keys.
+pub(crate) fn sync_project_env_secrets(project_root: &Path, overwrite: bool) -> Result<EnvSyncSummary> {
+    let store = build_store(project_root)?;
+    let summary = sync_env_secrets_into(store.as_ref(), project_root, overwrite)?;
+    // Record an audit event for install-time secret provisioning, mirroring the
+    // trail emitted by `secret set` / `import-env` / `rm` / `migrate` so
+    // install-time mutations are not invisible to audit-log consumers.
+    if !summary.imported.is_empty() {
+        if let Some(scoped_root) = scoped_state_root(project_root) {
+            let actor = resolve_actor(None);
+            log_secret_event(
+                &scoped_root,
+                &actor,
+                AuditEventKind::PolicyOverride,
+                "secret_import_env",
+                "*",
+                Some(json!({ "source": ".env", "imported": summary.imported.len(), "via": "install" })),
+            );
+        }
+    }
+    Ok(summary)
+}
+
+/// Store-bound core of [`sync_project_env_secrets`], split out so tests can
+/// drive it with a `MockSecretStore`.
+fn sync_env_secrets_into(store: &dyn SecretStore, project_root: &Path, overwrite: bool) -> Result<EnvSyncSummary> {
+    let mut have: std::collections::BTreeSet<String> = store.list_keys()?.into_iter().collect();
+
+    let env_path = project_root.join(".env");
+    let env_present = env_path.exists();
+    let mut imported = Vec::new();
+    let mut skipped = Vec::new();
+    if env_present {
+        let body = fs::read_to_string(&env_path).with_context(|| format!("failed to read {}", env_path.display()))?;
+        for (key, value) in parse_dotenv(&body)? {
+            if validate_secret_key(&key).is_err() {
+                skipped.push(key);
+                continue;
+            }
+            // A blank `KEY=` (the unfilled `.env.example` shape) must NOT be
+            // stored as an empty secret — that would mask the key as "present"
+            // and leave a credential set to "". Skip it and leave it to surface
+            // in `missing_declared` instead (mirrors `secret set` refusing empty).
+            if value.is_empty() {
+                skipped.push(key);
+                continue;
+            }
+            if have.contains(&key) && !overwrite {
+                skipped.push(key);
+                continue;
+            }
+            store.set(&key, &value)?;
+            have.insert(key.clone());
+            imported.push(key);
+        }
+    }
+
+    // Declared keys = uncommented `KEY=` lines in `.env.example`. `parse_dotenv`
+    // skips comments, so the scaffold's commented examples count as nothing.
+    let mut missing_declared = Vec::new();
+    let example_path = project_root.join(".env.example");
+    if example_path.exists() {
+        let body =
+            fs::read_to_string(&example_path).with_context(|| format!("failed to read {}", example_path.display()))?;
+        for (key, _value) in parse_dotenv(&body)? {
+            if !have.contains(&key) && !missing_declared.contains(&key) {
+                missing_declared.push(key);
+            }
+        }
+    }
+
+    Ok(EnvSyncSummary { env_present, imported, skipped, missing_declared })
+}
+
 /// Store one project-scoped secret in the OS keychain, with the same
 /// validation and audit logging as `animus secret set`. Used by the
 /// `animus init` walkthrough to migrate detected env-var API keys after
@@ -647,6 +739,55 @@ use std::collections::BTreeMap as _BTreeMap;
 mod tests {
     use super::*;
     use orchestrator_core::MockSecretStore;
+
+    #[test]
+    fn sync_env_imports_new_skips_present_and_reports_missing_declared() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env"), "ALPHA_KEY=1\nBETA_KEY=2\n").unwrap();
+        // Declared keys: BETA_KEY (already supplied via .env) + GAMMA_KEY (unset);
+        // the commented DELTA_KEY must NOT count as declared.
+        std::fs::write(dir.path().join(".env.example"), "BETA_KEY=\nGAMMA_KEY=\n# DELTA_KEY=\n").unwrap();
+        // ALPHA_KEY already in the store -> skipped, not overwritten.
+        let store = MockSecretStore::with_entries([("ALPHA_KEY", "old")]);
+
+        let summary = sync_env_secrets_into(&store, dir.path(), false).unwrap();
+
+        assert!(summary.env_present);
+        assert_eq!(summary.imported, vec!["BETA_KEY"], "only the new key is imported");
+        assert!(summary.skipped.contains(&"ALPHA_KEY".to_string()), "already-present key is skipped");
+        assert_eq!(store.get("ALPHA_KEY").unwrap().as_deref(), Some("old"), "existing value preserved");
+        assert_eq!(
+            summary.missing_declared,
+            vec!["GAMMA_KEY"],
+            "declared-but-unset key surfaced; commented one ignored"
+        );
+    }
+
+    #[test]
+    fn sync_env_skips_blank_dotenv_values_and_flags_them_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        // A copied-but-unfilled `.env`: real value for ONE key, blank for another.
+        std::fs::write(dir.path().join(".env"), "REAL_KEY=set\nBLANK_KEY=\n").unwrap();
+        std::fs::write(dir.path().join(".env.example"), "REAL_KEY=\nBLANK_KEY=\n").unwrap();
+        let store = MockSecretStore::new();
+
+        let summary = sync_env_secrets_into(&store, dir.path(), false).unwrap();
+
+        assert_eq!(summary.imported, vec!["REAL_KEY"]);
+        assert_eq!(store.get("BLANK_KEY").unwrap(), None, "blank value must not be stored as an empty secret");
+        assert_eq!(summary.missing_declared, vec!["BLANK_KEY"], "blank declared key surfaces as still-missing");
+    }
+
+    #[test]
+    fn sync_env_missing_dotenv_is_noop_but_still_checks_example() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".env.example"), "NEEDED_KEY=\n").unwrap();
+        let store = MockSecretStore::new();
+        let summary = sync_env_secrets_into(&store, dir.path(), false).unwrap();
+        assert!(!summary.env_present);
+        assert!(summary.imported.is_empty());
+        assert_eq!(summary.missing_declared, vec!["NEEDED_KEY"]);
+    }
 
     #[test]
     fn parse_dotenv_handles_quoted_and_unquoted_and_comments() {
