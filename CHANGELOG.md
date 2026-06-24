@@ -4,6 +4,53 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.10] - 2026-06-24
+
+**v0.6.10 — first-party providers install without `--allow-shadow-builtin`.**
+
+- The reserved-provider guard (`enforce_provider_tool_policy`) no longer treats
+  the legitimate first-party plugins as name squatters. A canonical
+  `animus-provider-<reserved>` (claude / codex / gemini / opencode / oai /
+  oai-agent / oai-runner) published by a **built-in trusted publisher**
+  (`launchapp-dev`) is the rightful owner of the name and installs with **no
+  flag**. Untrusted orgs — and `--path` / `--url` installs (owner unknown) —
+  still require `--allow-shadow-builtin`. `enforce_manifest_name_matches_repo`
+  and the org-trust gate still run, so this is not a security loosening.
+- Corrected the misleading "reserved in-tree backend" error wording. These names
+  are reserved so an **untrusted** plugin cannot silently hijack the core
+  provider dispatch path — the providers are **plugins, not compiled into the
+  kernel** (the resolver only resolves to installed plugins; there is no
+  fallback, so the reserved names are an anti-squat guard, not native backends).
+
+## [0.6.9] - 2026-06-24
+
+**v0.6.9 — the npm-style project experience + core providers driven properly.**
+
+- **`animus.toml` project manifest + `install` / `add` / `remove`.** A committed
+  `animus.toml` (`[project]` kernel, `[plugins]`, `[packs]`; deps as a version
+  string, `{ git, tag }`, or `{ path }`) declares intent; `animus install`
+  resolves it into `.animus/plugins.lock` and installs the set. `--locked`
+  reproduces the committed lock exactly (npm-ci) and fails on manifest↔lock
+  drift. `animus add <spec>` / `animus remove <name>` mutate the manifest +
+  install/uninstall. `animus init` scaffolds `animus.toml`, `.env.example`, and
+  a merge-safe project `.gitignore`. Onboarding becomes `git clone && animus
+  install`; a Dockerfile is `animus install --locked`.
+- **Plugin lock = source of truth.** `.animus/plugins.lock` is authoritative; the
+  `plugins.yaml` registry is a derived projection regenerated on every mutating op.
+- **`.env` → secrets sync.** `animus install` provisions secrets from `.env` into
+  the device-encrypted store (idempotent; blank `KEY=` values are skipped, never
+  stored empty; imports are audited) and warns about keys declared (uncommented)
+  in `.env.example` but still unset.
+- **Core providers driven properly by default.** Curated provider defaults now
+  use proper transports instead of stdout scraping: **gemini** + **opencode**
+  drive their CLI over **ACP** (`animus-provider-{gemini,opencode}` v0.3.0, thin
+  wrappers on the shared `animus-provider-acp` client), **codex** over **MCP**
+  (`animus-provider-codex-mcp`). `claude` and `oai` stay native (native session +
+  approval hook / direct API). `provider_tool` ids are unchanged, so kernel
+  model→provider routing is identical — the transport is an internal detail.
+- **Fixed** restart-resume of the legacy `oai-runner` / `animus-oai-runner`
+  aliases: they canonicalize to `oai-agent` (the agentic provider), not `oai`.
+
 ## [0.6.8] - 2026-06-22
 
 **v0.6.8 — install Agent Skills from GitHub.**
