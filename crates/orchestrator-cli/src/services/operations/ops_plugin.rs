@@ -1678,7 +1678,7 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     };
 
     if let Some(manifest_for_check) = source_manifest.as_ref() {
-        enforce_provider_tool_policy(manifest_for_check, req.allow_shadow_builtin)?;
+        enforce_provider_tool_policy(manifest_for_check, req.allow_shadow_builtin, provenance.owner.as_deref())?;
         if let (Some(owner), Some(repo)) = (provenance.owner.as_deref(), provenance.repo.as_deref()) {
             enforce_manifest_name_matches_repo(manifest_for_check, owner, repo, req.force)?;
         }
@@ -4991,11 +4991,21 @@ fn probe_manifest(binary_path: &Path) -> Result<PluginManifest> {
     })
 }
 
-/// Refuse provider plugins whose manifest name (or `animus-provider-*` suffix)
-/// claims one of the in-tree `RESERVED_PROVIDER_TOOLS`. A misconfigured or
-/// malicious plugin can otherwise replace the entire `claude` / `codex` /
-/// `gemini` / `opencode` / `oai-runner` dispatch path without warning.
-fn enforce_provider_tool_policy(manifest: &PluginManifest, allow_shadow_builtin: bool) -> Result<()> {
+/// Guard the reserved first-party provider names (`RESERVED_PROVIDER_TOOLS`:
+/// claude / codex / gemini / opencode / oai / oai-agent / oai-runner). These
+/// providers are NOT compiled into the kernel — each ships as a standalone
+/// plugin — but the names are reserved so an UNTRUSTED plugin can't silently
+/// hijack a core provider's dispatch path (a supply-chain risk).
+///
+/// The legitimate owner of these names is the built-in trusted publisher
+/// (`launchapp-dev`): a canonical `animus-provider-<tool>` from that org is the
+/// rightful first-party provider, not a squatter, so it installs with NO flag.
+/// Any other source claiming a reserved name must pass `--allow-shadow-builtin`.
+fn enforce_provider_tool_policy(
+    manifest: &PluginManifest,
+    allow_shadow_builtin: bool,
+    owner: Option<&str>,
+) -> Result<()> {
     if manifest.plugin_kind != animus_plugin_protocol::PLUGIN_KIND_PROVIDER {
         return Ok(());
     }
@@ -5003,19 +5013,28 @@ fn enforce_provider_tool_policy(manifest: &PluginManifest, allow_shadow_builtin:
     if !is_reserved_provider_tool(derived_tool) {
         return Ok(());
     }
+    // First-party publisher claiming its own canonical name: it owns the name,
+    // so no `--allow-shadow-builtin` dance for `launchapp-dev/animus-provider-*`.
+    let from_first_party_publisher = manifest.name.starts_with("animus-provider-")
+        && owner.is_some_and(|o| BUILTIN_TRUSTED_ORGS.iter().any(|trusted| trusted.eq_ignore_ascii_case(o)));
+    if from_first_party_publisher {
+        return Ok(());
+    }
     if allow_shadow_builtin {
         tracing::warn!(
             plugin = %manifest.name,
             tool = %derived_tool,
-            "installing plugin that shadows the in-tree '{}' backend (--allow-shadow-builtin)",
+            "installing a plugin that claims the reserved provider name '{}' (--allow-shadow-builtin)",
             derived_tool,
         );
         return Ok(());
     }
     Err(invalid_input_error(format!(
-        "plugin '{}' resolves to provider_tool '{}', which is a reserved in-tree backend \
-         (claude / codex / gemini / opencode / oai-runner). Installing it would silently \
-         override the built-in dispatch for that tool. Pass --allow-shadow-builtin to proceed.",
+        "plugin '{}' claims the reserved first-party provider name '{}' \
+         (claude / codex / gemini / opencode / oai / oai-agent / oai-runner). These names are \
+         reserved so an untrusted plugin cannot silently hijack the core provider dispatch path. \
+         First-party plugins from launchapp-dev install automatically; to install a third-party \
+         plugin under this name, pass --allow-shadow-builtin.",
         manifest.name, derived_tool
     )))
 }
@@ -7842,21 +7861,21 @@ name = "same"
     #[test]
     fn install_refuses_reserved_provider_tool_without_flag() {
         let manifest = provider_manifest("animus-provider-claude");
-        let err = enforce_provider_tool_policy(&manifest, false).expect_err("must refuse claude provider plugin");
-        assert!(format!("{err}").contains("reserved in-tree backend"));
+        let err = enforce_provider_tool_policy(&manifest, false, None).expect_err("must refuse claude provider plugin");
+        assert!(format!("{err}").contains("reserved first-party provider name"));
     }
 
     #[test]
     fn install_allows_reserved_with_explicit_flag() {
         let manifest = provider_manifest("animus-provider-codex");
-        let ok = enforce_provider_tool_policy(&manifest, true);
+        let ok = enforce_provider_tool_policy(&manifest, true, None);
         assert!(ok.is_ok(), "--allow-shadow-builtin must let install through");
     }
 
     #[test]
     fn install_allows_non_reserved_provider_plugin() {
         let manifest = provider_manifest("animus-provider-mock");
-        let ok = enforce_provider_tool_policy(&manifest, false);
+        let ok = enforce_provider_tool_policy(&manifest, false, None);
         assert!(ok.is_ok(), "non-reserved provider tools must install without the override");
     }
 
@@ -7864,8 +7883,30 @@ name = "same"
     fn install_skips_provider_check_for_non_provider_plugins() {
         let mut manifest = provider_manifest("animus-provider-claude");
         manifest.plugin_kind = animus_plugin_protocol::PLUGIN_KIND_SUBJECT_BACKEND.to_string();
-        let ok = enforce_provider_tool_policy(&manifest, false);
+        let ok = enforce_provider_tool_policy(&manifest, false, None);
         assert!(ok.is_ok(), "subject backends are never gated by reserved provider tools");
+    }
+
+    #[test]
+    fn first_party_publisher_installs_reserved_name_without_flag() {
+        // The legitimate first-party claude plugin from launchapp-dev is the
+        // rightful owner of the reserved name, so it installs with NO flag.
+        let manifest = provider_manifest("animus-provider-claude");
+        let trusted = BUILTIN_TRUSTED_ORGS[0];
+        assert!(
+            enforce_provider_tool_policy(&manifest, false, Some(trusted)).is_ok(),
+            "first-party {trusted}/animus-provider-claude must install without --allow-shadow-builtin"
+        );
+        // An untrusted org claiming the same reserved name is still blocked.
+        assert!(
+            enforce_provider_tool_policy(&manifest, false, Some("attacker")).is_err(),
+            "an untrusted org claiming a reserved provider name must still be rejected"
+        );
+        // ...unless the operator explicitly opts in.
+        assert!(
+            enforce_provider_tool_policy(&manifest, true, Some("attacker")).is_ok(),
+            "--allow-shadow-builtin is the explicit opt-in for non-first-party reserved names"
+        );
     }
 
     #[test]
@@ -7875,7 +7916,7 @@ name = "same"
             let repo_basename = slug.rsplit('/').next().unwrap_or(slug);
             let manifest = provider_manifest(repo_basename);
 
-            let curated_install = enforce_provider_tool_policy(&manifest, true);
+            let curated_install = enforce_provider_tool_policy(&manifest, true, None);
             assert!(
                 curated_install.is_ok(),
                 "curated install-defaults (allow_shadow_builtin=true) must accept '{repo_basename}'"
@@ -7884,7 +7925,7 @@ name = "same"
             let derived_tool = repo_basename.strip_prefix("animus-provider-").unwrap_or(repo_basename);
             if is_reserved_provider_tool(derived_tool) {
                 at_least_one_reserved = true;
-                let user_install = enforce_provider_tool_policy(&manifest, false);
+                let user_install = enforce_provider_tool_policy(&manifest, false, None);
                 assert!(
                     user_install.is_err(),
                     "user-typed install MUST still be blocked for reserved name '{repo_basename}'"
@@ -7916,9 +7957,9 @@ name = "same"
         let req =
             PluginInstallRequest { source: Some("attacker/animus-provider-claude".to_string()), ..Default::default() };
         assert!(!req.allow_shadow_builtin, "user-default request must NOT bypass shadow-builtin guard");
-        let err = enforce_provider_tool_policy(&manifest, req.allow_shadow_builtin)
+        let err = enforce_provider_tool_policy(&manifest, req.allow_shadow_builtin, Some("attacker"))
             .expect_err("user-typed install of reserved name must still be rejected");
-        assert!(format!("{err}").contains("reserved in-tree backend"));
+        assert!(format!("{err}").contains("reserved first-party provider name"));
     }
 
     #[test]
