@@ -223,6 +223,10 @@ main() {
   printf '\nIf you use OAI-compatible providers (MiniMax/Z.AI/OpenRouter/etc), also install:\n'
   printf '  animus plugin install launchapp-dev/animus-provider-oai-agent\n'
 
+  printf '\nManaging multiple projects? Install avm (the Animus Version Manager) to pin\n'
+  printf 'each project to a kernel version (à la nvm/rustup) and dispatch automatically:\n'
+  printf '  curl -fsSL https://raw.githubusercontent.com/launchapp-dev/avm/main/install.sh | sh\n'
+
   if ! echo "${PATH}" | tr ':' '\n' | grep -qxF "${INSTALL_DIR}"; then
     warn "${INSTALL_DIR} is not in your PATH"
     echo ""

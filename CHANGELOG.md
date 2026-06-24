@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.6.11] - 2026-06-24
+
+**v0.6.11 — `animus update` defers to avm.**
+
+- When the running binary is managed by [avm](https://github.com/launchapp-dev/avm)
+  (the Animus Version Manager — it installs kernels under `~/.avm/versions/` and
+  dispatches through an `animus` shim), `animus update` no longer self-replaces
+  the binary (which would corrupt avm's version directory). It now prints the
+  `avm install` / `avm use` commands and exits. Plain installs (`~/.local/bin`,
+  `/usr/local/bin`, Cargo) are unaffected and still self-update.
+- `scripts/install.sh` and the docs now point multi-project users at avm.
+
 ## [0.6.10] - 2026-06-24
 
 **v0.6.10 — first-party providers install without `--allow-shadow-builtin`.**

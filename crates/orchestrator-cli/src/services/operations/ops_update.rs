@@ -5,7 +5,7 @@ use serde::Serialize;
 use crate::cli_types::{UpdateArgs, UpdateChannelArg};
 use crate::print_value;
 use crate::services::self_update::{
-    resolve_effective_config_block, run_manual_update, ManualUpdateOptions, UpdateOutcome,
+    avm_managed_version, resolve_effective_config_block, run_manual_update, ManualUpdateOptions, UpdateOutcome,
 };
 
 const UPDATE_SCHEMA: &str = "animus.update.cli.v1";
@@ -23,6 +23,33 @@ struct UpdateOutput {
 }
 
 pub(crate) async fn handle_update(args: UpdateArgs, project_root: &str, json: bool) -> Result<()> {
+    // When this binary is managed by avm (the Animus Version Manager), `animus
+    // update` must NOT self-replace it — avm owns kernel versioning under
+    // `~/.avm/versions/<version>/` and dispatches through an `animus` shim.
+    // Overwriting the running binary in place would corrupt avm's version dir.
+    // Defer to avm instead.
+    if let Some(version) = avm_managed_version() {
+        if !json {
+            eprintln!(
+                "animus {version} is managed by avm. Use avm to change versions:\n  \
+                 avm install <version>            # download a kernel\n  \
+                 avm use --global <version>       # set the machine default\n  \
+                 avm use <version>                # pin THIS project (.animus-version)\n  \
+                 avm list --remote                # available release tags"
+            );
+        }
+        return print_value(
+            UpdateOutput {
+                schema: UPDATE_SCHEMA,
+                action: "managed_by_avm",
+                current: version,
+                latest: None,
+                installed: None,
+                channel: "n/a",
+            },
+            json,
+        );
+    }
     let block = resolve_effective_config_block(project_root);
     // `--prerelease` (folded in from the retired `self update`) forces the
     // prerelease channel regardless of `--channel`, matching the documented
