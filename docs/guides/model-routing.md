@@ -5,9 +5,13 @@ agent runtime config plus any workflow or pack overrides. The current planner
 logic lives in:
 
 - `crates/animus-runtime-shared/src/config_context.rs`
-- `crates/protocol/src/model_routing.rs`
 - `crates/orchestrator-config/src/agent_runtime_config.rs`
 - `.animus/workflows.yaml` or `.animus/workflows/*.yaml`
+
+Tool/model normalization helpers such as `protocol::tool_for_model_id()`,
+`protocol::canonical_model_id()`, and `protocol::default_model_for_tool()`
+come from the external `launchapp-dev/animus-protocol` dependency pinned in
+the workspace `Cargo.toml` files.
 
 ## How Primary Target Resolution Works
 
@@ -127,8 +131,7 @@ table no longer reflect the live code.
 
 ## Tool Assignment
 
-Tool inference comes from `tool_for_model_id()` in
-`crates/protocol/src/model_routing.rs`:
+Tool inference comes from `protocol::tool_for_model_id()`:
 
 | Model family | CLI tool |
 |-------------|----------|
@@ -170,8 +173,9 @@ animus doctor --check api_keys
 The effective model/tool assignments come from the config cascade described
 above: `phase.runtime.model` in workflow YAML, then the agent profile in
 `~/.animus/<repo-scope>/config/agent-runtime-config.v2.json`, then the
-compiled defaults in `protocol::model_routing`. Inspect or edit the agent
-runtime layer with `animus workflow agent-runtime get|validate|set` (below).
+compiled defaults in the external `protocol` dependency. Inspect or edit the
+agent runtime layer with `animus workflow agent-runtime get|validate|set`
+(below).
 
 ## Agent Runtime Commands
 

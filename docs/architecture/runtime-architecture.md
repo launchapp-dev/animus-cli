@@ -19,7 +19,7 @@ observability, and extension rules, see
 | Project root resolution | [`crates/orchestrator-core/src/config.rs`](../../crates/orchestrator-core/src/config.rs) |
 | Service bootstrap and state | [`crates/orchestrator-core/src/services.rs`](../../crates/orchestrator-core/src/services.rs) |
 | Workflow config loading | [`crates/orchestrator-config/src/workflow_config/`](../../crates/orchestrator-config/src/workflow_config/) |
-| Shared config and scope types | [`crates/protocol/src/config.rs`](../../crates/protocol/src/config.rs), [`crates/protocol/src/repository_scope.rs`](../../crates/protocol/src/repository_scope.rs) |
+| Shared config and scope types | External `protocol::Config` and `protocol::repository_scope::*` from the `launchapp-dev/animus-protocol` dependency pinned in the workspace `Cargo.toml` files |
 | Workflow execution helpers | [`crates/animus-runtime-shared/src/`](../../crates/animus-runtime-shared/src/) |
 | Daemon runtime | [`crates/orchestrator-daemon-runtime/src/`](../../crates/orchestrator-daemon-runtime/src/) |
 | Plugin host | [`crates/orchestrator-plugin-host/src/`](../../crates/orchestrator-plugin-host/src/) |
@@ -84,7 +84,7 @@ graph TB
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared`, `animus-mcp-oauth` | Queue scheduling, workflow dispatch, shared phase/runtime-contract logic, and protected MCP OAuth proxy/token handling |
 | Providers | `orchestrator-plugin-host::session`, external `launchapp-dev/animus-provider-oai-agent` plugin | Provider plugin sessions and the OpenAI-compatible runner binary resolved from installed plugins |
 | Plugins | `orchestrator-plugin-host`, `animus-plugin-protocol`, `animus-plugin-runtime` | Discovery, manifests, stdio JSON-RPC host, runtime helpers |
-| Support | `orchestrator-logging`, `protocol` | Tracing, log plumbing, shared types, config, and repository-scope helpers |
+| Support | `orchestrator-logging`, external `protocol` dependency | Tracing, log plumbing, shared types, config, and repository-scope helpers |
 
 ## Startup Flow
 

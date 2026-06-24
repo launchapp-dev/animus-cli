@@ -23,14 +23,14 @@ cargo run -p orchestrator-cli -- --help
 Build a specific crate:
 
 ```bash
-cargo build -p protocol
 cargo build -p orchestrator-core
 cargo build -p orchestrator-plugin-host
+cargo build -p orchestrator-daemon-runtime
 ```
 
 ## Workspace Structure
 
-The workspace is a Cargo workspace of 12 crates. The current workspace members are:
+The workspace is a Cargo workspace of 10 crates. The current workspace members are:
 
 ```text
 crates/
@@ -43,8 +43,7 @@ crates/
 ├── orchestrator-core/
 ├── orchestrator-daemon-runtime/
 ├── orchestrator-logging/
-├── orchestrator-plugin-host/
-└── protocol/
+└── orchestrator-plugin-host/
 ```
 
 `default-members` in `Cargo.toml` include:
@@ -97,6 +96,10 @@ For a full drift check, also run the `orchestrator-cli` tests that assert the
 published CLI tree, `AGENTS.md` top-level command list, crate map, and MCP
 tool table match the live clap/MCP registries before deploying the docs site
 to Vercel.
+
+The repo also consumes shared `protocol::*`, provider/session, and config
+types from the external `launchapp-dev/animus-protocol` git dependencies
+pinned in the root `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`.
 
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. The deploy helper

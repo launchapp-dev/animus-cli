@@ -39,7 +39,7 @@
 
 Open a fresh **Claude Code** (or **Codex** / **OpenCode** / **Cursor**) session and paste this. The agent installs the Animus CLI, clones `animus-skills`, runs the setup script, and adds the project section to `CLAUDE.md` / `AGENTS.md`. You'll be running workflows in about a minute.
 
-> Install Animus + Animus Skills: run **`curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash`** to install the `animus` CLI (currently `v0.6.0` in this repo), then **`animus plugin install-defaults`** to pull in the provider + subject + workflow_runner + queue plugins the daemon needs (one-time setup, idempotent; add `--include-recommended` for the web UI and extra providers). Then **`git clone --single-branch --depth 1 https://github.com/launchapp-dev/animus-skills.git ~/.claude/skills/animus-skills && cd ~/.claude/skills/animus-skills && ./setup`** to link the skills and write `.mcp.json`. Add an "Animus" section to CLAUDE.md (or AGENTS.md for Codex) listing the slash commands: `/animus-setup`, `/animus-getting-started`, `/animus-mcp-setup`, `/animus-workflow-authoring`, `/animus-pack-authoring`, `/animus-skill-authoring`, `/animus-troubleshooting`. Restart the agent so the new `animus` MCP server is picked up. From a project root, run `animus init --walkthrough` to scaffold `.animus/`, install packs, and optionally start the daemon.
+> Install Animus + Animus Skills: run **`curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash`** to install the `animus` CLI (currently `v0.6.9` in this repo), then **`animus plugin install-defaults`** to pull in the provider + subject + workflow_runner + queue plugins the daemon needs (one-time setup, idempotent; add `--include-recommended` for the web UI and extra providers). Then **`git clone --single-branch --depth 1 https://github.com/launchapp-dev/animus-skills.git ~/.claude/skills/animus-skills && cd ~/.claude/skills/animus-skills && ./setup`** to link the skills and write `.mcp.json`. Add an "Animus" section to CLAUDE.md (or AGENTS.md for Codex) listing the slash commands: `/animus-setup`, `/animus-getting-started`, `/animus-mcp-setup`, `/animus-workflow-authoring`, `/animus-pack-authoring`, `/animus-skill-authoring`, `/animus-troubleshooting`. Restart the agent so the new `animus` MCP server is picked up. From a project root, run `animus init --walkthrough` to scaffold `.animus/`, install packs, and optionally start the daemon.
 
 For Codex CLI, swap the clone path to `~/.codex/skills/animus-skills` and edit `AGENTS.md` instead of `CLAUDE.md`.
 
@@ -59,7 +59,7 @@ The second command is **required in v0.4.12 and later** (and expanded in **v0.5*
 
 ```bash
 # Specific version
-ANIMUS_VERSION=v0.6.0 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
+ANIMUS_VERSION=v0.6.9 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 
 # Custom directory
 ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
@@ -503,7 +503,6 @@ workspace members from `Cargo.toml` are:
 
 - `animus-plugin-protocol` — in-tree stdio plugin protocol types
 - `animus-plugin-runtime` — runtime helpers for plugin implementations
-- `protocol` — shared protocol, config, repository-scope, and CLI JSON envelope types
 - `orchestrator-daemon-runtime` — daemon queue, scheduling, subject dispatch, and runtime supervision
 - `orchestrator-logging` — shared tracing and log-file utilities
 - `orchestrator-plugin-host` — plugin discovery, install state, stdio host, and provider session bridge
@@ -512,6 +511,10 @@ workspace members from `Cargo.toml` are:
 - `orchestrator-cli` — main `animus` binary, clap surface, MCP server, and CLI operations
 - `animus-runtime-shared` — shared workflow execution and runtime-contract helpers used by the daemon and external `workflow_runner` plugins
 - `animus-mcp-oauth` — OAuth authorization-code + PKCE helpers and the `animus-mcp-proxy` bridge for protected MCP servers
+
+Shared `protocol::*`, config-source, provider/session, and subject wire types
+now come from the external `launchapp-dev/animus-protocol` dependencies pinned
+in the workspace `Cargo.toml` files rather than an in-tree crate.
 
 Provider execution and the web stack are no longer in-tree crates. The
 OpenAI-compatible runner ships as the external

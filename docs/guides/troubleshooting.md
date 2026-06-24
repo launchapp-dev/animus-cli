@@ -129,12 +129,12 @@ This clears `paused`, `blocked_at`, `blocked_reason`, `blocked_phase`, and `bloc
 
 **Symptoms**: After editing protocol types or model routing, `cargo build` does not pick up changes.
 
-**Cause**: Cargo's incremental compilation may not detect changes in certain files, particularly in the `protocol` crate.
+**Cause**: Cargo's incremental compilation may not detect changes in certain files, especially when the edit lands in a shared crate or freshly updated git dependency.
 
 **Fix**: Touch the changed file to force recompilation:
 
 ```bash
-touch crates/protocol/src/model_routing.rs
+touch crates/orchestrator-config/src/agent_runtime_config.rs
 cargo build -p orchestrator-cli
 ```
 

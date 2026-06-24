@@ -1080,7 +1080,7 @@ triggers:
     workflow_ref: regenerate-schema
     config:
       paths:
-        - "crates/protocol/src/**/*.rs"
+        - "crates/orchestrator-config/src/**/*.rs"
         - "schema/**/*.json"
       debounce_secs: 15
       ignore:

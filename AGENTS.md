@@ -44,8 +44,7 @@ crates/
 ├── orchestrator-core/           # Domain services, subject_adapter, store, bootstrap, state mutation APIs
 ├── orchestrator-daemon-runtime/ # Daemon queue and scheduling runtime
 ├── orchestrator-logging/        # Shared tracing and log file utilities
-├── orchestrator-plugin-host/    # Plugin discovery, install, stdio host, session backend bridge (folded in v0.5.3)
-└── protocol/                    # Shared protocol/config/runtime types
+└── orchestrator-plugin-host/    # Plugin discovery, install, stdio host, session backend bridge (folded in v0.5.3)
 ```
 
 The OpenAI-compatible runner (formerly `crates/oai-runner/`) moved
@@ -83,8 +82,7 @@ Key implementation files:
 - `crates/orchestrator-core/src/config.rs`
 - `crates/orchestrator-core/src/services.rs`
 - `crates/orchestrator-config/src/workflow_config/`
-- `crates/protocol/src/config.rs`
-- `crates/protocol/src/repository_scope.rs`
+- external `protocol::Config` and `protocol::repository_scope::*` from the `launchapp-dev/animus-protocol` dependency pinned in `Cargo.toml`
 
 ## State Layout
 
