@@ -506,6 +506,7 @@ kernel plus a curated bundle of out-of-tree plugins for providers, subject
 backends, workflow execution, queues, transports, and web UI. The current
 workspace members from `Cargo.toml` are:
 
+- `animus-config-protocol` — wire contract for config-source/workflow YAML schema loading
 - `animus-plugin-protocol` — in-tree stdio plugin protocol types
 - `animus-plugin-runtime` — runtime helpers for plugin implementations
 - `protocol` — shared protocol, config, repository-scope, and CLI JSON envelope types
