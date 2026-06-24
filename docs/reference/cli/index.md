@@ -389,7 +389,9 @@ pins the exact per-platform artifacts. `animus init` scaffolds `animus.toml`,
 
 ```bash
 git clone <repo> && cd <repo>
-animus install            # resolve animus.toml -> lock -> install plugins + packs
+cp .env.example .env && $EDITOR .env   # fill in the project's declared keys
+animus install            # resolve animus.toml -> lock -> install plugins + packs,
+                          # then load .env into the secret store (warns on unset keys)
 # in CI / a container:
 animus install --locked   # reproduce EXACTLY the committed lockfile (npm ci)
 ```
@@ -416,9 +418,13 @@ tag (or the explicit git tag) selects the release, and the lock records the
 installed sha. `animus init` emits explicit `{ git, tag }` pins for the default
 set so the scaffold is fully reproducible.
 
-- `animus install [--locked] [--force]` — resolve + install. `--locked`
-  refuses to proceed if the manifest declares a plugin the lockfile does not
-  pin (run `animus install` without `--locked` to refresh).
+- `animus install [--locked] [--force]` — resolve + install plugins and packs,
+  then **provision secrets from `.env`** into the device-encrypted store
+  (idempotent; keys already set are skipped) and warn about any keys declared
+  (uncommented) in `.env.example` that are still unset. `--locked` refuses to
+  proceed if the manifest declares a plugin the lockfile does not pin (run
+  `animus install` without `--locked` to refresh). A missing `.env` is a no-op,
+  so the secret step never blocks the install.
 - `animus add <spec> [--pack] [--path PATH] [--force]` — `spec` is
   `name[@version]`, `OWNER/REPO@tag`, or a bare `name`. Updates `animus.toml`
   and installs the one dependency. `--pack` targets `[packs]`.

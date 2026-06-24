@@ -94,12 +94,35 @@ pub(crate) async fn handle_manifest_install(args: InstallArgs, project_root: &st
             install_pack_dep(id, dep, root, false)
                 .with_context(|| format!("--locked: failed to install declared pack '{id}'"))?;
         }
+        // Provision secrets from `.env` (best-effort) so a container's
+        // `animus install --locked` brings up secrets too. CI usually injects
+        // secrets via the environment instead; a missing `.env` is a no-op.
+        let locked_secrets = super::ops_secret::sync_project_env_secrets(root, false);
+        if !json {
+            if let Ok(summary) = &locked_secrets {
+                if !summary.imported.is_empty() {
+                    println!("Provisioned {} secret(s) from .env", summary.imported.len());
+                }
+                if !summary.missing_declared.is_empty() {
+                    println!(
+                        "Secrets declared in .env.example but not set: {} — add them to .env or `animus secret set <KEY>`.",
+                        summary.missing_declared.join(", ")
+                    );
+                }
+            }
+        }
         // A pack-only manifest has no plugin pins to reproduce — the plugin
         // locked installer would error on an empty/missing plugins.lock, so
         // skip it.
         if manifest.plugins.is_empty() {
+            let secrets_value = match &locked_secrets {
+                Ok(s) => {
+                    json!({ "imported": s.imported, "skipped": s.skipped, "missing_declared": s.missing_declared })
+                }
+                Err(err) => json!({ "error": err.to_string() }),
+            };
             return print_value(
-                json!({ "schema": "animus.install.v1", "locked": true, "plugins": [], "packs": manifest.packs.len() }),
+                json!({ "schema": "animus.install.v1", "locked": true, "plugins": [], "packs": manifest.packs.len(), "secrets": secrets_value }),
                 json,
             );
         }
@@ -145,6 +168,20 @@ pub(crate) async fn handle_manifest_install(args: InstallArgs, project_root: &st
         }
     }
 
+    // Provision secrets from `.env` into the device store and report keys
+    // declared in `.env.example` that are still unset — the last leg of the
+    // `git clone && animus install` onboarding flow. Best-effort: a secret
+    // backend error must not fail the install (plugins/packs already landed).
+    let secrets = super::ops_secret::sync_project_env_secrets(root, false);
+    let secrets_value = match &secrets {
+        Ok(summary) => json!({
+            "imported": summary.imported,
+            "skipped": summary.skipped,
+            "missing_declared": summary.missing_declared,
+        }),
+        Err(err) => json!({ "error": err.to_string() }),
+    };
+
     let failed = plugin_rows.iter().chain(pack_rows.iter()).filter(|row| row["status"] == "failed").count();
     print_value(
         json!({
@@ -152,10 +189,25 @@ pub(crate) async fn handle_manifest_install(args: InstallArgs, project_root: &st
             "manifest": project_manifest_path(root).display().to_string(),
             "plugins": plugin_rows,
             "packs": pack_rows,
+            "secrets": secrets_value,
             "failed": failed,
         }),
         json,
     )?;
+    // Surface unset declared keys as an actionable, non-fatal hint.
+    if !json {
+        if let Ok(summary) = &secrets {
+            if !summary.imported.is_empty() {
+                println!("Provisioned {} secret(s) from .env", summary.imported.len());
+            }
+            if !summary.missing_declared.is_empty() {
+                println!(
+                    "Secrets declared in .env.example but not set: {} — add them to .env (then re-run `animus install`) or `animus secret set <KEY>`.",
+                    summary.missing_declared.join(", ")
+                );
+            }
+        }
+    }
     // Fail the command (non-zero exit) when any dependency failed — critical
     // for the documented CI / container `animus install [--locked]` use case.
     if failed > 0 {

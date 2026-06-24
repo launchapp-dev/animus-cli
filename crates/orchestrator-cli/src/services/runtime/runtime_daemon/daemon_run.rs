@@ -1624,22 +1624,24 @@ mod tests {
         #[test]
         fn restart_resume_finds_oai_plugin_via_canonical_alias_when_checkpoint_says_oai_runner() {
             use super::super::resolve_resume_provider_key;
-            let providers = vec!["oai".to_string()];
+            // Post-PR#249 the legacy `oai-runner` alias canonicalizes to the
+            // agentic `oai-agent` provider (the one-shot is `oai`).
+            let providers = vec!["oai-agent".to_string()];
             assert_eq!(
                 resolve_resume_provider_key(&providers, "oai-runner").as_deref(),
-                Some("oai"),
-                "checkpoint provider 'oai-runner' must canonicalize to installed key 'oai'"
+                Some("oai-agent"),
+                "checkpoint provider 'oai-runner' must canonicalize to installed key 'oai-agent'"
             );
         }
 
         #[test]
         fn restart_resume_finds_oai_plugin_when_checkpoint_says_animus_oai_runner() {
             use super::super::resolve_resume_provider_key;
-            let providers = vec!["oai".to_string()];
+            let providers = vec!["oai-agent".to_string()];
             assert_eq!(
                 resolve_resume_provider_key(&providers, "animus-oai-runner").as_deref(),
-                Some("oai"),
-                "checkpoint provider 'animus-oai-runner' must canonicalize to installed key 'oai'"
+                Some("oai-agent"),
+                "checkpoint provider 'animus-oai-runner' must canonicalize to installed key 'oai-agent'"
             );
         }
 
@@ -1658,11 +1660,11 @@ mod tests {
         #[test]
         fn restart_resume_canonical_alias_lookup_is_case_insensitive() {
             use super::super::resolve_resume_provider_key;
-            let providers = vec!["oai".to_string()];
+            let providers = vec!["oai-agent".to_string()];
             // Mirror the resolver: canonicalization lowercases the input
             // before comparing, so uppercase aliases must still match.
-            assert_eq!(resolve_resume_provider_key(&providers, "OAI-RUNNER").as_deref(), Some("oai"));
-            assert_eq!(resolve_resume_provider_key(&providers, "Animus-OAI-Runner").as_deref(), Some("oai"));
+            assert_eq!(resolve_resume_provider_key(&providers, "OAI-RUNNER").as_deref(), Some("oai-agent"));
+            assert_eq!(resolve_resume_provider_key(&providers, "Animus-OAI-Runner").as_deref(), Some("oai-agent"));
         }
 
         #[test]
