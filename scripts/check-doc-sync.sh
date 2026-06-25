@@ -262,5 +262,13 @@ assert_contains \
   "$repo_root/docs/getting-started/installation.md" \
   "ANIMUS_VERSION=${current_cli_version}" \
   "installation guide install snippet version"
+assert_contains \
+  "$repo_root/docs/guides/deployment.md" \
+  "ARG ANIMUS_VERSION=${current_cli_version}" \
+  "deployment guide Dockerfile version"
+assert_contains \
+  "$repo_root/docs/guides/deployment.md" \
+  "| \`ANIMUS_VERSION\` | \`${current_cli_version}\` |" \
+  "deployment guide build-arg version table"
 
 echo "CLI command tree and MCP tool reference are in sync."
