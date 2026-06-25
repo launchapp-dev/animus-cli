@@ -48,6 +48,13 @@ The keychain itself doesn't support listing entries by service prefix portably. 
 
 The index stores KEY names only — every actual value lives in the OS keychain. The file is safe to back up or commit-to-private-storage if you want to track which secrets a project needs without leaking values.
 
+### MCP OAuth keychain entries
+
+`animus mcp auth` stores OAuth material in the same backend under reserved KEY prefixes (derived per `(server, principal, url)`, so they survive `animus secret list` as opaque entries):
+
+- `MCP_OAUTH__<...>` — the issued token bundle (access/refresh) the MCP proxy injects as a bearer. Persistent until `animus mcp auth-logout`.
+- `MCP_OAUTH_STATE__<...>` / `MCP_OAUTH_PENDING__<...>` — **transient** records written by the delegated (`--print-url`) begin step: the PKCE verifier and the non-secret exchange parameters, keyed by the OAuth `state`. The `--complete` step consumes them; both carry a 15-minute TTL and are best-effort swept on the next access, so an abandoned begin cannot leave a usable PKCE verifier behind. The interactive loopback flow keeps this state in memory and writes neither entry.
+
 ## Storage backends
 
 Two backends sit behind the same `animus secret` surface. The default is unchanged (OS keyring); the device-encrypted store is opt-in and exists for hosts where the keyring is awkward (a macOS binary whose signature changes re-prompts on every keychain access) or absent (a headless Linux server with no session keyring).

@@ -48,6 +48,8 @@ enum Exchange {
 use crate::callback::CallbackListener;
 use crate::config::{build_secret_store, resolve_principal_id, resolve_server_url};
 use crate::keychain_store::KeychainCredentialStore;
+use crate::pending::{PendingAuth, PendingStore};
+use crate::state_store::PersistentStateStore;
 use crate::{CALLBACK_TIMEOUT_SECS, DEFAULT_CLIENT_NAME};
 
 /// Successful interactive-auth outcome, returned to the CLI for display.
@@ -520,6 +522,215 @@ pub async fn run_auth(project_root: &Path, server: &str, opts: RunAuthOptions<'_
         expires_at,
         has_refresh_token,
     }))
+}
+
+/// Options for [`begin_auth`] — the first half of the delegated (headless/web)
+/// flow. Unlike [`run_auth`], the caller (a remote host such as the portal)
+/// supplies the `redirect_uri` its own public callback will receive, and there
+/// is no interactive consent here: the host is responsible for gating who may
+/// start a connect, and discovery is a read-only public-metadata GET.
+pub struct BeginOptions<'a> {
+    pub url_override: Option<&'a str>,
+    pub scopes_override: Option<&'a [String]>,
+    /// The caller's public callback URL (e.g. `https://portal/api/mcp-oauth/callback`).
+    /// Registered as the OAuth redirect_uri and required verbatim at exchange.
+    pub redirect_uri: String,
+}
+
+/// Result of [`begin_auth`]: the URL to send the user's browser to, plus the
+/// CSRF `state` that [`complete_auth`] must be called back with. Carries NO PKCE
+/// material or token — those stay in the keychain-backed stores.
+#[derive(Debug, Clone, Serialize)]
+pub struct BeginOutcome {
+    pub authorize_url: String,
+    pub state: String,
+    pub would_register_client: bool,
+    pub requested_scopes: Vec<String>,
+    pub scopes_auto_detected: bool,
+}
+
+/// Options for [`complete_auth`] — the second half of the delegated flow, run in
+/// a FRESH process after the user's browser hits the caller's callback. Only the
+/// callback's `code` + `state` are needed: the server URL and all other exchange
+/// parameters are read back from the pending record located by `state`.
+pub struct CompleteOptions {
+    pub code: String,
+    pub state: String,
+}
+
+/// Begin a delegated authorization: resolve + discover + register/configure a
+/// (public) client + mint the authorization URL, persisting the PKCE state
+/// ([`PersistentStateStore`]) and the non-secret exchange parameters
+/// ([`PendingAuth`]) keyed by the CSRF `state` so a separate
+/// [`complete_auth`] process can finish the exchange.
+///
+/// Does NOT bind a loopback listener, open a browser, or exchange any token —
+/// the caller drives the browser to `authorize_url` and later calls
+/// [`complete_auth`] with the `code`/`state` from its callback. The laptop
+/// loopback flow ([`run_auth`]) is unchanged; this shares the same config
+/// resolution + keychain stores.
+pub async fn begin_auth(project_root: &Path, server: &str, opts: BeginOptions<'_>) -> Result<BeginOutcome> {
+    crate::ensure_crypto_provider();
+    let BeginOptions { url_override, scopes_override, redirect_uri } = opts;
+
+    let resolution = resolve_server_url(project_root, server, url_override)?;
+    let pinned_client_id = resolution.client_id.as_deref().map(str::trim).filter(|id| !id.is_empty());
+    let principal = resolve_principal_id(project_root);
+    let secrets = build_secret_store(project_root)?;
+
+    // PersistentStateStore (NOT InMemory): the PKCE verifier minted below must
+    // survive into the separate `complete_auth` process.
+    let mut manager = AuthorizationManager::new(&resolution.url)
+        .await
+        .map_err(|err| anyhow!("failed to initialize OAuth manager for `{server}`: {err}"))?;
+    manager.set_state_store(PersistentStateStore::new(secrets.clone(), server, &principal, &resolution.url));
+
+    let metadata = manager
+        .discover_metadata()
+        .await
+        .map_err(|err| anyhow!("OAuth discovery failed for `{server}` at {}: {err}", resolution.url))?;
+    manager.set_metadata(metadata);
+
+    let advertised_scopes = manager.select_scopes(None, &[]);
+    let ResolvedScopes { scopes, auto_detected: scopes_auto_detected } =
+        resolve_requested_scopes(scopes_override, &resolution.scopes, &advertised_scopes);
+    let scope_refs: Vec<&str> = scopes.iter().map(String::as_str).collect();
+
+    // Attach the keychain credential store so the eventual token bundle (written
+    // by `complete_auth`) lands in the same entry the proxy reads.
+    manager.set_credential_store(KeychainCredentialStore::new(secrets.clone(), server, &principal, &resolution.url));
+
+    // Resolve the client. Both branches end with a configured PUBLIC client
+    // whose id (and any DCR-issued secret) we persist; `complete_auth`
+    // re-configures the same client on a fresh manager (no AuthorizationSession —
+    // its in-process state can't cross the boundary). DCR usually registers a
+    // PUBLIC client (`token_endpoint_auth_method: "none"`), but a server may
+    // still return a confidential client; carry the secret so completion can
+    // authenticate the exchange with the same client begin registered.
+    let (client_id, client_secret) = if let Some(id) = pinned_client_id {
+        let config = OAuthClientConfig::new(id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        manager
+            .configure_client(config)
+            .map_err(|err| anyhow!("failed to configure pinned client_id for `{server}`: {err}"))?;
+        (id.to_string(), None)
+    } else {
+        // register_client runs DCR and internally calls configure_client.
+        let config = manager
+            .register_client(DEFAULT_CLIENT_NAME, &redirect_uri, &scope_refs)
+            .await
+            .map_err(|err| anyhow!("dynamic client registration failed for `{server}`: {err}"))?;
+        (config.client_id, config.client_secret)
+    };
+
+    // Mint the authorization URL — this writes the PKCE verifier + CSRF into the
+    // PersistentStateStore keyed by the state param.
+    let auth_url = manager
+        .get_authorization_url(&scope_refs)
+        .await
+        .map_err(|err| anyhow!("failed to build authorization URL for `{server}`: {err}"))?;
+    let state =
+        extract_state_param(&auth_url).ok_or_else(|| anyhow!("authorization URL is missing the `state` parameter"))?;
+
+    // Persist the non-secret exchange parameters keyed by the same state.
+    let pending_store = PendingStore::new(secrets, server, &principal);
+    pending_store.save(
+        &state,
+        PendingAuth {
+            server: server.to_string(),
+            url: resolution.url.clone(),
+            scopes: scopes.clone(),
+            scopes_auto_detected,
+            principal: principal.clone(),
+            redirect_uri,
+            client_id,
+            client_secret,
+            created_at: 0, // stamped by save()
+        },
+    )?;
+
+    Ok(BeginOutcome {
+        authorize_url: auth_url,
+        state,
+        would_register_client: pinned_client_id.is_none(),
+        requested_scopes: scopes,
+        scopes_auto_detected,
+    })
+}
+
+/// Complete a delegated authorization started by [`begin_auth`]: rebuild the
+/// same `AuthorizationManager` (same [`PersistentStateStore`] + keychain
+/// credential store), re-configure the public client from the persisted
+/// [`PendingAuth`], and exchange `code`/`state` for a token — the exchange reads
+/// the PKCE verifier back from the persistent state store. On success the token
+/// bundle is written to the keychain entry the proxy reads, and the transient
+/// pending + state records are deleted.
+pub async fn complete_auth(project_root: &Path, server: &str, opts: CompleteOptions) -> Result<AuthOutcome> {
+    crate::ensure_crypto_provider();
+    let CompleteOptions { code, state } = opts;
+
+    let principal = resolve_principal_id(project_root);
+    let secrets = build_secret_store(project_root)?;
+
+    // The pending record is keyed by `(server, principal, state)` and is the
+    // source of truth for the URL + exchange parameters — so completion needs
+    // only the callback's `state`, never a re-supplied `--url`.
+    let pending_store = PendingStore::new(secrets.clone(), server, &principal);
+    let pending = pending_store.load(&state)?.ok_or_else(|| {
+        anyhow!("no pending authorization for `{server}` (expired or never begun); start over with `animus mcp auth {server} --print-url ...`")
+    })?;
+
+    let mut manager = AuthorizationManager::new(&pending.url)
+        .await
+        .map_err(|err| anyhow!("failed to initialize OAuth manager for `{server}`: {err}"))?;
+    manager.set_state_store(PersistentStateStore::new(secrets.clone(), server, &principal, &pending.url));
+
+    let metadata = manager
+        .discover_metadata()
+        .await
+        .map_err(|err| anyhow!("OAuth discovery failed for `{server}` at {}: {err}", pending.url))?;
+    manager.set_metadata(metadata);
+    manager.set_credential_store(KeychainCredentialStore::new(secrets, server, &principal, &pending.url));
+
+    // Re-configure the SAME public client `begin` resolved/registered. No DCR
+    // here — re-registering would mint a different client than the PKCE state
+    // was bound to.
+    let mut config = OAuthClientConfig::new(pending.client_id.clone(), pending.redirect_uri.clone())
+        .with_scopes(pending.scopes.clone());
+    if let Some(secret) = pending.client_secret.clone() {
+        config = config.with_client_secret(secret);
+    }
+    manager.configure_client(config).map_err(|err| anyhow!("failed to configure client for `{server}`: {err}"))?;
+
+    let token = manager
+        .exchange_code_for_token(&code, &state)
+        .await
+        .map_err(|err| anyhow!("token exchange failed for `{server}`: {err}"))?;
+    let (client_id, _) = manager
+        .get_credentials()
+        .await
+        .map_err(|err| anyhow!("failed to read back stored credentials for `{server}`: {err}"))?;
+
+    let token_value = serde_json::to_value(&token).unwrap_or_default();
+    let granted_scopes = scopes_from_token_value(&token_value).unwrap_or_else(|| pending.scopes.clone());
+    let has_refresh_token = token_value.get("refresh_token").and_then(|v| v.as_str()).is_some();
+    let expires_at = expires_at_from_token_value(&token_value, Utc::now());
+
+    // Best-effort cleanup of the pending record on success. The PKCE state
+    // entry is left to its TTL sweep (see PersistentStateStore) — rmcp's
+    // exchange consumes it, and re-deleting would need the StateStore trait in
+    // scope for no functional gain.
+    let _ = pending_store.delete(&state);
+
+    Ok(AuthOutcome {
+        server: server.to_string(),
+        principal,
+        client_id,
+        requested_scopes: pending.scopes,
+        scopes_auto_detected: pending.scopes_auto_detected,
+        granted_scopes,
+        expires_at,
+        has_refresh_token,
+    })
 }
 
 /// Report auth state for one server (when `server` is `Some`) or for every

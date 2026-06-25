@@ -64,6 +64,34 @@ pub(crate) struct McpAuthArgs {
     /// or obtaining any token.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Delegated (headless/web) BEGIN: resolve + register/configure the client
+    /// and PRINT the authorization URL + `state` instead of opening a browser
+    /// or binding a localhost listener. Requires `--redirect-uri`. The PKCE
+    /// state is persisted so a later `--complete` finishes the exchange. Used by
+    /// a remote host (e.g. the portal) that drives the redirect itself.
+    #[arg(long, conflicts_with = "dry_run")]
+    pub print_url: bool,
+
+    /// The caller's public OAuth callback URL (e.g.
+    /// `https://portal/api/mcp-oauth/callback`). Required with `--print-url`.
+    #[arg(long, requires = "print_url")]
+    pub redirect_uri: Option<String>,
+
+    /// Delegated (headless/web) COMPLETE: exchange the `--code`/`--state`
+    /// returned to the caller's callback for a token, finishing a flow started
+    /// with `--print-url`. Mutually exclusive with `--print-url`/`--dry-run`.
+    #[arg(long, conflicts_with_all = ["print_url", "dry_run"])]
+    pub complete: bool,
+
+    /// Authorization code from the callback. Required with `--complete`.
+    #[arg(long, requires = "complete")]
+    pub code: Option<String>,
+
+    /// CSRF `state` from the callback (and from the `--print-url` output).
+    /// Required with `--complete`.
+    #[arg(long, requires = "complete")]
+    pub state: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
