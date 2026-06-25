@@ -47,6 +47,11 @@ pub(crate) async fn handle_subject(command: SubjectCommand, project_root: &str, 
     }
 }
 
+/// Default page size for `subject list` when no `--limit` is given. Bounds
+/// MCP/agent list calls (the common token-bloat source) while `--limit 0`
+/// returns everything.
+const DEFAULT_SUBJECT_LIST_LIMIT: u32 = 50;
+
 async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bool) -> Result<()> {
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let mut filter = serde_json::Map::new();
@@ -54,8 +59,16 @@ async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bo
     if let Some(status) = args.status.as_deref() {
         filter.insert("status".to_string(), json!([status]));
     }
-    if let Some(limit) = args.limit {
+    // Default to a bounded page so MCP/agent callers (and a bare `subject list`)
+    // don't pull the entire set; `--limit 0` opts out and returns ALL. Backends
+    // that honor `limit` also return `total` + `next_cursor` for paging; backends
+    // that ignore it simply return everything (no behavior change for them).
+    let limit = args.limit.unwrap_or(DEFAULT_SUBJECT_LIST_LIMIT);
+    if limit > 0 {
         filter.insert("limit".to_string(), json!(limit));
+    }
+    if let Some(cursor) = args.cursor.as_deref() {
+        filter.insert("cursor".to_string(), json!(cursor));
     }
     let params = Some(Value::Object(filter));
     dispatch(&kind, "list", params, project_root, json).await
@@ -606,7 +619,9 @@ fn render_subject_human(verb: &str, kind: &str, result: &Value) {
     match verb {
         "list" => {
             let subjects = extract_subjects(result);
+            let shown = subjects.len();
             render_subject_table(&subjects);
+            render_list_pagination_footer(result, shown);
         }
         "next" => match extract_single_subject(result) {
             Some(subject) => render_subject_block(subject),
@@ -617,6 +632,23 @@ fn render_subject_human(verb: &str, kind: &str, result: &Value) {
             Some(subject) => render_subject_block(subject),
             None => println!("{result}"),
         },
+    }
+}
+
+/// Print a one-line pagination footer for `subject list` human output when the
+/// backend reports another page, so the bounded default page isn't silently
+/// truncated. No-op when there's no non-empty `next_cursor`.
+fn render_list_pagination_footer(result: &Value, shown: usize) {
+    let Some(cursor) = result.get("next_cursor").and_then(Value::as_str).filter(|c| !c.is_empty()) else {
+        return;
+    };
+    match result.get("total").and_then(Value::as_u64) {
+        Some(total) => {
+            println!("\nshowing {shown} of {total} — next page: --cursor {cursor}  (all: --limit 0)")
+        }
+        None => {
+            println!("\nshowing {shown} — more available, next page: --cursor {cursor}  (all: --limit 0)")
+        }
     }
 }
 

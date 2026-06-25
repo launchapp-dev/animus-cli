@@ -10,6 +10,7 @@ pub(super) fn build_subject_list_args(input: &SubjectListInput) -> Vec<String> {
         args.push("--limit".to_string());
         args.push(limit.to_string());
     }
+    push_opt(&mut args, "--cursor", input.cursor.clone());
     args
 }
 

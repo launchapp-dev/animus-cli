@@ -156,7 +156,7 @@ plugin (e.g. `linear`, `jira`, `github-issue`).
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.subject.list` | List subjects for a kind via the active `subject_backend` plugin | `kind`, `status`, `limit`, `project_root` |
+| `animus.subject.list` | List subjects for a kind via the active `subject_backend` plugin. Returns a bounded page by default (`limit` defaults to 50; pass `limit: 0` to remove the cap); the result carries `next_cursor` (and `total` when the backend reports it) — pass `cursor` to fetch the next page. | `kind`, `status`, `limit`, `cursor`, `project_root` |
 | `animus.subject.get` | Fetch a subject by wire id (`<kind>:<native_id>`) | `kind`, `id`, `project_root` |
 | `animus.subject.create` | Create a subject through the active `subject_backend` plugin | `kind`, `title`, `priority`, `status`, `labels[]`, `body`, `project_root` |
 | `animus.subject.update` | Update a subject through the active `subject_backend` plugin | `kind`, `id`, `priority`, `status`, `labels[]`, `body`, `project_root` |
