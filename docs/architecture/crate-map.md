@@ -53,10 +53,11 @@ for the kernel wire types (`protocol`), the `config_source` contract
 queue/workflow/subject plugin routing. The root `Cargo.toml` pins `protocol`,
 `animus-config-protocol`, `animus-provider-protocol`,
 `animus-session-backend`, and `animus-subject-protocol` to the same
-`animus-protocol` tag (v0.1.21);
-`crates/orchestrator-cli/Cargo.toml` adds crate-local pins for `animus-queue-protocol`,
-`animus-workflow-runner-protocol`, and the parallel v0.1.13/v0.5.x subject
-wire crates used by the CLI surface.
+`animus-protocol` tag (`v0.1.21`); `crates/orchestrator-cli/Cargo.toml` adds
+crate-local pins for `animus-control-protocol`,
+`animus-log-storage-protocol`, and `animus-subject-protocol-wire` at
+`v0.1.13`, plus `animus-queue-protocol` / `animus-subject-protocol-v05` at
+`v0.5.10` and `animus-workflow-runner-protocol` at `v0.5.3`.
 
 ## Repo-Local Directories Outside The Workspace
 

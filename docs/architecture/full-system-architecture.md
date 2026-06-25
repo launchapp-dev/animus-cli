@@ -43,8 +43,10 @@ The core goals are:
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
 especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
-current runtime mixes legacy `v0.1.13` provider/session wire crates with newer
-`v0.5.x` queue/workflow/subject protocol crates.
+current runtime mixes workspace-wide `v0.1.21` config/session/provider pins,
+legacy CLI wire crates at `v0.1.13`, `animus-queue-protocol` /
+`animus-subject-protocol-v05` at `v0.5.10`, and
+`animus-workflow-runner-protocol` at `v0.5.3`.
 
 The release/runtime binary set is:
 

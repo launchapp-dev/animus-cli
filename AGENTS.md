@@ -28,8 +28,9 @@ web stack (transport + UI) lives in external plugins under
 [`launchapp-dev`](https://github.com/launchapp-dev). The workspace also depends
 on external protocol crates from that repo. The authoritative pins live in
 `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`; current builds mix the
-legacy `v0.1.13` wire crates with newer `v0.5.x`
-queue/workflow/subject protocol crates.
+workspace-wide `animus-protocol` pin at `v0.1.21`, legacy CLI wire crates at
+`v0.1.13`, plus newer `animus-queue-protocol` / `animus-subject-protocol`
+pins at `v0.5.10` and `animus-workflow-runner-protocol` at `v0.5.3`.
 
 Current workspace members from `Cargo.toml`:
 

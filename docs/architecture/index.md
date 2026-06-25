@@ -6,8 +6,10 @@ helpers, MCP server, plugin host, and plugin protocol crates.
 Provider, subject, transport,
 and web UI integrations run as external stdio plugins rather than in-process
 desktop or web shell frameworks. The workspace also depends on external
-`launchapp-dev/animus-protocol` crates, mixing legacy `v0.1.13`
-provider/session wires with newer `v0.5.x` queue/workflow/subject protocols.
+`launchapp-dev/animus-protocol` crates. The current pins mix the workspace-wide
+`v0.1.21` config/session/provider set, legacy CLI wire crates at `v0.1.13`,
+`animus-queue-protocol` / `animus-subject-protocol-v05` at `v0.5.10`, and
+`animus-workflow-runner-protocol` at `v0.5.3`.
 
 Trust code and generated references over hand-maintained summaries when they
 disagree. Start with:
