@@ -39,7 +39,7 @@
 
 Open a fresh **Claude Code** (or **Codex** / **OpenCode** / **Cursor**) session and paste this. The agent installs the Animus CLI, clones `animus-skills`, runs the setup script, and adds the project section to `CLAUDE.md` / `AGENTS.md`. You'll be running workflows in about a minute.
 
-> Install Animus + Animus Skills: run **`curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash`** to install the `animus` CLI (currently `v0.6.13` in this repo), then **`animus plugin install-defaults`** to pull in the provider + subject + workflow_runner + queue plugins the daemon needs (one-time setup, idempotent; add `--include-recommended` for the web UI and extra providers). Then **`git clone --single-branch --depth 1 https://github.com/launchapp-dev/animus-skills.git ~/.claude/skills/animus-skills && cd ~/.claude/skills/animus-skills && ./setup`** to link the skills and write `.mcp.json`. Add an "Animus" section to CLAUDE.md (or AGENTS.md for Codex) listing the slash commands: `/animus-setup`, `/animus-getting-started`, `/animus-mcp-setup`, `/animus-workflow-authoring`, `/animus-pack-authoring`, `/animus-skill-authoring`, `/animus-troubleshooting`. Restart the agent so the new `animus` MCP server is picked up. From a project root, run `animus init --walkthrough` to scaffold `.animus/`, install packs, and optionally start the daemon.
+> Install Animus + Animus Skills: run **`curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash`** to install the `animus` CLI (currently `v0.6.14` in this repo), then **`animus plugin install-defaults`** to pull in the provider + subject + workflow_runner + queue plugins the daemon needs (one-time setup, idempotent; add `--include-recommended` for the web UI and extra providers). Then **`git clone --single-branch --depth 1 https://github.com/launchapp-dev/animus-skills.git ~/.claude/skills/animus-skills && cd ~/.claude/skills/animus-skills && ./setup`** to link the skills and write `.mcp.json`. Add an "Animus" section to CLAUDE.md (or AGENTS.md for Codex) listing the slash commands: `/animus-setup`, `/animus-getting-started`, `/animus-mcp-setup`, `/animus-workflow-authoring`, `/animus-pack-authoring`, `/animus-skill-authoring`, `/animus-troubleshooting`. Restart the agent so the new `animus` MCP server is picked up. From a project root, run `animus init --walkthrough` to scaffold `.animus/`, install packs, and optionally start the daemon.
 
 For Codex CLI, swap the clone path to `~/.codex/skills/animus-skills` and edit `AGENTS.md` instead of `CLAUDE.md`.
 
@@ -60,11 +60,11 @@ The second command is **required in v0.4.12 and later** (and expanded in **v0.5*
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/avm/main/install.sh | sh
-avm install v0.6.13            # download a kernel version
-avm use --global v0.6.13       # machine default; per-project: `avm use v0.6.13` writes .animus-version
+avm install v0.6.14            # download a kernel version
+avm use --global v0.6.14       # machine default; per-project: `avm use v0.6.14` writes .animus-version
 ```
 
-### Project setup: `animus.toml` (v0.6.13+)
+### Project setup: `animus.toml` (v0.6.14+)
 
 Animus uses an npm/cargo-style manifest. A committed `animus.toml` declares the project's kernel, plugins, and packs; `animus install` resolves it into `.animus/plugins.lock` and installs the set, so onboarding a checked-out project is two commands:
 
@@ -83,7 +83,7 @@ animus install --locked
 
 ```bash
 # Specific version
-ANIMUS_VERSION=v0.6.13 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
+ANIMUS_VERSION=v0.6.14 curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
 
 # Custom directory
 ANIMUS_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/launchapp-dev/animus-cli/main/scripts/install.sh | bash
