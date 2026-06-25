@@ -4,6 +4,17 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+require_command() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    echo "error: required command '$cmd' is not installed or not on PATH" >&2
+    exit 127
+  fi
+}
+
+require_command npm
+require_command npx
+
 cd "$repo_root"
 
 npm run docs:check-sync

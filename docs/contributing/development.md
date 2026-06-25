@@ -104,7 +104,8 @@ pinned in the root `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`.
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. The deploy helper
 always runs `npx vercel --yes --prod` and points npm at a temporary cache
-directory so the command does not depend on a writable `~/.npm/`.
+directory so the command does not depend on a writable `~/.npm/`. It also
+fails fast with an explicit error when `npm` or `npx` is not installed.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
 running through `npx`, it also assumes the runner can reach
