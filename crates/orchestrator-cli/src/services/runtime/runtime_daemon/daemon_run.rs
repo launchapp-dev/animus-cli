@@ -765,6 +765,11 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
         std::path::Path::new(project_root),
         crate::services::metrics::EventTags::DaemonStarted {},
     );
+
+    // NB: the live `daemon.pid` file is written/cleared by `DaemonRunGuard`
+    // (acquired inside `run_daemon`), tied to the single-winner daemon lock so
+    // foreground `daemon run` registers liveness race-free. See
+    // `daemon_run_guard.rs`.
     let run_result =
         run_daemon(project_root, &mut runtime_options, &mut driver, &mut host, |driver| driver.active_process_count())
             .await;
@@ -787,6 +792,38 @@ mod tests {
     }
 
     use protocol::test_utils::EnvVarGuard;
+
+    // The foreground `daemon run` path registers its own PID so the daemon's
+    // status/health handlers can confirm liveness (without it a healthy daemon
+    // reports `running: false` / `unhealthy`). Verify the write creates the
+    // scoped daemon dir on a fresh scope, round-trips the PID, and the cleanup
+    // helper clears it.
+    #[test]
+    fn write_daemon_pid_creates_dir_and_round_trips() {
+        let _lock = lock_env();
+        let config_root = TempDir::new().expect("config temp dir");
+        let home_root = TempDir::new().expect("home temp dir");
+        let _config_guard = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_root.path().to_string_lossy().as_ref()));
+        let _home_guard = EnvVarGuard::set("HOME", Some(home_root.path().to_string_lossy().as_ref()));
+        let _legacy_guard = EnvVarGuard::set("AGENT_ORCHESTRATOR_CONFIG_DIR", None);
+
+        let primary = TempDir::new().expect("primary project dir");
+        let primary_root = primary.path().to_string_lossy().to_string();
+
+        // Fresh scope: the scoped daemon dir does not exist yet.
+        assert_eq!(super::super::read_daemon_pid(&primary_root), None);
+
+        let pid = std::process::id();
+        super::super::write_daemon_pid(&primary_root, pid);
+        assert_eq!(
+            super::super::read_daemon_pid(&primary_root),
+            Some(pid),
+            "write_daemon_pid must create the daemon dir and persist the pid"
+        );
+
+        super::super::remove_daemon_pid(&primary_root);
+        assert_eq!(super::super::read_daemon_pid(&primary_root), None);
+    }
 
     #[tokio::test]
     async fn daemon_run_once_processes_current_project_root() {
@@ -816,6 +853,10 @@ mod tests {
             skip_preflight: true,
         };
         handle_daemon_run(args, &primary_root, true).await.expect("daemon run should succeed");
+
+        // A completed `--once` run registers then clears its PID; no stale PID
+        // should remain afterward.
+        assert_eq!(super::super::read_daemon_pid(&primary_root), None);
 
         let events_path = daemon_events_log_path();
         let events_content = std::fs::read_to_string(events_path).expect("daemon events log should exist");
