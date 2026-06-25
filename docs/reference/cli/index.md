@@ -1769,7 +1769,7 @@ mode. Pass `--json` to get the `animus.cli.v1` envelope instead.
 
 | Command | Notes |
 |---|---|
-| `animus subject list` | Table with id, title, status, priority |
+| `animus subject list` | Table with id, title, status, priority. Returns a bounded page by default (`--limit` defaults to 50); a footer shows `next_cursor` (and `total` when the backend reports it) when more remain. Pass `--cursor <c>` to page, or `--limit 0` to remove the cap. |
 | `animus subject get` | Detail card |
 | `animus subject next` | Single-row card; prints nothing when no ready subject exists |
 | `animus queue list` | Table with id, title, status, priority |

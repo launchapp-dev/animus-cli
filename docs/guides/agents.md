@@ -474,7 +474,7 @@ Act on `remediation` first when present; see the
 
 ## Recommended Flow
 
-1. Discover or create a subject with `animus.subject.list` or `animus.subject.create`.
+1. Discover or create a subject with `animus.subject.list` or `animus.subject.create`. `animus.subject.list` returns a bounded page by default (`limit` defaults to 50) plus a `next_cursor` (and `total` when the backend reports it); pass `cursor` to fetch the next page, or `limit: 0` to remove the cap. Prefer paging over `limit: 0` for large boards to keep results small.
 2. Mark it ready with `animus.subject.status`.
 3. Start work with `animus.workflow.run` or let the daemon schedule it.
 4. Observe progress with `animus.workflow.list`, `animus.output.*`, and `animus.logs.tail`.

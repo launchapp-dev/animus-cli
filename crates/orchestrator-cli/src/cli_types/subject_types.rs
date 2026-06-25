@@ -81,9 +81,17 @@ pub(crate) struct SubjectListArgs {
     #[arg(long, value_name = "STATUS")]
     pub status: Option<String>,
 
-    /// Maximum number of subjects to return.
+    /// Maximum subjects per page. Defaults to a bounded page so MCP/agent
+    /// callers don't pull the whole set. Pass `--limit 0` to remove the per-page
+    /// cap. The result carries `next_cursor` (and `total` when the backend
+    /// reports it) — page with `--cursor` until `next_cursor` is null to read
+    /// everything from a paginating backend.
     #[arg(long, value_name = "N")]
     pub limit: Option<u32>,
+
+    /// Opaque cursor from a prior page's `next_cursor`, to fetch the next page.
+    #[arg(long, value_name = "CURSOR")]
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Args)]

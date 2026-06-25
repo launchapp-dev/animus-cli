@@ -5,8 +5,13 @@ pub(super) struct SubjectListInput {
     pub(super) kind: String,
     #[serde(default)]
     pub(super) status: Option<String>,
+    /// Max subjects per page. Defaults to a bounded page; pass 0 to remove the
+    /// per-page cap. The result carries `total` + `next_cursor`.
     #[serde(default)]
     pub(super) limit: Option<u32>,
+    /// Opaque cursor from a prior result's `next_cursor`, to fetch the next page.
+    #[serde(default)]
+    pub(super) cursor: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }
