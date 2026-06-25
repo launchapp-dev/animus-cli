@@ -255,7 +255,7 @@ impl std::fmt::Display for SkillDefinitionWarning {
 /// becomes obsolete (e.g. activation matching learns to normalize aliases),
 /// delete its entry here and update `docs/architecture/skill-system.md`.
 const SKILL_WARNING_CHECKS: &[fn(&SkillDefinition, &mut Vec<SkillDefinitionWarning>)] =
-    &[warn_unknown_activation_tools, warn_unknown_adapter_tools];
+    &[warn_unknown_activation_tools, warn_unknown_adapter_tools, warn_skill_pins_model];
 
 fn known_tool_ids_label() -> String {
     protocol::KNOWN_TOOL_IDS.join(", ")
@@ -310,6 +310,46 @@ fn warn_unknown_adapter_tools(skill: &SkillDefinition, out: &mut Vec<SkillDefini
     for declared in skill.adapters.keys() {
         if let Some(message) = tool_id_warning_message(declared) {
             out.push(SkillDefinitionWarning { field: format!("adapters.{declared}"), message });
+        }
+    }
+}
+
+/// One-line warning explaining that a pinned model silently overrides the
+/// model/tool of any agent that activates the skill. See
+/// [`build_skill_application`], where `model.preferred`/`model.fallback` (and
+/// any `adapters.<tool>.model`) flow into `SkillApplicationResult.model` and
+/// then override the phase's resolved model — so an agent on `tool: oai-agent`
+/// silently runs the skill's `claude-sonnet-4-6` instead.
+fn pinned_model_warning_message(field: &str, model: &str) -> String {
+    // A blank model is still applied verbatim (`build_skill_application` produces
+    // `Some("")`), so it overrides the agent's resolved model just as silently —
+    // render it explicitly rather than hiding it.
+    let model_label = if model.trim().is_empty() { "<empty>".to_string() } else { format!("'{model}'") };
+    format!(
+        "{field} pins a model ({model_label}) — this overrides the model/tool of any agent that uses the skill; skills should be model-agnostic, so move the model to the agent profile (`agents.<name>.model`/`tool`) instead"
+    )
+}
+
+fn warn_skill_pins_model(skill: &SkillDefinition, out: &mut Vec<SkillDefinitionWarning>) {
+    // Warn on ANY present model field (including blank/whitespace): an empty
+    // string still flows through as `Some("")` and overrides the agent's model.
+    if let Some(model) = skill.model.preferred.as_deref() {
+        out.push(SkillDefinitionWarning {
+            field: "model.preferred".to_string(),
+            message: pinned_model_warning_message("model.preferred", model),
+        });
+    }
+    if let Some(model) = skill.model.fallback.as_deref() {
+        out.push(SkillDefinitionWarning {
+            field: "model.fallback".to_string(),
+            message: pinned_model_warning_message("model.fallback", model),
+        });
+    }
+    for (tool, adapter) in &skill.adapters {
+        if let Some(model) = adapter.model.as_deref() {
+            let field = format!("adapters.{tool}.model");
+            let message = pinned_model_warning_message(&field, model);
+            out.push(SkillDefinitionWarning { field, message });
         }
     }
 }
@@ -381,6 +421,12 @@ fn build_skill_application(skill: &SkillDefinition, tool_id: Option<&str>) -> Sk
     result.mcp_servers.extend(skill.mcp_servers.clone());
     result.tool_policy = skill.tool_policy.clone();
     result.codex_config_overrides.extend(skill.codex_config_overrides.clone());
+    // A skill-pinned model silently overrides the model/tool the agent profile
+    // resolved (a footgun: e.g. a skill's `claude-sonnet-4-6` forces agents off
+    // `tool: oai-agent`). We surface this via `warn_skill_pins_model` but keep
+    // the precedence unchanged for now (non-breaking). Follow-up (maintainer's
+    // call): make the agent's explicit model win, or drop model support from the
+    // skill schema entirely.
     result.model = skill.model.preferred.clone().or_else(|| skill.model.fallback.clone());
     result.timeout_secs = skill.timeout_secs;
     result.capabilities.extend(skill.capabilities.clone());
@@ -756,12 +802,57 @@ adapters:
     }
 
     #[test]
-    fn test_no_warnings_for_minimal_and_full_fixtures() {
+    fn test_no_tool_warnings_for_minimal_and_full_fixtures() {
         let minimal = parse_skill_definition(minimal_yaml()).unwrap();
         assert!(skill_definition_warnings(&minimal).is_empty());
 
+        // The full fixture's claude/gemini activation + gemini adapter are
+        // canonical, so no tool-id warnings fire. It DOES pin models, so only
+        // the model-pin warnings remain.
         let full = parse_skill_definition(full_skill_yaml()).unwrap();
-        assert!(skill_definition_warnings(&full).is_empty(), "claude/gemini activation + gemini adapter are canonical");
+        let fields: Vec<String> = skill_definition_warnings(&full).into_iter().map(|w| w.field).collect();
+        assert_eq!(fields, ["model.preferred", "model.fallback", "adapters.gemini.model"]);
+    }
+
+    #[test]
+    fn test_warning_fires_when_skill_pins_preferred_model() {
+        let yaml = "name: x\nmodel:\n  preferred: claude-sonnet-4-6\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        let warnings = skill_definition_warnings(&skill);
+        assert_eq!(warnings.len(), 1, "only the pinned model should warn: {warnings:?}");
+        assert_eq!(warnings[0].field, "model.preferred");
+        assert!(warnings[0].message.contains("'claude-sonnet-4-6'"), "got: {}", warnings[0].message);
+        assert!(warnings[0].message.contains("overrides the model/tool"), "got: {}", warnings[0].message);
+    }
+
+    #[test]
+    fn test_warning_fires_for_fallback_and_adapter_models() {
+        let yaml =
+            "name: x\nmodel:\n  fallback: gemini-3.1-pro-preview\nadapters:\n  claude:\n    model: claude-opus-4-6\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        let fields: Vec<String> = skill_definition_warnings(&skill).into_iter().map(|w| w.field).collect();
+        assert_eq!(fields, ["model.fallback", "adapters.claude.model"]);
+    }
+
+    #[test]
+    fn test_warning_fires_for_blank_pinned_model() {
+        // A blank model is still applied as Some("") and overrides the agent, so
+        // it must warn just like a real model id.
+        let yaml = "name: x\nmodel:\n  preferred: \"  \"\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        let warnings = skill_definition_warnings(&skill);
+        assert_eq!(warnings.len(), 1, "blank model should warn: {warnings:?}");
+        assert_eq!(warnings[0].field, "model.preferred");
+        assert!(warnings[0].message.contains("<empty>"), "got: {}", warnings[0].message);
+    }
+
+    #[test]
+    fn test_no_model_pin_warning_for_model_free_skill() {
+        // Activation by model is fine (it selects, it does not override); only a
+        // pinned model.preferred/fallback/adapter model should warn.
+        let yaml = "name: x\nactivation:\n  tools:\n    - claude\n  models:\n    - claude-sonnet-4-6\n";
+        let skill = parse_skill_definition(yaml).unwrap();
+        assert!(skill_definition_warnings(&skill).is_empty(), "model-free skill must not warn");
     }
 
     #[test]
@@ -806,9 +897,13 @@ adapters:
         let yaml = "name: x\nadapters:\n  geminni:\n    model: gemini-2.5-pro\n";
         let skill = parse_skill_definition(yaml).unwrap();
         let warnings = skill_definition_warnings(&skill);
-        assert_eq!(warnings.len(), 1);
-        assert_eq!(warnings[0].field, "adapters.geminni");
-        assert!(warnings[0].message.contains("not a built-in tool id"));
+        // The unknown adapter key warns, and its pinned model warns separately.
+        let unknown = warnings.iter().find(|w| w.field == "adapters.geminni").expect("unknown-tool warning");
+        assert!(unknown.message.contains("not a built-in tool id"));
+        assert!(
+            warnings.iter().any(|w| w.field == "adapters.geminni.model"),
+            "adapter model pin should also warn: {warnings:?}"
+        );
     }
 
     #[test]
