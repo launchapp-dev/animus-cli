@@ -18,12 +18,15 @@ pub mod callback;
 pub mod config;
 pub mod flow;
 pub mod keychain_store;
+pub mod pending;
 pub mod proxy;
+pub mod state_store;
 
 pub use config::{resolve_principal_id, resolve_server_url, ServerResolution, ServerResolutionError};
 pub use flow::{
-    auth_logout, auth_status, run_auth, AuthOutcome, AuthPreview, AuthResult, AuthStatus, Confirm, ConfirmDecision,
-    DryRunOutcome, RunAuthOptions, ServerAuthState,
+    auth_logout, auth_status, begin_auth, complete_auth, run_auth, AuthOutcome, AuthPreview, AuthResult, AuthStatus,
+    BeginOptions, BeginOutcome, CompleteOptions, Confirm, ConfirmDecision, DryRunOutcome, RunAuthOptions,
+    ServerAuthState,
 };
 pub use keychain_store::{derive_keychain_key, KeychainCredentialStore};
 

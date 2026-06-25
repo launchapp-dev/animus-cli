@@ -473,6 +473,49 @@ pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str, cli_json
 async fn handle_mcp_auth(args: crate::McpAuthArgs, project_root: &str, cli_json: bool) -> Result<()> {
     let root = Path::new(project_root);
     let scopes = args.scopes.clone();
+
+    // Delegated (headless/web) BEGIN: print the authorize URL + state; do not
+    // open a browser or bind a localhost listener. clap enforces --redirect-uri.
+    if args.print_url {
+        let redirect_uri = args
+            .redirect_uri
+            .clone()
+            .ok_or_else(|| crate::invalid_input_error("--redirect-uri is required with --print-url"))?;
+        let outcome = animus_mcp_oauth::begin_auth(
+            root,
+            &args.server,
+            animus_mcp_oauth::BeginOptions {
+                url_override: args.url.as_deref(),
+                scopes_override: scopes.as_deref(),
+                redirect_uri,
+            },
+        )
+        .await?;
+        if cli_json {
+            return crate::shared::print_value(outcome, true);
+        }
+        // Human: the URL on its own line (pipeable), the state labeled. Never
+        // logged — printed only to the caller's stdout.
+        println!("{}", outcome.authorize_url);
+        println!("state: {}", outcome.state);
+        return Ok(());
+    }
+
+    // Delegated COMPLETE: exchange the callback code/state for a token. clap
+    // enforces --code and --state.
+    if args.complete {
+        let code = args.code.clone().ok_or_else(|| crate::invalid_input_error("--code is required with --complete"))?;
+        let state =
+            args.state.clone().ok_or_else(|| crate::invalid_input_error("--state is required with --complete"))?;
+        let outcome =
+            animus_mcp_oauth::complete_auth(root, &args.server, animus_mcp_oauth::CompleteOptions { code, state })
+                .await?;
+        if cli_json {
+            return crate::shared::print_value(outcome, true);
+        }
+        return print_auth_outcome(&outcome);
+    }
+
     let opts = animus_mcp_oauth::RunAuthOptions {
         url_override: args.url.as_deref(),
         scopes_override: scopes.as_deref(),
@@ -508,21 +551,28 @@ async fn handle_mcp_auth(args: crate::McpAuthArgs, project_root: &str, cli_json:
             if cli_json {
                 return crate::shared::print_value(outcome, true);
             }
-            let expiry = outcome.expires_at.map(|e| e.to_rfc3339()).unwrap_or_else(|| "unknown".to_string());
-            println!(
-                "Authenticated `{}` (principal `{}`, client_id `{}`). Token expires: {}. Refresh token: {}.",
-                outcome.server,
-                outcome.principal,
-                outcome.client_id,
-                expiry,
-                if outcome.has_refresh_token { "yes" } else { "no" }
-            );
-            if !outcome.granted_scopes.is_empty() {
-                println!("Granted scopes: {}", outcome.granted_scopes.join(", "));
-            }
-            Ok(())
+            print_auth_outcome(&outcome)
         }
     }
+}
+
+/// Render a completed [`animus_mcp_oauth::AuthOutcome`] as the human summary
+/// line. Shared by the interactive (`run_auth`) and delegated (`complete_auth`)
+/// success paths.
+fn print_auth_outcome(outcome: &animus_mcp_oauth::AuthOutcome) -> Result<()> {
+    let expiry = outcome.expires_at.map(|e| e.to_rfc3339()).unwrap_or_else(|| "unknown".to_string());
+    println!(
+        "Authenticated `{}` (principal `{}`, client_id `{}`). Token expires: {}. Refresh token: {}.",
+        outcome.server,
+        outcome.principal,
+        outcome.client_id,
+        expiry,
+        if outcome.has_refresh_token { "yes" } else { "no" }
+    );
+    if !outcome.granted_scopes.is_empty() {
+        println!("Granted scopes: {}", outcome.granted_scopes.join(", "));
+    }
+    Ok(())
 }
 
 async fn handle_mcp_auth_status(args: crate::McpAuthStatusArgs, project_root: &str, cli_json: bool) -> Result<()> {
