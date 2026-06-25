@@ -52,6 +52,14 @@ impl DaemonRunGuard {
 
         DaemonRuntimeState::set_daemon_pid(&canonical_project_root, Some(current_pid))?;
         DaemonRuntimeState::set_runtime_paused(&canonical_project_root, false)?;
+        // Register the `daemon.pid` file alongside the lock so liveness probes
+        // (`daemon status`/`daemon health` and the daemon's own control-wire
+        // handlers, which read this file) succeed for a foreground `daemon run`
+        // too — previously only the parent of a detached `daemon start` wrote
+        // it, so a healthy containerized daemon reported `running: false` /
+        // `unhealthy`. Tying the write to the lock winner here is race-free; the
+        // Drop impl clears it.
+        DaemonRuntimeState::write_daemon_pid_file(&canonical_project_root, current_pid);
 
         Ok(Self { project_root: canonical_project_root, pid: current_pid, _lock_file: lock_file })
     }
@@ -63,6 +71,11 @@ impl Drop for DaemonRunGuard {
             if existing_pid == self.pid {
                 let _ = DaemonRuntimeState::set_daemon_pid(&self.project_root, None);
             }
+        }
+        // Clear the live PID file iff it still holds our PID — never remove a PID
+        // a successor daemon wrote.
+        if DaemonRuntimeState::read_daemon_pid_file(&self.project_root) == Some(self.pid) {
+            DaemonRuntimeState::remove_daemon_pid_file(&self.project_root);
         }
     }
 }

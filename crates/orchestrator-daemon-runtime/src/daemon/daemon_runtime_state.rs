@@ -78,6 +78,13 @@ impl DaemonRuntimeState {
 
     pub fn write_daemon_pid_file(project_root: &str, pid: u32) {
         let path = daemon_pid_path(project_root);
+        // Ensure the scoped daemon dir exists: the foreground `daemon run` path
+        // writes its PID before `run_daemon` boots (and creates the dir), so
+        // without this the very first write would silently no-op on a fresh
+        // scope and liveness probes would still find no PID.
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
         let _ = fs::write(path, pid.to_string());
     }
 
