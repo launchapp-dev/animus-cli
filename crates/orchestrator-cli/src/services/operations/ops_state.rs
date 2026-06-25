@@ -941,7 +941,7 @@ mod tests {
         touch(&scope_dir.join("workflow.db"), b"sqlite-fake");
         touch(&scope_dir.join("audit.jsonl"), b"{}\n");
         touch(&scope_dir.join("tasks-migrated.marker"), b"");
-        touch(&scope_dir.join("state/agent-runtime-config.v2.json"), br#"{"agents":{}}"#);
+        touch(&scope_dir.join("config/agent-runtime-config.v2.json"), br#"{"agents":{}}"#);
         touch(&scope_dir.join("docs/architecture.json"), b"{}");
         touch(&scope_dir.join("metrics/pending.jsonl"), b"{}\n");
         touch(&scope_dir.join("logs/events.jsonl"), b"{}\n");
@@ -1016,7 +1016,7 @@ mod tests {
         assert!(names.iter().any(|n| n == "scope/workflow.db"), "workflow.db missing");
         assert!(names.iter().any(|n| n == "scope/audit.jsonl"), "audit.jsonl missing");
         assert!(names.iter().any(|n| n == "scope/tasks-migrated.marker"), "marker missing");
-        assert!(names.iter().any(|n| n == "scope/state/agent-runtime-config.v2.json"), "state/ missing");
+        assert!(names.iter().any(|n| n == "scope/config/agent-runtime-config.v2.json"), "config/ missing");
         assert!(names.iter().any(|n| n == "scope/docs/architecture.json"), "docs/ missing");
         assert!(names.iter().any(|n| n == "scope/metrics/pending.jsonl"), "metrics/ missing");
         assert!(names.iter().any(|n| n == "scope/logs/events.jsonl"), "logs/ missing");
