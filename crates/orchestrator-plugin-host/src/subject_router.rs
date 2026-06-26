@@ -851,8 +851,15 @@ impl SubjectRouter {
         best.map(|(_, plugin)| plugin).or(self.catch_all.as_deref())
     }
 
+    /// `true` when `method`'s kind prefix is EXPLICITLY registered (exact or
+    /// glob). Deliberately excludes the `*` catch-all: the catch-all routes any
+    /// kind via [`Self::plugin_for_kind`]/[`Self::route_call`], but a method
+    /// classifier must not report every `x/y` method as a subject method, or it
+    /// would mis-claim non-subject methods (`config/load`, `journal/record`).
     pub fn is_subject_method(&self, method: &str) -> bool {
-        method.split('/').next().is_some_and(|kind| self.plugin_for_kind(kind).is_some())
+        method.split('/').next().is_some_and(|kind| {
+            self.exact_kinds.contains_key(kind) || self.glob_kinds.iter().any(|(p, _)| p.matches(kind))
+        })
     }
 
     pub async fn route_call(&self, method: &str, params: Option<Value>) -> Result<Value, RpcError> {
@@ -1611,6 +1618,12 @@ done
             // Any kind no specific backend claims falls to the catch-all.
             assert_eq!(router.plugin_for_kind("blog"), Some("baas"));
             assert_eq!(router.plugin_for_kind("knowledge"), Some("baas"));
+            // is_subject_method reflects EXPLICIT registration only — it must
+            // NOT report catch-all-routed kinds (or it would mis-classify
+            // non-subject methods like config/load as subject methods).
+            assert!(router.is_subject_method("task/list"));
+            assert!(!router.is_subject_method("blog/list"));
+            assert!(!router.is_subject_method("config/load"));
         }
 
         #[test]
