@@ -22,7 +22,7 @@ resolve_vercel_cli() {
   fi
 
   local cached_vercel
-  cached_vercel="$(find "$HOME/.npm/_npx" -path '*/node_modules/.bin/vercel' -type f 2>/dev/null | tail -n 1 || true)"
+  cached_vercel="$(find "$HOME/.npm/_npx" -path '*/node_modules/.bin/vercel' 2>/dev/null | tail -n 1 || true)"
   if [[ -n "$cached_vercel" && -x "$cached_vercel" ]]; then
     echo "$cached_vercel"
     return 0
