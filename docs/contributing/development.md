@@ -103,13 +103,18 @@ pinned in the root `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`.
 
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. The deploy helper
-always runs `npx vercel --yes --prod` and points npm at a temporary cache
-directory so the command does not depend on a writable `~/.npm/`.
+runs the sync check directly, uses the repo-local `vitepress` binary from
+`node_modules/.bin` for the site build, then always runs
+`npx vercel --yes --prod`. It points npm at a temporary cache directory so
+the deploy command does not depend on a writable `~/.npm/`.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
 running through `npx`, it also assumes the runner can reach
 `registry.npmjs.org` to resolve `vercel`. In restricted environments, expect
 the deploy phase to stall or fail even when the docs are otherwise in sync.
+If `npm` is missing from `PATH` but `node_modules` is already installed, the
+local sync/build preflight still works; the final deploy still requires
+`npx`.
 
 Protocol schema exports live at the repo root:
 
