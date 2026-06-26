@@ -105,6 +105,17 @@ pub const PLUGIN_KIND_WEB_UI: &str = "web_ui";
 /// [`conversation_store::ConversationMeta`]).
 pub const PLUGIN_KIND_CONVERSATION_STORE: &str = "conversation_store";
 
+/// Plugin kind for workflow-journal backend plugins (sqlite, Postgres, ...).
+///
+/// Workflow-journal backends persist workflow RUN STATE (the orchestrator
+/// workflow blob + checkpoints) and the lifecycle EVENT stream. The role is
+/// **optional**: with no plugin installed the kernel falls back to the in-tree
+/// SQLite `WorkflowStateManager` (`workflow.db`), so workflows run with zero
+/// plugins. A Postgres-backed implementation makes run history durable across
+/// redeploys (a disposable container loses `workflow.db` on every restart). See
+/// the `animus-journal-protocol` crate for the `journal/*` method family.
+pub const PLUGIN_KIND_WORKFLOW_JOURNAL: &str = "workflow_journal";
+
 /// Method name for the log-storage `log/entry` notification.
 ///
 /// Emitted by any supervised plugin to forward a structured log entry to
@@ -164,6 +175,8 @@ pub enum PluginKind {
     /// Conversation store backend plugin. See
     /// [`PLUGIN_KIND_CONVERSATION_STORE`].
     ConversationStore,
+    /// Workflow-journal backend plugin. See [`PLUGIN_KIND_WORKFLOW_JOURNAL`].
+    WorkflowJournal,
     /// Generic custom plugin. See [`PLUGIN_KIND_CUSTOM`].
     Custom,
     /// Any kind not understood by this crate version. Preserves the wire
@@ -184,6 +197,7 @@ impl PluginKind {
             PluginKind::TransportBackend => PLUGIN_KIND_TRANSPORT_BACKEND,
             PluginKind::WebUi => PLUGIN_KIND_WEB_UI,
             PluginKind::ConversationStore => PLUGIN_KIND_CONVERSATION_STORE,
+            PluginKind::WorkflowJournal => PLUGIN_KIND_WORKFLOW_JOURNAL,
             PluginKind::Custom => PLUGIN_KIND_CUSTOM,
             PluginKind::Other(value) => value.as_str(),
         }
@@ -216,6 +230,7 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_TRANSPORT_BACKEND => PluginKind::TransportBackend,
             PLUGIN_KIND_WEB_UI => PluginKind::WebUi,
             PLUGIN_KIND_CONVERSATION_STORE => PluginKind::ConversationStore,
+            PLUGIN_KIND_WORKFLOW_JOURNAL => PluginKind::WorkflowJournal,
             PLUGIN_KIND_CUSTOM => PluginKind::Custom,
             _ => PluginKind::Other(value),
         }
