@@ -233,7 +233,7 @@ enum HostSource {
 /// (`kind -> plugin_name`) and glob registrations (`(pattern, plugin_name)`).
 /// Produced by [`SubjectRouter::register_kinds`] /
 /// [`SubjectRouter::register_kinds_from_specs`].
-type KindTables = (HashMap<String, String>, Vec<(KindPattern, String)>);
+type KindTables = (HashMap<String, String>, Vec<(KindPattern, String)>, Option<String>);
 
 /// A cached, lazily-spawned subject-backend host plus a liveness token. The
 /// token (`active`) is cloned into every [`HostLease`] handed out for the host;
@@ -499,6 +499,12 @@ pub struct SubjectRouter {
     exact_kinds: HashMap<String, String>,
     /// Glob registrations stored as (pattern, plugin_name) pairs.
     glob_kinds: Vec<(KindPattern, String)>,
+    /// Catch-all backend (declared via a bare `*` `subject_kind`). Resolves
+    /// ONLY when no exact or glob pattern claims the kind, so a dynamic-kind
+    /// backend (e.g. `subject-postgres` serving runtime-declared kinds) can
+    /// receive any unclaimed kind without re-declaring its manifest. At most
+    /// one catch-all may be registered.
+    catch_all: Option<String>,
     /// Backing host source: eager (pre-spawned) or lazy (spawn-on-route).
     hosts: HostSource,
     /// Daemon-side translator state: maps user-facing `installed_kind` to
@@ -587,8 +593,8 @@ impl SubjectRouter {
         aliases: KindAliasMap,
     ) -> Result<Self> {
         match Self::register_kinds(&hosts, &aliases).await {
-            Ok((exact_kinds, glob_kinds)) => {
-                Ok(Self { exact_kinds, glob_kinds, hosts: HostSource::Eager(hosts), aliases })
+            Ok((exact_kinds, glob_kinds, catch_all)) => {
+                Ok(Self { exact_kinds, glob_kinds, catch_all, hosts: HostSource::Eager(hosts), aliases })
             }
             Err(error) => {
                 // We own the spawned hosts; dropping them without shutdown
@@ -618,7 +624,7 @@ impl SubjectRouter {
     /// far below the runtime plugin-process cap even when dozens of
     /// data-source subject plugins are installed globally.
     pub fn from_lazy_specs(specs: Vec<SubjectPluginSpec>, aliases: KindAliasMap) -> Result<Self> {
-        let (exact_kinds, glob_kinds) = Self::register_kinds_from_specs(&specs, &aliases)?;
+        let (exact_kinds, glob_kinds, catch_all) = Self::register_kinds_from_specs(&specs, &aliases)?;
         let specs_by_name: HashMap<String, SubjectPluginSpec> =
             specs.into_iter().map(|spec| (spec.name.clone(), spec)).collect();
         let lazy = LazyHosts {
@@ -627,7 +633,7 @@ impl SubjectRouter {
             spawn_locks: Mutex::new(HashMap::new()),
             max_live: subject_host_cache_max(),
         };
-        Ok(Self { exact_kinds, glob_kinds, hosts: HostSource::Lazy(Box::new(lazy)), aliases })
+        Ok(Self { exact_kinds, glob_kinds, catch_all, hosts: HostSource::Lazy(Box::new(lazy)), aliases })
     }
 
     /// Build the exact/glob kind tables from manifest-declared native kinds,
@@ -637,9 +643,23 @@ impl SubjectRouter {
     fn register_kinds_from_specs(specs: &[SubjectPluginSpec], aliases: &KindAliasMap) -> Result<KindTables> {
         let mut exact_kinds: HashMap<String, String> = HashMap::new();
         let mut glob_kinds: Vec<(KindPattern, String)> = Vec::new();
+        let mut catch_all: Option<String> = None;
 
         for spec in specs {
             for raw_kind in &spec.native_kinds {
+                // A bare `*` declares the catch-all backend: it claims any kind
+                // no specific pattern matches. At most one may be registered.
+                if raw_kind == "*" {
+                    if let Some(existing) = &catch_all {
+                        return Err(anyhow!(
+                            "duplicate subject catch-all '*' claimed by '{}' and '{}'",
+                            existing,
+                            spec.name
+                        ));
+                    }
+                    catch_all = Some(spec.name.clone());
+                    continue;
+                }
                 let pattern = KindPattern::parse(raw_kind);
                 let (registered_pattern, registered_raw) = if pattern.is_glob {
                     (pattern, raw_kind.clone())
@@ -674,7 +694,7 @@ impl SubjectRouter {
             }
         }
 
-        Ok((exact_kinds, glob_kinds))
+        Ok((exact_kinds, glob_kinds, catch_all))
     }
 
     /// Resolve a leased host for `plugin_name`, spawning + handshaking it on
@@ -726,12 +746,25 @@ impl SubjectRouter {
     async fn register_kinds(hosts: &HashMap<String, PluginHost>, aliases: &KindAliasMap) -> Result<KindTables> {
         let mut exact_kinds: HashMap<String, String> = HashMap::new();
         let mut glob_kinds: Vec<(KindPattern, String)> = Vec::new();
+        let mut catch_all: Option<String> = None;
         let names = hosts.keys().cloned().collect::<Vec<_>>();
 
         for name in names {
             let host = hosts.get(&name).ok_or_else(|| anyhow!("plugin host disappeared during routing setup"))?;
             let result = host.handshake().await?;
             for raw_kind in result.capabilities.subject_kinds {
+                // A bare `*` declares the catch-all backend (see the lazy path).
+                if raw_kind == "*" {
+                    if let Some(existing) = &catch_all {
+                        return Err(anyhow!(
+                            "duplicate subject catch-all '*' claimed by '{}' and '{}'",
+                            existing,
+                            name
+                        ));
+                    }
+                    catch_all = Some(name.clone());
+                    continue;
+                }
                 let pattern = KindPattern::parse(&raw_kind);
                 // Apply install-time rename: register the installed_kind
                 // instead of the native one for this plugin if an alias
@@ -774,7 +807,7 @@ impl SubjectRouter {
             }
         }
 
-        Ok((exact_kinds, glob_kinds))
+        Ok((exact_kinds, glob_kinds, catch_all))
     }
 
     /// Resolve the plugin name responsible for `kind`.
@@ -811,14 +844,22 @@ impl SubjectRouter {
             }
         }
         if ambiguous {
-            None
-        } else {
-            best.map(|(_, plugin)| plugin)
+            return None;
         }
+        // A specific (exact/glob) match always wins; the catch-all backend is
+        // consulted only when no specific pattern claims the kind.
+        best.map(|(_, plugin)| plugin).or(self.catch_all.as_deref())
     }
 
+    /// `true` when `method`'s kind prefix is EXPLICITLY registered (exact or
+    /// glob). Deliberately excludes the `*` catch-all: the catch-all routes any
+    /// kind via [`Self::plugin_for_kind`]/[`Self::route_call`], but a method
+    /// classifier must not report every `x/y` method as a subject method, or it
+    /// would mis-claim non-subject methods (`config/load`, `journal/record`).
     pub fn is_subject_method(&self, method: &str) -> bool {
-        method.split('/').next().is_some_and(|kind| self.plugin_for_kind(kind).is_some())
+        method.split('/').next().is_some_and(|kind| {
+            self.exact_kinds.contains_key(kind) || self.glob_kinds.iter().any(|(p, _)| p.matches(kind))
+        })
     }
 
     pub async fn route_call(&self, method: &str, params: Option<Value>) -> Result<Value, RpcError> {
@@ -1563,6 +1604,34 @@ done
         /// host cap tests), since each lazy test spawns real plugin children.
         fn slot_guard() -> std::sync::MutexGuard<'static, ()> {
             crate::TEST_SLOT_FACTORY_GUARD.lock().unwrap_or_else(|p| p.into_inner())
+        }
+
+        #[test]
+        fn catch_all_resolves_only_unclaimed_kinds() {
+            // from_lazy_specs spawns nothing; plugin_for_kind is a pure lookup.
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("spawns.log");
+            let specs = vec![spec(dir.path(), "tasks", "task", &log), spec(dir.path(), "baas", "*", &log)];
+            let router = SubjectRouter::from_lazy_specs(specs, KindAliasMap::default()).expect("router builds");
+            // A specific (exact) backend wins over the catch-all.
+            assert_eq!(router.plugin_for_kind("task"), Some("tasks"));
+            // Any kind no specific backend claims falls to the catch-all.
+            assert_eq!(router.plugin_for_kind("blog"), Some("baas"));
+            assert_eq!(router.plugin_for_kind("knowledge"), Some("baas"));
+            // is_subject_method reflects EXPLICIT registration only — it must
+            // NOT report catch-all-routed kinds (or it would mis-classify
+            // non-subject methods like config/load as subject methods).
+            assert!(router.is_subject_method("task/list"));
+            assert!(!router.is_subject_method("blog/list"));
+            assert!(!router.is_subject_method("config/load"));
+        }
+
+        #[test]
+        fn duplicate_catch_all_is_rejected() {
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("spawns.log");
+            let specs = vec![spec(dir.path(), "a", "*", &log), spec(dir.path(), "b", "*", &log)];
+            assert!(SubjectRouter::from_lazy_specs(specs, KindAliasMap::default()).is_err());
         }
 
         #[tokio::test]
