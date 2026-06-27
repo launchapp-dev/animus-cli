@@ -48,13 +48,6 @@ resolve_node_package_manager_bin() {
 }
 
 resolve_vercel_cli() {
-  local npx_bin
-
-  if npx_bin="$(resolve_node_package_manager_bin npx)"; then
-    echo "$npx_bin"
-    return 0
-  fi
-
   if [[ -x "$repo_root/node_modules/.bin/vercel" ]]; then
     echo "$repo_root/node_modules/.bin/vercel"
     return 0
@@ -64,6 +57,12 @@ resolve_vercel_cli() {
   cached_vercel="$(find "$HOME/.npm/_npx" -path '*/node_modules/.bin/vercel' 2>/dev/null | tail -n 1 || true)"
   if [[ -n "$cached_vercel" && -x "$cached_vercel" ]]; then
     echo "$cached_vercel"
+    return 0
+  fi
+
+  local npx_bin
+  if npx_bin="$(resolve_node_package_manager_bin npx)"; then
+    echo "$npx_bin"
     return 0
   fi
 
