@@ -15,7 +15,7 @@ pub(crate) struct Cli {
     )]
     pub(crate) project_root: Option<String>,
     /// v0.5.8 honor-system principal override. Sends `$/setPrincipal` to
-    /// the daemon at connection open. Logged loudly; ignored under
+    /// the daemon at connection open. Logged loudly; accepted as-is under
     /// `policy.rbac=single-user`. Under `enforce` the daemon rejects
     /// impersonation when peer credentials don't match.
     #[arg(
