@@ -347,6 +347,42 @@ impl AgentRuntimeConfig {
             .or_else(|| self.phase_agent_profile(phase_id).and_then(|profile| profile.max_continuations))
     }
 
+    /// Failure-class tokens eligible for agent-call retry on this phase.
+    /// Phase `runtime.retry_on` wins when non-empty; otherwise falls back to
+    /// the agent profile's `retry_on`. Empty means "retry all transient".
+    pub fn phase_retry_on(&self, phase_id: &str) -> Vec<String> {
+        if let Some(tokens) = self
+            .phase_execution(phase_id)
+            .and_then(|definition| definition.runtime.as_ref())
+            .map(|runtime| normalized_nonempty_values(&runtime.retry_on))
+            .filter(|tokens| !tokens.is_empty())
+        {
+            return tokens;
+        }
+
+        self.phase_agent_profile(phase_id)
+            .map(|profile| normalized_nonempty_values(&profile.retry_on))
+            .unwrap_or_default()
+    }
+
+    /// Failure-class tokens that must never be retried on this phase. Takes
+    /// precedence over [`Self::phase_retry_on`]. Phase `runtime.no_retry_on`
+    /// wins when non-empty; otherwise falls back to the profile's value.
+    pub fn phase_no_retry_on(&self, phase_id: &str) -> Vec<String> {
+        if let Some(tokens) = self
+            .phase_execution(phase_id)
+            .and_then(|definition| definition.runtime.as_ref())
+            .map(|runtime| normalized_nonempty_values(&runtime.no_retry_on))
+            .filter(|tokens| !tokens.is_empty())
+        {
+            return tokens;
+        }
+
+        self.phase_agent_profile(phase_id)
+            .map(|profile| normalized_nonempty_values(&profile.no_retry_on))
+            .unwrap_or_default()
+    }
+
     pub fn phase_extra_args(&self, phase_id: &str) -> Vec<String> {
         if let Some(args) = self
             .phase_execution(phase_id)
@@ -765,6 +801,12 @@ fn merge_runtime_overrides(base: &mut AgentRuntimeOverrides, overlay: &AgentRunt
     }
     if overlay.max_attempts.is_some() {
         base.max_attempts = overlay.max_attempts;
+    }
+    if !overlay.retry_on.is_empty() {
+        base.retry_on = overlay.retry_on.clone();
+    }
+    if !overlay.no_retry_on.is_empty() {
+        base.no_retry_on = overlay.no_retry_on.clone();
     }
     if !overlay.extra_args.is_empty() {
         base.extra_args = overlay.extra_args.clone();
@@ -1516,6 +1558,8 @@ mod tests {
                 network_access: None,
                 timeout_secs: None,
                 max_attempts: None,
+                retry_on: vec![],
+                no_retry_on: vec![],
                 extra_args: vec![],
                 codex_config_overrides: vec![],
                 max_continuations: None,
@@ -4210,6 +4254,26 @@ agents:
         phase.runtime =
             Some(AgentRuntimeOverrides { permission_mode: Some("acceptEdits".to_string()), ..Default::default() });
         assert_eq!(config.phase_permission_mode("implementation"), Some("acceptEdits"));
+    }
+
+    #[test]
+    fn phase_retry_on_phase_runtime_takes_precedence_over_agent_profile() {
+        let mut config = seeded_agent_runtime_config();
+        let profile = config.agents.get_mut("swe").expect("swe profile");
+        profile.retry_on = vec!["provider_rate_limit".to_string()];
+        profile.no_retry_on = vec!["schema_validation_failed".to_string()];
+
+        assert_eq!(config.phase_retry_on("implementation"), vec!["provider_rate_limit".to_string()]);
+        assert_eq!(config.phase_no_retry_on("implementation"), vec!["schema_validation_failed".to_string()]);
+
+        let phase = config.phases.get_mut("implementation").expect("implementation phase");
+        phase.runtime = Some(AgentRuntimeOverrides {
+            retry_on: vec!["timeout".to_string(), "transport_lost".to_string()],
+            ..Default::default()
+        });
+        // A non-empty phase runtime list wins; the unset no_retry_on still falls back to the profile.
+        assert_eq!(config.phase_retry_on("implementation"), vec!["timeout".to_string(), "transport_lost".to_string()]);
+        assert_eq!(config.phase_no_retry_on("implementation"), vec!["schema_validation_failed".to_string()]);
     }
 
     #[test]

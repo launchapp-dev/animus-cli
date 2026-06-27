@@ -42,6 +42,8 @@ fn profile(description: &str, system_prompt: &str, role: Option<&str>) -> AgentP
         network_access: None,
         timeout_secs: None,
         max_attempts: None,
+        retry_on: vec![],
+        no_retry_on: vec![],
         extra_args: vec![],
         codex_config_overrides: vec![],
         max_continuations: None,

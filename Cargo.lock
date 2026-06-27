@@ -70,7 +70,7 @@ dependencies = [
 [[package]]
 name = "animus-config-protocol"
 version = "0.1.0"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.21#27553880500d9aba768e5c7925c62a3b516f9f42"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.24#9bb711498a1c7958e75d0a3743b8905c4e2317e9"
 dependencies = [
  "anyhow",
  "protocol",
@@ -183,7 +183,7 @@ dependencies = [
 [[package]]
 name = "animus-plugin-protocol"
 version = "0.1.15"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.21#27553880500d9aba768e5c7925c62a3b516f9f42"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.24#9bb711498a1c7958e75d0a3743b8905c4e2317e9"
 dependencies = [
  "schemars",
  "serde",
@@ -247,7 +247,7 @@ dependencies = [
 [[package]]
 name = "animus-session-backend"
 version = "0.1.15"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.21#27553880500d9aba768e5c7925c62a3b516f9f42"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.24#9bb711498a1c7958e75d0a3743b8905c4e2317e9"
 dependencies = [
  "animus-plugin-protocol 0.1.15",
  "anyhow",
@@ -310,7 +310,7 @@ dependencies = [
 [[package]]
 name = "animus-subject-protocol"
 version = "0.1.16"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.21#27553880500d9aba768e5c7925c62a3b516f9f42"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.24#9bb711498a1c7958e75d0a3743b8905c4e2317e9"
 dependencies = [
  "animus-plugin-protocol 0.1.15",
  "anyhow",
@@ -3171,7 +3171,7 @@ dependencies = [
 [[package]]
 name = "protocol"
 version = "0.1.0"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.21#27553880500d9aba768e5c7925c62a3b516f9f42"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.24#9bb711498a1c7958e75d0a3743b8905c4e2317e9"
 dependencies = [
  "animus-subject-protocol 0.1.16",
  "anyhow",
