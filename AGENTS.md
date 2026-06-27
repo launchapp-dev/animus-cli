@@ -28,7 +28,7 @@ web stack (transport + UI) lives in external plugins under
 [`launchapp-dev`](https://github.com/launchapp-dev). The workspace also depends
 on external protocol crates from that repo. The authoritative pins live in
 `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`; current builds mix the
-workspace-wide `animus-protocol` pin at `v0.1.21`, legacy CLI wire crates at
+workspace-wide `animus-protocol` pin at `v0.1.24`, legacy CLI wire crates at
 `v0.1.13`, plus newer `animus-queue-protocol` / `animus-subject-protocol`
 pins at `v0.5.10` and `animus-workflow-runner-protocol` at `v0.5.3`.
 
@@ -49,7 +49,7 @@ crates/
 ```
 
 The OpenAI-compatible runner (formerly `crates/oai-runner/`) moved
-out-of-tree to `launchapp-dev/animus-provider-oai-agent` v0.1.4 in the
+out-of-tree to `launchapp-dev/animus-provider-oai-agent` v0.1.5 in the
 v0.5.2 surface-shrink. Install via
 `animus plugin install launchapp-dev/animus-provider-oai-agent`.
 
@@ -101,11 +101,15 @@ Scoped runtime state in `~/.animus/<repo-scope>/`:
 - `core-state.json`
 - `resume-config.json`
 - `workflow.db`
+- `chat/`
 - `config/`
 - `daemon/`
 - `docs/`
 - `logs/`
-- `runner/`
+- `metrics/`
+- `runs/`
+- `artifacts/`
+- `secrets/`
 - `state/`
 - `worktrees/`
 
@@ -115,7 +119,7 @@ Global config in `protocol::Config::global_config_dir()`:
 - `credentials.json`
 - `daemon-events.jsonl`
 - `cli-tracker.json`
-- runner socket and runner config files
+- `runner-sessions/`
 
 Repository scope format:
 

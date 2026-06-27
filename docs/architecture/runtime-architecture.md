@@ -91,7 +91,7 @@ graph TB
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
 especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
-current runtime mixes workspace-wide `v0.1.21` config/session/provider pins,
+current runtime mixes workspace-wide `v0.1.24` config/session/provider pins,
 legacy CLI wire crates at `v0.1.13`, `animus-queue-protocol` /
 `animus-subject-protocol-v05` at `v0.5.10`, and
 `animus-workflow-runner-protocol` at `v0.5.3`.

@@ -27,7 +27,7 @@ workflow execution now route through `orchestrator-plugin-host::session` and
 installed provider plugins. The OpenAI-compatible runner binary moved
 out-of-tree to the `launchapp-dev/animus-provider-oai-agent` plugin in the
 v0.5.2 surface-shrink. The curated default-install config currently pins that
-plugin at `v0.1.4`, and the daemon's runtime contract resolver locates the
+plugin at `v0.1.5`, and the daemon's runtime contract resolver locates the
 binary inside the installed plugin (see
 `crates/orchestrator-core/src/runtime_contract.rs::resolve_oai_runner_binary`).
 
@@ -53,7 +53,7 @@ for the kernel wire types (`protocol`), the `config_source` contract
 queue/workflow/subject plugin routing. The root `Cargo.toml` pins `protocol`,
 `animus-config-protocol`, `animus-provider-protocol`,
 `animus-session-backend`, and `animus-subject-protocol` to the same
-`animus-protocol` tag (`v0.1.21`); `crates/orchestrator-cli/Cargo.toml` adds
+`animus-protocol` tag (`v0.1.24`); `crates/orchestrator-cli/Cargo.toml` adds
 crate-local pins for `animus-control-protocol`,
 `animus-log-storage-protocol`, and `animus-subject-protocol-wire` at
 `v0.1.13`, plus `animus-queue-protocol` / `animus-subject-protocol-v05` at
