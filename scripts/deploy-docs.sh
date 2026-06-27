@@ -10,9 +10,48 @@ PATH="$repo_root/node_modules/.bin:$PATH"
 
 bash scripts/check-doc-sync.sh
 
+resolve_node_package_manager_bin() {
+  local bin_name="$1"
+  local node_bin
+  local sibling
+  local candidate
+
+  if command -v "$bin_name" >/dev/null 2>&1; then
+    command -v "$bin_name"
+    return 0
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    node_bin="$(command -v node)"
+    sibling="$(dirname "$node_bin")/$bin_name"
+    if [[ -x "$sibling" ]]; then
+      echo "$sibling"
+      return 0
+    fi
+  fi
+
+  for candidate in \
+    "$HOME/.nvm/versions/node"/*/bin/"$bin_name" \
+    "$HOME/.volta/bin/$bin_name" \
+    "$HOME/.fnm"/*/bin/"$bin_name" \
+    "$HOME/.asdf/shims/$bin_name" \
+    /opt/homebrew/bin/"$bin_name" \
+    /usr/local/bin/"$bin_name"
+  do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 resolve_vercel_cli() {
-  if command -v npx >/dev/null 2>&1; then
-    echo "npx"
+  local npx_bin
+
+  if npx_bin="$(resolve_node_package_manager_bin npx)"; then
+    echo "$npx_bin"
     return 0
   fi
 
@@ -53,20 +92,20 @@ echo "Deploying docs with Vercel..."
 echo "Prerequisites: network access for Vercel and a valid Vercel login."
 
 vercel_cli="$(resolve_vercel_cli)" || {
-  echo "Unable to find a usable Vercel CLI. Install npm/npx or ensure a cached/local vercel binary exists." >&2
+  echo "Unable to find a usable Vercel CLI. Install npm/npx, expose an existing Node install, or ensure a cached/local vercel binary exists." >&2
   exit 1
 }
 
-if [[ "$vercel_cli" == "npx" ]]; then
+if [[ "$(basename "$vercel_cli")" == "npx" ]]; then
   npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
   trap 'rm -rf "$npx_cache_dir"' EXIT
-  echo "Using npx vercel for the production deploy."
+  echo "Using npx vercel for the production deploy via $vercel_cli."
   echo "Using temporary npm cache at $npx_cache_dir."
   npm_config_cache="$npx_cache_dir" \
   npm_config_fetch_retries=0 \
   npm_config_fetch_timeout=10000 \
   npm_config_fetch_retry_maxtimeout=10000 \
-    npx vercel --yes --prod
+    "$vercel_cli" vercel --yes --prod
 else
   echo "Using cached/local Vercel CLI at $vercel_cli."
   "$vercel_cli" --yes --prod

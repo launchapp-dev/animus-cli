@@ -112,9 +112,12 @@ The deploy step assumes the shell is already authenticated with Vercel. When
 running through `npx`, it also assumes the runner can reach
 `registry.npmjs.org` to resolve `vercel`. In restricted environments, expect
 the deploy phase to stall or fail even when the docs are otherwise in sync.
-If `npm` is missing from `PATH` but `node_modules` is already installed, the
-local sync/build preflight still works; the final deploy still requires
-`npx`.
+If `npm`/`npx` are missing from `PATH`, `scripts/deploy-docs.sh` now also
+checks the active Node install's sibling `bin/`, common `nvm`/`volta`/`fnm`/
+`asdf` locations, and Homebrew paths before giving up. If none of those
+locations contain `npx`, the local sync/build preflight can still run when
+`node_modules` is already installed, but the final Vercel deploy still
+cannot proceed.
 
 Protocol schema exports live at the repo root:
 
