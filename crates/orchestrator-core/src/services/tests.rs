@@ -974,6 +974,8 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
             network_access: None,
             timeout_secs: None,
             max_attempts: None,
+            retry_on: Vec::new(),
+            no_retry_on: Vec::new(),
             extra_args: Vec::new(),
             codex_config_overrides: Vec::new(),
             max_continuations: None,
