@@ -47,28 +47,6 @@ resolve_node_package_manager_bin() {
   return 1
 }
 
-resolve_vercel_cli() {
-  if [[ -x "$repo_root/node_modules/.bin/vercel" ]]; then
-    echo "$repo_root/node_modules/.bin/vercel"
-    return 0
-  fi
-
-  local cached_vercel
-  cached_vercel="$(find "$HOME/.npm/_npx" -path '*/node_modules/.bin/vercel' 2>/dev/null | tail -n 1 || true)"
-  if [[ -n "$cached_vercel" && -x "$cached_vercel" ]]; then
-    echo "$cached_vercel"
-    return 0
-  fi
-
-  local npx_bin
-  if npx_bin="$(resolve_node_package_manager_bin npx)"; then
-    echo "$npx_bin"
-    return 0
-  fi
-
-  return 1
-}
-
 if command -v vitepress >/dev/null 2>&1; then
   rm -rf docs/.vitepress/.temp docs/.vitepress/cache
   vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
@@ -90,22 +68,17 @@ fi
 echo "Deploying docs with Vercel..."
 echo "Prerequisites: network access for Vercel and a valid Vercel login."
 
-vercel_cli="$(resolve_vercel_cli)" || {
-  echo "Unable to find a usable Vercel CLI. Install npm/npx, expose an existing Node install, or ensure a cached/local vercel binary exists." >&2
+npx_bin="$(resolve_node_package_manager_bin npx)" || {
+  echo "Unable to find a usable npx binary. Install Node/npm, or expose an existing Node install on PATH." >&2
   exit 1
 }
 
-if [[ "$(basename "$vercel_cli")" == "npx" ]]; then
-  npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
-  trap 'rm -rf "$npx_cache_dir"' EXIT
-  echo "Using npx vercel for the production deploy via $vercel_cli."
-  echo "Using temporary npm cache at $npx_cache_dir."
-  npm_config_cache="$npx_cache_dir" \
-  npm_config_fetch_retries=0 \
-  npm_config_fetch_timeout=10000 \
-  npm_config_fetch_retry_maxtimeout=10000 \
-    "$vercel_cli" vercel --yes --prod
-else
-  echo "Using cached/local Vercel CLI at $vercel_cli."
-  "$vercel_cli" --yes --prod
-fi
+npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
+trap 'rm -rf "$npx_cache_dir"' EXIT
+echo "Using npx vercel for the production deploy via $npx_bin."
+echo "Using temporary npm cache at $npx_cache_dir."
+npm_config_cache="$npx_cache_dir" \
+npm_config_fetch_retries=0 \
+npm_config_fetch_timeout=10000 \
+npm_config_fetch_retry_maxtimeout=10000 \
+  "$npx_bin" vercel --yes --prod
