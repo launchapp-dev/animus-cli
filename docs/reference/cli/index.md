@@ -261,7 +261,7 @@ animus
 │   ├── browse               Browse the public Animus plugin registry, grouped by kind
 │   ├── update               Update installed release-source plugins to the recommended pins from `default-install.json` (`--all`, `--kind`, or `--name`)
 │   ├── outdated             Report version drift: installed tag vs recommended pin vs latest published tag
-│   ├── install-defaults     Install every plugin the flavor manifest (`--flavor <name>`, default `default`) marks `required` from public GitHub releases. `--include-recommended` adds the recommended set. Skips plugins that are already installed
+│   ├── install-defaults     Install the standard provider set (claude, codex, gemini, opencode, oai) plus every plugin the selected flavor manifest (`--flavor <name>`, default `default`) marks `required`; `--include-recommended` adds the recommended set. Skips plugins that are already installed
 │   ├── lock                 Inspect and verify the plugin lockfile (`.animus/plugins.lock`) — the SOURCE OF TRUTH for the installed plugin set. It records sha256 + version + source for every installed plugin; `plugins.yaml` (the registry discovery reads) is a DERIVED cache regenerated from the lock on every install/update/uninstall, so the two can never drift
 │   │   ├── list             List every entry currently recorded in the plugin lockfile
 │   │   └── verify           Re-hash every installed plugin binary and report drift against the lockfile: mismatch (sha changed), missing_binary, and extra (installed but not in the lockfile). Exits non-zero on any drift (CI gate)

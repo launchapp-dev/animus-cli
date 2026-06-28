@@ -60,9 +60,9 @@ $ animus plugin scope --help
 Per-project plugin scope (.animus/plugin-scope.yaml).
 
 Commands:
-  show   Print the effective scope (mode + resolved admit-set)
-  set    Write .animus/plugin-scope.yaml with the supplied flags
-  reset  Delete .animus/plugin-scope.yaml
+  show   Print the effective scope (mode + resolved admit-set) for the current project
+  set    Write .animus/plugin-scope.yaml with the supplied mode + allow/extras/require sets
+  reset  Delete .animus/plugin-scope.yaml and fall back to the default scope
 ```
 
 Common flows:
@@ -81,12 +81,19 @@ animus plugin scope set \
 # layer extras on top of the active flavor's required set
 animus plugin scope set --mode flavor-only --extras animus-subject-linear
 
+# replace the file instead of merging additively with any existing values
+animus plugin scope set --replace --mode allowlist --allow animus-provider-claude
+
 # return to defaults (flavor-only when a flavor manifest exists, otherwise all)
 animus plugin scope reset
 ```
 
 All three subcommands accept `--json` for `animus.cli.v1` envelope
 output.
+
+Repeat `animus plugin scope set` calls merge additively by default. Pass
+`--replace` when you want the file rewritten with exactly the flags from the
+current invocation.
 
 ## Preflight interaction
 
