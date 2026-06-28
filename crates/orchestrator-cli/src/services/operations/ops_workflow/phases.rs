@@ -69,8 +69,14 @@ pub(crate) fn ensure_workflow_runner_plugin(project_root: &Path) -> Result<()> {
 }
 
 /// Build the `workflow/execute` request that re-attaches the workflow_runner
-/// plugin to an already-persisted workflow record. Subject fields stay empty:
-/// the persisted record is authoritative for subject, input, and vars.
+/// plugin to an already-persisted workflow record. The persisted record is
+/// authoritative for input and vars, but the subject MUST be carried in the
+/// request: the runner plugin resolves subject context from
+/// `subject_ref`/`task_id`/`requirement_id`, not from `workflow_id` alone, so
+/// an empty subject made `workflow/execute` fail to resolve subject context
+/// for every detached `workflow run` / `run_workflow` dispatch (the
+/// queue/trigger path carries the subject via `build_runner_command`, which is
+/// why only this reattach path was affected).
 pub(crate) fn workflow_execute_request_for_existing(
     workflow: &OrchestratorWorkflow,
 ) -> workflow_proto::WorkflowExecuteRequest {
@@ -78,8 +84,8 @@ pub(crate) fn workflow_execute_request_for_existing(
         workflow_id: Some(workflow.id.clone()),
         subject_dispatch: None,
         subject_ref: None,
-        task_id: None,
-        requirement_id: None,
+        task_id: workflow.subject.task_id().map(str::to_string),
+        requirement_id: workflow.subject.requirement_id().map(str::to_string),
         title: None,
         description: None,
         workflow_ref: workflow.workflow_ref.clone(),
@@ -1148,6 +1154,35 @@ workflows:
             TaskStatus::InProgress,
             "dispatched task must leave Ready so the daemon does not re-dispatch it"
         );
+    }
+
+    #[tokio::test]
+    async fn reattach_request_carries_task_subject_for_plugin_resolution() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = TempDir::new().expect("temp dir");
+        let _guards = isolate_plugin_discovery(&temp);
+        init_git_repo(&temp);
+        write_standard_workflow_yaml(&temp);
+        let project_root = temp.path().to_string_lossy().to_string();
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
+        let hub = Arc::new(FileServiceHub::new(&project_root).expect("file service hub"));
+        let task = create_test_task(&hub, "reattach subject").await;
+        let existing = hub
+            .workflows()
+            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .await
+            .expect("workflow should start");
+
+        let request = super::workflow_execute_request_for_existing(&existing);
+
+        assert_eq!(request.workflow_id.as_deref(), Some(existing.id.as_str()));
+        assert_eq!(
+            request.task_id.as_deref(),
+            Some(task.id.as_str()),
+            "reattach request must carry the task subject so the runner plugin resolves subject context"
+        );
+        assert_eq!(request.requirement_id, None);
     }
 
     #[tokio::test]
