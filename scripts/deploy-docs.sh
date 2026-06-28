@@ -47,6 +47,30 @@ resolve_node_package_manager_bin() {
   return 1
 }
 
+resolve_node_bin() {
+  if command -v node >/dev/null 2>&1; then
+    command -v node
+    return 0
+  fi
+
+  local candidate
+  for candidate in \
+    "$HOME/.nvm/versions/node"/*/bin/node \
+    "$HOME/.volta/bin/node" \
+    "$HOME/.fnm"/*/bin/node \
+    "$HOME/.asdf/shims/node" \
+    /opt/homebrew/bin/node \
+    /usr/local/bin/node
+  do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 if command -v vitepress >/dev/null 2>&1; then
   rm -rf docs/.vitepress/.temp docs/.vitepress/cache
   vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
@@ -70,6 +94,10 @@ echo "Prerequisites: network access for Vercel and a valid Vercel login."
 
 npx_bin="$(resolve_node_package_manager_bin npx)" || {
   echo "Unable to find a usable npx binary. Install Node/npm, or expose an existing Node install on PATH." >&2
+  if node_bin="$(resolve_node_bin)"; then
+    echo "Found node at $node_bin, but this install does not provide npm/npx." >&2
+    echo "A bundled runtime such as the Codex desktop Node binary is not sufficient for \`npx vercel\`; install a full Node distribution or expose npm/npx on PATH." >&2
+  fi
   exit 1
 }
 

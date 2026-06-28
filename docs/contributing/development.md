@@ -114,7 +114,10 @@ resolve `vercel`. In restricted environments, expect the deploy phase to fail
 once it needs fresh network access, even when the docs are otherwise in sync.
 If `npm`/`npx` are missing from `PATH`, `scripts/deploy-docs.sh` also checks
 the active Node install's sibling `bin/`, common `nvm`/`volta`/`fnm`/`asdf`
-locations, and Homebrew paths before giving up.
+locations, and Homebrew paths before giving up. A standalone bundled `node`
+binary without npm tooling is still insufficient: the deploy helper now calls
+that out explicitly because `npx vercel` cannot run without a full npm/npx
+install.
 
 Protocol schema exports live at the repo root:
 
