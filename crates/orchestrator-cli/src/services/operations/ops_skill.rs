@@ -805,6 +805,15 @@ fn handle_list(args: SkillListArgs, project_root: &str, json: bool) -> Result<()
         for entry in &state.installed {
             items.push(serde_json::json!({
                 "name": entry.name,
+                // Surface the captured definition's description/category (when the
+                // install snapshotted one) so `skill list` callers don't have to
+                // fan out to `skill info` per skill just to render a catalog.
+                "description": entry.definition.as_ref().map(|d| d.description.clone()),
+                "category": entry
+                    .definition
+                    .as_ref()
+                    .and_then(|d| d.category.as_ref())
+                    .map(|c| format!("{:?}", c)),
                 "version": entry.version,
                 "source": entry.source,
                 "registry": entry.registry,
