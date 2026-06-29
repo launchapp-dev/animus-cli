@@ -1,8 +1,13 @@
+mod journal_client;
 mod lifecycle_executor;
 mod phase_plan;
 mod resume;
 mod state_machine;
 mod state_manager;
+
+pub use journal_client::{
+    record_wire_event as journal_record_wire_event, shutdown_resident_hosts as shutdown_journal_hosts,
+};
 
 pub use lifecycle_executor::WorkflowLifecycleExecutor;
 pub use phase_plan::{

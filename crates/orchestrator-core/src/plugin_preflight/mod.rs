@@ -22,6 +22,8 @@ const PLUGIN_KIND_WORKFLOW_RUNNER: &str = "workflow_runner";
 const PLUGIN_KIND_QUEUE: &str = "queue";
 /// Plugin-kind wire value for `config_source` (v0.6). See [`PLUGIN_KIND_QUEUE`].
 const PLUGIN_KIND_CONFIG_SOURCE: &str = "config_source";
+/// Plugin-kind wire value for `workflow_journal` (BU-1). See [`PLUGIN_KIND_QUEUE`].
+const PLUGIN_KIND_WORKFLOW_JOURNAL: &str = "workflow_journal";
 
 /// Minimum `workflow_runner` plugin version that consumes phase skill
 /// payloads. The reference runner
@@ -176,6 +178,12 @@ pub enum RequiredRole {
     /// daemon default required-roles until the load path resolves it (else
     /// existing daemons fail preflight on upgrade).
     ConfigSource,
+    /// Satisfied by ANY installed `workflow_journal` plugin (BU-1). This role is
+    /// OPTIONAL: it is NEVER added to [`PluginPreflightSpec::daemon_default`], so
+    /// its absence never blocks boot — with no plugin installed the kernel uses
+    /// the in-tree SQLite journal, exactly as before. The variant exists so the
+    /// role's presence can be reported (and required by an explicit spec/test).
+    WorkflowJournal,
 }
 
 impl RequiredRole {
@@ -188,6 +196,7 @@ impl RequiredRole {
             RequiredRole::WorkflowRunner => "workflow_runner".to_string(),
             RequiredRole::Queue => "queue".to_string(),
             RequiredRole::ConfigSource => "config_source".to_string(),
+            RequiredRole::WorkflowJournal => "workflow_journal".to_string(),
         }
     }
 }
@@ -349,6 +358,10 @@ impl InstalledPluginSummary {
 
     pub fn is_config_source(&self) -> bool {
         self.plugin_kind == PLUGIN_KIND_CONFIG_SOURCE
+    }
+
+    pub fn is_workflow_journal(&self) -> bool {
+        self.plugin_kind == PLUGIN_KIND_WORKFLOW_JOURNAL
     }
 
     pub fn covers_subject_kind(&self, kind: &str) -> bool {
