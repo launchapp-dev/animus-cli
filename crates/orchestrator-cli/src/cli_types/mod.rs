@@ -907,6 +907,81 @@ mod tests {
     }
 
     #[test]
+    fn workflow_run_parses_actor_json_for_transport_scoping() {
+        let actor_json = r#"{"user_id":"alice","claims":["admin"],"tenant_id":"acme"}"#;
+        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--task-id", "TASK-1", "--actor-json", actor_json])
+            .expect("workflow run --actor-json should parse");
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::Run(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected workflow run, got {other:?}"),
+        }
+        // No flag => None => global scope.
+        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--task-id", "TASK-1"])
+            .expect("bare workflow run should parse");
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::Run(args) } => assert_eq!(args.actor_json, None),
+            other => panic!("expected workflow run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workflow_config_get_and_validate_parse_actor_json() {
+        let actor_json = r#"{"user_id":"bob","claims":[]}"#;
+        let cli = Cli::try_parse_from(["animus", "workflow", "config", "get", "--actor-json", actor_json])
+            .expect("workflow config get --actor-json should parse");
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::Config { command: WorkflowConfigCommand::Get(args) } } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected workflow config get, got {other:?}"),
+        }
+        let cli = Cli::try_parse_from(["animus", "workflow", "config", "validate", "--actor-json", actor_json])
+            .expect("workflow config validate --actor-json should parse");
+        match cli.command {
+            Command::Workflow {
+                command: WorkflowCommand::Config { command: WorkflowConfigCommand::Validate(args) },
+            } => assert_eq!(args.actor_json.as_deref(), Some(actor_json)),
+            other => panic!("expected workflow config validate, got {other:?}"),
+        }
+        // No flag => global-only resolution.
+        let cli = Cli::try_parse_from(["animus", "workflow", "config", "get"])
+            .expect("bare workflow config get should parse");
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::Config { command: WorkflowConfigCommand::Get(args) } } => {
+                assert_eq!(args.actor_json, None)
+            }
+            other => panic!("expected workflow config get, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_send_parses_actor_json_distinct_from_as_user() {
+        let actor_json = r#"{"user_id":"carol","claims":["admin"]}"#;
+        let cli =
+            Cli::try_parse_from(["animus", "chat", "send", "hello", "--as-user", "carol", "--actor-json", actor_json])
+                .expect("chat send --actor-json should parse");
+        match cli.command {
+            Command::Chat { command: ChatCommand::Send(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+                assert_eq!(args.as_user.as_deref(), Some("carol"));
+            }
+            other => panic!("expected chat send, got {other:?}"),
+        }
+        // No actor flag => None (global authz scope) even with --as-user set.
+        let cli = Cli::try_parse_from(["animus", "chat", "send", "hello", "--as-user", "carol"])
+            .expect("bare chat send should parse");
+        match cli.command {
+            Command::Chat { command: ChatCommand::Send(args) } => {
+                assert_eq!(args.actor_json, None);
+                assert_eq!(args.as_user.as_deref(), Some("carol"));
+            }
+            other => panic!("expected chat send, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn output_read_is_primary_and_run_alias_is_retired() {
         let cli =
             Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1"]).expect("output read should parse");

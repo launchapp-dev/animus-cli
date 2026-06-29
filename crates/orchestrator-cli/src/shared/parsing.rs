@@ -1,3 +1,4 @@
+use animus_actor::Actor;
 use anyhow::Result;
 use orchestrator_core::{WorkflowQuerySort, WorkflowStatus};
 use protocol::{AgentRunEvent, RunId};
@@ -158,6 +159,30 @@ pub(crate) fn parse_workflow_query_sort_opt(value: Option<&str>) -> Result<Optio
     Ok(Some(sort))
 }
 
+/// Parse the `--actor-json` flag (a JSON-encoded [`Actor`]) into an
+/// `Option<Actor>`, mirroring the parse `animus mcp serve --actor-json`
+/// performs in `ops_mcp`.
+///
+/// `None`/absent flag ⇒ `Ok(None)` ⇒ global scope (unchanged behavior). A
+/// present-but-malformed value is a HARD error: the flag is a transport
+/// assertion of an authenticated caller, so a garbled identity must fail loud
+/// rather than silently degrade to global scope (fail-closed).
+///
+/// TRUST BOUNDARY: the actor is supplied ONLY by the (authenticated) caller via
+/// this flag. The transport (e.g. the portal) authenticates the user and then
+/// passes `--actor-json`; the kernel does NOT validate the claims — it relays
+/// them verbatim to the config_source / runner / MCP surfaces, which enforce.
+/// The value is NEVER synthesized from local context, workflow YAML, agent
+/// output, or subject content.
+pub(crate) fn parse_actor_json_flag(value: Option<&str>) -> Result<Option<Actor>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let actor = serde_json::from_str::<Actor>(raw)
+        .map_err(|error| invalid_input_error(format!("invalid --actor-json: {error}; {COMMAND_HELP_HINT}")))?;
+    Ok(Some(actor))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,6 +194,21 @@ mod tests {
     fn parse_workflow_filters_accept_aliases() {
         assert_eq!(parse_workflow_status_opt(Some("running")).unwrap(), Some(WorkflowStatus::Running));
         assert_eq!(parse_workflow_query_sort_opt(Some("workflow_ref")).unwrap(), Some(WorkflowQuerySort::WorkflowRef));
+    }
+
+    #[test]
+    fn parse_actor_json_flag_round_trips_and_fails_closed() {
+        assert_eq!(parse_actor_json_flag(None).unwrap(), None);
+
+        let actor = parse_actor_json_flag(Some(r#"{"user_id":"alice","claims":["admin"]}"#))
+            .expect("valid actor json should parse")
+            .expect("present flag yields Some");
+        assert_eq!(actor.user_id, "alice");
+        assert_eq!(actor.claims, vec!["admin".to_string()]);
+        assert_eq!(actor.tenant_id, None);
+
+        let error = parse_actor_json_flag(Some("not-json")).expect_err("malformed actor json must fail closed");
+        assert!(error.to_string().contains("invalid --actor-json"));
     }
 
     #[test]

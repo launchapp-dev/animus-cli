@@ -1813,6 +1813,38 @@ validation errors with rich caret-style line/column indicators. Under
 compile`. The `warnings[]` array reports declared-but-unenforced fields in
 both modes.
 
+### `--actor-json` (transport-asserted per-user scoping)
+
+`animus workflow run`, `animus workflow config get`, `animus workflow config
+validate`, and `animus chat send` accept `--actor-json <JSON>` — a JSON-encoded
+`Actor` (`{"user_id","claims","tenant_id"}`) that scopes the operation to that
+user, mirroring `animus mcp serve --actor-json`:
+
+```bash
+animus workflow run --task-id TASK-1 --actor-json '{"user_id":"alice"}'
+animus workflow config get  --actor-json '{"user_id":"alice"}'
+animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":["admin"]}'
+```
+
+- `workflow run` relays the actor to the runner (and onward to the per-agent
+  `animus mcp serve` child + config_source), so the run resolves the actor's
+  config partition and the agent's tools scope per-user.
+- `workflow config get` / `validate` return the actor's
+  global ∪ private ∪ shared config set; an actor whose `claims` contains
+  `admin` sees everything; **no flag = global-only**.
+- `chat send --actor-json` is the **authz** identity for the turn (binds the
+  chat agent's built-in `animus` MCP server to that user). It is distinct from
+  `--as-user`, which only stamps **conversation ownership** for the
+  `conversation_store`.
+- Omitting the flag = `None` = global scope (system / local runs), unchanged.
+
+**Trust boundary:** the flag is a *transport assertion*. The transport (e.g. a
+portal) authenticates the user and then passes `--actor-json`; the kernel does
+**not** validate the claims — it relays them verbatim to the surfaces that
+enforce. The actor is never synthesized from local context, workflow YAML,
+agent output, or subject content. A malformed value is a hard error
+(fail-closed), never a silent downgrade to global scope.
+
 ### `animus workflow config set` / entity write-back
 
 The `set` family persists config back through the installed **writable**

@@ -1,8 +1,8 @@
 use clap::{Args, Subcommand};
 
 use super::{
-    parse_duration_secs_default_days, parse_positive_usize, INPUT_JSON_PRECEDENCE_HELP, WORKFLOW_SORT_HELP,
-    WORKFLOW_STATUS_HELP,
+    parse_duration_secs_default_days, parse_positive_usize, ACTOR_JSON_HELP, INPUT_JSON_PRECEDENCE_HELP,
+    WORKFLOW_SORT_HELP, WORKFLOW_STATUS_HELP,
 };
 
 /// Workflow identifier args: `--id` is primary, `--workflow-id` is a hidden
@@ -148,9 +148,9 @@ pub(crate) enum WorkflowDefinitionsCommand {
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowConfigCommand {
     /// Read resolved workflow config.
-    Get,
+    Get(WorkflowConfigReadArgs),
     /// Validate workflow config shape and references.
-    Validate,
+    Validate(WorkflowConfigReadArgs),
     /// Validate and resolve YAML workflow files.
     Compile,
     /// Re-run the workflow YAML compile pipeline and (when the daemon is
@@ -170,6 +170,16 @@ pub(crate) enum WorkflowConfigCommand {
     WorkflowSet(WorkflowConfigWorkflowSetArgs),
     /// Remove one workflow definition (read-modify-write).
     WorkflowRemove(WorkflowConfigEntityIdArgs),
+}
+
+/// Shared args for `workflow config get` / `workflow config validate`.
+///
+/// `--actor-json` scopes the resolved config to the asserted user
+/// (global ∪ private ∪ shared; admins see all). Omit for global-only.
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowConfigReadArgs {
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -307,6 +317,8 @@ pub(crate) struct WorkflowRunArgs {
         help = "Workflow variable in KEY=VALUE format. Repeat for multiple variables."
     )]
     pub(crate) vars: Vec<String>,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]

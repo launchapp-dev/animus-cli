@@ -179,9 +179,9 @@ pub(crate) fn set_agent_runtime_payload(project_root: &str, input_json: &str) ->
     }))
 }
 
-pub(crate) fn get_workflow_config_payload(project_root: &str) -> Value {
+pub(crate) fn get_workflow_config_payload(project_root: &str, actor: Option<&animus_actor::Actor>) -> Value {
     let path = workflow_config_path(project_root);
-    match orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root), None) {
+    match orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root), actor) {
         Ok(loaded) => serde_json::json!({
             "path": path.display().to_string(),
             "source": loaded.metadata.source,
@@ -231,10 +231,15 @@ fn config_error_to_value(error: &anyhow::Error) -> Value {
     serde_json::json!({ "message": format!("{error:#}") })
 }
 
-pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
-    let workflow_loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root), None);
-    let runtime_loaded =
-        orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root));
+pub(crate) fn validate_workflow_config_payload(project_root: &str, actor: Option<&animus_actor::Actor>) -> Value {
+    let workflow_loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root), actor);
+    // The agent runtime derives from the SAME actor's workflow-config partition,
+    // so validate must load it for `actor` too — otherwise actor-private agents
+    // are missing and validation reports the wrong runtime (or spuriously fails).
+    let runtime_loaded = orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata_for_actor(
+        Path::new(project_root),
+        actor,
+    );
     let warnings = unenforced_warnings_payload(project_root);
 
     match (workflow_loaded, runtime_loaded) {
@@ -623,6 +628,51 @@ mod tests {
     }
 
     #[test]
+    fn get_payload_threads_distinct_actors_into_the_load() {
+        use orchestrator_config::workflow_config::config_source_client::test_seam;
+
+        let dir = tempdir().unwrap();
+        let animus = dir.path().join(".animus");
+        fs::create_dir_all(&animus).unwrap();
+
+        // Compile two distinct, valid bases off disk — one workflow vs two —
+        // to stand in for a per-user `config_source` partition.
+        let one = "tools_allowlist:\n  - cargo\nphases:\n  alpha:\n    mode: agent\n    agent_id: a\nagents:\n  a:\n    description: d\n    system_prompt: p\n    skills: []\nworkflows:\n  - id: only-mine\n    name: Only Mine\n    phases:\n      - alpha\n";
+        fs::write(animus.join("workflows.yaml"), one).unwrap();
+        let alice_base = orchestrator_core::compile_yaml_workflow_files(dir.path())
+            .expect("compile alice base")
+            .expect("alice base present");
+
+        let two = "tools_allowlist:\n  - cargo\nphases:\n  alpha:\n    mode: agent\n    agent_id: a\nagents:\n  a:\n    description: d\n    system_prompt: p\n    skills: []\nworkflows:\n  - id: only-mine\n    name: Only Mine\n    phases:\n      - alpha\n  - id: also-shared\n    name: Also Shared\n    phases:\n      - alpha\n";
+        fs::write(animus.join("workflows.yaml"), two).unwrap();
+        let bob_base = orchestrator_core::compile_yaml_workflow_files(dir.path())
+            .expect("compile bob base")
+            .expect("bob base present");
+
+        let alice = animus_actor::Actor { user_id: "alice".to_string(), claims: vec![], tenant_id: None };
+        let bob = animus_actor::Actor { user_id: "bob".to_string(), claims: vec![], tenant_id: None };
+        let _g_alice = test_seam::install_for_actor(dir.path(), &alice, alice_base);
+        let _g_bob = test_seam::install_for_actor(dir.path(), &bob, bob_base);
+
+        let root = dir.path().to_string_lossy().to_string();
+        let alice_payload = get_workflow_config_payload(&root, Some(&alice));
+        let bob_payload = get_workflow_config_payload(&root, Some(&bob));
+
+        let alice_workflows = alice_payload["workflow_config"]["workflows"]
+            .as_array()
+            .unwrap_or_else(|| panic!("alice workflows array: {alice_payload}"))
+            .len();
+        let bob_workflows = bob_payload["workflow_config"]["workflows"]
+            .as_array()
+            .unwrap_or_else(|| panic!("bob workflows array: {bob_payload}"))
+            .len();
+
+        // Distinct actors must resolve their own per-user base (no leak).
+        assert_eq!(alice_workflows, 1, "alice base has one workflow: {alice_payload}");
+        assert_eq!(bob_workflows, 2, "bob base has two workflows: {bob_payload}");
+    }
+
+    #[test]
     fn reload_payload_reports_reloaded_true_for_valid_overlay() {
         let dir = tempdir().unwrap();
         write_minimal_overlay(dir.path());
@@ -647,7 +697,7 @@ mod tests {
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(dir.path());
         let project_root = dir.path().to_string_lossy().to_string();
-        let value = validate_workflow_config_payload(&project_root);
+        let value = validate_workflow_config_payload(&project_root, None);
         assert_eq!(value["valid"], serde_json::json!(true), "warnings must never fail validation: {value}");
         let warnings = value["warnings"].as_array().expect("warnings array");
         assert!(
@@ -681,7 +731,7 @@ mod tests {
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(dir.path());
         let project_root = dir.path().to_string_lossy().to_string();
-        let value = validate_workflow_config_payload(&project_root);
+        let value = validate_workflow_config_payload(&project_root, None);
         assert_eq!(value["valid"], serde_json::json!(true), "minimal overlay must validate: {value}");
         let summary = value.get("summary").expect("summary present on success");
         assert!(summary["workflows"].as_u64().is_some(), "summary must count workflows: {summary}");

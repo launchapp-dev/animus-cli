@@ -443,6 +443,12 @@ pub(crate) async fn handle_workflow(
             // stripped so a foreign-kind qualifier is not silently rewritten.
             args.task_id = args.task_id.map(|id| crate::bare_task_id(&id));
             let workflow_ref = args.pipeline.clone();
+            // Transport-asserted caller identity for this run. The transport
+            // (e.g. the portal) authenticates the user and passes
+            // `--actor-json`; the kernel relays it verbatim to the runner /
+            // config_source / MCP surfaces (which enforce). A malformed value
+            // hard-fails (fail-closed). Omitted => `None` => global scope.
+            let asserted_actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
             if args.sync {
                 let execute_args = WorkflowExecuteArgs {
                     workflow_id: args.workflow_id,
@@ -457,14 +463,16 @@ pub(crate) async fn handle_workflow(
                     phase_timeout_secs: args.phase_timeout_secs,
                     input_json: args.input_json,
                     vars: args.vars,
-                    // This `--sync` branch is also the entry point of the
-                    // daemon-spawned detached runner child. The daemon relays the
-                    // authenticated control-request actor to that child via the
-                    // trusted WORKFLOW_ACTOR_ENV env var; read it back here so the
-                    // runner request carries the caller identity. For a direct
-                    // local CLI invocation the env is unset => `None` (never
-                    // synthesized from local context, YAML, or subject content).
-                    actor: phases::workflow_actor_from_env(),
+                    // Actor precedence: an explicit transport-asserted
+                    // `--actor-json` flag wins. Otherwise this `--sync` branch
+                    // is also the entry point of the daemon-spawned detached
+                    // runner child, where the daemon relays the authenticated
+                    // control-request actor via the trusted WORKFLOW_ACTOR_ENV
+                    // env var — read it back so the runner request carries the
+                    // caller identity. A direct local CLI invocation with no
+                    // flag and no env => `None` (never synthesized from local
+                    // context, YAML, or subject content).
+                    actor: asserted_actor.clone().or_else(phases::workflow_actor_from_env),
                 };
                 execute::handle_workflow_execute(execute_args, hub, project_root, json).await?;
                 Ok(())
@@ -492,9 +500,11 @@ pub(crate) async fn handle_workflow(
                     model: args.model.clone(),
                     tool: args.tool.clone(),
                     phase_timeout_secs: args.phase_timeout_secs,
-                    // Local async `workflow run`: no authenticated transport
-                    // actor. The control path supplies the actor instead.
-                    actor: None,
+                    // The transport-asserted `--actor-json` (if any) is relayed
+                    // to the detached runner child via WORKFLOW_ACTOR_ENV. With
+                    // no flag this is `None` => global scope; an authenticated
+                    // inbound control request supplies its own actor instead.
+                    actor: asserted_actor.clone(),
                 };
                 if json && args.input_json.is_none() && args.requirement_id.is_none() && args.title.is_none() {
                     if let Some(task_id) = args.task_id.as_ref() {
@@ -735,9 +745,13 @@ pub(crate) async fn handle_workflow(
             }
         },
         WorkflowCommand::Config { command } => match command {
-            WorkflowConfigCommand::Get => print_value(config::get_workflow_config_payload(project_root), json),
-            WorkflowConfigCommand::Validate => {
-                let payload = config::validate_workflow_config_payload(project_root);
+            WorkflowConfigCommand::Get(args) => {
+                let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+                print_value(config::get_workflow_config_payload(project_root, actor.as_ref()), json)
+            }
+            WorkflowConfigCommand::Validate(args) => {
+                let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+                let payload = config::validate_workflow_config_payload(project_root, actor.as_ref());
                 if json {
                     print_value(payload, json)
                 } else {
@@ -903,11 +917,12 @@ async fn try_workflow_run_via_control(
         }
         params.insert("overrides".to_string(), serde_json::Value::Object(overrides_obj));
     }
-    // Local CLI → own daemon over the control wire: no authenticated transport
-    // actor (the operator is acting locally). Authenticated actors are asserted
-    // only by the transport plugins (http/graphql) on inbound requests — never
-    // synthesized by the CLI client.
-    let request = WireRequest { task_id: task_id.to_string(), definition, params, actor: None };
+    // Relay the transport-asserted actor (from an explicit `--actor-json`) over
+    // the control wire so the daemon scopes the run to that user. With no flag
+    // `overrides.actor` is `None` and the run is global — the CLI client never
+    // synthesizes an actor from local context; authenticated actors are
+    // asserted only by the caller (the flag) or the transport plugins.
+    let request = WireRequest { task_id: task_id.to_string(), definition, params, actor: overrides.actor.clone() };
     match client.workflow_run(request).await {
         Ok(response) => Ok(Some(response)),
         Err(err) if is_method_unavailable(&err) => {
