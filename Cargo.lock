@@ -70,7 +70,7 @@ dependencies = [
 [[package]]
 name = "animus-actor"
 version = "0.1.0"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "schemars",
  "serde",
@@ -79,7 +79,7 @@ dependencies = [
 [[package]]
 name = "animus-config-protocol"
 version = "0.1.0"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "animus-actor",
  "anyhow",
@@ -94,7 +94,7 @@ dependencies = [
 [[package]]
 name = "animus-control-protocol"
 version = "0.1.15"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "animus-actor",
  "animus-log-storage-protocol",
@@ -114,7 +114,7 @@ dependencies = [
 [[package]]
 name = "animus-log-storage-protocol"
 version = "0.1.15"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "animus-plugin-protocol 0.1.15",
  "anyhow",
@@ -176,7 +176,7 @@ dependencies = [
 [[package]]
 name = "animus-plugin-protocol"
 version = "0.1.15"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "schemars",
  "serde",
@@ -241,7 +241,7 @@ dependencies = [
 [[package]]
 name = "animus-session-backend"
 version = "0.1.15"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "animus-actor",
  "animus-plugin-protocol 0.1.15",
@@ -274,8 +274,9 @@ dependencies = [
 [[package]]
 name = "animus-subject-protocol"
 version = "0.1.16"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
+ "animus-actor",
  "animus-plugin-protocol 0.1.15",
  "anyhow",
  "async-trait",
@@ -290,7 +291,7 @@ dependencies = [
 [[package]]
 name = "animus-trigger-protocol"
 version = "0.1.15"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "animus-plugin-protocol 0.1.15",
  "anyhow",
@@ -306,7 +307,7 @@ dependencies = [
 [[package]]
 name = "animus-workflow-runner-protocol"
 version = "0.2.0"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "animus-actor",
  "animus-plugin-protocol 0.1.15",
@@ -2763,7 +2764,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "orchestrator-cli"
-version = "0.6.21"
+version = "0.6.22"
 dependencies = [
  "animus-actor",
  "animus-control-protocol",
@@ -3141,7 +3142,7 @@ dependencies = [
 [[package]]
 name = "protocol"
 version = "0.1.0"
-source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.25#e9bf4f1575f68ed0ffe59de5507d1d0e9350a533"
+source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.1.26#a6e37ed730204449dfe61ff4f413d7bd3bec2401"
 dependencies = [
  "animus-subject-protocol 0.1.16",
  "anyhow",
