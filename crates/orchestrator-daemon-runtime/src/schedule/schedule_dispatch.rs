@@ -122,7 +122,8 @@ where
             workflow_ref.clone(),
             schedule.input.clone(),
             trigger_source.to_string(),
-        );
+        )
+        .with_actor(mint_schedule_actor(schedule));
         match spawn_pipeline(schedule_id, &dispatch) {
             Ok(()) => "dispatched".to_string(),
             Err(error) => {
@@ -145,6 +146,23 @@ where
     };
 
     status
+}
+
+/// Mint the [`Actor`] an owner-scoped schedule runs as, or `None` for a global
+/// (system) schedule.
+///
+/// TRUST BOUNDARY: this is the ONE place the kernel CONSTRUCTS an actor rather
+/// than relaying a transport-asserted one. It is sound because the owner is
+/// asserted at config-authoring time: the workflow config (and thus
+/// `schedule.owner_id`) is itself owner-scoped / admin-authored — served by a
+/// trusted `config_source` (e.g. `config-postgres` team_* rows or
+/// admin-curated YAML), NEVER derived from runtime, agent output, or subject
+/// content. Minting the owner here therefore respects the
+/// transport-asserted-identity model. A schedule with no `owner_id` keeps the
+/// legacy global dispatch (`actor = None`).
+fn mint_schedule_actor(schedule: &orchestrator_core::workflow_config::WorkflowSchedule) -> Option<animus_actor::Actor> {
+    let owner_id = schedule.owner_id.as_deref().map(str::trim).filter(|id| !id.is_empty())?;
+    Some(animus_actor::Actor { user_id: owner_id.to_string(), claims: schedule.claims.clone(), tenant_id: None })
 }
 
 /// `occurrence_allowed` is the active-hours gate applied to the caught-up
@@ -359,6 +377,8 @@ mod tests {
             command: None,
             input: None,
             enabled: false,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let state = orchestrator_core::ScheduleState::default();
         let due = evaluate_schedules(&schedules, &state, now, |_| true);
@@ -376,6 +396,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let state = orchestrator_core::ScheduleState::default();
         let due = evaluate_schedules(&schedules, &state, now, |_| true);
@@ -393,6 +415,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let state = orchestrator_core::ScheduleState::default();
         let due = evaluate_schedules(&schedules, &state, now, |_| true);
@@ -410,6 +434,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let state = orchestrator_core::ScheduleState::default();
         let due = evaluate_schedules(&schedules, &state, now, |_| true);
@@ -427,6 +453,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let mut state = orchestrator_core::ScheduleState::default();
         state.schedules.insert(
@@ -457,6 +485,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let mut state = orchestrator_core::ScheduleState::default();
         state.schedules.insert(
@@ -493,6 +523,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let mut state = orchestrator_core::ScheduleState::default();
         state.schedules.insert(
@@ -528,6 +560,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let mut state = orchestrator_core::ScheduleState::default();
         state.schedules.insert(
@@ -558,6 +592,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let mut state = orchestrator_core::ScheduleState::default();
         let due = evaluate_schedules(&schedules, &state, now, |_| true);
@@ -590,6 +626,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let state = orchestrator_core::ScheduleState::default();
         let due = evaluate_schedules(&schedules, &state, now, |_| true);
@@ -624,6 +662,8 @@ mod tests {
             command: None,
             input: Some(json!({"scope":"nightly"})),
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
 
@@ -682,6 +722,8 @@ mod tests {
             command: Some("echo cleanup".to_string()),
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         };
         let pipeline_calls = Arc::new(Mutex::new(Vec::new()));
         let pipeline_calls_ref = pipeline_calls.clone();
@@ -700,6 +742,74 @@ mod tests {
         assert!(calls.is_empty());
     }
 
+    #[test]
+    fn owner_scoped_schedule_dispatches_minted_actor() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
+        let schedule = orchestrator_core::WorkflowSchedule {
+            id: "nightly".to_string(),
+            cron: "30 12 * * *".to_string(),
+            workflow_ref: Some("standard-workflow".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+            owner_id: Some("alice".to_string()),
+            claims: vec!["admin".to_string()],
+        };
+        let captured = Arc::new(Mutex::new(None));
+        let captured_ref = captured.clone();
+        let mut spawn = move |_id: &str, dispatch: &SubjectDispatch| {
+            *captured_ref.lock().expect("lock") = dispatch.actor.clone();
+            Ok(())
+        };
+
+        let status = dispatch_schedule("nightly", &schedule, now, "schedule", &mut spawn);
+        assert_eq!(status, "dispatched");
+        let actor = captured.lock().expect("lock").clone().expect("owner schedule must mint an actor");
+        assert_eq!(actor.user_id, "alice");
+        assert_eq!(actor.claims, vec!["admin".to_string()]);
+        assert_eq!(actor.tenant_id, None);
+    }
+
+    #[test]
+    fn global_schedule_dispatches_without_actor() {
+        let now: chrono::DateTime<chrono::Utc> = "2026-03-04T12:30:00Z".parse().expect("timestamp should parse");
+        let schedule = orchestrator_core::WorkflowSchedule {
+            id: "global".to_string(),
+            cron: "30 12 * * *".to_string(),
+            workflow_ref: Some("standard-workflow".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
+        };
+        let captured = Arc::new(Mutex::new(Some(animus_actor::Actor::new("sentinel"))));
+        let captured_ref = captured.clone();
+        let mut spawn = move |_id: &str, dispatch: &SubjectDispatch| {
+            *captured_ref.lock().expect("lock") = dispatch.actor.clone();
+            Ok(())
+        };
+
+        let status = dispatch_schedule("global", &schedule, now, "schedule", &mut spawn);
+        assert_eq!(status, "dispatched");
+        assert!(captured.lock().expect("lock").is_none(), "a schedule without owner_id must stay global (actor=None)");
+    }
+
+    #[test]
+    fn owner_id_whitespace_only_stays_global() {
+        let schedule = orchestrator_core::WorkflowSchedule {
+            id: "blank-owner".to_string(),
+            cron: "* * * * *".to_string(),
+            workflow_ref: Some("wf".to_string()),
+            command: None,
+            input: None,
+            enabled: true,
+            owner_id: Some("   ".to_string()),
+            claims: Vec::new(),
+        };
+        assert!(mint_schedule_actor(&schedule).is_none(), "a blank owner_id must not mint an actor");
+    }
+
     fn deadline_schedule(id: &str, cron: &str, enabled: bool) -> orchestrator_core::WorkflowSchedule {
         orchestrator_core::WorkflowSchedule {
             id: id.to_string(),
@@ -708,6 +818,8 @@ mod tests {
             command: None,
             input: None,
             enabled,
+            owner_id: None,
+            claims: Vec::new(),
         }
     }
 
@@ -792,6 +904,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be written");
 
@@ -806,6 +920,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         });
         orchestrator_core::write_workflow_config(project_root, &config).expect("workflow config should be rewritten");
 
@@ -868,6 +984,8 @@ mod tests {
             command: None,
             input: None,
             enabled: true,
+            owner_id: None,
+            claims: Vec::new(),
         }];
         let state = orchestrator_core::ScheduleState::default();
         let now: chrono::DateTime<chrono::Utc> = "2026-03-07T14:00:00Z".parse().unwrap();

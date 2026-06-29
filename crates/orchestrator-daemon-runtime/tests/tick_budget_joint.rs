@@ -54,6 +54,8 @@ fn write_combined_config(project_root: &std::path::Path) {
         command: None,
         input: None,
         enabled: true,
+        owner_id: None,
+        claims: Vec::new(),
     });
     config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
         id: "on-webhook".to_string(),
