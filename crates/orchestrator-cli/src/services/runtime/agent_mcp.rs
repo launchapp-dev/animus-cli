@@ -23,7 +23,7 @@
 //! machinery, so no resolved secret rides the contract.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
@@ -563,6 +563,42 @@ pub(crate) fn materialize_mcp_json(cwd: &Path, runtime_contract: &Value) -> Resu
     std::fs::write(&mcp_path, serialized)
         .with_context(|| format!("failed to write MCP config at {}", mcp_path.display()))?;
     Ok(written)
+}
+
+/// Materialize the FULL (un-stripped) `runtime_contract` MCP server set into a
+/// per-run ISOLATED directory and return the path of the written `.mcp.json`.
+///
+/// This is the actor-scoped counterpart to [`materialize_mcp_json`]: where the
+/// shared cwd file is written actor-STRIPPED (a concurrent run, or a crash
+/// before cleanup, must never let another caller inherit the per-turn identity
+/// from the persisted, auto-discovered cwd file), this file lives in a fresh,
+/// run-private directory and keeps the actor-pinned `animus mcp serve
+/// --actor-json <json>` command intact. A provider that locates MCP servers by
+/// file auto-discovery can be pointed at THIS path (e.g. claude-code's
+/// `--mcp-config`) so the actor reaches that channel too — without ever
+/// touching the shared cwd `.mcp.json`.
+///
+/// The directory is assumed to be run-private and freshly created, so there is
+/// no user-file merge and no managed-marker bookkeeping: the resolved set is
+/// written wholesale. Returns the `.mcp.json` path, or `None` when the contract
+/// resolves to no servers (nothing to point a provider at).
+pub(crate) fn materialize_isolated_mcp_json(dir: &Path, runtime_contract: &Value) -> Result<Option<PathBuf>> {
+    let resolved = contract_mcp_servers_for_mcp_json(runtime_contract);
+    if resolved.is_empty() {
+        return Ok(None);
+    }
+
+    let mut written: Vec<String> = resolved.keys().cloned().collect();
+    written.sort();
+    let mut root = serde_json::Map::new();
+    root.insert("mcpServers".to_string(), Value::Object(resolved));
+    root.insert(ANIMUS_MANAGED_MARKER.to_string(), Value::Array(written.into_iter().map(Value::String).collect()));
+
+    let mcp_path = dir.join(".mcp.json");
+    let serialized = format!("{}\n", serde_json::to_string_pretty(&Value::Object(root))?);
+    std::fs::write(&mcp_path, serialized)
+        .with_context(|| format!("failed to write isolated MCP config at {}", mcp_path.display()))?;
+    Ok(Some(mcp_path))
 }
 
 /// Return a clone of `runtime_contract` with any `--actor-json <json>` pair
@@ -1258,6 +1294,54 @@ mod tests {
             .map(|a| a.iter().filter_map(Value::as_str).collect())
             .unwrap_or_default();
         assert!(args.contains(&"mcp") && args.contains(&"serve"), "args: {args:?}");
+    }
+
+    #[test]
+    fn materialize_isolated_mcp_json_keeps_actor_and_skips_shared_cwd() {
+        // The isolated file lives in a run-private dir and retains the
+        // actor-pinned `--actor-json` command, while the shared cwd file (if
+        // any) is unaffected by this call.
+        let isolated = tempfile::tempdir().unwrap();
+        let contract = serde_json::json!({
+            "mcp": {
+                "agent_id": "animus",
+                "stdio": {
+                    "command": "animus",
+                    "args": [
+                        "--project-root", "/p", "mcp", "serve",
+                        "--actor-json", r#"{"user_id":"alice","claims":["admin"]}"#
+                    ]
+                }
+            }
+        });
+
+        let path = materialize_isolated_mcp_json(isolated.path(), &contract).unwrap().expect("servers resolved");
+        assert_eq!(path, isolated.path().join(".mcp.json"), "isolated config lands in the run-private dir");
+
+        let on_disk: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        let args: Vec<&str> = on_disk
+            .pointer("/mcpServers/animus/args")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).collect())
+            .unwrap_or_default();
+        assert!(args.contains(&"--actor-json"), "isolated config must retain the actor flag: {args:?}");
+        assert!(args.iter().any(|a| a.contains("alice")), "isolated config must retain the actor identity: {args:?}");
+        // The marker is recorded so a consumer knows the entry is Animus-managed.
+        assert!(
+            on_disk.pointer(&format!("/{ANIMUS_MANAGED_MARKER}")).is_some(),
+            "managed marker must be recorded: {on_disk}"
+        );
+    }
+
+    #[test]
+    fn materialize_isolated_mcp_json_returns_none_without_servers() {
+        let isolated = tempfile::tempdir().unwrap();
+        let contract = serde_json::json!({ "mcp": {} });
+        assert!(
+            materialize_isolated_mcp_json(isolated.path(), &contract).unwrap().is_none(),
+            "no servers => nothing to point a provider at, and no file is written"
+        );
+        assert!(!isolated.path().join(".mcp.json").exists(), "no .mcp.json should be created when empty");
     }
 
     #[test]
