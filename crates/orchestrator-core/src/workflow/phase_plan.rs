@@ -79,10 +79,21 @@ pub fn resolve_phase_plan_for_workflow_ref(
         crate::resolve_pack_registry(root).map(|registry| registry.has_pack_overlays()).unwrap_or(false);
     let has_legacy_workflow_config =
         crate::legacy_workflow_config_paths(root).iter().any(|candidate| candidate.exists());
-    if !has_yaml_workflows && !has_pack_workflows && !workflow_config_path.exists() && !has_legacy_workflow_config {
+    // An installed `config_source` plugin (e.g. config-postgres reading team_*,
+    // or config-yaml reading author YAML) is an authoritative config source even
+    // when no `.animus/workflows/*.yaml`, pack, or compiled cache exists on disk.
+    // Mirror `load_workflow_config`'s own gate (loading.rs) so config_source-only
+    // projects (no on-disk YAML) can still resolve workflows.
+    let has_config_source = orchestrator_config::config_source_client::config_source_installed(root);
+    if !has_config_source
+        && !has_yaml_workflows
+        && !has_pack_workflows
+        && !workflow_config_path.exists()
+        && !has_legacy_workflow_config
+    {
         let requested = requested_workflow_ref.as_deref().or(normalized_workflow_ref.as_deref()).unwrap_or("<default>");
         return Err(anyhow!(
-            "workflow '{requested}' is not available until the project defines workflows in .animus/workflows.yaml or .animus/workflows/*.yaml, or installs a pack"
+            "workflow '{requested}' is not available until the project defines workflows in .animus/workflows.yaml or .animus/workflows/*.yaml, installs a pack, or installs a config_source plugin"
         ));
     }
 
