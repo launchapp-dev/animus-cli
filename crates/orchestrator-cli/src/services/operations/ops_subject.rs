@@ -54,6 +54,7 @@ const DEFAULT_SUBJECT_LIST_LIMIT: u32 = 50;
 
 async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bool) -> Result<()> {
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
+    let query = args.query.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let mut filter = serde_json::Map::new();
     filter.insert("kind".to_string(), json!([kind]));
     if let Some(status) = args.status.as_deref() {
@@ -64,14 +65,65 @@ async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bo
     // that honor `limit` also return `total` + `next_cursor` for paging; backends
     // that ignore it simply return everything (no behavior change for them).
     let limit = args.limit.unwrap_or(DEFAULT_SUBJECT_LIST_LIMIT);
-    if limit > 0 {
-        filter.insert("limit".to_string(), json!(limit));
+    // A --query lookup must see the WHOLE set (the backend has no title filter,
+    // and the daemon drops unknown filter fields), so fetch unbounded and apply
+    // both the title filter and the page limit client-side below.
+    let fetch_limit = if query.is_some() { 0 } else { limit };
+    if fetch_limit > 0 {
+        filter.insert("limit".to_string(), json!(fetch_limit));
     }
     if let Some(cursor) = args.cursor.as_deref() {
         filter.insert("cursor".to_string(), json!(cursor));
     }
     let params = Some(Value::Object(filter));
+    if let Some(q) = query {
+        return dispatch_list_filtered(&kind, params, &q, limit, project_root, json).await;
+    }
     dispatch(&kind, "list", params, project_root, json).await
+}
+
+/// `subject list --query`: fetch the full set, filter by a case-insensitive
+/// substring of the subject TITLE, then apply the page `limit` to the matches.
+/// Lets agents/UI resolve a subject by name without paging — and without the
+/// agent-facing MCP result truncating a huge unfiltered list. Mirrors
+/// `dispatch`'s output (json envelope vs human table); the result is the
+/// filtered subset with an exact `total` and a null `next_cursor`.
+async fn dispatch_list_filtered(
+    kind: &str,
+    params: Option<Value>,
+    query: &str,
+    limit: u32,
+    project_root: &str,
+    json: bool,
+) -> Result<()> {
+    let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
+    let method = format!("{kind}/list");
+    let raw = route_or_not_found(&resolution.selected, &method, params).await?;
+    let needle = query.to_lowercase();
+    let mut matches: Vec<Value> = extract_subjects(&raw)
+        .into_iter()
+        .filter(|s| s.get("title").and_then(Value::as_str).map(|t| t.to_lowercase().contains(&needle)).unwrap_or(false))
+        .cloned()
+        .collect();
+    let total = matches.len() as u64;
+    if limit > 0 {
+        matches.truncate(limit as usize);
+    }
+    let result = json!({ "subjects": matches, "next_cursor": Value::Null, "total": total });
+    if json {
+        return print_value(
+            SubjectCallResponse {
+                kind: kind.to_string(),
+                verb: "list",
+                method,
+                plugin_count: resolution.selected.plugin_count(),
+                result,
+            },
+            true,
+        );
+    }
+    render_subject_human("list", kind, &result);
+    Ok(())
 }
 
 async fn handle_subject_get(args: SubjectGetArgs, project_root: &str, json: bool) -> Result<()> {

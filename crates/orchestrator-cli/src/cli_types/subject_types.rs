@@ -92,6 +92,12 @@ pub(crate) struct SubjectListArgs {
     /// Opaque cursor from a prior page's `next_cursor`, to fetch the next page.
     #[arg(long, value_name = "CURSOR")]
     pub cursor: Option<String>,
+
+    /// Case-insensitive substring filter on the subject TITLE. Looks a subject
+    /// up by name without paging the whole set: the full set is fetched and
+    /// filtered by title, then `--limit` is applied to the matches.
+    #[arg(long, value_name = "TEXT")]
+    pub query: Option<String>,
 }
 
 #[derive(Debug, Args)]
