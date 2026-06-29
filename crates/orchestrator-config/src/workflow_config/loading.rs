@@ -275,7 +275,15 @@ pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowCon
     // The default/fallback path is system-initiated (daemon reconcilers,
     // schedulers, CLI inspection) with no authenticated actor → the global
     // (`actor = None`) config partition.
-    match load_workflow_config_with_metadata(project_root, None) {
+    load_workflow_config_or_default_for_actor(project_root, None)
+}
+
+/// Actor-scoped variant of [`load_workflow_config_or_default`]: resolves the
+/// config from the `actor`'s partition (a per-user `config_source` returns that
+/// user's global∪private∪shared set), falling back to the builtin base on error.
+/// `actor = None` is identical to [`load_workflow_config_or_default`] (global).
+pub fn load_workflow_config_or_default_for_actor(project_root: &Path, actor: Option<&Actor>) -> LoadedWorkflowConfig {
+    match load_workflow_config_with_metadata(project_root, actor) {
         Ok(loaded) => loaded,
         Err(_) => {
             let config = runtime_workflow_config_base();

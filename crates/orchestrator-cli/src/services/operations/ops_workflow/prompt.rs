@@ -509,6 +509,7 @@ mod tests {
                 )
                 .with_input(Some(serde_json::json!({"ticket":"WF-7"})))
                 .with_vars(HashMap::from([("release_name".to_string(), "Mercury".to_string())])),
+                None,
             )
             .await
             .expect("workflow should bootstrap");
@@ -535,11 +536,14 @@ mod tests {
         let hub = Arc::new(InMemoryServiceHub::new());
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_custom(
-                "Release Preview".to_string(),
-                "Inspect rendered prompt".to_string(),
+            .run(
+                WorkflowRunInput::for_custom(
+                    "Release Preview".to_string(),
+                    "Inspect rendered prompt".to_string(),
+                    None,
+                ),
                 None,
-            ))
+            )
             .await
             .expect("workflow should bootstrap");
         let mut args = base_args();

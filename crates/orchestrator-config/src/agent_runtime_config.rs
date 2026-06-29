@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -504,7 +505,18 @@ pub fn load_agent_runtime_config(project_root: &Path) -> Result<AgentRuntimeConf
 }
 
 pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<LoadedAgentRuntimeConfig> {
-    if let Ok(loaded_workflow) = crate::workflow_config::load_workflow_config_with_metadata(project_root, None) {
+    load_agent_runtime_config_with_metadata_for_actor(project_root, None)
+}
+
+/// Actor-scoped variant of [`load_agent_runtime_config_with_metadata`]: derives
+/// the agent runtime from the `actor`'s workflow-config partition so a per-user
+/// `config_source` contributes that user's agents/runtime overlay. `actor = None`
+/// is identical to the global path.
+pub fn load_agent_runtime_config_with_metadata_for_actor(
+    project_root: &Path,
+    actor: Option<&Actor>,
+) -> Result<LoadedAgentRuntimeConfig> {
+    if let Ok(loaded_workflow) = crate::workflow_config::load_workflow_config_with_metadata(project_root, actor) {
         let mut config = builtin_agent_runtime_config();
         let registry = crate::resolve_pack_registry(project_root)?;
         let mut path = loaded_workflow.path.clone();
@@ -552,7 +564,16 @@ pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<Lo
 }
 
 pub fn load_agent_runtime_config_or_default(project_root: &Path) -> AgentRuntimeConfig {
-    match load_agent_runtime_config_with_metadata(project_root) {
+    load_agent_runtime_config_or_default_for_actor(project_root, None)
+}
+
+/// Actor-scoped variant of [`load_agent_runtime_config_or_default`].
+/// `actor = None` is identical to the global path.
+pub fn load_agent_runtime_config_or_default_for_actor(
+    project_root: &Path,
+    actor: Option<&Actor>,
+) -> AgentRuntimeConfig {
+    match load_agent_runtime_config_with_metadata_for_actor(project_root, actor) {
         Ok(loaded) => loaded.config,
         Err(_) => builtin_agent_runtime_config(),
     }

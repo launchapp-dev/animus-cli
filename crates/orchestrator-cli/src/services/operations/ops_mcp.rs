@@ -1,6 +1,7 @@
 #[cfg(test)]
 use crate::run_dir;
 use crate::McpCommand;
+use animus_actor::Actor;
 use anyhow::Result;
 #[cfg(test)]
 use orchestrator_core::{OrchestratorWorkflow, WorkflowStateManager, WorkflowStatus};
@@ -184,6 +185,12 @@ struct AoMcpServer {
     // wait="suspend" and pending records carry this workflow id; overrides
     // both the env pin and the payload.
     pinned_workflow_id: Option<String>,
+    // CLI-pinned, transport-asserted caller identity for the run
+    // (`animus mcp serve --actor-json <json>`), relayed by the workflow runner
+    // from the authenticated run. Available to every tool via [`Self::pinned_actor`]
+    // so per-user integrations / subject / queue ops can scope to the user.
+    // `None` = global scope. NEVER sourced from agent output / YAML / subject content.
+    pinned_actor: Option<Actor>,
 }
 
 impl std::fmt::Debug for AoMcpServer {
@@ -262,7 +269,7 @@ pub(super) fn new_memory_mcp_server(default_project_root: &str) -> MemoryMcpServ
 
 #[cfg(test)]
 fn new_ao_mcp_server(default_project_root: &str) -> AoMcpServer {
-    new_ao_mcp_server_with_options(default_project_root, false, None, None)
+    new_ao_mcp_server_with_options(default_project_root, false, None, None, None)
 }
 
 // `management` gates the human-side `animus.interactions.*` tools. The default
@@ -278,6 +285,7 @@ fn new_ao_mcp_server_with_options(
     management: bool,
     pinned_agent_id: Option<String>,
     pinned_workflow_id: Option<String>,
+    pinned_actor: Option<Actor>,
 ) -> AoMcpServer {
     let mut tool_router = AoMcpServer::daemon_tool_router()
         + AoMcpServer::cost_tool_router()
@@ -304,6 +312,7 @@ fn new_ao_mcp_server_with_options(
         plugin_registry: std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
         pinned_agent_id: pinned_agent_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
         pinned_workflow_id: pinned_workflow_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
+        pinned_actor,
     }
 }
 
@@ -452,10 +461,27 @@ fn read_file_with_mtime(path: &Path) -> Result<(String, Option<u64>), std::io::E
 pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str, cli_json: bool) -> Result<()> {
     match command {
         McpCommand::Serve(args) => {
-            let service =
-                new_ao_mcp_server_with_options(project_root, args.management, args.agent_id, args.workflow_id)
-                    .serve(stdio())
-                    .await?;
+            // Parse the host-relayed actor (see McpServeArgs::actor_json). A
+            // malformed value is ignored (logged) → global scope, never a hard
+            // failure that would kill the agent's MCP server. TRUST BOUNDARY:
+            // this value is set ONLY by the trusted host (the workflow runner,
+            // relaying the authenticated run's actor) — never from agent output.
+            let pinned_actor = args.actor_json.as_deref().and_then(|raw| match serde_json::from_str::<Actor>(raw) {
+                Ok(actor) => Some(actor),
+                Err(error) => {
+                    tracing::warn!(%error, "ignoring malformed --actor-json; MCP server runs with no actor");
+                    None
+                }
+            });
+            let service = new_ao_mcp_server_with_options(
+                project_root,
+                args.management,
+                args.agent_id,
+                args.workflow_id,
+                pinned_actor,
+            )
+            .serve(stdio())
+            .await?;
             service.waiting().await?;
             Ok(())
         }

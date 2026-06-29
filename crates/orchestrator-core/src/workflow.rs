@@ -6,7 +6,8 @@ mod state_manager;
 
 pub use lifecycle_executor::WorkflowLifecycleExecutor;
 pub use phase_plan::{
-    phase_plan_for_workflow_ref, resolve_phase_plan_for_workflow_ref, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
+    phase_plan_for_workflow_ref, resolve_phase_plan_for_workflow_ref, resolve_phase_plan_for_workflow_ref_for_actor,
+    STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
 };
 pub use resume::{ResumabilityStatus, ResumeConfig, WorkflowResumeManager};
 pub use state_machine::WorkflowStateMachine;

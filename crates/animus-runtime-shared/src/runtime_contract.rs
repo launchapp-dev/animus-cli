@@ -1,5 +1,6 @@
 use std::sync::{OnceLock, RwLock};
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 use tracing::warn;
@@ -331,7 +332,7 @@ pub fn inject_default_stdio_mcp_with_config(
     project_root: &str,
     mcp_config: &protocol::McpRuntimeConfig,
 ) {
-    inject_default_stdio_mcp_for_agent(runtime_contract, project_root, mcp_config, None);
+    inject_default_stdio_mcp_for_agent(runtime_contract, project_root, mcp_config, None, None);
 }
 
 /// Variant of [`inject_default_stdio_mcp_with_config`] that pins the spawned
@@ -341,11 +342,23 @@ pub fn inject_default_stdio_mcp_with_config(
 /// cannot claim a sibling profile whose `approval_policy` is more permissive.
 /// The flag is only appended to the DEFAULT serve args — host-supplied
 /// `stdio_args_json` is passed through untouched.
+///
+/// `actor` is the transport-asserted caller identity for this run (relayed from
+/// the workflow runner's `WorkflowPhaseRunRequest.actor`). When present it is
+/// serialized and appended as `--actor-json <json>` to the DEFAULT serve args,
+/// so the per-agent `animus mcp serve` child is bound to the user and its tools
+/// can scope per-user integrations / subject / queue ops.
+///
+/// TRUST BOUNDARY: `actor` MUST originate only from the authenticated run (the
+/// runner relays it from the daemon's authenticated control request). It is
+/// NEVER derived from agent output, workflow YAML, or subject content. `None` =
+/// system / local / unauthenticated run (global scope).
 pub fn inject_default_stdio_mcp_for_agent(
     runtime_contract: &mut Value,
     project_root: &str,
     mcp_config: &protocol::McpRuntimeConfig,
     agent_profile_id: Option<&str>,
+    actor: Option<&Actor>,
 ) {
     if runtime_contract.pointer("/mcp/stdio/command").and_then(Value::as_str).is_some_and(|v| !v.trim().is_empty()) {
         return;
@@ -390,6 +403,31 @@ pub fn inject_default_stdio_mcp_for_agent(
             if let Some(agent_id) = agent_profile_id.map(str::trim).filter(|value| !value.is_empty()) {
                 args.push("--agent-id".to_string());
                 args.push(agent_id.to_string());
+            }
+            // Bind the per-agent `animus mcp serve` child to the run's actor so
+            // its tools can scope per-user integrations / subject / queue ops.
+            // Encoded as JSON (self-delimiting); a serialization failure simply
+            // omits the flag (global scope) rather than aborting the run.
+            //
+            // TODO(codex-p2): the actor JSON (incl. tenant + advisory claims like
+            // `admin`) rides in argv, so it is readable via `ps` / process-listing
+            // on a shared multi-user host. This matches the existing `--agent-id`
+            // / `--workflow-id` argv precedent, but a less-exposed channel (an
+            // inherited env var or an opaque file handle the child reads) is
+            // preferable. The robust fix needs the provider plugin to propagate a
+            // dedicated env to the spawned stdio MCP child — the plugin host
+            // spawns with a FILTERED env (manifest `env_required`), so plain
+            // inheritance is unreliable; deferred as a cross-plugin change.
+            if let Some(actor) = actor {
+                match serde_json::to_string(actor) {
+                    Ok(json) => {
+                        args.push("--actor-json".to_string());
+                        args.push(json);
+                    }
+                    Err(error) => {
+                        warn!(%error, "failed to encode actor for animus mcp serve; tools run with no actor");
+                    }
+                }
             }
             args
         });
@@ -2093,6 +2131,67 @@ mod tests {
             Some("https://host.example.com/mcp"),
             "host-supplied endpoint must remain on the contract"
         );
+    }
+
+    fn default_serve_args(runtime_contract: &Value) -> Vec<String> {
+        runtime_contract
+            .pointer("/mcp/stdio/args")
+            .and_then(Value::as_array)
+            .expect("stdio args")
+            .iter()
+            .map(|v| v.as_str().expect("arg is string").to_string())
+            .collect()
+    }
+
+    /// WU-G: the per-agent `animus mcp serve` child must be bound to the run's
+    /// actor via `--actor-json <json>` so its tools can scope per-user ops. The
+    /// actor round-trips losslessly through the serialized arg.
+    #[test]
+    fn inject_default_stdio_mcp_appends_actor_json_when_actor_present() {
+        let actor = Actor {
+            user_id: "alice".to_string(),
+            claims: vec!["admin".to_string()],
+            tenant_id: Some("acme".to_string()),
+        };
+        let mut runtime_contract = serde_json::json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": {}
+        });
+        // stdio_command set (so the command resolves) but NO stdio_args_json, so
+        // the DEFAULT serve-args branch (where --actor-json is appended) runs.
+        let mcp_config = protocol::McpRuntimeConfig {
+            stdio_command: Some("/usr/local/bin/animus".to_string()),
+            ..Default::default()
+        };
+        inject_default_stdio_mcp_for_agent(
+            &mut runtime_contract,
+            "/tmp/project",
+            &mcp_config,
+            Some("swe"),
+            Some(&actor),
+        );
+
+        let args = default_serve_args(&runtime_contract);
+        let pos = args.iter().position(|a| a == "--actor-json").expect("default serve args must carry --actor-json");
+        let decoded: Actor = serde_json::from_str(&args[pos + 1]).expect("actor arg must be valid JSON");
+        assert_eq!(decoded, actor, "actor must round-trip through the --actor-json arg unchanged");
+    }
+
+    /// Without an actor the flag is absent → the server runs at global scope.
+    #[test]
+    fn inject_default_stdio_mcp_omits_actor_json_when_actor_absent() {
+        let mut runtime_contract = serde_json::json!({
+            "cli": { "capabilities": { "supports_mcp": true } },
+            "mcp": {}
+        });
+        let mcp_config = protocol::McpRuntimeConfig {
+            stdio_command: Some("/usr/local/bin/animus".to_string()),
+            ..Default::default()
+        };
+        inject_default_stdio_mcp_for_agent(&mut runtime_contract, "/tmp/project", &mcp_config, None, None);
+
+        let args = default_serve_args(&runtime_contract);
+        assert!(!args.iter().any(|a| a == "--actor-json"), "no actor => no --actor-json flag (global scope)");
     }
 
     /// Codex P2 #1 (mcp_config wire-through): when the host supplies a

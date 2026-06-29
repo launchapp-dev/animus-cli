@@ -1907,7 +1907,7 @@ mod interaction_tool_tests {
             .await
             .expect("task created");
         hub.workflows()
-            .run(orchestrator_core::WorkflowRunInput::for_task(task.id, None))
+            .run(orchestrator_core::WorkflowRunInput::for_task(task.id, None), None)
             .await
             .expect("workflow started")
     }
@@ -1937,7 +1937,7 @@ mod interaction_tool_tests {
             );
         }
 
-        let management = new_ao_mcp_server_with_options("/tmp/project", true, None, None);
+        let management = new_ao_mcp_server_with_options("/tmp/project", true, None, None, None);
         let names: Vec<String> =
             management.tool_router.list_all().into_iter().map(|tool| tool.name.to_string()).collect();
         for expected in [
@@ -2316,7 +2316,8 @@ phases:
                     orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
                         project.path(),
                     );
-                let server = new_ao_mcp_server_with_options(&project_root, false, Some("restricted".to_string()), None);
+                let server =
+                    new_ao_mcp_server_with_options(&project_root, false, Some("restricted".to_string()), None, None);
 
                 let result = server
                     .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {
@@ -2557,7 +2558,7 @@ phases:
             let workflow = bootstrap_running_workflow(&project_root).await;
             assert_eq!(workflow.status, orchestrator_core::WorkflowStatus::Running);
 
-            let server = new_ao_mcp_server_with_options(&project_root, false, None, Some(workflow.id.clone()));
+            let server = new_ao_mcp_server_with_options(&project_root, false, None, Some(workflow.id.clone()), None);
             let result = server
                 .ao_agent_ask(Parameters(AgentAskInput {
                     agent_id: "swe".to_string(),
@@ -2647,7 +2648,8 @@ phases:
         with_isolated_scope(async {
             let project = tempdir().expect("tempdir");
             let project_root = project.path().to_string_lossy().to_string();
-            let server = new_ao_mcp_server_with_options(&project_root, false, None, Some("wf-pinned".to_string()));
+            let server =
+                new_ao_mcp_server_with_options(&project_root, false, None, Some("wf-pinned".to_string()), None);
 
             let result = server
                 .ao_agent_ask(Parameters(AgentAskInput {
@@ -2971,7 +2973,7 @@ phases:
                 orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
                     project.path(),
                 );
-            let server = new_ao_mcp_server_with_options(&project_root, false, Some("swe".to_string()), None);
+            let server = new_ao_mcp_server_with_options(&project_root, false, Some("swe".to_string()), None, None);
             let original_input = serde_json::json!({ "command": "cargo test" });
 
             let result = server
@@ -3083,7 +3085,8 @@ phases:
         with_isolated_scope(async {
             let project = tempdir().expect("tempdir");
             let project_root = project.path().to_string_lossy().to_string();
-            let server = new_ao_mcp_server_with_options(&project_root, false, None, Some("wf-native".to_string()));
+            let server =
+                new_ao_mcp_server_with_options(&project_root, false, None, Some("wf-native".to_string()), None);
 
             let result = server
                 .ao_agent_request_approval(Parameters(AgentRequestApprovalInput {

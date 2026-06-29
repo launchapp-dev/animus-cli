@@ -121,7 +121,7 @@ fn read_doc(relative_path: &str) -> String {
 // router. The default (agent-injected) server omits the two
 // `animus.interactions.*` management tools; the docs call that gating out.
 fn live_builtin_tool_names() -> BTreeSet<String> {
-    let server = new_ao_mcp_server_with_options("/tmp/project", true, None, None);
+    let server = new_ao_mcp_server_with_options("/tmp/project", true, None, None, None);
     server.tool_router.list_all().into_iter().map(|tool| tool.name.to_string()).collect()
 }
 

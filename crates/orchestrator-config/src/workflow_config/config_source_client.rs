@@ -225,7 +225,7 @@ pub fn resolve_plugin_base(project_root: &Path, actor: Option<&Actor>) -> Result
     // unit tests can exercise the kernel's pack-merge + validate pipeline (which
     // it still owns) without spawning a real plugin process.
     #[cfg(any(test, feature = "test-utils"))]
-    if let Some(base) = test_seam::base_for(project_root) {
+    if let Some(base) = test_seam::base_for(project_root, actor) {
         // Derive the CacheToken from the base content so the compiled-config
         // short-circuit in `loading.rs` recompiles when a test reinstalls a
         // DIFFERENT base for the same root. A constant token would serve a
@@ -588,7 +588,9 @@ pub mod test_seam {
     use std::path::{Path, PathBuf};
     use std::sync::{Mutex, OnceLock};
 
-    use super::WorkflowConfig;
+    use animus_actor::Actor;
+
+    use super::{actor_cache_key, WorkflowConfig};
 
     // Process-global registry keyed by project root, so the seam is safe under
     // cargo's parallel test execution (daemon/runtime tests load config on
@@ -597,6 +599,15 @@ pub mod test_seam {
     // installed for its own project.
     fn registry() -> &'static Mutex<HashMap<PathBuf, WorkflowConfig>> {
         static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, WorkflowConfig>>> = OnceLock::new();
+        REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
+    // Actor-scoped registry keyed by (project root, actor partition). Lets a
+    // test simulate a per-user `config_source` whose base differs per actor
+    // (e.g. a private workflow visible only to one user). Looked up before the
+    // root-only `registry()` when an actor is present.
+    fn actor_registry() -> &'static Mutex<HashMap<(PathBuf, String), WorkflowConfig>> {
+        static REGISTRY: OnceLock<Mutex<HashMap<(PathBuf, String), WorkflowConfig>>> = OnceLock::new();
         REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
@@ -617,9 +628,28 @@ pub mod test_seam {
         TestBaseGuard { key }
     }
 
-    /// Clone the synthetic base installed for `project_root`, if any.
-    pub fn base_for(project_root: &Path) -> Option<WorkflowConfig> {
-        registry().lock().unwrap_or_else(|p| p.into_inner()).get(&normalize(project_root)).cloned()
+    /// Install a synthetic base config for `(project_root, actor)`, simulating a
+    /// per-user `config_source` partition. The override is active until the
+    /// returned guard is dropped.
+    #[must_use]
+    pub fn install_for_actor(project_root: &Path, actor: &Actor, base: WorkflowConfig) -> ActorTestBaseGuard {
+        let key = (normalize(project_root), actor_cache_key(Some(actor)));
+        actor_registry().lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), base);
+        ActorTestBaseGuard { key }
+    }
+
+    /// Clone the synthetic base installed for `(project_root, actor)`. Prefers an
+    /// actor-scoped base (when `actor` is present and one was installed), else
+    /// falls back to the root-only base.
+    pub fn base_for(project_root: &Path, actor: Option<&Actor>) -> Option<WorkflowConfig> {
+        let root = normalize(project_root);
+        if actor.is_some() {
+            let actor_key = (root.clone(), actor_cache_key(actor));
+            if let Some(base) = actor_registry().lock().unwrap_or_else(|p| p.into_inner()).get(&actor_key).cloned() {
+                return Some(base);
+            }
+        }
+        registry().lock().unwrap_or_else(|p| p.into_inner()).get(&root).cloned()
     }
 
     /// RAII guard that removes the installed base for its project root on drop.
@@ -630,6 +660,17 @@ pub mod test_seam {
     impl Drop for TestBaseGuard {
         fn drop(&mut self) {
             registry().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
+        }
+    }
+
+    /// RAII guard that removes the installed `(root, actor)` base on drop.
+    pub struct ActorTestBaseGuard {
+        key: (PathBuf, String),
+    }
+
+    impl Drop for ActorTestBaseGuard {
+        fn drop(&mut self) {
+            actor_registry().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
         }
     }
 }

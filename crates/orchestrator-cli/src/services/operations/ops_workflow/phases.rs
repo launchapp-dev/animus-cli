@@ -244,7 +244,11 @@ pub(crate) async fn start_workflow_with_runner(
     overrides: DetachedRunnerOverrides,
 ) -> Result<OrchestratorWorkflow> {
     ensure_workflow_runner_plugin(Path::new(project_root))?;
-    let workflow = hub.workflows().run(input).await?;
+    // Resolve the bootstrap (default workflow ref / phase plan / skip guards)
+    // from the authenticated actor's config partition so a user's private
+    // workflow resolves at run-time, not only from the global view. The same
+    // actor is relayed to the detached runner child via WORKFLOW_ACTOR_ENV.
+    let workflow = hub.workflows().run(input, overrides.actor.as_ref()).await?;
     // Mirror the daemon's ready-dispatch contract: a dispatched task moves
     // to InProgress. Terminal projection never auto-completes tasks, so a
     // task left Ready here would be re-dispatched by the daemon after its
@@ -1128,7 +1132,7 @@ workflows:
 
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .run(WorkflowRunInput::for_task(task.id.clone(), None), None)
             .await
             .expect("workflow should start");
         let paused = hub.workflows().pause(&workflow.id).await.expect("workflow should pause");
@@ -1221,7 +1225,7 @@ workflows:
         let task = create_test_task(&hub, "reattach subject").await;
         let existing = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .run(WorkflowRunInput::for_task(task.id.clone(), None), None)
             .await
             .expect("workflow should start");
 
@@ -1253,7 +1257,7 @@ workflows:
         // concurrent runner.
         let running = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .run(WorkflowRunInput::for_task(task.id.clone(), None), None)
             .await
             .expect("workflow should start");
         orchestrator_core::register_workflow_runner_pid(temp.path(), &running.id, std::process::id())
@@ -1416,7 +1420,7 @@ workflows:
 
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .run(WorkflowRunInput::for_task(task.id.clone(), None), None)
             .await
             .expect("workflow should start");
         let current_phase = workflow.current_phase.clone().expect("workflow should have current phase");

@@ -884,6 +884,29 @@ mod tests {
     }
 
     #[test]
+    fn mcp_serve_parses_actor_json_for_per_user_scoping() {
+        // WU-G: the workflow runner relays the authenticated run's actor to the
+        // per-agent `animus mcp serve` child via `--actor-json`.
+        let actor_json = r#"{"user_id":"alice","claims":["admin"],"tenant_id":"acme"}"#;
+        let cli = Cli::try_parse_from(["animus", "mcp", "serve", "--actor-json", actor_json])
+            .expect("mcp serve --actor-json should parse");
+        match cli.command {
+            Command::Mcp { command: McpCommand::Serve(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+                assert_eq!(args.agent_id, None);
+                assert_eq!(args.workflow_id, None);
+            }
+            other => panic!("expected mcp serve, got {other:?}"),
+        }
+        // Bare `mcp serve` carries no actor (global scope).
+        let cli = Cli::try_parse_from(["animus", "mcp", "serve"]).expect("bare mcp serve should parse");
+        match cli.command {
+            Command::Mcp { command: McpCommand::Serve(args) } => assert_eq!(args.actor_json, None),
+            other => panic!("expected mcp serve, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn output_read_is_primary_and_run_alias_is_retired() {
         let cli =
             Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1"]).expect("output read should parse");

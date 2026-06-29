@@ -1,5 +1,6 @@
 use std::path::Path;
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 
 pub const STANDARD_WORKFLOW_REF: &str = "standard-workflow";
@@ -59,6 +60,19 @@ pub fn resolve_phase_plan_for_workflow_ref(
     project_root: Option<&Path>,
     workflow_ref: Option<&str>,
 ) -> Result<Vec<String>> {
+    resolve_phase_plan_for_workflow_ref_for_actor(project_root, workflow_ref, None)
+}
+
+/// Actor-scoped variant of [`resolve_phase_plan_for_workflow_ref`]: resolves the
+/// phase plan (and validates against the agent-runtime config) from the
+/// `actor`'s config partition, so a workflow definition that exists only in a
+/// user's private/shared set resolves at run-time for that actor. `actor = None`
+/// is identical to today's global behavior.
+pub fn resolve_phase_plan_for_workflow_ref_for_actor(
+    project_root: Option<&Path>,
+    workflow_ref: Option<&str>,
+    actor: Option<&Actor>,
+) -> Result<Vec<String>> {
     let requested_workflow_ref = raw_requested_workflow_ref(workflow_ref);
     let normalized_workflow_ref = normalize_requested_workflow_ref(workflow_ref);
 
@@ -97,9 +111,9 @@ pub fn resolve_phase_plan_for_workflow_ref(
         ));
     }
 
-    let loaded_workflow = crate::load_workflow_config_with_metadata(root, None)?;
+    let loaded_workflow = crate::load_workflow_config_with_metadata(root, actor)?;
     let workflow_config = loaded_workflow.config;
-    let runtime_config = crate::load_agent_runtime_config_or_default(root);
+    let runtime_config = crate::load_agent_runtime_config_or_default_for_actor(root, actor);
     crate::validate_workflow_and_runtime_configs_with_project_root(&workflow_config, &runtime_config, Some(root))?;
 
     if let Some(phases) = crate::resolve_workflow_phase_plan(&workflow_config, requested_workflow_ref.as_deref()) {
@@ -459,5 +473,60 @@ workflows:
         let review_cycle_error = resolve_phase_plan_for_workflow_ref(Some(temp.path()), Some("animus.review/cycle"))
             .expect_err("review pack workflow should not resolve until the pack is installed");
         assert!(review_cycle_error.to_string().contains("is not available until the project defines workflows"));
+    }
+
+    #[test]
+    fn resolve_phase_plan_resolves_actor_private_workflow_only_for_that_actor() {
+        use orchestrator_config::workflow_config::config_source_client::test_seam;
+        use orchestrator_config::WorkflowDefinition;
+
+        let _home_lock = ensure_stable_home();
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        // Global base: standard + ui-ux only (NO private workflow).
+        let global_config = test_workflow_config_with_standard_pipeline();
+        // Alice's partition base: the same, PLUS a workflow visible only to her.
+        let mut alice_config = test_workflow_config_with_standard_pipeline();
+        alice_config.workflows.push(WorkflowDefinition {
+            id: "alice-private".to_string(),
+            name: "Alice Private".to_string(),
+            description: "Visible only in alice's config_source partition.".to_string(),
+            phases: vec!["requirements".to_string().into(), "implementation".to_string().into()],
+            variables: Vec::new(),
+            worktree: None,
+            budget: None,
+        });
+
+        // Pass the resolver's source gate (has_yaml_workflows) by writing a config
+        // to disk, then inject the per-partition bases through the test seam: the
+        // root-only base is the global view, the actor base is alice's view.
+        crate::write_workflow_config(temp.path(), &global_config).expect("write workflow config");
+        let _global = test_seam::install(temp.path(), global_config);
+        let alice = animus_actor::Actor { user_id: "alice".into(), claims: Vec::new(), tenant_id: None };
+        let bob = animus_actor::Actor { user_id: "bob".into(), claims: Vec::new(), tenant_id: None };
+        let _alice_base = test_seam::install_for_actor(temp.path(), &alice, alice_config);
+
+        // Alice resolves her private workflow from her partition.
+        let phases =
+            resolve_phase_plan_for_workflow_ref_for_actor(Some(temp.path()), Some("alice-private"), Some(&alice))
+                .expect("alice's private workflow must resolve from her partition");
+        assert_eq!(phases, vec!["requirements".to_string(), "implementation".to_string()]);
+
+        // The global (actor = None) partition must NOT contain it (no cross-leak).
+        assert!(
+            resolve_phase_plan_for_workflow_ref_for_actor(Some(temp.path()), Some("alice-private"), None).is_err(),
+            "the global partition must not resolve alice's private workflow"
+        );
+        // Another actor (bob) falls back to the global view → also cannot see it.
+        assert!(
+            resolve_phase_plan_for_workflow_ref_for_actor(Some(temp.path()), Some("alice-private"), Some(&bob))
+                .is_err(),
+            "bob must not resolve alice's private workflow"
+        );
+        // Sanity: the shared standard workflow still resolves for the global view.
+        assert!(
+            resolve_phase_plan_for_workflow_ref_for_actor(Some(temp.path()), Some(STANDARD_WORKFLOW_REF), None).is_ok(),
+            "the shared workflow must still resolve globally"
+        );
     }
 }

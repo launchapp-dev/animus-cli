@@ -512,7 +512,7 @@ mod tests {
     async fn running_workflow(hub: &Arc<InMemoryServiceHub>) -> String {
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_task("TASK-BUDGET".to_string(), None))
+            .run(WorkflowRunInput::for_task("TASK-BUDGET".to_string(), None), None)
             .await
             .expect("workflow should bootstrap");
         assert_eq!(workflow.status, WorkflowStatus::Running);

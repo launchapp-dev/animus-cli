@@ -213,6 +213,7 @@ dependencies = [
 name = "animus-runtime-shared"
 version = "0.1.0"
 dependencies = [
+ "animus-actor",
  "animus-plugin-protocol 0.1.0",
  "anyhow",
  "async-trait",
@@ -2837,6 +2838,7 @@ dependencies = [
 name = "orchestrator-core"
 version = "0.1.0"
 dependencies = [
+ "animus-actor",
  "animus-plugin-protocol 0.1.0",
  "anyhow",
  "argon2",

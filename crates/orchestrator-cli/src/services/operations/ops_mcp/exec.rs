@@ -1,16 +1,35 @@
 use super::exec_errors::{batch_item_error_from_result, build_tool_error_payload, extract_cli_success_data};
 use super::{build_guarded_list_result, AoMcpServer, BatchItemExec, ListGuardInput, OnError, BATCH_RESULT_SCHEMA};
+use animus_actor::Actor;
 use anyhow::Result;
 use rmcp::{model::CallToolResult, ErrorData as McpError};
 use serde_json::{json, Value};
 
 impl AoMcpServer {
+    /// The transport-asserted caller identity this server is bound to (from
+    /// `animus mcp serve --actor-json`, relayed by the workflow runner from the
+    /// authenticated run), or `None` for a global-scope / local server.
+    ///
+    /// Every tool call routes through [`Self::run_tool`] / [`Self::run_list_tool`],
+    /// which surface this for per-user audit. Per-user ENFORCEMENT (scoping the
+    /// underlying subject / queue / integration ops to the actor) is the
+    /// consumer-side change tracked separately — see the WU-G design note.
+    pub(super) fn pinned_actor(&self) -> Option<&Actor> {
+        self.pinned_actor.as_ref()
+    }
+
     pub(super) async fn run_tool(
         &self,
         tool_name: &str,
         requested_args: Vec<String>,
         project_root_override: Option<String>,
     ) -> Result<CallToolResult, McpError> {
+        // Per-user audit: record which actor (if any) this tool call runs as.
+        // The actor reaches this server per-agent-spawn via `--actor-json`; this
+        // is the single choke point every typed tool routes through.
+        if let Some(actor) = self.pinned_actor() {
+            tracing::debug!(tool = tool_name, actor_user = %actor.user_id, "MCP tool invoked for actor");
+        }
         match self.execute_ao(requested_args, project_root_override).await {
             Ok(result) => {
                 if result.success {
