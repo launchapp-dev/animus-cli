@@ -8,6 +8,7 @@ cli_source="$repo_root/crates/orchestrator-cli/src/cli_types/root_types.rs"
 cli_docs="$repo_root/docs/reference/cli/index.md"
 agents_guide="$repo_root/AGENTS.md"
 mcp_source_dir="$repo_root/crates/orchestrator-cli/src/services/operations/ops_mcp"
+mcp_server_source="$repo_root/crates/orchestrator-cli/src/services/operations/ops_mcp.rs"
 mcp_docs="$repo_root/docs/reference/mcp-tools.md"
 cargo_manifest="$repo_root/Cargo.toml"
 
@@ -120,6 +121,10 @@ tool_family_count() {
   extract_mcp_source | awk -v family="$family" 'index($0, "animus." family ".") == 1 { count++ } END { print count + 0 }'
 }
 
+resource_count() {
+  rg -o 'RawResource::new\("[^"]+"' "$mcp_server_source" -N | wc -l | tr -d ' '
+}
+
 cli_version() {
   awk -F'"' '
     $1 ~ /^version = / { print $2; exit }
@@ -205,6 +210,9 @@ assert_not_contains \
 workspace_count="$(workspace_member_count)"
 mcp_count="$(mcp_tool_count)"
 skill_tool_count="$(tool_family_count "skill")"
+interaction_tool_count="$(tool_family_count "interactions")"
+default_agent_mcp_count="$((mcp_count - interaction_tool_count))"
+resource_total="$(resource_count)"
 current_cli_version="v$(cli_version)"
 assert_contains \
   "$repo_root/docs/architecture/full-system-architecture.md" \
@@ -238,6 +246,22 @@ assert_contains \
   "$repo_root/docs/guides/agents.md" \
   "Animus currently exposes **${mcp_count} built-in MCP tools** across these families:" \
   "agents guide MCP tool count"
+assert_contains \
+  "$repo_root/docs/reference/mcp-tools.md" \
+  "registers ${mcp_count} built-in tools across daemon, cost, queue, agent, output," \
+  "MCP reference total tool count"
+assert_contains \
+  "$repo_root/docs/reference/mcp-tools.md" \
+  "exposes ${default_agent_mcp_count}:" \
+  "MCP reference default agent tool count"
+assert_contains \
+  "$repo_root/docs/reference/mcp-tools.md" \
+  "## MCP Resources (${resource_total} resources)" \
+  "MCP reference resource count"
+assert_contains \
+  "$repo_root/docs/guides/agents.md" \
+  "The same server also publishes ${resource_total} built-in read-only resources:" \
+  "agents guide resource count"
 assert_contains \
   "$repo_root/docs/reference/mcp-tools.md" \
   "## Skills (${skill_tool_count} tools)" \
