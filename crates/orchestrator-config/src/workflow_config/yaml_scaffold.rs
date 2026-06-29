@@ -4,6 +4,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use animus_config_protocol::parse::yaml_workflows_dir;
+// Only the test-only `default_workflow_template_files` consumes these template
+// name constants; gate the import so non-test builds don't warn on unused imports.
+#[cfg(any(test, feature = "test-utils"))]
 use animus_config_protocol::yaml_types::{
     DEFAULT_WORKFLOW_TEMPLATE_FILE_NAME, HOTFIX_WORKFLOW_TEMPLATE_FILE_NAME, RESEARCH_WORKFLOW_TEMPLATE_FILE_NAME,
     STANDARD_WORKFLOW_TEMPLATE_FILE_NAME,
