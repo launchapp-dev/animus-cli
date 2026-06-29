@@ -12,6 +12,11 @@ pub(super) struct SubjectListInput {
     /// Opaque cursor from a prior result's `next_cursor`, to fetch the next page.
     #[serde(default)]
     pub(super) cursor: Option<String>,
+    /// Case-insensitive substring filter on the subject title — look a subject up
+    /// by name (e.g. a repo's owner/repo) without paging. The full set is fetched
+    /// and filtered, so the match is found even on a large board.
+    #[serde(default)]
+    pub(super) query: Option<String>,
     #[serde(default)]
     pub(super) project_root: Option<String>,
 }

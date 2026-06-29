@@ -1581,6 +1581,7 @@ fn mcp_subject_list_routes_via_control() {
         status: Some("ready".to_string()),
         limit: Some(25),
         cursor: Some("page2".to_string()),
+        query: Some("flaky".to_string()),
         project_root: None,
     };
     let args = build_subject_list_args(&input);
@@ -1597,6 +1598,8 @@ fn mcp_subject_list_routes_via_control() {
             "25".to_string(),
             "--cursor".to_string(),
             "page2".to_string(),
+            "--query".to_string(),
+            "flaky".to_string(),
         ]
     );
 }

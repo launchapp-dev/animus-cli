@@ -11,6 +11,7 @@ pub(super) fn build_subject_list_args(input: &SubjectListInput) -> Vec<String> {
         args.push(limit.to_string());
     }
     push_opt(&mut args, "--cursor", input.cursor.clone());
+    push_opt(&mut args, "--query", input.query.clone());
     args
 }
 
