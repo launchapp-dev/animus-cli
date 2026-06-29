@@ -12,6 +12,7 @@
 //! `phase_targets`, `phase_failover`, `phase_command`, `skill_dispatch`,
 //! `direct_exec`) is plugin-private and intentionally NOT here.
 
+pub mod actor_env;
 pub mod agent_state;
 pub mod config_context;
 pub mod ensure_execution_cwd;

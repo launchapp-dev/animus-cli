@@ -1880,6 +1880,8 @@ fn validate_rejects_invalid_unified_sections() {
         command: None,
         enabled: true,
         input: None,
+        owner_id: None,
+        claims: Vec::new(),
     });
     config.tools.insert(
         "cli-gpt".to_string(),
@@ -1954,6 +1956,8 @@ fn validate_rejects_schedule_with_command() {
         command: Some("echo conflict".to_string()),
         input: None,
         enabled: true,
+        owner_id: None,
+        claims: Vec::new(),
     });
     let err =
         validate_workflow_config(&config).expect_err("schedules defining both workflow and command should be rejected");
@@ -1975,6 +1979,8 @@ fn validate_rejects_invalid_cron_expression() {
         command: None,
         input: None,
         enabled: true,
+        owner_id: None,
+        claims: Vec::new(),
     });
     let err = validate_workflow_config(&config).expect_err("schedules with malformed cron should fail validation");
     let message = err.to_string();

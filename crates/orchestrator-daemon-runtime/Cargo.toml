@@ -24,15 +24,15 @@ orchestrator-core = { workspace = true }
 orchestrator-logging = { workspace = true }
 orchestrator-plugin-host = { workspace = true }
 animus-plugin-protocol = { workspace = true }
-# All animus-protocol git deps pin the SAME tag (v0.1.25) so the transitively
-# pulled `animus-subject-protocol` resolves to ONE source rev. v0.1.25 additively
+# All animus-protocol git deps pin the SAME tag (v0.1.26) so the transitively
+# pulled `animus-subject-protocol` resolves to ONE source rev. v0.1.26 additively
 # adds `actor: Option<Actor>` to the control request types relayed by the daemon.
-animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.25" }
-animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.25" }
+animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
+animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
 animus-actor = { workspace = true }
-# Subject / SubjectChangedEvent share the same v0.1.25 surface as the
+# Subject / SubjectChangedEvent share the same v0.1.26 surface as the
 # control-protocol (one source rev so the protocol versions stay in lockstep).
-animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.25" }
+animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
 protocol = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -51,14 +51,14 @@ interprocess = "2.4"
 protocol = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
 tokio = { version = "1", features = ["io-util", "macros", "process", "rt", "signal", "test-util", "time"] }
-animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.25", features = ["client"] }
+animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26", features = ["client"] }
 async-trait = "0.1"
 chrono = { version = "0.4", features = ["serde"] }
 futures-core = "0.3"
 futures-util = "0.3"
 serde_json = "1.0"
 uuid = { version = "1", features = ["v4"] }
-animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.25" }
+animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
 animus-runtime-shared = { workspace = true }
 
 [lints]

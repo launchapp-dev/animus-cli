@@ -34,7 +34,7 @@
 //! alternate `TurnProducer` without changing the continuity logic here, and
 //! tests inject a scripted mock producer.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use animus_session_backend::session::{SessionEvent, SessionRequest, SessionRun};
@@ -178,6 +178,13 @@ pub(crate) struct TurnContext<'a> {
     /// `extras.runtime_contract` so the provider wires the profile/skill-
     /// scoped MCP servers. `None` when the tool cannot speak MCP.
     pub mcp_contract: Option<&'a Value>,
+    /// Path to a per-run ISOLATED, actor-pinned `.mcp.json` for actor-scoped
+    /// runs. Threaded into `extras.mcp_config_path` so a provider that locates
+    /// MCP servers by file auto-discovery can be pointed at this run-private
+    /// file (e.g. claude-code's `--mcp-config`) instead of the actor-stripped
+    /// shared cwd file. `None` for global / non-actor runs. Consuming this path
+    /// is provider-launch plumbing tracked out-of-tree.
+    pub isolated_mcp_config_path: Option<&'a Path>,
     /// The `--skill`'s full application for this conversation, resolved ONCE
     /// per `animus chat send` invocation (the same lifecycle as
     /// `mcp_contract`) and applied to every attempt within the turn: prompt
@@ -464,6 +471,20 @@ async fn drive_once(
                 map.insert("mcp_servers".to_string(), Value::Object(servers));
             }
             map.insert("runtime_contract".to_string(), contract);
+        }
+    }
+
+    // Actor-scoped runs also expose a per-run ISOLATED, actor-pinned
+    // `.mcp.json` path. A provider that auto-discovers MCP servers from a file
+    // (rather than the runtime contract) can be pointed at this run-private
+    // file via its MCP-config flag (e.g. claude-code's `--mcp-config`) so the
+    // actor reaches that channel too — without the identity ever landing in
+    // the shared cwd `.mcp.json`. Consuming this is provider-launch plumbing
+    // (out-of-tree); contract-consuming providers stay scoped via
+    // `extras.runtime_contract` above.
+    if let Some(path) = ctx.isolated_mcp_config_path {
+        if let Value::Object(map) = &mut extras {
+            map.insert("mcp_config_path".to_string(), Value::String(path.to_string_lossy().into_owned()));
         }
     }
 
@@ -834,6 +855,7 @@ mod tests {
             permission_mode: None,
             approvals: false,
             mcp_contract: None,
+            isolated_mcp_config_path: None,
             skill: None,
         }
     }
@@ -1264,6 +1286,7 @@ mod tests {
                                 permission_mode: None,
                                 approvals: false,
                                 mcp_contract: None,
+                                isolated_mcp_config_path: None,
                                 skill: None,
                             },
                         ))

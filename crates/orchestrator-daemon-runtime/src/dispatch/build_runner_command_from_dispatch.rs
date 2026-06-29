@@ -45,6 +45,20 @@ pub fn build_runner_command(
             cmd.arg("--mcp-config-json").arg(json);
         }
     }
+
+    // Owner-scoped dispatch: relay the kernel-minted actor to the workflow
+    // runner over the back-compat-safe env channel (an older runner ignores
+    // the env var; a newer one threads it into `WorkflowRunInput.actor` so the
+    // run scopes to the owner). We always clear any inherited value first so a
+    // global dispatch never leaks the daemon's own env into the runner.
+    cmd.env_remove(animus_runtime_shared::actor_env::ANIMUS_ACTOR_JSON_ENV);
+    if let Some(actor) = dispatch.actor.as_ref() {
+        if let Some(json) = animus_runtime_shared::actor_env::encode_actor_env(actor) {
+            cmd.env(animus_runtime_shared::actor_env::ANIMUS_ACTOR_JSON_ENV, json);
+        } else {
+            warn!("failed to encode schedule owner actor; dispatching workflow runner with global scope");
+        }
+    }
     cmd
 }
 
@@ -428,6 +442,43 @@ mod tests {
                 title: "schedule:nightly".to_string(),
                 description: "nightly dispatch".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn runner_command_relays_actor_env_for_owner_scoped_dispatch() {
+        let dispatch = SubjectDispatch::for_custom("schedule:nightly", "nightly", "schedule", None, "schedule")
+            .with_actor(Some(animus_actor::Actor {
+                user_id: "alice".to_string(),
+                claims: vec!["admin".to_string()],
+                tenant_id: None,
+            }));
+        let command = build_runner_command_from_dispatch(&dispatch, "/tmp/project");
+        let actor_env = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new(animus_runtime_shared::actor_env::ANIMUS_ACTOR_JSON_ENV))
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().into_owned())
+            .expect("owner-scoped dispatch must set the actor env");
+        let decoded = animus_runtime_shared::actor_env::decode_actor_env(Some(&actor_env)).expect("decodes");
+        assert_eq!(decoded.user_id, "alice");
+        assert_eq!(decoded.claims, vec!["admin".to_string()]);
+    }
+
+    #[test]
+    fn runner_command_clears_actor_env_for_global_dispatch() {
+        // A global dispatch must explicitly CLEAR the env so the runner never
+        // inherits the daemon's own ANIMUS_ACTOR_JSON (env_remove records a
+        // removal on the Command).
+        let dispatch = SubjectDispatch::for_custom("schedule:global", "wf", "schedule", None, "schedule");
+        let command = build_runner_command_from_dispatch(&dispatch, "/tmp/project");
+        let entry = command
+            .get_envs()
+            .find(|(key, _)| *key == std::ffi::OsStr::new(animus_runtime_shared::actor_env::ANIMUS_ACTOR_JSON_ENV));
+        assert_eq!(
+            entry,
+            Some((std::ffi::OsStr::new(animus_runtime_shared::actor_env::ANIMUS_ACTOR_JSON_ENV), None)),
+            "global dispatch must clear (remove) the actor env, not set it"
         );
     }
 

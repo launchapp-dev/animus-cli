@@ -428,13 +428,25 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // rides the ephemeral `extras.runtime_contract` (below) for the turn's own
     // provider session, so contract-consuming providers are still scoped.
     //
-    // TODO(codex-p1): providers that scope ONLY off the cwd `.mcp.json` (and
-    // ignore the runtime contract's `mcp` block) therefore run the auto-
-    // discovered `animus` server unscoped. Closing that gap needs a per-run
-    // isolated MCP config path the provider is pointed at (e.g. claude's
-    // `--mcp-config`), which is provider-launch plumbing tracked separately;
-    // persisting the identity into the shared file is not an acceptable
-    // stopgap.
+    // Providers that scope ONLY off the cwd `.mcp.json` (and ignore the
+    // runtime contract's `mcp` block) would otherwise run the auto-discovered
+    // `animus` server unscoped. We close that gap WITHOUT persisting the
+    // identity into the shared file: when an actor is asserted we ALSO
+    // materialize the FULL (actor-pinned) contract into a per-run ISOLATED
+    // directory and surface its `.mcp.json` path on `extras.mcp_config_path`
+    // (see [`run_turn`]). A provider that locates servers by file
+    // auto-discovery can be pointed at this run-private file (e.g.
+    // claude-code's `--mcp-config`) so the actor reaches that channel too. The
+    // isolated dir is held alive (`_isolated_mcp_dir`) for the whole turn and
+    // cleaned on drop.
+    //
+    // Consuming `extras.mcp_config_path` (passing `--mcp-config <path>` to the
+    // provider CLI) is provider-launch plumbing that lives in the provider
+    // plugin; until a plugin honors it, contract-consuming providers remain
+    // scoped via `extras.runtime_contract` and the gap is closed only for
+    // plugins that adopt the path. This is the documented out-of-tree tail.
+    let mut isolated_mcp_config_path: Option<PathBuf> = None;
+    let mut _isolated_mcp_dir: Option<tempfile::TempDir> = None;
     if let Some(contract) = mcp_contract.as_ref() {
         let for_disk = if actor.is_some() {
             std::borrow::Cow::Owned(crate::services::runtime::agent_mcp::strip_actor_from_contract(contract))
@@ -442,6 +454,16 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
             std::borrow::Cow::Borrowed(contract)
         };
         crate::services::runtime::agent_mcp::materialize_mcp_json(&cwd, &for_disk)?;
+
+        if actor.is_some() {
+            let dir = tempfile::Builder::new()
+                .prefix("animus-mcp-actor-")
+                .tempdir()
+                .context("failed to create isolated MCP config dir for actor-scoped run")?;
+            isolated_mcp_config_path =
+                crate::services::runtime::agent_mcp::materialize_isolated_mcp_json(dir.path(), contract)?;
+            _isolated_mcp_dir = Some(dir);
+        }
     }
 
     // Sink selection: --json => JSONL stdout; --stream (no json) => text;
@@ -465,6 +487,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         permission_mode: permission_mode.as_deref(),
         approvals,
         mcp_contract: mcp_contract.as_ref(),
+        isolated_mcp_config_path: isolated_mcp_config_path.as_deref(),
         skill: skill_application,
     };
 
