@@ -1407,7 +1407,7 @@ phases:
             .await
             .expect("task created");
         hub.workflows()
-            .run(orchestrator_core::WorkflowRunInput::for_task(task.id, None))
+            .run(orchestrator_core::WorkflowRunInput::for_task(task.id, None), None)
             .await
             .expect("workflow started")
     }

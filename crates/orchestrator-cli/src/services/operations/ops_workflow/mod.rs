@@ -335,7 +335,7 @@ pub(crate) fn resolve_requirement_workflow_ref(project_root: &str) -> Result<Str
     const REQUIREMENT_PLAN_WORKFLOW_REF: &str = "animus.requirement/plan";
     let root = Path::new(project_root);
     ensure_workflow_config_compiled(root)?;
-    let workflow_config = load_workflow_config(root)?;
+    let workflow_config = load_workflow_config(root, None)?;
     workflow_config
         .workflows
         .iter()
@@ -457,6 +457,14 @@ pub(crate) async fn handle_workflow(
                     phase_timeout_secs: args.phase_timeout_secs,
                     input_json: args.input_json,
                     vars: args.vars,
+                    // This `--sync` branch is also the entry point of the
+                    // daemon-spawned detached runner child. The daemon relays the
+                    // authenticated control-request actor to that child via the
+                    // trusted WORKFLOW_ACTOR_ENV env var; read it back here so the
+                    // runner request carries the caller identity. For a direct
+                    // local CLI invocation the env is unset => `None` (never
+                    // synthesized from local context, YAML, or subject content).
+                    actor: phases::workflow_actor_from_env(),
                 };
                 execute::handle_workflow_execute(execute_args, hub, project_root, json).await?;
                 Ok(())
@@ -484,6 +492,9 @@ pub(crate) async fn handle_workflow(
                     model: args.model.clone(),
                     tool: args.tool.clone(),
                     phase_timeout_secs: args.phase_timeout_secs,
+                    // Local async `workflow run`: no authenticated transport
+                    // actor. The control path supplies the actor instead.
+                    actor: None,
                 };
                 if json && args.input_json.is_none() && args.requirement_id.is_none() && args.title.is_none() {
                     if let Some(task_id) = args.task_id.as_ref() {
@@ -712,7 +723,7 @@ pub(crate) async fn handle_workflow(
         },
         WorkflowCommand::Definitions { command } => match command {
             WorkflowDefinitionsCommand::List => {
-                let wf_config = orchestrator_core::load_workflow_config(Path::new(project_root))?;
+                let wf_config = orchestrator_core::load_workflow_config(Path::new(project_root), None)?;
                 print_value(wf_config.workflows, json)
             }
             WorkflowDefinitionsCommand::Upsert(args) => {
@@ -892,7 +903,11 @@ async fn try_workflow_run_via_control(
         }
         params.insert("overrides".to_string(), serde_json::Value::Object(overrides_obj));
     }
-    let request = WireRequest { task_id: task_id.to_string(), definition, params };
+    // Local CLI → own daemon over the control wire: no authenticated transport
+    // actor (the operator is acting locally). Authenticated actors are asserted
+    // only by the transport plugins (http/graphql) on inbound requests — never
+    // synthesized by the CLI client.
+    let request = WireRequest { task_id: task_id.to_string(), definition, params, actor: None };
     match client.workflow_run(request).await {
         Ok(response) => Ok(Some(response)),
         Err(err) if is_method_unavailable(&err) => {

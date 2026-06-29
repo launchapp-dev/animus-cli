@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 use sha2::{Digest, Sha256};
 
@@ -38,14 +39,14 @@ pub fn ensure_workflow_config_compiled(project_root: &Path) -> Result<()> {
         return Ok(());
     }
 
-    load_workflow_config_with_metadata(project_root).map(|_| ())
+    load_workflow_config_with_metadata(project_root, None).map(|_| ())
 }
 
-pub fn load_workflow_config(project_root: &Path) -> Result<WorkflowConfig> {
-    Ok(load_workflow_config_with_metadata(project_root)?.config)
+pub fn load_workflow_config(project_root: &Path, actor: Option<&Actor>) -> Result<WorkflowConfig> {
+    Ok(load_workflow_config_with_metadata(project_root, actor)?.config)
 }
 
-pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedWorkflowConfig> {
+pub fn load_workflow_config_with_metadata(project_root: &Path, actor: Option<&Actor>) -> Result<LoadedWorkflowConfig> {
     // v0.6: the project's base `WorkflowConfig` is sourced EXCLUSIVELY by an
     // installed `config_source` plugin. The kernel no longer parses
     // `.animus/*.yaml` in its runtime load path — the YAML parser lives on as a
@@ -53,7 +54,7 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
     // path-deps this crate and calls `compile_yaml_workflow_files`). The kernel
     // stays the compiler: it merges pack overlays onto the plugin-sourced base
     // and validates.
-    let plugin_base = super::config_source_client::resolve_plugin_base(project_root)?;
+    let plugin_base = super::config_source_client::resolve_plugin_base(project_root, actor)?;
     let registry = resolve_pack_registry(project_root)?;
     let path = workflow_config_path(project_root);
     if let Some(legacy_path) = legacy_workflow_config_paths(project_root).iter().find(|candidate| candidate.exists()) {
@@ -89,8 +90,19 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
     // mismatch ALWAYS does the full compile below. The pack registry is folded
     // into the key because the source token reflects ONLY the source, not which
     // packs are installed/active.
-    let compile_token = format!("{cache_version}\u{1f}{}", pack_registry_fingerprint(&registry));
-    if let Some(cached) = super::config_source_client::cached_compiled(project_root, &compile_token) {
+    //
+    // SECURITY: the actor identity is folded into the token AND the cache map key
+    // (see `config_source_client::cached_compiled`) so a per-user `config_source`
+    // result is never served across actors. Belt-and-suspenders: the map key
+    // already partitions by actor; folding it into the token keeps a stale
+    // cross-actor compile from ever matching even if a future refactor relaxes
+    // the map key.
+    let compile_token = format!(
+        "{cache_version}\u{1f}{}\u{1f}{}",
+        pack_registry_fingerprint(&registry),
+        super::config_source_client::actor_cache_key(actor),
+    );
+    if let Some(cached) = super::config_source_client::cached_compiled(project_root, actor, &compile_token) {
         return Ok(cached);
     }
 
@@ -144,7 +156,7 @@ pub fn load_workflow_config_with_metadata(project_root: &Path) -> Result<LoadedW
     // Cache the compiled result under the source-token + pack-registry key so
     // an unchanged source AND pack set on the next load short-circuits the
     // merge + validate above.
-    super::config_source_client::store_compiled(project_root, compile_token, loaded.clone());
+    super::config_source_client::store_compiled(project_root, actor, compile_token, loaded.clone());
     Ok(loaded)
 }
 
@@ -260,7 +272,18 @@ pub(crate) fn compile_workflow_config_onto_base(
 }
 
 pub fn load_workflow_config_or_default(project_root: &Path) -> LoadedWorkflowConfig {
-    match load_workflow_config_with_metadata(project_root) {
+    // The default/fallback path is system-initiated (daemon reconcilers,
+    // schedulers, CLI inspection) with no authenticated actor → the global
+    // (`actor = None`) config partition.
+    load_workflow_config_or_default_for_actor(project_root, None)
+}
+
+/// Actor-scoped variant of [`load_workflow_config_or_default`]: resolves the
+/// config from the `actor`'s partition (a per-user `config_source` returns that
+/// user's global∪private∪shared set), falling back to the builtin base on error.
+/// `actor = None` is identical to [`load_workflow_config_or_default`] (global).
+pub fn load_workflow_config_or_default_for_actor(project_root: &Path, actor: Option<&Actor>) -> LoadedWorkflowConfig {
+    match load_workflow_config_with_metadata(project_root, actor) {
         Ok(loaded) => loaded,
         Err(_) => {
             let config = runtime_workflow_config_base();

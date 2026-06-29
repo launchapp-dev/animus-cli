@@ -104,7 +104,7 @@ workflows:
     let _reloaded = file_hub(temp.path()).expect("reload hub");
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
-    let config = crate::load_workflow_config(temp.path()).expect("workflow config should load");
+    let config = crate::load_workflow_config(temp.path(), None).expect("workflow config should load");
 
     assert_eq!(config.default_workflow_ref.as_str(), "yaml-standard");
     assert!(
@@ -205,7 +205,7 @@ fn file_hub_bootstraps_workflow_yaml_with_phase_catalog() {
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&project_path);
 
-    let config = crate::load_workflow_config(&project_path).expect("workflow config should load");
+    let config = crate::load_workflow_config(&project_path, None).expect("workflow config should load");
 
     assert_eq!(config.schema.as_str(), "animus.workflow-config.v2");
     assert_eq!(config.version, 2);
@@ -660,7 +660,7 @@ workflows:
     let scoped = scoped_ao_root(temp.path());
     assert!(!scoped.join("state").join("workflow-config.v2.json").exists(), "no JSON config should exist");
 
-    let config = crate::load_workflow_config(temp.path()).expect("yaml-only repo should load workflow config");
+    let config = crate::load_workflow_config(temp.path(), None).expect("yaml-only repo should load workflow config");
     assert!(
         config.workflows.iter().any(|w| w.id == "yaml-only-workflow"),
         "workflow config should include yaml-defined workflow"
@@ -669,6 +669,7 @@ workflows:
     let workflow = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput::for_task("TASK-yaml-only".to_string(), Some("yaml-only-workflow".to_string())),
+        None,
     )
     .await
     .expect("workflow should start in yaml-only repo");
@@ -680,15 +681,69 @@ workflows:
 }
 
 #[tokio::test]
+async fn file_hub_run_persists_actor_for_lifecycle_continuation() {
+    // Codex P1: the actor a run bootstraps with must persist so EVERY later
+    // lifecycle transition (resume/complete/cancel/...) re-resolves config from
+    // the same partition — otherwise an actor-private workflow starts then fails
+    // at the next transition (global re-lookup). run() persists it on the run row.
+    let temp = tempfile::tempdir().expect("tempdir");
+    let hub = file_hub(temp.path()).expect("create hub");
+    let _config_source_seam =
+        orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
+    let actor = animus_actor::Actor {
+        user_id: "alice".to_string(),
+        claims: vec!["admin".to_string()],
+        tenant_id: Some("acme".to_string()),
+    };
+    let workflow = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-actor".to_string(), Some("standard".to_string())),
+        Some(&actor),
+    )
+    .await
+    .expect("run workflow");
+
+    let manager = crate::WorkflowStateManager::new(temp.path());
+    assert_eq!(
+        manager.load_workflow_actor(&workflow.id),
+        Some(actor.clone()),
+        "run() must persist the bootstrap actor for lifecycle continuation"
+    );
+
+    // The actor MUST survive a lifecycle save: `save()` upserts (not INSERT OR
+    // REPLACE), preserving the `actor` column. Without that, the first pause/
+    // resume/complete would NULL it and later transitions fall back to global.
+    WorkflowServiceApi::pause(&hub, &workflow.id).await.expect("pause workflow");
+    assert_eq!(
+        manager.load_workflow_actor(&workflow.id),
+        Some(actor),
+        "actor must survive a lifecycle save (upsert preserves the actor column)"
+    );
+
+    // A system-initiated run (actor = None) persists no actor (global scope).
+    let global = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-global".to_string(), Some("standard".to_string())),
+        None,
+    )
+    .await
+    .expect("run workflow");
+    assert_eq!(manager.load_workflow_actor(&global.id), None, "actor = None must persist nothing (global scope)");
+}
+
+#[tokio::test]
 async fn file_hub_persists_workflows_with_machine_state() {
     let temp = tempfile::tempdir().expect("tempdir");
     let hub = file_hub(temp.path()).expect("create hub");
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
-    let workflow =
-        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard".to_string())))
-            .await
-            .expect("run workflow");
+    let workflow = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard".to_string())),
+        None,
+    )
+    .await
+    .expect("run workflow");
 
     assert_eq!(workflow.status, WorkflowStatus::Running);
     assert_eq!(workflow.machine_state, crate::types::WorkflowMachineState::RunPhase);
@@ -788,6 +843,7 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
     let workflow = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput::for_task("TASK-routed-rework".to_string(), Some("routed-rework".to_string())),
+        None,
     )
     .await
     .expect("run workflow");
@@ -830,7 +886,7 @@ async fn file_hub_auto_prunes_checkpoints_on_completion_when_enabled() {
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
-    let mut config = crate::load_workflow_config(temp.path()).expect("load workflow config");
+    let mut config = crate::load_workflow_config(temp.path(), None).expect("load workflow config");
     config.checkpoint_retention.keep_last_per_phase = 1;
     config.checkpoint_retention.max_age_hours = None;
     config.checkpoint_retention.auto_prune_on_completion = true;
@@ -841,6 +897,7 @@ async fn file_hub_auto_prunes_checkpoints_on_completion_when_enabled() {
     let mut workflow = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput::for_task("TASK-prune".to_string(), Some("standard".to_string())),
+        None,
     )
     .await
     .expect("run workflow");
@@ -862,7 +919,7 @@ async fn file_hub_completion_remains_successful_when_auto_prune_errors() {
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
-    let mut config = crate::load_workflow_config(temp.path()).expect("load workflow config");
+    let mut config = crate::load_workflow_config(temp.path(), None).expect("load workflow config");
     config.checkpoint_retention.keep_last_per_phase = 1;
     config.checkpoint_retention.max_age_hours = Some(u64::MAX);
     config.checkpoint_retention.auto_prune_on_completion = true;
@@ -873,6 +930,7 @@ async fn file_hub_completion_remains_successful_when_auto_prune_errors() {
     let mut workflow = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput::for_task("TASK-prune-error".to_string(), Some("standard".to_string())),
+        None,
     )
     .await
     .expect("run workflow");
@@ -1048,10 +1106,13 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
     let hub = file_hub(temp.path()).expect("create hub");
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
-    let workflow =
-        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-1".to_string(), Some("xhigh-dev".to_string())))
-            .await
-            .expect("run workflow");
+    let workflow = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-1".to_string(), Some("xhigh-dev".to_string())),
+        None,
+    )
+    .await
+    .expect("run workflow");
 
     let phase_ids = workflow.phases.iter().map(|phase| phase.phase_id.as_str()).collect::<Vec<_>>();
     assert_eq!(phase_ids, vec!["requirements", "implementation", "code-review", "testing", "qa-signoff"]);
@@ -1078,6 +1139,7 @@ async fn file_hub_errors_when_requested_pipeline_is_missing_from_config() {
     let err = WorkflowServiceApi::run(
         &hub,
         WorkflowRunInput::for_task("TASK-1".to_string(), Some("missing-pipeline".to_string())),
+        None,
     )
     .await
     .expect_err("unknown pipeline should fail when workflow config exists");
@@ -1098,7 +1160,7 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
-    let mut workflow_config = crate::load_workflow_config(temp.path()).expect("load config");
+    let mut workflow_config = crate::load_workflow_config(temp.path(), None).expect("load config");
     workflow_config.workflows.push(crate::WorkflowDefinition {
         id: "planning-custom".to_string(),
         name: "Planning Custom".to_string(),
@@ -1577,10 +1639,13 @@ async fn workflow_service_exposes_decisions_and_checkpoints() {
     let hub = file_hub(temp.path()).expect("create hub");
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
-    let workflow =
-        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-123".to_string(), Some("standard".to_string())))
-            .await
-            .expect("run workflow");
+    let workflow = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-123".to_string(), Some("standard".to_string())),
+        None,
+    )
+    .await
+    .expect("run workflow");
 
     let workflow =
         WorkflowServiceApi::complete_current_phase(&hub, &workflow.id).await.expect("complete current phase");
@@ -1751,14 +1816,20 @@ async fn planning_service_query_filters_and_sorts_requirements() {
 async fn workflow_service_query_filters_by_status_and_reference() {
     let hub = InMemoryServiceHub::new();
 
-    let first =
-        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-100".to_string(), Some("standard".to_string())))
-            .await
-            .expect("first workflow should start");
-    let second =
-        WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task("TASK-200".to_string(), Some("ui-ux".to_string())))
-            .await
-            .expect("second workflow should start");
+    let first = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-100".to_string(), Some("standard".to_string())),
+        None,
+    )
+    .await
+    .expect("first workflow should start");
+    let second = WorkflowServiceApi::run(
+        &hub,
+        WorkflowRunInput::for_task("TASK-200".to_string(), Some("ui-ux".to_string())),
+        None,
+    )
+    .await
+    .expect("second workflow should start");
 
     WorkflowServiceApi::pause(&hub, &first.id).await.expect("first workflow should pause");
     WorkflowServiceApi::cancel(&hub, &second.id).await.expect("second workflow should cancel");
@@ -2557,7 +2628,7 @@ async fn execute_requirements_skips_tasks_with_active_workflow_on_file_hub() {
     .await
     .expect("upsert requirement");
 
-    let active = WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task(task.id.clone(), None))
+    let active = WorkflowServiceApi::run(&hub, WorkflowRunInput::for_task(task.id.clone(), None), None)
         .await
         .expect("start workflow for task");
     assert_eq!(active.status, WorkflowStatus::Running);
@@ -2674,7 +2745,7 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
         .expect("create task");
     let workflow = hub
         .workflows()
-        .run(WorkflowRunInput::for_task(task.id.clone(), Some("manual-only".to_string())))
+        .run(WorkflowRunInput::for_task(task.id.clone(), Some("manual-only".to_string())), None)
         .await
         .expect("run workflow");
     assert_eq!(workflow.current_phase.as_deref(), Some("qa-signoff"));

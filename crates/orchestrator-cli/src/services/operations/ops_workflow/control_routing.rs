@@ -157,6 +157,9 @@ fn extract_runner_overrides_from_params(
         model: obj.get("model").and_then(serde_json::Value::as_str).map(ToOwned::to_owned),
         tool: obj.get("tool").and_then(serde_json::Value::as_str).map(ToOwned::to_owned),
         phase_timeout_secs: obj.get("phase_timeout_secs").and_then(serde_json::Value::as_u64),
+        // The actor is NOT carried in `params.overrides` (untrusted wire field);
+        // the caller sets `overrides.actor` from the authenticated `request.actor`.
+        actor: None,
     }
 }
 
@@ -198,7 +201,27 @@ impl WorkflowRouting for WorkflowRoutingImpl {
         // path. Any non-string values are stringified via
         // `Value::to_string()` so callers always see a valid scalar.
         let vars = extract_vars_from_params(&request.params);
-        let overrides = extract_runner_overrides_from_params(&request.params);
+        let mut overrides = extract_runner_overrides_from_params(&request.params);
+        // TRUST BOUNDARY: `request.actor` is the transport-asserted caller
+        // identity from the authenticated control request — the ONLY trusted
+        // source. The kernel relays it opaquely; it never reads an actor from
+        // workflow config, agent output, or subject content. This path hands
+        // execution to a DETACHED workflow_runner child that rebuilds its
+        // request from the persisted record (which carries no actor), so the
+        // actor is relayed to that child via the trusted WORKFLOW_ACTOR_ENV
+        // handoff carried in the runner overrides.
+        //
+        // TODO(codex-p2): the actor reaches the detached RUNNER, but the core
+        // bootstrap below (`start_workflow_with_runner` -> `hub.workflows().run`)
+        // still resolves the default-workflow-ref / skip-guards / phase plan from
+        // `load_workflow_config_or_default(actor=None)` (the global config
+        // partition). For an actor-scoped `config_source` (per-user default
+        // workflow or actor-only definitions) the record can be created from the
+        // global view. Closing this needs `actor` threaded through the core
+        // `WorkflowServiceApi::run` + phase-plan resolution (a cross-crate change
+        // beyond this wave's kernel-threading scope); tracked for the
+        // runner-integration / per-actor-config wave.
+        overrides.actor = request.actor;
         let input = WorkflowRunInput::for_task(request.task_id, request.definition).with_vars(vars);
         // Post-v0.5 the daemon has no in-process workflow executor: a bare
         // `workflows.run(...)` would only bootstrap a Running record that
@@ -227,7 +250,12 @@ impl WorkflowRouting for WorkflowRoutingImpl {
             ));
         }
         let vars = extract_vars_from_params(&request.params);
-        let overrides = extract_runner_overrides_from_params(&request.params);
+        let mut overrides = extract_runner_overrides_from_params(&request.params);
+        // TRUST BOUNDARY: see `workflow_run` above — `request.actor` is relayed
+        // opaquely from the authenticated control request only, and reaches the
+        // detached workflow_runner child via the trusted WORKFLOW_ACTOR_ENV
+        // handoff carried in the runner overrides.
+        overrides.actor = request.actor;
         let input = WorkflowRunInput::for_task(task_id, Some(request.definition)).with_vars(vars);
         let workflow = super::phases::start_workflow_with_runner(hub, &self.project_root_str(), input, overrides)
             .await

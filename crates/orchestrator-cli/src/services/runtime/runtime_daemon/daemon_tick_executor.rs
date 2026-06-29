@@ -438,7 +438,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task_id.clone(), None))
+            .run(WorkflowRunInput::for_task(task_id.clone(), None), None)
             .await
             .expect("workflow should start");
         // Drive the workflow to a terminal Failed state (distinct from
@@ -507,7 +507,7 @@ mod tests {
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task_id.clone(), None))
+            .run(WorkflowRunInput::for_task(task_id.clone(), None), None)
             .await
             .expect("workflow should start");
         hub.workflows().cancel(&workflow.id).await.expect("workflow should cancel");
@@ -532,7 +532,7 @@ mod tests {
         hub.tasks().set_status(&task_id, TaskStatus::InProgress, false).await.expect("task should be in progress");
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task_id.clone(), None))
+            .run(WorkflowRunInput::for_task(task_id.clone(), None), None)
             .await
             .expect("workflow should start");
         hub.workflows().cancel(&workflow.id).await.expect("workflow should cancel");

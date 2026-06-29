@@ -35,6 +35,7 @@ interprocess = "2.4"
 # agent-runner plugin can depend on a single canonical implementation.
 thiserror = "2"
 zstd = "0.13"
+animus-actor             = { workspace = true }
 animus-plugin-protocol   = { workspace = true }
 orchestrator-plugin-host = { workspace = true }
 

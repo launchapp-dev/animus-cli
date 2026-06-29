@@ -193,7 +193,7 @@ async fn render_ad_hoc_prompts(
 
 fn effective_existing_workflow_ref(project_root: &str, workflow: &OrchestratorWorkflow) -> Result<String> {
     ensure_workflow_config_compiled(Path::new(project_root))?;
-    let workflow_config = load_workflow_config(Path::new(project_root))?;
+    let workflow_config = load_workflow_config(Path::new(project_root), None)?;
     Ok(workflow.workflow_ref.clone().unwrap_or_else(|| workflow_config.default_workflow_ref.clone()))
 }
 
@@ -509,6 +509,7 @@ mod tests {
                 )
                 .with_input(Some(serde_json::json!({"ticket":"WF-7"})))
                 .with_vars(HashMap::from([("release_name".to_string(), "Mercury".to_string())])),
+                None,
             )
             .await
             .expect("workflow should bootstrap");
@@ -535,11 +536,14 @@ mod tests {
         let hub = Arc::new(InMemoryServiceHub::new());
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_custom(
-                "Release Preview".to_string(),
-                "Inspect rendered prompt".to_string(),
+            .run(
+                WorkflowRunInput::for_custom(
+                    "Release Preview".to_string(),
+                    "Inspect rendered prompt".to_string(),
+                    None,
+                ),
                 None,
-            ))
+            )
             .await
             .expect("workflow should bootstrap");
         let mut args = base_args();

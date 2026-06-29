@@ -324,6 +324,10 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         env_vars,
         mcp_servers: extras.get("mcp_servers").cloned(),
         extras: Value::Object(extras),
+        // CLI-local `animus agent run`: no authenticated control identity, so no
+        // actor. The actor reaches a provider session only when relayed from the
+        // workflow runner; it is never synthesized from local CLI context.
+        actor: None,
     })
 }
 
@@ -767,6 +771,7 @@ mod tests {
             timeout_secs: None,
             env_vars: Vec::new(),
             extras: serde_json::json!({}),
+            actor: None,
         };
         let err = start_session(tmp.path(), request).await.expect_err("missing provider must error");
         let message = err.to_string();

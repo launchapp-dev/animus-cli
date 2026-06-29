@@ -63,6 +63,7 @@ fn build_request() -> SessionRequest {
         timeout_secs: Some(15),
         env_vars: Vec::new(),
         extras: json!({}),
+        actor: None,
     }
 }
 
@@ -208,6 +209,7 @@ async fn agent_run_errors_when_provider_plugin_missing() {
         timeout_secs: Some(5),
         env_vars: Vec::new(),
         extras: json!({}),
+        actor: None,
     };
 
     let err = match resolver.resolve(&request) {

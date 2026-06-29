@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{params, params_from_iter, types::Value, Connection, TransactionBehavior};
@@ -216,8 +217,14 @@ impl WorkflowStateManager {
     fn save_with_conn(&self, conn: &Connection, workflow: &OrchestratorWorkflow) -> Result<()> {
         let data = compress_json(&serde_json::to_string(workflow)?);
         let summary = workflow_summary_fields(workflow);
+        // Upsert (not INSERT OR REPLACE): the `actor` column is written ONCE at
+        // run bootstrap via `set_workflow_actor` and is NOT part of the protocol
+        // `OrchestratorWorkflow` record. INSERT OR REPLACE rewrites the whole row
+        // and would NULL `actor` on the first lifecycle save, dropping the run's
+        // partition. ON CONFLICT DO UPDATE touches only the listed columns,
+        // leaving `actor` intact across every later save.
         conn.execute(
-            "INSERT OR REPLACE INTO workflows (
+            "INSERT INTO workflows (
                 id,
                 status,
                 task_id,
@@ -228,7 +235,16 @@ impl WorkflowStateManager {
                 completed_at,
                 json
             )
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                task_id = excluded.task_id,
+                phase_id = excluded.phase_id,
+                failed_at = excluded.failed_at,
+                failure_reason = excluded.failure_reason,
+                started_at = excluded.started_at,
+                completed_at = excluded.completed_at,
+                json = excluded.json",
             params![
                 workflow.id,
                 status_str(workflow.status),
@@ -251,6 +267,34 @@ impl WorkflowStateManager {
             .map_err(|_| anyhow!("workflow not found: {workflow_id}"))?;
         let json = decompress_json(&data)?;
         Ok(serde_json::from_str(&json)?)
+    }
+
+    /// Persist the transport-asserted [`Actor`] this run is bound to, so later
+    /// lifecycle transitions resolve config from the same partition the run
+    /// bootstrapped with. `None` clears it (global scope). Called once at run
+    /// bootstrap; the row MUST already exist (saved first).
+    ///
+    /// TRUST BOUNDARY: the actor originates only from the authenticated control
+    /// request that started the run — never from agent output / YAML / subject.
+    pub fn set_workflow_actor(&self, workflow_id: &str, actor: Option<&Actor>) -> Result<()> {
+        let conn = self.open_db()?;
+        let json = match actor {
+            Some(actor) => Some(serde_json::to_string(actor).context("serializing actor for persistence")?),
+            None => None,
+        };
+        conn.execute("UPDATE workflows SET actor = ?2 WHERE id = ?1", params![workflow_id, json])
+            .context("failed to persist workflow actor")?;
+        Ok(())
+    }
+
+    /// Load the [`Actor`] a run was bootstrapped with, if any. Best-effort: a
+    /// missing row / column / malformed value yields `None` (global scope) so a
+    /// lifecycle op never fails on actor lookup.
+    pub fn load_workflow_actor(&self, workflow_id: &str) -> Option<Actor> {
+        let conn = self.open_db().ok()?;
+        let json: Option<String> =
+            conn.query_row("SELECT actor FROM workflows WHERE id = ?1", params![workflow_id], |row| row.get(0)).ok()?;
+        json.and_then(|raw| serde_json::from_str(&raw).ok())
     }
 
     pub fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
@@ -910,6 +954,7 @@ pub fn open_project_db(project_root: &std::path::Path) -> Result<Connection> {
             failure_reason TEXT,
             started_at TEXT,
             completed_at TEXT,
+            actor  TEXT,
             json   TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows(status);
@@ -985,6 +1030,15 @@ fn ensure_workflow_summary_columns(project_root: &std::path::Path, conn: &Connec
     if !columns.contains("completed_at") {
         conn.execute("ALTER TABLE workflows ADD COLUMN completed_at TEXT", [])
             .context("failed to add workflows.completed_at column")?;
+    }
+    if !columns.contains("actor") {
+        // Per-run, transport-asserted caller identity (JSON-encoded `Actor`),
+        // so lifecycle transitions (resume/complete/cancel/...) re-resolve the
+        // phase plan + config from the SAME actor partition the run bootstrapped
+        // with. A column (not the protocol `OrchestratorWorkflow` JSON) because
+        // the actor is kernel routing context, not part of the wire record.
+        conn.execute("ALTER TABLE workflows ADD COLUMN actor TEXT", [])
+            .context("failed to add workflows.actor column")?;
     }
 
     conn.execute("CREATE INDEX IF NOT EXISTS idx_wf_failed_at ON workflows(status, failed_at)", [])

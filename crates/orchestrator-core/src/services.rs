@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use crate::store::{write_json_if_missing, write_json_pretty};
 use crate::types::not_found;
+use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
 use async_trait::async_trait;
 use chrono::Utc;
@@ -158,7 +159,13 @@ pub trait WorkflowServiceApi: Send + Sync {
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>>;
     async fn list_checkpoints(&self, id: &str) -> Result<Vec<usize>>;
     async fn get_checkpoint(&self, id: &str, checkpoint_number: usize) -> Result<OrchestratorWorkflow>;
-    async fn run(&self, input: WorkflowRunInput) -> Result<OrchestratorWorkflow>;
+    /// Bootstrap a workflow run. `actor` is the transport-asserted caller
+    /// identity (from the authenticated control request); it scopes the
+    /// default-workflow-ref / phase-plan / skip-guard resolution to the actor's
+    /// `config_source` partition. `None` = the global partition (system-initiated
+    /// runs, local CLI). The actor is NEVER synthesized from workflow YAML, agent
+    /// output, or subject content.
+    async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow>;
     async fn resume(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn pause(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn cancel(&self, id: &str) -> Result<OrchestratorWorkflow>;

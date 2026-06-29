@@ -40,6 +40,16 @@ pub(crate) struct McpServeArgs {
     /// server should pass the running workflow id here.
     #[arg(long, value_name = "WORKFLOW_ID")]
     pub workflow_id: Option<String>,
+    /// Bind this server to the transport-asserted caller identity for the run,
+    /// as a JSON-encoded `Actor` (`{"user_id","claims","tenant_id"}`). The host
+    /// that injects this server (the workflow runner, relaying the authenticated
+    /// run's actor) passes it so the tools can scope per-user integrations /
+    /// subject / queue ops. Omitted = global scope (system / local runs).
+    ///
+    /// TRUST BOUNDARY: set ONLY by the trusted host from the authenticated run;
+    /// never from agent output, workflow YAML, or subject content.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]

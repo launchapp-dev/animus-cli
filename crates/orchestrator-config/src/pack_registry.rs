@@ -1163,7 +1163,8 @@ workflows:
         .expect("write project workflows");
 
         let _base = install_yaml_config_source_base(project.path());
-        let loaded = crate::load_workflow_config_with_metadata(project.path()).expect("load effective workflow config");
+        let loaded =
+            crate::load_workflow_config_with_metadata(project.path(), None).expect("load effective workflow config");
         let workflows = loaded.config.workflows.iter().map(|workflow| workflow.id.as_str()).collect::<Vec<_>>();
         let standard = loaded
             .config
@@ -1210,7 +1211,8 @@ workflows:
         .expect("write project workflows");
 
         let _base = install_yaml_config_source_base(project.path());
-        let loaded = crate::load_workflow_config_with_metadata(project.path()).expect("load effective workflow config");
+        let loaded =
+            crate::load_workflow_config_with_metadata(project.path(), None).expect("load effective workflow config");
         let standard = loaded
             .config
             .workflows
@@ -1334,8 +1336,8 @@ version = ">=1.0.0"
         .expect("write workflow overlay");
 
         let _base = install_yaml_config_source_base(project.path());
-        let error =
-            crate::load_workflow_config_with_metadata(project.path()).expect_err("missing dependency should fail");
+        let error = crate::load_workflow_config_with_metadata(project.path(), None)
+            .expect_err("missing dependency should fail");
         assert!(error.to_string().contains("requires dependency 'animus.missing'"));
     }
 
@@ -1389,7 +1391,7 @@ tools = ["cargo"]
         .expect("write workflow overlay");
 
         let _base = install_yaml_config_source_base(project.path());
-        let error = crate::load_workflow_config_with_metadata(project.path())
+        let error = crate::load_workflow_config_with_metadata(project.path(), None)
             .expect_err("undeclared tool permission should fail");
         assert!(error.to_string().contains("without declaring it in permissions.tools"));
     }
@@ -1461,7 +1463,7 @@ required_env = ["PACK_SECRET_TOKEN"]
         // skips the scaffold and the merged config validates without those phases.
         write_minimal_project_workflow(project.path());
         let _base = install_yaml_config_source_base(project.path());
-        crate::load_workflow_config_with_metadata(project.path())
+        crate::load_workflow_config_with_metadata(project.path(), None)
             .expect("workflow config loading should not require secrets");
     }
 
@@ -1531,7 +1533,7 @@ workflows:
         // workflow, so the merged config validates without those phases.
         write_minimal_project_workflow(project.path());
         let _base = install_yaml_config_source_base(project.path());
-        crate::load_workflow_config_with_metadata(project.path())
+        crate::load_workflow_config_with_metadata(project.path(), None)
             .expect("workflow config loading should not probe runtimes");
     }
 

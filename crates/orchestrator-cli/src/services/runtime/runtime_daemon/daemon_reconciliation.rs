@@ -254,7 +254,7 @@ mod tests {
             .expect("task should be created");
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .run(WorkflowRunInput::for_task(task.id.clone(), None), None)
             .await
             .expect("workflow should start");
 
@@ -313,7 +313,7 @@ mod tests {
             .expect("task should be created");
         let workflow = hub
             .workflows()
-            .run(WorkflowRunInput::for_task(task.id.clone(), None))
+            .run(WorkflowRunInput::for_task(task.id.clone(), None), None)
             .await
             .expect("workflow should start");
         hub.workflows().pause(&workflow.id).await.expect("workflow should pause");

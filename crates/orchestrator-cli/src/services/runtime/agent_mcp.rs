@@ -144,6 +144,10 @@ pub(crate) fn assemble_agent_mcp_contract(
             &project_root.to_string_lossy(),
             &mcp_config,
             agent_id,
+            // Ad-hoc `animus chat` / `animus agent run` is a local, unauthenticated
+            // invocation — no transport actor. The workflow runner supplies the
+            // actor on the daemon-driven phase path; never synthesized here.
+            None,
         );
 
         // Mirror the shared IPC path: when a stdio MCP command is injected

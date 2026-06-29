@@ -101,7 +101,7 @@ fn missing_v2_file_reports_actionable_error() {
     let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let temp = tempfile::tempdir().expect("tempdir");
     let _home_guard = crate::test_support::EnvVarGuard::set("HOME", temp.path());
-    let error = load_workflow_config(temp.path()).expect_err("missing workflow config should fail");
+    let error = load_workflow_config(temp.path(), None).expect_err("missing workflow config should fail");
     // v0.6: with no config_source plugin installed (the unit-test case), the
     // kernel load path has no base to source and errors actionably.
     assert!(error.to_string().contains("no config_source plugin installed"), "got: {error}");
@@ -4063,12 +4063,12 @@ mod cache_token_short_circuit {
         // First base => first load compiles and caches under the content token.
         let base_a = base_with_marker("marker-a");
         let guard_a = test_seam::install(root, base_a);
-        let loaded_a = load_workflow_config_with_metadata(root).expect("first load");
+        let loaded_a = load_workflow_config_with_metadata(root, None).expect("first load");
         assert!(loaded_a.config.tools_allowlist.contains(&"marker-a".to_string()));
 
         // Same base again: the cached compile is served (token unchanged). The
         // result is identical, proving the short-circuit returns the right value.
-        let loaded_a2 = load_workflow_config_with_metadata(root).expect("second load");
+        let loaded_a2 = load_workflow_config_with_metadata(root, None).expect("second load");
         assert_eq!(loaded_a2.metadata.hash, loaded_a.metadata.hash, "unchanged source must serve the cached compile");
         drop(guard_a);
 
@@ -4076,7 +4076,7 @@ mod cache_token_short_circuit {
         // recompile, never serving the stale compile.
         let base_b = base_with_marker("marker-b");
         let _guard_b = test_seam::install(root, base_b);
-        let loaded_b = load_workflow_config_with_metadata(root).expect("third load after change");
+        let loaded_b = load_workflow_config_with_metadata(root, None).expect("third load after change");
         assert!(
             loaded_b.config.tools_allowlist.contains(&"marker-b".to_string()),
             "a changed source token must recompile, not serve the stale cached config"

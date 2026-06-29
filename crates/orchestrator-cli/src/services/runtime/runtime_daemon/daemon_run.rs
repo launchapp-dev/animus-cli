@@ -936,7 +936,7 @@ mod tests {
 
         let workflow = primary_hub
             .workflows()
-            .run(orchestrator_core::WorkflowRunInput::for_task(task.id.clone(), None))
+            .run(orchestrator_core::WorkflowRunInput::for_task(task.id.clone(), None), None)
             .await
             .expect("workflow should run");
         // Cancel the workflow so all task workflows are terminal with no success.
@@ -1786,7 +1786,10 @@ mod tests {
                 .expect("create task");
             let mut workflow = hub
                 .workflows()
-                .run(orchestrator_core::WorkflowRunInput::for_task(task.id.clone(), workflow_ref.map(String::from)))
+                .run(
+                    orchestrator_core::WorkflowRunInput::for_task(task.id.clone(), workflow_ref.map(String::from)),
+                    None,
+                )
                 .await
                 .expect("run workflow");
 

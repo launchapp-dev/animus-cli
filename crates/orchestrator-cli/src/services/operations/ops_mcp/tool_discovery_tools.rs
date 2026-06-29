@@ -404,7 +404,7 @@ mod tests {
     fn every_registered_tool_is_searchable_by_its_exact_name() {
         // Live-registry coverage: searching any registered tool's exact name
         // must return that tool first. Management mode = full built-in set.
-        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", true, None, None);
+        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", true, None, None, None);
         let tools = server.tool_router.list_all();
         assert!(!tools.is_empty(), "live tool router should not be empty");
         for tool in &tools {
@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn discovery_tools_appear_in_their_own_search_results() {
-        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None);
+        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None, None);
         let tools = server.tool_router.list_all();
         let result = build_tools_search_result(&tools, "search tools registry", None).expect("search should succeed");
         let names = match_names(&result);
@@ -434,7 +434,7 @@ mod tests {
 
     #[test]
     fn tools_list_groups_the_live_registry_without_schemas() {
-        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None);
+        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None, None);
         let tools = server.tool_router.list_all();
         let result = build_tools_list_result(&tools);
         assert_eq!(result.get("schema").and_then(Value::as_str), Some(TOOLS_LIST_SCHEMA));
@@ -470,7 +470,7 @@ mod tests {
 
     #[tokio::test]
     async fn tools_search_handler_returns_structured_result_through_dispatch_surface() {
-        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None);
+        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None, None);
         let result = server
             .ao_tools_search(Parameters(ToolsSearchInput { query: "animus.tools.search".to_string(), limit: Some(3) }))
             .await
@@ -483,7 +483,7 @@ mod tests {
 
     #[tokio::test]
     async fn tools_search_handler_rejects_empty_query_as_structured_error() {
-        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None);
+        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None, None);
         let result = server
             .ao_tools_search(Parameters(ToolsSearchInput { query: "  ".to_string(), limit: None }))
             .await
@@ -493,7 +493,7 @@ mod tests {
 
     #[tokio::test]
     async fn tools_list_handler_returns_structured_catalog() {
-        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None);
+        let server = super::super::new_ao_mcp_server_with_options("/tmp/project", false, None, None, None);
         let result = server.ao_tools_list(Parameters(ToolsListInput {})).await.expect("handler should succeed");
         assert_ne!(result.is_error, Some(true));
         let payload = result.structured_content.expect("structured content");

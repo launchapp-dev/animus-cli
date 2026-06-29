@@ -946,6 +946,10 @@ fn session_request_from_agent_run_request(
         env_vars: Vec::new(),
         mcp_servers: context.get("mcp_servers").cloned(),
         extras: Value::Object(extras),
+        // The resume path carries no authenticated control identity. The actor
+        // reaches a session only when relayed from the workflow runner's
+        // WorkflowExecuteRequest; it is never synthesized from a checkpoint.
+        actor: None,
     })
 }
 
@@ -1473,6 +1477,7 @@ mod tests {
             timeout_secs: None,
             env_vars: Vec::new(),
             extras: json!({ "reasoning_effort": "high" }),
+            actor: None,
         };
         let params = backend.build_run_params(&request, None, "ctrl-test");
         assert_eq!(
@@ -1509,6 +1514,7 @@ mod tests {
             timeout_secs: None,
             env_vars: Vec::new(),
             extras: json!({ "approvals": true }),
+            actor: None,
         };
         let params = backend.build_run_params(&request, None, "ctrl-test");
         assert_eq!(
@@ -1543,6 +1549,7 @@ mod tests {
             timeout_secs: None,
             env_vars: Vec::new(),
             extras: json!({}),
+            actor: None,
         };
         let control_session_id = Uuid::new_v4().to_string();
         let params = backend.build_run_params(&request, None, &control_session_id);
@@ -1839,6 +1846,7 @@ mod tests {
             timeout_secs: None,
             env_vars: filtered,
             extras: Value::Object(Default::default()),
+            actor: None,
         };
         let params = backend.build_run_params(&req, None, "ctrl-test");
         let env_obj = params.get("env").and_then(Value::as_object).expect("env param must be an object");

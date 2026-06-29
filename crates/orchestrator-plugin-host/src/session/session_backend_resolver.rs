@@ -155,6 +155,7 @@ mod tests {
             timeout_secs: None,
             env_vars: Vec::new(),
             extras: json!({}),
+            actor: None,
         }
     }
 

@@ -18,6 +18,7 @@ rusqlite = { version = "0.31", features = ["bundled", "blob"] }
 zstd = "0.13"
 tempfile = "3"
 protocol = { workspace = true }
+animus-actor = { workspace = true }
 animus-plugin-protocol = { workspace = true }
 orchestrator-plugin-host = { workspace = true }
 orchestrator-config = { workspace = true }

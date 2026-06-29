@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 use orchestrator_core::services::ServiceHub;
 
@@ -22,6 +23,15 @@ pub(crate) struct WorkflowExecuteArgs {
     pub(crate) phase_timeout_secs: Option<u64>,
     pub(crate) input_json: Option<String>,
     pub(crate) vars: Vec<String>,
+    /// Transport-asserted caller identity, relayed verbatim into the runner
+    /// `WorkflowExecuteRequest` so the runner can scope subject/journal/config
+    /// plugins to the user.
+    ///
+    /// TRUST BOUNDARY: this is populated ONLY from an authenticated inbound
+    /// control request. Local CLI invocations leave it `None` — the actor is
+    /// NEVER synthesized from local context, workflow YAML, agent output, or
+    /// subject content.
+    pub(crate) actor: Option<Actor>,
 }
 
 pub(crate) async fn handle_workflow_execute(
@@ -97,6 +107,10 @@ pub(crate) async fn handle_workflow_execute(
         request.tool = args.tool.clone();
         request.phase_timeout_secs = args.phase_timeout_secs;
         request.phase_filter = phase_filter.clone();
+        // Relay the transport-asserted actor (if any) verbatim. The persisted
+        // record carries no actor, so this is the only place a re-attach run
+        // can carry the caller identity.
+        request.actor = args.actor.clone();
         request
     } else {
         workflow_proto::WorkflowExecuteRequest {
@@ -116,6 +130,9 @@ pub(crate) async fn handle_workflow_execute(
             phase_filter: phase_filter.clone(),
             phase_routing: None,
             mcp_config: None,
+            // Relayed verbatim from the authenticated control request; `None`
+            // for local CLI invocations (never synthesized).
+            actor: args.actor.clone(),
         }
     };
     let project_root_path = std::path::Path::new(project_root);

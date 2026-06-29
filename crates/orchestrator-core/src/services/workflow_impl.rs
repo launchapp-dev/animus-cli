@@ -1,5 +1,6 @@
 use super::*;
 use crate::types::PhaseDecision;
+use animus_actor::Actor;
 
 use super::query_support::paginate_items;
 
@@ -21,8 +22,12 @@ fn effective_workflow_ref(
 
 fn load_phase_retry_configs(
     project_root: &std::path::Path,
+    actor: Option<&Actor>,
 ) -> std::collections::HashMap<String, crate::agent_runtime_config::PhaseRetryConfig> {
-    let config = crate::agent_runtime_config::load_agent_runtime_config_or_default(project_root);
+    // Scope retry/backoff policy to the actor partition so a per-user config
+    // source's `max_attempts` / backoff overrides apply (matches the workflow
+    // config + phase-plan resolution). `actor = None` = global.
+    let config = crate::agent_runtime_config::load_agent_runtime_config_or_default_for_actor(project_root, actor);
     config
         .phases
         .iter()
@@ -185,16 +190,17 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         }
     }
 
-    async fn run(&self, input: WorkflowRunInput) -> Result<OrchestratorWorkflow> {
+    async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow> {
         let id = Uuid::new_v4().to_string();
         let workflow = {
             let mut lock = self.state.write().await;
             let task = input.subject.task_id().and_then(|id| lock.tasks.get(id).cloned());
             let workflow_ref =
                 effective_workflow_ref(input.workflow_ref(), crate::workflow::STANDARD_WORKFLOW_REF, task.as_ref());
-            let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_workflow_ref(
+            let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 None,
                 Some(workflow_ref.as_str()),
+                actor,
             )?);
             let workflow = executor.bootstrap(id.clone(), input.with_workflow_ref(workflow_ref));
             lock.workflows.insert(id.clone(), workflow.clone());
@@ -393,11 +399,14 @@ impl WorkflowServiceApi for FileServiceHub {
         self.workflow_manager().load_checkpoint(id, checkpoint_number)
     }
 
-    async fn run(&self, input: WorkflowRunInput) -> Result<OrchestratorWorkflow> {
+    async fn run(&self, input: WorkflowRunInput, actor: Option<&Actor>) -> Result<OrchestratorWorkflow> {
         let id = Uuid::new_v4().to_string();
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
-        let retry_configs = load_phase_retry_configs(self.project_root.as_path());
-        let workflow_config = crate::load_workflow_config_or_default(self.project_root.as_path());
+        let retry_configs = load_phase_retry_configs(self.project_root.as_path(), actor);
+        // Resolve the bootstrap config from the actor's partition so a per-user
+        // `config_source` (global∪private∪shared) contributes the default
+        // workflow ref, skip guards, and phase plan. `actor = None` = global.
+        let workflow_config = crate::load_workflow_config_or_default_for_actor(self.project_root.as_path(), actor);
         let task = if let Some(task_id) = input.subject.task_id() {
             crate::workflow::load_task(&self.project_root, task_id).ok()
         } else {
@@ -407,7 +416,11 @@ impl WorkflowServiceApi for FileServiceHub {
             effective_workflow_ref(input.workflow_ref(), &workflow_config.config.default_workflow_ref, task.as_ref());
         let skip_guards = crate::resolve_workflow_skip_guards(&workflow_config.config, Some(workflow_ref.as_str()));
         let executor = WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(Some(self.project_root.as_path()), Some(workflow_ref.as_str()))?,
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
+                Some(self.project_root.as_path()),
+                Some(workflow_ref.as_str()),
+                actor,
+            )?,
             state_machines,
         )
         .with_retry_configs(retry_configs)
@@ -422,6 +435,11 @@ impl WorkflowServiceApi for FileServiceHub {
         let manager = self.workflow_manager();
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::Start)?;
+        // Persist the actor partition so EVERY later lifecycle transition
+        // (resume/complete/cancel/...) re-resolves config from the same partition
+        // this run bootstrapped with — otherwise an actor-private workflow would
+        // start, then fail or mis-route at the next transition (global lookup).
+        manager.set_workflow_actor(&workflow.id, actor)?;
 
         self.state.write().await.workflows.insert(id, workflow.clone());
         Ok(workflow)
@@ -432,9 +450,10 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         let executor = WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 Some(self.project_root.as_path()),
                 workflow.workflow_ref.as_deref(),
+                manager.load_workflow_actor(id).as_ref(),
             )?,
             state_machines,
         );
@@ -451,9 +470,10 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 Some(self.project_root.as_path()),
                 workflow.workflow_ref.as_deref(),
+                manager.load_workflow_actor(id).as_ref(),
             )?,
             state_machines,
         )
@@ -469,9 +489,10 @@ impl WorkflowServiceApi for FileServiceHub {
         let manager = self.workflow_manager();
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
-        let phase_plan = crate::resolve_phase_plan_for_workflow_ref(
+        let phase_plan = crate::resolve_phase_plan_for_workflow_ref_for_actor(
             Some(self.project_root.as_path()),
             workflow.workflow_ref.as_deref(),
+            manager.load_workflow_actor(id).as_ref(),
         )
         .unwrap_or_default();
         WorkflowLifecycleExecutor::with_state_machines(phase_plan, state_machines).cancel(&mut workflow);
@@ -493,17 +514,22 @@ impl WorkflowServiceApi for FileServiceHub {
     ) -> Result<OrchestratorWorkflow> {
         let manager = self.workflow_manager();
         let mut workflow = manager.load(id)?;
+        // The run's persisted actor partition: re-resolve config / phase plan /
+        // retry policy from the SAME partition the run bootstrapped with.
+        let actor = manager.load_workflow_actor(id);
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
-        let retry_configs = load_phase_retry_configs(self.project_root.as_path());
-        let workflow_config = crate::load_workflow_config_or_default(self.project_root.as_path());
+        let retry_configs = load_phase_retry_configs(self.project_root.as_path(), actor.as_ref());
+        let workflow_config =
+            crate::load_workflow_config_or_default_for_actor(self.project_root.as_path(), actor.as_ref());
         let verdict_routing =
             crate::resolve_workflow_verdict_routing(&workflow_config.config, workflow.workflow_ref.as_deref());
         let skip_guards =
             crate::resolve_workflow_skip_guards(&workflow_config.config, workflow.workflow_ref.as_deref());
         let executor = WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 Some(self.project_root.as_path()),
                 workflow.workflow_ref.as_deref(),
+                actor.as_ref(),
             )?,
             state_machines,
         )
@@ -562,9 +588,10 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 Some(self.project_root.as_path()),
                 workflow.workflow_ref.as_deref(),
+                manager.load_workflow_actor(id).as_ref(),
             )?,
             state_machines,
         )
@@ -581,9 +608,10 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 Some(self.project_root.as_path()),
                 workflow.workflow_ref.as_deref(),
+                manager.load_workflow_actor(id).as_ref(),
             )?,
             state_machines,
         )
@@ -600,9 +628,10 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 Some(self.project_root.as_path()),
                 workflow.workflow_ref.as_deref(),
+                manager.load_workflow_actor(id).as_ref(),
             )?,
             state_machines,
         )
@@ -619,9 +648,10 @@ impl WorkflowServiceApi for FileServiceHub {
         let mut workflow = manager.load(id)?;
         let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
         WorkflowLifecycleExecutor::with_state_machines(
-            crate::resolve_phase_plan_for_workflow_ref(
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
                 Some(self.project_root.as_path()),
                 workflow.workflow_ref.as_deref(),
+                manager.load_workflow_actor(id).as_ref(),
             )?,
             state_machines,
         )

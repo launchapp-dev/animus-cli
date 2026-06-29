@@ -299,7 +299,11 @@ mod tests {
     }
 
     async fn start_workflow_for_task(hub: &Arc<InMemoryServiceHub>, task_id: &str) -> String {
-        hub.workflows().run(WorkflowRunInput::for_task(task_id.to_string(), None)).await.expect("bootstrap workflow").id
+        hub.workflows()
+            .run(WorkflowRunInput::for_task(task_id.to_string(), None), None)
+            .await
+            .expect("bootstrap workflow")
+            .id
     }
 
     #[tokio::test]

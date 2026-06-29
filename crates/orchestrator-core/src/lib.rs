@@ -28,11 +28,11 @@ pub mod workflow_runner_registry;
 
 pub use agent_runtime_config::{
     agent_runtime_config_path, builtin_agent_runtime_config, ensure_agent_runtime_config_file,
-    load_agent_runtime_config, load_agent_runtime_config_or_default, write_agent_runtime_config, AgentProfile,
-    AgentRuntimeConfig, AgentRuntimeMetadata, AgentRuntimeOverrides, AgentRuntimeSource, BackoffConfig, CliToolConfig,
-    CommandCwdMode, Idempotency, LoadedAgentRuntimeConfig, PhaseCommandDefinition, PhaseDecisionContract,
-    PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition, PhaseOutputContract, PhaseRetryConfig,
-    DEFAULT_MAX_REWORK_ATTEMPTS,
+    load_agent_runtime_config, load_agent_runtime_config_or_default, load_agent_runtime_config_or_default_for_actor,
+    write_agent_runtime_config, AgentProfile, AgentRuntimeConfig, AgentRuntimeMetadata, AgentRuntimeOverrides,
+    AgentRuntimeSource, BackoffConfig, CliToolConfig, CommandCwdMode, Idempotency, LoadedAgentRuntimeConfig,
+    PhaseCommandDefinition, PhaseDecisionContract, PhaseExecutionDefinition, PhaseExecutionMode, PhaseManualDefinition,
+    PhaseOutputContract, PhaseRetryConfig, DEFAULT_MAX_REWORK_ATTEMPTS,
 };
 pub use config::RuntimeConfig;
 pub use daemon_config::{
@@ -143,10 +143,10 @@ pub use workflow::{
     load_task_priority_policy_report, load_task_statistics, load_task_titles_by_ids, load_tasks_by_ids,
     load_workflow_history_summaries, load_workflow_ref_index, migrate_tasks_and_requirements_from_core_state,
     open_project_db, phase_plan_for_workflow_ref, query_requirement_ids, query_task_ids,
-    resolve_phase_plan_for_workflow_ref, save_requirement, save_task, BlockedTaskSummary, CleanupResult,
-    RequirementLinkSummary, ResumabilityStatus, ResumeConfig, StaleTaskSummary, WorkflowActivitySummary,
-    WorkflowCheckpointPruneResult, WorkflowFailureSummary, WorkflowHistorySummary, WorkflowLifecycleExecutor,
-    WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
+    resolve_phase_plan_for_workflow_ref, resolve_phase_plan_for_workflow_ref_for_actor, save_requirement, save_task,
+    BlockedTaskSummary, CleanupResult, RequirementLinkSummary, ResumabilityStatus, ResumeConfig, StaleTaskSummary,
+    WorkflowActivitySummary, WorkflowCheckpointPruneResult, WorkflowFailureSummary, WorkflowHistorySummary,
+    WorkflowLifecycleExecutor, WorkflowResumeManager, WorkflowStateMachine, WorkflowStateManager,
     DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, STANDARD_WORKFLOW_REF, UI_UX_WORKFLOW_REF,
 };
 pub use workflow::{
@@ -156,14 +156,14 @@ pub use workflow::{
 pub use workflow_config::{
     builtin_workflow_config, compile_yaml_workflow_files, ensure_workflow_config_compiled, ensure_workflow_config_file,
     expand_variables, expand_workflow_phases, generated_workflow_phase_is_defined, legacy_workflow_config_paths,
-    load_workflow_config, load_workflow_config_or_default, load_workflow_config_with_metadata, merge_yaml_into_config,
-    missing_project_skill_reference_warnings, missing_skill_reference_warnings_for_sources,
-    missing_skill_yaml_warnings, parse_yaml_workflow_config, remove_agent_profile, remove_generated_workflow_phase,
-    remove_workflow_definition, resolve_workflow_phase_plan, resolve_workflow_rework_attempts,
-    resolve_workflow_skip_guards, resolve_workflow_variables, resolve_workflow_verdict_routing,
-    unenforced_project_yaml_warnings, unenforced_yaml_field_warnings, upsert_agent_profile,
-    upsert_generated_workflow_phase, upsert_generated_workflow_pipeline, upsert_workflow_definition,
-    validate_and_compile_yaml_workflows, validate_workflow_and_runtime_configs,
+    load_workflow_config, load_workflow_config_or_default, load_workflow_config_or_default_for_actor,
+    load_workflow_config_with_metadata, merge_yaml_into_config, missing_project_skill_reference_warnings,
+    missing_skill_reference_warnings_for_sources, missing_skill_yaml_warnings, parse_yaml_workflow_config,
+    remove_agent_profile, remove_generated_workflow_phase, remove_workflow_definition, resolve_workflow_phase_plan,
+    resolve_workflow_rework_attempts, resolve_workflow_skip_guards, resolve_workflow_variables,
+    resolve_workflow_verdict_routing, unenforced_project_yaml_warnings, unenforced_yaml_field_warnings,
+    upsert_agent_profile, upsert_generated_workflow_phase, upsert_generated_workflow_pipeline,
+    upsert_workflow_definition, validate_and_compile_yaml_workflows, validate_workflow_and_runtime_configs,
     validate_workflow_and_runtime_configs_with_project_root, validate_workflow_config, workflow_config_hash,
     workflow_config_path, write_full_workflow_config, write_workflow_config, yaml_workflows_dir, CompileYamlResult,
     FileWatcherTriggerConfig, LoadedWorkflowConfig, PhaseMcpBinding, PhaseTransitionConfig, PhaseUiDefinition,
