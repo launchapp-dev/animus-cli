@@ -40,7 +40,7 @@ pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: 
 }
 
 #[derive(Debug, Serialize, PartialEq)]
-struct SearchMatch {
+pub(crate) struct SearchMatch {
     conversation_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
@@ -142,7 +142,7 @@ fn search_conversations(
 
 fn handle_chat_search(args: ChatSearchArgs, project_root: &str, json: bool) -> Result<()> {
     let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
-    let matches = search_conversations(&store, &args.query, !args.case_sensitive, args.limit, args.as_user.as_deref())?;
+    let matches = store.search(&args.query, !args.case_sensitive, args.limit, args.as_user.as_deref())?;
     print_value(matches, json)
 }
 
