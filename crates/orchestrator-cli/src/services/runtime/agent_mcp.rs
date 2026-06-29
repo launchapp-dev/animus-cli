@@ -25,6 +25,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use tracing::warn;
@@ -102,6 +103,45 @@ pub(crate) fn assemble_agent_mcp_contract(
     disable_animus: bool,
     agent_id: Option<&str>,
 ) -> Result<Option<Value>> {
+    // Default (unauthenticated) ad-hoc path: no transport-asserted actor.
+    assemble_agent_mcp_contract_with_actor(
+        project_root,
+        tool,
+        model,
+        profile_servers,
+        skill_servers,
+        extra_servers,
+        tool_policy,
+        scope_selected,
+        disable_animus,
+        agent_id,
+        None,
+    )
+}
+
+/// Variant of [`assemble_agent_mcp_contract`] that binds the spawned built-in
+/// `animus mcp serve` child to a transport-asserted [`Actor`] (relayed as
+/// `--actor-json`). Used by `animus chat send --actor-json` so a chat turn's
+/// per-user subject / queue / integration tools are scoped to the caller.
+///
+/// TRUST BOUNDARY: `actor` originates ONLY from the authenticated caller (the
+/// transport asserts it via the flag). It is NEVER synthesized from local
+/// context, workflow YAML, agent output, or subject content. `None` = global
+/// scope.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn assemble_agent_mcp_contract_with_actor(
+    project_root: &Path,
+    tool: &str,
+    model: &str,
+    profile_servers: &[String],
+    skill_servers: &[String],
+    extra_servers: &[String],
+    tool_policy: &AgentToolPolicy,
+    scope_selected: bool,
+    disable_animus: bool,
+    agent_id: Option<&str>,
+    actor: Option<&Actor>,
+) -> Result<Option<Value>> {
     // Base contract carries the per-tool `cli` block (including
     // `cli/capabilities/supports_mcp`) plus an empty `mcp` block the
     // inject_* helpers fill in. An unknown/unsupported tool yields `None`.
@@ -144,10 +184,12 @@ pub(crate) fn assemble_agent_mcp_contract(
             &project_root.to_string_lossy(),
             &mcp_config,
             agent_id,
-            // Ad-hoc `animus chat` / `animus agent run` is a local, unauthenticated
-            // invocation — no transport actor. The workflow runner supplies the
-            // actor on the daemon-driven phase path; never synthesized here.
-            None,
+            // Transport-asserted actor (from `animus chat send --actor-json`),
+            // relayed to the spawned `animus mcp serve` child so its tools
+            // scope per-user. `None` for unauthenticated ad-hoc invocations;
+            // the workflow runner supplies the actor on the daemon-driven
+            // phase path. Never synthesized here.
+            actor,
         );
 
         // Mirror the shared IPC path: when a stdio MCP command is injected
@@ -523,6 +565,28 @@ pub(crate) fn materialize_mcp_json(cwd: &Path, runtime_contract: &Value) -> Resu
     Ok(written)
 }
 
+/// Return a clone of `runtime_contract` with any `--actor-json <json>` pair
+/// stripped from the built-in `animus` server's `/mcp/stdio/args`.
+///
+/// The transport-asserted actor is a PER-TURN authz identity. It rides the
+/// ephemeral `extras.runtime_contract` (the path the turn's own provider
+/// session consumes), but it must NEVER be persisted into the cwd-local,
+/// auto-discovered `.mcp.json`: that file outlives the turn and is shared, so a
+/// later or concurrent invocation from the same directory could silently
+/// inherit a previous user's identity (including `admin` claims). Use this to
+/// sanitize the contract before [`materialize_mcp_json`].
+pub(crate) fn strip_actor_from_contract(runtime_contract: &Value) -> Value {
+    let mut sanitized = runtime_contract.clone();
+    if let Some(args) = sanitized.pointer_mut("/mcp/stdio/args").and_then(Value::as_array_mut) {
+        if let Some(pos) = args.iter().position(|a| a.as_str() == Some("--actor-json")) {
+            // Remove the flag and its JSON value (when present).
+            let remove_to = (pos + 2).min(args.len());
+            args.drain(pos..remove_to);
+        }
+    }
+    sanitized
+}
+
 /// The MCP server names an `--agent` profile and `--skill` declare,
 /// resolved from project config. Either component is empty when its flag is
 /// absent.
@@ -697,6 +761,32 @@ mod tests {
 
     fn names(v: &[&str]) -> Vec<String> {
         v.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn strip_actor_from_contract_removes_actor_pair_only() {
+        let contract = serde_json::json!({
+            "mcp": { "stdio": { "command": "animus", "args": [
+                "--project-root", "/p", "mcp", "serve", "--agent-id", "swe", "--actor-json", r#"{"user_id":"alice"}"#
+            ]}}
+        });
+        let stripped = strip_actor_from_contract(&contract);
+        let args: Vec<&str> = stripped
+            .pointer("/mcp/stdio/args")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(!args.contains(&"--actor-json"), "actor flag must be dropped: {args:?}");
+        assert!(!args.iter().any(|a| a.contains("alice")), "actor json value must be dropped: {args:?}");
+        // The rest of the args (incl. --agent-id) survive intact.
+        assert!(args.contains(&"--agent-id") && args.contains(&"swe"), "non-actor args must survive: {args:?}");
+        assert!(args.contains(&"serve"), "serve verb must survive: {args:?}");
+
+        // No actor present => unchanged.
+        let no_actor = serde_json::json!({ "mcp": { "stdio": { "command": "animus", "args": ["mcp", "serve"] }}});
+        assert_eq!(strip_actor_from_contract(&no_actor), no_actor);
     }
 
     #[test]

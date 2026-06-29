@@ -1,12 +1,16 @@
 use clap::{Args, Subcommand, ValueEnum};
 
-use super::ReasoningEffortArg;
+use super::{ReasoningEffortArg, ACTOR_JSON_HELP};
 
 /// `animus chat` — hold multi-turn conversations with a provider tool.
 ///
 /// Continuity is owned by the wrapped CLI tool's native session; Animus
 /// stores a portable, queryable transcript and a thin continuity pointer
 /// (`session_id` + `tool`). See `docs/reference/chat.md`.
+// `Send` carries the rich per-turn flag set (provider/model/mcp/actor/...), so
+// it dwarfs the other variants. Boxing it would break clap's `Subcommand`
+// derive (a tuple-variant field must itself be `Args`); accept the size delta.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand)]
 pub(crate) enum ChatCommand {
     /// Start a new (empty) conversation and print its id.
@@ -137,6 +141,12 @@ pub(crate) struct ChatSendArgs {
     /// Visibility for a conversation created by this send.
     #[arg(long, value_enum, default_value = "private")]
     pub(crate) visibility: ChatVisibilityArg,
+    /// Transport-asserted authz identity for this chat turn (distinct from
+    /// `--as-user`, which is the conversation-ownership stamp). Binds the
+    /// chat agent's built-in `animus` MCP server to this user so its
+    /// per-user subject / queue / integration tools are scoped accordingly.
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]

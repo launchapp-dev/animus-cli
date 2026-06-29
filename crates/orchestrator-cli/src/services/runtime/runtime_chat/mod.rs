@@ -303,6 +303,16 @@ fn handle_chat_new(args: ChatNewArgs, project_root: &str, json: bool) -> Result<
 
 async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) -> Result<()> {
     let project_root_path = PathBuf::from(project_root);
+
+    // Transport-asserted authz identity for this turn. The transport (e.g. the
+    // portal) authenticates the user, then passes `--actor-json`; the kernel
+    // relays it (it does not validate the claims). This is the authz identity,
+    // distinct from `--as-user` (conversation ownership). Parsed FIRST: a
+    // malformed value must fail closed BEFORE any store write (conversation
+    // create / title rename), so an invalid assertion leaves no state behind.
+    // Omitted => `None` => global scope.
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+
     let store = ConversationStoreClient::for_project_as_user(&project_root_path, args.as_user.as_deref())?;
 
     // Resolve (or create) the target conversation.
@@ -388,9 +398,10 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
 
     // Assemble the runtime contract the provider receives so the chat agent
     // sees the MCP servers its profile/skill declares. Plain chat (no
-    // --agent/--skill) defaults to the built-in `animus` server only.
+    // --agent/--skill) defaults to the built-in `animus` server only. When an
+    // actor is asserted, the spawned `animus mcp serve` child is bound to it.
     let scope_selected = args.agent.is_some() || args.skill.is_some();
-    let mcp_contract = crate::services::runtime::agent_mcp::assemble_agent_mcp_contract(
+    let mcp_contract = crate::services::runtime::agent_mcp::assemble_agent_mcp_contract_with_actor(
         &project_root_path,
         &args.tool,
         &model,
@@ -401,6 +412,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         scope_selected,
         args.no_animus_mcp,
         args.agent.as_deref(),
+        actor.as_ref(),
     )?;
 
     // Provider CLIs that auto-discover a cwd-local `.mcp.json` (claude-code)
@@ -408,8 +420,28 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // per-agent set is also materialized there. The merge is additive — it
     // upserts only the resolved Animus-scoped names and preserves any
     // user-authored entries.
+    //
+    // The transport-asserted actor is NEVER written to this shared, persisted,
+    // auto-discovered file: a concurrent invocation in the same cwd, or a crash
+    // before any cleanup, would let another caller inherit the per-turn identity
+    // (incl. `admin` claims) and run MCP tools as that user. The actor instead
+    // rides the ephemeral `extras.runtime_contract` (below) for the turn's own
+    // provider session, so contract-consuming providers are still scoped.
+    //
+    // TODO(codex-p1): providers that scope ONLY off the cwd `.mcp.json` (and
+    // ignore the runtime contract's `mcp` block) therefore run the auto-
+    // discovered `animus` server unscoped. Closing that gap needs a per-run
+    // isolated MCP config path the provider is pointed at (e.g. claude's
+    // `--mcp-config`), which is provider-launch plumbing tracked separately;
+    // persisting the identity into the shared file is not an acceptable
+    // stopgap.
     if let Some(contract) = mcp_contract.as_ref() {
-        crate::services::runtime::agent_mcp::materialize_mcp_json(&cwd, contract)?;
+        let for_disk = if actor.is_some() {
+            std::borrow::Cow::Owned(crate::services::runtime::agent_mcp::strip_actor_from_contract(contract))
+        } else {
+            std::borrow::Cow::Borrowed(contract)
+        };
+        crate::services::runtime::agent_mcp::materialize_mcp_json(&cwd, &for_disk)?;
     }
 
     // Sink selection: --json => JSONL stdout; --stream (no json) => text;
