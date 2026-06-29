@@ -71,6 +71,25 @@ impl ConversationStoreClient {
         }
     }
 
+    /// Search conversations for `query`, newest-first, up to `limit` matches.
+    /// The File store reads in-process, so the generic per-conversation scan is
+    /// cheap. The Plugin store spawns + reaps the host on EVERY rpc, so the
+    /// scan's N+1 (`list` + `load_messages` per conversation) would spawn the
+    /// plugin N+1 times — instead we run the whole scan over ONE spawned host
+    /// (see [`PluginConversationStore::search_async`]).
+    pub(crate) fn search(
+        &self,
+        query: &str,
+        case_insensitive: bool,
+        limit: usize,
+        as_user: Option<&str>,
+    ) -> Result<Vec<super::SearchMatch>> {
+        match self {
+            Self::File(_) => super::search_conversations(self, query, case_insensitive, limit, as_user),
+            Self::Plugin(plugin) => run_blocking(plugin.search_async(query, case_insensitive, limit, as_user))?,
+        }
+    }
+
     /// Build a `File`-backed client rooted at an explicit directory. Test-only
     /// escape hatch mirroring [`FileConversationStore::with_root_for_test`] so
     /// query-layer helpers that take a `ConversationStoreClient` can be
@@ -392,6 +411,85 @@ impl PluginConversationStore {
             .await
             .with_context(|| format!("{method} on conversation_store plugin {}", self.plugin.name))?;
         serde_json::from_value(value).with_context(|| format!("decoding {method} response"))
+    }
+
+    /// Run a whole `chat search` over ONE spawned plugin host. The per-rpc
+    /// `call` path spawns+reaps the host every call, so the search's N+1 (a
+    /// `list` then one `load_messages` per conversation) would spawn the plugin
+    /// N+1 times. Here we spawn once, handshake once, run every rpc over the live host, and
+    /// reap once — turning ~N spawns into a single one.
+    async fn search_async(
+        &self,
+        query: &str,
+        case_insensitive: bool,
+        limit: usize,
+        as_user: Option<&str>,
+    ) -> Result<Vec<super::SearchMatch>> {
+        if query.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let options = PluginSpawnOptions::for_manifest(
+            self.plugin.name.clone(),
+            &self.plugin.manifest.env_required,
+            std::iter::empty::<String>(),
+            None,
+        )
+        .with_working_dir(self.project_root.clone());
+        let host = PluginHost::spawn_with_options(&self.plugin.path, &[], options)
+            .await
+            .with_context(|| format!("spawning conversation_store plugin {}", self.plugin.name))?;
+        // Reap the host (and its DB pool) no matter how the scan ends — a
+        // persistent stdio plugin never EOFs, so dropping the handle leaks it.
+        let scan = async {
+            host.handshake()
+                .await
+                .with_context(|| format!("handshake with conversation_store plugin {}", self.plugin.name))?;
+            let list_params = serde_json::to_value(proto::ConversationListRequest {
+                scope: self.scope(),
+                as_user: as_user.map(ToOwned::to_owned),
+            })?;
+            let list_val = host
+                .request_typed_with_timeout(proto::METHOD_CONVERSATION_LIST, Some(list_params), RPC_TIMEOUT)
+                .await
+                .with_context(|| format!("conversation/list on {}", self.plugin.name))?;
+            let list_resp: proto::ConversationListResponse = serde_json::from_value(list_val)?;
+            let mut out: Vec<super::SearchMatch> = Vec::new();
+            for psummary in list_resp.conversations {
+                if out.len() >= limit {
+                    break;
+                }
+                let summary = from_proto_summary(psummary);
+                let lm_params = serde_json::to_value(proto::ConversationLoadMessagesRequest {
+                    scope: self.scope(),
+                    id: summary.id.clone(),
+                    as_user: self.acting_user(),
+                })?;
+                let lm_val = host
+                    .request_typed_with_timeout(proto::METHOD_CONVERSATION_LOAD_MESSAGES, Some(lm_params), RPC_TIMEOUT)
+                    .await
+                    .with_context(|| format!("conversation/load_messages on {}", self.plugin.name))?;
+                let lm_resp: proto::ConversationLoadMessagesResponse = serde_json::from_value(lm_val)?;
+                for pm in lm_resp.messages {
+                    if out.len() >= limit {
+                        break;
+                    }
+                    let m = from_proto_message(pm)?;
+                    if let Some(snippet) = super::snippet_around(&m.content, query, case_insensitive) {
+                        out.push(super::SearchMatch {
+                            conversation_id: summary.id.clone(),
+                            title: summary.title.clone(),
+                            role: super::role_str(m.role),
+                            seq: m.seq,
+                            snippet,
+                        });
+                    }
+                }
+            }
+            Ok::<_, anyhow::Error>(out)
+        }
+        .await;
+        let _ = host.shutdown().await;
+        scan
     }
 }
 
