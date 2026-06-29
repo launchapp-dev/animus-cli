@@ -580,7 +580,7 @@ pub fn install_yaml_config_source_base(project_root: &Path) -> test_seam::TestBa
     // matches the historical kernel behavior where `FileServiceHub::new` wrote
     // the scaffold and the in-tree loader compiled it, so tests that create a
     // hub (which still scaffolds) and rely on the standard workflow keep working.
-    let _ = super::ensure_workflow_yaml_scaffold(project_root);
+    let _ = super::yaml_scaffold::scaffold_default_workflows_for_tests(project_root);
     let base = super::compile_yaml_workflow_files(project_root)
         .expect("compile project yaml base")
         .unwrap_or_else(super::builtin_workflow_config);

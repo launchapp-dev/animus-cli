@@ -153,8 +153,12 @@ fn file_hub_new_bootstraps_base_configs_for_project_path() {
     assert!(scoped.join("core-state.json").exists());
     assert!(project_path.join(".animus").join("config.json").exists());
     assert!(scoped.join("resume-config.json").exists());
-    assert!(project_path.join(".animus").join("workflows").join("custom.yaml").exists());
-    assert!(project_path.join(".animus").join("workflows").join("standard-workflow.yaml").exists());
+    // The kernel ships zero baked workflow content: bootstrap creates the
+    // workflows dir but scaffolds NO default templates (workflows come from the
+    // flavor / config_source plugin).
+    assert!(project_path.join(".animus").join("workflows").exists());
+    assert!(!project_path.join(".animus").join("workflows").join("custom.yaml").exists());
+    assert!(!project_path.join(".animus").join("workflows").join("standard-workflow.yaml").exists());
     assert!(scoped.join("config").join("state-machines.v1.json").exists());
     assert!(!project_path.join(".git").exists());
     assert!(
