@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
@@ -97,6 +98,10 @@ pub(crate) fn workflow_execute_request_for_existing(
         phase_filter: None,
         phase_routing: None,
         mcp_config: None,
+        // The persisted record carries no actor. Callers that have a
+        // transport-asserted actor (the re-attach path in `execute.rs`)
+        // overwrite `request.actor` after building. Never synthesized here.
+        actor: None,
     }
 }
 
@@ -108,6 +113,38 @@ pub(crate) struct DetachedRunnerOverrides {
     pub(crate) model: Option<String>,
     pub(crate) tool: Option<String>,
     pub(crate) phase_timeout_secs: Option<u64>,
+    /// Transport-asserted caller identity from the authenticated control
+    /// request, relayed to the detached `workflow run --sync` child via
+    /// [`WORKFLOW_ACTOR_ENV`] so the runner request the child builds carries it.
+    /// `None` for local CLI / system-initiated runs.
+    pub(crate) actor: Option<Actor>,
+}
+
+/// Daemon → detached-runner-child handoff for the transport-asserted [`Actor`].
+///
+/// TRUST BOUNDARY: this env var is set on the spawned child ONLY by the daemon
+/// (in `detached_runner_command`) from the authenticated control request's
+/// actor — the same trust as the daemon spawning the child at all. The child
+/// reads it back in the `workflow run --sync` path. It is process-environment
+/// (a parent→child channel like secrets), NOT workflow YAML, agent output, or
+/// subject content, so it does not widen the actor's trusted sources. A local
+/// operator who sets it is merely asserting their own identity, which carries no
+/// kernel privilege (claims are advisory; consumers enforce).
+pub(crate) const WORKFLOW_ACTOR_ENV: &str = "ANIMUS_WORKFLOW_ACTOR_JSON";
+
+/// Read the relayed [`Actor`] from [`WORKFLOW_ACTOR_ENV`], if the daemon set it
+/// on this (detached-runner-child) process. A malformed value is ignored
+/// (logged) rather than failing the run — a dropped actor degrades to global
+/// scope, never a crash.
+pub(crate) fn workflow_actor_from_env() -> Option<Actor> {
+    let raw = std::env::var(WORKFLOW_ACTOR_ENV).ok()?;
+    match serde_json::from_str::<Actor>(&raw) {
+        Ok(actor) => Some(actor),
+        Err(error) => {
+            tracing::warn!(%error, "ignoring malformed {WORKFLOW_ACTOR_ENV}; running with no actor");
+            None
+        }
+    }
 }
 
 fn detached_runner_command(
@@ -132,6 +169,20 @@ fn detached_runner_command(
     }
     if let Some(timeout) = overrides.phase_timeout_secs {
         command.args(["--phase-timeout-secs", &timeout.to_string()]);
+    }
+    // Relay the authenticated actor to the detached child via a trusted env var
+    // (see WORKFLOW_ACTOR_ENV). The child rebuilds its runner request from the
+    // persisted record (which carries no actor), so this is the only channel
+    // that delivers the caller identity to the detached run.
+    if let Some(actor) = overrides.actor.as_ref() {
+        match serde_json::to_string(actor) {
+            Ok(json) => {
+                command.env(WORKFLOW_ACTOR_ENV, json);
+            }
+            Err(error) => {
+                tracing::warn!(%error, "failed to encode actor for detached runner; run proceeds with no actor");
+            }
+        }
     }
     command
         .current_dir(project_root)
@@ -379,7 +430,7 @@ pub(crate) fn upsert_phase_definition(
     phase_id: &str,
     definition: orchestrator_core::PhaseExecutionDefinition,
 ) -> Result<Value> {
-    let mut workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
+    let mut workflow = orchestrator_core::load_workflow_config(Path::new(project_root), None)?;
     let catalog_entry =
         workflow.phase_catalog.keys().all(|existing| !existing.eq_ignore_ascii_case(phase_id)).then(|| {
             orchestrator_core::PhaseUiDefinition {
@@ -424,7 +475,7 @@ pub(crate) fn upsert_phase_definition(
 }
 
 pub(crate) fn remove_phase_definition(project_root: &str, phase_id: &str) -> Result<Value> {
-    let workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
+    let workflow = orchestrator_core::load_workflow_config(Path::new(project_root), None)?;
     // TODO(codex-p2): when the phase is a generated-overlay OVERRIDE of a
     // hand-authored YAML/pack definition, removing the override leaves the
     // phase defined and pipeline references valid — this check should not
@@ -495,7 +546,7 @@ pub(crate) fn preview_phase_removal(project_root: &str, phase_id: &str) -> Resul
 }
 
 pub(crate) fn upsert_pipeline(project_root: &str, pipeline: orchestrator_core::WorkflowDefinition) -> Result<Value> {
-    let mut workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
+    let mut workflow = orchestrator_core::load_workflow_config(Path::new(project_root), None)?;
     if let Some(existing) =
         workflow.workflows.iter_mut().find(|existing| existing.id.eq_ignore_ascii_case(pipeline.id.as_str()))
     {
@@ -522,7 +573,7 @@ pub(crate) fn upsert_pipeline(project_root: &str, pipeline: orchestrator_core::W
 }
 
 pub(crate) fn phase_payload(project_root: &str, phase_id: &str) -> Result<Value> {
-    let workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
+    let workflow = orchestrator_core::load_workflow_config(Path::new(project_root), None)?;
     let runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
 
     let ui =
@@ -538,7 +589,7 @@ pub(crate) fn phase_payload(project_root: &str, phase_id: &str) -> Result<Value>
 }
 
 pub(crate) fn list_phase_payload(project_root: &str) -> Result<Value> {
-    let workflow = orchestrator_core::load_workflow_config(Path::new(project_root))?;
+    let workflow = orchestrator_core::load_workflow_config(Path::new(project_root), None)?;
     let runtime = orchestrator_core::load_agent_runtime_config(Path::new(project_root))?;
 
     let mut phases = Vec::new();
@@ -919,7 +970,7 @@ workflows:
 
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
-        let recompiled = orchestrator_core::load_workflow_config(temp.path()).expect("recompile should succeed");
+        let recompiled = orchestrator_core::load_workflow_config(temp.path(), None).expect("recompile should succeed");
         assert!(recompiled.phase_definitions.contains_key("custom-phase"), "phase should survive recompile");
         let runtime = load_agent_runtime_config(temp.path()).expect("runtime should load");
         assert!(runtime.phases.contains_key("custom-phase"), "phase should reach the runtime config");
@@ -955,7 +1006,7 @@ workflows:
 
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
-        let recompiled = orchestrator_core::load_workflow_config(temp.path()).expect("recompile should succeed");
+        let recompiled = orchestrator_core::load_workflow_config(temp.path(), None).expect("recompile should succeed");
         assert!(
             recompiled.workflows.iter().any(|workflow| workflow.id == "custom-pipeline"),
             "pipeline should survive recompile"
@@ -1244,6 +1295,7 @@ workflows:
                 model: Some("claude-sonnet-4-6".to_string()),
                 tool: Some("claude".to_string()),
                 phase_timeout_secs: Some(120),
+                actor: None,
             },
         );
         let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
@@ -1267,6 +1319,36 @@ workflows:
             ],
             "async-run execution overrides must be forwarded to the detached child"
         );
+        // No actor => the trusted actor-handoff env var must be absent.
+        assert!(
+            !command.get_envs().any(|(k, _)| k == std::ffi::OsStr::new(super::WORKFLOW_ACTOR_ENV)),
+            "actor env must not be set when no actor is present"
+        );
+    }
+
+    #[test]
+    fn detached_runner_command_relays_actor_via_trusted_env() {
+        // The authenticated control-request actor reaches the detached child
+        // through WORKFLOW_ACTOR_ENV (the persisted record carries no actor),
+        // round-tripping losslessly so the child rebuilds a scoped runner request.
+        let actor = animus_actor::Actor {
+            user_id: "alice".to_string(),
+            claims: vec!["admin".to_string()],
+            tenant_id: Some("acme".to_string()),
+        };
+        let command = super::detached_runner_command(
+            std::path::Path::new("/usr/local/bin/animus"),
+            "/tmp/project",
+            "wf-actor",
+            &super::DetachedRunnerOverrides { actor: Some(actor.clone()), ..Default::default() },
+        );
+        let (_, value) = command
+            .get_envs()
+            .find(|(k, _)| *k == std::ffi::OsStr::new(super::WORKFLOW_ACTOR_ENV))
+            .expect("actor env must be set when an actor is present");
+        let json = value.expect("actor env must have a value").to_string_lossy().into_owned();
+        let decoded: animus_actor::Actor = serde_json::from_str(&json).expect("actor env must be valid JSON");
+        assert_eq!(decoded, actor, "actor must round-trip through the env handoff unchanged");
     }
 
     #[cfg(unix)]

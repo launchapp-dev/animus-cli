@@ -600,6 +600,8 @@ async fn evaluate_approval_with_llm(
         env_vars: Vec::new(),
         mcp_servers: None,
         extras: json!({ "system_prompt": build_judge_system_prompt(extra_instructions) }),
+        // Internal approval-judge session: no caller actor is propagated here.
+        actor: None,
     };
 
     let mut run = match provider_client::start_session(std::path::Path::new(project_root), request).await {
@@ -756,6 +758,8 @@ async fn answer_question_with_llm(
         env_vars: Vec::new(),
         mcp_servers: None,
         extras: json!({ "system_prompt": system }),
+        // Internal autopilot judge session: no caller actor is propagated here.
+        actor: None,
     };
 
     let mut run = match provider_client::start_session(std::path::Path::new(project_root), request).await {
@@ -881,6 +885,8 @@ async fn answer_structured_with_llm(
         env_vars: Vec::new(),
         mcp_servers: None,
         extras: json!({ "system_prompt": system }),
+        // Internal autopilot judge session: no caller actor is propagated here.
+        actor: None,
     };
     let mut run = match provider_client::start_session(std::path::Path::new(project_root), request).await {
         Ok(run) => run,

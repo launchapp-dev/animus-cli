@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
 use orchestrator_plugin_host::session::plugin_supervisor::{classify, RetryDecision};
 use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, HostError, PluginHost, PluginSpawnOptions};
@@ -73,22 +74,71 @@ fn resident_hosts() -> &'static Mutex<HashMap<PathBuf, ResidentHost>> {
     HOSTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Last compiled config served for a root, keyed by the plugin's CacheToken
-/// version. A `config/load` whose token matches `version` can skip the whole
-/// pack-overlay merge + validate compile and reuse `compiled`. Invalidated on
-/// `config/write` and on host re-spawn so a real config change always
+/// Compiled-config cache map: `(normalized project root, actor partition)` =>
+/// `(CacheToken version, compiled config)`. The actor partition (see
+/// [`actor_cache_key`]) keeps one user's compiled config from being served to
+/// another.
+type CompiledCacheMap = HashMap<(PathBuf, String), (String, LoadedWorkflowConfig)>;
+
+/// Last compiled config served for a `(root, actor)` pair, keyed by the plugin's
+/// CacheToken version. A `config/load` whose token matches `version` can skip the
+/// whole pack-overlay merge + validate compile and reuse `compiled`. Invalidated
+/// on `config/write` and on host re-spawn so a real config change always
 /// recompiles. Lives here (not in `loading.rs`) so write + load share one
 /// invalidation point.
-fn compiled_cache() -> &'static Mutex<HashMap<PathBuf, (String, LoadedWorkflowConfig)>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, (String, LoadedWorkflowConfig)>>> = OnceLock::new();
+///
+/// SECURITY: the key includes an [`actor_cache_key`] partition so one user's
+/// compiled config can never be served to another. A `config_source` plugin may
+/// return per-user config (the actor reaches it via the `config/load` params),
+/// so a root-only key would leak user A's private config to user B on a cache
+/// hit. `None` (no authenticated actor) maps to the shared `__global__`
+/// partition.
+fn compiled_cache() -> &'static Mutex<CompiledCacheMap> {
+    static CACHE: OnceLock<Mutex<CompiledCacheMap>> = OnceLock::new();
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Return the cached compiled config for `project_root` iff its stored
-/// CacheToken `version` matches `cache_version`. The kernel's `loading.rs`
-/// calls this to short-circuit recompilation when the source is unchanged.
-pub(crate) fn cached_compiled(project_root: &Path, cache_version: &str) -> Option<LoadedWorkflowConfig> {
-    let key = normalize_root(project_root);
+/// Stable cache-partition key derived from the actor identity. Two actors with
+/// the same `user_id`, claim set, and tenant collide (correct — they see the
+/// same scoped config); any difference partitions them. Claims are sorted so the
+/// key is order-independent. `None` => the shared `__global__` partition.
+///
+/// SECURITY: the encoding MUST be unambiguous — a delimiter-joined string (e.g.
+/// `user_id|claims|tenant`) lets distinct identities collide when a field
+/// contains the delimiter (`user_id="a|b"`+claim `c` vs `user_id="a"`+claim
+/// `b|c`), which would serve one actor another's cached config. JSON of the
+/// sorted fields is self-delimiting (strings are escaped), so no field value can
+/// forge another identity's key. `__global__` cannot collide with a JSON object
+/// (which always starts with `{`).
+pub(crate) fn actor_cache_key(actor: Option<&Actor>) -> String {
+    match actor {
+        None => "__global__".to_string(),
+        Some(actor) => {
+            let mut claims = actor.claims.clone();
+            claims.sort();
+            // serde_json::to_string on owned strings/Vec<String>/Option<String>
+            // is infallible in practice; fall back to a Debug encoding (still
+            // unambiguous) on the impossible error rather than panicking.
+            serde_json::to_string(&serde_json::json!({
+                "u": actor.user_id,
+                "c": claims,
+                "t": actor.tenant_id,
+            }))
+            .unwrap_or_else(|_| format!("{:?}", (&actor.user_id, &claims, &actor.tenant_id)))
+        }
+    }
+}
+
+/// Return the cached compiled config for `(project_root, actor)` iff its stored
+/// CacheToken `version` matches `cache_version`. The kernel's `loading.rs` calls
+/// this to short-circuit recompilation when the source is unchanged for THIS
+/// actor — a different actor never hits another actor's entry.
+pub(crate) fn cached_compiled(
+    project_root: &Path,
+    actor: Option<&Actor>,
+    cache_version: &str,
+) -> Option<LoadedWorkflowConfig> {
+    let key = (normalize_root(project_root), actor_cache_key(actor));
     let guard = compiled_cache().lock().unwrap_or_else(|p| p.into_inner());
     match guard.get(&key) {
         Some((version, loaded)) if version == cache_version => Some(loaded.clone()),
@@ -96,17 +146,26 @@ pub(crate) fn cached_compiled(project_root: &Path, cache_version: &str) -> Optio
     }
 }
 
-/// Store the compiled config for `project_root` under its CacheToken `version`.
-pub(crate) fn store_compiled(project_root: &Path, cache_version: String, loaded: LoadedWorkflowConfig) {
-    let key = normalize_root(project_root);
+/// Store the compiled config for `(project_root, actor)` under its CacheToken
+/// `version`.
+pub(crate) fn store_compiled(
+    project_root: &Path,
+    actor: Option<&Actor>,
+    cache_version: String,
+    loaded: LoadedWorkflowConfig,
+) {
+    let key = (normalize_root(project_root), actor_cache_key(actor));
     compiled_cache().lock().unwrap_or_else(|p| p.into_inner()).insert(key, (cache_version, loaded));
 }
 
 /// Drop the cached compiled config for `project_root` so the next load
-/// recompiles. Called after a `config/write` (the source changed under us).
+/// recompiles. Called after a `config/write` (the source changed under us) and
+/// on host re-spawn. Clears EVERY actor partition for the root: a write (or a
+/// source/host change) can alter what any user sees, so a single global event
+/// must invalidate all per-actor entries, not just the writer's.
 fn invalidate_compiled(project_root: &Path) {
-    let key = normalize_root(project_root);
-    compiled_cache().lock().unwrap_or_else(|p| p.into_inner()).remove(&key);
+    let root = normalize_root(project_root);
+    compiled_cache().lock().unwrap_or_else(|p| p.into_inner()).retain(|(cached_root, _actor), _| cached_root != &root);
 }
 
 /// Normalize a project root the same way the test seam does, so the resident
@@ -160,7 +219,7 @@ pub fn config_source_installed(project_root: &Path) -> bool {
 /// `Ok(None)` => no plugin installed and (in tests) no injected base; the
 /// caller surfaces an actionable "no config_source plugin installed" error.
 /// Returns `(base WorkflowConfig, cache_token_version)`.
-pub fn resolve_plugin_base(project_root: &Path) -> Result<Option<(WorkflowConfig, String)>> {
+pub fn resolve_plugin_base(project_root: &Path, actor: Option<&Actor>) -> Result<Option<(WorkflowConfig, String)>> {
     // Test-only seam: a synthetic base config injected via
     // `set_test_plugin_base` stands in for an installed config_source plugin so
     // unit tests can exercise the kernel's pack-merge + validate pipeline (which
@@ -180,7 +239,7 @@ pub fn resolve_plugin_base(project_root: &Path) -> Result<Option<(WorkflowConfig
     let Some(plugin) = plugins.into_iter().next() else {
         return Ok(None);
     };
-    let loaded = run_blocking(load_via_resident(plugin, project_root.to_path_buf()))?;
+    let loaded = run_blocking(load_via_resident(plugin, project_root.to_path_buf(), actor.cloned()))?;
     Ok(Some(loaded?))
 }
 
@@ -335,13 +394,18 @@ async fn spawn_config_source_host(plugin: &DiscoveredPlugin) -> Result<PluginHos
 /// Reuse the resident host to run `config/load`. The host is NOT reaped after
 /// the call (the v0.6.6 resident model) — only on death-like failure or at
 /// shutdown via [`shutdown_resident_hosts`].
-async fn load_via_resident(plugin: DiscoveredPlugin, project_root: PathBuf) -> Result<(WorkflowConfig, String)> {
+async fn load_via_resident(
+    plugin: DiscoveredPlugin,
+    project_root: PathBuf,
+    actor: Option<Actor>,
+) -> Result<(WorkflowConfig, String)> {
     let name = plugin.name.clone();
     let call_root = project_root.clone();
     with_resident_host(plugin, &project_root, move |host| {
         let project_root = call_root.clone();
         let name = name.clone();
-        async move { config_load_call(&host, &name, &project_root).await }
+        let actor = actor.clone();
+        async move { config_load_call(&host, &name, &project_root, actor.as_ref()).await }
     })
     .await
 }
@@ -449,13 +513,22 @@ async fn config_load_call(
     host: &PluginHost,
     plugin_name: &str,
     project_root: &Path,
+    actor: Option<&Actor>,
 ) -> std::result::Result<(WorkflowConfig, String), ResidentCallError> {
     // Compute the repo-scope id from the project root so config_source plugins
     // that select config rows / repo-scoped secrets by scope (e.g. postgres)
     // get a real scope, not null.
+    //
+    // TRUST BOUNDARY: `actor` is the transport-asserted caller identity relayed
+    // verbatim from the authenticated control request. It is serialized into the
+    // `config/load` params (`null` when absent) so a per-user `config_source`
+    // plugin can scope its result. The kernel never authenticates or interprets
+    // it — and it is NEVER sourced from workflow YAML, agent output, or subject
+    // content.
     let params = serde_json::json!({
         "project_root": project_root,
         "repo_scope": protocol::repository_scope_for_path(project_root),
+        "actor": actor,
     });
     let value = host
         .request_typed_with_timeout("config/load", Some(params), CONFIG_LOAD_TIMEOUT)
@@ -593,8 +666,16 @@ mod resident_cache_tests {
     use animus_config_protocol::builtins::builtin_workflow_config;
 
     fn loaded(root: &Path) -> LoadedWorkflowConfig {
+        loaded_marked(root, "")
+    }
+
+    /// Build a `LoadedWorkflowConfig` tagged with `marker` in `default_workflow_ref`
+    /// so a test can prove two cached entries are distinct (no cross-actor leak).
+    fn loaded_marked(root: &Path, marker: &str) -> LoadedWorkflowConfig {
+        let mut config = builtin_workflow_config();
+        config.default_workflow_ref = marker.to_string();
         LoadedWorkflowConfig {
-            config: builtin_workflow_config(),
+            config,
             metadata: super::super::types::WorkflowConfigMetadata {
                 schema: String::new(),
                 version: 0,
@@ -605,28 +686,106 @@ mod resident_cache_tests {
         }
     }
 
+    fn actor(user_id: &str) -> Actor {
+        Actor { user_id: user_id.to_string(), claims: Vec::new(), tenant_id: None }
+    }
+
     #[test]
     fn compiled_cache_hits_on_matching_token_and_misses_otherwise() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
         // Cold: nothing cached.
-        assert!(cached_compiled(root, "tok-1").is_none());
+        assert!(cached_compiled(root, None, "tok-1").is_none());
 
-        store_compiled(root, "tok-1".to_string(), loaded(root));
+        store_compiled(root, None, "tok-1".to_string(), loaded(root));
         // Same token: hit.
-        assert!(cached_compiled(root, "tok-1").is_some());
+        assert!(cached_compiled(root, None, "tok-1").is_some());
         // Different token (source changed): miss => caller recompiles.
-        assert!(cached_compiled(root, "tok-2").is_none());
+        assert!(cached_compiled(root, None, "tok-2").is_none());
     }
 
     #[test]
     fn invalidate_compiled_forces_recompile() {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path();
-        store_compiled(root, "tok".to_string(), loaded(root));
-        assert!(cached_compiled(root, "tok").is_some());
+        store_compiled(root, None, "tok".to_string(), loaded(root));
+        assert!(cached_compiled(root, None, "tok").is_some());
         invalidate_compiled(root);
-        assert!(cached_compiled(root, "tok").is_none(), "write must invalidate the compiled cache");
+        assert!(cached_compiled(root, None, "tok").is_none(), "write must invalidate the compiled cache");
+    }
+
+    #[test]
+    fn compiled_cache_never_leaks_across_actors() {
+        // (a) SAME project_root + token, two DIFFERENT actors => two distinct
+        // compiled configs. Actor B must never receive actor A's entry.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let alice = actor("alice");
+        let bob = actor("bob");
+
+        store_compiled(root, Some(&alice), "tok".to_string(), loaded_marked(root, "alice-wf"));
+        store_compiled(root, Some(&bob), "tok".to_string(), loaded_marked(root, "bob-wf"));
+
+        let a = cached_compiled(root, Some(&alice), "tok").expect("alice cached");
+        let b = cached_compiled(root, Some(&bob), "tok").expect("bob cached");
+        assert_eq!(a.config.default_workflow_ref, "alice-wf");
+        assert_eq!(b.config.default_workflow_ref, "bob-wf", "bob must not be served alice's compiled config");
+
+        // The global (actor=None) partition is independent of both users.
+        assert!(
+            cached_compiled(root, None, "tok").is_none(),
+            "per-actor stores must not populate the global partition"
+        );
+    }
+
+    #[test]
+    fn actor_cache_key_is_claim_order_independent_and_partitions_identity() {
+        // (b) actor=None maps to the shared global partition, unchanged from
+        // today's behavior.
+        assert_eq!(actor_cache_key(None), "__global__");
+
+        // Claim order does not matter (sorted), so the same identity always
+        // shares one partition.
+        let unsorted = Actor { user_id: "u".into(), claims: vec!["b".into(), "a".into()], tenant_id: Some("t".into()) };
+        let sorted = Actor { user_id: "u".into(), claims: vec!["a".into(), "b".into()], tenant_id: Some("t".into()) };
+        assert_eq!(actor_cache_key(Some(&unsorted)), actor_cache_key(Some(&sorted)));
+
+        // Different user / tenant / claims partition.
+        assert_ne!(actor_cache_key(Some(&actor("alice"))), actor_cache_key(Some(&actor("bob"))));
+        let no_tenant = Actor { user_id: "u".into(), claims: vec!["a".into()], tenant_id: None };
+        assert_ne!(actor_cache_key(Some(&sorted)), actor_cache_key(Some(&no_tenant)));
+
+        // SECURITY: delimiter-bearing fields must NOT collide. With a naive
+        // `user_id|claims.join(",")|tenant` encoding, (`a|b`, [`c`]) and
+        // (`a`, [`b|c`]) would both render `a|b|c|` and share a cache partition.
+        // The unambiguous (JSON) encoding must keep them distinct.
+        let pipe_user = Actor { user_id: "a|b".into(), claims: vec!["c".into()], tenant_id: None };
+        let pipe_claim = Actor { user_id: "a".into(), claims: vec!["b|c".into()], tenant_id: None };
+        assert_ne!(
+            actor_cache_key(Some(&pipe_user)),
+            actor_cache_key(Some(&pipe_claim)),
+            "delimiter-bearing identities must not collide into one cache partition"
+        );
+    }
+
+    #[test]
+    fn invalidate_clears_every_actor_partition_for_the_root() {
+        // (c) a global/source change (config/write) must invalidate EVERY actor's
+        // entry for the root, not just one partition.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let alice = actor("alice");
+        let bob = actor("bob");
+
+        store_compiled(root, Some(&alice), "tok".to_string(), loaded_marked(root, "alice-wf"));
+        store_compiled(root, Some(&bob), "tok".to_string(), loaded_marked(root, "bob-wf"));
+        store_compiled(root, None, "tok".to_string(), loaded(root));
+
+        invalidate_compiled(root);
+
+        assert!(cached_compiled(root, Some(&alice), "tok").is_none(), "alice entry must be invalidated");
+        assert!(cached_compiled(root, Some(&bob), "tok").is_none(), "bob entry must be invalidated");
+        assert!(cached_compiled(root, None, "tok").is_none(), "global entry must be invalidated");
     }
 
     #[test]

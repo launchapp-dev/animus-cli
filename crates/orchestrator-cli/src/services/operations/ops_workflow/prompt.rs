@@ -193,7 +193,7 @@ async fn render_ad_hoc_prompts(
 
 fn effective_existing_workflow_ref(project_root: &str, workflow: &OrchestratorWorkflow) -> Result<String> {
     ensure_workflow_config_compiled(Path::new(project_root))?;
-    let workflow_config = load_workflow_config(Path::new(project_root))?;
+    let workflow_config = load_workflow_config(Path::new(project_root), None)?;
     Ok(workflow.workflow_ref.clone().unwrap_or_else(|| workflow_config.default_workflow_ref.clone()))
 }
 

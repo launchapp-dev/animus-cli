@@ -125,6 +125,7 @@ impl ResolverTurnProducer {
             env_vars: Vec::new(),
             mcp_servers: None,
             extras: Value::Object(Default::default()),
+            actor: None,
         };
         self.resolver.resolve(&probe).ok()
     }
@@ -487,6 +488,8 @@ async fn drive_once(
         env_vars,
         mcp_servers: extras.get("mcp_servers").cloned(),
         extras,
+        // CLI-local chat turn: no authenticated control identity → no actor.
+        actor: None,
     };
 
     let mut run = producer.start(request, resume_id.as_deref()).await?;

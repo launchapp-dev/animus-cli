@@ -107,7 +107,7 @@ pub fn resolve_server_url(
     // case. So: only propagate the load error when a workflow YAML source
     // actually exists; otherwise fall back to the builtin default and continue
     // to project config.
-    let loaded = match load_workflow_config_with_metadata(project_root) {
+    let loaded = match load_workflow_config_with_metadata(project_root, None) {
         Ok(loaded) => loaded,
         Err(err) if workflow_yaml_present(project_root) => {
             return Err(ServerResolutionError::WorkflowConfig(err.to_string()));

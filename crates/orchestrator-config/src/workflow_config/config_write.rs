@@ -53,7 +53,10 @@ fn read_modify_write<F>(project_root: &Path, mutate: F) -> Result<WorkflowConfig
 where
     F: FnOnce(&mut WorkflowConfig) -> Result<()>,
 {
-    let (mut config, _cache_token) = resolve_plugin_base(project_root)
+    // Config authoring (WU-F) is out of scope for the actor wave: this in-tree
+    // write path runs without an authenticated actor, so it reads the global
+    // (`actor = None`) base. A future wave threads the writer's actor here.
+    let (mut config, _cache_token) = resolve_plugin_base(project_root, None)
         .context("loading the raw config from the config_source plugin before mutating it")?
         .ok_or_else(|| {
             anyhow!(

@@ -181,7 +181,7 @@ pub(crate) fn set_agent_runtime_payload(project_root: &str, input_json: &str) ->
 
 pub(crate) fn get_workflow_config_payload(project_root: &str) -> Value {
     let path = workflow_config_path(project_root);
-    match orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root)) {
+    match orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root), None) {
         Ok(loaded) => serde_json::json!({
             "path": path.display().to_string(),
             "source": loaded.metadata.source,
@@ -232,7 +232,7 @@ fn config_error_to_value(error: &anyhow::Error) -> Value {
 }
 
 pub(crate) fn validate_workflow_config_payload(project_root: &str) -> Value {
-    let workflow_loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root));
+    let workflow_loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root), None);
     let runtime_loaded =
         orchestrator_core::agent_runtime_config::load_agent_runtime_config_with_metadata(Path::new(project_root));
     let warnings = unenforced_warnings_payload(project_root);
@@ -512,7 +512,7 @@ pub(crate) fn compile_yaml_workflows_payload(project_root: &str) -> Result<Value
 /// daemon's YAML watcher, which would not observe a non-file source.
 fn write_back_payload(project_root: &str, config: &orchestrator_core::WorkflowConfig) -> Result<Value> {
     let written_hash = orchestrator_core::workflow_config_hash(config);
-    let loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root)).with_context(|| {
+    let loaded = orchestrator_core::load_workflow_config_with_metadata(Path::new(project_root), None).with_context(|| {
         "config was written but reloading it from the config_source plugin failed; the persisted config may be unusable"
     })?;
     Ok(serde_json::json!({

@@ -504,7 +504,7 @@ pub fn load_agent_runtime_config(project_root: &Path) -> Result<AgentRuntimeConf
 }
 
 pub fn load_agent_runtime_config_with_metadata(project_root: &Path) -> Result<LoadedAgentRuntimeConfig> {
-    if let Ok(loaded_workflow) = crate::workflow_config::load_workflow_config_with_metadata(project_root) {
+    if let Ok(loaded_workflow) = crate::workflow_config::load_workflow_config_with_metadata(project_root, None) {
         let mut config = builtin_agent_runtime_config();
         let registry = crate::resolve_pack_registry(project_root)?;
         let mut path = loaded_workflow.path.clone();
@@ -2545,7 +2545,8 @@ cli_tools:
 
         write_minimal_project_workflow(temp.path());
         let _base = install_yaml_config_source_base(temp.path());
-        crate::workflow_config::load_workflow_config_with_metadata(temp.path()).expect("workflow config should load");
+        crate::workflow_config::load_workflow_config_with_metadata(temp.path(), None)
+            .expect("workflow config should load");
         let resolved = load_agent_runtime_config_with_metadata(temp.path()).expect("load runtime config");
         let command = resolved.config.phase_command("pack-review").expect("pack review command");
         let tool = resolved.config.cli_tools.get("pack-tool").expect("pack tool");

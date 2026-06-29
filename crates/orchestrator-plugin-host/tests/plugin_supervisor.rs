@@ -109,6 +109,7 @@ fn make_request(cwd: PathBuf) -> SessionRequest {
         timeout_secs: Some(10),
         env_vars: vec![],
         extras: json!({}),
+        actor: None,
     }
 }
 

@@ -104,7 +104,7 @@ workflows:
     let _reloaded = file_hub(temp.path()).expect("reload hub");
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
-    let config = crate::load_workflow_config(temp.path()).expect("workflow config should load");
+    let config = crate::load_workflow_config(temp.path(), None).expect("workflow config should load");
 
     assert_eq!(config.default_workflow_ref.as_str(), "yaml-standard");
     assert!(
@@ -205,7 +205,7 @@ fn file_hub_bootstraps_workflow_yaml_with_phase_catalog() {
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&project_path);
 
-    let config = crate::load_workflow_config(&project_path).expect("workflow config should load");
+    let config = crate::load_workflow_config(&project_path, None).expect("workflow config should load");
 
     assert_eq!(config.schema.as_str(), "animus.workflow-config.v2");
     assert_eq!(config.version, 2);
@@ -660,7 +660,7 @@ workflows:
     let scoped = scoped_ao_root(temp.path());
     assert!(!scoped.join("state").join("workflow-config.v2.json").exists(), "no JSON config should exist");
 
-    let config = crate::load_workflow_config(temp.path()).expect("yaml-only repo should load workflow config");
+    let config = crate::load_workflow_config(temp.path(), None).expect("yaml-only repo should load workflow config");
     assert!(
         config.workflows.iter().any(|w| w.id == "yaml-only-workflow"),
         "workflow config should include yaml-defined workflow"
@@ -830,7 +830,7 @@ async fn file_hub_auto_prunes_checkpoints_on_completion_when_enabled() {
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
-    let mut config = crate::load_workflow_config(temp.path()).expect("load workflow config");
+    let mut config = crate::load_workflow_config(temp.path(), None).expect("load workflow config");
     config.checkpoint_retention.keep_last_per_phase = 1;
     config.checkpoint_retention.max_age_hours = None;
     config.checkpoint_retention.auto_prune_on_completion = true;
@@ -862,7 +862,7 @@ async fn file_hub_completion_remains_successful_when_auto_prune_errors() {
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
-    let mut config = crate::load_workflow_config(temp.path()).expect("load workflow config");
+    let mut config = crate::load_workflow_config(temp.path(), None).expect("load workflow config");
     config.checkpoint_retention.keep_last_per_phase = 1;
     config.checkpoint_retention.max_age_hours = Some(u64::MAX);
     config.checkpoint_retention.auto_prune_on_completion = true;
@@ -1098,7 +1098,7 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
     let _config_source_seam =
         orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(temp.path());
 
-    let mut workflow_config = crate::load_workflow_config(temp.path()).expect("load config");
+    let mut workflow_config = crate::load_workflow_config(temp.path(), None).expect("load config");
     workflow_config.workflows.push(crate::WorkflowDefinition {
         id: "planning-custom".to_string(),
         name: "Planning Custom".to_string(),

@@ -643,6 +643,10 @@ fn build_session_request(info: &ProviderInfo, params: AgentRunParams) -> Session
         env_vars: params.env.into_iter().collect(),
         mcp_servers: params.mcp_servers,
         extras: Value::Object(extras),
+        // `AgentRunParams` carries no actor today; the actor reaches a provider
+        // session only when relayed from the workflow runner (out-of-tree). Never
+        // synthesized from local run params.
+        actor: None,
     }
 }
 

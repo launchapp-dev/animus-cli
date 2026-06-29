@@ -11,6 +11,9 @@ protocol = { workspace = true }
 # v0.6: resolve an installed `config_source` plugin (else fall back to in-tree YAML).
 orchestrator-plugin-host = { workspace = true }
 animus-config-protocol = { workspace = true }
+# v0.6.20: thread the transport-asserted per-user Actor through the config-load
+# path (and re-key the compiled-config cache by actor identity).
+animus-actor = { workspace = true }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "time"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
