@@ -9,6 +9,11 @@ use animus_config_protocol::yaml_types::{
     STANDARD_WORKFLOW_TEMPLATE_FILE_NAME,
 };
 
+// Default workflow templates — TEST FIXTURES ONLY. The kernel no longer
+// scaffolds these into real projects (see `ensure_workflow_yaml_scaffold`);
+// they survive solely so the `test-utils` config_source seam can give tests a
+// standard workflow to load.
+#[cfg(any(test, feature = "test-utils"))]
 pub fn default_workflow_template_files() -> [(&'static str, &'static str); 4] {
     [
         (
@@ -115,7 +120,26 @@ phase_catalog:
     ]
 }
 
+/// v0.6: the kernel ships ZERO baked workflow content. Workflows come from the
+/// active flavor / `config_source` plugin (e.g. config-postgres team_*, or
+/// config-yaml reading author-provided `.animus/workflows/*.yaml`), never from
+/// kernel-scaffolded defaults. This ensures the workflows directory exists but
+/// writes no template files — so deleting workflow YAML does NOT get silently
+/// repopulated with bundled defaults, and an empty project stays empty until the
+/// flavor/config_source provides workflows.
 pub fn ensure_workflow_yaml_scaffold(project_root: &Path) -> Result<Vec<PathBuf>> {
+    let workflows_dir = yaml_workflows_dir(project_root);
+    fs::create_dir_all(&workflows_dir).with_context(|| format!("failed to create {}", workflows_dir.display()))?;
+    Ok(Vec::new())
+}
+
+/// TEST ONLY: write the default workflow templates into a project (the historical
+/// `ensure_workflow_yaml_scaffold` behavior). Production no longer scaffolds
+/// baked defaults; the `test-utils` config_source seam uses this so tests that
+/// rely on the standard workflow keep working. Only writes when no workflow YAML
+/// already exists, so tests that author their own YAML are not clobbered.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn scaffold_default_workflows_for_tests(project_root: &Path) -> Result<Vec<PathBuf>> {
     let workflows_dir = yaml_workflows_dir(project_root);
     fs::create_dir_all(&workflows_dir).with_context(|| format!("failed to create {}", workflows_dir.display()))?;
 
@@ -125,7 +149,6 @@ pub fn ensure_workflow_yaml_scaffold(project_root: &Path) -> Result<Vec<PathBuf>
             .with_context(|| format!("failed to read {}", workflows_dir.display()))?
             .filter_map(|entry| entry.ok())
             .any(|entry| entry.path().extension().map(|ext| ext == "yaml" || ext == "yml").unwrap_or(false));
-
     if has_existing_yaml {
         return Ok(Vec::new());
     }

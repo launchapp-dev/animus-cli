@@ -2453,10 +2453,13 @@ cli_tools:
         ensure_agent_runtime_config_file(temp.path()).expect("ensure file");
 
         let workflows_dir = crate::workflow_config::yaml_workflows_dir(temp.path());
-        assert!(workflows_dir.join("custom.yaml").exists());
-        assert!(workflows_dir.join("standard-workflow.yaml").exists());
-        assert!(workflows_dir.join("hotfix-workflow.yaml").exists());
-        assert!(workflows_dir.join("research-workflow.yaml").exists());
+        // Kernel ships zero baked workflow content: the dir is created but no
+        // default templates are scaffolded.
+        assert!(workflows_dir.exists());
+        assert!(!workflows_dir.join("custom.yaml").exists());
+        assert!(!workflows_dir.join("standard-workflow.yaml").exists());
+        assert!(!workflows_dir.join("hotfix-workflow.yaml").exists());
+        assert!(!workflows_dir.join("research-workflow.yaml").exists());
     }
 
     #[test]
