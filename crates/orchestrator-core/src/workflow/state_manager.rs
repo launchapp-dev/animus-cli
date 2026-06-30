@@ -202,14 +202,32 @@ fn dir_size_bytes(path: &std::path::Path) -> u64 {
 #[derive(Clone)]
 pub struct WorkflowStateManager {
     project_root: PathBuf,
+    /// Resolved ONCE at construction: SQLite (no plugin installed — the default,
+    /// byte-identical to pre-BU-1 behavior) or an installed `workflow_journal`
+    /// plugin. See [`super::journal_client`].
+    backend: super::journal_client::JournalBackend,
 }
 
 impl WorkflowStateManager {
     pub fn new(project_root: impl Into<PathBuf>) -> Self {
-        Self { project_root: project_root.into() }
+        let project_root = project_root.into();
+        let backend = super::journal_client::resolve_backend(&project_root);
+        Self { project_root, backend }
+    }
+
+    /// The installed `workflow_journal` plugin, if the backend resolved to one.
+    /// `None` => SQLite (run every existing code path unchanged).
+    fn journal_plugin(&self) -> Option<&orchestrator_plugin_host::DiscoveredPlugin> {
+        match &self.backend {
+            super::journal_client::JournalBackend::Sqlite => None,
+            super::journal_client::JournalBackend::Plugin(plugin) => Some(plugin.as_ref()),
+        }
     }
 
     pub fn save(&self, workflow: &OrchestratorWorkflow) -> Result<()> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::save(plugin, &self.project_root, workflow);
+        }
         let conn = self.open_db()?;
         self.save_with_conn(&conn, workflow)
     }
@@ -261,6 +279,9 @@ impl WorkflowStateManager {
     }
 
     pub fn load(&self, workflow_id: &str) -> Result<OrchestratorWorkflow> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::load(plugin, &self.project_root, workflow_id);
+        }
         let conn = self.open_db()?;
         let data: Vec<u8> = conn
             .query_row("SELECT json FROM workflows WHERE id = ?1", params![workflow_id], |row| row.get(0))
@@ -277,6 +298,9 @@ impl WorkflowStateManager {
     /// TRUST BOUNDARY: the actor originates only from the authenticated control
     /// request that started the run — never from agent output / YAML / subject.
     pub fn set_workflow_actor(&self, workflow_id: &str, actor: Option<&Actor>) -> Result<()> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::save_actor(plugin, &self.project_root, workflow_id, actor);
+        }
         let conn = self.open_db()?;
         let json = match actor {
             Some(actor) => Some(serde_json::to_string(actor).context("serializing actor for persistence")?),
@@ -291,6 +315,9 @@ impl WorkflowStateManager {
     /// missing row / column / malformed value yields `None` (global scope) so a
     /// lifecycle op never fails on actor lookup.
     pub fn load_workflow_actor(&self, workflow_id: &str) -> Option<Actor> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::load_actor(plugin, &self.project_root, workflow_id);
+        }
         let conn = self.open_db().ok()?;
         let json: Option<String> =
             conn.query_row("SELECT actor FROM workflows WHERE id = ?1", params![workflow_id], |row| row.get(0)).ok()?;
@@ -298,6 +325,9 @@ impl WorkflowStateManager {
     }
 
     pub fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::list(plugin, &self.project_root, &["running", "paused"]);
+        }
         let conn = self.open_db()?;
         let mut stmt = conn.prepare("SELECT json FROM workflows WHERE status IN ('running', 'paused')")?;
         let workflows = stmt
@@ -310,6 +340,9 @@ impl WorkflowStateManager {
     }
 
     pub fn list_active(&self) -> Result<Vec<OrchestratorWorkflow>> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::list(plugin, &self.project_root, &["pending", "running", "paused"]);
+        }
         let conn = self.open_db()?;
         let mut stmt = conn.prepare("SELECT json FROM workflows WHERE status IN ('pending', 'running', 'paused')")?;
         let workflows = stmt
@@ -322,6 +355,9 @@ impl WorkflowStateManager {
     }
 
     pub fn list_all(&self) -> Result<Vec<OrchestratorWorkflow>> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::list(plugin, &self.project_root, &[]);
+        }
         let conn = self.open_db()?;
         let mut stmt = conn.prepare("SELECT json FROM workflows")?;
         let workflows = stmt
@@ -338,6 +374,16 @@ impl WorkflowStateManager {
         page: ListPageRequest,
         status: Option<crate::types::WorkflowStatus>,
     ) -> Result<(Vec<String>, usize)> {
+        if let Some(plugin) = self.journal_plugin() {
+            // The journal protocol's query_ids has no offset/total, so fetch the
+            // full matching id set from the plugin and paginate client-side to
+            // preserve the (page, total) contract.
+            let all_ids = super::journal_client::query_ids(plugin, &self.project_root, status)?;
+            let total = all_ids.len();
+            let (start, end) = page.bounds(total);
+            let ids = all_ids.into_iter().skip(start).take(end.saturating_sub(start)).collect();
+            return Ok((ids, total));
+        }
         let conn = self.open_db()?;
 
         let total: usize = match status {
@@ -385,6 +431,18 @@ impl WorkflowStateManager {
 
     pub fn cleanup_terminal_workflows(&self, max_age_hours: u64) -> Result<CleanupResult> {
         let cutoff = Utc::now() - Duration::hours(max_age_hours as i64);
+        if let Some(plugin) = self.journal_plugin() {
+            let terminal = &["completed", "failed", "escalated", "cancelled"];
+            let runs = super::journal_client::list(plugin, &self.project_root, terminal)?;
+            let mut deleted = 0usize;
+            for workflow in runs {
+                if workflow.completed_at.unwrap_or(workflow.started_at) < cutoff {
+                    super::journal_client::delete(plugin, &self.project_root, &workflow.id)?;
+                    deleted += 1;
+                }
+            }
+            return Ok(CleanupResult { deleted });
+        }
         let cutoff_str = cutoff.to_rfc3339();
 
         let mut conn = self.open_db()?;
@@ -405,6 +463,9 @@ impl WorkflowStateManager {
     }
 
     pub fn delete(&self, workflow_id: &str) -> Result<()> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::delete(plugin, &self.project_root, workflow_id);
+        }
         let mut conn = self.open_db()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
@@ -431,6 +492,20 @@ impl WorkflowStateManager {
     }
 
     fn list_run_prune_candidates(&self) -> Result<Vec<WorkflowRunPruneCandidate>> {
+        if let Some(plugin) = self.journal_plugin() {
+            // Terminal runs only; effective_at = completed_at (fall back to started_at).
+            let terminal = &["completed", "failed", "escalated", "cancelled"];
+            let runs = super::journal_client::list(plugin, &self.project_root, terminal)?;
+            let mut candidates = Vec::with_capacity(runs.len());
+            for workflow in runs {
+                candidates.push(WorkflowRunPruneCandidate {
+                    workflow_id: workflow.id.clone(),
+                    status: workflow.status,
+                    effective_at: workflow.completed_at.unwrap_or(workflow.started_at),
+                });
+            }
+            return Ok(candidates);
+        }
         let conn = self.open_db()?;
         let mut stmt = conn.prepare(
             "SELECT id, status, started_at, completed_at FROM workflows
@@ -516,13 +591,19 @@ impl WorkflowStateManager {
         }
 
         if !removable_ids.is_empty() {
-            let mut conn = self.open_db()?;
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            for workflow_id in &removable_ids {
-                tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
-                tx.execute("DELETE FROM checkpoints WHERE workflow_id = ?1", params![workflow_id])?;
+            if let Some(plugin) = self.journal_plugin() {
+                for workflow_id in &removable_ids {
+                    super::journal_client::delete(plugin, &self.project_root, workflow_id)?;
+                }
+            } else {
+                let mut conn = self.open_db()?;
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                for workflow_id in &removable_ids {
+                    tx.execute("DELETE FROM workflows WHERE id = ?1", params![workflow_id])?;
+                    tx.execute("DELETE FROM checkpoints WHERE workflow_id = ?1", params![workflow_id])?;
+                }
+                tx.commit()?;
             }
-            tx.commit()?;
         }
         Ok(report)
     }
@@ -562,6 +643,9 @@ impl WorkflowStateManager {
         workflow: &OrchestratorWorkflow,
         reason: CheckpointReason,
     ) -> Result<OrchestratorWorkflow> {
+        if let Some(plugin) = self.journal_plugin() {
+            return self.save_checkpoint_plugin(plugin, workflow, reason);
+        }
         let mut workflow = workflow.clone();
 
         let mut conn = self.open_db()?;
@@ -600,6 +684,47 @@ impl WorkflowStateManager {
         )?;
         self.save_with_conn(&tx, &workflow)?;
         tx.commit()?;
+
+        if workflow.checkpoint_metadata.checkpoint_count.is_multiple_of(5) {
+            let _ = self.prune_checkpoints(&workflow.id, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, None, false);
+        }
+
+        Ok(workflow)
+    }
+
+    /// Plugin-backend variant of [`Self::save_checkpoint`]: derives the next
+    /// checkpoint number from the plugin's checkpoint list, persists the snapshot
+    /// and the run via `journal/*`, and triggers the periodic prune. Mirrors the
+    /// SQLite path's bookkeeping; the snapshot blob is the serialized workflow
+    /// (raw JSON `Value`, exactly what the SQLite path compresses into
+    /// `snapshot_json`).
+    fn save_checkpoint_plugin(
+        &self,
+        plugin: &orchestrator_plugin_host::DiscoveredPlugin,
+        workflow: &OrchestratorWorkflow,
+        reason: CheckpointReason,
+    ) -> Result<OrchestratorWorkflow> {
+        let mut workflow = workflow.clone();
+        let max_persisted_number = super::journal_client::checkpoint_list(plugin, &self.project_root, &workflow.id)?
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+        workflow.checkpoint_metadata.checkpoint_count =
+            workflow.checkpoint_metadata.checkpoint_count.max(max_persisted_number) + 1;
+
+        let checkpoint = WorkflowCheckpoint {
+            number: workflow.checkpoint_metadata.checkpoint_count,
+            timestamp: Utc::now(),
+            reason,
+            phase_id: checkpoint_phase_id(&workflow),
+            machine_state: workflow.machine_state,
+            status: workflow.status,
+        };
+        workflow.checkpoint_metadata.checkpoints.push(checkpoint.clone());
+
+        let snapshot = serde_json::to_value(&workflow).context("serializing checkpoint snapshot")?;
+        super::journal_client::checkpoint_save(plugin, &self.project_root, &workflow.id, checkpoint.number, snapshot)?;
+        super::journal_client::save(plugin, &self.project_root, &workflow)?;
 
         if workflow.checkpoint_metadata.checkpoint_count.is_multiple_of(5) {
             let _ = self.prune_checkpoints(&workflow.id, DEFAULT_CHECKPOINT_RETENTION_KEEP_LAST_PER_PHASE, None, false);
@@ -704,16 +829,36 @@ impl WorkflowStateManager {
         if !dry_run {
             workflow.checkpoint_metadata.checkpoints = retained_checkpoints;
 
-            let mut conn = self.open_db()?;
-            let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            self.save_with_conn(&tx, &workflow)?;
-            for checkpoint_num in &pruned_checkpoint_numbers {
-                tx.execute(
-                    "DELETE FROM checkpoints WHERE workflow_id = ?1 AND number = ?2",
-                    params![workflow_id, *checkpoint_num as i64],
+            if let Some(plugin) = self.journal_plugin() {
+                // TODO(codex-p2): the journal protocol exposes only
+                // `checkpoint_prune(keep)` (keep most-recent-N), not per-number
+                // deletion, so for multi-phase / age-based pruning the backend's
+                // retained SET can differ from the kernel's per-phase selection
+                // (`pruned_checkpoint_numbers`). The count converges and the
+                // report reflects the kernel's intended selection, but a backend
+                // that strictly keeps the newest N may retain a different blob set
+                // than the saved workflow metadata claims. Needs a protocol
+                // `checkpoint_delete(nums)` (or `checkpoint_retain(nums)`) to make
+                // the plugin path exact; the SQLite path is already exact.
+                super::journal_client::save(plugin, &self.project_root, &workflow)?;
+                super::journal_client::checkpoint_prune(
+                    plugin,
+                    &self.project_root,
+                    workflow_id,
+                    checkpoint_count_after,
                 )?;
+            } else {
+                let mut conn = self.open_db()?;
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                self.save_with_conn(&tx, &workflow)?;
+                for checkpoint_num in &pruned_checkpoint_numbers {
+                    tx.execute(
+                        "DELETE FROM checkpoints WHERE workflow_id = ?1 AND number = ?2",
+                        params![workflow_id, *checkpoint_num as i64],
+                    )?;
+                }
+                tx.commit()?;
             }
-            tx.commit()?;
         }
 
         Ok(WorkflowCheckpointPruneResult {
@@ -753,6 +898,9 @@ impl WorkflowStateManager {
     }
 
     pub fn list_checkpoints(&self, workflow_id: &str) -> Result<Vec<usize>> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::checkpoint_list(plugin, &self.project_root, workflow_id);
+        }
         let conn = self.open_db()?;
         let mut stmt = conn.prepare("SELECT number FROM checkpoints WHERE workflow_id = ?1 ORDER BY number")?;
         let numbers: Vec<usize> = stmt
@@ -764,6 +912,9 @@ impl WorkflowStateManager {
     }
 
     pub fn load_checkpoint(&self, workflow_id: &str, checkpoint_num: usize) -> Result<OrchestratorWorkflow> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::checkpoint_load(plugin, &self.project_root, workflow_id, checkpoint_num);
+        }
         let conn = self.open_db()?;
         let data: Vec<u8> = conn
             .query_row(
@@ -782,6 +933,21 @@ impl WorkflowStateManager {
 }
 
 pub fn load_active_workflow_summaries(project_root: &std::path::Path) -> Result<Vec<WorkflowActivitySummary>> {
+    if let Some(plugin) = super::journal_client::plugin_for(project_root) {
+        let runs = super::journal_client::list(&plugin, project_root, &["running", "paused"])?;
+        return Ok(runs
+            .into_iter()
+            .map(|workflow| {
+                let summary = workflow_summary_fields(&workflow);
+                WorkflowActivitySummary {
+                    workflow_id: workflow.id.clone(),
+                    task_id: workflow.task_id.clone(),
+                    status: status_str(workflow.status).to_string(),
+                    phase_id: summary.phase_id.unwrap_or_else(|| "unknown".to_string()),
+                }
+            })
+            .collect());
+    }
     let conn = open_project_db(project_root)?;
     let mut stmt = conn.prepare(
         "SELECT id, task_id, status, phase_id
@@ -815,6 +981,26 @@ pub fn load_recent_failed_workflow_summaries(
     project_root: &std::path::Path,
     limit: usize,
 ) -> Result<Vec<WorkflowFailureSummary>> {
+    if let Some(plugin) = super::journal_client::plugin_for(project_root) {
+        let runs = super::journal_client::list(&plugin, project_root, &["failed"])?;
+        let mut out: Vec<WorkflowFailureSummary> = runs
+            .into_iter()
+            .filter_map(|workflow| {
+                let summary = workflow_summary_fields(&workflow);
+                let failed_at = DateTime::parse_from_rfc3339(&summary.failed_at?).ok()?.with_timezone(&Utc);
+                Some(WorkflowFailureSummary {
+                    workflow_id: workflow.id.clone(),
+                    task_id: workflow.task_id.clone(),
+                    phase_id: summary.phase_id.unwrap_or_else(|| "unknown".to_string()),
+                    failed_at,
+                    failure_reason: summary.failure_reason,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| b.failed_at.cmp(&a.failed_at).then_with(|| a.workflow_id.cmp(&b.workflow_id)));
+        out.truncate(limit);
+        return Ok(out);
+    }
     let conn = open_project_db(project_root)?;
     let limit = i64::try_from(limit).context("recent failed workflow limit overflow")?;
     let mut stmt = conn.prepare(
@@ -853,6 +1039,21 @@ pub fn load_recent_failed_workflow_summaries(
 }
 
 pub fn load_workflow_history_summaries(project_root: &std::path::Path) -> Result<Vec<WorkflowHistorySummary>> {
+    if let Some(plugin) = super::journal_client::plugin_for(project_root) {
+        let runs = super::journal_client::list(&plugin, project_root, &[])?;
+        let mut out: Vec<WorkflowHistorySummary> = runs
+            .into_iter()
+            .map(|workflow| WorkflowHistorySummary {
+                workflow_id: workflow.id.clone(),
+                task_id: workflow.task_id.clone(),
+                status: status_str(workflow.status).to_string(),
+                started_at: workflow.started_at,
+                completed_at: workflow.completed_at,
+            })
+            .collect();
+        out.sort_by(|a, b| b.started_at.cmp(&a.started_at).then_with(|| a.workflow_id.cmp(&b.workflow_id)));
+        return Ok(out);
+    }
     let conn = open_project_db(project_root)?;
     let mut stmt = conn.prepare(
         "SELECT id, task_id, status, started_at, completed_at
@@ -896,6 +1097,15 @@ pub fn load_workflow_history_summaries(project_root: &std::path::Path) -> Result
 /// fail to decompress or parse are skipped silently — the caller
 /// gets a partial index rather than a hard error.
 pub fn load_workflow_ref_index(project_root: &std::path::Path) -> Result<std::collections::HashMap<String, String>> {
+    if let Some(plugin) = super::journal_client::plugin_for(project_root) {
+        // Best-effort, matching the SQLite path: a backend error yields an empty
+        // index rather than failing the caller (cost attribution degrades, not breaks).
+        let runs = super::journal_client::list(&plugin, project_root, &[]).unwrap_or_default();
+        return Ok(runs
+            .into_iter()
+            .filter_map(|workflow| workflow.workflow_ref.clone().map(|r| (workflow.id.clone(), r)))
+            .collect());
+    }
     let conn = match open_project_db(project_root) {
         Ok(conn) => conn,
         Err(_) => return Ok(std::collections::HashMap::new()),

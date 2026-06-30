@@ -136,6 +136,11 @@ struct SubscriberSlot {
 pub struct WorkflowEventBroadcaster {
     next_id: AtomicU64,
     subscribers: Mutex<Vec<SubscriberSlot>>,
+    /// BU-3 event sink: when set, each emitted event is additionally tee'd into
+    /// the project's `workflow_journal` plugin via `journal/record` (a no-op when
+    /// no journal plugin is installed). `None` => no tee (the default). Stored as
+    /// the project root so the sink can resolve the (per-root) journal backend.
+    journal_sink_root: Mutex<Option<std::path::PathBuf>>,
 }
 
 impl WorkflowEventBroadcaster {
@@ -172,6 +177,19 @@ impl WorkflowEventBroadcaster {
         let mut guard = self.subscribers.lock().expect("workflow event subscribers mutex poisoned");
         guard.push(SubscriberSlot { id, sender: tx, filter, user_buffer });
         (id, rx)
+    }
+
+    /// BU-3: enable the journal event sink for `project_root`. Idempotent; the
+    /// daemon calls this at startup so phase/run lifecycle events are tee'd into
+    /// an installed `workflow_journal` plugin. No-op behaviorally when no such
+    /// plugin is installed (the sink resolves to the SQLite backend, which has no
+    /// `journal/record`).
+    pub fn set_journal_sink(&self, project_root: std::path::PathBuf) {
+        *self.journal_sink_root.lock().expect("journal sink mutex poisoned") = Some(project_root);
+    }
+
+    fn journal_sink_root(&self) -> Option<std::path::PathBuf> {
+        self.journal_sink_root.lock().expect("journal sink mutex poisoned").clone()
     }
 
     /// Drop a subscription by id. Called on client disconnect.
@@ -230,6 +248,27 @@ impl WorkflowEventBroadcaster {
                 crate::metrics::incr(&crate::metrics::labeled("phase_executions_total", &[("status", "failed")]));
             }
             _ => {}
+        }
+        // BU-3: tee the event into the workflow_journal plugin (fire-and-forget,
+        // off the emit path). No-op when no sink is configured or no runtime is
+        // current (e.g. unit tests). State persistence is unaffected either way.
+        if let Some(root) = self.journal_sink_root() {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                let workflow_id = event.workflow_id.clone();
+                let kind = event.kind.clone();
+                let payload = event.payload.clone();
+                let occurred_at = event.occurred_at;
+                handle.spawn(async move {
+                    orchestrator_core::workflow::journal_record_wire_event(
+                        &root,
+                        &workflow_id,
+                        &kind,
+                        payload,
+                        occurred_at,
+                    )
+                    .await;
+                });
+            }
         }
         let mut delivered = 0usize;
         let mut closed_ids: Vec<SubscriptionId> = Vec::new();

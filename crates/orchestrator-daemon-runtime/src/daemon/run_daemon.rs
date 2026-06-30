@@ -284,6 +284,9 @@ where
     let subject_dispatch = resolve_subject_dispatch_for_daemon(project_root, &primary_root, hooks).await;
 
     let workflow_event_broadcaster = WorkflowEventBroadcaster::new();
+    // BU-3: tee phase/run lifecycle events into an installed workflow_journal
+    // plugin (no-op when none is installed — the SQLite backend has no events).
+    workflow_event_broadcaster.set_journal_sink(std::path::PathBuf::from(project_root));
     install_workflow_event_emitter(BroadcastWorkflowEventEmitter::new(workflow_event_broadcaster.clone()));
     install_workflow_event_broadcaster(workflow_event_broadcaster.clone());
 
@@ -620,6 +623,11 @@ where
     // loads/writes (v0.6.6). Without this the warm plugin process would survive
     // daemon teardown until kill_on_drop fires at runtime exit.
     orchestrator_config::workflow_config::config_source_client::shutdown_resident_hosts().await;
+
+    // BU-1: likewise reap the resident workflow_journal plugin host (kept warm
+    // across run-state/checkpoint/event RPCs) so its child process — and any DB
+    // connection it holds — is terminated cleanly on daemon teardown.
+    orchestrator_core::workflow::shutdown_journal_hosts().await;
 
     if stop_daemon_on_exit {
         let _ = hooks.stop_daemon(&primary_root).await;
