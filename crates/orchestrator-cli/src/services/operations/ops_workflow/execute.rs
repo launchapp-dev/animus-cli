@@ -15,6 +15,13 @@ pub(crate) struct WorkflowExecuteArgs {
     pub(crate) task_id: Option<String>,
     pub(crate) requirement_id: Option<String>,
     pub(crate) title: Option<String>,
+    /// Generic, kind-correct subject dispatch for the BaaS `--subject-id` path.
+    /// When set (and not re-attaching to an existing workflow), it is relayed
+    /// verbatim on the runner request as `subject_dispatch` — the protocol
+    /// requires generic (non-task/requirement) subject backends to use the
+    /// dispatch envelope — so the subject resolves under its real kind via
+    /// `<kind>/get` instead of being coerced to `task`.
+    pub(crate) subject_dispatch: Option<protocol::SubjectDispatch>,
     pub(crate) description: Option<String>,
     pub(crate) workflow_ref: Option<String>,
     pub(crate) phase: Option<String>,
@@ -115,7 +122,7 @@ pub(crate) async fn handle_workflow_execute(
     } else {
         workflow_proto::WorkflowExecuteRequest {
             workflow_id: None,
-            subject_dispatch: None,
+            subject_dispatch: args.subject_dispatch.clone(),
             subject_ref: None,
             task_id: args.task_id.clone(),
             requirement_id: args.requirement_id.clone(),

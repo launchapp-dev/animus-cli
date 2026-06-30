@@ -24,6 +24,7 @@ mod ops_trigger;
 mod ops_update;
 mod ops_web;
 mod ops_workflow;
+mod subject_id_dispatch;
 
 pub(crate) use ops_auth::*;
 use ops_common::*;

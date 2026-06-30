@@ -81,9 +81,35 @@ pub(crate) fn ensure_workflow_runner_plugin(project_root: &Path) -> Result<()> {
 pub(crate) fn workflow_execute_request_for_existing(
     workflow: &OrchestratorWorkflow,
 ) -> workflow_proto::WorkflowExecuteRequest {
+    use protocol::orchestrator::{SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK};
+    use protocol::SubjectDispatch;
+    // Generic (BaaS dynamic) kinds carry no `task_id` / `requirement_id`, so
+    // the convenience-field reattach would leave the request with NO subject
+    // and the runner would fail subject resolution after the CLI already
+    // reported the workflow dispatched. The runner protocol requires
+    // non-task/requirement subjects to travel as a `subject_dispatch`, so
+    // rebuild one from the persisted record (authoritative for workflow_ref /
+    // input / vars). Task / requirement / custom keep the existing convenience
+    // fields untouched.
+    let kind = workflow.subject.kind();
+    let subject_dispatch =
+        if kind == SUBJECT_KIND_TASK || kind == SUBJECT_KIND_REQUIREMENT || kind == SUBJECT_KIND_CUSTOM {
+            None
+        } else {
+            Some(
+                SubjectDispatch::for_subject_with_metadata(
+                    workflow.subject.clone(),
+                    workflow.workflow_ref.clone().unwrap_or_default(),
+                    "reattach-detached-runner",
+                    workflow.started_at,
+                )
+                .with_input(workflow.input.clone())
+                .with_vars(workflow.vars.clone()),
+            )
+        };
     workflow_proto::WorkflowExecuteRequest {
         workflow_id: Some(workflow.id.clone()),
-        subject_dispatch: None,
+        subject_dispatch,
         subject_ref: None,
         task_id: workflow.subject.task_id().map(str::to_string),
         requirement_id: workflow.subject.requirement_id().map(str::to_string),
@@ -1238,6 +1264,45 @@ workflows:
             "reattach request must carry the task subject so the runner plugin resolves subject context"
         );
         assert_eq!(request.requirement_id, None);
+    }
+
+    #[test]
+    fn reattach_request_carries_generic_subject_dispatch_for_baas_kind() {
+        // A detached `workflow run --subject-id blog:BLOG-001` persists a
+        // generic-kind workflow record. Its reattach child must rebuild a
+        // `subject_dispatch` (the runner protocol requires it for non-task /
+        // requirement kinds) — without it the runner has no subject and fails
+        // resolution after the CLI already reported the workflow dispatched.
+        let workflow = orchestrator_core::OrchestratorWorkflow {
+            id: "wf-blog-1".to_string(),
+            task_id: String::new(),
+            workflow_ref: Some("draft-post".to_string()),
+            input: None,
+            vars: std::collections::HashMap::new(),
+            status: WorkflowStatus::Running,
+            current_phase_index: 0,
+            phases: Vec::new(),
+            machine_state: orchestrator_core::WorkflowMachineState::Idle,
+            current_phase: None,
+            started_at: chrono::Utc::now(),
+            completed_at: None,
+            failure_reason: None,
+            checkpoint_metadata: orchestrator_core::WorkflowCheckpointMetadata::default(),
+            rework_counts: std::collections::HashMap::new(),
+            total_reworks: 0,
+            decision_history: Vec::new(),
+            subject: protocol::orchestrator::SubjectRef::new("blog", "blog:BLOG-001"),
+        };
+
+        let request = super::workflow_execute_request_for_existing(&workflow);
+
+        // Convenience fields stay empty; the subject travels as a dispatch.
+        assert_eq!(request.task_id, None);
+        assert_eq!(request.requirement_id, None);
+        let dispatch = request.subject_dispatch.expect("generic kind must carry subject_dispatch");
+        assert_eq!(dispatch.subject.kind(), "blog");
+        assert_eq!(dispatch.subject.id(), "blog:BLOG-001");
+        assert_eq!(dispatch.workflow_ref, "draft-post");
     }
 
     #[tokio::test]

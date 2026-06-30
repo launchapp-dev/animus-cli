@@ -42,8 +42,29 @@ pub fn build_runner_command_with_resume(
             cmd.arg("--requirement-id").arg(id);
         }
         protocol::orchestrator::WorkflowSubject::Custom { title, description } => {
-            cmd.arg("--title").arg(title);
-            cmd.arg("--description").arg(description);
+            // `to_workflow_subject()` collapses every non-task/requirement kind
+            // to `Custom`, but a BaaS dynamic kind (e.g. `blog`) must NOT be
+            // dispatched as a custom title — the runner has to resolve it via
+            // `<kind>/get`. Disambiguate by the real subject kind: only the
+            // genuine built-in `custom` kind uses `--title`/`--description`; any
+            // other kind passes its qualified id via `--subject-id` so the
+            // runner resolves the subject under its real kind. (Requires the
+            // workflow_runner plugin to accept `--subject-id`; only ever emitted
+            // for dynamic kinds, so task/requirement/custom dispatch is
+            // unchanged for existing runners.)
+            if dispatch.subject.kind() == protocol::orchestrator::SUBJECT_KIND_CUSTOM {
+                cmd.arg("--title").arg(title);
+                cmd.arg("--description").arg(description);
+            } else {
+                // Qualify with the known kind when the stored id is bare so the
+                // runner resolves the exact kind (a bare native id could be
+                // re-probed to the wrong kind, or fail under a catch-all
+                // backend). Already-qualified ids (`blog:BLOG-001`) pass through.
+                let id = dispatch.subject.id();
+                let qualified =
+                    if id.contains(':') { id.to_string() } else { format!("{}:{id}", dispatch.subject.kind()) };
+                cmd.arg("--subject-id").arg(qualified);
+            }
         }
     }
 
@@ -464,6 +485,64 @@ mod tests {
                 title: "schedule:nightly".to_string(),
                 description: "nightly dispatch".to_string(),
             }
+        );
+    }
+
+    #[test]
+    fn runner_command_emits_subject_id_for_generic_baas_kind() {
+        use chrono::Utc;
+        use protocol::orchestrator::SubjectRef;
+        // A queued BaaS dynamic-kind subject (kind=blog) must NOT be coerced to
+        // a custom `--title`; it travels as `--subject-id blog:BLOG-001` so the
+        // runner resolves it via `blog/get`.
+        let dispatch = SubjectDispatch::for_subject_with_metadata(
+            SubjectRef::new("blog", "blog:BLOG-001"),
+            "draft-post",
+            "queue",
+            Utc::now(),
+        );
+        let command = build_runner_command_from_dispatch(&dispatch, "/tmp/project");
+        let args = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "execute",
+                "--subject-id",
+                "blog:BLOG-001",
+                "--workflow-ref",
+                "draft-post",
+                "--project-root",
+                "/tmp/project",
+            ]
+        );
+    }
+
+    #[test]
+    fn runner_command_qualifies_bare_generic_subject_id_with_kind() {
+        use chrono::Utc;
+        use protocol::orchestrator::SubjectRef;
+        // A generic dispatch storing a BARE native id must be qualified with its
+        // known kind before reaching the runner, so the runner resolves the
+        // exact kind rather than re-probing a bare id.
+        let dispatch = SubjectDispatch::for_subject_with_metadata(
+            SubjectRef::new("pack.review", "REV-7"),
+            "review-flow",
+            "queue",
+            Utc::now(),
+        );
+        let command = build_runner_command_from_dispatch(&dispatch, "/tmp/project");
+        let args = command.get_args().map(|arg| arg.to_string_lossy().into_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            args,
+            vec![
+                "execute",
+                "--subject-id",
+                "pack.review:REV-7",
+                "--workflow-ref",
+                "review-flow",
+                "--project-root",
+                "/tmp/project",
+            ]
         );
     }
 

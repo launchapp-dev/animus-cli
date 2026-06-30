@@ -22,7 +22,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.queue.enqueue",
-        description = "Enqueue a subject dispatch. Purpose: Add a SubjectDispatch to the daemon queue using a task, requirement, or custom subject plus optional workflow/input override. Prerequisites: Task subjects must exist; custom subjects require a title. Example: {\"task_id\": \"TASK-001\", \"workflow_ref\": \"ops\"}. Sequencing: Use animus.queue.list to inspect position or animus.queue.reorder to adjust ordering.",
+        description = "Enqueue a subject dispatch. Purpose: Add a SubjectDispatch to the daemon queue using a task, requirement, custom, or arbitrary-kind subject plus optional workflow/input override. Prerequisites: Subjects must exist; custom subjects require a title. For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like blog/post/etc.), pass subject_id (the kernel resolves the kind) instead of task_id. Example: {\"task_id\": \"TASK-001\", \"workflow_ref\": \"ops\"} or {\"subject_id\": \"blog:BLOG-001\"}. Sequencing: Use animus.queue.list to inspect position or animus.queue.reorder to adjust ordering.",
         input_schema = ao_schema_for_type::<QueueEnqueueInput>()
     )]
     async fn ao_queue_enqueue(&self, params: Parameters<QueueEnqueueInput>) -> Result<CallToolResult, McpError> {

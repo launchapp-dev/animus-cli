@@ -52,6 +52,19 @@ fn print_workflow_list_table(items: &[protocol::orchestrator::OrchestratorWorkfl
     render_table(&["ID", "WORKFLOW", "STATUS", "TASK", "STARTED"], &rows);
 }
 
+/// Resolve a generic `--subject-id` value to a kind-correct [`SubjectRef`] by
+/// probing the installed subject backends (the `*` catch-all serves BaaS
+/// dynamic kinds). Qualified ids (`blog:BLOG-001`) trust the explicit kind;
+/// bare ids are resolved to their owning kind.
+async fn resolve_subject_id_ref_via_router(
+    project_root: &str,
+    subject_id: &str,
+) -> Result<protocol::orchestrator::SubjectRef> {
+    use super::subject_id_dispatch::{resolve_subject_id_ref, RouterSubjectProbe};
+    let probe = RouterSubjectProbe::discover(std::path::Path::new(project_root)).await?;
+    resolve_subject_id_ref(subject_id, &probe).await
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn resolve_workflow_run_dispatch(
     hub: Arc<dyn ServiceHub>,
@@ -443,6 +456,34 @@ pub(crate) async fn handle_workflow(
             // stripped so a foreign-kind qualifier is not silently rewritten.
             args.task_id = args.task_id.map(|id| crate::bare_task_id(&id));
             let workflow_ref = args.pipeline.clone();
+            // Generic BaaS subject path: resolve the subject's real kind once
+            // (qualified prefix or router probe) and build a kind-correct
+            // dispatch carrying the resolved SubjectRef (kind=blog,
+            // id=blog:BLOG-001, ...) plus this run's workflow_ref / input / vars.
+            // The runner protocol requires generic (non-task/requirement)
+            // subjects to travel as a `subject_dispatch`, so both the sync and
+            // detached paths consume this single envelope rather than coercing
+            // the subject to task.
+            let subject_id_dispatch = match args.subject_id.clone() {
+                Some(sid) => {
+                    let subject_ref = resolve_subject_id_ref_via_router(project_root, &sid).await?;
+                    let resolved_ref =
+                        workflow_ref.clone().unwrap_or_else(|| default_project_workflow_ref(project_root));
+                    let input = args.input_json.as_deref().map(serde_json::from_str).transpose()?;
+                    let vars = parse_workflow_vars(&args.vars)?;
+                    Some(
+                        protocol::SubjectDispatch::for_subject_with_metadata(
+                            subject_ref,
+                            resolved_ref,
+                            "manual-cli-run",
+                            Utc::now(),
+                        )
+                        .with_input(input)
+                        .with_vars(vars),
+                    )
+                }
+                None => None,
+            };
             // Transport-asserted caller identity for this run. The transport
             // (e.g. the portal) authenticates the user and passes
             // `--actor-json`; the kernel relays it verbatim to the runner /
@@ -455,6 +496,7 @@ pub(crate) async fn handle_workflow(
                     task_id: args.task_id,
                     requirement_id: args.requirement_id,
                     title: args.title,
+                    subject_dispatch: subject_id_dispatch.clone(),
                     description: args.description,
                     workflow_ref: workflow_ref.clone(),
                     phase: args.phase,
@@ -521,20 +563,28 @@ pub(crate) async fn handle_workflow(
                         }
                     }
                 }
-                let dispatch = match args.input_json {
-                    Some(raw) => resolve_workflow_run_dispatch_from_raw_input(hub.clone(), project_root, &raw).await?,
-                    None => {
-                        resolve_workflow_run_dispatch(
-                            hub.clone(),
-                            project_root,
-                            args.task_id,
-                            args.requirement_id,
-                            args.title,
-                            args.description,
-                            workflow_ref,
-                            parsed_vars,
-                        )
-                        .await?
+                let dispatch = if let Some(subject_dispatch) = subject_id_dispatch {
+                    // Generic subject: the kind-correct dispatch was built up
+                    // front; the detached runner resolves it via `<kind>/get`.
+                    subject_dispatch
+                } else {
+                    match args.input_json {
+                        Some(raw) => {
+                            resolve_workflow_run_dispatch_from_raw_input(hub.clone(), project_root, &raw).await?
+                        }
+                        None => {
+                            resolve_workflow_run_dispatch(
+                                hub.clone(),
+                                project_root,
+                                args.task_id,
+                                args.requirement_id,
+                                args.title,
+                                args.description,
+                                workflow_ref,
+                                parsed_vars,
+                            )
+                            .await?
+                        }
                     }
                 };
                 // Post-v0.5 there is no in-process executor: a bare

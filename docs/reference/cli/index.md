@@ -849,14 +849,29 @@ removed in v0.5.14 — `animus approval` is the only surface.
 
 ### `animus queue enqueue` (immediate + deferred dispatch)
 
-Enqueue a subject dispatch for a task, requirement, or custom title. By
-default the entry is dispatched as soon as the daemon has capacity.
+Enqueue a subject dispatch for a task, requirement, custom title, or any
+other subject kind. By default the entry is dispatched as soon as the daemon
+has capacity.
 
 ```bash
 animus queue enqueue --task-id TASK-001
 animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
 animus queue enqueue --title "Investigate flaky test" --description "Fails on CI"
+animus queue enqueue --subject-id blog:BLOG-001                      # BaaS dynamic kind
 ```
+
+**Generic subjects (`--subject-id`).** For a subject that is **not**
+`kind=task`/`requirement` (a BaaS dynamic kind such as `blog`, `post`, etc.),
+use `--subject-id` instead of `--task-id`. It accepts either a **qualified**
+id (`blog:BLOG-001` — the kind before the `:` is trusted; the recommended
+form) or a **bare** id (`BLOG-001` — the kind is resolved by probing the
+installed subject backends that declare concrete kinds). A backend that
+declares only the `subject_kind:*` catch-all (a pure dynamic-kind backend)
+cannot enumerate a bare id's kind, so it requires the qualified form.
+The resolved kind is preserved in the dispatch, so the queue lease and runner
+resolve the subject via `<kind>/get` rather than coercing it to a task.
+`--subject-id` is mutually exclusive with `--task-id` / `--requirement-id` /
+`--title`.
 
 **Deferred dispatch.** `--at` schedules the entry for a future time; it stays
 queued (counted under `pending`, and broken out as `deferred` in
@@ -1791,6 +1806,16 @@ Priority is displayed in `p0`–`p3` bucket notation in all human-readable views
 is normalized to the qualified form at the CLI boundary, so both resolve the
 same subject. You do not need to run any command in `--json` mode to discover
 the id format.
+
+For subjects of an arbitrary kind (BaaS dynamic kinds like `blog`, `post`),
+`queue enqueue --subject-id` and `workflow run --subject-id` accept a
+qualified id (`blog:BLOG-001`, kind trusted — the recommended form) or a bare
+id (`BLOG-001`, kind resolved by probing installed backends that declare
+concrete kinds; a pure `subject_kind:*` catch-all backend requires the
+qualified form). The resolved kind is preserved on the dispatch so the subject
+is leased/run under its real kind (via `<kind>/get`) instead of being coerced
+to `task`. `--subject-id` is mutually exclusive with `--task-id` /
+`--requirement-id` / `--title`.
 
 ### `animus pack search` (positional query)
 

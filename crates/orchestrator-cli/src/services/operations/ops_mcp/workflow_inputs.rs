@@ -32,6 +32,13 @@ pub(super) struct WorkflowRunInput {
     pub(super) requirement_id: Option<String>,
     #[serde(default)]
     pub(super) title: Option<String>,
+    /// For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like
+    /// blog/post/etc.), pass `subject_id` (the kernel resolves the kind)
+    /// instead of `task_id`. Accepts a qualified id (`blog:BLOG-001` — kind
+    /// trusted) or a bare id (`BLOG-001` — kind resolved via the subject
+    /// router). Mutually exclusive with `task_id` / `requirement_id` / `title`.
+    #[serde(default)]
+    pub(super) subject_id: Option<String>,
     #[serde(default)]
     pub(super) description: Option<String>,
     #[serde(default)]
