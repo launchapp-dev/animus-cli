@@ -215,6 +215,14 @@ impl WorkflowStateManager {
         Self { project_root, backend }
     }
 
+    /// Construct a manager PINNED to the in-tree SQLite backend, ignoring any
+    /// installed `workflow_journal` plugin. Used by the one-time journal import
+    /// migration ([`super::journal_client::import_local_sqlite_into_plugin`]) so it
+    /// can read the LOCAL store directly while the active backend is the plugin.
+    pub(crate) fn new_sqlite(project_root: impl Into<PathBuf>) -> Self {
+        Self { project_root: project_root.into(), backend: super::journal_client::JournalBackend::Sqlite }
+    }
+
     /// The installed `workflow_journal` plugin, if the backend resolved to one.
     /// `None` => SQLite (run every existing code path unchanged).
     fn journal_plugin(&self) -> Option<&orchestrator_plugin_host::DiscoveredPlugin> {
@@ -1134,6 +1142,17 @@ pub fn load_workflow_ref_index(project_root: &std::path::Path) -> Result<std::co
         }
     }
     Ok(out)
+}
+
+/// All run ids in the LOCAL SQLite store, regardless of status (terminal +
+/// non-terminal). Reads the SQLite engine directly (never the plugin backend);
+/// used by the one-time journal import migration to enumerate runs cheaply
+/// (ids only) so each run is loaded + forwarded individually, bounding memory.
+pub(crate) fn sqlite_all_run_ids(project_root: &std::path::Path) -> Result<Vec<String>> {
+    let conn = open_project_db(project_root)?;
+    let mut stmt = conn.prepare("SELECT id FROM workflows")?;
+    let ids = stmt.query_map([], |row| row.get::<_, String>(0))?.filter_map(|row| row.ok()).collect();
+    Ok(ids)
 }
 
 pub fn db_path_for_project(project_root: &std::path::Path) -> PathBuf {

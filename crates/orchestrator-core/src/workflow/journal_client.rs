@@ -150,6 +150,179 @@ pub(crate) fn reset_backend_cache_for_tests() {
 }
 
 // ---------------------------------------------------------------------------
+// BU-1H: one-time local SQLite -> plugin import.
+// ---------------------------------------------------------------------------
+
+/// Marker file (next to the local `workflow.db`) recording that the one-time
+/// import of the local SQLite run history into the `workflow_journal` plugin has
+/// completed for this project root. Its presence skips the (otherwise idempotent)
+/// re-scan on every boot.
+const JOURNAL_IMPORT_MARKER_FILE: &str = ".journal-imported-v1";
+
+/// Outcome of [`import_local_sqlite_into_plugin`].
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct JournalImportStats {
+    /// Runs upserted into the plugin via `journal/save`.
+    pub runs_imported: usize,
+    /// Checkpoints upserted via `journal/checkpoint_save`.
+    pub checkpoints_imported: usize,
+    /// `true` when the import did not run because there was nothing to do at the
+    /// gate: no plugin backend active (SQLite / kill-switch) or the marker already
+    /// existed. `false` means the scan ran (possibly importing 0 rows from an
+    /// empty/absent local store, in which case the marker is now written).
+    pub skipped: bool,
+}
+
+impl JournalImportStats {
+    fn skipped() -> Self {
+        Self { skipped: true, ..Default::default() }
+    }
+}
+
+/// Sink the import writes scanned runs/checkpoints to. The production impl
+/// forwards to the resident `workflow_journal` plugin; tests use an in-memory
+/// recorder so the scan + marker logic is exercised without spawning a plugin.
+trait JournalImportSink {
+    fn save_run(&mut self, workflow: &OrchestratorWorkflow) -> Result<()>;
+    fn save_checkpoint(&mut self, workflow_id: &str, checkpoint_num: usize, blob: serde_json::Value) -> Result<()>;
+}
+
+struct PluginImportSink {
+    plugin: DiscoveredPlugin,
+    project_root: PathBuf,
+}
+
+impl JournalImportSink for PluginImportSink {
+    fn save_run(&mut self, workflow: &OrchestratorWorkflow) -> Result<()> {
+        save(&self.plugin, &self.project_root, workflow)
+    }
+    fn save_checkpoint(&mut self, workflow_id: &str, checkpoint_num: usize, blob: serde_json::Value) -> Result<()> {
+        checkpoint_save(&self.plugin, &self.project_root, workflow_id, checkpoint_num, blob)
+    }
+}
+
+fn import_marker_path(project_root: &Path) -> PathBuf {
+    super::state_manager::db_path_for_project(project_root).with_file_name(JOURNAL_IMPORT_MARKER_FILE)
+}
+
+fn write_import_marker(marker: &Path) -> Result<()> {
+    if let Some(parent) = marker.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    std::fs::File::create(marker).with_context(|| format!("creating journal import marker at {}", marker.display()))?;
+    Ok(())
+}
+
+/// One-time migration: copy every run + its checkpoints from the LOCAL SQLite
+/// store into the active `workflow_journal` PLUGIN, so re-enabling the durable
+/// backend does not blank the run-history view (the summary readers route to the
+/// plugin store; without this, an installed-but-empty plugin shows no history).
+///
+/// No-op (returns `skipped`) when the SQLite backend is active (no plugin
+/// installed / kill-switch set) — the local path never imports. No-op when the
+/// marker already exists.
+///
+/// IDEMPOTENT + SAFE: `journal/save` and `journal/checkpoint_save` are upserts,
+/// so a re-run (e.g. after a mid-import failure left the marker unwritten) merely
+/// rewrites the same rows. The marker is written ONLY after a clean full pass, so
+/// a partial import is retried on the next boot rather than silently truncated.
+pub fn import_local_sqlite_into_plugin(project_root: &Path) -> Result<JournalImportStats> {
+    let plugin = match resolve_backend(project_root) {
+        JournalBackend::Sqlite => return Ok(JournalImportStats::skipped()),
+        JournalBackend::Plugin(plugin) => *plugin,
+    };
+    let mut sink = PluginImportSink { plugin, project_root: project_root.to_path_buf() };
+    import_local_sqlite_into_sink(project_root, &mut sink)
+}
+
+/// Backend-agnostic core of the import: scan the LOCAL SQLite store, forward each
+/// run + checkpoints to `sink`, and write the marker on a clean pass. Separated
+/// from [`import_local_sqlite_into_plugin`] so the scan + marker logic is unit
+/// testable with an in-memory sink (the plugin RPC path needs a live plugin).
+fn import_local_sqlite_into_sink<S: JournalImportSink>(
+    project_root: &Path,
+    sink: &mut S,
+) -> Result<JournalImportStats> {
+    let marker = import_marker_path(project_root);
+    if marker.exists() {
+        return Ok(JournalImportStats::skipped());
+    }
+
+    // Read the LOCAL SQLite engine directly, regardless of the active backend.
+    let sqlite = super::state_manager::WorkflowStateManager::new_sqlite(project_root);
+    let ids = super::state_manager::sqlite_all_run_ids(project_root)?;
+
+    if ids.is_empty() {
+        // Nothing to import (empty or absent local store): mark done so we never
+        // re-scan, and report a non-skipped 0/0 pass.
+        write_import_marker(&marker)?;
+        return Ok(JournalImportStats::default());
+    }
+
+    let total = ids.len();
+    let mut stats = JournalImportStats::default();
+    for (idx, id) in ids.iter().enumerate() {
+        // Load + forward one run at a time so the full set never resides in memory.
+        let workflow = match sqlite.load(id) {
+            Ok(workflow) => workflow,
+            Err(err) => {
+                tracing::warn!(
+                    target: "animus.workflow.journal",
+                    workflow_id = %id,
+                    error = %err,
+                    "skipping unreadable local run during workflow_journal import"
+                );
+                continue;
+            }
+        };
+        sink.save_run(&workflow).with_context(|| format!("importing run {id} into workflow_journal plugin"))?;
+        stats.runs_imported += 1;
+
+        let checkpoint_nums = sqlite.list_checkpoints(id).unwrap_or_default();
+        for checkpoint_num in checkpoint_nums {
+            match sqlite.load_checkpoint(id, checkpoint_num) {
+                Ok(snapshot) => {
+                    let blob = serde_json::to_value(&snapshot)
+                        .with_context(|| format!("serializing checkpoint snapshot {id}#{checkpoint_num}"))?;
+                    sink.save_checkpoint(id, checkpoint_num, blob)
+                        .with_context(|| format!("importing checkpoint {id}#{checkpoint_num}"))?;
+                    stats.checkpoints_imported += 1;
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        target: "animus.workflow.journal",
+                        workflow_id = %id,
+                        checkpoint = checkpoint_num,
+                        error = %err,
+                        "skipping unreadable local checkpoint during workflow_journal import"
+                    );
+                }
+            }
+        }
+
+        if (idx + 1) % 50 == 0 {
+            tracing::info!(
+                target: "animus.workflow.journal",
+                imported = idx + 1,
+                total,
+                "workflow_journal import progress"
+            );
+        }
+    }
+
+    // Marker written only after a clean full pass: a mid-import failure (the `?`
+    // above) leaves it absent so the next boot retries (saves are upserts).
+    write_import_marker(&marker)?;
+    tracing::info!(
+        target: "animus.workflow.journal",
+        runs = stats.runs_imported,
+        checkpoints = stats.checkpoints_imported,
+        "workflow_journal local SQLite import complete"
+    );
+    Ok(stats)
+}
+
+// ---------------------------------------------------------------------------
 // Blob <-> OrchestratorWorkflow conversions
 // ---------------------------------------------------------------------------
 
@@ -726,5 +899,105 @@ mod tests {
 
     fn env_flag_enabled_value(v: &str) -> bool {
         matches!(v.trim(), "1" | "true" | "TRUE" | "yes" | "on")
+    }
+
+    // --- BU-1H import migration ---------------------------------------------
+
+    use crate::types::CheckpointReason;
+    use crate::workflow::state_manager::WorkflowStateManager;
+
+    #[derive(Default)]
+    struct RecordingSink {
+        runs: Vec<String>,
+        checkpoints: Vec<(String, usize)>,
+    }
+
+    impl JournalImportSink for RecordingSink {
+        fn save_run(&mut self, workflow: &OrchestratorWorkflow) -> Result<()> {
+            self.runs.push(workflow.id.clone());
+            Ok(())
+        }
+        fn save_checkpoint(
+            &mut self,
+            workflow_id: &str,
+            checkpoint_num: usize,
+            _blob: serde_json::Value,
+        ) -> Result<()> {
+            self.checkpoints.push((workflow_id.to_string(), checkpoint_num));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn import_copies_runs_and_checkpoints_and_writes_marker() {
+        crate::test_env::stable_test_home();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sqlite = WorkflowStateManager::new_sqlite(dir.path());
+
+        let wf_a = sample_workflow("import-a");
+        let wf_b = sample_workflow("import-b");
+        sqlite.save(&wf_a).expect("save a");
+        sqlite.save(&wf_b).expect("save b");
+        // Two checkpoints on one run, none on the other.
+        sqlite.save_checkpoint(&wf_a, CheckpointReason::Start).expect("cp1");
+        sqlite.save_checkpoint(&wf_a, CheckpointReason::StatusChange).expect("cp2");
+
+        let mut sink = RecordingSink::default();
+        let stats = import_local_sqlite_into_sink(dir.path(), &mut sink).expect("import");
+
+        assert!(!stats.skipped);
+        assert_eq!(stats.runs_imported, 2);
+        assert_eq!(stats.checkpoints_imported, 2);
+        assert_eq!(sink.runs.len(), 2);
+        assert!(sink.runs.contains(&"import-a".to_string()));
+        assert!(sink.runs.contains(&"import-b".to_string()));
+        assert_eq!(sink.checkpoints, vec![("import-a".to_string(), 1), ("import-a".to_string(), 2)]);
+        assert!(import_marker_path(dir.path()).exists(), "marker written after a clean pass");
+    }
+
+    #[test]
+    fn import_skips_when_marker_present() {
+        crate::test_env::stable_test_home();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let sqlite = WorkflowStateManager::new_sqlite(dir.path());
+        sqlite.save(&sample_workflow("import-c")).expect("save");
+
+        // Pre-write the marker: the scan must not run.
+        write_import_marker(&import_marker_path(dir.path())).expect("write marker");
+
+        let mut sink = RecordingSink::default();
+        let stats = import_local_sqlite_into_sink(dir.path(), &mut sink).expect("import");
+
+        assert!(stats.skipped);
+        assert_eq!(stats.runs_imported, 0);
+        assert!(sink.runs.is_empty(), "no saves when marker present");
+    }
+
+    #[test]
+    fn import_empty_sqlite_writes_marker_and_imports_nothing() {
+        crate::test_env::stable_test_home();
+        let dir = tempfile::tempdir().expect("tempdir");
+        // No runs saved: the local store is empty/absent.
+
+        let mut sink = RecordingSink::default();
+        let stats = import_local_sqlite_into_sink(dir.path(), &mut sink).expect("import");
+
+        assert!(!stats.skipped, "an empty store still completes a (0-row) pass");
+        assert_eq!(stats.runs_imported, 0);
+        assert!(sink.runs.is_empty());
+        assert!(import_marker_path(dir.path()).exists(), "marker written so we never re-scan");
+    }
+
+    #[test]
+    fn import_is_a_noop_for_sqlite_backend() {
+        crate::test_env::stable_test_home();
+        reset_backend_cache_for_tests();
+        let dir = tempfile::tempdir().expect("tempdir");
+        // No plugin installed => SQLite backend => the public entrypoint must not
+        // touch SQLite and must report skipped (no marker written).
+        let stats = import_local_sqlite_into_plugin(dir.path()).expect("import");
+        assert!(stats.skipped);
+        assert_eq!(stats.runs_imported, 0);
+        assert!(!import_marker_path(dir.path()).exists(), "no marker for the SQLite path");
     }
 }
