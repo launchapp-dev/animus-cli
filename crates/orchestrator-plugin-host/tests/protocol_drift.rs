@@ -323,63 +323,32 @@ fn protocol_public_surface_does_not_drift_against_standalone() {
     let mut findings: Vec<DriftFinding> = Vec::new();
     diff_surfaces(&in_tree, &standalone, "", &mut findings);
 
-    // Filter out drift we *expect* between the in-tree and standalone crates
-    // because the in-tree crate is a strict superset for a few well-known
-    // additions that have not yet shipped as a standalone release. Each
-    // entry MUST be paired with a tracking note so it isn't quietly carried
+    // Filter out drift we *expect* between the in-tree and standalone crates.
+    // Each entry MUST be paired with a tracking note so it isn't quietly carried
     // forever.
+    //
+    // As of TASK-120 / BU-0 (STANDALONE_TAG bumped to v0.1.27) the two
+    // `PluginKind` enums and every other previously in-tree-only addition
+    // (env-scrub, trigger surface, log-storage, conversation_store, the typed
+    // enum mirrors, the v0.5 PluginKind variants) have been reconciled — the
+    // standalone tag now contains them, so all the old in-tree-only entries are
+    // dropped. The only remaining divergence is in the OTHER direction:
+    // standalone v0.1.27 is AHEAD of the in-tree crate on a small set of
+    // additions the kernel has not yet absorbed. They are wire-additive
+    // (new optional fields + a new struct) so an in-tree host that ignores them
+    // stays compatible; they are tracked here until a future in-tree protocol
+    // sync pulls them in.
     let expected_in_tree_only: &[&str] = &[
-        // Added in the in-tree crate post v0.1.1 to cover env-scrub + trigger
-        // protocol surface. Slated for inclusion in the next standalone tag.
-        "EnvRequirement",
-        "TriggerWatchParams",
-        "TriggerEvent",
-        "TriggerAckParams",
-        "PLUGIN_KIND_TASK_BACKEND",
-        "TRIGGER_METHOD_WATCH",
-        "TRIGGER_METHOD_EVENT",
-        "TRIGGER_METHOD_ACK",
-        // Added in the in-tree crate for the v0.4.0 log-storage plugin cut
-        // (commit #1 of the three-commit sequence). Slated for inclusion in
-        // the next standalone tag.
-        "PLUGIN_KIND_LOG_STORAGE_BACKEND",
-        "LOG_STORAGE_METHOD_ENTRY",
-        "LOG_STORAGE_METHOD_TAIL",
-        // Manifest.env_required + PluginCapabilities.projections — additions
-        // covered by the next standalone release.
-        "PluginManifest.env_required",
-        "PluginManifest.notification_buffer_size",
-        "PluginCapabilities.projections",
-        // r-protocol/r1-type-audit (2026-05): typed enum mirrors for previously
-        // stringly-typed fields. The wire shape is unchanged — these enums use
-        // serde `from = "String", into = "String"` so older plugins / hosts
-        // round-trip identically. Slated for inclusion in the next standalone
-        // tag together with the matching `kind()` accessor on `PluginManifest`
-        // / `PluginInfo` and the typed `TriggerEvent.action_hint` +
-        // `TriggerAckParams.status` fields.
-        "PluginKind",
-        "TriggerActionHint",
-        "TriggerAckStatus",
-        // p3housekeeping/j2-pluginkind-variants (2026-05): typed
-        // PluginKind variants for the two first-party plugin roles the
-        // host already dispatches by raw string — `transport_backend`
-        // (consumed by `ops_web.rs`) and `web_ui` (legacy
-        // `partition_transport_plugins` path). The wire shape is
-        // unchanged. TODO: drop these allowlist entries once the
-        // standalone `launchapp-dev/animus-protocol` repo is bumped to
-        // include both variants.
-        "PluginKind.TransportBackend",
-        "PluginKind.WebUi",
-        "PLUGIN_KIND_TRANSPORT_BACKEND",
-        "PLUGIN_KIND_WEB_UI",
-        // v0.6.4 conversation_store plugin role (per-user + shared chat history).
-        // The in-tree crate added the role + wire contract; it is ALREADY
-        // published in the standalone repo at tag v0.1.20, but STANDALONE_TAG
-        // here is still pinned to v0.1.13. Drop these two entries once
-        // STANDALONE_TAG advances to >= v0.1.20 (the PluginKind.ConversationStore
-        // variant is already covered by the blanket "PluginKind" entry above).
-        "PLUGIN_KIND_CONVERSATION_STORE",
-        "conversation_store",
+        // Standalone-ahead (v0.1.27): kind-capability negotiation on the
+        // handshake — `InitializeParams.init_extensions` (opaque host→plugin
+        // extension map), `InitializeResult.kind_capabilities` (per-kind
+        // capability declarations), and the `KindCapability` struct they
+        // reference. Not yet mirrored in the in-tree crate. TODO: absorb into
+        // `crates/animus-plugin-protocol` in a follow-up in-tree protocol sync,
+        // then drop these entries.
+        "InitializeParams.init_extensions",
+        "InitializeResult.kind_capabilities",
+        "KindCapability",
     ];
 
     let unexpected_findings: Vec<&DriftFinding> =

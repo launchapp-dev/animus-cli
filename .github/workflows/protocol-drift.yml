@@ -47,7 +47,7 @@ jobs:
       # when a new standalone release ships; the in-tree crate is expected
       # to match the surface at this tag (modulo entries the test's
       # `expected_in_tree_only` allowlist documents as pending-release).
-      STANDALONE_TAG: v0.1.13
+      STANDALONE_TAG: v0.1.27
 
     steps:
       - name: Checkout ao-cli (in-tree protocol)

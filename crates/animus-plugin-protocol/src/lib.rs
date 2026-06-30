@@ -39,6 +39,15 @@ use serde_json::Value;
 /// declares its own in [`InitializeParams::protocol_version`]. A plugin and
 /// host with the same major version are compatible. See `spec.md` for the
 /// full versioning policy.
+///
+/// Intentionally held at `1.0.0` even though the standalone crate advertises
+/// `1.1.0`: the minor bump there signals the additive kind-capability surface
+/// (`InitializeParams.init_extensions` / `InitializeResult.kind_capabilities` /
+/// `KindCapability`) that this in-tree crate does NOT yet implement (see the
+/// standalone-ahead entries in `tests/protocol_drift.rs`). Compatibility is
+/// major-version based and those fields are optional (serde-default), so a
+/// `1.0.0` in-tree host stays compatible. TODO: bump to `1.1.0` in the same
+/// in-tree protocol sync that absorbs the 1.1 surface.
 pub const PROTOCOL_VERSION: &str = "1.0.0";
 
 /// Plugin kind for LLM provider plugins (Claude, Codex, Gemini, OpenAI-compat,
@@ -116,6 +125,45 @@ pub const PLUGIN_KIND_CONVERSATION_STORE: &str = "conversation_store";
 /// the `animus-journal-protocol` crate for the `journal/*` method family.
 pub const PLUGIN_KIND_WORKFLOW_JOURNAL: &str = "workflow_journal";
 
+/// Plugin kind for workflow runner plugins (v0.5).
+///
+/// Workflow runners execute Animus workflow YAML by orchestrating phases,
+/// evaluating decision contracts, handling rework loops, and applying
+/// post-success actions. See `animus-workflow-runner-protocol` for the
+/// typed RPC surface (`workflow/execute`, `workflow/run_phase`).
+pub const PLUGIN_KIND_WORKFLOW_RUNNER: &str = "workflow_runner";
+
+/// Plugin kind for queue backend plugins (v0.5).
+///
+/// Queue plugins own a per-project priority FIFO of `SubjectDispatch`
+/// envelopes awaiting scheduling. See `animus-queue-protocol` for the typed
+/// RPC surface (`queue/enqueue`, `queue/lease`, `queue/list`, etc.).
+pub const PLUGIN_KIND_QUEUE: &str = "queue";
+
+/// Plugin kind for durable execution / step checkpointing plugins (v0.5).
+///
+/// Durable stores provide reservation-fenced step persistence so the daemon
+/// can recover from crashes without re-executing already-committed side
+/// effects. See `animus-durable-store-protocol` for the typed RPC surface
+/// (`durable/begin_step`, `durable/commit_step`, `durable/recover_in_flight`,
+/// etc.).
+pub const PLUGIN_KIND_DURABLE_STORE: &str = "durable_store";
+
+/// Plugin kind for agent memory store plugins (v0.5).
+///
+/// Memory stores provide persistent semantic memory across runs / agents /
+/// tasks. See `animus-memory-store-protocol` for the typed RPC surface
+/// (`memory/put`, `memory/get`, `memory/query`, etc.).
+pub const PLUGIN_KIND_MEMORY_STORE: &str = "memory_store";
+
+/// Plugin kind for the legacy agent-runner sidecar.
+///
+/// The agent-runner sidecar (and its `animus-agent-runner-protocol` crate)
+/// was removed in v0.5.3 — provider plugins now spawn and supervise the
+/// coding-agent CLIs end to end. This wire constant is retained only so an
+/// older `agent_runner`-kind manifest still parses to a known kind.
+pub const PLUGIN_KIND_AGENT_RUNNER: &str = "agent_runner";
+
 /// Method name for the log-storage `log/entry` notification.
 ///
 /// Emitted by any supervised plugin to forward a structured log entry to
@@ -179,6 +227,17 @@ pub enum PluginKind {
     WorkflowJournal,
     /// Generic custom plugin. See [`PLUGIN_KIND_CUSTOM`].
     Custom,
+    /// Workflow runner plugin (v0.5). See [`PLUGIN_KIND_WORKFLOW_RUNNER`].
+    WorkflowRunner,
+    /// Queue backend plugin (v0.5). See [`PLUGIN_KIND_QUEUE`].
+    Queue,
+    /// Durable execution / step checkpointing plugin (v0.5).
+    /// See [`PLUGIN_KIND_DURABLE_STORE`].
+    DurableStore,
+    /// Agent memory store plugin (v0.5). See [`PLUGIN_KIND_MEMORY_STORE`].
+    MemoryStore,
+    /// Agent-runner sidecar plugin (v0.5). See [`PLUGIN_KIND_AGENT_RUNNER`].
+    AgentRunner,
     /// Any kind not understood by this crate version. Preserves the wire
     /// string so unknown roles round-trip and so hosts that recognize the
     /// role can still dispatch on the string.
@@ -199,6 +258,11 @@ impl PluginKind {
             PluginKind::ConversationStore => PLUGIN_KIND_CONVERSATION_STORE,
             PluginKind::WorkflowJournal => PLUGIN_KIND_WORKFLOW_JOURNAL,
             PluginKind::Custom => PLUGIN_KIND_CUSTOM,
+            PluginKind::WorkflowRunner => PLUGIN_KIND_WORKFLOW_RUNNER,
+            PluginKind::Queue => PLUGIN_KIND_QUEUE,
+            PluginKind::DurableStore => PLUGIN_KIND_DURABLE_STORE,
+            PluginKind::MemoryStore => PLUGIN_KIND_MEMORY_STORE,
+            PluginKind::AgentRunner => PLUGIN_KIND_AGENT_RUNNER,
             PluginKind::Other(value) => value.as_str(),
         }
     }
@@ -232,6 +296,11 @@ impl From<String> for PluginKind {
             PLUGIN_KIND_CONVERSATION_STORE => PluginKind::ConversationStore,
             PLUGIN_KIND_WORKFLOW_JOURNAL => PluginKind::WorkflowJournal,
             PLUGIN_KIND_CUSTOM => PluginKind::Custom,
+            PLUGIN_KIND_WORKFLOW_RUNNER => PluginKind::WorkflowRunner,
+            PLUGIN_KIND_QUEUE => PluginKind::Queue,
+            PLUGIN_KIND_DURABLE_STORE => PluginKind::DurableStore,
+            PLUGIN_KIND_MEMORY_STORE => PluginKind::MemoryStore,
+            PLUGIN_KIND_AGENT_RUNNER => PluginKind::AgentRunner,
             _ => PluginKind::Other(value),
         }
     }
