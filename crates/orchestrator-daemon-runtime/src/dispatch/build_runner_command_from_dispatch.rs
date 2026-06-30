@@ -13,6 +13,24 @@ pub fn build_runner_command(
     phase_routing: Option<&PhaseRoutingConfig>,
     mcp_config: Option<&McpRuntimeConfig>,
 ) -> std::process::Command {
+    build_runner_command_with_resume(dispatch, project_root, phase_routing, mcp_config, None)
+}
+
+/// Build the `execute` command for the workflow runner.
+///
+/// `resume_workflow_id` (BU-4 journal-resume re-dispatch) targets an EXISTING
+/// persisted run by id via `--workflow-id`, so the runner CONTINUES that run
+/// from its persisted `current_phase` instead of starting a fresh workflow for
+/// the subject. The subject args (`--task-id` / `--requirement-id` / `--title`)
+/// are still emitted so the runner can resolve subject context (the v0.6.17
+/// detached-run reattach fix requires both). `None` is a normal fresh dispatch.
+pub fn build_runner_command_with_resume(
+    dispatch: &SubjectDispatch,
+    project_root: &str,
+    phase_routing: Option<&PhaseRoutingConfig>,
+    mcp_config: Option<&McpRuntimeConfig>,
+    resume_workflow_id: Option<&str>,
+) -> std::process::Command {
     let mut cmd = std::process::Command::new(resolve_workflow_runner_binary_for(Some(project_root)));
     cmd.arg("execute");
 
@@ -27,6 +45,10 @@ pub fn build_runner_command(
             cmd.arg("--title").arg(title);
             cmd.arg("--description").arg(description);
         }
+    }
+
+    if let Some(workflow_id) = resume_workflow_id {
+        cmd.arg("--workflow-id").arg(workflow_id);
     }
 
     if let Some(input) = &dispatch.input {

@@ -232,6 +232,45 @@ pub fn list_running_checkpoints(scoped_root: &Path) -> io::Result<Vec<(PathBuf, 
     Ok(out)
 }
 
+/// Workflow ids that have at least one session checkpoint in `Blocked` state.
+///
+/// A `Blocked` checkpoint marks a mid-phase resume that was intentionally held
+/// (e.g. the provider plugin is not installed, or `resume_agent` returned a
+/// failure) and is waiting on an operator `animus workflow resume --force`. The
+/// daemon's journal-resume re-dispatch consults this so it does NOT spawn a
+/// fresh runner for such a run and bypass the hold.
+pub fn blocked_checkpoint_workflow_ids(scoped_root: &Path) -> io::Result<std::collections::HashSet<String>> {
+    let runs_dir = scoped_root.join("runs");
+    let mut out = std::collections::HashSet::new();
+    let entries = match fs::read_dir(&runs_dir) {
+        Ok(e) => e,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(out),
+        Err(err) => return Err(err),
+    };
+    for run_entry in entries {
+        let run_entry = run_entry?;
+        let phases_dir = run_entry.path().join("phases");
+        let phase_entries = match fs::read_dir(&phases_dir) {
+            Ok(e) => e,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => continue,
+            Err(err) => return Err(err),
+        };
+        for phase_entry in phase_entries {
+            let phase_entry = phase_entry?;
+            let path = phase_entry.path();
+            if !path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".session.json")) {
+                continue;
+            }
+            if let Some(checkpoint) = read_path(&path)? {
+                if matches!(checkpoint.status, SessionCheckpointStatus::Blocked) {
+                    out.insert(checkpoint.workflow_id);
+                }
+            }
+        }
+    }
+    Ok(out)
+}
+
 fn mutate(
     scoped_root: &Path,
     workflow_id: &str,

@@ -16,7 +16,7 @@ use tokio::task::JoinHandle;
 use crate::control::WorkflowEventBroadcaster;
 #[cfg(unix)]
 use crate::dispatch::event_pipe::SubprocessEventPipe;
-use crate::{build_runner_command, CompletedProcess, RunnerEvent};
+use crate::{build_runner_command_with_resume, CompletedProcess, RunnerEvent};
 
 #[cfg(unix)]
 #[allow(unsafe_code)]
@@ -160,6 +160,13 @@ struct WorkflowProcess {
     event_pipe: Option<SubprocessEventPipe>,
     agent_session_id: Option<String>,
     project_root: Option<std::path::PathBuf>,
+    /// BU-4 journal-resume: the EXISTING workflow id this runner was spawned to
+    /// continue (via `execute --workflow-id`), if any. Used as the
+    /// `workflow_id` fallback in completion reconciliation so an early runner
+    /// exit (before any `workflow_events` is emitted) still fails/cancels the
+    /// TARGETED run rather than leaving it Running — which would otherwise let
+    /// the resume sweep re-dispatch it every tick in an endless loop.
+    resume_workflow_id: Option<String>,
 }
 
 pub struct ProcessManager {
@@ -253,14 +260,42 @@ impl ProcessManager {
     }
 
     pub fn spawn_workflow_runner(&mut self, dispatch: &SubjectDispatch, project_root: &str) -> Result<()> {
+        self.spawn_workflow_runner_inner(dispatch, project_root, None)
+    }
+
+    /// BU-4 journal-resume re-dispatch: spawn a runner that CONTINUES the
+    /// EXISTING persisted run `resume_workflow_id` from its `current_phase`
+    /// (via `execute --workflow-id`), rather than starting a fresh workflow for
+    /// the subject. Same spawn bookkeeping (concurrency cap, agent record,
+    /// event pipe, reattach socket) as [`Self::spawn_workflow_runner`].
+    pub fn spawn_workflow_runner_resume(
+        &mut self,
+        dispatch: &SubjectDispatch,
+        project_root: &str,
+        resume_workflow_id: &str,
+    ) -> Result<()> {
+        self.spawn_workflow_runner_inner(dispatch, project_root, Some(resume_workflow_id))
+    }
+
+    fn spawn_workflow_runner_inner(
+        &mut self,
+        dispatch: &SubjectDispatch,
+        project_root: &str,
+        resume_workflow_id: Option<&str>,
+    ) -> Result<()> {
         if let Some(cap) = self.workflow_concurrency_max {
             if self.processes.len() >= cap {
                 return Err(anyhow::Error::new(WorkflowConcurrencyCapReached { active: self.processes.len(), cap }));
             }
         }
 
-        let std_cmd =
-            build_runner_command(dispatch, project_root, self.phase_routing.as_ref(), self.mcp_config.as_ref());
+        let std_cmd = build_runner_command_with_resume(
+            dispatch,
+            project_root,
+            self.phase_routing.as_ref(),
+            self.mcp_config.as_ref(),
+            resume_workflow_id,
+        );
         let command_line: Vec<String> = std::iter::once(std_cmd.get_program().to_string_lossy().into_owned())
             .chain(std_cmd.get_args().map(|a| a.to_string_lossy().into_owned()))
             .collect();
@@ -446,6 +481,7 @@ impl ProcessManager {
             event_pipe,
             agent_session_id,
             project_root: Some(project_root_path),
+            resume_workflow_id: resume_workflow_id.map(String::from),
         });
 
         Ok(())
@@ -537,7 +573,7 @@ impl ProcessManager {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
                         task_id: process.task_id,
-                        workflow_id: None,
+                        workflow_id: process.resume_workflow_id.take(),
                         workflow_ref: Some(process.workflow_ref),
                         workflow_status: Some(WorkflowStatus::Failed),
                         schedule_id: process.schedule_id,
@@ -560,7 +596,7 @@ impl ProcessManager {
                             subject_id: process.subject_key,
                             subject_kind: Some(process.subject_kind),
                             task_id: process.task_id,
-                            workflow_id: None,
+                            workflow_id: process.resume_workflow_id.take(),
                             workflow_ref: Some(process.workflow_ref),
                             workflow_status: None,
                             schedule_id: process.schedule_id,
@@ -589,13 +625,29 @@ impl ProcessManager {
                     cleanup_agent_record(&process);
                     let exit_code = status.code();
                     let events = parse_runner_events(&process.stderr_lines);
-                    let workflow_id = latest_runner_workflow_id(&events);
-                    let workflow_status = latest_runner_workflow_status(&events);
+                    // Prefer the runner-reported id; fall back to the resume
+                    // target so an early exit before any event still reconciles
+                    // the known run (BU-4: prevents endless re-dispatch).
+                    let resume_target = process.resume_workflow_id.take();
+                    let workflow_id = latest_runner_workflow_id(&events).or_else(|| resume_target.clone());
+                    let mut workflow_status = latest_runner_workflow_status(&events);
                     let (success, failure_reason) = if status.success() {
                         (true, None)
                     } else {
                         (false, Some(format!("workflow runner exited unsuccessfully with status {:?}", exit_code)))
                     };
+                    // BU-4 (codex P2): a RESUME-spawned runner that exits
+                    // non-zero WITHOUT reporting a workflow status (e.g. a bad
+                    // `--workflow-id`, a plugin/startup failure, an arg parse
+                    // error — all before any `workflow_events`) must terminalize
+                    // the TARGETED run as Failed. Otherwise the projector only
+                    // blocks the task, the workflow stays Running, and the
+                    // journal-resume sweep re-dispatches it every tick
+                    // (livelock). Scoped to resume spawns so normal dispatch
+                    // behavior is byte-identical.
+                    if workflow_status.is_none() && !status.success() && resume_target.is_some() {
+                        workflow_status = Some(WorkflowStatus::Failed);
+                    }
 
                     completed.push(CompletedProcess {
                         subject_id: process.subject_key,
@@ -620,7 +672,7 @@ impl ProcessManager {
                         subject_id: process.subject_key,
                         subject_kind: Some(process.subject_kind),
                         task_id: process.task_id,
-                        workflow_id: None,
+                        workflow_id: process.resume_workflow_id.take(),
                         workflow_ref: Some(process.workflow_ref),
                         workflow_status: None,
                         schedule_id: process.schedule_id,

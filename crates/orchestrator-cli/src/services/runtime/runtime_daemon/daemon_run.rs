@@ -3,7 +3,9 @@ use crate::services::operations::{
     build_plugin_routing, build_queue_routing, build_workflow_routing, run_plugin_install, PluginInstallRequest,
 };
 use crate::services::runtime::runtime_daemon::build_daemon_ops_routing;
-use crate::services::runtime::runtime_daemon::daemon_reconciliation::recover_orphaned_running_workflows;
+use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
+    journal_resume_enabled, recover_orphaned_running_workflows,
+};
 use anyhow::Result;
 use async_trait::async_trait;
 use orchestrator_core::services::DaemonStartConfig;
@@ -645,10 +647,18 @@ impl DaemonRunHooks for CliDaemonRunHost {
         // and resume has nothing left to recover. See codex round-4 P2.
         let resumable_workflow_ids = resumable_workflow_ids_for_project(project_root);
 
+        // BU-4: when the durable journal is active, preserve ALL resumable
+        // in-flight runs (not just those with a mid-phase session checkpoint)
+        // so a restart/redeploy resumes them instead of destroying them. The
+        // no-sid runs are re-dispatched from their phase boundary by the
+        // steady-state dispatch leg on the first tick after boot.
+        let resume_orphans = journal_resume_enabled(project_root);
+
         let orphans = recover_orphaned_running_workflows(
             startup_hub as Arc<dyn ServiceHub>,
             project_root,
             &resumable_workflow_ids,
+            resume_orphans,
         )
         .await;
 

@@ -27,7 +27,9 @@ mod process_manager;
 mod ready_dispatch_plan;
 pub mod reattach;
 
-pub use build_runner_command_from_dispatch::{build_runner_command, build_runner_command_from_dispatch};
+pub use build_runner_command_from_dispatch::{
+    build_runner_command, build_runner_command_from_dispatch, build_runner_command_with_resume,
+};
 pub use completed_process::CompletedProcess;
 pub use completion_reconciliation_plan::{
     build_completion_reconciliation_plan, CompletedProcessReconciliation, CompletionReconciliationPlan,
