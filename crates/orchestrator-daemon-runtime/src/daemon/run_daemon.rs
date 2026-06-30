@@ -287,6 +287,33 @@ where
     // BU-3: tee phase/run lifecycle events into an installed workflow_journal
     // plugin (no-op when none is installed — the SQLite backend has no events).
     workflow_event_broadcaster.set_journal_sink(std::path::PathBuf::from(project_root));
+
+    // BU-1H: one-time migration of the local SQLite run history into the durable
+    // workflow_journal plugin, BEFORE the scheduler/reconcile reads the journal.
+    // No-op when the SQLite backend is active (no plugin / kill-switch) or when
+    // the marker already exists. Best-effort: a failure is logged and never
+    // blocks daemon startup (the kill-switch remains the escape hatch). Runs once
+    // per boot (this startup path executes once).
+    match orchestrator_core::workflow::import_local_sqlite_into_plugin(std::path::Path::new(project_root)) {
+        Ok(stats) if !stats.skipped => {
+            tracing::info!(
+                target: "animus.workflow.journal",
+                runs = stats.runs_imported,
+                checkpoints = stats.checkpoints_imported,
+                "workflow_journal local SQLite import pass"
+            );
+        }
+        Ok(_) => {}
+        Err(err) => {
+            tracing::warn!(
+                target: "animus.workflow.journal",
+                error = %err,
+                "workflow_journal local SQLite import failed (run history may be incomplete until next boot; \
+                 set ANIMUS_DISABLE_WORKFLOW_JOURNAL_PLUGIN=1 to fall back to local SQLite)"
+            );
+        }
+    }
+
     install_workflow_event_emitter(BroadcastWorkflowEventEmitter::new(workflow_event_broadcaster.clone()));
     install_workflow_event_broadcaster(workflow_event_broadcaster.clone());
 
