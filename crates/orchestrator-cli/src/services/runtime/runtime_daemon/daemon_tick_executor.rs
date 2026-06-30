@@ -1,7 +1,8 @@
 use super::*;
 use crate::services::runtime::execution_fact_projection::reconcile_completed_processes;
 use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
-    reconcile_manual_phase_timeouts, recover_orphaned_running_workflows,
+    journal_resume_enabled, reconcile_manual_phase_timeouts, recover_orphaned_running_workflows,
+    resumable_orphans_for_redispatch,
 };
 use anyhow::Result;
 use orchestrator_core::services::ServiceHub;
@@ -21,6 +22,99 @@ pub(crate) struct CliProjectTickServices {
 impl CliProjectTickServices {
     fn new(_args: &DaemonRuntimeOptions, logger: Arc<Logger>) -> Self {
         Self { logger }
+    }
+
+    /// BU-4: spawn a fresh `workflow_runner` for up to `limit` in-flight runs
+    /// the orphan sweep preserved (durable journal active). Each runner
+    /// re-enters the run at its persisted `current_phase` (phase-boundary
+    /// resume). The relayed actor preserves owner scoping across the restart.
+    /// Returns the number of runners spawned (resumed runs), so the caller can
+    /// subtract it from the queue-drain capacity.
+    async fn redispatch_resumable_orphans(
+        &mut self,
+        root: &str,
+        process_manager: &mut ProcessManager,
+        limit: usize,
+    ) -> usize {
+        let hub: Arc<dyn ServiceHub> = match orchestrator_core::FileServiceHub::new(root) {
+            Ok(hub) => Arc::new(hub),
+            Err(error) => {
+                self.logger
+                    .warn("reconciliation", format!("journal-resume re-dispatch skipped: hub init failed: {error}"))
+                    .emit();
+                return 0;
+            }
+        };
+        let active_subject_ids = process_manager.active_subject_ids();
+        let candidates = resumable_orphans_for_redispatch(hub, root, &active_subject_ids).await;
+        if candidates.is_empty() {
+            return 0;
+        }
+        let state_manager = WorkflowStateManager::new(root);
+        let mut started = 0usize;
+        // Within-tick dedupe (codex P2): the candidate set is computed from a
+        // single pre-loop `active_subject_ids` snapshot, so two Running records
+        // for the SAME subject could both be returned. The ProcessManager only
+        // reflects the first spawn AFTER it happens, so guard here too — never
+        // drive one subject with two concurrent runners in a single tick.
+        let mut dispatched_subjects: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for workflow in candidates {
+            if started >= limit {
+                break;
+            }
+            if !dispatched_subjects.insert(workflow.subject.id().to_string()) {
+                continue;
+            }
+            let workflow_ref = workflow.workflow_ref.clone().unwrap_or_else(|| "standard".to_string());
+            // Relay the owner actor the run bootstrapped with so the restarted
+            // run scopes identically; `None` => system/global run.
+            let actor = state_manager.load_workflow_actor(&workflow.id);
+            let dispatch = orchestrator_daemon_runtime::SubjectDispatch::for_subject_with_metadata(
+                workflow.subject.clone(),
+                workflow_ref,
+                "journal-resume",
+                chrono::Utc::now(),
+            )
+            .with_input(workflow.input.clone())
+            .with_vars(workflow.vars.clone())
+            .with_actor(actor);
+
+            // Target the EXISTING persisted run by id so the runner continues
+            // it from `current_phase` (phase-boundary resume) instead of
+            // starting a duplicate workflow for the subject.
+            match process_manager.spawn_workflow_runner_resume(&dispatch, root, &workflow.id) {
+                Ok(()) => {
+                    started += 1;
+                    self.logger
+                        .info(
+                            "reconciliation",
+                            format!(
+                                "journal-resume: re-dispatched in-flight workflow {} (subject {}) from phase boundary {}",
+                                workflow.id,
+                                workflow.subject.id(),
+                                workflow.current_phase.as_deref().unwrap_or("<index>")
+                            ),
+                        )
+                        .emit();
+                }
+                Err(error) => {
+                    // Concurrency cap reached: stop — the remaining candidates
+                    // are picked up on a later tick (still preserved, never
+                    // cancelled). Any other spawn error is logged and the run
+                    // stays preserved for the next attempt.
+                    if error.downcast_ref::<orchestrator_daemon_runtime::WorkflowConcurrencyCapReached>().is_some() {
+                        break;
+                    }
+                    self.logger
+                        .warn(
+                            "reconciliation",
+                            format!("journal-resume re-dispatch of workflow {} failed: {error}", workflow.id),
+                        )
+                        .emit();
+                }
+            }
+        }
+        started
     }
 }
 
@@ -51,7 +145,13 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         root: &str,
         active_subject_ids: &std::collections::HashSet<String>,
     ) -> Result<usize> {
-        Ok(recover_orphaned_running_workflows(hub, root, active_subject_ids).await)
+        // BU-4: when the durable journal is active, the zombie sweep PRESERVES
+        // resumable orphans (re-dispatched from their phase boundary by
+        // `dispatch_ready_tasks` below) instead of cancelling them. On the
+        // SQLite path `journal_resume_enabled` is false and this is the
+        // byte-identical pre-BU-4 cancel behavior.
+        let resume_orphans = journal_resume_enabled(root);
+        Ok(recover_orphaned_running_workflows(hub, root, active_subject_ids, resume_orphans).await)
     }
 
     async fn reconcile_manual_timeouts(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<usize> {
@@ -173,16 +273,34 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         let Some(process_manager) = process_manager else {
             return Ok(DispatchWorkflowStartSummary::default());
         };
+        // Suppressed entirely while the pool is draining (`queue_drain_limit
+        // == 0`): no resume re-dispatch, no queue lease.
+        if queue_drain_limit == 0 {
+            return Ok(DispatchWorkflowStartSummary::default());
+        }
+
+        // BU-4 journal-resume re-dispatch leg: when the durable journal is
+        // active, restart in-flight runs the orphan sweep PRESERVED (rather
+        // than cancelled) from their current phase boundary. Run this BEFORE
+        // the queue lease (codex P2): the queue lease only excludes
+        // ProcessManager-active subjects, so a pending queue entry for the
+        // SAME subject as a preserved run would otherwise start first, strand
+        // the preserved run, and duplicate the subject's work. Spawning the
+        // resume first marks the subject active, so the lease's
+        // `exclude_subjects` filter skips it. Bounded by `queue_drain_limit`
+        // so it never exceeds pool sizing. Idempotent: a re-dispatched run
+        // registers a live runner + agent record, excluding it on later ticks.
+        let resumed = self.redispatch_resumable_orphans(root, process_manager, queue_drain_limit).await;
+
         // Queue-only dispatch model: the daemon executes ONLY what has been
-        // explicitly enqueued, leasing up to the available agent-slot
-        // capacity (`queue_drain_limit`, zeroed while the pool is draining).
-        // It does NOT scan the subject backend for Ready tasks — moving a
-        // task from a subject backend into the queue is the end user's
-        // responsibility (an agent, a script, or a configured trigger calls
-        // `animus queue enqueue`). Cron `schedules:` still dispatch via their
-        // own leg.
-        let summary = if queue_drain_limit > 0 {
-            dispatch_queued_entries_via_runner(root, process_manager, queue_drain_limit).await?
+        // explicitly enqueued, leasing up to the agent-slot capacity left
+        // after resumes. It does NOT scan the subject backend for Ready tasks —
+        // moving a task into the queue is the end user's responsibility (an
+        // agent, a script, or a configured trigger calls `animus queue
+        // enqueue`). Cron `schedules:` still dispatch via their own leg.
+        let remaining = queue_drain_limit.saturating_sub(resumed);
+        let summary = if remaining > 0 {
+            dispatch_queued_entries_via_runner(root, process_manager, remaining).await?
         } else {
             DispatchWorkflowStartSummary::default()
         };

@@ -6,7 +6,8 @@ mod state_machine;
 mod state_manager;
 
 pub use journal_client::{
-    record_wire_event as journal_record_wire_event, shutdown_resident_hosts as shutdown_journal_hosts,
+    durable_journal_active, record_wire_event as journal_record_wire_event,
+    shutdown_resident_hosts as shutdown_journal_hosts,
 };
 
 pub use lifecycle_executor::WorkflowLifecycleExecutor;

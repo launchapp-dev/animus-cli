@@ -16,7 +16,7 @@ pub(crate) async fn reconcile_completed_processes(
 ) -> CompletedProcessReconciliation {
     let plan = build_completion_reconciliation_plan(completed_processes);
 
-    for fact in plan.execution_facts {
+    for fact in &plan.execution_facts {
         for event in &fact.runner_events {
             debug!(
                 actor = protocol::ACTOR_DAEMON,
@@ -32,9 +32,9 @@ pub(crate) async fn reconcile_completed_processes(
         // `fact.completion_status()` already maps
         // onto the plugin's `completion_status` vocabulary
         // (`completed`/`failed`/`cancelled`).
-        finalize_plugin_queue_entry(root, &fact).await;
+        finalize_plugin_queue_entry(root, fact).await;
 
-        if !project_execution_fact(hub.clone(), root, &fact).await {
+        if !project_execution_fact(hub.clone(), root, fact).await {
             info!(
                 actor = protocol::ACTOR_DAEMON,
                 subject_id = %fact.subject_id,
@@ -44,7 +44,59 @@ pub(crate) async fn reconcile_completed_processes(
             );
         }
 
-        project_schedule_execution_fact(root, &fact);
+        project_schedule_execution_fact(root, fact);
+    }
+
+    // BU-4: when durable journal resume is active, terminalize the persisted
+    // workflow row for any run that FAILED before the runner could write a
+    // terminal status itself (e.g. a resume re-dispatch that died on a bad
+    // `--workflow-id`, plugin/startup failure, or arg parse error). The
+    // task/queue projectors above do NOT update the workflow row, so without
+    // this the run stays `Running` and `resumable_orphans_for_redispatch`
+    // re-dispatches it every tick (livelock). Cancel is idempotent here — a run
+    // the runner already terminalized is skipped by the non-terminal guard.
+    // Gated on `journal_resume_enabled` so the no-journal path is byte-identical
+    // (its stuck runs are still handled by the orphan-sweep cancel path).
+    if crate::services::runtime::runtime_daemon::daemon_reconciliation::journal_resume_enabled(root) {
+        for fact in &plan.execution_facts {
+            let Some(workflow_id) = fact.workflow_id.as_deref() else {
+                continue;
+            };
+            if !matches!(fact.completion_status(), "failed" | "cancelled") {
+                continue;
+            }
+            match hub.workflows().get(workflow_id).await {
+                Ok(workflow) if !orchestrator_core::is_terminal_workflow_run_status(workflow.status) => {
+                    // Use `cancel` (Running -> Cancelled): it is the only
+                    // service transition GUARANTEED to terminalize a Running
+                    // run here. `mark_completed_failed` no-ops unless the run is
+                    // already Completed, and `fail_current_phase` may apply the
+                    // phase RETRY policy and leave the run Running — both would
+                    // leave the livelock unbroken (codex P1). Cancelling a run
+                    // that died before doing any work is correct cleanup (live
+                    // runners / live agent records were already excluded from
+                    // re-dispatch), not a wrongful cancel; the operator can
+                    // re-enqueue. The original failure reason is preserved in
+                    // the execution fact / task projection above.
+                    if let Err(error) = hub.workflows().cancel(workflow_id).await {
+                        warn!(
+                            actor = protocol::ACTOR_DAEMON,
+                            workflow_id = %workflow_id,
+                            error = %error,
+                            "failed to terminalize failed resume target; it may be re-dispatched next tick"
+                        );
+                    } else {
+                        info!(
+                            actor = protocol::ACTOR_DAEMON,
+                            workflow_id = %workflow_id,
+                            status = %fact.completion_status(),
+                            "terminalized failed resume target (runner exited before persisting terminal status)"
+                        );
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     CompletedProcessReconciliation {

@@ -130,6 +130,18 @@ pub(crate) fn plugin_for(project_root: &Path) -> Option<DiscoveredPlugin> {
     }
 }
 
+/// BU-4: whether the DURABLE (plugin-backed, e.g. Postgres) workflow journal is
+/// active for `project_root`. Workflow RUN STATE survives a host/volume wipe
+/// (a Railway redeploy) ONLY when this is `true`.
+///
+/// Returns `false` for the in-tree SQLite backend — the default, and what the
+/// `ANIMUS_DISABLE_WORKFLOW_JOURNAL_PLUGIN` kill-switch forces. In that case the
+/// daemon's boot orphan-sweep keeps its byte-identical pre-BU-4 cancel behavior;
+/// resume-from-journal is gated entirely on this returning `true`.
+pub fn durable_journal_active(project_root: &Path) -> bool {
+    matches!(resolve_backend(project_root), JournalBackend::Plugin(_))
+}
+
 /// Clear the cached backend decisions. Test-only seam so a test that installs (or
 /// removes) a synthetic plugin between runs is not served a stale decision.
 #[cfg(test)]
@@ -692,6 +704,15 @@ mod tests {
         reset_backend_cache_for_tests();
         let dir = tempfile::tempdir().expect("tempdir");
         assert!(matches!(resolve_backend(dir.path()), JournalBackend::Sqlite));
+    }
+
+    #[test]
+    fn durable_journal_inactive_without_plugin() {
+        // BU-4 gate: no workflow_journal plugin installed => SQLite => NOT
+        // durable, so the daemon keeps its byte-identical cancel-orphans path.
+        reset_backend_cache_for_tests();
+        let dir = tempfile::tempdir().expect("tempdir");
+        assert!(!durable_journal_active(dir.path()));
     }
 
     #[test]
