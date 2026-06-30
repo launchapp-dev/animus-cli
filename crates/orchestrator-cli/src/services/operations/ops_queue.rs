@@ -87,6 +87,37 @@ async fn resolve_enqueue_dispatch_for_subject_id(
     .with_input(input))
 }
 
+/// Reserved key under which a spawning chat conversation's id is stamped into a
+/// dispatch's `input` payload. The workflow runner reads it back out to emit
+/// `ANIMUS_CONVERSATION_ID` per phase so provider spend attributes to the
+/// conversation that enqueued the workflow.
+pub(crate) const CONVERSATION_INPUT_KEY: &str = "__animus_conversation_id";
+
+/// Stamp `ANIMUS_CONVERSATION_ID` (when present in the process env — e.g. the
+/// chat conductor's bridged `animus mcp serve`) into the dispatch input so it
+/// persists onto the queued run and reaches the runner. Leaves a non-object
+/// input untouched to avoid corrupting an explicit payload.
+fn inject_conversation_id_from_env(input: &mut Option<serde_json::Value>) {
+    let conversation_id = match std::env::var("ANIMUS_CONVERSATION_ID") {
+        Ok(value) if !value.trim().is_empty() => value.trim().to_string(),
+        _ => return,
+    };
+    match input {
+        Some(serde_json::Value::Object(map)) => {
+            // The env value is the conversation that actually enqueued this run;
+            // it MUST win over any caller-supplied (stale/forged) reserved key so
+            // spend never attributes to the wrong conversation.
+            map.insert(CONVERSATION_INPUT_KEY.to_string(), serde_json::Value::String(conversation_id));
+        }
+        None => {
+            let mut map = serde_json::Map::new();
+            map.insert(CONVERSATION_INPUT_KEY.to_string(), serde_json::Value::String(conversation_id));
+            *input = Some(serde_json::Value::Object(map));
+        }
+        Some(_) => {}
+    }
+}
+
 fn queue_plugin_required(operation: &str) -> anyhow::Error {
     // Same human-readable text as the previous bare `anyhow!` constructor
     // (which classified as Internal via the message fallback) — this only
@@ -134,7 +165,8 @@ pub(crate) async fn handle_queue(
             Ok(())
         }
         QueueCommand::Enqueue(args) => {
-            let input = args.input_json.clone().map(|value| serde_json::from_str(&value)).transpose()?;
+            let mut input = args.input_json.clone().map(|value| serde_json::from_str(&value)).transpose()?;
+            inject_conversation_id_from_env(&mut input);
             let dispatch = if let Some(subject_id) = args.subject_id.clone() {
                 // Generic BaaS path: resolve the subject's real kind (qualified
                 // prefix or router probe) so a non-task/requirement subject

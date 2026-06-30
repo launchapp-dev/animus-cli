@@ -37,8 +37,11 @@ pub fn estimate_cost_usd(model_id: &str, total_tokens: u64) -> Option<f64> {
         return Some(0.0);
     }
     let lower = model_id.to_ascii_lowercase();
+    // OpenRouter-style ids carry a "<provider>/" prefix (e.g. "openai/gpt-5.5",
+    // "moonshotai/kimi-k2.6"); match the bare model segment too so those resolve.
+    let bare = lower.rsplit('/').next().unwrap_or(lower.as_str());
     for rate in RATES {
-        if lower.starts_with(rate.model_id_prefix) {
+        if lower.starts_with(rate.model_id_prefix) || bare.starts_with(rate.model_id_prefix) {
             let tokens = total_tokens as f64;
             return Some((tokens / 1_000_000.0) * rate.usd_per_million_tokens);
         }
@@ -69,5 +72,14 @@ mod tests {
     #[test]
     fn case_insensitive_match() {
         assert!(estimate_cost_usd("CLAUDE-OPUS-4", 1_000_000).is_some());
+    }
+
+    #[test]
+    fn openrouter_provider_prefixed_ids_resolve() {
+        // "openai/gpt-5.5" does not start with "gpt-5"; the bare-segment match
+        // (after stripping "<provider>/") resolves it to the gpt-5 rate.
+        let gpt = estimate_cost_usd("openai/gpt-5.5", 1_000_000).expect("openrouter gpt id resolves");
+        assert!((gpt - 5.0).abs() < 1e-9, "expected $5.00 for 1M gpt-5 tokens, got {gpt}");
+        assert!(estimate_cost_usd("moonshotai/kimi-k2.6", 1_000_000).is_some(), "kimi id resolves");
     }
 }
