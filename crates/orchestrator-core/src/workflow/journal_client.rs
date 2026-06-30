@@ -70,6 +70,22 @@ const DISABLE_JOURNAL_PLUGIN_ENV: &str = "ANIMUS_DISABLE_WORKFLOW_JOURNAL_PLUGIN
 /// into an `OrchestratorWorkflow`.
 const ACTOR_BLOB_KEY: &str = "__animus_actor__";
 
+/// Denormalized blob key carrying the run's canonical subject id (kind-qualified
+/// for generic BaaS kinds, e.g. `blog:BLOG-001`; the bare native id for built-in
+/// `task` / `requirement` kinds, e.g. `TASK-1`).
+///
+/// The journal protocol's `JournalRun` has a `kind` summary column but NO subject
+/// id, so plugin backends (e.g. `animus-journal-postgres`) index the run's subject
+/// by reading a top-level `subject_id` from the opaque blob. `OrchestratorWorkflow`
+/// serializes its subject as a nested `subject` object plus a `task_id` string and
+/// never emits a top-level `subject_id`, so that read was always `NULL` — most
+/// visibly for generic BaaS-kind runs that carry no `task_id`. We fold the
+/// canonical subject id into the blob here so every journal backend records it for
+/// EVERY kind. It is stripped before the blob is deserialized back into an
+/// `OrchestratorWorkflow` (the model derives the subject id from `subject`, never
+/// from this denormalized mirror).
+const SUBJECT_ID_BLOB_KEY: &str = "subject_id";
+
 /// Which persistence engine a [`WorkflowStateManager`](super::state_manager::WorkflowStateManager)
 /// is bound to for its lifetime. Resolved once at construction.
 #[derive(Debug, Clone)]
@@ -342,7 +358,24 @@ fn status_wire(status: WorkflowStatus) -> &'static str {
 /// serialized workflow (the same shape persisted as `snapshot_json` in checkpoints
 /// today), plus indexed summary columns the backend can query.
 pub(crate) fn to_journal_run(workflow: &OrchestratorWorkflow) -> Result<JournalRun> {
-    let blob = serde_json::to_value(workflow).context("serializing OrchestratorWorkflow for journal")?;
+    let mut blob = serde_json::to_value(workflow).context("serializing OrchestratorWorkflow for journal")?;
+    // Fold the canonical subject id into the blob so plugin journal backends that
+    // index `subject_id` from the blob record it for every kind (built-in task /
+    // requirement AND generic BaaS kinds). `OrchestratorWorkflow` never serializes
+    // a top-level `subject_id`, so without this the indexed column is always NULL.
+    // Legacy fallback: workflow blobs that predate the `subject` field
+    // deserialize with `subject = SubjectRef::task("")` (empty id) while the real
+    // id still lives in `task_id`. Mirror the `workflow_task_id` fallback used
+    // elsewhere so SQLite->plugin imports of old task runs index a non-null id.
+    let subject_id = match workflow.subject.id() {
+        "" => workflow.task_id.as_str(),
+        id => id,
+    };
+    if !subject_id.is_empty() {
+        if let Some(obj) = blob.as_object_mut() {
+            obj.insert(SUBJECT_ID_BLOB_KEY.to_string(), serde_json::Value::String(subject_id.to_string()));
+        }
+    }
     let kind = if workflow.subject.kind.is_empty() { None } else { Some(workflow.subject.kind.clone()) };
     Ok(JournalRun {
         workflow_id: workflow.id.clone(),
@@ -362,6 +395,9 @@ pub(crate) fn from_journal_run(run: JournalRun) -> Result<OrchestratorWorkflow> 
     let mut blob = run.blob;
     if let Some(obj) = blob.as_object_mut() {
         obj.remove(ACTOR_BLOB_KEY);
+        // Denormalized mirror, not part of the model — the subject id is derived
+        // from the `subject` object on load.
+        obj.remove(SUBJECT_ID_BLOB_KEY);
     }
     serde_json::from_value(blob).context("deserializing OrchestratorWorkflow from journal blob")
 }
@@ -856,6 +892,58 @@ mod tests {
         assert_eq!(back.id, "wf-1");
         assert_eq!(back.task_id, "TASK-1");
         assert_eq!(back.status, WorkflowStatus::Running);
+    }
+
+    fn sample_baas_workflow(id: &str, kind: &str, subject_id: &str) -> OrchestratorWorkflow {
+        let mut wf = sample_workflow(id);
+        // A generic BaaS dynamic-kind subject carries NO task_id and is
+        // kind-qualified (e.g. blog:BLOG-001).
+        wf.subject = SubjectRef::new(kind, subject_id);
+        wf.task_id = String::new();
+        wf.workflow_ref = Some("draft-blog".to_string());
+        wf
+    }
+
+    #[test]
+    fn to_journal_run_records_subject_id_for_generic_baas_kind() {
+        // Regression: a detached / queue BaaS-kind dispatch must persist a run
+        // whose journal subject id is the kind-qualified id, not NULL. Plugin
+        // backends index `subject_id` from the blob, so the kernel must fold it
+        // in (OrchestratorWorkflow never serializes a top-level `subject_id`).
+        let wf = sample_baas_workflow("wf-blog", "blog", "blog:BLOG-001");
+        let run = to_journal_run(&wf).expect("to run");
+        assert_eq!(run.kind.as_deref(), Some("blog"));
+        let subject_id = run.blob.get(SUBJECT_ID_BLOB_KEY).and_then(serde_json::Value::as_str);
+        assert_eq!(subject_id, Some("blog:BLOG-001"), "journal blob must carry the kind-qualified subject id");
+
+        // And it must round-trip back to the same subject (the denormalized
+        // mirror is stripped; the model derives the subject from `subject`).
+        let back = from_journal_run(run).expect("from run");
+        assert_eq!(back.subject.kind(), "blog");
+        assert_eq!(back.subject.id(), "blog:BLOG-001");
+        assert!(back.task_id.is_empty());
+    }
+
+    #[test]
+    fn to_journal_run_records_subject_id_for_task_kind() {
+        // Built-in task path stays equivalent: the recorded subject id is the
+        // bare native task id (previously also NULL because the blob carried no
+        // top-level `subject_id`).
+        let wf = sample_workflow("wf-task");
+        let run = to_journal_run(&wf).expect("to run");
+        let subject_id = run.blob.get(SUBJECT_ID_BLOB_KEY).and_then(serde_json::Value::as_str);
+        assert_eq!(subject_id, Some("TASK-1"));
+    }
+
+    #[test]
+    fn subject_id_blob_key_is_stripped_before_deserialization() {
+        let wf = sample_baas_workflow("wf-blog-2", "blog", "blog:BLOG-002");
+        let run = to_journal_run(&wf).expect("to run");
+        assert!(run.blob.get(SUBJECT_ID_BLOB_KEY).is_some(), "blob carries the denormalized subject id");
+        // The denormalized key must not break workflow deserialization.
+        let back = from_journal_run(run).expect("from run with subject_id key");
+        assert_eq!(back.id, "wf-blog-2");
+        assert_eq!(back.subject.id(), "blog:BLOG-002");
     }
 
     #[test]
