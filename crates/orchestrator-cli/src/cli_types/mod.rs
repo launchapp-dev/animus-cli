@@ -245,6 +245,59 @@ mod tests {
     }
 
     #[test]
+    fn queue_enqueue_accepts_subject_id() {
+        let cli = Cli::try_parse_from(["animus", "queue", "enqueue", "--subject-id", "blog:BLOG-001"])
+            .expect("queue enqueue --subject-id should parse");
+        match cli.command {
+            Command::Queue { command: QueueCommand::Enqueue(args) } => {
+                assert_eq!(args.subject_id.as_deref(), Some("blog:BLOG-001"));
+                assert!(args.task_id.is_none());
+            }
+            other => panic!("expected queue enqueue, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn queue_enqueue_subject_id_conflicts_with_kind_flags() {
+        for other in [["--task-id", "TASK-1"], ["--requirement-id", "REQ-1"], ["--title", "x"]] {
+            let error = Cli::try_parse_from([
+                "animus",
+                "queue",
+                "enqueue",
+                "--subject-id",
+                "blog:BLOG-001",
+                other[0],
+                other[1],
+            ])
+            .expect_err("--subject-id must be mutually exclusive with the kind flags");
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "flag {}: {error}", other[0]);
+        }
+    }
+
+    #[test]
+    fn workflow_run_accepts_subject_id() {
+        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "blog:BLOG-001"])
+            .expect("workflow run --subject-id should parse");
+        match cli.command {
+            Command::Workflow { command: WorkflowCommand::Run(args) } => {
+                assert_eq!(args.subject_id.as_deref(), Some("blog:BLOG-001"));
+                assert!(args.task_id.is_none());
+            }
+            other => panic!("expected workflow run, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn workflow_run_subject_id_conflicts_with_kind_flags() {
+        for other in [["--task-id", "TASK-1"], ["--requirement-id", "REQ-1"], ["--title", "x"]] {
+            let error =
+                Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "blog:BLOG-001", other[0], other[1]])
+                    .expect_err("--subject-id must be mutually exclusive with the kind flags");
+            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "flag {}: {error}", other[0]);
+        }
+    }
+
+    #[test]
     fn daemon_metrics_bare_defaults_to_display() {
         let cli = Cli::try_parse_from(["animus", "daemon", "metrics"]).expect("bare daemon metrics should parse");
         match cli.command {

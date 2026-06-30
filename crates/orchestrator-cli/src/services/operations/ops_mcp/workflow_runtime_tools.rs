@@ -20,7 +20,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.workflow.run",
-        description = "Run a workflow for a task. Purpose: Execute a workflow to complete task phases automatically. Prerequisites: Task should exist (use animus.subject.get with {\"kind\":\"task\"} to verify). Example: {\"task_id\": \"TASK-001\"} or {\"task_id\": \"TASK-001\", \"workflow_ref\": \"default\"}. Sequencing: Use animus.subject.status with {\"kind\":\"task\", ...} to track progress, animus.workflow.get to monitor, and animus.workflow.pause/resume/cancel for control.",
+        description = "Run a workflow for a subject. Purpose: Execute a workflow to complete subject phases automatically. Prerequisites: Subject should exist. For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like blog/post/etc.), pass subject_id (the kernel resolves the kind) instead of task_id. Example: {\"task_id\": \"TASK-001\"} or {\"subject_id\": \"blog:BLOG-001\"} or {\"subject_id\": \"blog:BLOG-001\", \"workflow_ref\": \"draft-post\"}. Sequencing: Use animus.subject.status to track progress, animus.workflow.get to monitor, and animus.workflow.pause/resume/cancel for control.",
         input_schema = ao_schema_for_type::<WorkflowRunInput>()
     )]
     async fn ao_workflow_run(&self, params: Parameters<WorkflowRunInput>) -> Result<CallToolResult, McpError> {
@@ -30,6 +30,7 @@ impl AoMcpServer {
         push_opt(&mut args, "--task-id", input.task_id);
         push_opt(&mut args, "--requirement-id", input.requirement_id);
         push_opt(&mut args, "--title", input.title);
+        push_opt(&mut args, "--subject-id", input.subject_id);
         push_opt(&mut args, "--description", input.description);
         push_opt(&mut args, "--input-json", input.input_json);
         self.run_tool("animus.workflow.run", args, input.project_root).await

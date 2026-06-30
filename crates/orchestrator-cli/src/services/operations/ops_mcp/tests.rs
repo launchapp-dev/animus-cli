@@ -865,6 +865,7 @@ fn build_queue_enqueue_args_includes_optional_fields() {
         task_id: Some("TASK-123".to_string()),
         requirement_id: None,
         title: None,
+        subject_id: None,
         description: None,
         workflow_ref: Some("ops".to_string()),
         input_json: Some("{\"mode\":\"fast\"}".to_string()),

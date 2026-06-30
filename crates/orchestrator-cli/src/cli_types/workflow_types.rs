@@ -287,6 +287,13 @@ pub(crate) struct WorkflowRunArgs {
     pub(crate) requirement_id: Option<String>,
     #[arg(long, value_name = "TITLE", group = "subject", help = "Custom workflow title for freeform execution.")]
     pub(crate) title: Option<String>,
+    #[arg(
+        long = "subject-id",
+        value_name = "SUBJECT_ID",
+        group = "subject",
+        help = "Generic subject to run the workflow for, any kind (BaaS dynamic kinds like blog/post). Accepts a qualified id (blog:BLOG-001 — kind trusted; the recommended form) or a bare id (BLOG-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form). Mutually exclusive with --task-id / --requirement-id / --title."
+    )]
+    pub(crate) subject_id: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]
     pub(crate) description: Option<String>,
     #[arg(

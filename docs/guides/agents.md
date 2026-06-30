@@ -134,7 +134,8 @@ so one bad item never corrupts its neighbors.
 
 ## Workflow Operations
 
-Use workflows to execute work for a task, a requirement, or a freeform title.
+Use workflows to execute work for a task, a requirement, a freeform title, or
+any other subject kind.
 
 ```json
 // Async run via daemon
@@ -145,6 +146,10 @@ Use workflows to execute work for a task, a requirement, or a freeform title.
 
 // Requirement-linked execution
 { "requirement_id": "REQ-001", "workflow_ref": "standard-workflow" }
+
+// BaaS dynamic kind (blog/post/etc.): pass subject_id, NOT task_id —
+// the kernel resolves the kind. Accepts qualified (blog:BLOG-001) or bare.
+{ "subject_id": "blog:BLOG-001" }
 
 // Batch-run multiple tasks (animus.workflow.run-multiple)
 {
@@ -199,6 +204,8 @@ dispatch control.
 { "pool_size": 4, "interval_secs": 10 }     // animus.daemon.config-set
 { "limit": 50 }                              // animus.daemon.events
 { "project_root": "/repo" }                  // animus.queue.list / stats
+{ "task_id": "TASK-001" }                    // animus.queue.enqueue (task)
+{ "subject_id": "blog:BLOG-001" }            // animus.queue.enqueue (BaaS dynamic kind — kernel resolves the kind)
 { "subject_id": "task:TASK-001" }            // animus.queue.hold / release / drop
 { "subject_ids": ["task:TASK-001", "task:TASK-002"] } // animus.queue.hold / release / drop (bulk)
 { "subject_ids": ["task:TASK-003", "task:TASK-001"] } // animus.queue.reorder

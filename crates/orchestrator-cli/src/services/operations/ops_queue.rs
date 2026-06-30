@@ -61,6 +61,32 @@ async fn resolve_enqueue_dispatch(
     }
 }
 
+/// Resolve a generic `--subject-id` enqueue into a kind-correct
+/// [`SubjectDispatch`]. The subject's real kind is taken from the qualified
+/// prefix or discovered by probing the installed subject backends, so a
+/// `kind=blog` subject is stored as a `blog` dispatch (and leased/resolved via
+/// `blog/get`) rather than coerced to `task`.
+async fn resolve_enqueue_dispatch_for_subject_id(
+    project_root: &str,
+    subject_id: &str,
+    workflow_ref: Option<String>,
+    input: Option<serde_json::Value>,
+) -> Result<SubjectDispatch> {
+    use super::subject_id_dispatch::{resolve_subject_id_ref, RouterSubjectProbe};
+    let probe = RouterSubjectProbe::discover(std::path::Path::new(project_root)).await?;
+    let subject_ref = resolve_subject_id_ref(subject_id, &probe).await?;
+    let workflow_ref = workflow_ref.unwrap_or_else(|| {
+        load_workflow_config_or_default(std::path::Path::new(project_root)).config.default_workflow_ref
+    });
+    Ok(SubjectDispatch::for_subject_with_metadata(
+        subject_ref,
+        workflow_ref,
+        "manual-queue-enqueue",
+        chrono::Utc::now(),
+    )
+    .with_input(input))
+}
+
 fn queue_plugin_required(operation: &str) -> anyhow::Error {
     // Same human-readable text as the previous bare `anyhow!` constructor
     // (which classified as Internal via the message fallback) — this only
@@ -109,17 +135,25 @@ pub(crate) async fn handle_queue(
         }
         QueueCommand::Enqueue(args) => {
             let input = args.input_json.clone().map(|value| serde_json::from_str(&value)).transpose()?;
-            let dispatch = resolve_enqueue_dispatch(
-                hub.clone(),
-                project_root,
-                args.task_id.clone(),
-                args.requirement_id.clone(),
-                args.title.clone(),
-                args.description.clone(),
-                args.workflow_ref.clone(),
-                input,
-            )
-            .await?;
+            let dispatch = if let Some(subject_id) = args.subject_id.clone() {
+                // Generic BaaS path: resolve the subject's real kind (qualified
+                // prefix or router probe) so a non-task/requirement subject
+                // dispatches under its own kind instead of being coerced to task.
+                resolve_enqueue_dispatch_for_subject_id(project_root, &subject_id, args.workflow_ref.clone(), input)
+                    .await?
+            } else {
+                resolve_enqueue_dispatch(
+                    hub.clone(),
+                    project_root,
+                    args.task_id.clone(),
+                    args.requirement_id.clone(),
+                    args.title.clone(),
+                    args.description.clone(),
+                    args.workflow_ref.clone(),
+                    input,
+                )
+                .await?
+            };
 
             let run_at = args.run_at.as_deref().map(resolve_run_at).transpose()?;
 
