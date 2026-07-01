@@ -280,26 +280,54 @@ where
     F: FnMut(PluginHost) -> Fut,
     Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
 {
-    let (host, generation) = acquire_resident_host(&plugin, project_root).await?;
-    match call(host).await {
-        Ok(value) => Ok(value),
-        Err(ResidentCallError::Other(err)) => Err(err),
-        Err(ResidentCallError::Death(err)) => {
-            // The warm host is presumed dead: reap it (only if it's still the
-            // generation that failed — a concurrent caller may have already
-            // replaced it), re-spawn once, retry.
-            drop_resident_host_if_current(project_root, generation).await;
-            let (host, _gen) = acquire_resident_host(&plugin, project_root).await?;
-            match call(host).await {
-                Ok(value) => Ok(value),
-                Err(ResidentCallError::Other(retry_err)) => Err(retry_err),
-                Err(ResidentCallError::Death(retry_err)) => Err(retry_err.context(format!(
-                    "config_source plugin {} still failing after one re-spawn (first error: {err})",
-                    plugin.name
-                ))),
+    // Acquire (spawning if absent) + call, retrying transient spawn/handshake or
+    // death-like failures with backoff. This covers BOTH the cold-start path (no
+    // cached host yet — the first config load after daemon start) AND a warm host
+    // dying mid-flight: a transient cold DB connect / fork / handshake pressure
+    // self-heals rather than surfacing as a hard config error. Structured
+    // ("Other") call errors propagate immediately — a genuine backend fault is
+    // not retried. `attempt == 0` runs immediately; later attempts reap the last
+    // generation and back off first.
+    const RESPAWN_BACKOFF_MS: [u64; 2] = [150, 600];
+    let mut generation: Option<u64> = None;
+    let mut first_err_msg: Option<String> = None;
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 0..=RESPAWN_BACKOFF_MS.len() {
+        if attempt > 0 {
+            if let Some(gen) = generation {
+                drop_resident_host_if_current(project_root, gen).await;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(RESPAWN_BACKOFF_MS[attempt - 1])).await;
+        }
+        let (host, gen) = match acquire_resident_host(&plugin, project_root).await {
+            Ok(pair) => pair,
+            Err(spawn_err) => {
+                if first_err_msg.is_none() {
+                    first_err_msg = Some(format!("{spawn_err}"));
+                }
+                last_err = Some(spawn_err);
+                continue;
+            }
+        };
+        generation = Some(gen);
+        match call(host).await {
+            Ok(value) => return Ok(value),
+            Err(ResidentCallError::Other(err)) => return Err(err),
+            Err(ResidentCallError::Death(err)) => {
+                if first_err_msg.is_none() {
+                    first_err_msg = Some(format!("{err}"));
+                }
+                last_err = Some(err);
             }
         }
     }
+    let last_err = last_err.unwrap_or_else(|| anyhow!("config_source plugin {} unavailable", plugin.name));
+    Err(last_err.context(format!(
+        "config_source plugin {} still failing after {} attempts (first error: {})",
+        plugin.name,
+        RESPAWN_BACKOFF_MS.len() + 1,
+        first_err_msg.unwrap_or_default()
+    )))
 }
 
 /// Return a clone of the resident host for `project_root` plus its generation
@@ -323,7 +351,14 @@ async fn acquire_resident_host(plugin: &DiscoveredPlugin, project_root: &Path) -
     // Spawn + handshake OUTSIDE the map lock so a slow spawn for one root never
     // blocks another root's cache lookups.
     let host = spawn_config_source_host(plugin).await?;
-    host.handshake().await.with_context(|| format!("handshake with config_source plugin {}", plugin.name))?;
+    // Tear the half-started child down on a handshake failure rather than leaking
+    // it (its reader task would otherwise keep the process + slot alive). The
+    // retry loop in `with_resident_host` re-spawns cleanly instead of piling up
+    // orphaned config_source processes under transient handshake failures.
+    if let Err(err) = host.handshake().await {
+        let _ = host.clone().shutdown().await;
+        return Err(err).with_context(|| format!("handshake with config_source plugin {}", plugin.name));
+    }
 
     // Decide the outcome WITHOUT holding the std Mutex across an `.await`: take
     // any host that needs reaping out under the lock, drop the guard, then await

@@ -451,10 +451,41 @@ impl LazyHosts {
         }
     }
 
-    /// Spawn + handshake a subject-backend plugin from its spec. Translates a
-    /// spawn / handshake failure into an `RpcError` rather than panicking so a
-    /// single broken backend fails just the route that touches it.
+    /// Spawn + handshake a subject-backend plugin, retrying on transient
+    /// failures (a cold DB connect, fork/handshake pressure under load) with
+    /// backoff. Previously a single transient "connection lost" on (re)spawn
+    /// surfaced as a hard board error; a couple of quick retries let the daemon
+    /// self-heal instead. Backend bugs still fail fast after the attempts.
     async fn spawn_and_handshake(&self, spec: &SubjectPluginSpec) -> Result<PluginHost, RpcError> {
+        const MAX_ATTEMPTS: usize = 3;
+        // Backoff before each retry (not before the first attempt).
+        const BACKOFF_MS: [u64; 2] = [150, 600];
+        let mut last_err: Option<RpcError> = None;
+        for attempt in 0..MAX_ATTEMPTS {
+            match self.spawn_and_handshake_once(spec).await {
+                Ok(host) => return Ok(host),
+                Err(error) => {
+                    if let Some(delay) = BACKOFF_MS.get(attempt).copied() {
+                        tracing::warn!(
+                            plugin = %spec.name,
+                            attempt = attempt + 1,
+                            "subject_backend spawn/handshake failed ({}); retrying in {delay}ms",
+                            error.message
+                        );
+                        tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+                    }
+                    last_err = Some(error);
+                }
+            }
+        }
+        Err(last_err.unwrap_or_else(|| RpcError {
+            code: animus_plugin_protocol::error_codes::INTERNAL_ERROR,
+            message: format!("subject_backend plugin '{}' spawn failed after {MAX_ATTEMPTS} attempts", spec.name),
+            data: None,
+        }))
+    }
+
+    async fn spawn_and_handshake_once(&self, spec: &SubjectPluginSpec) -> Result<PluginHost, RpcError> {
         let mut options =
             PluginSpawnOptions::for_manifest(spec.name.clone(), &spec.env_required, std::iter::empty::<String>(), None)
                 .with_notification_buffer_hint(spec.notification_buffer_size);
