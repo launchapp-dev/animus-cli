@@ -69,6 +69,80 @@ const WRITE_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 /// down and every awaiter observes [`HostError::ConnectionLost`].
 const READER_BUFFER_CAP: usize = 8 * 1024 * 1024;
 
+/// How many trailing stderr lines to retain per plugin for failure diagnostics.
+const STDERR_TAIL_CAP: usize = 40;
+
+/// Max bytes retained per captured stderr line (bounds memory for a plugin that
+/// emits pathologically long lines; the tail is diagnostics, not a full log).
+const MAX_STDERR_LINE_LEN: usize = 512;
+
+/// Truncate `line` to at most [`MAX_STDERR_LINE_LEN`] bytes on a char boundary,
+/// appending an ellipsis when clipped. Keeps the ring buffer bounded.
+fn clip_stderr_line(line: String) -> String {
+    if line.len() <= MAX_STDERR_LINE_LEN {
+        return line;
+    }
+    let mut end = MAX_STDERR_LINE_LEN;
+    while end > 0 && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &line[..end])
+}
+
+/// Matches a credential label anywhere in a stderr line, tolerating word breaks
+/// (`api key`, `api_key`, `api-key`) and any following separator/spacing. Once
+/// matched, everything from the label to end-of-line is masked, so the value is
+/// redacted regardless of how it is delimited or whether it spans tokens (PEM
+/// blob, JSON, `password = hunter2`, `Authorization: Bearer <tok>`).
+fn secret_marker_regex() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?i)(pass(?:word|wd)?|pwd|secret|token|api[ _-]?key|access[ _-]?key|client[ _-]?secret|authorization|credential|private[ _-]?key|session[ _-]?key|bearer|basic)",
+        )
+        .expect("valid secret-marker regex")
+    })
+}
+
+/// Redact credentials from a stderr line before it is surfaced in a user-visible
+/// error, so secrets stay in operator logs and do not leak into RPC/CLI errors.
+///
+/// Two passes: (1) mask the password of any `scheme://user:pass@host` connection
+/// string (a Postgres plugin echoing its DATABASE_URL on a connect failure), even
+/// when no credential *label* is present; (2) if a credential label (`password`,
+/// `api key`, `Authorization`, `bearer`, ...) appears, keep the text up to and
+/// including the label and mask everything after it. This over-redacts the tail of
+/// such a line — the stderr tail is failure diagnostics, not a full log — but
+/// never leaks the value regardless of separator, spacing, or token spanning.
+fn redact_stderr_line(line: &str) -> String {
+    let url_redacted = redact_url_userinfo(line);
+    if let Some(m) = secret_marker_regex().find(&url_redacted) {
+        return format!("{} ***", url_redacted[..m.end()].trim_end());
+    }
+    url_redacted
+}
+
+/// Mask the password in any `scheme://user:pass@host` token: `user:***@host`.
+/// Uses the LAST `@` so an unescaped `@` inside the password cannot leave a
+/// suffix unmasked (`u:p@ss@host` -> `u:***@host`).
+fn redact_url_userinfo(line: &str) -> String {
+    line.split(' ')
+        .map(|token| {
+            if let Some(scheme_end) = token.find("://") {
+                let after = &token[scheme_end + 3..];
+                if let Some(at) = after.rfind('@') {
+                    let userinfo = &after[..at];
+                    if let Some(colon) = userinfo.find(':') {
+                        return format!("{}{}:***@{}", &token[..scheme_end + 3], &userinfo[..colon], &after[at + 1..]);
+                    }
+                }
+            }
+            token.to_string()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Deadline the [`PluginHost::shutdown_transport`] flow waits for a transport
 /// plugin's `transport/shutdown` reply before moving on to the generic
 /// shutdown. Spec-compliant transports drain in-flight requests during this
@@ -541,6 +615,12 @@ pub struct PluginHostInner {
     /// guard and drop it eagerly after the child wait completes, ahead of the
     /// last `Arc` drop. In steady state nothing else touches this field.
     _process_slot: std::sync::Mutex<Option<BoxedProcessSlotGuard>>,
+    /// Ring buffer of the plugin's most recent stderr lines (last
+    /// [`STDERR_TAIL_CAP`]), captured by the stderr reader task. Surfaced in
+    /// handshake / ConnectionLost errors so a plugin that dies during startup
+    /// reports WHY (its stderr) instead of an opaque "connection lost". Empty
+    /// for in-memory test hosts.
+    stderr_tail: Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
 }
 
 /// Single-process JSON-RPC plugin host.
@@ -722,6 +802,14 @@ impl PluginHost {
 
         let stderr_plugin_name = name.clone();
         let stderr_sink = options.stderr_sink.clone();
+
+        let capacity = resolve_broadcast_capacity(options.notification_capacity, options.notification_buffer_hint);
+        let host = Self::launch_with_slot(name, Box::new(stdout), Box::new(stdin), Some(child), capacity, process_slot);
+
+        // Capture the plugin's stderr into a bounded ring buffer (in addition to
+        // the standard warn! + optional sink) so a startup/handshake failure can
+        // report the plugin's own last words instead of a bare "connection lost".
+        let stderr_tail = host.inner.stderr_tail.clone();
         tokio::spawn(async move {
             let mut lines = tokio::io::BufReader::new(stderr).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -729,11 +817,20 @@ impl PluginHost {
                 if let Some(sink) = stderr_sink.as_ref() {
                     sink(&stderr_plugin_name, &line);
                 }
+                if let Ok(mut buf) = stderr_tail.lock() {
+                    if buf.len() >= STDERR_TAIL_CAP {
+                        buf.pop_front();
+                    }
+                    // Redact BEFORE clipping: clipping first could split a
+                    // `scheme://user:pass@host` across the byte cutoff and defeat
+                    // the URL detector, leaking the password prefix. The raw line
+                    // still reaches operator logs above via `warn!`/`sink`.
+                    buf.push_back(clip_stderr_line(redact_stderr_line(&line)));
+                }
             }
         });
 
-        let capacity = resolve_broadcast_capacity(options.notification_capacity, options.notification_buffer_hint);
-        Ok(Self::launch_with_slot(name, Box::new(stdout), Box::new(stdin), Some(child), capacity, process_slot))
+        Ok(host)
     }
 
     /// Build a host from caller-supplied in-memory streams. Used by tests
@@ -829,6 +926,7 @@ impl PluginHost {
             reader_handle: std::sync::Mutex::new(None),
             alive: AtomicBool::new(true),
             _process_slot: std::sync::Mutex::new(process_slot),
+            stderr_tail: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
         });
 
         let reader_inner = inner.clone();
@@ -931,6 +1029,23 @@ impl PluginHost {
     ///
     /// Returns the plugin's [`InitializeResult`] on success and rejects on
     /// protocol-version drift via [`check_protocol_compat`].
+    /// A short diagnostic suffix built from the plugin's captured stderr tail,
+    /// appended to startup/handshake failures so an opaque transport error
+    /// ("connection lost") carries the plugin's own last words. When the plugin
+    /// died without printing anything, that itself is the signal (killed by a
+    /// signal / OOM / exec failure).
+    fn stderr_tail_context(&self) -> String {
+        match self.inner.stderr_tail.lock() {
+            Ok(buf) if !buf.is_empty() => {
+                let tail: Vec<String> = buf.iter().rev().take(15).map(|line| redact_stderr_line(line)).collect();
+                let joined = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+                format!("; last plugin stderr:\n{joined}")
+            }
+            _ => "; plugin emitted no stderr before exit (likely killed by a signal / OOM, or an exec/fork failure)"
+                .to_string(),
+        }
+    }
+
     pub async fn handshake(&self) -> Result<InitializeResult> {
         const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -943,7 +1058,9 @@ impl PluginHost {
         let response = self
             .request_raw_with_timeout("initialize", Some(serde_json::to_value(params)?), HANDSHAKE_TIMEOUT)
             .await
-            .map_err(|error| anyhow!("plugin '{}' initialize failed: {error}", self.inner.name))?;
+            .map_err(|error| {
+                anyhow!("plugin '{}' initialize failed: {error}{}", self.inner.name, self.stderr_tail_context())
+            })?;
 
         if let Some(error) = response.error {
             return Err(anyhow!("plugin initialize failed ({}): {}", error.code, error.message));
@@ -1507,6 +1624,32 @@ mod tests {
     use tokio::io::{duplex, AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     use super::*;
+
+    #[test]
+    fn redact_stderr_line_masks_credentials_without_leaking_tails() {
+        // URL userinfo password, even with no credential label and an '@' in it.
+        assert_eq!(
+            redact_stderr_line("connect failed postgres://user:p@ss@db:5432/x"),
+            "connect failed postgres://user:***@db:5432/x"
+        );
+        // Labelled secrets with assorted separators / spacing — value + rest of
+        // line masked, prefix kept.
+        assert_eq!(redact_stderr_line("db password = hunter2 for role app"), "db password ***");
+        assert_eq!(redact_stderr_line("using api key: sk-abc123 now"), "using api key ***");
+        assert_eq!(redact_stderr_line("Authorization: Bearer sk-xyz trailing"), "Authorization ***");
+        // Multi-token / PEM value cannot leak its tail.
+        assert_eq!(
+            redact_stderr_line("private_key=-----BEGIN KEY----- abcd -----END KEY-----"),
+            "private_key ***"
+        );
+        // Query-string credential in a URL without userinfo.
+        assert_eq!(
+            redact_stderr_line("cb https://h/x?client_id=a&client_secret=zzz"),
+            "cb https://h/x?client_id=a&client_secret ***"
+        );
+        // A line with no credential material is untouched.
+        assert_eq!(redact_stderr_line("could not connect to host db:5432"), "could not connect to host db:5432");
+    }
 
     fn ok_initialize_response(id: Option<Value>, protocol_version: &str) -> RpcResponse {
         RpcResponse::ok(
