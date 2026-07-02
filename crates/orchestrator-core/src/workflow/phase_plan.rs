@@ -196,6 +196,8 @@ mod tests {
                 variables: Vec::new(),
                 worktree: None,
                 budget: None,
+                environment: None,
+                workspace: None,
             },
             WorkflowDefinition {
                 id: UI_UX_WORKFLOW_REF.to_string(),
@@ -205,6 +207,8 @@ mod tests {
                 variables: Vec::new(),
                 worktree: None,
                 budget: None,
+                environment: None,
+                workspace: None,
             },
         ];
         config
@@ -495,6 +499,8 @@ workflows:
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
 
         // Pass the resolver's source gate (has_yaml_workflows) by writing a config

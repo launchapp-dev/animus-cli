@@ -1081,6 +1081,23 @@ not in `daemon_default()`, `animus daemon preflight` never reports it, and the d
 never refuses to start without it. The contract lives in the `conversation_store` module
 of `crates/animus-plugin-protocol`. See `docs/reference/chat.md` for the full surface.
 
+### Optional `environment` plugin role (v0.7+)
+
+Execution contexts (git worktree, container, microVM) are materialized by an
+**optional** `environment` plugin role. With no plugin installed the workflow
+runner falls back to local execution, so workflows run with zero environment
+plugins. When an `environment` plugin is discovered
+(`serves_kind(.., "environment")`), `animus daemon preflight` /
+`animus plugin status` **report** it via the `RequiredRole::Environment`
+variant and the `InstalledPluginSummary::is_environment()` helper. Like
+`conversation_store` and `workflow_journal` — and unlike `config_source` — this
+role is **never** part of `daemon_default()`, so its absence never blocks daemon
+boot. WHICH environment runs a unit of work is selected by the config-level
+`environment_routing` table plus workflow/phase `environment:` overrides (see
+[Workflow YAML → environment_routing](workflow-yaml.md#environment_routing)).
+The wire contract lives in the `animus-environment-protocol` crate; the runtime
+`EnvironmentClient` (prepare / exec / teardown) is a follow-on.
+
 ## Notes
 
 - Project YAML is the authored workflow surface.

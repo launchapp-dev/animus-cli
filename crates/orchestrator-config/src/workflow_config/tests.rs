@@ -36,6 +36,8 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         },
         WorkflowDefinition {
             id: "ui-ux-standard".to_string(),
@@ -53,6 +55,8 @@ fn test_workflow_config_with_standard_pipeline() -> WorkflowConfig {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         },
     ];
     config
@@ -140,6 +144,8 @@ fn validation_rejects_on_verdict_targeting_nonexistent_phase() {
         on_verdict,
         skip_if: Vec::new(),
         budget: None,
+        environment: None,
+        workspace: None,
     });
 
     let err = validate_workflow_config(&config).expect_err("on_verdict with nonexistent target should fail validation");
@@ -163,6 +169,8 @@ fn validation_rejects_zero_max_rework_attempts() {
         on_verdict: HashMap::new(),
         skip_if: Vec::new(),
         budget: None,
+        environment: None,
+        workspace: None,
     });
 
     let err = validate_workflow_config(&config).expect_err("zero max_rework_attempts should fail validation");
@@ -313,6 +321,8 @@ fn resolve_workflow_skip_guards_extracts_guards_from_config() {
             on_verdict: HashMap::new(),
             skip_if: vec!["task_type == 'docs'".to_string()],
             budget: None,
+            environment: None,
+            workspace: None,
         }),
         "implementation".to_string().into(),
     ];
@@ -773,6 +783,8 @@ fn make_pipeline(id: &str, phases: Vec<WorkflowPhaseEntry>) -> WorkflowDefinitio
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     }
 }
 
@@ -915,6 +927,8 @@ fn expand_preserves_rich_phase_config() {
                 on_verdict: on_verdict.clone(),
                 skip_if: vec!["task_type == 'docs'".into()],
                 budget: None,
+                environment: None,
+                workspace: None,
             })],
         ),
         make_pipeline(
@@ -1009,6 +1023,8 @@ fn resolve_phase_plan_expands_sub_pipelines() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
 
     let standard = config.workflows.iter_mut().find(|p| p.id == "standard-workflow").expect("standard workflow");
@@ -1052,6 +1068,8 @@ fn validate_rejects_circular_sub_pipeline() {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         },
         WorkflowDefinition {
             id: "review".into(),
@@ -1061,6 +1079,8 @@ fn validate_rejects_circular_sub_pipeline() {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         },
     ];
 
@@ -2328,6 +2348,8 @@ fn pipeline_variables_not_serialized_when_empty() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     };
     let json = serde_json::to_value(&workflow).expect("serialize");
     let obj = json.as_object().expect("json object");
@@ -2900,6 +2922,8 @@ fn worktree_and_secrets_serde_roundtrip_through_workflow_config() {
             base_ref: Some("develop".to_string()),
         }),
         budget: None,
+        environment: None,
+        workspace: None,
     });
     config.secrets.insert(
         "linear".to_string(),
@@ -3111,6 +3135,8 @@ fn validation_surfaces_malformed_trigger_configs() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     config.triggers.push(WorkflowTrigger {
         id: "bad-webhook".to_string(),
@@ -3221,6 +3247,8 @@ fn workflow_with_budget(id: &str, budget: BudgetConfig) -> WorkflowDefinition {
         variables: Vec::new(),
         worktree: None,
         budget: Some(budget),
+        environment: None,
+        workspace: None,
     }
 }
 
@@ -4372,4 +4400,85 @@ workflows:
     // raw placeholder is skipped rather than reported as a missing skill.
     let warnings = super::validation::missing_project_skill_reference_warnings(temp.path());
     assert!(warnings.is_empty(), "{warnings:?}");
+}
+
+#[test]
+fn yaml_parses_workspaces_environment_routing_and_env_overrides() {
+    let yaml = r#"
+workspaces:
+  fullstack:
+    repos:
+      - url: "https://github.com/acme/api"
+        primary: true
+      - url: "https://github.com/acme/web"
+        name: web
+        git_ref: develop
+environment_routing:
+  default: env-local
+  rules:
+    - match:
+        kind: task
+        harness: claude
+      environment: env-firecracker
+      spec:
+        image: "acme/dev:latest"
+    - match:
+        harness: codex
+      environment: env-sandbox
+workflows:
+  - id: standard
+    name: Standard
+    environment: env-workflow
+    workspace: fullstack
+    phases:
+      - requirements
+      - implementation:
+          environment: env-phase
+      - testing
+"#;
+    let config = parse_yaml_workflow_config(yaml).expect("should parse workspaces + environment_routing");
+
+    // workspaces round-trip.
+    let ws = config.workspaces.get("fullstack").expect("fullstack workspace should be parsed");
+    assert_eq!(ws.repos.len(), 2);
+    assert_eq!(ws.repos[0].url, "https://github.com/acme/api");
+    assert!(ws.repos[0].primary);
+    assert_eq!(ws.repos[1].name.as_deref(), Some("web"));
+    assert_eq!(ws.repos[1].git_ref.as_deref(), Some("develop"));
+
+    // environment_routing round-trips (default + ordered rules with match predicates).
+    let routing = config.environment_routing.as_ref().expect("environment_routing should be parsed");
+    assert_eq!(routing.default.as_deref(), Some("env-local"));
+    assert_eq!(routing.rules.len(), 2);
+    assert_eq!(routing.rules[0].match_on.kind.as_deref(), Some("task"));
+    assert_eq!(routing.rules[0].match_on.harness.as_deref(), Some("claude"));
+    assert_eq!(routing.rules[0].environment, "env-firecracker");
+    assert!(routing.rules[0].spec.is_some());
+    assert_eq!(routing.rules[1].match_on.kind, None);
+    assert_eq!(routing.rules[1].match_on.harness.as_deref(), Some("codex"));
+    assert_eq!(routing.rules[1].environment, "env-sandbox");
+
+    // Workflow-level environment + workspace round-trip.
+    let standard = config.workflows.iter().find(|w| w.id == "standard").expect("standard workflow");
+    assert_eq!(standard.environment.as_deref(), Some("env-workflow"));
+    assert_eq!(standard.workspace.as_deref(), Some("fullstack"));
+
+    // Phase-level environment override round-trips on the rich phase entry.
+    let impl_phase = standard.phases.iter().find(|p| p.phase_id() == "implementation").expect("implementation phase");
+    match impl_phase {
+        WorkflowPhaseEntry::Rich(cfg) => assert_eq!(cfg.environment.as_deref(), Some("env-phase")),
+        other => panic!("expected rich phase entry, got {other:?}"),
+    }
+
+    // End-to-end: the compiled routing table drives resolve_environment.
+    assert_eq!(
+        super::resolve_environment(Some("task"), Some("claude"), None, None, config.environment_routing.as_ref())
+            .as_deref(),
+        Some("env-firecracker"),
+    );
+    assert_eq!(
+        super::resolve_environment(Some("task"), Some("gemini"), None, None, config.environment_routing.as_ref())
+            .as_deref(),
+        Some("env-local"),
+    );
 }

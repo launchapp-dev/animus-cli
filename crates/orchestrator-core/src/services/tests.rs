@@ -828,12 +828,16 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
                     },
                 )]),
                 budget: None,
+                environment: None,
+                workspace: None,
             }),
             "push-branch".to_string().into(),
         ],
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
 
@@ -995,6 +999,8 @@ async fn file_hub_uses_custom_pipeline_from_workflow_config_v2() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("workflow config should be written");
 
@@ -1173,6 +1179,8 @@ async fn planning_execute_starts_workflows_with_config_phase_plan() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write config");
     let _config_source_seam_after_write =
@@ -2683,6 +2691,8 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     crate::write_workflow_config(temp.path(), &workflow_config).expect("write workflow config");
 

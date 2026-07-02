@@ -738,6 +738,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -763,6 +765,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: "fswatch-default".to_string(),
@@ -1061,6 +1065,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(WorkflowTrigger {
             id: "fw-collision".to_string(),

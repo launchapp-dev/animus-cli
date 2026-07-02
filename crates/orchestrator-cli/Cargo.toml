@@ -35,9 +35,9 @@ animus-plugin-protocol = { workspace = true }
 # embed subject-protocol types, so `animus-subject-protocol-wire` MUST match
 # control's rev. v0.1.26 additively adds `actor: Option<Actor>` to the control +
 # workflow-runner request types relayed by the control surface / plugin_clients.
-animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.1" }
-animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.1" }
-animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.1" }
+animus-control-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.2" }
+animus-log-storage-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.2" }
+animus-subject-protocol-wire = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.2" }
 animus-actor = { workspace = true }
 # Plugin protocol crates used by the plugin-host wrappers in
 # `services::plugin_clients` to dispatch `workflow/*` and `queue/*` RPCs through
@@ -47,7 +47,7 @@ animus-actor = { workspace = true }
 # NOT share `animus-subject-protocol-wire`'s rev (cargo forbids two names for one
 # package instance), so they stay a distinct rev.
 animus-queue-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.10" }
-animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.1" }
+animus-workflow-runner-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.2" }
 animus-subject-protocol-v05 = { package = "animus-subject-protocol", git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.5.10" }
 protocol = { workspace = true }
 animus-session-backend = { workspace = true }

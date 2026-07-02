@@ -654,6 +654,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.schedules.push(orchestrator_core::WorkflowSchedule {
             id: "nightly".to_string(),
@@ -895,6 +897,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         let workflow_ref = config.default_workflow_ref.clone();
         config.schedules.push(orchestrator_core::WorkflowSchedule {

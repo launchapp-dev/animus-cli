@@ -311,6 +311,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -336,6 +338,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: trigger_id.to_string(),
@@ -395,6 +399,8 @@ mod tests {
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         config.triggers.push(orchestrator_core::workflow_config::WorkflowTrigger {
             id: "disabled-watcher".to_string(),

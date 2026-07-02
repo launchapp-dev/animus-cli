@@ -921,6 +921,8 @@ pub fn write_agent_runtime_config(project_root: &Path, config: &AgentRuntimeConf
         triggers: Vec::new(),
         daemon: None,
         secrets: BTreeMap::new(),
+        workspaces: BTreeMap::new(),
+        environment_routing: None,
     };
     crate::workflow_config::write_workflow_yaml_overlay(
         project_root,
@@ -2641,6 +2643,8 @@ cli_tools:
             variables: Vec::new(),
             worktree: None,
             budget: None,
+            environment: None,
+            workspace: None,
         });
         crate::workflow_config::write_workflow_config(temp.path(), &workflow).expect("write workflow config");
 

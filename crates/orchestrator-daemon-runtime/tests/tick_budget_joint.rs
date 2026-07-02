@@ -36,6 +36,8 @@ fn write_combined_config(project_root: &std::path::Path) {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
     config.workflows.push(orchestrator_core::WorkflowDefinition {
         id: "webhook-flow".to_string(),
@@ -45,6 +47,8 @@ fn write_combined_config(project_root: &std::path::Path) {
         variables: Vec::new(),
         worktree: None,
         budget: None,
+        environment: None,
+        workspace: None,
     });
 
     config.schedules.push(orchestrator_core::WorkflowSchedule {

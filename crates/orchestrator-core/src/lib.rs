@@ -5,6 +5,14 @@ pub mod daemon_config;
 pub mod daemon_tick_metrics;
 pub mod doctor;
 pub mod domain_state;
+/// v0.7 environment plugin kind wire types, re-exported so the follow-on runtime
+/// `EnvironmentClient` (prepare / exec / exec_stream / teardown) and the
+/// out-of-tree workflow runner can reach `EnvironmentSpec` / `HarnessCommand` /
+/// `ExecRequest` / `ExecResponse` / `EnvironmentHandle` from one place. The
+/// client itself is NOT implemented yet — this is the type seam only.
+pub mod environment {
+    pub use animus_environment_protocol::*;
+}
 pub mod execution_projection;
 pub mod flavor;
 pub mod model_quality;

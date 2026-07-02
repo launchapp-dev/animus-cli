@@ -5,7 +5,7 @@ mod tests;
 
 pub use runner::{PluginInstaller, PluginPreflightRunner};
 
-use animus_plugin_protocol::{PLUGIN_KIND_PROVIDER, PLUGIN_KIND_SUBJECT_BACKEND};
+use animus_plugin_protocol::{PLUGIN_KIND_ENVIRONMENT, PLUGIN_KIND_PROVIDER, PLUGIN_KIND_SUBJECT_BACKEND};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin_registry::{
@@ -184,6 +184,15 @@ pub enum RequiredRole {
     /// the in-tree SQLite journal, exactly as before. The variant exists so the
     /// role's presence can be reported (and required by an explicit spec/test).
     WorkflowJournal,
+    /// Satisfied by ANY installed `environment` plugin (v0.7). This role is
+    /// OPTIONAL: it is NEVER added to [`PluginPreflightSpec::daemon_default`], so
+    /// its absence never blocks boot — with no environment plugin installed the
+    /// workflow runner falls back to local execution, exactly as before. The
+    /// variant exists so the role's presence can be REPORTED by
+    /// `animus daemon preflight` / `animus plugin status` (and required by an
+    /// explicit spec/test once the reference worktree/container env plugins
+    /// ship).
+    Environment,
 }
 
 impl RequiredRole {
@@ -197,6 +206,7 @@ impl RequiredRole {
             RequiredRole::Queue => "queue".to_string(),
             RequiredRole::ConfigSource => "config_source".to_string(),
             RequiredRole::WorkflowJournal => "workflow_journal".to_string(),
+            RequiredRole::Environment => "environment".to_string(),
         }
     }
 }
@@ -371,6 +381,16 @@ impl InstalledPluginSummary {
 
     pub fn is_workflow_journal(&self) -> bool {
         self.serves_kind(PLUGIN_KIND_WORKFLOW_JOURNAL)
+    }
+
+    /// Whether this plugin serves the `environment` kind (v0.7). Environment
+    /// plugins prepare/exec/teardown execution contexts (worktree, container,
+    /// microVM). This role is OPTIONAL — it is reported by
+    /// `animus daemon preflight` / `animus plugin status` but is NOT part of
+    /// the required-role set, so a daemon boots fine with no environment
+    /// plugin installed (the workflow runner falls back to local execution).
+    pub fn is_environment(&self) -> bool {
+        self.serves_kind(PLUGIN_KIND_ENVIRONMENT)
     }
 
     pub fn covers_subject_kind(&self, kind: &str) -> bool {
