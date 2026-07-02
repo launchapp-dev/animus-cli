@@ -1662,9 +1662,11 @@ mod tests {
                     name: "test".to_string(),
                     version: "0.1.0".to_string(),
                     plugin_kind: "custom".to_string(),
+                    plugin_kinds: Vec::new(),
                     description: None,
                 },
                 capabilities: PluginCapabilities::default(),
+                kind_capabilities: std::collections::HashMap::new(),
             }),
         )
     }

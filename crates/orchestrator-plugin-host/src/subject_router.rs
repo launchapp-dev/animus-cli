@@ -1245,6 +1245,7 @@ mod tests {
                                 name: name_for_task.clone(),
                                 version: "0.1.0".to_string(),
                                 plugin_kind: "subject_backend".to_string(),
+                                plugin_kinds: Vec::new(),
                                 description: None,
                             },
                             capabilities: PluginCapabilities {
@@ -1252,6 +1253,7 @@ mod tests {
                                 methods: kinds.iter().map(|kind| format!("{kind}/get")).collect(),
                                 ..PluginCapabilities::default()
                             },
+                            kind_capabilities: std::collections::HashMap::new(),
                         }),
                     ),
                     "initialized" => continue,
@@ -1342,6 +1344,7 @@ mod tests {
                                 name: name_for_task.clone(),
                                 version: "0.1.0".to_string(),
                                 plugin_kind: "subject_backend".to_string(),
+                                plugin_kinds: Vec::new(),
                                 description: None,
                             },
                             capabilities: PluginCapabilities {
@@ -1349,6 +1352,7 @@ mod tests {
                                 methods: kinds.iter().map(|kind| format!("{kind}/get")).collect(),
                                 ..PluginCapabilities::default()
                             },
+                            kind_capabilities: std::collections::HashMap::new(),
                         }),
                     ),
                     "initialized" => continue,

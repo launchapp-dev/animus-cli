@@ -268,6 +268,7 @@ mod tests {
             name: name.to_string(),
             version: "0.1.0".into(),
             plugin_kind: "custom".into(),
+            plugin_kinds: vec![],
             description: "test".into(),
             protocol_version: "1.0.0".into(),
             capabilities: vec![],
