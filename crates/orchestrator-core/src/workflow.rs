@@ -1,9 +1,12 @@
+mod environment_client;
 mod journal_client;
 mod lifecycle_executor;
 mod phase_plan;
 mod resume;
 mod state_machine;
 mod state_manager;
+
+pub use environment_client::{shutdown_resident_hosts as shutdown_environment_hosts, EnvironmentClient};
 
 pub use journal_client::{
     durable_journal_active, import_local_sqlite_into_plugin, record_wire_event as journal_record_wire_event,
