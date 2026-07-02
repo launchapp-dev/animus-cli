@@ -31,6 +31,33 @@ pub enum DiscoverySource {
     SystemPath,
 }
 
+impl DiscoverySource {
+    /// `true` when a candidate from this source can be committed into a
+    /// cloned repository, and is therefore attacker-controlled on a server
+    /// that clones untrusted repos.
+    ///
+    /// Only [`DiscoverySource::ProjectLocal`] is repo-shippable — it covers
+    /// BOTH the project-local `<project>/.animus/plugins/` directory scan AND
+    /// the project-local `<project>/.animus/plugins.yaml` registry (whose
+    /// `binary:` entries the repo author controls). Every other source is
+    /// operator-installed into the user/global registry
+    /// (`ExplicitConfig` → `~/.animus/plugins.yaml`), the global install dir
+    /// (`PluginPath`), or the operator's `$PATH` (`SystemPath`), and is
+    /// trusted.
+    ///
+    /// UNTRUSTED candidates are pre-probe gated by the scope's filename slug
+    /// ([`PluginScope::may_probe`]) and, one layer up, are only enumerated at
+    /// all when the caller opts into project-local probing
+    /// ([`PluginDiscovery::probe_project_local_plugins`]). TRUSTED candidates
+    /// are always probed so the post-probe manifest-name fallback
+    /// ([`crate::scope::PluginScope::admits`]) can still admit a plugin
+    /// installed under a `--name <NAME>` override whose filename slug is not
+    /// in the flavor admit set.
+    pub fn is_untrusted(self) -> bool {
+        matches!(self, DiscoverySource::ProjectLocal)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DiscoveredPlugin {
     pub name: String,
@@ -184,36 +211,39 @@ fn resolve_manifests(
     let mut outcomes: Vec<Option<ProbeOutcome>> = (0..candidates.len()).map(|_| None).collect();
 
     // SECURITY: gate the `--manifest` probe (which EXECUTES the candidate
-    // binary) on the active scope BEFORE any hashing or spawning. A
-    // candidate is executed only when the scope could admit it — this is
-    // the load-bearing defense against a cloned hostile repo shipping an
-    // attacker binary under `.animus/plugins/`. Unrestricted (mode=all)
-    // scopes admit everything, so local-dev behavior is unchanged.
+    // binary) on TRUST + scope BEFORE any hashing or spawning.
     //
-    // The gate admits a probe when the binary's filename-derived slug is
-    // admitted ([`PluginScope::may_probe`]) — authoritative for directory
-    // scans where the attacker controls the file name.
+    // The pre-probe skip fires ONLY for UNTRUSTED (repo-shippable)
+    // candidates — `DiscoverySource::ProjectLocal`, covering both the
+    // project-local `.animus/plugins/` dir scan and the project-local
+    // `.animus/plugins.yaml` registry — whose filename-derived slug the
+    // active scope cannot admit ([`PluginScope::may_probe`]). This is the
+    // load-bearing defense against a cloned hostile repo shipping an
+    // attacker binary (or a `plugins.yaml` `binary:` entry pointing at one)
+    // and getting it executed during discovery. Because the attacker
+    // controls the file name, only the path/filename gate is authoritative
+    // for these sources — a logical-name escape is NOT offered, or a hostile
+    // repo could pair an admitted logical key (`animus-provider-claude`)
+    // with `binary: .animus/plugins/evil` and get the evil binary run.
     //
-    // For the GLOBAL registry (`DiscoverySource::ExplicitConfig`,
-    // `~/.animus/plugins.yaml`) ONLY, a second escape hatch also admits a
-    // probe when the operator-declared LOGICAL name is admitted, so a
-    // supported scoped entry like
-    // `animus-provider-claude: { binary: /opt/claude-wrapper }` is not
-    // dropped just because its wrapper basename differs from the slug. This
-    // escape is deliberately NOT extended to project-local sources
-    // (`ProjectLocal` — the project dir scan AND the project
-    // `.animus/plugins.yaml` registry): a cloned hostile repo controls its
-    // own `plugins.yaml`, so it could otherwise pair an admitted logical
-    // key (`animus-provider-claude`) with `binary: .animus/plugins/evil`
-    // and get the evil binary executed. Repo-controlled candidates must
-    // pass the path/filename gate.
+    // TRUSTED candidates (global registry, global install dir, `$PATH`) are
+    // never pre-probe skipped: they are operator-installed, not
+    // repo-shippable, so we always probe them and let the post-probe
+    // [`crate::scope::PluginScope::admits`] predicate filter — which
+    // additionally consults the manifest-declared name so a plugin installed
+    // under a `--name <NAME>` override (whose filename slug is outside the
+    // flavor admit set) is still discovered.
+    //
+    // Unrestricted (mode=all) scopes admit everything, so local-dev behavior
+    // is unchanged.
     let mut gated: Vec<bool> = vec![false; candidates.len()];
     if let Some(scope) = scope {
         if !scope.admits_everything() {
             for (idx, cand) in candidates.iter().enumerate() {
-                let logical_name_escape =
-                    matches!(cand.source, DiscoverySource::ExplicitConfig) && scope.admits_by_name(&cand.name);
-                if !scope.may_probe(&cand.path) && !logical_name_escape {
+                if !cand.source.is_untrusted() {
+                    continue;
+                }
+                if !scope.may_probe(&cand.path) {
                     gated[idx] = true;
                     outcomes[idx] = Some(ProbeOutcome::SkippedOutOfScope(format!(
                         "skipped --manifest probe: `{}` is not admitted by the active plugin scope ({}); \
@@ -366,22 +396,27 @@ impl PluginDiscovery {
         self
     }
 
-    /// Opt in to scanning the project-local `<project_root>/.animus/plugins/`
-    /// directory for `animus-plugin-*` / `animus-provider-*` binaries.
+    /// Opt in to the project-local (repo-shippable) discovery tier:
+    /// the `<project_root>/.animus/plugins/` directory scan AND the
+    /// `<project_root>/.animus/plugins.yaml` project registry.
     ///
-    /// Defaults to `false`. This is the hostile-repo defense: because the
-    /// directory scan EXECUTES every matching binary with `--manifest`, a
-    /// cloud daemon that clones a repo shipping
-    /// `.animus/plugins/animus-provider-evil` would otherwise run that
+    /// Defaults to `false`. This is the hostile-repo defense: BOTH sources
+    /// EXECUTE a binary the repo author controls (the dir scan runs every
+    /// matching `animus-plugin-*` / `animus-provider-*` file with
+    /// `--manifest`; the registry runs whatever its `binary:` entries point
+    /// at), so a cloud daemon that clones a repo shipping
+    /// `.animus/plugins/animus-provider-evil` — or a `.animus/plugins.yaml`
+    /// with `binary: ./.animus/plugins/evil` — would otherwise run that
     /// attacker binary during discovery. Cloud daemons / servers therefore
     /// leave this OFF (see [`discover_plugins`]); explicit local-dev flows
-    /// that intentionally support hand-dropped project-scoped binaries opt
-    /// in (see [`discover_plugins_including_project_local`]).
+    /// that intentionally support project-scoped installs opt in (see
+    /// [`discover_plugins_including_project_local`]).
     ///
-    /// Note: this only gates the raw project-local *directory* scan. The
-    /// project registry (`<project_root>/.animus/plugins.yaml`) and every
-    /// other tier are unaffected, and all probes remain subject to the
-    /// pre-probe [`PluginScope::may_probe`] gate.
+    /// When opted in, probes from these sources remain subject to the
+    /// pre-probe [`PluginScope::may_probe`] gate (defense in depth for a
+    /// local dev with a restricted flavor/allowlist scope). Every other tier
+    /// (global registry, global install dir, `$ANIMUS_PLUGIN_PATH`, `$PATH`)
+    /// is unaffected by this flag.
     pub fn probe_project_local_plugins(mut self, probe_project_local_plugins: bool) -> Self {
         self.probe_project_local_plugins = probe_project_local_plugins;
         self
@@ -427,7 +462,12 @@ impl PluginDiscovery {
     ///    registry (`<project_root>/.animus/plugins.yaml`) — the
     ///    highest-priority tier so a project-scoped install
     ///    (`animus plugin install --project`) shadows BOTH a hand-pinned
-    ///    global registry entry and a global install of the same name.
+    ///    global registry entry and a global install of the same name. Both
+    ///    of these sources are repo-shippable (UNTRUSTED) and are only walked
+    ///    when the caller opts into
+    ///    [`PluginDiscovery::probe_project_local_plugins`]; the server-safe
+    ///    default ([`discover_plugins`]) skips the entire tier so a cloned
+    ///    hostile repo's binaries are never executed during discovery.
     /// 2. Explicit registry config (`~/.animus/plugins.yaml`, or the path
     ///    supplied to [`PluginDiscovery::with_config_path`]). Every global
     ///    `animus plugin install` records its entry here, so this tier is
@@ -490,6 +530,18 @@ impl PluginDiscovery {
             // (default OFF) and is only enabled for explicit local-dev
             // flows — cloud daemons never probe binaries shipped inside a
             // cloned repo. See [`PluginDiscovery::probe_project_local_plugins`].
+            // Both project-local sources are repo-shippable (UNTRUSTED) and
+            // EXECUTE binaries the repo author controls:
+            //   * the `.animus/plugins/` directory scan runs any
+            //     `animus-plugin-*` / `animus-provider-*` binary it finds;
+            //   * the `.animus/plugins.yaml` registry runs whatever its
+            //     `binary:` entries point at.
+            // A cloned hostile repo can ship EITHER, so BOTH are gated behind
+            // the same opt-in — cloud daemons / servers leave it OFF and never
+            // execute a repo-shipped binary during discovery (see
+            // [`PluginDiscovery::probe_project_local_plugins`] and the
+            // server-safe [`discover_plugins`]). Explicit local-dev flows opt
+            // in via [`discover_plugins_including_project_local`].
             if self.probe_project_local_plugins {
                 scan_dir(
                     &project_root.join(".animus/plugins"),
@@ -501,20 +553,20 @@ impl PluginDiscovery {
                     lockfile.as_ref(),
                     scope_ref,
                 );
+                // The dir scan only matches `animus-plugin-*` /
+                // `animus-provider-*` file names; the project registry tier
+                // resolves project-scoped installs of every other official
+                // plugin name (`animus-subject-*`, `animus-queue-*`, ...).
+                self.discover_project_registry(
+                    project_root,
+                    &mut discovered,
+                    &mut warnings,
+                    &mut seen,
+                    &cache,
+                    lockfile.as_ref(),
+                    scope_ref,
+                );
             }
-            // The dir scan only matches `animus-plugin-*` /
-            // `animus-provider-*` file names; the project registry tier
-            // resolves project-scoped installs of every other official
-            // plugin name (`animus-subject-*`, `animus-queue-*`, ...).
-            self.discover_project_registry(
-                project_root,
-                &mut discovered,
-                &mut warnings,
-                &mut seen,
-                &cache,
-                lockfile.as_ref(),
-                scope_ref,
-            );
         }
 
         self.discover_configured(&mut discovered, &mut warnings, &mut seen, &cache, lockfile.as_ref(), scope_ref)?;
@@ -808,14 +860,17 @@ impl PluginDiscovery {
 /// Server-safe plugin discovery: the default entry used by the daemon and
 /// every runtime resolution path.
 ///
-/// The project-local `<project_root>/.animus/plugins/` directory scan is
-/// left OFF, so a cloud daemon that clones a hostile repo shipping an
-/// attacker binary under `.animus/plugins/` never executes it during
-/// discovery. Legitimately installed plugins in `~/.animus/plugins/` (the
-/// global install dir), the `~/.animus/plugins.yaml` registry, and the
-/// project registry are all still discovered, so this does not stop a
-/// server from finding its real plugins. Local-dev flows that
-/// intentionally support hand-dropped project-scoped binaries should call
+/// The entire repo-shippable project-local tier is left OFF — BOTH the
+/// `<project_root>/.animus/plugins/` directory scan AND the
+/// `<project_root>/.animus/plugins.yaml` project registry — so a cloud
+/// daemon that clones a hostile repo never executes a binary the repo
+/// author controls (whether shipped as a file under `.animus/plugins/` or
+/// pointed at by a `plugins.yaml` `binary:` entry) during discovery.
+/// Legitimately installed plugins in `~/.animus/plugins/` (the global
+/// install dir) and the `~/.animus/plugins.yaml` global registry are all
+/// still discovered, so this does not stop a server from finding its real
+/// (operator-installed) plugins. Local-dev flows that intentionally support
+/// project-scoped installs should call
 /// [`discover_plugins_including_project_local`] instead.
 pub fn discover_plugins(project_root: impl Into<PathBuf>) -> Result<Vec<DiscoveredPlugin>> {
     discover_plugins_inner(project_root, false)
@@ -2045,8 +2100,16 @@ mod tests {
     /// under a scope that excludes it we must instead see a "skipped, out
     /// of scope" warning proving the binary was never run.
     #[cfg(unix)]
+    /// A TRUSTED, operator-installed plugin in the global install dir that
+    /// falls outside a restricted scope is PROBED (the operator installed it,
+    /// so executing it for a `--manifest` probe is safe) and then filtered
+    /// out post-probe by [`PluginScope::admits`]. It must NOT be pre-probe
+    /// skipped — otherwise a `--name` renamed install whose filename slug is
+    /// outside the flavor admit set would vanish before its manifest name can
+    /// be matched (the P2 regression). The spy binary proves it ran.
+    #[cfg(unix)]
     #[test]
-    fn out_of_scope_plugin_is_skipped_before_probe_not_executed() {
+    fn out_of_scope_trusted_plugin_is_probed_then_filtered_post_probe() {
         use crate::scope::{PluginScope, PluginScopeMode};
         use std::os::unix::fs::PermissionsExt;
 
@@ -2060,35 +2123,51 @@ mod tests {
         let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
         let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
 
-        // A binary that, if executed with --manifest, exits 2 (would fail
-        // the probe). It must NEVER be executed because the scope excludes
-        // it — so we must NOT see a manifest-failure warning.
-        let hostile = install_dir.join("animus-provider-hostile");
-        fs::write(&hostile, "#!/bin/sh\nexit 2\n").expect("write hostile");
-        let mut perms = fs::metadata(&hostile).expect("metadata").permissions();
+        // Spy: records every execution. The binary prints a VALID manifest so
+        // its absence from the discovered set is attributable to the
+        // post-probe scope filter, not a broken probe.
+        let ran_marker = temp.path().join("trusted-ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let installed = install_dir.join("animus-provider-installed");
+        let manifest = serde_json::json!({
+            "name": "animus-provider-installed",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "operator-installed",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&installed, script).expect("write installed plugin");
+        let mut perms = fs::metadata(&installed).expect("metadata").permissions();
         perms.set_mode(0o755);
-        fs::set_permissions(&hostile, perms).expect("chmod");
+        fs::set_permissions(&installed, perms).expect("chmod");
 
         let empty_config = temp.path().join("empty-plugins.yaml");
         fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
 
-        // Allowlist that does NOT include the hostile plugin.
+        // Allowlist that does NOT include the installed plugin.
         let mut scope = PluginScope { mode: PluginScopeMode::Allowlist, ..PluginScope::default() };
         scope.allow.insert("animus-provider-default".to_string());
 
-        let (discovered, warnings) = PluginDiscovery::new()
+        let (discovered, _warnings) = PluginDiscovery::new()
             .with_config_path(&empty_config)
             .with_scope(scope)
             .discover_with_warnings()
             .expect("discover");
 
-        assert!(discovered.is_empty(), "out-of-scope plugin must not appear in discovered set");
-        assert_eq!(warnings.len(), 1, "expected exactly one scope-skip warning, got {warnings:?}");
-        assert_eq!(warnings[0].name, "animus-provider-hostile");
+        assert_eq!(
+            fs::read_to_string(&ran_marker).unwrap().trim(),
+            "1",
+            "a TRUSTED installed plugin must be probed even when out of scope"
+        );
         assert!(
-            warnings[0].reason.contains("not admitted") && warnings[0].reason.contains("NOT executed"),
-            "warning must prove the binary was skipped pre-probe, got: {}",
-            warnings[0].reason
+            discovered.iter().all(|p| p.name != "animus-provider-installed"),
+            "out-of-scope plugin must be filtered from the discovered set post-probe, got {discovered:?}"
         );
     }
 
@@ -2228,10 +2307,13 @@ mod tests {
     }
 
     /// SECURITY: a hostile PROJECT registry (`<project>/.animus/plugins.yaml`,
-    /// shipped in a cloned repo) must NOT be able to use the logical-name
-    /// escape to get an out-of-scope binary executed. Even when it declares
-    /// an admitted logical key pointing at a repo-shipped wrapper, the
-    /// binary must fail the path/filename gate and never run.
+    /// shipped in a cloned repo) must NOT be able to get an out-of-scope
+    /// binary executed — even when project-local probing is EXPLICITLY opted
+    /// in AND the registry declares an admitted logical key pointing at a
+    /// repo-shipped wrapper. Because the project registry is an UNTRUSTED
+    /// source, the repo-controlled binary must fail the path/filename
+    /// [`PluginScope::may_probe`] gate and never run (no logical-name escape
+    /// for untrusted sources).
     #[cfg(unix)]
     #[test]
     fn hostile_project_registry_cannot_probe_via_logical_name_escape() {
@@ -2289,10 +2371,13 @@ mod tests {
         flavor.insert("animus-provider-claude".to_string());
         let scope = PluginScope { mode: PluginScopeMode::FlavorOnly, flavor_plugins: flavor, ..PluginScope::default() };
 
+        // project-local probing is EXPLICITLY opted in — the untrusted-source
+        // filename gate must still refuse the repo-shipped wrapper.
         let (discovered, warnings) = PluginDiscovery::new()
             .with_project_root(&project_root)
             .with_config_path(&empty_config)
             .with_scope(scope)
+            .probe_project_local_plugins(true)
             .discover_with_warnings()
             .expect("discover");
 
@@ -2303,6 +2388,175 @@ mod tests {
             .find(|w| w.name == "animus-provider-claude")
             .unwrap_or_else(|| panic!("expected a scope-skip warning, got {warnings:?}"));
         assert!(evil_warn.reason.contains("NOT executed"), "reason: {}", evil_warn.reason);
+    }
+
+    /// SECURITY (P1 regression guard): a hostile PROJECT registry
+    /// (`<project>/.animus/plugins.yaml`, shipped in a cloned repo) with a
+    /// `binary:` pointing at a repo-shipped attacker binary must NOT be
+    /// executed on the SERVER-SAFE discovery path — even under the default
+    /// unrestricted (`all`) scope, where the pre-probe scope gate admits
+    /// everything. The project registry is an UNTRUSTED source, so it is only
+    /// walked when project-local probing is opted in; the server-safe default
+    /// leaves it OFF, closing the "effective scope is `all`, so the registry
+    /// still probes" hole. The spy binary proves it never ran.
+    #[cfg(unix)]
+    #[test]
+    fn hostile_project_registry_binary_not_executed_on_server_safe_path_under_all_scope() {
+        use crate::scope::PluginScope;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        let project_root = temp.path().join("cloned-hostile-repo");
+        let animus_dir = project_root.join(".animus");
+        let evil_dir = animus_dir.join("plugins");
+        fs::create_dir_all(&evil_dir).expect("mkdir");
+
+        // Spy: the attacker binary records every execution.
+        let ran_marker = temp.path().join("evil-ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let evil = evil_dir.join("evil");
+        let manifest = serde_json::json!({
+            "name": "animus-provider-evil",
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "pwned",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&evil, script).expect("write attacker binary");
+        let mut perms = fs::metadata(&evil).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&evil, perms).expect("chmod");
+
+        // Hostile project registry committed into the cloned repo, pointing at
+        // the repo-shipped attacker binary.
+        fs::write(
+            animus_dir.join("plugins.yaml"),
+            format!("plugins:\n  animus-provider-evil:\n    binary: {}\n", evil.to_string_lossy()),
+        )
+        .expect("write project registry");
+
+        // Server-safe posture: no project-local probing, unrestricted (`all`)
+        // scope (the effective scope when the repo ships no restrictive
+        // flavor). This is precisely the P1 hole.
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_project_root(&project_root)
+            .with_scope(PluginScope::unrestricted())
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert_eq!(
+            fs::read_to_string(&ran_marker).unwrap().trim(),
+            "0",
+            "server-safe discovery MUST NOT execute a repo-shipped project-registry binary"
+        );
+        assert!(discovered.is_empty(), "hostile project-registry entry must not be discovered, got {discovered:?}");
+        assert!(
+            warnings.iter().all(|w| w.name != "animus-provider-evil"),
+            "an un-walked untrusted registry emits no warning for its entries, got {warnings:?}"
+        );
+
+        // The public server-safe helper agrees (it also defaults to `all`
+        // scope for a repo with no flavor manifest).
+        let via_helper = discover_plugins(&project_root).expect("discover_plugins");
+        assert!(via_helper.iter().all(|p| p.name != "animus-provider-evil"), "got {via_helper:?}");
+        assert_eq!(
+            fs::read_to_string(&ran_marker).unwrap().trim(),
+            "0",
+            "still not executed via the server-safe discover_plugins helper"
+        );
+    }
+
+    /// P2 regression guard: a plugin installed under `--name <NAME>` (recorded
+    /// as a `name_override` in the TRUSTED global registry) whose MANIFEST
+    /// name is a flavor-required slug must STILL be probed and admitted under
+    /// a flavor-only scope. Its filename/override slug (`custom-task`) is NOT
+    /// in the flavor admit set, so a pre-probe filename gate would skip it
+    /// before the post-probe manifest-name fallback could match — trusted
+    /// installed candidates must therefore never be pre-probe gated.
+    #[cfg(unix)]
+    #[test]
+    fn renamed_trusted_install_still_probed_and_admitted_under_flavor_only_scope() {
+        use crate::scope::{PluginScope, PluginScopeMode};
+        use std::collections::BTreeSet;
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        // Operator-installed binary whose on-disk name matches the `--name`
+        // override (`custom-task`) but whose MANIFEST declares the canonical
+        // flavor-required slug `animus-subject-default`.
+        let ran_marker = temp.path().join("renamed-ran");
+        fs::write(&ran_marker, "0").expect("seed marker");
+        let binary = temp.path().join("custom-task");
+        let manifest = serde_json::json!({
+            "name": "animus-subject-default",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "installed as custom-task",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let script = format!(
+            "#!/bin/sh\nold=$(cat {marker})\necho $((old + 1)) > {marker}\nprintf '{manifest}\\n'\n",
+            marker = ran_marker.display(),
+            manifest = manifest,
+        );
+        fs::write(&binary, script).expect("write renamed plugin");
+        let mut perms = fs::metadata(&binary).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&binary, perms).expect("chmod");
+
+        // TRUSTED global registry entry recording the `--name` override.
+        let config_path = temp.path().join("plugins.yaml");
+        fs::write(
+            &config_path,
+            format!(
+                "plugins:\n  animus-subject-default:\n    binary: {}\n    name_override: custom-task\n",
+                binary.to_string_lossy()
+            ),
+        )
+        .expect("write config");
+
+        // Flavor-only scope requiring the canonical manifest slug.
+        let mut flavor: BTreeSet<String> = BTreeSet::new();
+        flavor.insert("animus-subject-default".to_string());
+        let scope = PluginScope { mode: PluginScopeMode::FlavorOnly, flavor_plugins: flavor, ..PluginScope::default() };
+
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&config_path)
+            .with_scope(scope)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert_eq!(
+            fs::read_to_string(&ran_marker).unwrap().trim(),
+            "1",
+            "renamed trusted install must be probed (not pre-probe skipped on its filename slug)"
+        );
+        assert_eq!(
+            discovered.len(),
+            1,
+            "renamed required plugin must be discovered, got {discovered:?} / {warnings:?}"
+        );
+        assert_eq!(discovered[0].name, "custom-task", "discovery keeps the --name override as the logical name");
+        assert_eq!(discovered[0].manifest.name, "animus-subject-default");
     }
 
     /// SECURITY (belt): the default (daemon/server) discovery path does NOT
