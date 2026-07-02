@@ -131,6 +131,13 @@ pub(super) struct PluginInstallInput {
     /// cannot be parsed.
     #[serde(default)]
     force_rewrite_lockfile: Option<bool>,
+    /// GitHub owners to pre-trust for this install (trust-on-first-use). MCP
+    /// installs run headlessly, so an untrusted `source` owner fails closed
+    /// unless it is `launchapp-dev` (built-in), already trusted, or listed
+    /// here. Pass the owner segment of `source` to authorize a third-party
+    /// publisher without a TTY prompt.
+    #[serde(default)]
+    allow_org: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -317,6 +324,7 @@ impl AoMcpServer {
             skip_signature,
             trusted_signers,
             force_rewrite_lockfile,
+            allow_org,
         } = params.0;
         // Resolve to the server's default project root when the caller did
         // not override it. Forwarding the project root is what makes the
@@ -340,10 +348,11 @@ impl AoMcpServer {
             skip_signature: skip_signature.unwrap_or(false),
             trusted_signers: trusted_signers.map(std::path::PathBuf::from),
             allow_shadow_builtin: false,
-            allow_org: Vec::new(),
-            // MCP runs non-interactively; let unknown-org installs proceed
-            // silently rather than blocking on a TTY prompt. The TOFU record
-            // still lands in trusted-orgs.yaml after a successful install.
+            // MCP runs headlessly (no TTY): an untrusted `source` owner fails
+            // closed unless it is built-in trusted, already trusted, or passed
+            // in `allow_org`. `yes: true` keeps the flow non-interactive but no
+            // longer auto-trusts an unknown org (the fail-closed TOFU gate).
+            allow_org: allow_org.unwrap_or_default(),
             yes: true,
             project_root: Some(resolved_project_root),
             // Authenticated escape hatch for a corrupt lockfile. Defaults to

@@ -126,7 +126,7 @@ pub(crate) async fn handle_manifest_install(args: InstallArgs, project_root: &st
                 json,
             );
         }
-        return run_locked_install_default(project_root, args.force, json).await;
+        return run_locked_install_default(project_root, args.force, &args.allow_org, json).await;
     }
 
     let mut plugin_rows = Vec::new();
@@ -150,7 +150,7 @@ pub(crate) async fn handle_manifest_install(args: InstallArgs, project_root: &st
         }
         // Binary on disk but absent/mismatched in the lock -> force a reinstall
         // so the install pipeline records (or refreshes) the project lock entry.
-        match install_plugin_dep(name, dep, project_root, args.force || on_disk).await {
+        match install_plugin_dep(name, dep, project_root, args.force || on_disk, &args.allow_org).await {
             Ok(output) => {
                 plugin_rows.push(json!({ "name": name, "status": "installed", "path": output.installed_path }))
             }
@@ -241,7 +241,7 @@ pub(crate) async fn handle_manifest_add(args: AddArgs, project_root: &str, json:
             json,
         )
     } else {
-        let output = install_plugin_dep(&name, &dep, project_root, args.force)
+        let output = install_plugin_dep(&name, &dep, project_root, args.force, &[])
             .await
             .map_err(|err| invalid_input_error(format!("failed to install '{name}': {err}")))?;
         manifest.upsert_plugin(&name, dep.clone());
@@ -395,10 +395,26 @@ pub(crate) fn ensure_project_root_gitignore(project_root: &Path) -> Result<bool>
 // resolution helpers
 // ---------------------------------------------------------------------------
 
-fn base_install_request(project_root: &str, force: bool) -> PluginInstallRequest {
+/// Shared base request for `animus install` (manifest-driven) plugin installs.
+///
+/// `signature_policy` is intentionally left `None` so the install pipeline's
+/// `effective_policy_mode` resolves it from `ANIMUS_PLUGIN_SIGNATURE_POLICY` /
+/// `plugins.signature_policy` (defaulting to `warn`) — this is how `animus
+/// install` inherits strict enforcement in cloud/CI without a per-call flag.
+///
+/// `yes: true` keeps the flow non-interactive, but it no longer silently
+/// auto-trusts unknown orgs: `enforce_org_trust` fails closed for an untrusted
+/// org in a non-interactive/server context. Only `launchapp-dev` (pre-seeded
+/// in `allow_org` and built-in trusted), already-trusted orgs, and explicit
+/// `--allow-org` targets install without a prompt. `extra_allow_org` carries
+/// the operator's `animus install --allow-org <OWNER>` values so a manifest git
+/// dependency from a third-party org can be trusted non-interactively.
+fn base_install_request(project_root: &str, force: bool, extra_allow_org: &[String]) -> PluginInstallRequest {
+    let mut allow_org = vec!["launchapp-dev".to_string()];
+    allow_org.extend(extra_allow_org.iter().cloned());
     PluginInstallRequest {
         force,
-        allow_org: vec!["launchapp-dev".to_string()],
+        allow_org,
         yes: true,
         allow_shadow_builtin: true,
         project_root: Some(project_root.to_string()),
@@ -411,6 +427,7 @@ async fn install_plugin_dep(
     dep: &Dependency,
     project_root: &str,
     force: bool,
+    allow_org: &[String],
 ) -> Result<PluginInstallOutput> {
     let req = match dep {
         Dependency::Version(_) => {
@@ -426,20 +443,20 @@ async fn install_plugin_dep(
             PluginInstallRequest {
                 source: Some(slug.to_string()),
                 tag: Some(tag.to_string()),
-                ..base_install_request(project_root, force)
+                ..base_install_request(project_root, force, allow_org)
             }
         }
         Dependency::Git { repo, tag, .. } => PluginInstallRequest {
             source: Some(repo.clone()),
             tag: Some(tag.clone()),
-            ..base_install_request(project_root, force)
+            ..base_install_request(project_root, force, allow_org)
         },
         Dependency::Path { path } => PluginInstallRequest {
             path: Some(resolve_source_path(project_root, path)),
             // Pin the installed/locked name to the manifest key so drift checks
             // and `animus remove` find it even when the path basename differs.
             name: Some(name.to_string()),
-            ..base_install_request(project_root, force)
+            ..base_install_request(project_root, force, allow_org)
         },
     };
     run_plugin_install(req).await
@@ -676,6 +693,21 @@ mod tests {
         for dep in manifest.plugins.values().chain(manifest.packs.values()) {
             assert!(matches!(dep, Dependency::Git { .. }), "scaffold deps are git-pinned");
         }
+    }
+
+    #[test]
+    fn base_install_request_merges_allow_org_and_stays_non_interactive() {
+        // No extra orgs: only the built-in launchapp-dev is pre-trusted, and the
+        // request is left signature-policy-agnostic so it inherits env/config.
+        let base = base_install_request("/proj", false, &[]);
+        assert_eq!(base.allow_org, vec!["launchapp-dev".to_string()]);
+        assert!(base.yes, "manifest installs stay non-interactive");
+        assert!(base.signature_policy.is_none(), "policy inherited from env/config, not hardcoded");
+        // Operator `--allow-org` values are appended so a third-party org can be
+        // trusted non-interactively.
+        let with_extra = base_install_request("/proj", true, &["third-party".to_string()]);
+        assert_eq!(with_extra.allow_org, vec!["launchapp-dev".to_string(), "third-party".to_string()]);
+        assert!(with_extra.force);
     }
 
     #[test]

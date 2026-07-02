@@ -304,7 +304,7 @@ animus
 ├── init                     Initialize an Animus project from a template
 │   (no subcommands)         Supports registry-backed or local copy templates, plan mode, and daemon defaults. Also scaffolds `animus.toml`, `.env.example`, and a merge-safe project `.gitignore`
 │
-├── install                  Resolve `animus.toml` into the lockfile and install the declared plugins + packs. `--locked` reproduces exactly the committed `.animus/plugins.lock` (npm-ci style; fails on manifest↔lock drift)
+├── install                  Resolve `animus.toml` into the lockfile and install the declared plugins + packs. `--locked` reproduces exactly the committed `.animus/plugins.lock` (npm-ci style; fails on manifest↔lock drift). `--allow-org OWNER` (repeatable) pre-trusts a third-party org so its git dependency installs non-interactively (CI fails closed otherwise)
 │   (no subcommands)         `--force` reinstalls already-present dependencies
 │
 ├── add                      Add a plugin (or pack with `--pack`) to `animus.toml` and install it. SPEC is `name[@version]`, `OWNER/REPO[@tag]`, or a bare `name`; `--path PATH` adds a local source dependency
@@ -418,13 +418,18 @@ tag (or the explicit git tag) selects the release, and the lock records the
 installed sha. `animus init` emits explicit `{ git, tag }` pins for the default
 set so the scaffold is fully reproducible.
 
-- `animus install [--locked] [--force]` — resolve + install plugins and packs,
-  then **provision secrets from `.env`** into the device-encrypted store
-  (idempotent; keys already set are skipped) and warn about any keys declared
-  (uncommented) in `.env.example` that are still unset. `--locked` refuses to
-  proceed if the manifest declares a plugin the lockfile does not pin (run
-  `animus install` without `--locked` to refresh). A missing `.env` is a no-op,
-  so the secret step never blocks the install.
+- `animus install [--locked] [--force] [--allow-org OWNER]...` — resolve +
+  install plugins and packs, then **provision secrets from `.env`** into the
+  device-encrypted store (idempotent; keys already set are skipped) and warn
+  about any keys declared (uncommented) in `.env.example` that are still unset.
+  `--locked` refuses to proceed if the manifest declares a plugin the lockfile
+  does not pin (run `animus install` without `--locked` to refresh). A missing
+  `.env` is a no-op, so the secret step never blocks the install. `--allow-org`
+  (repeatable) pre-trusts an additional GitHub owner: `launchapp-dev` is always
+  trusted, but a manifest git dependency from a third-party org fails closed in
+  a non-interactive / CI / server context (no TTY, or `ANIMUS_SERVER=1`) unless
+  its owner is passed here — this stops a hostile `animus.toml` from silently
+  pulling attacker-chosen plugins on `git clone && animus install`.
 - `animus add <spec> [--pack] [--path PATH] [--force]` — `spec` is
   `name[@version]`, `OWNER/REPO@tag`, or a bare `name`. Updates `animus.toml`
   and installs the one dependency. `--pack` targets `[packs]`.
@@ -1220,10 +1225,14 @@ animus plugin install --locked
 
 When installing from a public repo, the CLI looks for a cosign keyless bundle next to the release asset and verifies it via `cosign verify-blob`. The outcome (one of `verified`, `unsigned`, `invalid`, `untrusted_signer`, `skipped`) is persisted in `~/.animus/plugins.yaml` and surfaced in the `SIG` column of `animus plugin list`. See [Security](../security.md) and [Plugin Signing](../../architecture/plugin-signing.md).
 
-- **`--signature-policy strict`**: refuse install when the bundle is missing, invalid, or signed by an untrusted identity. Requires `cosign` on `$PATH`.
-- **`--signature-policy warn`**: log signature failures and install with `signature_status=unsigned` or `untrusted_signer`. This is the v0.4.12 transition default.
+- **`--signature-policy strict`**: refuse install when the bundle is missing, invalid, or signed by an untrusted identity. Requires `cosign` on `$PATH` — when strict is in effect but `cosign` is missing, the install fails fast with an actionable "install cosign or set `ANIMUS_PLUGIN_SIGNATURE_POLICY=warn`" error instead of a confusing per-plugin block.
+- **`--signature-policy warn`**: log signature failures and install with `signature_status=unsigned` or `untrusted_signer`. This is the local default.
 - **`--signature-policy disabled`**: bypass verification entirely; install records `signature_status=skipped`.
 - **Legacy flags**: `--require-signature` maps to `strict`, `--skip-signature` maps to `disabled`, and `--allow-unsigned` maps to `warn`.
+
+**Policy resolution precedence** (highest first): the per-call flag above → the `ANIMUS_PLUGIN_SIGNATURE_POLICY` env (`strict`/`warn`/`skip`) → the `plugins.signature_policy` field in the global `config.json` → the `warn` default. When no flag is passed, `animus plugin install` and `animus install` inherit the env/config layer, so a cloud/CI host can set `ANIMUS_PLUGIN_SIGNATURE_POLICY=strict` once and have every install fail closed. The local default is unchanged: with no env and no config field, installs stay `warn`.
+
+**Publisher trust (TOFU) fail-closed in CI:** installing from a public repo owned by an untrusted org prompts for trust-on-first-use on an interactive terminal. In a non-interactive / server / CI context (no TTY, or `ANIMUS_SERVER=1`), `--yes`/`--force` no longer silently auto-trusts an unknown org — the install fails closed and asks you to re-run interactively or pass an explicit `--allow-org <OWNER>`. Built-in trusted orgs (`launchapp-dev`), already-trusted orgs, and `--allow-org` targets are unaffected. This closes the `git clone && animus install` hole where a hostile manifest could pull attacker-chosen plugins.
 
 The trusted-signers file format:
 

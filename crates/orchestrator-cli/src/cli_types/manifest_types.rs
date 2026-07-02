@@ -11,6 +11,12 @@ pub(crate) struct InstallArgs {
     pub(crate) locked: bool,
     #[arg(long, help = "Reinstall declared dependencies even when already present.")]
     pub(crate) force: bool,
+    #[arg(
+        long,
+        value_name = "OWNER",
+        help = "Pre-trust an additional GitHub owner (repeatable). Required to install a manifest git dependency from a non-`launchapp-dev` org in a non-interactive / CI / server context, where trust-on-first-use fails closed instead of auto-trusting."
+    )]
+    pub(crate) allow_org: Vec<String>,
 }
 
 /// `animus add <spec>` — add a plugin (or pack) to `animus.toml` and install it.
