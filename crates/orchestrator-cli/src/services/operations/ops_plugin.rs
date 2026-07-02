@@ -1532,6 +1532,20 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         }
     }
 
+    // ---- Cosign preflight (runs BEFORE any source resolution / network /
+    // manifest probe) ----------------------------------------------------
+    //
+    // Strict enforcement is impossible without the cosign binary. Fail once,
+    // here, with an actionable instruction — and crucially BEFORE we download
+    // the release or run the candidate binary with `--manifest`. Doing it here
+    // keeps the fail-closed invariant: a strict host with no cosign never
+    // executes unverified plugin code just to be told cosign is missing.
+    if let Some(message) =
+        cosign_preflight_error(matches!(effective_policy_mode(&req), PluginPolicyMode::Strict), cosign_available())
+    {
+        return Err(invalid_input_error(message));
+    }
+
     // ---- Lockfile pre-load (runs BEFORE any source resolution / network /
     // manifest probe) ----------------------------------------------------
     //
@@ -1590,6 +1604,10 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     // tempdir is reliably cleaned up whether install succeeds, errors,
     // or returns early — closing the GBs-of-`animus-plugin-install-*`
     // accumulation the old `std::env::temp_dir().join(uuid)` left behind.
+    // Publisher trust decision, captured for the trusted-orgs write below. For
+    // RELEASE sources it is resolved EARLY (before download + manifest probe)
+    // so an untrusted org fails closed before we fetch or execute any binary.
+    let mut org_trust_decision: Option<TrustDecision> = None;
     let (source_path, default_name, provenance, _install_temp, release_assets_opt): (
         PathBuf,
         String,
@@ -1598,6 +1616,11 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         Option<Vec<GithubReleaseAsset>>,
     ) = if let Some(slug) = req.source.as_deref() {
         let spec = parse_repo_spec(slug)?;
+        // TOFU gate BEFORE any network fetch or `--manifest` probe: a hostile
+        // manifest naming an untrusted `OWNER/REPO` must be rejected before we
+        // download or execute its plugin binary. This closes the
+        // `git clone && animus install` hole for release-source installs.
+        org_trust_decision = enforce_org_trust(&spec.owner, &req)?;
         let release = resolve_release_install(spec, req.tag.clone(), req.expected_archive_sha256.clone()).await?;
         let provenance = InstallProvenance {
             source_kind: Some("release"),
@@ -1684,13 +1707,13 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         }
     }
 
-    let mut org_trust_decision: Option<TrustDecision> = None;
-    if provenance.source_kind == Some("release") {
-        if let Some(owner) = provenance.owner.as_deref() {
-            org_trust_decision = enforce_org_trust(owner, &req)?;
-        }
-    }
+    // Publisher trust was enforced BEFORE the download / manifest probe above
+    // (see `org_trust_decision`), so no untrusted release binary is fetched or
+    // executed before rejection.
 
+    // Strict + missing-cosign was already caught by the preflight at the top of
+    // this function (before any download / manifest probe), so it cannot reach
+    // here.
     let signature_detail = resolve_signature_status(&req, &provenance)?;
     let policy_mode = effective_policy_mode(&req);
     match evaluate_signature_policy(&signature_detail, policy_mode, req.require_signature) {
@@ -4711,28 +4734,106 @@ fn map_host_result_to_status(
     }
 }
 
-/// Compute the effective [`PluginPolicyMode`] for an install request.
-///
-/// Precedence:
-/// 1. `req.signature_policy` (the `--signature-policy` flag).
-/// 2. `--skip-signature` -> `Disabled`.
-/// 3. `--require-signature` -> `Strict`.
-/// 4. Fallback: `Warn` (verify-if-present). Matches the library default in
-///    [`PluginPolicyMode::default_for_install`]. The CLI handler flows
-///    through the same value so direct callers (unit tests, MCP wire) and
-///    CLI users agree. See `docs/reference/security.md` for the rationale
-///    and the recommended `strict` opt-in for production.
-fn effective_policy_mode(req: &PluginInstallRequest) -> PluginPolicyMode {
+/// Explicit per-call signature policy: the `--signature-policy` flag (already
+/// parsed into `req.signature_policy`) or the legacy `--skip-signature` /
+/// `--require-signature` booleans. Returns `None` when the caller left the
+/// policy unset, which lets the env/config layers decide. Kept pure so the
+/// precedence can be unit-tested without touching real env/config.
+fn explicit_signature_policy(req: &PluginInstallRequest) -> Option<PluginPolicyMode> {
     if let Some(mode) = req.signature_policy {
-        return mode;
+        return Some(mode);
     }
     if req.skip_signature {
-        return PluginPolicyMode::Disabled;
+        return Some(PluginPolicyMode::Disabled);
     }
     if req.require_signature {
-        return PluginPolicyMode::Strict;
+        return Some(PluginPolicyMode::Strict);
     }
-    PluginPolicyMode::Warn
+    None
+}
+
+/// Parse a signature-policy string for the env/config layers. Accepts
+/// `strict`/`warn`/`skip` (case-insensitive) plus the aliases the
+/// [`PluginPolicyMode`] `FromStr` already understands
+/// (`disabled`/`off`/`none`/`warning`). Empty or unrecognized values return
+/// `None` (unknown values are logged and IGNORED rather than failing the
+/// install) so a typo can never silently downgrade trust.
+fn parse_signature_policy_layer(raw: &str) -> Option<PluginPolicyMode> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if trimmed.eq_ignore_ascii_case("skip") {
+        return Some(PluginPolicyMode::Disabled);
+    }
+    match trimmed.parse::<PluginPolicyMode>() {
+        Ok(mode) => Some(mode),
+        Err(_) => {
+            tracing::warn!(
+                value = %trimmed,
+                "ignoring unrecognized signature policy value (expected strict|warn|skip)"
+            );
+            None
+        }
+    }
+}
+
+/// Env layer: `ANIMUS_PLUGIN_SIGNATURE_POLICY`. Cloud/CI sets this once to
+/// `strict`; local dev leaves it unset (falls through to the `Warn` default).
+fn env_signature_policy() -> Option<PluginPolicyMode> {
+    parse_signature_policy_layer(&std::env::var("ANIMUS_PLUGIN_SIGNATURE_POLICY").ok()?)
+}
+
+/// Config layer: `plugins.signature_policy` in the global `config.json`. The
+/// field is optional and absent by default, so a fleet with no config change
+/// keeps the `Warn` default. Read directly from JSON because the out-of-tree
+/// `protocol::Config` struct does not model a `plugins` block; when/if it
+/// gains one, this reader stays forward-compatible.
+fn config_signature_policy() -> Option<PluginPolicyMode> {
+    let path = protocol::Config::global_config_dir().join("config.json");
+    let raw = std::fs::read_to_string(path).ok()?;
+    let value: Value = serde_json::from_str(&raw).ok()?;
+    let field = value.get("plugins")?.get("signature_policy")?.as_str()?;
+    parse_signature_policy_layer(field)
+}
+
+/// Pure precedence resolver: explicit per-call flag > env > config > `Warn`
+/// default. Split out so tests can assert precedence without real env/config.
+fn resolve_signature_policy_layers(
+    explicit: Option<PluginPolicyMode>,
+    env: Option<PluginPolicyMode>,
+    config: Option<PluginPolicyMode>,
+) -> PluginPolicyMode {
+    explicit.or(env).or(config).unwrap_or(PluginPolicyMode::Warn)
+}
+
+/// Cosign preflight: strict enforcement is impossible without the cosign
+/// binary. Returns an actionable message when the effective policy is strict
+/// but cosign is absent. Kept pure (no PATH/env reads) so it is unit-testable.
+fn cosign_preflight_error(strict: bool, cosign_present: bool) -> Option<String> {
+    if strict && !cosign_present {
+        Some(
+            "signature policy is strict but cosign is not installed — install cosign \
+             (https://github.com/sigstore/cosign) or set ANIMUS_PLUGIN_SIGNATURE_POLICY=warn"
+                .to_string(),
+        )
+    } else {
+        None
+    }
+}
+
+/// Compute the effective [`PluginPolicyMode`] for an install request.
+///
+/// Precedence (highest first):
+/// 1. Explicit per-call flag (`--signature-policy`, or legacy
+///    `--skip-signature` -> `Disabled` / `--require-signature` -> `Strict`).
+/// 2. `ANIMUS_PLUGIN_SIGNATURE_POLICY` env (cloud/CI opt-in to `strict`).
+/// 3. `plugins.signature_policy` in the global `config.json`.
+/// 4. Fallback: `Warn` (verify-if-present) — the unchanged local default.
+///
+/// See `docs/reference/security.md` and `docs/reference/configuration.md`.
+fn effective_policy_mode(req: &PluginInstallRequest) -> PluginPolicyMode {
+    resolve_signature_policy_layers(explicit_signature_policy(req), env_signature_policy(), config_signature_policy())
 }
 
 /// Outcome of applying the signature policy gate to a resolved
@@ -4904,16 +5005,12 @@ fn resolve_signature_status(req: &PluginInstallRequest, provenance: &InstallProv
     }
 
     if !cosign_available() {
-        let mode = effective_policy_mode(req);
-        let suffix = if matches!(mode, PluginPolicyMode::Strict) {
-            " (signature policy is strict; install cosign or rerun with --signature-policy warn/disabled)"
-        } else {
-            ""
-        };
+        // Strict + cosign-missing already hard-errored in the preflight above,
+        // so under `Warn` this degrades to an Unsigned status (verify-if-present).
         return Ok(SignatureStatus::Unsigned {
-            reason: format!(
-                "cosign binary not found on PATH; install cosign from https://github.com/sigstore/cosign to enable signature verification{suffix}"
-            ),
+            reason:
+                "cosign binary not found on PATH; install cosign from https://github.com/sigstore/cosign to enable signature verification"
+                    .to_string(),
         });
     }
 
@@ -5304,38 +5401,127 @@ fn org_is_trusted(owner: &str) -> Result<bool> {
 /// Returns the [`TrustDecision`] that admitted the install so the caller can
 /// persist it and surface it in the install audit line. `None` means the org
 /// was already trusted (no fresh decision to record).
-fn enforce_org_trust(owner: &str, req: &PluginInstallRequest) -> Result<Option<TrustDecision>> {
-    if req.allow_org.iter().any(|o| o.eq_ignore_ascii_case(owner)) {
-        return Ok(Some(TrustDecision::AllowOrg));
-    }
-    if org_is_trusted(owner)? {
-        return Ok(None);
-    }
-    if req.yes || req.force {
-        tracing::warn!(owner, "installing plugin from untrusted org (--yes / --force); recording trust on first use");
-        return Ok(Some(TrustDecision::Yes));
-    }
-    if !std::io::stdin().is_terminal() {
-        return Err(invalid_input_error(format!(
-            "installing plugin from untrusted org '{owner}'. Pass --allow-org {owner} (or --yes) to confirm \
-             non-interactively. trusted-orgs.yaml lives at {}.",
-            trusted_orgs_path().display()
-        )));
-    }
-    eprintln!(
-        "warning: you are installing a plugin from `{owner}`, which is not a trusted organization.\n\
-         Verify this is the intended publisher before continuing. Type 'yes' to trust this org \
-         for future installs, anything else to abort."
-    );
-    eprint!("> ");
-    let _ = std::io::stderr().flush();
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer).with_context(|| "failed to read TOFU response from stdin")?;
-    let normalized = answer.trim().to_ascii_lowercase();
-    if normalized == "yes" || normalized == "y" {
-        Ok(Some(TrustDecision::InteractivePrompt))
+/// True when this process looks like a server/headless host: `ANIMUS_SERVER=1`.
+/// Mirrors `orchestrator_core::secret_keysource::is_server_env` (private there).
+fn plugin_install_is_server_env() -> bool {
+    std::env::var("ANIMUS_SERVER").map(|v| v.trim() == "1").unwrap_or(false)
+}
+
+/// A plugin install is "interactive" only on a local host that is NOT flagged
+/// as a server AND whose STDIN is a real terminal. Stdin specifically (not
+/// stdout/stderr) because the trust-on-first-use gate PROMPTS and reads the
+/// answer from stdin — if stdin is piped or closed the prompt is unusable, so
+/// such installs must take the non-interactive fail-closed path rather than
+/// consuming pipeline input / EOF. This closes the `git clone && animus
+/// install` fail-open hole without breaking `printf ... | animus plugin
+/// install`.
+fn plugin_install_is_interactive() -> bool {
+    !plugin_install_is_server_env() && std::io::stdin().is_terminal()
+}
+
+/// Decision for the org trust-on-first-use gate. Kept as a pure enum so the
+/// precedence can be exhaustively unit-tested without real env/TTY/network.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OrgTrustGate {
+    /// Pre-trusted via `--allow-org` -> record `AllowOrg`.
+    ExplicitAllow,
+    /// Already trusted (built-in or persisted) -> no fresh decision.
+    AlreadyTrusted,
+    /// `--yes`/`--force` on an interactive host -> record `Yes`.
+    AutoConfirm,
+    /// Interactive host, no auto-confirm -> prompt on stderr.
+    Prompt,
+    /// Non-interactive / server unknown org -> refuse (fail closed).
+    FailClosed,
+}
+
+/// Pure resolver for the org trust gate.
+///
+/// The security-critical rule: `--yes`/`--force` auto-confirms an unknown org
+/// ONLY on an interactive local host. In CI / server / non-TTY contexts an
+/// unknown org fails closed rather than silently TOFU-ing an attacker-chosen
+/// org from a hostile manifest.
+///
+/// The bool params are kept flat (rather than folded into enums) so the truth
+/// table is exhaustively unit-testable, mirroring
+/// `orchestrator_core::secret_keysource::decide_auto`.
+#[allow(clippy::fn_params_excessive_bools)]
+fn resolve_org_trust_gate(
+    allow_listed: bool,
+    already_trusted: bool,
+    yes_or_force: bool,
+    interactive: bool,
+) -> OrgTrustGate {
+    if allow_listed {
+        OrgTrustGate::ExplicitAllow
+    } else if already_trusted {
+        OrgTrustGate::AlreadyTrusted
+    } else if yes_or_force {
+        if interactive {
+            OrgTrustGate::AutoConfirm
+        } else {
+            OrgTrustGate::FailClosed
+        }
+    } else if interactive {
+        OrgTrustGate::Prompt
     } else {
-        Err(invalid_input_error(format!("user declined to trust org '{owner}'; aborting install")))
+        OrgTrustGate::FailClosed
+    }
+}
+
+fn enforce_org_trust(owner: &str, req: &PluginInstallRequest) -> Result<Option<TrustDecision>> {
+    enforce_org_trust_with(owner, req, plugin_install_is_interactive())
+}
+
+/// Interactivity-injected core of [`enforce_org_trust`] so tests can drive the
+/// interactive / non-interactive branches deterministically.
+fn enforce_org_trust_with(owner: &str, req: &PluginInstallRequest, interactive: bool) -> Result<Option<TrustDecision>> {
+    let allow_listed = req.allow_org.iter().any(|o| o.eq_ignore_ascii_case(owner));
+    // Skip the trusted-orgs read entirely when `--allow-org` already covers it.
+    let already_trusted = !allow_listed && org_is_trusted(owner)?;
+    match resolve_org_trust_gate(allow_listed, already_trusted, req.yes || req.force, interactive) {
+        OrgTrustGate::ExplicitAllow => Ok(Some(TrustDecision::AllowOrg)),
+        OrgTrustGate::AlreadyTrusted => Ok(None),
+        OrgTrustGate::AutoConfirm => {
+            tracing::warn!(
+                owner,
+                "installing plugin from untrusted org (--yes / --force on an interactive host); recording trust on first use"
+            );
+            Ok(Some(TrustDecision::Yes))
+        }
+        OrgTrustGate::FailClosed => {
+            if req.yes || req.force {
+                Err(invalid_input_error(format!(
+                    "refusing to auto-trust untrusted org '{owner}' with --yes/--force in a non-interactive/server \
+                     environment. Re-run interactively, or pass --allow-org {owner} to explicitly trust it. \
+                     trusted-orgs.yaml lives at {}.",
+                    trusted_orgs_path().display()
+                )))
+            } else {
+                Err(invalid_input_error(format!(
+                    "installing plugin from untrusted org '{owner}'. Pass --allow-org {owner} (or --yes on an \
+                     interactive host) to confirm. trusted-orgs.yaml lives at {}.",
+                    trusted_orgs_path().display()
+                )))
+            }
+        }
+        OrgTrustGate::Prompt => {
+            eprintln!(
+                "warning: you are installing a plugin from `{owner}`, which is not a trusted organization.\n\
+                 Verify this is the intended publisher before continuing. Type 'yes' to trust this org \
+                 for future installs, anything else to abort."
+            );
+            eprint!("> ");
+            let _ = std::io::stderr().flush();
+            let mut answer = String::new();
+            std::io::stdin().read_line(&mut answer).with_context(|| "failed to read TOFU response from stdin")?;
+            let normalized = answer.trim().to_ascii_lowercase();
+            if normalized == "yes" || normalized == "y" {
+                Ok(Some(TrustDecision::InteractivePrompt))
+            } else {
+                Err(invalid_input_error(format!("user declined to trust org '{owner}'; aborting install")))
+            }
+        }
     }
 }
 
@@ -5374,7 +5560,7 @@ async fn handle_plugin_install(args: PluginInstallArgs, project_root: &str, json
         force: args.force,
         skip_manifest_check: args.skip_manifest_check,
         plugin_dir: args.plugin_dir,
-        signature_policy: Some(signature_policy),
+        signature_policy,
         trust_key: args.trust_key,
         require_signature: args.require_signature,
         skip_signature: args.skip_signature,
@@ -5433,7 +5619,17 @@ struct LockedInstallOutput {
 /// using the same machinery as `animus plugin install --locked`, with default
 /// install-security posture. `force` is threaded so a re-pin reinstall can
 /// overwrite already-present binaries.
-pub(crate) async fn run_locked_install_default(project_root: &str, force: bool, json: bool) -> Result<()> {
+pub(crate) async fn run_locked_install_default(
+    project_root: &str,
+    force: bool,
+    extra_allow_org: &[String],
+    json: bool,
+) -> Result<()> {
+    // `launchapp-dev` is always pre-trusted; the operator's `animus install
+    // --allow-org <OWNER>` values are threaded through so a locked reinstall of
+    // a third-party org can be trusted in a non-interactive / CI context.
+    let mut allow_org = vec!["launchapp-dev".to_string()];
+    allow_org.extend(extra_allow_org.iter().cloned());
     let args = PluginInstallArgs {
         source: None,
         path: None,
@@ -5453,7 +5649,7 @@ pub(crate) async fn run_locked_install_default(project_root: &str, force: bool, 
         skip_signature: false,
         trusted_signers: None,
         allow_shadow_builtin: true,
-        allow_org: vec!["launchapp-dev".to_string()],
+        allow_org,
         yes: true,
         force_rewrite_lockfile: false,
         locked: true,
@@ -5473,6 +5669,11 @@ async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: b
     let signature_policy = resolve_cli_signature_policy(&args)?;
     let trusted_signers = args.trusted_signers.clone();
     let allow_shadow_builtin = args.allow_shadow_builtin;
+    // Thread the operator's `--allow-org` through every locked reinstall so the
+    // documented fail-closed-TOFU escape hatch works in CI: without this a
+    // `--locked --allow-org third-party` run would rebuild with an empty
+    // allowlist and the new non-interactive gate would refuse the unknown org.
+    let allow_org = args.allow_org.clone();
     let lock_path = PluginLockfile::default_path(Some(root));
     if !lock_path.exists() {
         return Err(invalid_input_error(format!(
@@ -5699,10 +5900,10 @@ async fn run_locked_install(args: PluginInstallArgs, project_root: &str, json: b
                 project: effective_project,
                 plugin_dir: args.plugin_dir.clone(),
                 yes: true,
-                allow_org: vec![],
+                allow_org: allow_org.clone(),
                 allow_shadow_builtin,
                 as_kind: locked_as_kind,
-                signature_policy: Some(signature_policy),
+                signature_policy,
                 trusted_signers: trusted_signers.clone(),
                 locked_secondary_archive_shas,
                 ..Default::default()
@@ -5912,28 +6113,29 @@ fn plugin_role_from_kind(kind: &str) -> crate::services::metrics::PluginRole {
 /// 2. `--allow-unsigned` -> `Warn`.
 /// 3. `--skip-signature` -> `Disabled` (legacy).
 /// 4. `--require-signature` -> `Strict` (legacy alias; explicit opt-in).
-/// 5. Fallback: [`PluginPolicyMode::default_for_install`], which is
-///    `Warn` for v0.4.12 as a one-release migration window — pre-v0.4.12
-///    installs used the (now-removed) key-based PEM path and may not have
-///    keyless bundles available yet. v0.4.13 flips that lib default back
-///    to `Strict` now that keyless verification has a real Sigstore trust
-///    anchor. See `docs/reference/security.md`.
-fn resolve_cli_signature_policy(args: &PluginInstallArgs) -> Result<PluginPolicyMode> {
+/// 5. No explicit flag -> `None`, so the install pipeline's env/config layers
+///    (`ANIMUS_PLUGIN_SIGNATURE_POLICY`, `plugins.signature_policy`) and then
+///    the `Warn` default apply. Previously this collapsed to `Warn` here,
+///    which meant an explicit `Some(Warn)` always shadowed the env/config
+///    layers — so a CLI `plugin install` could not inherit cloud/CI strict.
+///    See `effective_policy_mode` and `docs/reference/security.md`.
+fn resolve_cli_signature_policy(args: &PluginInstallArgs) -> Result<Option<PluginPolicyMode>> {
     if let Some(raw) = args.signature_policy.as_deref() {
         return raw
             .parse::<PluginPolicyMode>()
+            .map(Some)
             .map_err(|msg| invalid_input_error(format!("invalid --signature-policy: {msg}")));
     }
     if args.allow_unsigned {
-        return Ok(PluginPolicyMode::Warn);
+        return Ok(Some(PluginPolicyMode::Warn));
     }
     if args.skip_signature {
-        return Ok(PluginPolicyMode::Disabled);
+        return Ok(Some(PluginPolicyMode::Disabled));
     }
     if args.require_signature {
-        return Ok(PluginPolicyMode::Strict);
+        return Ok(Some(PluginPolicyMode::Strict));
     }
-    Ok(PluginPolicyMode::default_for_install())
+    Ok(None)
 }
 
 fn handle_plugin_uninstall(args: PluginUninstallArgs, project_root: &str, json: bool) -> Result<()> {
@@ -8018,7 +8220,7 @@ name = "same"
         );
         // Untrusted, non-interactive, no --yes -> must error.
         let req = PluginInstallRequest::default();
-        let err = enforce_org_trust("evil-org", &req).expect_err("untrusted org without --yes must fail");
+        let err = enforce_org_trust_with("evil-org", &req, false).expect_err("untrusted org without --yes must fail");
         assert!(format!("{err}").contains("untrusted org"), "unexpected: {err}");
     }
 
@@ -8034,7 +8236,7 @@ name = "same"
         // Pre-populate with someone-elses-org.
         std::fs::write(&trusted_orgs_yaml, "trusted_orgs:\n  - someone-elses-org\n").unwrap();
         let req = PluginInstallRequest::default();
-        let ok = enforce_org_trust("someone-elses-org", &req);
+        let ok = enforce_org_trust_with("someone-elses-org", &req, false);
         assert!(ok.is_ok(), "previously-trusted org must skip the TOFU prompt");
     }
 
@@ -8048,7 +8250,7 @@ name = "same"
             Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
         );
         let req = PluginInstallRequest { allow_org: vec!["new-friend-org".to_string()], ..Default::default() };
-        let ok = enforce_org_trust("new-friend-org", &req);
+        let ok = enforce_org_trust_with("new-friend-org", &req, false);
         assert!(ok.is_ok(), "--allow-org should pre-trust the org for this install");
     }
 
@@ -8062,7 +8264,7 @@ name = "same"
             Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
         );
         let req = PluginInstallRequest::default();
-        let ok = enforce_org_trust("launchapp-dev", &req);
+        let ok = enforce_org_trust_with("launchapp-dev", &req, false);
         assert!(ok.is_ok(), "launchapp-dev is pre-trusted and must never trip TOFU");
     }
 
@@ -8204,15 +8406,19 @@ name = "same"
             "ANIMUS_TRUSTED_ORGS",
             Some(trusted_orgs_yaml.to_str().expect("trusted-orgs path utf-8")),
         );
-        // --yes path returns the Yes decision.
+        // --yes on an INTERACTIVE host auto-confirms and returns the Yes decision.
         let req = PluginInstallRequest { yes: true, ..Default::default() };
-        assert_eq!(enforce_org_trust("fresh-org", &req).expect("ok"), Some(TrustDecision::Yes));
-        // --allow-org path returns AllowOrg.
+        assert_eq!(enforce_org_trust_with("fresh-org", &req, true).expect("ok"), Some(TrustDecision::Yes));
+        // --yes in a NON-interactive/CI context must FAIL CLOSED, not auto-TOFU.
+        let err = enforce_org_trust_with("fresh-org", &req, false)
+            .expect_err("--yes in a non-interactive context must refuse to auto-trust an unknown org");
+        assert!(format!("{err}").contains("refusing to auto-trust"), "unexpected: {err}");
+        // --allow-org path returns AllowOrg regardless of interactivity.
         let req2 = PluginInstallRequest { allow_org: vec!["friend-org".into()], ..Default::default() };
-        assert_eq!(enforce_org_trust("friend-org", &req2).expect("ok"), Some(TrustDecision::AllowOrg));
+        assert_eq!(enforce_org_trust_with("friend-org", &req2, false).expect("ok"), Some(TrustDecision::AllowOrg));
         // launchapp-dev (built-in, already trusted) -> None (no fresh grant).
         let req3 = PluginInstallRequest::default();
-        assert_eq!(enforce_org_trust("launchapp-dev", &req3).expect("ok"), None);
+        assert_eq!(enforce_org_trust_with("launchapp-dev", &req3, false).expect("ok"), None);
     }
 
     #[test]
@@ -8937,12 +9143,119 @@ required = ["launchapp-dev/animus-queue-default"]
 
     #[test]
     fn effective_policy_default_is_warn_for_legacy_callers() {
+        // Isolate the env + config layers so an ambient
+        // ANIMUS_PLUGIN_SIGNATURE_POLICY or a real ~/.animus/config.json cannot
+        // flake this: no env, empty config dir -> the Warn default must hold.
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let _env_policy = protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_SIGNATURE_POLICY", None);
+        let _env_dir = protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(temp.path().to_str().unwrap()));
         let req = PluginInstallRequest::default();
         assert_eq!(
             effective_policy_mode(&req),
             PluginPolicyMode::Warn,
-            "callers that build PluginInstallRequest without setting signature_policy get the verify-if-present default; this matches the v0.4.12 lib default while the built-in launchapp-dev cosign key is still a placeholder"
+            "with no explicit flag, no env, and no config field, the local default stays verify-if-present (Warn)"
         );
+    }
+
+    #[test]
+    fn effective_policy_reads_env_layer_when_no_explicit_flag() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        let _env_dir = protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(temp.path().to_str().unwrap()));
+        let _env_policy = protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_SIGNATURE_POLICY", Some("strict"));
+        let req = PluginInstallRequest::default();
+        assert_eq!(effective_policy_mode(&req), PluginPolicyMode::Strict, "env layer promotes to strict");
+        // An explicit per-call flag still overrides the env layer.
+        let req2 = PluginInstallRequest { signature_policy: Some(PluginPolicyMode::Disabled), ..Default::default() };
+        assert_eq!(effective_policy_mode(&req2), PluginPolicyMode::Disabled, "explicit flag beats env");
+    }
+
+    #[test]
+    fn effective_policy_reads_config_layer_when_no_env() {
+        let _guard = TRUSTED_ORGS_ENV_GUARD.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join("config.json"), r#"{"plugins":{"signature_policy":"strict"}}"#).unwrap();
+        let _env_dir = protocol::test_utils::EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(temp.path().to_str().unwrap()));
+        let _env_policy = protocol::test_utils::EnvVarGuard::set("ANIMUS_PLUGIN_SIGNATURE_POLICY", None);
+        let req = PluginInstallRequest::default();
+        assert_eq!(effective_policy_mode(&req), PluginPolicyMode::Strict, "config layer promotes to strict");
+    }
+
+    #[test]
+    fn layered_policy_precedence_explicit_over_env_over_config() {
+        use PluginPolicyMode::{Disabled, Strict, Warn};
+        // Explicit per-call flag wins over env and config.
+        assert_eq!(resolve_signature_policy_layers(Some(Disabled), Some(Strict), Some(Warn)), Disabled);
+        // Env wins over config when no explicit flag.
+        assert_eq!(resolve_signature_policy_layers(None, Some(Strict), Some(Warn)), Strict);
+        // Config wins over the default when no explicit flag and no env.
+        assert_eq!(resolve_signature_policy_layers(None, None, Some(Strict)), Strict);
+        // Nothing set -> Warn default (unchanged local behavior).
+        assert_eq!(resolve_signature_policy_layers(None, None, None), Warn);
+    }
+
+    #[test]
+    fn parse_signature_policy_layer_accepts_strict_warn_skip_case_insensitively() {
+        assert_eq!(parse_signature_policy_layer("strict"), Some(PluginPolicyMode::Strict));
+        assert_eq!(parse_signature_policy_layer("STRICT"), Some(PluginPolicyMode::Strict));
+        assert_eq!(parse_signature_policy_layer("  Warn "), Some(PluginPolicyMode::Warn));
+        assert_eq!(parse_signature_policy_layer("skip"), Some(PluginPolicyMode::Disabled));
+        assert_eq!(parse_signature_policy_layer("SKIP"), Some(PluginPolicyMode::Disabled));
+        // FromStr aliases still resolve.
+        assert_eq!(parse_signature_policy_layer("disabled"), Some(PluginPolicyMode::Disabled));
+        // Unknown / empty are ignored (never a silent trust downgrade).
+        assert_eq!(parse_signature_policy_layer("bogus"), None);
+        assert_eq!(parse_signature_policy_layer(""), None);
+        assert_eq!(parse_signature_policy_layer("   "), None);
+    }
+
+    #[test]
+    fn explicit_signature_policy_extracts_flags_or_none() {
+        assert_eq!(explicit_signature_policy(&PluginInstallRequest::default()), None);
+        assert_eq!(
+            explicit_signature_policy(&PluginInstallRequest { skip_signature: true, ..Default::default() }),
+            Some(PluginPolicyMode::Disabled)
+        );
+        assert_eq!(
+            explicit_signature_policy(&PluginInstallRequest { require_signature: true, ..Default::default() }),
+            Some(PluginPolicyMode::Strict)
+        );
+        assert_eq!(
+            explicit_signature_policy(&PluginInstallRequest {
+                signature_policy: Some(PluginPolicyMode::Warn),
+                skip_signature: true,
+                ..Default::default()
+            }),
+            Some(PluginPolicyMode::Warn),
+            "an explicit --signature-policy wins over the legacy booleans"
+        );
+    }
+
+    #[test]
+    fn cosign_preflight_only_errors_when_strict_and_cosign_absent() {
+        assert!(cosign_preflight_error(true, false).is_some());
+        assert!(cosign_preflight_error(true, true).is_none());
+        assert!(cosign_preflight_error(false, false).is_none());
+        let message = cosign_preflight_error(true, false).expect("strict + missing cosign errors");
+        assert!(message.contains("cosign"), "actionable message names cosign: {message}");
+        assert!(message.contains("ANIMUS_PLUGIN_SIGNATURE_POLICY=warn"), "message offers the warn escape: {message}");
+    }
+
+    #[test]
+    fn org_trust_gate_fails_closed_on_unknown_org_in_non_tty() {
+        use OrgTrustGate::{AlreadyTrusted, AutoConfirm, ExplicitAllow, FailClosed, Prompt};
+        // --allow-org always trusts.
+        assert_eq!(resolve_org_trust_gate(true, false, false, false), ExplicitAllow);
+        assert_eq!(resolve_org_trust_gate(true, true, true, true), ExplicitAllow);
+        // Already-trusted org: no fresh decision.
+        assert_eq!(resolve_org_trust_gate(false, true, false, false), AlreadyTrusted);
+        // Unknown org + --yes: auto-confirm ONLY when interactive.
+        assert_eq!(resolve_org_trust_gate(false, false, true, true), AutoConfirm);
+        assert_eq!(resolve_org_trust_gate(false, false, true, false), FailClosed);
+        // Unknown org, no --yes: prompt when interactive, fail closed otherwise.
+        assert_eq!(resolve_org_trust_gate(false, false, false, true), Prompt);
+        assert_eq!(resolve_org_trust_gate(false, false, false, false), FailClosed);
     }
 
     #[test]

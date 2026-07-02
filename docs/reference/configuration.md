@@ -163,6 +163,24 @@ installs run the identical integrity pipeline as global ones: sha256
 verification, cosign signature policy, publisher TOFU, and lockfile
 fail-closed checks.
 
+**Signature policy resolution.** The effective cosign policy resolves in this
+order (highest first): the per-call `--signature-policy` flag → the
+`ANIMUS_PLUGIN_SIGNATURE_POLICY` env (`strict`/`warn`/`skip`) → the
+`plugins.signature_policy` field in the global `config.json` (values
+`strict`/`warn`/`skip`; optional, absent by default) → the `warn` default.
+Because the env/config layers sit below any explicit flag but above the
+default, a fleet can opt every install into fail-closed enforcement by setting
+`ANIMUS_PLUGIN_SIGNATURE_POLICY=strict` (or the config field) without editing
+call sites; the local default is unchanged (`warn` when neither is set). When
+strict is in effect but `cosign` is not on `$PATH`, the install fails fast with
+an actionable error rather than a per-plugin `unsigned` block.
+
+**Publisher TOFU is fail-closed off a TTY.** On an interactive terminal an
+untrusted org triggers a trust-on-first-use prompt. In a non-interactive /
+server / CI context (no TTY, or `ANIMUS_SERVER=1`), `--yes`/`--force` will not
+silently auto-trust an unknown org — the install fails closed unless the org is
+built-in trusted, already trusted, or explicitly passed via `--allow-org`.
+
 **Shadowing rule.** Discovery scans the project-local
 `<project>/.animus/plugins/` tier FIRST, so on a name collision the
 project-local install wins over both a registry-recorded global install and
@@ -629,7 +647,9 @@ legacy aliases; the old names will not be read.
 | Variable | Description |
 |---|---|
 | `ANIMUS_PLUGIN_DIR` | Override the global plugin install directory used by `animus plugin install`. Discovery always scans the resolved global install dir: `$ANIMUS_PLUGIN_DIR` when set, otherwise `~/.animus/plugins/`. `--plugin-dir <PATH>` overrides it for install/uninstall commands |
+| `ANIMUS_PLUGIN_SIGNATURE_POLICY` | Default cosign signature policy for `animus plugin install` / `animus install` when no per-call `--signature-policy` flag is passed: `strict` (fail closed), `warn` (verify-if-present; the default when unset), or `skip` (disabled). Sits below the per-call flag and above the `plugins.signature_policy` config field. Cloud/CI sets this to `strict` once; unset locally keeps `warn`. Unrecognized values are logged and ignored (never a silent downgrade) |
 | `ANIMUS_PLUGIN_PATH` | Colon-separated list of additional directories to scan for `animus-provider-*` and `animus-plugin-*` binaries during plugin discovery |
+| `ANIMUS_SERVER` | Set to `1` to mark this host as headless/server. Among other effects, it makes plugin-install publisher TOFU fail closed for unknown orgs (no interactive prompt, and `--yes`/`--force` will not auto-trust an unknown org) |
 | `ANIMUS_TEMPLATE_REGISTRY_URL` | Override the default template registry URL used by `animus init`. Defaults to the LaunchApp project-templates registry |
 
 ### Runner and workflow
