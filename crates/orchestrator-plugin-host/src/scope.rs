@@ -449,6 +449,42 @@ impl PluginScope {
         let admit = self.effective_admit_set();
         admit.iter().any(|candidate| candidate == name)
     }
+
+    /// Security gate applied BEFORE the `--manifest` probe executes a
+    /// candidate binary. Returns `true` when this scope could admit the
+    /// plugin, so it is safe to spend a probe (which EXECUTES the binary)
+    /// on it.
+    ///
+    /// The slug is derived from the binary's file name WITHOUT executing
+    /// it — plugin binaries are named `animus-<kind>-<...>`, and both the
+    /// directory-scan candidate name and (for the common canonical-binary
+    /// case) the flavor admit-set slug agree with that file name. This
+    /// mirrors [`Self::admits_by_name`] but sources the identity from the
+    /// path instead of a probed manifest, so a cloned hostile repo that
+    /// ships `.animus/plugins/animus-provider-evil` is NOT executed during
+    /// discovery under a restricted (flavor-only / allowlist) scope.
+    ///
+    /// An unrestricted ([`PluginScopeMode::All`]) scope always returns
+    /// `true` — the local-dev default is unchanged and this gate only
+    /// bites server / flavor-scoped contexts.
+    ///
+    /// Note: because the manifest is not read here, a plugin installed
+    /// under `--name <NAME>` whose ON-DISK binary is ALSO renamed away
+    /// from its canonical `animus-*` slug cannot be recognized pre-probe
+    /// and will be skipped under a restricted scope. The common
+    /// `--name` case keeps the canonical binary file name, so its slug
+    /// still matches the flavor admit set. The post-probe
+    /// [`Self::admits`] retain still applies for the manifest-name
+    /// fallback on candidates that clear this gate.
+    pub fn may_probe(&self, path: &Path) -> bool {
+        if self.admits_everything() {
+            return true;
+        }
+        match path.file_name().and_then(|value| value.to_str()) {
+            Some(slug) => self.admits_by_name(slug),
+            None => false,
+        }
+    }
 }
 
 /// Minimal flavor-manifest reader used by [`PluginScope::load_for_project`]
@@ -957,6 +993,53 @@ required = ["acme/animus-provider-enterprise"]
     #[test]
     fn bundled_default_flavor_slugs_is_non_empty() {
         assert!(!bundled_default_flavor_slugs().is_empty(), "the embedded default flavor must resolve some plugins");
+    }
+
+    #[test]
+    fn may_probe_gates_execution_on_filename_slug() {
+        // Unrestricted: everything may be probed (local-dev default).
+        let all = PluginScope::unrestricted();
+        assert!(all.may_probe(&PathBuf::from("/some/repo/.animus/plugins/animus-provider-evil")));
+
+        // Flavor-only: only admitted slugs may be probed. A hostile
+        // binary shipped in a cloned repo is NOT executed.
+        let mut flavor: BTreeSet<String> = BTreeSet::new();
+        flavor.insert("animus-subject-default".to_string());
+        flavor.insert("animus-provider-claude".to_string());
+        let scope = PluginScope { mode: PluginScopeMode::FlavorOnly, flavor_plugins: flavor, ..PluginScope::default() };
+
+        assert!(
+            scope.may_probe(&PathBuf::from("/repo/.animus/plugins/animus-subject-default")),
+            "in-flavor slug must be probeable"
+        );
+        assert!(
+            !scope.may_probe(&PathBuf::from("/repo/.animus/plugins/animus-provider-evil")),
+            "out-of-flavor (hostile) slug must NOT be probed"
+        );
+        // No file name → conservatively refuse under a restricted scope.
+        assert!(!scope.may_probe(&PathBuf::from("/")));
+    }
+
+    #[test]
+    fn may_probe_matches_admits_for_real_plugin_names() {
+        // The pre-probe filename gate must agree with the post-probe
+        // `admits` predicate for canonically-named plugin binaries, so
+        // legitimate plugins are never spuriously skipped.
+        let mut allow: BTreeSet<String> = BTreeSet::new();
+        allow.insert("animus-subject-default".to_string());
+        allow.insert("animus-provider-claude".to_string());
+        let scope = PluginScope { mode: PluginScopeMode::Allowlist, allow, ..PluginScope::default() };
+
+        for name in
+            ["animus-subject-default", "animus-provider-claude", "animus-subject-linear", "animus-queue-default"]
+        {
+            let path = PathBuf::from(format!("/repo/.animus/plugins/{name}"));
+            assert_eq!(
+                scope.may_probe(&path),
+                scope.admits(&plugin(name)),
+                "may_probe and admits must agree for canonically-named binary `{name}`",
+            );
+        }
     }
 
     #[test]

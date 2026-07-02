@@ -2604,7 +2604,7 @@ fn current_subject_kinds_for_collision_check(
 ) -> Vec<String> {
     let mut discovery = PluginDiscovery::new();
     if let Some(root) = project_root {
-        discovery = discovery.with_project_root(std::path::Path::new(root));
+        discovery = discovery.with_project_root(std::path::Path::new(root)).probe_project_local_plugins(true);
     }
     let _ = plugin_dir;
     let discovered = match discovery.discover() {
@@ -2882,6 +2882,11 @@ fn discover(project_root: &str, include_system_path: bool) -> Result<Vec<Discove
     PluginDiscovery::new()
         .with_project_root(root)
         .include_system_path(include_system_path)
+        // Operator-facing `animus plugin ...` surface: preserve
+        // project-local `.animus/plugins/` discovery for explicit local
+        // dev. The hostile-repo defense lives on the autonomous daemon
+        // path (`discover_plugins`), which leaves this OFF.
+        .probe_project_local_plugins(true)
         .with_scope(scope)
         .discover()
         .context("plugin discovery failed")
@@ -2896,6 +2901,8 @@ fn discover_with_warnings(
     PluginDiscovery::new()
         .with_project_root(root)
         .include_system_path(include_system_path)
+        // See [`discover`]: operator-facing surface, project-local probing on.
+        .probe_project_local_plugins(true)
         .with_scope(scope)
         .discover_with_warnings()
         .context("plugin discovery failed")
@@ -3191,8 +3198,12 @@ fn find_plugin(project_root: &str, name: &str, include_system_path: bool) -> Res
     if trimmed.is_empty() {
         return Err(invalid_input_error("--name must not be empty"));
     }
-    let mut matches =
-        if include_system_path { discover(project_root, true)? } else { discover_plugins(Path::new(project_root))? };
+    // Operator-facing actions (`plugin info` / `ping` / `call`) must see
+    // the same set `plugin list` shows, including project-local
+    // `.animus/plugins/` installs — otherwise a listed plugin reports
+    // "not found" here. The `discover` helper opts project-local probing
+    // in (unlike the server-safe `discover_plugins`).
+    let mut matches = discover(project_root, include_system_path)?;
     matches.retain(|plugin| plugin.name == trimmed);
     matches.pop().ok_or_else(|| not_found_error(format!("plugin not found: {trimmed}")))
 }
@@ -6280,6 +6291,7 @@ pub(crate) fn run_plugin_rename(req: PluginRenameRequest) -> Result<PluginRename
     // the operator sees a clear error instead of a broken next boot.
     let own_secondary_native_kinds: Vec<String> = match PluginDiscovery::new()
         .with_project_root(std::path::Path::new(&req.project_root))
+        .probe_project_local_plugins(true)
         .discover()
     {
         Ok(plugins) => plugins

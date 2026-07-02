@@ -187,7 +187,11 @@ impl AoMcpServer {
         if let Some(entry) = guard.get(&key) {
             return Ok(entry.clone());
         }
-        let registry = PluginRegistry::discover(Path::new(project_root))
+        // Operator-facing MCP surface: preserve project-local
+        // `.animus/plugins/` discovery for explicit local dev. The
+        // hostile-repo defense lives on the daemon subject-resolution
+        // fallback, which uses the server-safe `PluginRegistry::discover`.
+        let registry = PluginRegistry::discover_including_project_local(Path::new(project_root))
             .map_err(|err| McpError::internal_error(format!("plugin discovery failed: {err}"), None))?;
         let entry: PluginRegistryEntry = std::sync::Arc::new(tokio::sync::Mutex::new(registry));
         guard.insert(key, entry.clone());

@@ -17,10 +17,30 @@ pub struct PluginRegistry {
 }
 
 impl PluginRegistry {
+    /// Server-safe discovery: the project-local `<project_root>/.animus/plugins/`
+    /// directory scan is OFF. This is the constructor wired into the daemon
+    /// subject-resolution fallback (`PluginSubjectFallback`), so a daemon
+    /// resolving subjects against a cloned repo never executes a
+    /// repo-shipped binary during discovery. Mirrors
+    /// [`crate::discover_plugins`].
     pub fn discover(project_root: impl Into<PathBuf>) -> Result<Self> {
+        Self::discover_inner(project_root, false)
+    }
+
+    /// Like [`PluginRegistry::discover`] but also scans (and executes via
+    /// `--manifest`) the project-local `<project_root>/.animus/plugins/`
+    /// directory. Use ONLY from operator-facing local-dev surfaces (the MCP
+    /// `animus.plugin.*` tools) where the working tree is trusted — never
+    /// from an autonomous daemon path.
+    pub fn discover_including_project_local(project_root: impl Into<PathBuf>) -> Result<Self> {
+        Self::discover_inner(project_root, true)
+    }
+
+    fn discover_inner(project_root: impl Into<PathBuf>, probe_project_local: bool) -> Result<Self> {
         let project_root = project_root.into();
         let discovered = PluginDiscovery::new()
             .with_project_root(project_root.clone())
+            .probe_project_local_plugins(probe_project_local)
             .discover()?
             .into_iter()
             .map(|plugin| (plugin.name.clone(), plugin))
