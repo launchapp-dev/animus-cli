@@ -692,7 +692,10 @@ pub fn discover_plugins(project_root: impl Into<PathBuf>) -> Result<Vec<Discover
 /// An empty `Vec` means "no plugins of that kind installed".
 pub fn discover_by_kind(project_root: impl Into<PathBuf>, kind: &str) -> Result<Vec<DiscoveredPlugin>> {
     let plugins = discover_plugins(project_root)?;
-    Ok(plugins.into_iter().filter(|p| p.manifest.plugin_kind == kind).collect())
+    // v0.7 multi-kind: match a plugin's primary `plugin_kind` OR any of its
+    // additional `plugin_kinds`, so one plugin can be discovered for several
+    // roles.
+    Ok(plugins.into_iter().filter(|p| p.manifest.serves_kind(kind)).collect())
 }
 
 /// Probe a plugin binary's `--manifest` output.

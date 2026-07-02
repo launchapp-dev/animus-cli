@@ -1053,6 +1053,8 @@ impl PluginHost {
             protocol_version: PROTOCOL_VERSION.to_string(),
             host_info: HostInfo { name: "animus".to_string(), version: env!("CARGO_PKG_VERSION").to_string() },
             capabilities: HostCapabilities { streaming: true, progress: true, cancellation: true },
+            // No init extensions from this host yet (empty = back-compat).
+            init_extensions: std::collections::HashMap::new(),
         };
 
         let response = self

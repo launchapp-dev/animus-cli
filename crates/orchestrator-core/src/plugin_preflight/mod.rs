@@ -336,32 +336,41 @@ pub struct AutoInstalledPlugin {
 pub struct InstalledPluginSummary {
     pub name: String,
     pub plugin_kind: String,
+    /// Additional kinds this plugin ALSO serves (v0.7 multi-kind). Empty for
+    /// single-kind plugins (back-compat).
+    pub plugin_kinds: Vec<String>,
     pub subject_kinds: Vec<String>,
 }
 
 impl InstalledPluginSummary {
+    /// Whether this plugin serves `kind` — its primary `plugin_kind` OR any of
+    /// its additional `plugin_kinds` (v0.7 multi-kind).
+    pub fn serves_kind(&self, kind: &str) -> bool {
+        self.plugin_kind == kind || self.plugin_kinds.iter().any(|k| k == kind)
+    }
+
     pub fn is_provider(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_PROVIDER
+        self.serves_kind(PLUGIN_KIND_PROVIDER)
     }
 
     pub fn is_subject_backend(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_SUBJECT_BACKEND
+        self.serves_kind(PLUGIN_KIND_SUBJECT_BACKEND)
     }
 
     pub fn is_workflow_runner(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_WORKFLOW_RUNNER
+        self.serves_kind(PLUGIN_KIND_WORKFLOW_RUNNER)
     }
 
     pub fn is_queue(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_QUEUE
+        self.serves_kind(PLUGIN_KIND_QUEUE)
     }
 
     pub fn is_config_source(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_CONFIG_SOURCE
+        self.serves_kind(PLUGIN_KIND_CONFIG_SOURCE)
     }
 
     pub fn is_workflow_journal(&self) -> bool {
-        self.plugin_kind == PLUGIN_KIND_WORKFLOW_JOURNAL
+        self.serves_kind(PLUGIN_KIND_WORKFLOW_JOURNAL)
     }
 
     pub fn covers_subject_kind(&self, kind: &str) -> bool {
@@ -412,6 +421,7 @@ pub fn summarize_discovered_plugins_with_lock(
             InstalledPluginSummary {
                 name: plugin.name.clone(),
                 plugin_kind: plugin.manifest.plugin_kind.clone(),
+                plugin_kinds: plugin.manifest.plugin_kinds.clone(),
                 subject_kinds,
             }
         })

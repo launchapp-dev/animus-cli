@@ -35,11 +35,6 @@ uuid = { version = "1.6", features = ["v4", "serde"] }
 
 [dev-dependencies]
 tempfile = "3"
-# Used by the `protocol_drift` integration test to parse the in-tree and
-# standalone `animus-plugin-protocol` crates and diff their public surfaces.
-# Kept as a dev-dep so we don't pull syn into the production binary.
-syn = { version = "2", features = ["full", "extra-traits", "parsing"] }
-proc-macro2 = "1"
 animus-session-backend = { workspace = true }
 
 [lints]

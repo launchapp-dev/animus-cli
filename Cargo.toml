@@ -1,6 +1,5 @@
 [workspace]
 members = [
-  "crates/animus-plugin-protocol",
   "crates/animus-plugin-runtime",
   "crates/orchestrator-daemon-runtime",
   "crates/orchestrator-logging",
@@ -31,14 +30,14 @@ categories = ["command-line-utilities", "development-tools"]
 # animus-subject-protocol resolves to one source (no duplicate-crate type
 # mismatches). animus-plugin-protocol/runtime remain in-tree pending a
 # follow-up move.
-animus-plugin-protocol = { path = "crates/animus-plugin-protocol" }
-animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
-animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
-animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
-animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
-animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
-animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26" }
-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.1.26", package = "protocol" }
+animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "feat/multi-kind-plugins" }
+animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "feat/multi-kind-plugins" }
+animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "feat/multi-kind-plugins" }
+animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "feat/multi-kind-plugins" }
+animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "feat/multi-kind-plugins" }
+animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "feat/multi-kind-plugins" }
+animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "feat/multi-kind-plugins" }
+protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "feat/multi-kind-plugins", package = "protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-plugin-host = { path = "crates/orchestrator-plugin-host" }
