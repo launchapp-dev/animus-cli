@@ -1116,6 +1116,7 @@ mod tests {
                 name: name.to_string(),
                 version: "0.0.0".to_string(),
                 plugin_kind: PLUGIN_KIND_TRIGGER_BACKEND.to_string(),
+                plugin_kinds: vec![],
                 description: "fake trigger plugin for unit tests".to_string(),
                 protocol_version: animus_plugin_protocol::PROTOCOL_VERSION.to_string(),
                 capabilities: Vec::new(),

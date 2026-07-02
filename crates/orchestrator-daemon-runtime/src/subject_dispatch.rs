@@ -671,6 +671,7 @@ mod tests {
                 name: name.to_string(),
                 version: "0.1.0".to_string(),
                 plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                plugin_kinds: vec![],
                 description: "fake".to_string(),
                 protocol_version: "1.0.0".to_string(),
                 capabilities: vec![],
@@ -707,6 +708,7 @@ mod tests {
                                 name: name_for_task.clone(),
                                 version: "0.1.0".to_string(),
                                 plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                                plugin_kinds: vec![],
                                 description: None,
                             },
                             capabilities: PluginCapabilities {
@@ -714,6 +716,7 @@ mod tests {
                                 methods: kinds.iter().map(|k| format!("{k}/list")).collect(),
                                 ..PluginCapabilities::default()
                             },
+                            kind_capabilities: std::collections::HashMap::new(),
                         }),
                     ),
                     "initialized" => continue,
@@ -756,6 +759,7 @@ mod tests {
                                     name: name_for_task.clone(),
                                     version: "0.1.0".to_string(),
                                     plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                                    plugin_kinds: vec![],
                                     description: None,
                                 },
                                 capabilities: PluginCapabilities {
@@ -763,6 +767,7 @@ mod tests {
                                     methods: kinds.iter().map(|k| format!("{k}/list")).collect(),
                                     ..PluginCapabilities::default()
                                 },
+                                kind_capabilities: std::collections::HashMap::new(),
                             }),
                         );
                         let mut encoded = serde_json::to_string(&response).expect("encode");
@@ -868,6 +873,7 @@ mod tests {
                                     name: name_for_task.clone(),
                                     version: "0.1.0".to_string(),
                                     plugin_kind: PLUGIN_KIND_SUBJECT_BACKEND.to_string(),
+                                    plugin_kinds: vec![],
                                     description: None,
                                 },
                                 capabilities: PluginCapabilities {
@@ -875,6 +881,7 @@ mod tests {
                                     methods: kinds.iter().map(|k| format!("{k}/list")).collect(),
                                     ..PluginCapabilities::default()
                                 },
+                                kind_capabilities: std::collections::HashMap::new(),
                             }),
                         );
                         let mut encoded = serde_json::to_string(&response).expect("encode");

@@ -672,6 +672,7 @@ mod tests {
                 name: name.to_string(),
                 version: "0.0.0".to_string(),
                 plugin_kind: plugin_kind.to_string(),
+                plugin_kinds: vec![],
                 description: "test fixture".to_string(),
                 protocol_version: "1.0.0".to_string(),
                 capabilities: capabilities.iter().map(|s| s.to_string()).collect(),
