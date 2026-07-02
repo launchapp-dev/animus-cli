@@ -638,6 +638,14 @@ pub struct PluginHost {
 }
 
 impl PluginHost {
+    /// Test-only identity handle: the address of the shared inner state. Two
+    /// clones of the same host (e.g. two role leases sharing one process) return
+    /// the same pointer; two distinct processes return different pointers.
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn inner_ptr(&self) -> *const () {
+        Arc::as_ptr(&self.inner).cast::<()>()
+    }
+
     /// Spawn a plugin without forwarding any environment beyond
     /// [`PLUGIN_BASE_ENV_ALLOWLIST`]. Most production callers should use
     /// [`PluginHost::spawn_with_options`] instead so the plugin sees the
@@ -1640,10 +1648,7 @@ mod tests {
         assert_eq!(redact_stderr_line("using api key: sk-abc123 now"), "using api key ***");
         assert_eq!(redact_stderr_line("Authorization: Bearer sk-xyz trailing"), "Authorization ***");
         // Multi-token / PEM value cannot leak its tail.
-        assert_eq!(
-            redact_stderr_line("private_key=-----BEGIN KEY----- abcd -----END KEY-----"),
-            "private_key ***"
-        );
+        assert_eq!(redact_stderr_line("private_key=-----BEGIN KEY----- abcd -----END KEY-----"), "private_key ***");
         // Query-string credential in a URL without userinfo.
         assert_eq!(
             redact_stderr_line("cb https://h/x?client_id=a&client_secret=zzz"),

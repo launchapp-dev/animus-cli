@@ -48,6 +48,9 @@ use animus_journal_protocol::{
     METHOD_JOURNAL_QUERY_IDS, METHOD_JOURNAL_RECORD, METHOD_JOURNAL_SAVE, PLUGIN_KIND_WORKFLOW_JOURNAL,
 };
 use anyhow::{anyhow, Context, Result};
+use orchestrator_plugin_host::resident_host_registry::{
+    binary_mtime_nanos, global_resident_host_registry, ResidentHostLease, ResidentHostRegistry,
+};
 use orchestrator_plugin_host::session::plugin_supervisor::{classify, RetryDecision};
 use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, HostError, PluginHost, PluginSpawnOptions};
 
@@ -647,63 +650,23 @@ pub async fn record_wire_event(
 }
 
 // ---------------------------------------------------------------------------
-// Resident-host machinery (mirrors config_source_client).
+// Resident-host machinery (cross-role shared registry — 0.7 Layer B).
+//
+// Warm `workflow_journal` hosts live in the process-global
+// `ResidentHostRegistry` shared with `config_source` / `subject_backend`, keyed
+// by the plugin's binary path + mtime. A plugin binary that also serves those
+// roles is therefore ONE shared process, spawned + handshaked once.
 // ---------------------------------------------------------------------------
-
-struct ResidentHost {
-    host: PluginHost,
-    plugin_path: PathBuf,
-    binary_mtime_nanos: u128,
-    generation: u64,
-}
-
-fn next_generation() -> u64 {
-    static GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-    GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-fn binary_mtime_nanos(path: &Path) -> u128 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_nanos())
-        .unwrap_or(0)
-}
-
-fn resident_hosts() -> &'static Mutex<HashMap<PathBuf, ResidentHost>> {
-    static HOSTS: OnceLock<Mutex<HashMap<PathBuf, ResidentHost>>> = OnceLock::new();
-    HOSTS.get_or_init(|| Mutex::new(HashMap::new()))
-}
 
 fn normalize_root(project_root: &Path) -> PathBuf {
     std::fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf())
 }
 
-/// Reap every resident `workflow_journal` host. Wired into daemon graceful
-/// shutdown so warm plugin processes terminate cleanly. Idempotent.
+/// Reap every resident host in the shared registry. Wired into daemon graceful
+/// shutdown so warm plugin processes terminate cleanly. Idempotent — a prior
+/// config_source teardown may already have drained the shared registry.
 pub async fn shutdown_resident_hosts() {
-    let hosts: Vec<ResidentHost> = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        guard.drain().map(|(_, v)| v).collect()
-    };
-    for resident in hosts {
-        let _ = resident.host.shutdown().await;
-    }
-}
-
-async fn drop_resident_host_if_current(project_root: &Path, failed_gen: u64) {
-    let key = normalize_root(project_root);
-    let resident = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        match guard.get(&key) {
-            Some(existing) if existing.generation == failed_gen => guard.remove(&key),
-            _ => None,
-        }
-    };
-    if let Some(resident) = resident {
-        let _ = resident.host.shutdown().await;
-    }
+    global_resident_host_registry().shutdown_all().await;
 }
 
 enum ResidentCallError {
@@ -747,19 +710,40 @@ async fn journal_rpc(
         .map_err(ResidentCallError::from_host_error)
 }
 
-async fn with_resident_host<T, F, Fut>(plugin: &DiscoveredPlugin, project_root: &Path, mut call: F) -> Result<T>
+/// Acquire the shared resident host for `plugin` and run `call` against a clone
+/// of it, retrying once (reap + re-spawn) on a death-like failure. All other
+/// errors propagate without a re-spawn.
+///
+/// The host lives in the process-global [`ResidentHostRegistry`] keyed by the
+/// plugin's binary path + mtime, shared with the other resident-style roles. The
+/// lease is held across the RPC `.await` so LRU pressure from another role can
+/// never evict the host mid-call. `project_root` no longer keys the host (it is
+/// passed to the plugin per call); it is retained for the call signature.
+async fn with_resident_host<T, F, Fut>(plugin: &DiscoveredPlugin, _project_root: &Path, mut call: F) -> Result<T>
 where
     F: FnMut(PluginHost) -> Fut,
     Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
 {
-    let (host, generation) = acquire_resident_host(plugin, project_root).await?;
-    match call(host).await {
+    let registry = global_resident_host_registry();
+    let mtime = binary_mtime_nanos(&plugin.path);
+    // Spawn-context fingerprint matching `spawn_journal_host`: full parent env
+    // forwarded, no working dir, no notification hint — identical to the
+    // `config_source` context, so a plugin binary serving BOTH roles shares one
+    // process.
+    let context = journal_spawn_context();
+
+    let lease = acquire_resident_lease(&registry, plugin, mtime, &context).await?;
+    let generation = lease.generation();
+    match call(lease.host().clone()).await {
         Ok(value) => Ok(value),
         Err(ResidentCallError::Other(err)) => Err(err),
         Err(ResidentCallError::Death(err)) => {
-            drop_resident_host_if_current(project_root, generation).await;
-            let (host, _gen) = acquire_resident_host(plugin, project_root).await?;
-            match call(host).await {
+            // Reap ONLY the exact host that failed (a concurrent caller may have
+            // already replaced it), then re-spawn once and retry.
+            drop(lease);
+            registry.invalidate_generation(&plugin.path, mtime, &context, generation).await;
+            let lease = acquire_resident_lease(&registry, plugin, mtime, &context).await?;
+            match call(lease.host().clone()).await {
                 Ok(value) => Ok(value),
                 Err(ResidentCallError::Other(retry_err)) => Err(retry_err),
                 Err(ResidentCallError::Death(retry_err)) => Err(retry_err.context(format!(
@@ -771,60 +755,34 @@ where
     }
 }
 
-async fn acquire_resident_host(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<(PluginHost, u64)> {
-    let key = normalize_root(project_root);
-    let current_mtime = binary_mtime_nanos(&plugin.path);
-    {
-        let guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        if let Some(resident) = guard.get(&key) {
-            if resident.plugin_path == plugin.path && resident.binary_mtime_nanos == current_mtime {
-                return Ok((resident.host.clone(), resident.generation));
+/// Lease the shared resident host for `plugin`, spawning + handshaking it once
+/// via the [`ResidentHostRegistry`] if it is not already live. A handshake
+/// failure inside the spawn closure tears the half-started child down (it is
+/// never inserted) so a retry re-spawns cleanly.
+async fn acquire_resident_lease(
+    registry: &ResidentHostRegistry,
+    plugin: &DiscoveredPlugin,
+    mtime: u128,
+    context: &str,
+) -> Result<ResidentHostLease> {
+    registry
+        .get_or_spawn(&plugin.path, mtime, context, || async {
+            let host = spawn_journal_host(plugin).await?;
+            if let Err(err) = host.handshake().await {
+                let _ = host.clone().shutdown().await;
+                return Err(err).with_context(|| format!("handshake with workflow_journal plugin {}", plugin.name));
             }
-        }
-    }
+            Ok(host)
+        })
+        .await
+}
 
-    let host = spawn_journal_host(plugin).await?;
-    host.handshake().await.with_context(|| format!("handshake with workflow_journal plugin {}", plugin.name))?;
-
-    enum Outcome {
-        UseExisting { winner: PluginHost, generation: u64, reap_ours: PluginHost },
-        Installed { ours: PluginHost, generation: u64, reap_old: Option<PluginHost> },
-    }
-    let outcome = {
-        let mut guard = resident_hosts().lock().unwrap_or_else(|p| p.into_inner());
-        match guard.get(&key) {
-            Some(existing) if existing.plugin_path == plugin.path && existing.binary_mtime_nanos == current_mtime => {
-                Outcome::UseExisting { winner: existing.host.clone(), generation: existing.generation, reap_ours: host }
-            }
-            _ => {
-                let ours = host.clone();
-                let generation = next_generation();
-                let replaced = guard.insert(
-                    key,
-                    ResidentHost {
-                        host,
-                        plugin_path: plugin.path.clone(),
-                        binary_mtime_nanos: current_mtime,
-                        generation,
-                    },
-                );
-                Outcome::Installed { ours, generation, reap_old: replaced.map(|r| r.host) }
-            }
-        }
-    };
-
-    match outcome {
-        Outcome::UseExisting { winner, generation, reap_ours } => {
-            let _ = reap_ours.shutdown().await;
-            Ok((winner, generation))
-        }
-        Outcome::Installed { ours, generation, reap_old } => {
-            if let Some(old) = reap_old {
-                let _ = old.shutdown().await;
-            }
-            Ok((ours, generation))
-        }
-    }
+/// Spawn-context fingerprint for a `workflow_journal` host, matching
+/// [`spawn_journal_host`]: full parent env forwarded, no working dir, no
+/// notification hint.
+fn journal_spawn_context() -> String {
+    let forwarded_env: Vec<String> = std::env::vars().map(|(name, _)| name).collect();
+    orchestrator_plugin_host::resident_host_registry::spawn_context_fingerprint(&forwarded_env, None, None)
 }
 
 async fn spawn_journal_host(plugin: &DiscoveredPlugin) -> Result<PluginHost> {

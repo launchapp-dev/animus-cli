@@ -29,13 +29,19 @@ impl PluginInstaller for FakeInstaller {
 }
 
 fn provider_plugin(name: &str) -> InstalledPluginSummary {
-    InstalledPluginSummary { name: name.to_string(), plugin_kind: "provider".to_string(), plugin_kinds: Vec::new(), subject_kinds: Vec::new() }
+    InstalledPluginSummary {
+        name: name.to_string(),
+        plugin_kind: "provider".to_string(),
+        plugin_kinds: Vec::new(),
+        subject_kinds: Vec::new(),
+    }
 }
 
 fn subject_plugin(name: &str, kinds: &[&str]) -> InstalledPluginSummary {
     InstalledPluginSummary {
         name: name.to_string(),
-        plugin_kind: "subject_backend".to_string(), plugin_kinds: Vec::new(),
+        plugin_kind: "subject_backend".to_string(),
+        plugin_kinds: Vec::new(),
         subject_kinds: kinds.iter().map(|k| (*k).to_string()).collect(),
     }
 }
@@ -43,19 +49,26 @@ fn subject_plugin(name: &str, kinds: &[&str]) -> InstalledPluginSummary {
 fn workflow_runner_plugin(name: &str) -> InstalledPluginSummary {
     InstalledPluginSummary {
         name: name.to_string(),
-        plugin_kind: "workflow_runner".to_string(), plugin_kinds: Vec::new(),
+        plugin_kind: "workflow_runner".to_string(),
+        plugin_kinds: Vec::new(),
         subject_kinds: Vec::new(),
     }
 }
 
 fn queue_plugin(name: &str) -> InstalledPluginSummary {
-    InstalledPluginSummary { name: name.to_string(), plugin_kind: "queue".to_string(), plugin_kinds: Vec::new(), subject_kinds: Vec::new() }
+    InstalledPluginSummary {
+        name: name.to_string(),
+        plugin_kind: "queue".to_string(),
+        plugin_kinds: Vec::new(),
+        subject_kinds: Vec::new(),
+    }
 }
 
 fn config_source_plugin(name: &str) -> InstalledPluginSummary {
     InstalledPluginSummary {
         name: name.to_string(),
-        plugin_kind: "config_source".to_string(), plugin_kinds: Vec::new(),
+        plugin_kind: "config_source".to_string(),
+        plugin_kinds: Vec::new(),
         subject_kinds: Vec::new(),
     }
 }
@@ -284,7 +297,8 @@ fn discovered_subject_plugin(name: &str, native_kind: &str) -> DiscoveredPlugin 
         manifest: animus_plugin_protocol::PluginManifest {
             name: name.to_string(),
             version: "0.1.0".to_string(),
-            plugin_kind: "subject_backend".to_string(), plugin_kinds: Vec::new(),
+            plugin_kind: "subject_backend".to_string(),
+            plugin_kinds: Vec::new(),
             description: "t".to_string(),
             protocol_version: "1.0.0".to_string(),
             capabilities: vec![format!("subject_kind:{native_kind}")],

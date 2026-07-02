@@ -5,6 +5,7 @@ mod host;
 pub mod lockfile;
 pub mod manifest_cache;
 mod registry;
+pub mod resident_host_registry;
 pub mod scope;
 pub mod session;
 pub mod signature_verifier;
