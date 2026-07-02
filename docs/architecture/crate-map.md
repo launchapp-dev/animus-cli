@@ -1,6 +1,6 @@
 # Crate Map
 
-The Animus workspace is a Cargo workspace of 10 crates organized by runtime
+The Animus workspace is a Cargo workspace of 9 crates organized by runtime
 responsibility. `Cargo.toml` is the source of truth for membership.
 
 The `protocol` (kernel wire types) and `animus-config-protocol` crates moved
@@ -44,7 +44,6 @@ binary inside the installed plugin (see
 | Crate | Responsibility |
 |---|---|
 | `orchestrator-plugin-host` | Plugin discovery, install lockfiles, manifest probes, stdio host, router, signature verification, and the `session::*` provider plugin session bridge (folded in from the former `orchestrator-session-host` crate in v0.5.3) |
-| `animus-plugin-protocol` | In-tree copy of the stdio plugin protocol types |
 | `animus-plugin-runtime` | Runtime helper crate for plugin implementations |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates
