@@ -397,7 +397,7 @@ pub(crate) fn graft_skill_launch_contract(
 /// claude: swap the default `--dangerously-skip-permissions` for
 /// `--permission-mode <mode>`; codex: upsert `-c approval_policy="<mode>"`.
 /// Other tools pass through (their transports do not map a mode flag today).
-fn apply_permission_mode_to_launch(contract: &mut Value, tool: &str, permission_mode: Option<&str>) {
+pub(super) fn apply_permission_mode_to_launch(contract: &mut Value, tool: &str, permission_mode: Option<&str>) {
     let Some(mode) = permission_mode.map(str::trim).filter(|mode| !mode.is_empty()) else {
         return;
     };
