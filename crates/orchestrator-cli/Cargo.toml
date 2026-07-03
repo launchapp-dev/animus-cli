@@ -29,6 +29,10 @@ orchestrator-core = { path = "../orchestrator-core" }
 orchestrator-logging = { path = "../orchestrator-logging" }
 orchestrator-plugin-host = { workspace = true }
 animus-plugin-protocol = { workspace = true }
+# v0.7 TASK-166 Phase 2: environment wire types (EnvironmentSpec /
+# HarnessCommand / ExecStream) for the agent-run env-exec seam in
+# `services::runtime::runtime_agent::environment_exec`.
+animus-environment-protocol = { workspace = true }
 # v0.1.x-lineage protocol crates. Pinned to v0.1.26 so they share ONE
 # `animus-subject-protocol` rev (0.1.16) with the workspace `protocol` dep and
 # the control surface — control-protocol's `WorkflowRunSummary.subject_id` etc.

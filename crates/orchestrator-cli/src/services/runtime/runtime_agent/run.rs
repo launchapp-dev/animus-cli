@@ -20,7 +20,16 @@ pub(super) async fn handle_agent_run(
     let project_root_path = Path::new(project_root);
 
     let request = session_request_from_args(&args, project_root)?;
-    let run = start_session(project_root_path, request).await?;
+    // v0.7 TASK-166 Phase 2: when the run resolves to a NON-LOCAL environment
+    // (config `environment_routing:` or the ANIMUS_ENVIRONMENT_EXEC override),
+    // the harness executes inside that environment plugin instead of the host.
+    // The default resolution is `None`, taking the unchanged local path.
+    let run = match super::environment_exec::resolve_exec_environment(project_root_path, &request.tool) {
+        Some(environment) => {
+            super::environment_exec::start_environment_session(project_root_path, &environment, &request)?
+        }
+        None => start_session(project_root_path, request).await?,
+    };
 
     // v0.5.3: the agent-runner sidecar used to host the provider session
     // out-of-process so `--detach` could safely return while the run kept

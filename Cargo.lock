@@ -2784,6 +2784,7 @@ version = "0.7.0-rc.1"
 dependencies = [
  "animus-actor",
  "animus-control-protocol",
+ "animus-environment-protocol",
  "animus-log-storage-protocol",
  "animus-mcp-oauth",
  "animus-plugin-protocol 0.1.17",
