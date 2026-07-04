@@ -146,8 +146,9 @@ pub fn load_workflow_config_with_metadata(project_root: &Path, actor: Option<&Ac
             schema: config.schema.clone(),
             version: config.version,
             hash: workflow_config_hash(&config),
-            // Plugin-sourced (YAML on disk / Postgres / API) — a non-builtin source.
-            source: WorkflowConfigSource::Yaml,
+            // Plugin-sourced base (config_source plugin: Postgres / API / YAML-on-disk).
+            // `path` is the project root the plugin sourced from, not a real YAML file.
+            source: WorkflowConfigSource::Plugin,
         },
         config,
         path,
