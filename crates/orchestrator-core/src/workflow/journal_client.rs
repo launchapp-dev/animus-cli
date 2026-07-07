@@ -600,14 +600,20 @@ pub async fn record_event_async(project_root: &Path, event: JournalEvent) {
 }
 
 /// Map a wire workflow-event kind (as emitted by the broadcaster) to a
-/// [`JournalEventKind`]. Returns `None` for kinds with no journal mapping
-/// (e.g. `phase_failed`), which the sink skips.
+/// [`JournalEventKind`]. Returns `None` for kinds with no journal mapping.
+///
+/// `phase_failed` maps to [`JournalEventKind::PhaseCompleted`] carrying a
+/// `status: "failed"` (the journal protocol has no dedicated `PhaseFailed`
+/// variant). This makes a failed phase — including its exit-code + stderr
+/// snippet, preserved in the event `detail` — visible in `journal_events`
+/// instead of only in the checkpoint `snapshot_json` decision history.
 fn wire_kind_to_journal(wire_kind: &str) -> Option<animus_journal_protocol::JournalEventKind> {
     use animus_journal_protocol::JournalEventKind as K;
     match wire_kind {
         "workflow_started" => Some(K::RunStarted),
         "phase_started" => Some(K::PhaseStarted),
         "phase_completed" => Some(K::PhaseCompleted),
+        "phase_failed" => Some(K::PhaseCompleted),
         "workflow_completed" => Some(K::RunCompleted),
         "workflow_failed" => Some(K::RunFailed),
         _ => None,
@@ -630,8 +636,15 @@ pub async fn record_wire_event(
     };
     let phase = payload.get("phase_id").and_then(|v| v.as_str()).map(str::to_string);
     let agent = payload.get("agent").or_else(|| payload.get("tool")).and_then(|v| v.as_str()).map(str::to_string);
-    let status =
-        payload.get("phase_status").or_else(|| payload.get("status")).and_then(|v| v.as_str()).map(str::to_string);
+    let status = payload
+        .get("phase_status")
+        .or_else(|| payload.get("status"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        // A `phase_failed` wire event folds into `PhaseCompleted`; stamp an
+        // explicit failed status when the payload didn't carry one so consumers
+        // reading `journal_events` can tell a failed phase from a successful one.
+        .or_else(|| (wire_kind == "phase_failed").then(|| "failed".to_string()));
     let workflow_ref = payload.get("workflow_ref").and_then(|v| v.as_str()).map(str::to_string);
     let event = JournalEvent {
         run_id: workflow_id.to_string(),
@@ -958,6 +971,50 @@ mod tests {
         // The reserved key must not break workflow deserialization.
         let back = from_journal_run(run).expect("from run with actor key");
         assert_eq!(back.id, "wf-2");
+    }
+
+    #[test]
+    fn wire_kind_phase_failed_maps_to_completed_with_failed_status() {
+        use animus_journal_protocol::JournalEventKind as K;
+        // A failed phase must reach `journal_events` (it previously mapped to
+        // None and was silently dropped). The journal protocol has no dedicated
+        // PhaseFailed variant, so it folds into PhaseCompleted while the failed
+        // status + command exit-code/stderr survive in the event detail.
+        assert!(matches!(wire_kind_to_journal("phase_failed"), Some(K::PhaseCompleted)));
+        assert!(wire_kind_to_journal("nonexistent_kind").is_none());
+    }
+
+    #[test]
+    fn phase_failed_wire_event_carries_failed_status_and_detail() {
+        // The daemon tee forwards the raw phase_failed payload; record_wire_event
+        // must lift a `failed` status (even when the payload omits one) and
+        // preserve the exit-code + stderr snippet in `detail` for diagnosis.
+        let payload = serde_json::json!({
+            "phase_id": "mark-running",
+            "exit_code": 2,
+            "stderr": "--id must not be empty",
+        });
+        let kind = wire_kind_to_journal("phase_failed").expect("phase_failed maps");
+        let status = payload
+            .get("phase_status")
+            .or_else(|| payload.get("status"))
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| Some("failed".to_string()));
+        let event = JournalEvent {
+            run_id: "wf-1".to_string(),
+            workflow_ref: None,
+            kind,
+            phase: payload.get("phase_id").and_then(|v| v.as_str()).map(str::to_string),
+            agent: None,
+            status,
+            ts: chrono::Utc::now(),
+            detail: payload,
+        };
+        assert_eq!(event.status.as_deref(), Some("failed"));
+        assert_eq!(event.phase.as_deref(), Some("mark-running"));
+        assert_eq!(event.detail.get("exit_code").and_then(serde_json::Value::as_i64), Some(2));
+        assert_eq!(event.detail.get("stderr").and_then(serde_json::Value::as_str), Some("--id must not be empty"));
     }
 
     #[test]

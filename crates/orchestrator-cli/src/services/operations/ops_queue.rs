@@ -6,10 +6,29 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub, workflow_ref_for_task};
+use protocol::orchestrator::{SubjectRef, SUBJECT_KIND_CUSTOM};
 use protocol::{SubjectDispatch, SubjectDispatchExt};
 
 use super::ops_workflow::resolve_requirement_workflow_ref;
 use crate::{invalid_input_error, print_ok, print_value, CliError, CliErrorKind, QueueCommand, QueueSubjectArgs};
+
+/// Build a subjectless (ad-hoc) dispatch with NO bound subject.
+///
+/// The wire [`SubjectRef`] is non-optional, so "no subject" is represented as a
+/// `custom`-kind subject carrying a UNIQUE id (`adhoc:<nanos>`) — the unique id
+/// keeps each ad-hoc run's queue `subject_key` distinct so a burst of
+/// subjectless runs (e.g. `relate` firing on repo events) is not deduped into
+/// one. The run-loop resolves this via the built-in custom subject adapter (it
+/// never hits the "no subject adapter registered" error), so a subjectless
+/// dispatch is a valid mode, not a failure. Subject-bound command phases are
+/// out of place in such a workflow and should be command-guarded / skipped.
+fn adhoc_subject_dispatch(workflow_ref: String, input: Option<serde_json::Value>) -> SubjectDispatch {
+    let unique = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
+    let mut subject = SubjectRef::new(SUBJECT_KIND_CUSTOM, format!("adhoc:{unique}"));
+    subject.title = Some("ad-hoc".to_string());
+    SubjectDispatch::for_subject_with_metadata(subject, workflow_ref, "manual-queue-enqueue", chrono::Utc::now())
+        .with_input(input)
+}
 
 #[allow(clippy::too_many_arguments)]
 async fn resolve_enqueue_dispatch(
@@ -21,7 +40,16 @@ async fn resolve_enqueue_dispatch(
     description: Option<String>,
     workflow_ref: Option<String>,
     input: Option<serde_json::Value>,
+    adhoc: bool,
 ) -> Result<SubjectDispatch> {
+    if adhoc {
+        let workflow_ref = workflow_ref.ok_or_else(|| {
+            invalid_input_error(
+                "--adhoc requires --workflow-ref: a subjectless run must name the workflow to dispatch.",
+            )
+        })?;
+        return Ok(adhoc_subject_dispatch(workflow_ref, input));
+    }
     match (task_id, requirement_id, title) {
         (Some(task_id), None, None) => {
             let task = hub.tasks().get(&task_id).await?;
@@ -53,7 +81,7 @@ async fn resolve_enqueue_dispatch(
             "manual-queue-enqueue",
         )),
         (None, None, None) => Err(anyhow!(
-            "no subject specified. Use --task-id TASK_ID for existing tasks, --requirement-id REQ_ID for requirements, or --title \"name\" for custom dispatches."
+            "no subject specified. Use --task-id TASK_ID for existing tasks, --requirement-id REQ_ID for requirements, --title \"name\" for custom dispatches, or --adhoc --workflow-ref REF for a subjectless run."
         )),
         _ => Err(anyhow!(
             "--task-id, --requirement-id, and --title are mutually exclusive - provide only one subject selector."
@@ -183,6 +211,7 @@ pub(crate) async fn handle_queue(
                     args.description.clone(),
                     args.workflow_ref.clone(),
                     input,
+                    args.adhoc,
                 )
                 .await?
             };
@@ -745,16 +774,83 @@ mod tests {
             .expect("write runtime config");
 
         let hub = Arc::new(InMemoryServiceHub::new());
-        let err =
-            resolve_enqueue_dispatch(hub, temp.path().to_string_lossy().as_ref(), None, None, None, None, None, None)
-                .await
-                .expect_err("missing subject should fail");
+        let err = resolve_enqueue_dispatch(
+            hub,
+            temp.path().to_string_lossy().as_ref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect_err("missing subject should fail");
 
         let msg = err.to_string();
         assert!(msg.contains("--task-id"), "error should mention --task-id");
         assert!(msg.contains("--requirement-id"), "error should mention --requirement-id");
         assert!(msg.contains("--title"), "error should mention --title");
         assert!(msg.contains("custom dispatches"), "error should suggest custom dispatches");
+        assert!(msg.contains("--adhoc"), "error should mention the subjectless --adhoc path");
+    }
+
+    #[tokio::test]
+    async fn resolve_enqueue_dispatch_adhoc_builds_subjectless_dispatch() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let hub = Arc::new(InMemoryServiceHub::new());
+        // A subjectless run: no task/requirement/title selector, --adhoc set with
+        // an explicit workflow ref. It must build a valid dispatch (not error).
+        let dispatch = resolve_enqueue_dispatch(
+            hub,
+            temp.path().to_string_lossy().as_ref(),
+            None,
+            None,
+            None,
+            None,
+            Some("relate".to_string()),
+            None,
+            true,
+        )
+        .await
+        .expect("adhoc dispatch builds");
+        assert_eq!(dispatch.workflow_ref, "relate");
+        // Custom kind so the built-in custom subject adapter resolves it — the
+        // run-loop never hits "no subject adapter registered".
+        assert_eq!(dispatch.subject.kind(), SUBJECT_KIND_CUSTOM);
+        assert!(dispatch.subject.id().starts_with("adhoc:"), "ad-hoc id: {}", dispatch.subject.id());
+    }
+
+    #[tokio::test]
+    async fn resolve_enqueue_dispatch_adhoc_requires_workflow_ref() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let hub = Arc::new(InMemoryServiceHub::new());
+        let err = resolve_enqueue_dispatch(
+            hub,
+            temp.path().to_string_lossy().as_ref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            true,
+        )
+        .await
+        .expect_err("adhoc without workflow ref should fail");
+        assert!(err.to_string().contains("--workflow-ref"), "error names the missing workflow ref: {err}");
+    }
+
+    #[test]
+    fn adhoc_subject_dispatches_have_distinct_subject_keys() {
+        // A burst of subjectless runs must not collapse to one queue entry: each
+        // ad-hoc dispatch carries a unique subject id, so the queue subject_key
+        // stays distinct (the `relate`-storm dedup regression).
+        let a = adhoc_subject_dispatch("relate".to_string(), None);
+        std::thread::sleep(std::time::Duration::from_nanos(10));
+        let b = adhoc_subject_dispatch("relate".to_string(), None);
+        assert_ne!(a.subject.subject_key(), b.subject.subject_key());
     }
 
     #[tokio::test]
@@ -775,6 +871,7 @@ mod tests {
             None,
             None,
             None,
+            false,
         )
         .await
         .expect_err("multiple subjects should fail");

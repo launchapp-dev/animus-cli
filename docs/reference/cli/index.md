@@ -858,7 +858,16 @@ animus queue enqueue --task-id TASK-001
 animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
 animus queue enqueue --title "Investigate flaky test" --description "Fails on CI"
 animus queue enqueue --subject-id blog:BLOG-001                      # BaaS dynamic kind
+animus queue enqueue --adhoc --workflow-ref relate                   # subjectless (ad-hoc) run
 ```
+
+**Subjectless (ad-hoc) runs (`--adhoc`).** A workflow that finds its own
+target (or needs none) can be dispatched with NO bound subject via `--adhoc`
+plus a required `--workflow-ref`. The run has no subject-bound template vars,
+so a subjectless-by-design workflow (e.g. `relate`) is a first-class mode, not
+an error. Each ad-hoc dispatch carries a unique id so a burst of subjectless
+runs is never deduped into one queue entry. `--adhoc` is mutually exclusive
+with `--task-id` / `--requirement-id` / `--title` / `--subject-id`.
 
 **Generic subjects (`--subject-id`).** For a subject that is **not**
 `kind=task`/`requirement` (a BaaS dynamic kind such as `blog`, `post`, etc.),
@@ -886,6 +895,7 @@ animus queue enqueue --task-id TASK-001 --at 2h --expire-after 10m  # drop if no
 
 | Flag | Description |
 |---|---|
+| `--adhoc` | Dispatch a subjectless (ad-hoc) run with no bound subject. Requires `--workflow-ref`; mutually exclusive with the subject selectors. |
 | `--at <WHEN>` | Defer until an RFC 3339 timestamp or a relative offset (`90s`, `30m`, `2h`, `3d`; bare number = seconds). Omit for immediate dispatch. |
 | `--expire-after <DURATION>` | Grace window after `--at`. If still pending past `--at + this`, the entry is dropped instead of dispatched late. Requires `--at`; omit to always fire late. |
 
@@ -1806,6 +1816,15 @@ Priority is displayed in `p0`–`p3` bucket notation in all human-readable views
 is normalized to the qualified form at the CLI boundary, so both resolve the
 same subject. You do not need to run any command in `--json` mode to discover
 the id format.
+
+**Kind resolution for `subject get/update/status/delete`.** When `--kind` is
+omitted, the kind is resolved in this order: (1) explicit `--kind`; (2) the
+kind encoded in a **kind-qualified** `--id` (`transcript:TRANSCRIPT-001`
+resolves kind `transcript`); (3) the `default_subject_kind` config fallback.
+No subject kind is privileged when the id names its kind inline — a qualified
+id never falls through to the `task`-favoring config default. This is what lets
+a workflow `mark-running` command (`animus subject status --id <kind>:<id>
+--status in-progress`) target the right backend without a `task` default.
 
 For subjects of an arbitrary kind (BaaS dynamic kinds like `blog`, `post`),
 `queue enqueue --subject-id` and `workflow run --subject-id` accept a

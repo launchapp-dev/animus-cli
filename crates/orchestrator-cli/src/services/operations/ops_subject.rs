@@ -127,7 +127,7 @@ async fn dispatch_list_filtered(
 }
 
 async fn handle_subject_get(args: SubjectGetArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
+    let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
     if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
@@ -161,7 +161,7 @@ async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json
 }
 
 async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
+    let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
     if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
@@ -461,7 +461,7 @@ async fn handle_subject_next(args: SubjectNextArgs, project_root: &str, json: bo
 }
 
 async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
+    let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
     if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
@@ -548,7 +548,7 @@ fn describe_cleared_block_flags(before: &Value, after: &Value) -> Option<String>
 }
 
 async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json: bool) -> Result<()> {
-    let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
+    let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
     if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
@@ -621,6 +621,43 @@ fn validate_kind(raw: &str) -> Result<&str> {
         return Err(invalid_input_error("--kind must not contain '/'"));
     }
     Ok(trimmed)
+}
+
+/// Extract the kind from a kind-qualified subject id (`<kind>:<native>`, e.g.
+/// `transcript:TRANSCRIPT-001`). Returns `None` for a bare id (no `:`), an
+/// empty kind, or an empty native part.
+fn kind_from_qualified_id(id: &str) -> Option<&str> {
+    let (kind, native) = id.trim().split_once(':')?;
+    let kind = kind.trim();
+    if kind.is_empty() || native.trim().is_empty() {
+        return None;
+    }
+    Some(kind)
+}
+
+/// Resolve the `--kind` for an id-bearing subject verb (`get`/`update`/
+/// `status`/`delete`).
+///
+/// Precedence:
+///
+/// 1. Explicit `--kind` on the command line.
+/// 2. The kind encoded in a kind-qualified id (`<kind>:<native>`). This is the
+///    uniform, task-agnostic path: a `transcript:TRANSCRIPT-001` id resolves to
+///    kind `transcript` with no `default_subject_kind` fallback — and it is what
+///    lets a workflow `mark-running` command (`animus subject status --id
+///    <kind>:<id> ...`) target the right backend without a `task` default.
+/// 3. The `default_subject_kind` config fallback (see [`resolve_kind`]).
+///
+/// A qualified id never falls through to the config default, so no subject kind
+/// is privileged when the caller names it inline.
+fn resolve_kind_for_id(raw: Option<&str>, id: &str, project_root: &str, json: bool) -> Result<String> {
+    if let Some(value) = raw {
+        return validate_kind(value).map(|s| s.to_string());
+    }
+    if let Some(kind) = kind_from_qualified_id(id) {
+        return validate_kind(kind).map(|s| s.to_string());
+    }
+    resolve_kind(None, project_root, json)
 }
 
 /// Build the daemon-side subject dispatch (spawns each installed
@@ -1020,6 +1057,54 @@ mod tests {
         // assert on without capturing stderr, but we confirm resolution is correct.
         let resolved_human = resolve_kind(None, project_root, false).expect("resolves in human mode");
         assert_eq!(resolved_human, "task");
+    }
+
+    #[test]
+    fn kind_from_qualified_id_extracts_kind() {
+        assert_eq!(kind_from_qualified_id("transcript:TRANSCRIPT-001"), Some("transcript"));
+        assert_eq!(kind_from_qualified_id("task:TASK-9"), Some("task"));
+        // Bare ids, empty halves, and stray colons do not yield a kind.
+        assert_eq!(kind_from_qualified_id("TASK-9"), None);
+        assert_eq!(kind_from_qualified_id(":TASK-9"), None);
+        assert_eq!(kind_from_qualified_id("task:"), None);
+        assert_eq!(kind_from_qualified_id("   "), None);
+    }
+
+    #[test]
+    fn resolve_kind_for_id_derives_kind_from_qualified_id_without_task_default() {
+        use std::fs;
+        // A project with NO default_subject_kind must still resolve a
+        // kind-qualified id (this is the `mark-running` <kind>:<id> path — it
+        // must NOT depend on a `task` default).
+        let tmp = tempfile::tempdir().expect("tmp");
+        let project_root = tmp.path();
+        let animus_dir = project_root.join(".animus");
+        fs::create_dir_all(&animus_dir).expect("create .animus");
+        fs::write(animus_dir.join("config.json"), serde_json::json!({ "agent_runner_token": null }).to_string())
+            .expect("seed config");
+        let root = project_root.to_str().expect("utf-8");
+        let resolved =
+            resolve_kind_for_id(None, "transcript:TRANSCRIPT-001", root, true).expect("qualified id resolves kind");
+        assert_eq!(resolved, "transcript");
+    }
+
+    #[test]
+    fn resolve_kind_for_id_prefers_explicit_kind_over_id_prefix() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().to_str().expect("utf-8");
+        let resolved = resolve_kind_for_id(Some("blog"), "task:TASK-1", root, true).expect("explicit kind wins");
+        assert_eq!(resolved, "blog");
+    }
+
+    #[test]
+    fn resolve_kind_for_id_falls_back_to_config_default_for_bare_id() {
+        let tmp = tempfile::tempdir().expect("tmp");
+        let root = tmp.path().to_str().expect("utf-8");
+        // Default `Config::load_or_default` writes `default_subject_kind: "task"`;
+        // a bare id keeps that ergonomic fallback.
+        let _ = Config::load_or_default(root).expect("seed config");
+        let resolved = resolve_kind_for_id(None, "TASK-1", root, true).expect("bare id uses config default");
+        assert_eq!(resolved, "task");
     }
 
     #[tokio::test]

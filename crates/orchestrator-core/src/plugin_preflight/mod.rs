@@ -9,8 +9,9 @@ use animus_plugin_protocol::{PLUGIN_KIND_PROVIDER, PLUGIN_KIND_SUBJECT_BACKEND};
 use serde::{Deserialize, Serialize};
 
 use crate::plugin_registry::{
-    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, DEFAULT_CONFIG_SOURCE_PLUGINS,
-    DEFAULT_QUEUE_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+    default_provider_repo_spec, default_subject_backend_repo as curated_subject_backend_repo,
+    default_subject_repo_for_kind, format_repo_spec, DEFAULT_CONFIG_SOURCE_PLUGINS, DEFAULT_QUEUE_PLUGINS,
+    DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 
 /// Plugin-kind wire value for `workflow_runner`. Kept local because the
@@ -106,6 +107,15 @@ fn parse_version_triple(version: &str) -> Option<(u64, u64, u64)> {
 /// shared `plugin_registry` constants so version bumps land in one place.
 pub fn default_provider_repo() -> String {
     default_provider_repo_spec()
+}
+
+/// Kind-agnostic default subject backend preflight auto-installs when NO
+/// subject backend is present and `at_least_one_subject_backend` is
+/// unsatisfied. This is a starter, not a privileged kind: any installed
+/// subject backend satisfies the role, so `task`/`requirement` are never
+/// forced on a deployment.
+pub fn default_subject_backend_repo() -> String {
+    curated_subject_backend_repo().expect("DEFAULT_SUBJECT_PLUGINS must have at least one curated subject backend")
 }
 
 /// Default backend repo spec for the `task` subject kind. Points at
@@ -233,9 +243,10 @@ impl PluginPreflightSpec {
             auto_install: false,
             auto_install_defaults: vec![
                 ("at_least_one_provider".to_string(), default_provider_repo()),
-                // If NO subject backend is installed, the default is the task
-                // backend — a sensible starter, not a requirement.
-                ("at_least_one_subject_backend".to_string(), default_task_backend_repo()),
+                // If NO subject backend is installed, install a kind-agnostic
+                // starter backend — a sensible default, not a task/requirement
+                // privilege. Any installed subject backend satisfies the role.
+                ("at_least_one_subject_backend".to_string(), default_subject_backend_repo()),
                 ("workflow_runner".to_string(), default_workflow_runner_repo()),
                 ("queue".to_string(), default_queue_repo()),
                 ("config_source".to_string(), default_config_source_repo()),

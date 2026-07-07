@@ -55,6 +55,12 @@ pub(crate) struct QueueEnqueueArgs {
         help = "Generic subject to enqueue for any kind (BaaS dynamic kinds like blog/post). Accepts a qualified id (blog:BLOG-001 — kind trusted; the recommended form) or a bare id (BLOG-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form). Mutually exclusive with --task-id / --requirement-id / --title."
     )]
     pub(crate) subject_id: Option<String>,
+    #[arg(
+        long,
+        group = "subject",
+        help = "Dispatch a subjectless (ad-hoc) run with NO bound subject. The workflow runs without subject-bound template vars — use for subject-less-by-design workflows (e.g. relate) fired without a target. Requires --workflow-ref. Mutually exclusive with --task-id / --requirement-id / --title / --subject-id."
+    )]
+    pub(crate) adhoc: bool,
     #[arg(long, value_name = "TEXT", help = "Custom subject description (used with --title).")]
     pub(crate) description: Option<String>,
     #[arg(long = "workflow-ref", value_name = "WORKFLOW_REF", help = "Optional YAML workflow reference override.")]
