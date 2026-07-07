@@ -871,6 +871,7 @@ async fn file_hub_complete_phase_with_decision_honors_rework_routing() {
             guardrail_violations: Vec::new(),
             commit_message: None,
             target_phase: None,
+            verdict_key: None,
         }),
     )
     .await

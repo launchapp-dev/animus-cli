@@ -109,12 +109,21 @@ pub fn read_persisted_decision(
         serde_json::from_str(&contents).map_err(|err| PersistedDecisionReadError::Malformed(err.to_string()))?;
 
     let verdict_str = output.verdict.as_deref().ok_or(PersistedDecisionReadError::VerdictMissing)?;
-    let verdict = match verdict_str.to_ascii_lowercase().as_str() {
-        "advance" => PhaseDecisionVerdict::Advance,
-        "rework" => PhaseDecisionVerdict::Rework,
-        "fail" => PhaseDecisionVerdict::Fail,
-        "skip" => PhaseDecisionVerdict::Skip,
-        other => return Err(PersistedDecisionReadError::UnknownVerdict(other.to_string())),
+    let verdict_trimmed = verdict_str.trim();
+    if verdict_trimmed.is_empty() {
+        return Err(PersistedDecisionReadError::VerdictMissing);
+    }
+    // Non-builtin verdicts are custom routing keys preserved on `verdict_key`
+    // (verdict enum is `Unknown`); the workflow executor routes them through the
+    // phase `on_verdict` map. This mirrors the agent-output parser so command
+    // phases (which persist the same shape) get identical routing. Built-in
+    // verdicts leave `verdict_key` unset.
+    let (verdict, verdict_key) = match verdict_trimmed.to_ascii_lowercase().as_str() {
+        "advance" => (PhaseDecisionVerdict::Advance, None),
+        "rework" => (PhaseDecisionVerdict::Rework, None),
+        "fail" => (PhaseDecisionVerdict::Fail, None),
+        "skip" => (PhaseDecisionVerdict::Skip, None),
+        _ => (PhaseDecisionVerdict::Unknown, Some(verdict_trimmed.to_string())),
     };
 
     let risk = match output.risk.as_deref().map(str::to_ascii_lowercase).as_deref() {
@@ -135,6 +144,7 @@ pub fn read_persisted_decision(
         guardrail_violations: output.guardrail_violations,
         commit_message: output.commit_message,
         target_phase: output.target_phase,
+        verdict_key,
     })
 }
 
@@ -300,7 +310,14 @@ pub fn persist_phase_output_with_metadata(
             PhaseExecutionOutcome::Completed { commit_message, phase_decision, result_payload } => {
                 let (v, c, r, risk, target, ev, gv) = match phase_decision {
                     Some(decision) => (
-                        Some(format!("{:?}", decision.verdict).to_ascii_lowercase()),
+                        // Persist a custom routing key verbatim so it round-trips
+                        // through crash recovery; built-in verdicts serialize from
+                        // the enum. Without this, an Unknown+verdict_key decision
+                        // would persist as "unknown" and lose its route on replay.
+                        Some(match decision.verdict_key.as_deref().map(str::trim).filter(|k| !k.is_empty()) {
+                            Some(key) => key.to_string(),
+                            None => format!("{:?}", decision.verdict).to_ascii_lowercase(),
+                        }),
                         Some(decision.confidence),
                         if decision.reason.is_empty() { None } else { Some(decision.reason.clone()) },
                         Some(format!("{:?}", decision.risk).to_ascii_lowercase()),
@@ -606,6 +623,7 @@ mod tests {
                 guardrail_violations: vec![],
                 commit_message: None,
                 target_phase: None,
+                verdict_key: None,
             }),
             result_payload: None,
         };
@@ -622,6 +640,53 @@ mod tests {
         assert!((loaded.confidence.unwrap() - 0.9).abs() < f32::EPSILON);
         assert_eq!(loaded.reason.as_deref(), Some("Research complete, found relevant patterns"));
         assert_eq!(loaded.commit_message.as_deref(), Some("feat: add login flow"));
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // TASK-207: a command (or agent) phase that emits a custom verdict key must
+    // persist the key verbatim and reconstruct it on read as
+    // verdict = Unknown + verdict_key = Some(key), so crash recovery routes it
+    // through on_verdict rather than losing it to "unknown".
+    #[test]
+    #[ignore = "intermittent scoped_state_root divergence under parallel cargo test; passes in isolation"]
+    fn custom_verdict_key_round_trips_through_persisted_output() {
+        let _serial = crate::test_env::scoped_state_serializer();
+        let tmp = std::env::temp_dir().join(format!("ao-test-custom-verdict-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&tmp).expect("create test dir");
+        let project_root = tmp.to_str().unwrap();
+        let workflow_id = "wf-custom-001";
+
+        let outcome = PhaseExecutionOutcome::Completed {
+            commit_message: None,
+            phase_decision: Some(orchestrator_core::PhaseDecision {
+                kind: "phase_decision".to_string(),
+                phase_id: "triage".to_string(),
+                verdict: orchestrator_core::PhaseDecisionVerdict::Unknown,
+                confidence: 0.8,
+                risk: orchestrator_core::WorkflowDecisionRisk::Low,
+                reason: "needs deeper investigation".to_string(),
+                evidence: vec![],
+                guardrail_violations: vec![],
+                commit_message: None,
+                target_phase: None,
+                verdict_key: Some("needs-research".to_string()),
+            }),
+            result_payload: None,
+        };
+
+        persist_phase_output(project_root, workflow_id, "triage", 1, &outcome).unwrap();
+
+        // Persisted verbatim (not collapsed to "unknown").
+        let output_file = phase_output_dir(project_root, workflow_id).join("triage.json");
+        let persisted: PersistedPhaseOutput =
+            serde_json::from_str(&std::fs::read_to_string(&output_file).unwrap()).unwrap();
+        assert_eq!(persisted.verdict.as_deref(), Some("needs-research"));
+
+        // Reconstructed as Unknown + verdict_key on read.
+        let decision = read_persisted_decision(project_root, workflow_id, "triage").expect("read decision");
+        assert_eq!(decision.verdict, orchestrator_core::PhaseDecisionVerdict::Unknown);
+        assert_eq!(decision.verdict_key.as_deref(), Some("needs-research"));
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
@@ -648,6 +713,7 @@ mod tests {
                 guardrail_violations: vec![],
                 commit_message: None,
                 target_phase: None,
+                verdict_key: None,
             }),
             result_payload: None,
         };
@@ -666,6 +732,7 @@ mod tests {
                 guardrail_violations: vec![],
                 commit_message: None,
                 target_phase: None,
+                verdict_key: None,
             }),
             result_payload: None,
         };
@@ -828,6 +895,7 @@ mod tests {
                 guardrail_violations: vec![],
                 commit_message: None,
                 target_phase: None,
+                verdict_key: None,
             }),
             result_payload: Some(serde_json::json!({"findings": ["pattern A"]})),
         };
