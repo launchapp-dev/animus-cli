@@ -467,9 +467,9 @@ impl ProcessManager {
         });
 
         self.processes.push(WorkflowProcess {
-            subject_key: dispatch.subject_key(),
-            subject_id: dispatch.subject_id().to_string(),
-            subject_kind: dispatch.subject_kind().to_string(),
+            subject_key: dispatch.subject_key().unwrap_or_default(),
+            subject_id: dispatch.subject_id().unwrap_or_default().to_string(),
+            subject_kind: dispatch.subject_kind().unwrap_or_default().to_string(),
             task_id,
             workflow_ref,
             schedule_id,
@@ -510,7 +510,7 @@ impl ProcessManager {
             Some(root) => root.clone(),
             None => default_event_pipe_root(),
         };
-        let subject_label = dispatch.subject_id().to_string();
+        let subject_label = dispatch.subject_id().unwrap_or_default().to_string();
         // Bind synchronously on the calling thread (just a couple of
         // syscalls) and let `SubprocessEventPipe::bind_sync` spawn the
         // reader task on the current Tokio runtime. This avoids the
@@ -1043,11 +1043,11 @@ mod tests {
     #[test]
     fn subject_id_returns_correct_value_for_each_variant() {
         let task = SubjectDispatch::for_task("TASK-1", "standard");
-        assert_eq!(task.subject_id(), "TASK-1");
+        assert_eq!(task.subject_id(), Some("TASK-1"));
         assert!(task.schedule_id().is_none());
 
         let requirement = SubjectDispatch::for_requirement("REQ-1", "standard", "manual");
-        assert_eq!(requirement.subject_id(), "REQ-1");
+        assert_eq!(requirement.subject_id(), Some("REQ-1"));
         assert!(requirement.schedule_id().is_none());
 
         let custom = SubjectDispatch::for_custom(
@@ -1057,7 +1057,7 @@ mod tests {
             Some(serde_json::json!({"key":"value"})),
             "schedule",
         );
-        assert_eq!(custom.subject_id(), "schedule:nightly");
+        assert_eq!(custom.subject_id(), Some("schedule:nightly"));
         assert_eq!(custom.schedule_id(), Some("nightly"));
     }
 

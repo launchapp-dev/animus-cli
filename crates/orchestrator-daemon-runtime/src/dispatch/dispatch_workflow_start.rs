@@ -15,7 +15,7 @@ impl DispatchWorkflowStart {
         self.dispatch.task_id()
     }
 
-    pub fn subject_id(&self) -> &str {
+    pub fn subject_id(&self) -> Option<&str> {
         self.dispatch.subject_id()
     }
 }

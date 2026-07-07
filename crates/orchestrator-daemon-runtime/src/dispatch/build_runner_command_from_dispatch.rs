@@ -34,36 +34,40 @@ pub fn build_runner_command_with_resume(
     let mut cmd = std::process::Command::new(resolve_workflow_runner_binary_for(Some(project_root)));
     cmd.arg("execute");
 
-    match dispatch.subject.to_workflow_subject() {
-        protocol::orchestrator::WorkflowSubject::Task { id } => {
-            cmd.arg("--task-id").arg(id);
-        }
-        protocol::orchestrator::WorkflowSubject::Requirement { id } => {
-            cmd.arg("--requirement-id").arg(id);
-        }
-        protocol::orchestrator::WorkflowSubject::Custom { title, description } => {
-            // `to_workflow_subject()` collapses every non-task/requirement kind
-            // to `Custom`, but a BaaS dynamic kind (e.g. `blog`) must NOT be
-            // dispatched as a custom title — the runner has to resolve it via
-            // `<kind>/get`. Disambiguate by the real subject kind: only the
-            // genuine built-in `custom` kind uses `--title`/`--description`; any
-            // other kind passes its qualified id via `--subject-id` so the
-            // runner resolves the subject under its real kind. (Requires the
-            // workflow_runner plugin to accept `--subject-id`; only ever emitted
-            // for dynamic kinds, so task/requirement/custom dispatch is
-            // unchanged for existing runners.)
-            if dispatch.subject.kind() == protocol::orchestrator::SUBJECT_KIND_CUSTOM {
-                cmd.arg("--title").arg(title);
-                cmd.arg("--description").arg(description);
-            } else {
-                // Qualify with the known kind when the stored id is bare so the
-                // runner resolves the exact kind (a bare native id could be
-                // re-probed to the wrong kind, or fail under a catch-all
-                // backend). Already-qualified ids (`blog:BLOG-001`) pass through.
-                let id = dispatch.subject.id();
-                let qualified =
-                    if id.contains(':') { id.to_string() } else { format!("{}:{id}", dispatch.subject.kind()) };
-                cmd.arg("--subject-id").arg(qualified);
+    // A subjectless dispatch (no bound subject) emits NO subject selector at
+    // all: the runner starts a subjectless run with subject template vars
+    // simply absent.
+    if let Some(subject) = dispatch.subject.as_ref() {
+        match subject.to_workflow_subject() {
+            protocol::orchestrator::WorkflowSubject::Task { id } => {
+                cmd.arg("--task-id").arg(id);
+            }
+            protocol::orchestrator::WorkflowSubject::Requirement { id } => {
+                cmd.arg("--requirement-id").arg(id);
+            }
+            protocol::orchestrator::WorkflowSubject::Custom { title, description } => {
+                // `to_workflow_subject()` collapses every non-task/requirement kind
+                // to `Custom`, but a BaaS dynamic kind (e.g. `blog`) must NOT be
+                // dispatched as a custom title — the runner has to resolve it via
+                // `<kind>/get`. Disambiguate by the real subject kind: only the
+                // genuine built-in `custom` kind uses `--title`/`--description`; any
+                // other kind passes its qualified id via `--subject-id` so the
+                // runner resolves the subject under its real kind. (Requires the
+                // workflow_runner plugin to accept `--subject-id`; only ever emitted
+                // for dynamic kinds, so task/requirement/custom dispatch is
+                // unchanged for existing runners.)
+                if subject.kind() == protocol::orchestrator::SUBJECT_KIND_CUSTOM {
+                    cmd.arg("--title").arg(title);
+                    cmd.arg("--description").arg(description);
+                } else {
+                    // Qualify with the known kind when the stored id is bare so the
+                    // runner resolves the exact kind (a bare native id could be
+                    // re-probed to the wrong kind, or fail under a catch-all
+                    // backend). Already-qualified ids (`blog:BLOG-001`) pass through.
+                    let id = subject.id();
+                    let qualified = if id.contains(':') { id.to_string() } else { format!("{}:{id}", subject.kind()) };
+                    cmd.arg("--subject-id").arg(qualified);
+                }
             }
         }
     }
@@ -480,7 +484,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            &dispatch.subject.to_workflow_subject(),
+            &dispatch.subject.as_ref().unwrap().to_workflow_subject(),
             &WorkflowSubject::Custom {
                 title: "schedule:nightly".to_string(),
                 description: "nightly dispatch".to_string(),

@@ -47,29 +47,32 @@ pub async fn dispatch_queued_entries_via_runner(
                         continue;
                     }
                 };
-                let subject_key = dispatch.subject_key();
                 // Within-batch dedupe: the queue's `exclude_subjects` filter
                 // honors the snapshot we sent at lease time, but multiple
                 // pending entries for the same subject (different
                 // workflow_refs) can still be returned in one batch. Release
                 // the duplicate back to Pending so it runs on a later tick
-                // after the first entry's workflow finishes.
-                if plugin_owned_subject_keys.contains(&subject_key) {
-                    warn!(
-                        actor = protocol::ACTOR_DAEMON,
-                        subject_key = %subject_key,
-                        entry_id = %entry.entry_id,
-                        "queue/lease returned duplicate subject within batch; releasing extra entry back to pending"
-                    );
-                    release_leased_entry_to_pending(
-                        project_root_path,
-                        &entry.entry_id,
-                        "within-batch-duplicate-subject",
-                    )
-                    .await;
-                    continue;
+                // after the first entry's workflow finishes. A subjectless
+                // dispatch has no subject_key and is never deduped — each
+                // subjectless run is its own entry.
+                if let Some(subject_key) = dispatch.subject_key() {
+                    if plugin_owned_subject_keys.contains(&subject_key) {
+                        warn!(
+                            actor = protocol::ACTOR_DAEMON,
+                            subject_key = %subject_key,
+                            entry_id = %entry.entry_id,
+                            "queue/lease returned duplicate subject within batch; releasing extra entry back to pending"
+                        );
+                        release_leased_entry_to_pending(
+                            project_root_path,
+                            &entry.entry_id,
+                            "within-batch-duplicate-subject",
+                        )
+                        .await;
+                        continue;
+                    }
+                    plugin_owned_subject_keys.insert(subject_key);
                 }
-                plugin_owned_subject_keys.insert(subject_key);
                 leased_entry_ids.push(entry.entry_id.clone());
                 planned_starts
                     .push(PlannedDispatchStart { dispatch, selection_source: DispatchSelectionSource::DispatchQueue });
@@ -105,43 +108,40 @@ pub async fn dispatch_queued_entries_via_runner(
         }
     }
 
-    let mut notice_sink = CliDispatchNoticeSink { hard_failed_subject_keys: std::collections::HashSet::new() };
+    let mut notice_sink = CliDispatchNoticeSink { outcomes: Vec::new() };
     let summary = execute_dispatch_plan_via_runner(root, process_manager, &planned_starts, limit, &mut notice_sink);
 
-    if !leased_entry_ids.is_empty() {
-        let started_keys: std::collections::HashSet<String> =
-            summary.started_workflows.iter().map(|s| s.dispatch.subject_key()).collect();
-        for (idx, planned) in planned_starts.iter().enumerate() {
-            let Some(entry_id) = leased_entry_ids.get(idx) else {
-                continue;
-            };
-            let subject_key = planned.dispatch.subject_key();
-            if started_keys.contains(&subject_key) {
-                continue;
-            }
-            // Only entries whose spawn hard-failed are closed as FAILED.
-            // Entries the runner never attempted (dispatch limit reached
-            // mid-batch) or that were rejected recoverably (workflow
-            // concurrency cap) go back to Pending for the next tick —
-            // closing them would permanently drop legitimate queued work.
-            if !notice_sink.hard_failed_subject_keys.contains(&subject_key) {
+    // Reconcile each leased queue entry against its spawn outcome. Outcomes are
+    // recorded in dispatch order (one per processed entry), so they align by
+    // INDEX with `leased_entry_ids` / `planned_starts`. Correlating by position
+    // rather than subject id is what lets subjectless dispatches (which have no
+    // subject_key to key on) reconcile correctly.
+    for (idx, entry_id) in leased_entry_ids.iter().enumerate() {
+        match notice_sink.outcomes.get(idx) {
+            // Runner spawned: the entry is now Assigned to a live workflow.
+            Some(DispatchEntryOutcome::Started) => {}
+            // Recoverable defer (workflow concurrency cap) or never attempted
+            // (dispatch limit reached mid-batch): back to Pending for the next
+            // tick — closing them would permanently drop legitimate queued work.
+            Some(DispatchEntryOutcome::Deferred) | None => {
                 release_leased_entry_to_pending(project_root_path, entry_id, "spawn-deferred").await;
-                continue;
             }
-            let req = QueueCompletionRequest {
-                entry_id: entry_id.clone(),
-                status: queue_proto::completion_status::FAILED.to_string(),
-                workflow_ref: None,
-                workflow_id: None,
-            };
-            if let Err(error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
-                warn!(
-                    actor = protocol::ACTOR_DAEMON,
-                    subject_key = %subject_key,
-                    entry_id = %entry_id,
-                    error = %error,
-                    "queue plugin queue/completion (spawn-failed entry) failed"
-                );
+            // Hard spawn failure: close the entry as FAILED.
+            Some(DispatchEntryOutcome::Failed) => {
+                let req = QueueCompletionRequest {
+                    entry_id: entry_id.clone(),
+                    status: queue_proto::completion_status::FAILED.to_string(),
+                    workflow_ref: None,
+                    workflow_id: None,
+                };
+                if let Err(error) = plugin_clients::call_queue_completion(project_root_path, &req).await {
+                    warn!(
+                        actor = protocol::ACTOR_DAEMON,
+                        entry_id = %entry_id,
+                        error = %error,
+                        "queue plugin queue/completion (spawn-failed entry) failed"
+                    );
+                }
             }
         }
     }
@@ -182,29 +182,40 @@ async fn release_leased_entry_to_pending(project_root_path: &std::path::Path, en
     }
 }
 
+/// Spawn outcome for a single dispatched queue entry, recorded in dispatch
+/// order so the caller can reconcile leased entries by position (subjectless
+/// dispatches have no subject_key to correlate on).
+enum DispatchEntryOutcome {
+    Started,
+    Deferred,
+    Failed,
+}
+
 struct CliDispatchNoticeSink {
-    hard_failed_subject_keys: std::collections::HashSet<String>,
+    outcomes: Vec<DispatchEntryOutcome>,
 }
 
 impl DispatchNoticeSink for CliDispatchNoticeSink {
     fn notice(&mut self, notice: DispatchNotice) {
         match notice {
+            DispatchNotice::Started { .. } => self.outcomes.push(DispatchEntryOutcome::Started),
             DispatchNotice::Failed { dispatch, error } => {
-                self.hard_failed_subject_keys.insert(dispatch.subject_key());
                 warn!(
                     actor = protocol::ACTOR_DAEMON,
-                    subject_id = %dispatch.subject_key(),
+                    subject_id = %dispatch.subject_id().unwrap_or_default(),
                     error = %error,
                     "failed to start workflow runner"
                 );
+                self.outcomes.push(DispatchEntryOutcome::Failed);
             }
             DispatchNotice::Deferred { dispatch, reason } => {
                 warn!(
                     actor = protocol::ACTOR_DAEMON,
-                    subject_id = %dispatch.subject_key(),
+                    subject_id = %dispatch.subject_id().unwrap_or_default(),
                     reason = %reason,
                     "workflow runner spawn deferred; entry returns to pending for next tick"
                 );
+                self.outcomes.push(DispatchEntryOutcome::Deferred);
             }
             _ => {}
         }

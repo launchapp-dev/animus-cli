@@ -208,7 +208,7 @@ pub async fn dispatch_workflow_event(
 /// the default `SubjectRef::task("")` with the real id in `task_id`).
 /// Returns `None` for non-task subjects (requirements, custom).
 pub fn workflow_task_id(workflow: &OrchestratorWorkflow) -> Option<String> {
-    match workflow.subject.task_id() {
+    match workflow.subject.as_ref().and_then(|s| s.task_id()) {
         Some(id) if !id.trim().is_empty() => Some(id.to_string()),
         Some(_) => {
             let legacy = workflow.task_id.trim();

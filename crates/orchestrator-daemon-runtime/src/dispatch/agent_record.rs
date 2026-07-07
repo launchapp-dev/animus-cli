@@ -96,8 +96,8 @@ pub fn build_record_with_decisions(
         agent_session_id,
         pid,
         started_at,
-        subject_id: dispatch.subject_id().to_string(),
-        subject_kind: dispatch.subject_kind().to_string(),
+        subject_id: dispatch.subject_id().unwrap_or_default().to_string(),
+        subject_kind: dispatch.subject_kind().unwrap_or_default().to_string(),
         workflow_ref: dispatch.workflow_ref.clone(),
         task_id: dispatch.task_id().map(String::from),
         command_line,
@@ -453,7 +453,7 @@ mod tests {
         let back: AgentSpawnRecord = serde_json::from_slice(&raw).unwrap();
         assert_eq!(back.agent_session_id, "agent-xyz");
         assert_eq!(back.pid, 4242);
-        assert_eq!(back.subject_id, dispatch.subject_id());
+        assert_eq!(back.subject_id, dispatch.subject_id().unwrap_or_default());
         assert_eq!(back.workflow_ref, "standard");
         assert_eq!(back.command_line, vec!["/bin/echo".to_string()]);
 
@@ -509,7 +509,7 @@ mod tests {
         let detected = &report.detected[0];
         assert_eq!(detected.agent_session_id, "agent-alive");
         assert_eq!(detected.pid, alive_pid);
-        assert_eq!(detected.subject_id, dispatch.subject_id());
+        assert_eq!(detected.subject_id, dispatch.subject_id().unwrap_or_default());
         assert_eq!(detected.workflow_ref, "standard");
         assert_eq!(detected.command_line, vec!["sleep".to_string(), "60".to_string()]);
 

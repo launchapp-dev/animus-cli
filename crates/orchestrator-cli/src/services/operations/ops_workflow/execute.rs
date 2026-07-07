@@ -183,7 +183,7 @@ pub(crate) async fn handle_workflow_execute(
                 project_terminal_workflow_result(
                     hub.clone(),
                     project_root,
-                    reloaded.subject.id(),
+                    reloaded.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                     Some(reloaded.task_id.as_str()),
                     reloaded.workflow_ref.as_deref(),
                     Some(reloaded.id.as_str()),
