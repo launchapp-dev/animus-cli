@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
+use std::sync::Arc;
 use std::time::Duration;
 
 use animus_plugin_protocol::PluginManifest;
@@ -8,6 +9,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use tokio::io::AsyncReadExt;
 
+use crate::db_registry::PluginRegistrySource;
 use crate::host::PLUGIN_BASE_ENV_ALLOWLIST;
 use crate::lockfile::PluginLockfile;
 use crate::manifest_cache::ManifestCache;
@@ -29,6 +31,11 @@ pub enum DiscoverySource {
     ProjectLocal,
     PluginPath,
     SystemPath,
+    /// The desired plugin set read from the Postgres `plugin_registry` served
+    /// by the animus-postgres BaaS. Opt-in — only active once the daemon wires
+    /// a [`PluginRegistrySource`] AFTER the bootstrap DB-backend plugin is up
+    /// (see [`crate::db_registry`]).
+    DbRegistry,
 }
 
 impl DiscoverySource {
@@ -111,13 +118,28 @@ struct PluginsConfig {
     providers: BTreeMap<String, PluginConfigEntry>,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct PluginDiscovery {
     project_root: Option<PathBuf>,
     config_path: Option<PathBuf>,
     include_system_path: bool,
     probe_project_local_plugins: bool,
     scope: Option<PluginScope>,
+    db_registry: Option<Arc<dyn PluginRegistrySource>>,
+}
+
+// Manual Debug: `dyn PluginRegistrySource` is not `Debug`, so the derive can't
+// apply. The source is rendered as an opaque presence marker.
+impl std::fmt::Debug for PluginDiscovery {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginDiscovery")
+            .field("project_root", &self.project_root)
+            .field("config_path", &self.config_path)
+            .field("include_system_path", &self.include_system_path)
+            .field("scope", &self.scope)
+            .field("db_registry", &self.db_registry.as_ref().map(|_| "<PluginRegistrySource>"))
+            .finish()
+    }
 }
 
 /// A binary the discovery walker found and now needs a manifest for.
@@ -441,6 +463,21 @@ impl PluginDiscovery {
         self
     }
 
+    /// Wire the DB-backed plugin registry ([`PluginRegistrySource`]) as an
+    /// additional discovery tier. The tier resolves the desired plugin set
+    /// recorded in the Postgres `plugin_registry` against the binaries present
+    /// on the volume.
+    ///
+    /// Bootstrap paradox: the daemon must call this ONLY after the bootstrap
+    /// DB-backend plugin is up (the plugin that serves the registry can't be
+    /// gated on the registry). When this builder is not called, discovery runs
+    /// the file/dir tiers alone and the DB tier is a no-op. See
+    /// [`crate::db_registry`].
+    pub fn with_db_registry(mut self, source: Arc<dyn PluginRegistrySource>) -> Self {
+        self.db_registry = Some(source);
+        self
+    }
+
     pub fn discover(&self) -> Result<Vec<DiscoveredPlugin>> {
         Ok(self.discover_with_warnings()?.0)
     }
@@ -570,6 +607,24 @@ impl PluginDiscovery {
         }
 
         self.discover_configured(&mut discovered, &mut warnings, &mut seen, &cache, lockfile.as_ref(), scope_ref)?;
+
+        // DB-registry tier: the desired plugin set recorded in the Postgres
+        // `plugin_registry`, resolved against binaries on the volume. Opt-in
+        // and gated on the bootstrap paradox — only active once the daemon has
+        // wired a source (i.e. after the bootstrap DB-backend plugin is up).
+        // Runs after the explicit/project registry tiers (so a hand-pinned
+        // config entry still wins) and before the unconditional global-dir
+        // scan.
+        if let Some(source) = self.db_registry.clone() {
+            self.discover_db_registry(
+                source.as_ref(),
+                &mut discovered,
+                &mut warnings,
+                &mut seen,
+                &cache,
+                lockfile.as_ref(),
+            );
+        }
 
         // Scan the global plugin install dir unconditionally. This is the
         // canonical destination for `animus plugin install` and the
@@ -751,6 +806,92 @@ impl PluginDiscovery {
             lockfile,
             scope,
         );
+    }
+
+    /// DB-registry tier: resolve the desired plugin set from a
+    /// [`PluginRegistrySource`] against binaries present in the plugin install
+    /// dir. Enabled rows whose binary is missing surface a
+    /// [`DiscoveryWarning`] (and reserve the name) so operators see the gap
+    /// instead of silently losing a plugin the DB said should be present.
+    /// A read error from the source degrades to a single warning — the daemon
+    /// must not lose every plugin because the registry read failed.
+    fn discover_db_registry(
+        &self,
+        source: &dyn PluginRegistrySource,
+        discovered: &mut Vec<DiscoveredPlugin>,
+        warnings: &mut Vec<DiscoveryWarning>,
+        seen: &mut HashSet<String>,
+        cache: &ManifestCache,
+        lockfile: Option<&PluginLockfile>,
+    ) {
+        let install_dir = plugin_install_dir();
+        let entries = match source.desired_plugins() {
+            Ok(entries) => entries,
+            Err(err) => {
+                let reason = format!("failed to read DB plugin registry: {err:#}");
+                tracing::warn!("plugin DB-registry discovery skipped: {reason}");
+                warnings.push(DiscoveryWarning {
+                    name: "plugin_registry".to_string(),
+                    path: install_dir,
+                    source: DiscoverySource::DbRegistry,
+                    reason,
+                });
+                return;
+            }
+        };
+
+        let mut candidates: Vec<ProbeCandidate> = Vec::new();
+        for entry in entries {
+            // Disabled rows are skipped entirely (not name-reserved) so a
+            // lower-precedence dir scan can still pick the binary up if it
+            // matches the scanned prefixes and the operator wants it.
+            if !entry.enabled {
+                continue;
+            }
+            let name = entry.name.trim().to_string();
+            if name.is_empty() || seen.contains(&name) {
+                continue;
+            }
+            // The installer places the correct per-target (or noarch) binary at
+            // `<install_dir>/<name>`, so resolution keys off the name; the
+            // row's `target` is advisory and only enriches the missing-binary
+            // warning.
+            let path = install_dir.join(&name);
+            if !path.exists() {
+                seen.insert(name.clone());
+                let target_note = entry.target.as_deref().map(|t| format!(" (target {t})")).unwrap_or_default();
+                let reason = format!(
+                    "DB registry lists plugin '{name}'{target_note} but no binary is present at {}",
+                    path.display()
+                );
+                tracing::warn!("plugin DB-registry discovery: {reason}");
+                warnings.push(DiscoveryWarning { name, path, source: DiscoverySource::DbRegistry, reason });
+                continue;
+            }
+            seen.insert(name.clone());
+            candidates.push(ProbeCandidate { name, path, source: DiscoverySource::DbRegistry });
+        }
+
+        let outcomes = resolve_manifests(&candidates, cache, lockfile);
+        for (cand, outcome) in candidates.into_iter().zip(outcomes) {
+            let ProbeCandidate { name, path, source } = cand;
+            match outcome {
+                ProbeOutcome::Hit(manifest) | ProbeOutcome::Probed(Ok(manifest)) => {
+                    seen.insert(name.clone());
+                    discovered.push(DiscoveredPlugin { name, path, manifest, source });
+                }
+                ProbeOutcome::Probed(Err(error)) => {
+                    seen.insert(name.clone());
+                    let reason = format!("{error:#}");
+                    tracing::warn!(
+                        plugin = %name,
+                        path = %path.display(),
+                        "DB-registry plugin manifest probe failed: {reason}"
+                    );
+                    warnings.push(DiscoveryWarning { name, path, source, reason });
+                }
+            }
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -3026,5 +3167,171 @@ mod tests {
                 "manifest must match its candidate, no cross-talk between parallel probes"
             );
         }
+    }
+
+    // ---- DB-registry discovery tier (TASK-194) -------------------------
+
+    use crate::db_registry::{DbRegistryEntry, StaticRegistrySource};
+    use std::sync::Arc;
+
+    /// A subject-backend plugin name (`animus-subject-*`) is NOT matched by the
+    /// directory-scan tiers, so without the DB tier it is invisible; with a
+    /// wired registry source it is discovered and tagged `DbRegistry`.
+    #[cfg(unix)]
+    #[test]
+    fn db_registry_tier_discovers_enabled_plugin_from_volume() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        let plugin_path = install_dir.join("animus-subject-default");
+        write_executable_plugin(&plugin_path, "animus-subject-default");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        // Without a wired source the plugin is invisible (bootstrap paradox:
+        // the DB tier is off until the daemon opts in).
+        let (without_db, _) =
+            PluginDiscovery::new().with_config_path(&empty_config).discover_with_warnings().expect("discover");
+        assert!(
+            without_db.iter().all(|p| p.name != "animus-subject-default"),
+            "subject plugin must not be discovered without the DB tier, got {without_db:?}"
+        );
+
+        let source = Arc::new(StaticRegistrySource::new(vec![DbRegistryEntry::enabled("animus-subject-default")]));
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_db_registry(source)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(warnings.is_empty(), "expected zero warnings, got {warnings:?}");
+        let row = discovered
+            .iter()
+            .find(|p| p.name == "animus-subject-default")
+            .expect("DB-registry tier must discover the enabled plugin");
+        assert_eq!(row.source, DiscoverySource::DbRegistry);
+        assert_eq!(row.path, plugin_path);
+    }
+
+    /// Disabled rows are skipped; enabled rows whose binary is absent from the
+    /// volume surface a warning instead of being silently dropped.
+    #[cfg(unix)]
+    #[test]
+    fn db_registry_tier_skips_disabled_and_warns_on_missing_binary() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        let disabled = DbRegistryEntry { enabled: false, ..DbRegistryEntry::enabled("animus-subject-disabled") };
+        let missing =
+            DbRegistryEntry { target: Some("noarch".to_string()), ..DbRegistryEntry::enabled("animus-postgres") };
+        let source = Arc::new(StaticRegistrySource::new(vec![disabled, missing]));
+
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_db_registry(source)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(discovered.is_empty(), "no binaries on the volume, nothing to discover, got {discovered:?}");
+        assert_eq!(warnings.len(), 1, "only the enabled-but-missing row warns, got {warnings:?}");
+        assert_eq!(warnings[0].name, "animus-postgres");
+        assert_eq!(warnings[0].source, DiscoverySource::DbRegistry);
+        assert!(warnings[0].reason.contains("noarch"), "warning should carry the target, got {}", warnings[0].reason);
+        assert!(warnings[0].reason.contains("no binary is present"));
+    }
+
+    /// A read failure from the registry source degrades to a single warning —
+    /// the other tiers (here, the global-dir scan) still resolve.
+    #[cfg(unix)]
+    #[test]
+    fn db_registry_read_error_degrades_to_warning_without_sinking_discovery() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let fake_home = temp.path().join("animus-home");
+        let install_dir = fake_home.join("plugins");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", &fake_home);
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+
+        // A prefixed plugin that the unconditional global-dir scan still finds.
+        let scanned = install_dir.join("animus-provider-scanned");
+        write_executable_plugin(&scanned, "animus-provider-scanned");
+
+        let empty_config = temp.path().join("empty-plugins.yaml");
+        fs::write(&empty_config, "plugins: {}\n").expect("write empty config");
+
+        let source = Arc::new(StaticRegistrySource::failing("connection refused"));
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&empty_config)
+            .with_db_registry(source)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(
+            discovered.iter().any(|p| p.name == "animus-provider-scanned"),
+            "file/dir tiers must still resolve when the DB read fails, got {discovered:?}"
+        );
+        let db_warning = warnings
+            .iter()
+            .find(|w| w.source == DiscoverySource::DbRegistry)
+            .expect("DB read error must surface a warning");
+        assert!(db_warning.reason.contains("connection refused"), "unexpected reason: {}", db_warning.reason);
+    }
+
+    /// A hand-pinned explicit config entry outranks the DB tier: the DB row's
+    /// name is already reserved by the higher-precedence tier, so it does not
+    /// re-add or shadow it.
+    #[cfg(unix)]
+    #[test]
+    fn explicit_config_takes_precedence_over_db_registry() {
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _clear_plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", "");
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        let plugin = temp.path().join("configured-subject");
+        write_executable_plugin(&plugin, "animus-subject-default");
+
+        let config_path = temp.path().join("plugins.yaml");
+        fs::write(
+            &config_path,
+            format!("plugins:\n  animus-subject-default:\n    binary: {}\n", plugin.to_string_lossy()),
+        )
+        .expect("write config");
+
+        let source = Arc::new(StaticRegistrySource::new(vec![DbRegistryEntry::enabled("animus-subject-default")]));
+        let (discovered, warnings) = PluginDiscovery::new()
+            .with_config_path(&config_path)
+            .with_db_registry(source)
+            .discover_with_warnings()
+            .expect("discover");
+
+        assert!(warnings.is_empty(), "expected zero warnings, got {warnings:?}");
+        let rows: Vec<&DiscoveredPlugin> = discovered.iter().filter(|p| p.name == "animus-subject-default").collect();
+        assert_eq!(rows.len(), 1, "name must dedupe to a single entry across tiers, got {rows:?}");
+        assert_eq!(rows[0].source, DiscoverySource::ExplicitConfig, "explicit config must outrank the DB tier");
+        assert_eq!(rows[0].path, plugin);
     }
 }

@@ -2914,6 +2914,7 @@ fn source_label(source: DiscoverySource) -> &'static str {
         DiscoverySource::ProjectLocal => "project_local",
         DiscoverySource::PluginPath => "plugin_path",
         DiscoverySource::SystemPath => "system_path",
+        DiscoverySource::DbRegistry => "db_registry",
     }
 }
 
@@ -4156,10 +4157,24 @@ const KNOWN_TARGET_TRIPLES: &[&str] = &[
     "x86_64-pc-windows-gnu",
 ];
 
+/// Filename-segment tokens that mark a platform-independent (noarch) asset. A
+/// JS-bundle plugin (a node-shebang esbuild bundle) IS the executable and runs
+/// on every triple, so it publishes ONE `<name>-noarch.tar.gz` instead of
+/// duplicating the same bytes under every triple name. Dash-prefixed so the
+/// substring match only fires on an explicit `-noarch` / `-any` segment, never
+/// an incidental substring of some other name.
+const NOARCH_SELECTION_TOKENS: &[&str] = &["-noarch", "-any"];
+
+/// Synthetic target recorded for a noarch asset in the lockfile / SHA256SUMS,
+/// so a `<name>-noarch.tar.gz` archive keys its integrity claim consistently.
+const NOARCH_TARGET: &str = "noarch";
+
 /// Derive the target triple a release asset filename targets, by scanning for a
 /// known triple substring (case-insensitive). `None` for non-archive assets
 /// (e.g. `SHA256SUMS.txt`, `.bundle`, `.sha256` sidecars) and any name with no
-/// recognizable triple.
+/// recognizable triple. A platform-independent bundle (`-noarch` / `-any`
+/// archive) maps to the synthetic [`NOARCH_TARGET`], checked only after the
+/// real triples so a triple-specific asset always wins.
 fn target_triple_from_asset_name(name: &str) -> Option<&'static str> {
     let lower = name.to_ascii_lowercase();
     // `lower` is already ASCII-lowercased, so these `ends_with` checks are
@@ -4169,7 +4184,31 @@ fn target_triple_from_asset_name(name: &str) -> Option<&'static str> {
     if !is_archive {
         return None;
     }
-    KNOWN_TARGET_TRIPLES.iter().copied().find(|triple| lower.contains(&triple.to_ascii_lowercase()))
+    if let Some(triple) =
+        KNOWN_TARGET_TRIPLES.iter().copied().find(|triple| lower.contains(&triple.to_ascii_lowercase()))
+    {
+        return Some(triple);
+    }
+    if NOARCH_SELECTION_TOKENS.iter().any(|token| lower.contains(token)) {
+        return Some(NOARCH_TARGET);
+    }
+    None
+}
+
+/// Select the release asset to install: a triple-specific asset always wins;
+/// a platform-independent (`-noarch` / `-any`) asset is the fallback used only
+/// when no triple-specific asset is present. Within each pass the `<binary>-`
+/// prefixed picker is tried first (so a multi-binary release doesn't grab a
+/// sibling), then the prefix-agnostic picker for back-compat.
+fn select_release_asset<'a>(
+    assets: &'a [GithubReleaseAsset],
+    binary_name: &str,
+    platform_tokens: &[&str],
+) -> Option<&'a GithubReleaseAsset> {
+    pick_release_asset_for_binary(assets, binary_name, platform_tokens)
+        .or_else(|| pick_release_asset(assets, platform_tokens))
+        .or_else(|| pick_release_asset_for_binary(assets, binary_name, NOARCH_SELECTION_TOKENS))
+        .or_else(|| pick_release_asset(assets, NOARCH_SELECTION_TOKENS))
 }
 
 /// Parse a release `SHA256SUMS.txt` body into per-target archive shas for the
@@ -4415,20 +4454,20 @@ async fn resolve_release_install(
     // archive naming) so multi-binary releases — which publish sibling
     // `<other-bin>-<target>.tar.gz` archives in the same release — don't
     // accidentally pick a secondary binary as the primary based on GitHub's
-    // asset ordering. Fall through to the legacy prefix-agnostic picker for
-    // back-compat with releases that use a different archive base name.
-    let asset = pick_release_asset_for_binary(&release.assets, &spec.repo, platform_tokens)
-        .or_else(|| pick_release_asset(&release.assets, platform_tokens))
-        .ok_or_else(|| {
-            let available: Vec<String> = release.assets.iter().map(|a| a.name.clone()).collect();
-            invalid_input_error(format!(
-                "no release asset matched current platform '{}' (looked for any of: {}). Available assets in {}: [{}]",
-                current_platform_label(),
-                platform_tokens.join(", "),
-                release.tag_name,
-                available.join(", ")
-            ))
-        })?;
+    // asset ordering. Fall through to the legacy prefix-agnostic picker, then
+    // to a platform-independent `-noarch` / `-any` asset for JS-bundle plugins
+    // that publish a single cross-platform archive.
+    let asset = select_release_asset(&release.assets, &spec.repo, platform_tokens).ok_or_else(|| {
+        let available: Vec<String> = release.assets.iter().map(|a| a.name.clone()).collect();
+        invalid_input_error(format!(
+            "no release asset matched current platform '{}' (looked for any of: {}, or a noarch/any asset). \
+             Available assets in {}: [{}]",
+            current_platform_label(),
+            platform_tokens.join(", "),
+            release.tag_name,
+            available.join(", ")
+        ))
+    })?;
 
     // RAII staging dir — drops when `ReleaseInstall` drops. Replaces the
     // pre-fix `std::env::temp_dir().join(uuid)` that was created and
@@ -7314,6 +7353,61 @@ mod tests {
     fn current_platform_has_known_tokens() {
         let tokens = current_platform_tokens();
         assert!(!tokens.is_empty(), "no platform tokens registered for {}", current_platform_label());
+    }
+
+    // ---- noarch / platform-independent asset support (TASK-200) --------
+
+    #[test]
+    fn target_triple_from_asset_name_recognizes_noarch_archives() {
+        assert_eq!(target_triple_from_asset_name("animus-postgres-noarch.tar.gz"), Some("noarch"));
+        assert_eq!(target_triple_from_asset_name("animus-postgres-any.tgz"), Some("noarch"));
+        // A real triple always wins over the noarch fallback.
+        assert_eq!(
+            target_triple_from_asset_name("animus-postgres-x86_64-unknown-linux-gnu.tar.gz"),
+            Some("x86_64-unknown-linux-gnu"),
+        );
+        // Non-archives and `-any`/`-noarch`-free names stay unrecognized.
+        assert_eq!(target_triple_from_asset_name("SHA256SUMS.txt"), None);
+        assert_eq!(target_triple_from_asset_name("animus-company-bundle.tar.gz"), None);
+    }
+
+    #[test]
+    fn select_release_asset_falls_back_to_noarch_when_no_triple_asset() {
+        let assets = vec![asset("animus-postgres-noarch.tar.gz")];
+        // Platform tokens that match nothing here — the noarch bundle is the fallback.
+        let tokens: &[&str] = &["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"];
+        let picked =
+            select_release_asset(&assets, "animus-postgres", tokens).expect("noarch fallback must be selected");
+        assert_eq!(picked.name, "animus-postgres-noarch.tar.gz");
+    }
+
+    #[test]
+    fn select_release_asset_prefers_triple_specific_over_noarch() {
+        let assets =
+            vec![asset("animus-postgres-noarch.tar.gz"), asset("animus-postgres-x86_64-unknown-linux-gnu.tar.gz")];
+        let tokens: &[&str] = &["x86_64-unknown-linux-gnu", "linux-x86_64"];
+        let picked = select_release_asset(&assets, "animus-postgres", tokens).expect("triple asset must be selected");
+        assert_eq!(
+            picked.name, "animus-postgres-x86_64-unknown-linux-gnu.tar.gz",
+            "a triple-specific asset must win over the noarch fallback"
+        );
+    }
+
+    #[test]
+    fn select_release_asset_returns_none_when_neither_triple_nor_noarch() {
+        let assets = vec![asset("animus-postgres-x86_64-apple-darwin.tar.gz")];
+        let tokens: &[&str] = &["x86_64-unknown-linux-gnu"];
+        assert!(select_release_asset(&assets, "animus-postgres", tokens).is_none());
+    }
+
+    #[test]
+    fn parse_sha256sums_keys_noarch_archive() {
+        let body = "abc123def4567890abc123def4567890abc123def4567890abc123def4567890  animus-postgres-noarch.tar.gz\n";
+        let parsed = parse_sha256sums_for_targets(body, "animus-postgres");
+        assert_eq!(
+            parsed.get("noarch").map(String::as_str),
+            Some("abc123def4567890abc123def4567890abc123def4567890abc123def4567890"),
+        );
     }
 
     #[test]
