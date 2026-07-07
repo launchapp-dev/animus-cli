@@ -2408,7 +2408,9 @@ workflows:
             // YAML-only custom phase with decision_contract. No
             // companion entry in agent-runtime-config.v2.json — the
             // overlay merge is the ONLY surface that injects it.
-            let yaml = r#"agents:
+            let yaml = r#"tools_allowlist:
+  - cargo
+agents:
   default:
     description: default agent
     role: software_engineer
@@ -2466,7 +2468,19 @@ phases:
             let _ = orchestrator_core::FileServiceHub::new(&root).expect("hub");
             let workflows_dir = project.path().join(".animus").join("workflows");
             std::fs::create_dir_all(&workflows_dir).expect("mkdir");
-            let yaml = r#"workflows:
+            let yaml = r#"tools_allowlist:
+  - cargo
+agents:
+  default:
+    description: default agent
+    role: software_engineer
+    tool: claude
+phases:
+  research:
+    mode: agent
+    agent_id: default
+    directive: Research the topic.
+workflows:
   - id: gated-research
     name: Gated Research
     description: research phase with on_verdict routing
