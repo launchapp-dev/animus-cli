@@ -1907,6 +1907,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_binds_subjectless_adhoc_dispatch_without_error() {
+        // Dispatch A (subjectless runs): a subjectless / ad-hoc run is
+        // represented as a `custom`-kind subject with an `adhoc:<nanos>` id. The
+        // run-loop MUST bind it to a valid context — the built-in custom adapter
+        // resolves it, so it never hits "no subject adapter registered", and the
+        // execution cwd is the project root (no managed worktree). This is a
+        // valid mode, not a failure.
+        let hub = Arc::new(TestHub::default());
+        let registry = builtin_subject_adapter_registry(hub);
+
+        let subject = SubjectRef::new(SUBJECT_KIND_CUSTOM, "adhoc:1730000000000000000");
+        let ctx = registry
+            .resolve_subject_context(&subject, None, None)
+            .await
+            .expect("subjectless ad-hoc run must bind, not die at the subject adapter");
+        assert_eq!(ctx.subject_kind, SUBJECT_KIND_CUSTOM);
+        assert_eq!(ctx.subject_id, "adhoc:1730000000000000000");
+        assert!(ctx.task.is_none(), "a subjectless run has no backing task");
+
+        let cwd = registry
+            .ensure_execution_cwd("/project/root", &subject, &ctx)
+            .await
+            .expect("subjectless run resolves an execution cwd");
+        assert_eq!(cwd, "/project/root");
+    }
+
+    #[tokio::test]
     async fn resolve_reports_both_errors_when_fallback_also_misses() {
         // When both routes fail the operator needs to see why each one missed,
         // so they can decide whether to seed the in-tree store or install the

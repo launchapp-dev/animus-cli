@@ -89,9 +89,9 @@ pub use plugin_preflight::{
     DEFAULT_REQUIREMENT_BACKEND_REPO, DEFAULT_TASK_BACKEND_REPO, QUEUE_PRECISE_WAKE_FLOOR, WORKFLOW_RUNNER_SKILL_FLOOR,
 };
 pub use plugin_registry::{
-    default_provider_repo_spec, default_subject_repo_for_kind, format_repo_spec, resolve_curated_plugin_by_basename,
-    resolve_tag_for_slug, DEFAULT_OAI_AGENT_PLUGINS, DEFAULT_PROVIDER_PLUGINS, DEFAULT_QUEUE_PLUGINS,
-    DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
+    default_provider_repo_spec, default_subject_backend_repo, default_subject_repo_for_kind, format_repo_spec,
+    resolve_curated_plugin_by_basename, resolve_tag_for_slug, DEFAULT_OAI_AGENT_PLUGINS, DEFAULT_PROVIDER_PLUGINS,
+    DEFAULT_QUEUE_PLUGINS, DEFAULT_SUBJECT_PLUGINS, DEFAULT_TRANSPORT_PLUGINS, DEFAULT_WORKFLOW_RUNNER_PLUGINS,
 };
 pub use principal::{
     bootstrap_principals_file_if_absent, bootstrap_principals_file_if_absent_for, check_principal_can,
