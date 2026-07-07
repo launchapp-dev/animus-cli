@@ -91,28 +91,34 @@ pub(crate) fn workflow_execute_request_for_existing(
     // rebuild one from the persisted record (authoritative for workflow_ref /
     // input / vars). Task / requirement / custom keep the existing convenience
     // fields untouched.
-    let kind = workflow.subject.kind();
-    let subject_dispatch =
-        if kind == SUBJECT_KIND_TASK || kind == SUBJECT_KIND_REQUIREMENT || kind == SUBJECT_KIND_CUSTOM {
-            None
-        } else {
-            Some(
-                SubjectDispatch::for_subject_with_metadata(
-                    workflow.subject.clone(),
-                    workflow.workflow_ref.clone().unwrap_or_default(),
-                    "reattach-detached-runner",
-                    workflow.started_at,
+    // A subjectless run reattaches with NO subject at all: no subject_dispatch
+    // and no convenience fields, so the runner resumes it subjectless.
+    let subject_dispatch = match workflow.subject.as_ref() {
+        None => None,
+        Some(subject) => {
+            let kind = subject.kind();
+            if kind == SUBJECT_KIND_TASK || kind == SUBJECT_KIND_REQUIREMENT || kind == SUBJECT_KIND_CUSTOM {
+                None
+            } else {
+                Some(
+                    SubjectDispatch::for_subject_with_metadata(
+                        subject.clone(),
+                        workflow.workflow_ref.clone().unwrap_or_default(),
+                        "reattach-detached-runner",
+                        workflow.started_at,
+                    )
+                    .with_input(workflow.input.clone())
+                    .with_vars(workflow.vars.clone()),
                 )
-                .with_input(workflow.input.clone())
-                .with_vars(workflow.vars.clone()),
-            )
-        };
+            }
+        }
+    };
     workflow_proto::WorkflowExecuteRequest {
         workflow_id: Some(workflow.id.clone()),
         subject_dispatch,
         subject_ref: None,
-        task_id: workflow.subject.task_id().map(str::to_string),
-        requirement_id: workflow.subject.requirement_id().map(str::to_string),
+        task_id: workflow.subject.as_ref().and_then(|s| s.task_id()).map(str::to_string),
+        requirement_id: workflow.subject.as_ref().and_then(|s| s.requirement_id()).map(str::to_string),
         title: None,
         description: None,
         workflow_ref: workflow.workflow_ref.clone(),
@@ -309,7 +315,7 @@ pub(crate) async fn start_workflow_with_runner(
         project_terminal_workflow_result(
             hub.clone(),
             project_root,
-            workflow.subject.id(),
+            workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
             Some(workflow.task_id.as_str()),
             workflow.workflow_ref.as_deref(),
             Some(workflow.id.as_str()),
@@ -367,7 +373,7 @@ pub(crate) async fn resume_workflow_with_runner(
     // concurrent runner for the same record.
     match orchestrator_daemon_runtime::agent_record::scan_orphans_for_project(Path::new(project_root)) {
         Ok(report) => {
-            let subject_id = existing.subject.id();
+            let subject_id = existing.subject.as_ref().map(|s| s.id()).unwrap_or_default();
             let daemon_owned = report.detected.iter().any(|agent| {
                 agent.subject_id == subject_id
                     || (!existing.task_id.is_empty() && agent.task_id.as_deref() == Some(existing.task_id.as_str()))
@@ -689,7 +695,7 @@ pub(crate) async fn approve_manual_phase(
                     project_terminal_workflow_result(
                         hub.clone(),
                         project_root,
-                        reloaded.subject.id(),
+                        reloaded.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                         Some(reloaded.task_id.as_str()),
                         reloaded.workflow_ref.as_deref(),
                         Some(reloaded.id.as_str()),
@@ -707,7 +713,7 @@ pub(crate) async fn approve_manual_phase(
                     project_terminal_workflow_result(
                         hub.clone(),
                         project_root,
-                        reloaded.subject.id(),
+                        reloaded.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                         Some(reloaded.task_id.as_str()),
                         reloaded.workflow_ref.as_deref(),
                         Some(reloaded.id.as_str()),
@@ -733,7 +739,7 @@ pub(crate) async fn approve_manual_phase(
     project_terminal_workflow_result(
         hub.clone(),
         project_root,
-        final_workflow.subject.id(),
+        final_workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
         Some(final_workflow.task_id.as_str()),
         final_workflow.workflow_ref.as_deref(),
         Some(final_workflow.id.as_str()),
@@ -785,7 +791,7 @@ pub(crate) async fn reject_manual_phase(
     project_terminal_workflow_result(
         hub.clone(),
         project_root,
-        updated.subject.id(),
+        updated.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
         Some(updated.task_id.as_str()),
         updated.workflow_ref.as_deref(),
         Some(updated.id.as_str()),
@@ -1291,7 +1297,7 @@ workflows:
             rework_counts: std::collections::HashMap::new(),
             total_reworks: 0,
             decision_history: Vec::new(),
-            subject: protocol::orchestrator::SubjectRef::new("blog", "blog:BLOG-001"),
+            subject: Some(protocol::orchestrator::SubjectRef::new("blog", "blog:BLOG-001")),
         };
 
         let request = super::workflow_execute_request_for_existing(&workflow);
@@ -1300,8 +1306,8 @@ workflows:
         assert_eq!(request.task_id, None);
         assert_eq!(request.requirement_id, None);
         let dispatch = request.subject_dispatch.expect("generic kind must carry subject_dispatch");
-        assert_eq!(dispatch.subject.kind(), "blog");
-        assert_eq!(dispatch.subject.id(), "blog:BLOG-001");
+        assert_eq!(dispatch.subject.as_ref().unwrap().kind(), "blog");
+        assert_eq!(dispatch.subject.as_ref().map(|s| s.id()).unwrap_or_default(), "blog:BLOG-001");
         assert_eq!(dispatch.workflow_ref, "draft-post");
     }
 

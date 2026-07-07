@@ -58,7 +58,7 @@ pub(crate) struct QueueEnqueueArgs {
     #[arg(
         long,
         group = "subject",
-        help = "Dispatch a subjectless (ad-hoc) run with NO bound subject. The workflow runs without subject-bound template vars — use for subject-less-by-design workflows (e.g. relate) fired without a target. Requires --workflow-ref. Mutually exclusive with --task-id / --requirement-id / --title / --subject-id."
+        help = "Dispatch a subjectless (ad-hoc) run with NO bound subject. The workflow runs without subject-bound template vars — use for subject-less-by-design workflows (e.g. relate) fired without a target. Requires --workflow-ref. Mutually exclusive with --task-id / --requirement-id / --title / --subject-id. NOTE: not yet supported through the installed queue plugin (its RPC protocol still requires a subject); dispatch such runs directly for now."
     )]
     pub(crate) adhoc: bool,
     #[arg(long, value_name = "TEXT", help = "Custom subject description (used with --title).")]

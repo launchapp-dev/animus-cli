@@ -194,7 +194,7 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         let id = Uuid::new_v4().to_string();
         let workflow = {
             let mut lock = self.state.write().await;
-            let task = input.subject.task_id().and_then(|id| lock.tasks.get(id).cloned());
+            let task = input.subject.as_ref().and_then(|s| s.task_id()).and_then(|id| lock.tasks.get(id).cloned());
             let workflow_ref =
                 effective_workflow_ref(input.workflow_ref(), crate::workflow::STANDARD_WORKFLOW_REF, task.as_ref());
             let executor = WorkflowLifecycleExecutor::new(crate::resolve_phase_plan_for_workflow_ref_for_actor(
@@ -407,7 +407,7 @@ impl WorkflowServiceApi for FileServiceHub {
         // `config_source` (global∪private∪shared) contributes the default
         // workflow ref, skip guards, and phase plan. `actor = None` = global.
         let workflow_config = crate::load_workflow_config_or_default_for_actor(self.project_root.as_path(), actor);
-        let task = if let Some(task_id) = input.subject.task_id() {
+        let task = if let Some(task_id) = input.subject.as_ref().and_then(|s| s.task_id()) {
             crate::workflow::load_task(&self.project_root, task_id).ok()
         } else {
             None
@@ -426,10 +426,13 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         let mut workflow = executor.bootstrap(id.clone(), input.with_workflow_ref(workflow_ref));
-        if let Ok(subject_context) =
-            self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
-        {
-            executor.skip_guarded_phases(&mut workflow, &subject_context);
+        // A subjectless run binds a None subject context: no subject to resolve,
+        // so subject template vars are simply absent and no guard phases are
+        // skipped on subject identity here.
+        if let Some(subject) = workflow.subject.clone() {
+            if let Ok(subject_context) = self.subject_resolver().resolve_subject_context(&subject, None, None).await {
+                executor.skip_guarded_phases(&mut workflow, &subject_context);
+            }
         }
 
         let manager = self.workflow_manager();
@@ -537,10 +540,11 @@ impl WorkflowServiceApi for FileServiceHub {
         .with_retry_configs(retry_configs)
         .with_skip_guards(skip_guards);
         executor.mark_current_phase_success_with_decision(&mut workflow, decision)?;
-        if let Ok(subject_context) =
-            self.subject_resolver().resolve_subject_context(&workflow.subject, None, None).await
-        {
-            executor.skip_guarded_phases(&mut workflow, &subject_context);
+        // Subjectless runs bind a None subject context (nothing to resolve).
+        if let Some(subject) = workflow.subject.clone() {
+            if let Ok(subject_context) = self.subject_resolver().resolve_subject_context(&subject, None, None).await {
+                executor.skip_guarded_phases(&mut workflow, &subject_context);
+            }
         }
         manager.save(&workflow)?;
         let mut workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;

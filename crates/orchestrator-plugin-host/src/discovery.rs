@@ -136,6 +136,7 @@ impl std::fmt::Debug for PluginDiscovery {
             .field("project_root", &self.project_root)
             .field("config_path", &self.config_path)
             .field("include_system_path", &self.include_system_path)
+            .field("probe_project_local_plugins", &self.probe_project_local_plugins)
             .field("scope", &self.scope)
             .field("db_registry", &self.db_registry.as_ref().map(|_| "<PluginRegistrySource>"))
             .finish()
@@ -623,6 +624,7 @@ impl PluginDiscovery {
                 &mut seen,
                 &cache,
                 lockfile.as_ref(),
+                scope_ref,
             );
         }
 
@@ -823,6 +825,7 @@ impl PluginDiscovery {
         seen: &mut HashSet<String>,
         cache: &ManifestCache,
         lockfile: Option<&PluginLockfile>,
+        scope: Option<&PluginScope>,
     ) {
         let install_dir = plugin_install_dir();
         let entries = match source.desired_plugins() {
@@ -872,7 +875,7 @@ impl PluginDiscovery {
             candidates.push(ProbeCandidate { name, path, source: DiscoverySource::DbRegistry });
         }
 
-        let outcomes = resolve_manifests(&candidates, cache, lockfile);
+        let outcomes = resolve_manifests(&candidates, cache, lockfile, scope);
         for (cand, outcome) in candidates.into_iter().zip(outcomes) {
             let ProbeCandidate { name, path, source } = cand;
             match outcome {
@@ -887,6 +890,20 @@ impl PluginDiscovery {
                         plugin = %name,
                         path = %path.display(),
                         "DB-registry plugin manifest probe failed: {reason}"
+                    );
+                    warnings.push(DiscoveryWarning { name, path, source, reason });
+                }
+                ProbeOutcome::SkippedOutOfScope(reason) => {
+                    // Reserve the name so a lower-precedence source can't
+                    // silently shadow this (equally out-of-scope) entry, and
+                    // surface a warning so operators understand the plugin was
+                    // located but deliberately NOT executed.
+                    seen.insert(name.clone());
+                    tracing::debug!(
+                        plugin = %name,
+                        path = %path.display(),
+                        source = ?source,
+                        "{reason}"
                     );
                     warnings.push(DiscoveryWarning { name, path, source, reason });
                 }

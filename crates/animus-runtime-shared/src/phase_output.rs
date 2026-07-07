@@ -763,7 +763,7 @@ mod tests {
             id: workflow_id.to_string(),
             task_id: "TASK-1".to_string(),
             workflow_ref: None,
-            subject: SubjectRef::task("TASK-1".to_string()),
+            subject: Some(SubjectRef::task("TASK-1".to_string())),
             input: None,
             vars: std::collections::HashMap::new(),
             status: WorkflowStatus::Running,

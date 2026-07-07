@@ -6,28 +6,25 @@ use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub, workflow_ref_for_task};
-use protocol::orchestrator::{SubjectRef, SUBJECT_KIND_CUSTOM};
 use protocol::{SubjectDispatch, SubjectDispatchExt};
 
 use super::ops_workflow::resolve_requirement_workflow_ref;
 use crate::{invalid_input_error, print_ok, print_value, CliError, CliErrorKind, QueueCommand, QueueSubjectArgs};
 
-/// Build a subjectless (ad-hoc) dispatch with NO bound subject.
+/// Build a genuinely subjectless (ad-hoc) dispatch with NO bound subject.
 ///
-/// The wire [`SubjectRef`] is non-optional, so "no subject" is represented as a
-/// `custom`-kind subject carrying a UNIQUE id (`adhoc:<nanos>`) — the unique id
-/// keeps each ad-hoc run's queue `subject_key` distinct so a burst of
-/// subjectless runs (e.g. `relate` firing on repo events) is not deduped into
-/// one. The run-loop resolves this via the built-in custom subject adapter (it
-/// never hits the "no subject adapter registered" error), so a subjectless
-/// dispatch is a valid mode, not a failure. Subject-bound command phases are
-/// out of place in such a workflow and should be command-guarded / skipped.
-fn adhoc_subject_dispatch(workflow_ref: String, input: Option<serde_json::Value>) -> SubjectDispatch {
-    let unique = chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default();
-    let mut subject = SubjectRef::new(SUBJECT_KIND_CUSTOM, format!("adhoc:{unique}"));
-    subject.title = Some("ad-hoc".to_string());
-    SubjectDispatch::for_subject_with_metadata(subject, workflow_ref, "manual-queue-enqueue", chrono::Utc::now())
-        .with_input(input)
+/// The wire subject is now optional, so "no subject" is a true absence
+/// (`SubjectDispatch::subject == None`) rather than a synthetic `custom`-kind
+/// sentinel. The run-loop binds a None subject context: subject template vars
+/// are simply absent and no subject adapter is resolved. Subject-bound command
+/// phases are out of place in such a workflow and should be command-guarded /
+/// skipped.
+///
+/// Because the dispatch carries no subject there is no `subject_key`, so the
+/// queue does not dedup subjectless runs — a burst of `relate` firings each
+/// enqueue as their own entry.
+fn subjectless_dispatch(workflow_ref: String, input: Option<serde_json::Value>) -> SubjectDispatch {
+    SubjectDispatch::subjectless(workflow_ref, "manual-queue-enqueue", chrono::Utc::now()).with_input(input)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -48,7 +45,7 @@ async fn resolve_enqueue_dispatch(
                 "--adhoc requires --workflow-ref: a subjectless run must name the workflow to dispatch.",
             )
         })?;
-        return Ok(adhoc_subject_dispatch(workflow_ref, input));
+        return Ok(subjectless_dispatch(workflow_ref, input));
     }
     match (task_id, requirement_id, title) {
         (Some(task_id), None, None) => {
@@ -218,6 +215,17 @@ pub(crate) async fn handle_queue(
 
             let run_at = args.run_at.as_deref().map(resolve_run_at).transpose()?;
 
+            // The kernel dispatch type (rc protocol) can now be subjectless, but
+            // the queue plugin RPC is still pinned to the v0.5 line for deployed
+            // queue-plugin wire compatibility, and that SubjectDispatch requires
+            // a subject. A subjectless run therefore cannot travel through the
+            // installed queue plugin yet: dispatch it directly (workflow run)
+            // until the queue protocol takes up the optional-subject 0.7 line.
+            if dispatch.subject().is_none() {
+                return Err(invalid_input_error(
+                    "subjectless (--adhoc) enqueue is not yet supported through the installed queue plugin: its queue RPC protocol still requires a subject. Dispatch the workflow directly instead.",
+                ));
+            }
             let dispatch_value =
                 serde_json::to_value(&dispatch).context("encoding subject_dispatch for queue plugin")?;
             let plugin_dispatch = serde_json::from_value(dispatch_value)
@@ -816,10 +824,11 @@ mod tests {
         .await
         .expect("adhoc dispatch builds");
         assert_eq!(dispatch.workflow_ref, "relate");
-        // Custom kind so the built-in custom subject adapter resolves it — the
-        // run-loop never hits "no subject adapter registered".
-        assert_eq!(dispatch.subject.kind(), SUBJECT_KIND_CUSTOM);
-        assert!(dispatch.subject.id().starts_with("adhoc:"), "ad-hoc id: {}", dispatch.subject.id());
+        // Genuinely subjectless: the dispatch carries NO subject at all (not a
+        // synthetic custom sentinel). The run-loop binds a None subject context.
+        assert!(dispatch.subject().is_none(), "subjectless dispatch must have no subject");
+        assert_eq!(dispatch.subject_id(), None);
+        assert_eq!(dispatch.subject_kind(), None);
     }
 
     #[tokio::test]
@@ -843,14 +852,16 @@ mod tests {
     }
 
     #[test]
-    fn adhoc_subject_dispatches_have_distinct_subject_keys() {
-        // A burst of subjectless runs must not collapse to one queue entry: each
-        // ad-hoc dispatch carries a unique subject id, so the queue subject_key
-        // stays distinct (the `relate`-storm dedup regression).
-        let a = adhoc_subject_dispatch("relate".to_string(), None);
-        std::thread::sleep(std::time::Duration::from_nanos(10));
-        let b = adhoc_subject_dispatch("relate".to_string(), None);
-        assert_ne!(a.subject.subject_key(), b.subject.subject_key());
+    fn subjectless_dispatches_have_no_subject_key() {
+        // A subjectless dispatch carries no subject, so it has no queue
+        // subject_key. With nothing to key on, the queue does not dedup a burst
+        // of subjectless runs (e.g. a `relate` storm) into one entry.
+        let a = subjectless_dispatch("relate".to_string(), None);
+        let b = subjectless_dispatch("relate".to_string(), None);
+        assert_eq!(a.subject_key(), None);
+        assert_eq!(b.subject_key(), None);
+        assert!(a.subject().is_none());
+        assert!(b.subject().is_none());
     }
 
     #[tokio::test]

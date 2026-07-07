@@ -15,7 +15,7 @@ fn make_workflow(status: WorkflowStatus) -> OrchestratorWorkflow {
         id: "WF-test".to_string(),
         task_id: "TASK-1".to_string(),
         workflow_ref: Some("standard-workflow".to_string()),
-        subject: SubjectRef::task("TASK-1".to_string()),
+        subject: Some(SubjectRef::task("TASK-1".to_string())),
         input: None,
         vars: std::collections::HashMap::new(),
         status,

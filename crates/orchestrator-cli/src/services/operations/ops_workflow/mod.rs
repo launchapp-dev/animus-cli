@@ -158,12 +158,17 @@ async fn resolve_workflow_run_dispatch_from_input(
         ..
     } = input;
     let effective_task_id = subject
-        .task_id()
+        .as_ref()
+        .and_then(|s| s.task_id())
         .filter(|id| !id.is_empty())
         .map(|s| s.to_string())
         .or_else(|| (!flat_task_id.is_empty()).then_some(flat_task_id));
-    let effective_requirement_id =
-        subject.requirement_id().filter(|id| !id.is_empty()).map(|s| s.to_string()).or(flat_requirement_id);
+    let effective_requirement_id = subject
+        .as_ref()
+        .and_then(|s| s.requirement_id())
+        .filter(|id| !id.is_empty())
+        .map(|s| s.to_string())
+        .or(flat_requirement_id);
     if let Some(id) = effective_task_id {
         // See `resolve_workflow_run_dispatch`: try in-tree task store first, then
         // fall back to subject_resolver so plugin-owned tasks dispatch correctly.
@@ -209,7 +214,7 @@ async fn resolve_workflow_run_dispatch_from_input(
         )
         .with_input(input))
         .map(|dispatch| dispatch.with_vars(vars))
-    } else {
+    } else if let Some(subject) = subject {
         Ok(protocol::SubjectDispatch::for_custom(
             subject.title.unwrap_or_else(|| subject.id.clone()),
             subject.description.unwrap_or_default(),
@@ -218,6 +223,15 @@ async fn resolve_workflow_run_dispatch_from_input(
             "manual-cli-run",
         ))
         .map(|dispatch| dispatch.with_vars(vars))
+    } else {
+        // No task/requirement/custom subject: a genuinely subjectless run.
+        Ok(protocol::SubjectDispatch::subjectless(
+            workflow_ref.unwrap_or_else(|| default_project_workflow_ref(project_root)),
+            "manual-cli-run",
+            Utc::now(),
+        )
+        .with_input(input)
+        .with_vars(vars))
     }
 }
 
@@ -1175,7 +1189,7 @@ mod tests {
         .await
         .expect("dispatch should resolve");
 
-        assert_eq!(dispatch.subject_id(), task.id);
+        assert_eq!(dispatch.subject_id(), Some(task.id.as_str()));
         assert_eq!(dispatch.workflow_ref, orchestrator_core::workflow_ref_for_task(&task));
         assert_eq!(dispatch.trigger_source, "manual-cli-run");
     }
@@ -1206,7 +1220,7 @@ mod tests {
         .await
         .expect("legacy input should resolve");
 
-        assert_eq!(dispatch.subject_id(), task.id);
+        assert_eq!(dispatch.subject_id(), Some(task.id.as_str()));
         assert_eq!(dispatch.workflow_ref, orchestrator_core::workflow_ref_for_task(&task));
     }
 
@@ -1278,7 +1292,7 @@ mod tests {
             .await
             .expect("legacy raw payload should resolve");
 
-        assert_eq!(dispatch.subject_id(), task.id);
+        assert_eq!(dispatch.subject_id(), Some(task.id.as_str()));
         assert_eq!(dispatch.input, Some(serde_json::json!({"k":"v"})));
     }
 

@@ -113,7 +113,7 @@ pub async fn recover_orphaned_running_workflows(
         }
         if active_subject_ids.contains(&workflow.id)
             || externally_active_workflows.contains(&workflow.id)
-            || active_subject_ids.contains(workflow.subject.id())
+            || workflow.subject.as_ref().is_some_and(|s| active_subject_ids.contains(s.id()))
         {
             continue;
         }
@@ -138,7 +138,7 @@ pub async fn recover_orphaned_running_workflows(
             info!(
                 actor = protocol::ACTOR_DAEMON,
                 workflow_id = %workflow.id,
-                subject_id = %workflow.subject.id(),
+                subject_id = %workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                 task_id = %workflow.task_id,
                 current_phase = workflow.current_phase.as_deref().unwrap_or_default(),
                 "preserving resumable in-flight workflow for resume (durable journal active); not cancelling"
@@ -149,7 +149,7 @@ pub async fn recover_orphaned_running_workflows(
         warn!(
             actor = protocol::ACTOR_DAEMON,
             workflow_id = %workflow.id,
-            subject_id = %workflow.subject.id(),
+            subject_id = %workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
             task_id = %workflow.task_id,
             "recovering orphaned running workflow"
         );
@@ -281,13 +281,13 @@ pub(crate) async fn resumable_orphans_for_redispatch(
         }
         if active_subject_ids.contains(&workflow.id)
             || externally_active_workflows.contains(&workflow.id)
-            || active_subject_ids.contains(workflow.subject.id())
+            || workflow.subject.as_ref().is_some_and(|s| active_subject_ids.contains(s.id()))
         {
             continue;
         }
         // Skip subjects whose detached runner from a previous daemon is still
         // alive (see `live_orphan_subjects` above).
-        if live_orphan_subjects.contains(workflow.subject.id())
+        if workflow.subject.as_ref().is_some_and(|s| live_orphan_subjects.contains(s.id()))
             || (!workflow.task_id.is_empty() && live_orphan_subjects.contains(&workflow.task_id))
         {
             continue;
@@ -385,7 +385,7 @@ pub async fn reconcile_manual_phase_timeouts(hub: Arc<dyn ServiceHub>, project_r
             project_terminal_workflow_result(
                 hub.clone(),
                 project_root,
-                updated.subject.id(),
+                updated.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                 Some(updated.task_id.as_str()),
                 updated.workflow_ref.as_deref(),
                 Some(updated.id.as_str()),

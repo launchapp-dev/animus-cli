@@ -62,19 +62,29 @@ impl CliProjectTickServices {
             if started >= limit {
                 break;
             }
-            if !dispatched_subjects.insert(workflow.subject.id().to_string()) {
-                continue;
+            // Subjectless runs carry no subject to dedup on — each is distinct.
+            if let Some(subject) = workflow.subject.as_ref() {
+                if !dispatched_subjects.insert(subject.id().to_string()) {
+                    continue;
+                }
             }
             let workflow_ref = workflow.workflow_ref.clone().unwrap_or_else(|| "standard".to_string());
             // Relay the owner actor the run bootstrapped with so the restarted
             // run scopes identically; `None` => system/global run.
             let actor = state_manager.load_workflow_actor(&workflow.id);
-            let dispatch = orchestrator_daemon_runtime::SubjectDispatch::for_subject_with_metadata(
-                workflow.subject.clone(),
-                workflow_ref,
-                "journal-resume",
-                chrono::Utc::now(),
-            )
+            let dispatch = match workflow.subject.clone() {
+                Some(subject) => orchestrator_daemon_runtime::SubjectDispatch::for_subject_with_metadata(
+                    subject,
+                    workflow_ref,
+                    "journal-resume",
+                    chrono::Utc::now(),
+                ),
+                None => orchestrator_daemon_runtime::SubjectDispatch::subjectless(
+                    workflow_ref,
+                    "journal-resume",
+                    chrono::Utc::now(),
+                ),
+            }
             .with_input(workflow.input.clone())
             .with_vars(workflow.vars.clone())
             .with_actor(actor);
@@ -91,7 +101,7 @@ impl CliProjectTickServices {
                             format!(
                                 "journal-resume: re-dispatched in-flight workflow {} (subject {}) from phase boundary {}",
                                 workflow.id,
-                                workflow.subject.id(),
+                                workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
                                 workflow.current_phase.as_deref().unwrap_or("<index>")
                             ),
                         )
@@ -322,20 +332,29 @@ impl DefaultProjectTickServices for CliProjectTickServices {
             }
             DispatchNotice::Failed { dispatch, error } => {
                 self.logger
-                    .error("process", format!("failed to start runner for {}", dispatch.subject_key()))
+                    .error(
+                        "process",
+                        format!("failed to start runner for {}", dispatch.subject_key().unwrap_or_default()),
+                    )
                     .err(error)
                     .emit();
             }
             DispatchNotice::Deferred { dispatch, reason } => {
                 self.logger
-                    .info("process", format!("deferred runner spawn for {} to next tick", dispatch.subject_key()))
+                    .info(
+                        "process",
+                        format!(
+                            "deferred runner spawn for {} to next tick",
+                            dispatch.subject_key().unwrap_or_default()
+                        ),
+                    )
                     .meta(serde_json::json!({"reason": reason}))
                     .emit();
             }
             DispatchNotice::Started { dispatch, .. } => {
                 self.logger
-                    .info("queue.dispatch", format!("dispatched {}", dispatch.subject_key()))
-                    .subject(dispatch.subject_id())
+                    .info("queue.dispatch", format!("dispatched {}", dispatch.subject_key().unwrap_or_default()))
+                    .subject(dispatch.subject_id().unwrap_or_default())
                     .meta(serde_json::json!({"workflow_ref": dispatch.workflow_ref}))
                     .emit();
             }

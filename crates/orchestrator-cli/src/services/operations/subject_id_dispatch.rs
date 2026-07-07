@@ -277,9 +277,9 @@ mod tests {
         let subject_ref = subject_ref_for_kind("blog", "blog:BLOG-001");
         let dispatch =
             SubjectDispatch::for_subject_with_metadata(subject_ref, "draft-post", "manual-queue-enqueue", Utc::now());
-        assert_eq!(dispatch.subject_kind(), "blog");
-        assert_eq!(dispatch.to_workflow_run_input().subject().kind(), "blog");
-        assert_eq!(dispatch.to_workflow_run_input().subject().id(), "blog:BLOG-001");
+        assert_eq!(dispatch.subject_kind(), Some("blog"));
+        assert_eq!(dispatch.to_workflow_run_input().subject().unwrap().kind(), "blog");
+        assert_eq!(dispatch.to_workflow_run_input().subject().unwrap().id(), "blog:BLOG-001");
     }
 
     #[test]

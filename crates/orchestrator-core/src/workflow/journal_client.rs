@@ -370,16 +370,16 @@ pub(crate) fn to_journal_run(workflow: &OrchestratorWorkflow) -> Result<JournalR
     // deserialize with `subject = SubjectRef::task("")` (empty id) while the real
     // id still lives in `task_id`. Mirror the `workflow_task_id` fallback used
     // elsewhere so SQLite->plugin imports of old task runs index a non-null id.
-    let subject_id = match workflow.subject.id() {
-        "" => workflow.task_id.as_str(),
-        id => id,
+    let subject_id = match workflow.subject.as_ref().map(|s| s.id()) {
+        None | Some("") => workflow.task_id.as_str(),
+        Some(id) => id,
     };
     if !subject_id.is_empty() {
         if let Some(obj) = blob.as_object_mut() {
             obj.insert(SUBJECT_ID_BLOB_KEY.to_string(), serde_json::Value::String(subject_id.to_string()));
         }
     }
-    let kind = if workflow.subject.kind.is_empty() { None } else { Some(workflow.subject.kind.clone()) };
+    let kind = workflow.subject.as_ref().map(|s| s.kind.clone()).filter(|k| !k.is_empty());
     Ok(JournalRun {
         workflow_id: workflow.id.clone(),
         workflow_ref: workflow.workflow_ref.clone(),
@@ -833,7 +833,7 @@ mod tests {
             id: id.to_string(),
             task_id: "TASK-1".to_string(),
             workflow_ref: Some("task-default".to_string()),
-            subject: SubjectRef::task("TASK-1".to_string()),
+            subject: Some(SubjectRef::task("TASK-1".to_string())),
             input: None,
             vars: HashMap::new(),
             status: WorkflowStatus::Running,
@@ -869,7 +869,7 @@ mod tests {
         let mut wf = sample_workflow(id);
         // A generic BaaS dynamic-kind subject carries NO task_id and is
         // kind-qualified (e.g. blog:BLOG-001).
-        wf.subject = SubjectRef::new(kind, subject_id);
+        wf.subject = Some(SubjectRef::new(kind, subject_id));
         wf.task_id = String::new();
         wf.workflow_ref = Some("draft-blog".to_string());
         wf
@@ -890,8 +890,8 @@ mod tests {
         // And it must round-trip back to the same subject (the denormalized
         // mirror is stripped; the model derives the subject from `subject`).
         let back = from_journal_run(run).expect("from run");
-        assert_eq!(back.subject.kind(), "blog");
-        assert_eq!(back.subject.id(), "blog:BLOG-001");
+        assert_eq!(back.subject.as_ref().unwrap().kind(), "blog");
+        assert_eq!(back.subject.as_ref().unwrap().id(), "blog:BLOG-001");
         assert!(back.task_id.is_empty());
     }
 
@@ -914,7 +914,7 @@ mod tests {
         // The denormalized key must not break workflow deserialization.
         let back = from_journal_run(run).expect("from run with subject_id key");
         assert_eq!(back.id, "wf-blog-2");
-        assert_eq!(back.subject.id(), "blog:BLOG-002");
+        assert_eq!(back.subject.as_ref().unwrap().id(), "blog:BLOG-002");
     }
 
     #[test]
