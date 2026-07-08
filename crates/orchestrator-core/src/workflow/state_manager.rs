@@ -377,6 +377,35 @@ impl WorkflowStateManager {
         Ok(workflows)
     }
 
+    /// Inter-workflow fan-in coordinator (see [`super::dependency`]). Snapshots
+    /// every run from the journal and returns the held JOIN runs that are ready to
+    /// FIRE or should be CANCELLED right now, per their declared upstream barrier.
+    ///
+    /// The daemon calls this on each `workflow_completed` / `workflow_failed` event
+    /// (and its reconcile tick): fire (release + dispatch) the [`JoinDecision::Fire`]
+    /// joins, cancel the [`JoinDecision::Cancel`] ones. Because only `Pending` /
+    /// `Paused` joins are eligible, a join is returned at most once over its
+    /// lifetime — the fan-in is idempotent under repeated evaluation.
+    ///
+    /// [`JoinDecision::Fire`]: super::dependency::JoinDecision::Fire
+    /// [`JoinDecision::Cancel`]: super::dependency::JoinDecision::Cancel
+    pub fn resolve_ready_joins(&self) -> Result<Vec<super::dependency::JoinResolution>> {
+        let runs = self.list_all()?;
+        let snapshots: Vec<super::dependency::RunSnapshot> =
+            runs.iter().map(super::dependency::RunSnapshot::from_workflow).collect();
+        Ok(super::dependency::resolve_ready_joins(&snapshots))
+    }
+
+    /// Every held JOIN run's resolution, including `Wait` and `Block` (see
+    /// [`super::dependency::resolve_all_joins`]). For status/observability surfaces
+    /// that show why a join is still held.
+    pub fn resolve_all_joins(&self) -> Result<Vec<super::dependency::JoinResolution>> {
+        let runs = self.list_all()?;
+        let snapshots: Vec<super::dependency::RunSnapshot> =
+            runs.iter().map(super::dependency::RunSnapshot::from_workflow).collect();
+        Ok(super::dependency::resolve_all_joins(&snapshots))
+    }
+
     pub fn query_ids(
         &self,
         page: ListPageRequest,

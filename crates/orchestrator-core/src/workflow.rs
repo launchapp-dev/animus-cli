@@ -1,3 +1,4 @@
+mod dependency;
 mod environment_client;
 mod journal_client;
 mod lifecycle_executor;
@@ -5,6 +6,12 @@ mod phase_plan;
 mod resume;
 mod state_machine;
 mod state_manager;
+
+pub use dependency::{
+    classify_status, detect_cycles, evaluate_join, is_awaiting_release, resolve_all_joins, resolve_ready_joins,
+    should_hold_at_enqueue, validate_declaration, DependencyError, JoinDecision, JoinResolution, RunDependencySpec,
+    RunSnapshot, UpstreamFailurePolicy, UpstreamOutcome, DEPENDS_ON_VAR, JOIN_POLICY_VAR,
+};
 
 pub use environment_client::{shutdown_resident_hosts as shutdown_environment_hosts, EnvironmentClient};
 
