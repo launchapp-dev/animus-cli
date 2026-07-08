@@ -327,7 +327,7 @@ animus
 │   ├── get                  Fetch a single subject by id from the active subject_backend plugin
 │   ├── create               Create a subject through the active subject_backend plugin
 │   ├── batch-create         Create up to 100 subjects from a JSON `--file` items array; `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-create` MCP tool
-│   ├── update               Update a subject through the active subject_backend plugin
+│   ├── update               Update a subject through the active subject_backend plugin (`--title` renames it; `--status` / `--priority` / `--labels` / `--body`)
 │   ├── batch-update         Patch up to 100 subjects from a JSON `--file` items array; `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-update` MCP tool
 │   ├── next                 Return the highest-priority Ready subject for the given kind
 │   ├── status               Set the status of a subject by id through the active subject_backend

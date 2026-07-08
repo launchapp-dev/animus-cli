@@ -54,6 +54,7 @@ pub(super) fn build_subject_update_args(input: &SubjectUpdateInput) -> Vec<Strin
         "--id".to_string(),
         input.id.clone(),
     ];
+    push_opt(&mut args, "--title", input.title.clone());
     push_opt(&mut args, "--status", input.status.clone());
     push_opt(&mut args, "--priority", input.priority.clone());
     if !input.labels.is_empty() {
@@ -80,10 +81,11 @@ pub(super) fn build_subject_batch_update_item_args(kind: &str, item: &SubjectBat
     build_subject_update_args(&SubjectUpdateInput {
         kind: kind.to_string(),
         id: item.id.clone(),
+        // batch-update doesn't carry title/body fields; single-update only.
+        title: None,
         status: item.status.clone(),
         priority: item.priority.clone(),
         labels: item.labels.clone(),
-        // batch-update doesn't carry a body field; single-update only.
         body: None,
         project_root: None,
     })

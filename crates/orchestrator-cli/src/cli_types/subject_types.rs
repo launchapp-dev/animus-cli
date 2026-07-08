@@ -148,6 +148,9 @@ pub(crate) struct SubjectUpdateArgs {
     /// kind-qualified form (e.g. `task:TASK-001`).
     #[arg(long, value_name = "ID")]
     pub id: String,
+    /// Rename the subject. Replaces the subject's title with this value.
+    #[arg(long, value_name = "TITLE")]
+    pub title: Option<String>,
     /// New normalized status.
     #[arg(long, value_name = "STATUS")]
     pub status: Option<String>,
