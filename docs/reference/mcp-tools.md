@@ -1,14 +1,14 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 91 built-in tools across daemon, cost, queue, agent, output,
+registers 93 built-in tools across daemon, cost, queue, agent, output,
 workflow, plugin, skill, subject, logs, tool-discovery, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
 and returning structured results.
 
-That headline 91 counts the full management-mode surface. A default
-agent-injected server (`animus mcp serve` without `--management`) exposes 89:
+That headline 93 counts the full management-mode surface. A default
+agent-injected server (`animus mcp serve` without `--management`) exposes 91:
 the two `animus.interactions.*` management tools are gated behind
 `--management` so an agent can never list or answer its own pending approvals.
 
@@ -134,16 +134,18 @@ approval gate stays human-only.
 | `animus.daemon.agents` | List currently running agent tasks and their status | `project_root` |
 | `animus.daemon.logs` | Read recent daemon log entries | `limit`, `search`, `project_root` |
 | `animus.daemon.config` | Read current daemon automation settings | `project_root` |
-| `animus.daemon.config-set` | Update daemon runtime settings and notification config | `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
+| `animus.daemon.config-set` | Update daemon runtime settings and notification config | `pool_size` (alias: `max_agents`), `interval_secs`, `max_tasks_per_tick`, `stale_threshold_hours`, `phase_timeout_secs`, `max_daily_usd`, `notification_config_json`, `notification_config_file`, `clear_notification_config`, `project_root` |
 | `animus.daemon.observe` | Routing front-door over the existing observability surfaces: returns the merged, chronological window of daemon events + logs (or routes to a single `source`). Non-streaming — always returns and never follows live. Works offline (reads scoped event/log history; the daemon need not be running) | `since`, `source` (`logs`/`events`/`stream`/`workflow`), `workflow_id`, `limit`, `project_root` |
 
 ---
 
-## Cost & Budget (1 tool)
+## Cost & Budget (3 tools)
 
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `animus.cost.decisions` | List recorded budget-cap breaches from the scoped breach log. Works offline (reads the scoped breach log; the daemon need not be running) | `since`, `project_root` |
+| `animus.budget.get` | Read the fleet budget posture: fleet daily spend cap, today's rolling-24h spend, remaining headroom, whether the cap is exceeded, whether dispatch is paused on the cap, and every configured per-workflow / per-phase budget cap. Works offline | `project_root` |
+| `animus.budget.set` | Set or clear the fleet daily spend cap (admin). Wraps `daemon config --max-daily-usd`; hot-reloaded by the running daemon | `max_daily_usd`, `clear`, `project_root` |
 
 ---
 

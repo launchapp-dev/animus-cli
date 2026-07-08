@@ -129,6 +129,13 @@ impl DaemonOpsRouting for DaemonOpsRoutingImpl {
         if let Some(reason) = plugin_process_cap_degraded_reason() {
             reasons.push(reason);
         }
+        // Fleet daily-cap latch: when the daemon has paused dispatch because
+        // the rolling-24h spend cap is blown it otherwise reports
+        // `healthy: true` and stops leasing silently. Surface it as a
+        // degraded reason so `daemon health` last_error names the pause.
+        if let Some(reason) = crate::services::cost::dispatch_paused_reason(&self.project_root) {
+            reasons.push(reason);
+        }
 
         let (status, last_error) = if wire_status == DaemonHealthStatus::Healthy && !reasons.is_empty() {
             (DaemonHealthStatus::Degraded, Some(reasons.join("; ")))
