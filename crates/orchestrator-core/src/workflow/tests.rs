@@ -376,6 +376,80 @@ fn resume_clears_failure_and_can_complete_after_retry() {
     assert!(workflow.failure_reason.is_none());
 }
 
+// A dispatcher-held fan-in join: a `Pending` run with no phase started (the shape
+// `release_held_run` acts on). Carries a dependency spec in `vars` for realism.
+fn make_held_join_run(id: &str, upstreams: &[&str]) -> OrchestratorWorkflow {
+    let mut vars = std::collections::HashMap::new();
+    super::dependency::RunDependencySpec {
+        upstreams: upstreams.iter().map(|s| s.to_string()).collect(),
+        policy: super::dependency::UpstreamFailurePolicy::Block,
+    }
+    .write_into_vars(&mut vars);
+    OrchestratorWorkflow {
+        id: id.to_string(),
+        task_id: "TASK-join".to_string(),
+        workflow_ref: Some("standard-workflow".to_string()),
+        subject: Some(SubjectRef::task("TASK-join".to_string())),
+        input: None,
+        vars,
+        status: WorkflowStatus::Pending,
+        current_phase_index: 0,
+        phases: vec![WorkflowPhaseExecution {
+            phase_id: "implementation".to_string(),
+            status: WorkflowPhaseStatus::Pending,
+            started_at: None,
+            completed_at: None,
+            attempt: 0,
+            error_message: None,
+        }],
+        machine_state: WorkflowMachineState::Idle,
+        current_phase: None,
+        started_at: Utc::now(),
+        completed_at: None,
+        failure_reason: None,
+        checkpoint_metadata: WorkflowCheckpointMetadata::default(),
+        rework_counts: std::collections::HashMap::new(),
+        total_reworks: 0,
+        decision_history: Vec::<WorkflowDecisionRecord>::new(),
+    }
+}
+
+#[test]
+fn release_held_run_starts_the_run_exactly_once() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    let mut held = make_held_join_run("WF-join", &["WF-a"]);
+    assert!(super::dependency::is_awaiting_release(held.status));
+    assert!(held.phases.iter().all(|p| p.started_at.is_none()), "held join has not started a phase");
+
+    // Release: the barrier cleared, so the dispatcher starts the run.
+    assert!(executor.release_held_run(&mut held), "first release transitions the held run");
+    assert_eq!(held.status, WorkflowStatus::Running);
+    assert_eq!(held.phases[0].status, WorkflowPhaseStatus::Running);
+    assert!(held.phases[0].started_at.is_some());
+
+    // Idempotent: a duplicate release from a repeated evaluation is a no-op.
+    assert!(!executor.release_held_run(&mut held), "a running run is not re-released");
+    assert_eq!(held.status, WorkflowStatus::Running);
+
+    // The released run then completes normally through the standard lifecycle.
+    executor.mark_current_phase_success(&mut held).expect("phase success");
+    assert_eq!(held.status, WorkflowStatus::Completed);
+}
+
+#[test]
+fn release_held_run_ignores_a_run_that_already_started() {
+    let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);
+    // A normally-bootstrapped (already Running) run is never re-started by a
+    // stray release call.
+    let mut running = executor.bootstrap(
+        "WF-running".to_string(),
+        WorkflowRunInput::for_task("TASK-1".to_string(), Some("standard-workflow".to_string())),
+    );
+    assert_eq!(running.status, WorkflowStatus::Running);
+    assert!(!executor.release_held_run(&mut running));
+    assert_eq!(running.phases[0].attempt, 1, "attempt count untouched");
+}
+
 #[test]
 fn lifecycle_marks_completed_workflow_as_merge_conflict() {
     let executor = WorkflowLifecycleExecutor::new(vec!["implementation".to_string()]);

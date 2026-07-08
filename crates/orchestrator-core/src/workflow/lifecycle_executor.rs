@@ -461,6 +461,56 @@ impl WorkflowLifecycleExecutor {
         }
     }
 
+    /// Release a run that the dispatcher is HOLDING for a fan-in barrier (see
+    /// `super::dependency`): start it now that its upstream dependencies are
+    /// satisfied. This is the lifecycle primitive the dispatch/reconcile owner
+    /// calls for each `resolve_ready_joins` result whose decision is `Fire` — a held
+    /// join is represented as a `Pending` run with no phase yet started, exactly the
+    /// shape this method acts on.
+    ///
+    /// Idempotent and narrow: it acts ONLY on a still-held run — one that is
+    /// `Pending` and has not started any phase. A run that has already been
+    /// released (or is running / terminal) is left untouched and the call returns
+    /// `false`, so a duplicate release from a repeated evaluation is a safe no-op.
+    /// Returns `true` when the run was transitioned into its first running phase.
+    pub fn release_held_run(&self, workflow: &mut OrchestratorWorkflow) -> bool {
+        // A held run is Pending with no phase yet started; anything else has already
+        // advanced past the barrier and must not be re-started.
+        if workflow.status != WorkflowStatus::Pending {
+            return false;
+        }
+        if workflow.phases.iter().any(|phase| phase.started_at.is_some()) {
+            return false;
+        }
+
+        let mut machine = self.state_machine(workflow.machine_state);
+        for event in [WorkflowMachineEvent::Start, WorkflowMachineEvent::PhaseStarted] {
+            if let Err(error) = machine.apply(event) {
+                tracing::warn!(
+                    workflow_id = %workflow.id,
+                    state = ?machine.state(),
+                    event = ?event,
+                    %error,
+                    "release_held_run halted: transition unavailable; run left held"
+                );
+                return false;
+            }
+        }
+
+        workflow.machine_state = machine.state();
+        workflow.sync_status();
+        let now = Utc::now();
+        if let Some(first) = workflow.phases.get_mut(0) {
+            first.status = WorkflowPhaseStatus::Running;
+            first.started_at = Some(now);
+            first.attempt = first.attempt.saturating_add(1);
+            workflow.current_phase = Some(first.phase_id.clone());
+        }
+        workflow.current_phase_index = 0;
+        workflow.started_at = now;
+        true
+    }
+
     pub fn pause(&self, workflow: &mut OrchestratorWorkflow) {
         if matches!(
             workflow.status,
