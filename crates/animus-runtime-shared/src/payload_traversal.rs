@@ -79,12 +79,20 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
     }
 
     let verdict_str = value.get("verdict").and_then(Value::as_str)?;
-    let verdict = match verdict_str.trim().to_ascii_lowercase().as_str() {
-        "advance" => orchestrator_core::PhaseDecisionVerdict::Advance,
-        "rework" => orchestrator_core::PhaseDecisionVerdict::Rework,
-        "fail" => orchestrator_core::PhaseDecisionVerdict::Fail,
-        "skip" => orchestrator_core::PhaseDecisionVerdict::Skip,
-        _ => return None,
+    let verdict_trimmed = verdict_str.trim();
+    if verdict_trimmed.is_empty() {
+        return None;
+    }
+    // Non-builtin verdict strings are preserved as a custom routing key on
+    // `verdict_key` (verdict enum is `Unknown`) so the workflow executor can
+    // route them through the phase `on_verdict` map. Built-in verdicts leave
+    // `verdict_key` unset.
+    let (verdict, verdict_key) = match verdict_trimmed.to_ascii_lowercase().as_str() {
+        "advance" => (orchestrator_core::PhaseDecisionVerdict::Advance, None),
+        "rework" => (orchestrator_core::PhaseDecisionVerdict::Rework, None),
+        "fail" => (orchestrator_core::PhaseDecisionVerdict::Fail, None),
+        "skip" => (orchestrator_core::PhaseDecisionVerdict::Skip, None),
+        _ => (orchestrator_core::PhaseDecisionVerdict::Unknown, Some(verdict_trimmed.to_string())),
     };
 
     let confidence = value
@@ -144,6 +152,7 @@ fn try_parse_decision(value: &Value, phase_id: &str) -> Option<orchestrator_core
         guardrail_violations,
         commit_message,
         target_phase,
+        verdict_key,
     })
 }
 
@@ -209,6 +218,26 @@ mod tests {
         assert_eq!(decision.reason, "All tests pass");
         assert!((decision.confidence - 0.95).abs() < f32::EPSILON);
         assert_eq!(decision.kind, "phase_decision");
+    }
+
+    #[test]
+    fn parse_phase_decision_preserves_custom_verdict_key() {
+        // A non-builtin verdict (agent structured output) is preserved as a
+        // routing key: verdict enum collapses to Unknown, verdict_key carries
+        // the raw string for the workflow executor to route via on_verdict.
+        let text = r#"{"kind":"phase_decision","phase_id":"triage","verdict":"needs-research","confidence":0.8,"risk":"low","reason":"missing context"}"#;
+        let decision = parse_phase_decision_from_text(text, "triage").unwrap();
+        assert_eq!(decision.verdict, orchestrator_core::PhaseDecisionVerdict::Unknown);
+        assert_eq!(decision.verdict_key.as_deref(), Some("needs-research"));
+        assert_eq!(decision.reason, "missing context");
+    }
+
+    #[test]
+    fn parse_phase_decision_builtin_verdict_has_no_key() {
+        let text = r#"{"kind":"phase_decision","phase_id":"triage","verdict":"advance","confidence":0.9}"#;
+        let decision = parse_phase_decision_from_text(text, "triage").unwrap();
+        assert_eq!(decision.verdict, orchestrator_core::PhaseDecisionVerdict::Advance);
+        assert!(decision.verdict_key.is_none());
     }
 
     #[test]
