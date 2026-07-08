@@ -469,6 +469,27 @@ pub(crate) async fn handle_workflow(
             // so normalize at the CLI boundary. Only the `task:` qualifier is
             // stripped so a foreign-kind qualifier is not silently rewritten.
             args.task_id = args.task_id.map(|id| crate::bare_task_id(&id));
+            // Deprecation notice (behavior unchanged): the legacy `--task-id` /
+            // `--requirement-id` selectors still resolve exactly as before, but
+            // `--subject-id <kind>:<id>` is now the canonical single dispatch
+            // selector. Only warn when the deprecated flag is the actual
+            // selector (i.e. `--subject-id` was not also passed). Suppressed in
+            // `--json` mode: the error/ok envelope is emitted to stderr too, so
+            // a bare warning line would corrupt the `animus.cli.v1` stream that
+            // scripted/MCP callers parse (the MCP tool schema already documents
+            // the deprecation).
+            if !json && args.subject_id.is_none() {
+                use super::subject_id_dispatch::deprecated_subject_flag_warning;
+                // `args.task_id` is already bare_task_id-normalized above; the
+                // helper qualifies both selector values with the dispatch's own
+                // rule, so an already-qualified id is preserved verbatim.
+                if let Some(id) = args.task_id.as_deref() {
+                    eprintln!("{}", deprecated_subject_flag_warning("--task-id", "task", id));
+                }
+                if let Some(id) = args.requirement_id.as_deref() {
+                    eprintln!("{}", deprecated_subject_flag_warning("--requirement-id", "requirement", id));
+                }
+            }
             let workflow_ref = args.pipeline.clone();
             // Generic BaaS subject path: resolve the subject's real kind once
             // (qualified prefix or router probe) and build a kind-correct

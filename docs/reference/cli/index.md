@@ -859,12 +859,24 @@ other subject kind. By default the entry is dispatched as soon as the daemon
 has capacity.
 
 ```bash
-animus queue enqueue --task-id TASK-001
-animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
-animus queue enqueue --title "Investigate flaky test" --description "Fails on CI"
+animus queue enqueue --subject-id task:TASK-001                      # canonical single dispatch selector
+animus queue enqueue --subject-id requirement:REQ-042 --workflow-ref ops
 animus queue enqueue --subject-id blog:BLOG-001                      # BaaS dynamic kind
+animus queue enqueue --title "Investigate flaky test" --description "Fails on CI"
 animus queue enqueue --adhoc --workflow-ref relate                   # subjectless (ad-hoc) run
+
+# DEPRECATED (still works, unchanged behavior; will be removed in a future release):
+animus queue enqueue --task-id TASK-001                              # == --subject-id task:TASK-001
+animus queue enqueue --requirement-id REQ-042                        # == --subject-id requirement:REQ-042
 ```
+
+**`--subject-id` is the canonical single dispatch selector.** The legacy
+`--task-id` / `--requirement-id` selectors are **deprecated**: they still
+accept the same values and resolve identically, but each maps directly onto
+`--subject-id` (`--task-id TASK-001` == `--subject-id task:TASK-001`;
+`--requirement-id REQ-042` == `--subject-id requirement:REQ-042`) and emits a
+one-line deprecation warning to stderr. They will be removed in a future
+release; prefer `--subject-id`.
 
 **Subjectless (ad-hoc) runs (`--adhoc`).** A workflow that finds its own
 target (or needs none) can be dispatched with NO bound subject via `--adhoc`
@@ -1835,8 +1847,8 @@ id never falls through to the `task`-favoring config default. This is what lets
 a workflow `mark-running` command (`animus subject status --id <kind>:<id>
 --status in-progress`) target the right backend without a `task` default.
 
-For subjects of an arbitrary kind (BaaS dynamic kinds like `blog`, `post`),
-`queue enqueue --subject-id` and `workflow run --subject-id` accept a
+On the dispatch surface (`queue enqueue` and `workflow run`), `--subject-id`
+is the **canonical single dispatch selector** for every kind. It accepts a
 qualified id (`blog:BLOG-001`, kind trusted — the recommended form) or a bare
 id (`BLOG-001`, kind resolved by probing installed backends that declare
 concrete kinds; a pure `subject_kind:*` catch-all backend requires the
@@ -1844,6 +1856,14 @@ qualified form). The resolved kind is preserved on the dispatch so the subject
 is leased/run under its real kind (via `<kind>/get`) instead of being coerced
 to `task`. `--subject-id` is mutually exclusive with `--task-id` /
 `--requirement-id` / `--title`.
+
+The `--task-id` / `--requirement-id` selectors on `queue enqueue` and
+`workflow run` are **deprecated** in favor of `--subject-id` (a task is
+`--subject-id task:<id>`, a requirement is `--subject-id requirement:<id>`).
+They still work with unchanged behavior but emit a one-line deprecation
+warning to stderr and will be removed in a future release. (This deprecation
+is scoped to the dispatch surface only: `workflow list --task-id` is a read
+filter and is unaffected.)
 
 ### `animus pack search` (positional query)
 

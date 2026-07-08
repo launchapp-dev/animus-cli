@@ -20,7 +20,7 @@ impl AoMcpServer {
 
     #[tool(
         name = "animus.workflow.run",
-        description = "Run a workflow for a subject. Purpose: Execute a workflow to complete subject phases automatically. Prerequisites: Subject should exist. For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like blog/post/etc.), pass subject_id (the kernel resolves the kind) instead of task_id. Example: {\"task_id\": \"TASK-001\"} or {\"subject_id\": \"blog:BLOG-001\"} or {\"subject_id\": \"blog:BLOG-001\", \"workflow_ref\": \"draft-post\"}. Sequencing: Use animus.subject.status to track progress, animus.workflow.get to monitor, and animus.workflow.pause/resume/cancel for control.",
+        description = "Run a workflow for a subject. Purpose: Execute a workflow to complete subject phases automatically. Prerequisites: Subject should exist. subject_id is the canonical single dispatch selector for every kind: a task is subject_id: \"task:TASK-001\", a requirement is subject_id: \"requirement:REQ-042\", a BaaS dynamic kind is subject_id: \"blog:BLOG-001\". DEPRECATED: task_id / requirement_id are still accepted (unchanged behavior) but will be removed in a future release; prefer subject_id. Example: {\"subject_id\": \"task:TASK-001\"} or {\"subject_id\": \"blog:BLOG-001\", \"workflow_ref\": \"draft-post\"}. Sequencing: Use animus.subject.status to track progress, animus.workflow.get to monitor, and animus.workflow.pause/resume/cancel for control.",
         input_schema = ao_schema_for_type::<WorkflowRunInput>()
     )]
     async fn ao_workflow_run(&self, params: Parameters<WorkflowRunInput>) -> Result<CallToolResult, McpError> {

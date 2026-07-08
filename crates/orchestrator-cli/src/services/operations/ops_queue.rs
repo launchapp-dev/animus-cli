@@ -9,7 +9,9 @@ use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub};
 use protocol::{SubjectDispatch, SubjectDispatchExt};
 
 use super::ops_workflow::resolve_requirement_workflow_ref;
-use super::subject_id_dispatch::{resolve_subject_id_ref, subject_ref_for_kind, RouterSubjectProbe, SubjectKindProbe};
+use super::subject_id_dispatch::{
+    deprecated_subject_flag_warning, resolve_subject_id_ref, subject_ref_for_kind, RouterSubjectProbe, SubjectKindProbe,
+};
 use crate::{invalid_input_error, print_ok, print_value, CliError, CliErrorKind, QueueCommand, QueueSubjectArgs};
 
 /// Build a genuinely subjectless (ad-hoc) dispatch with NO bound subject.
@@ -221,6 +223,26 @@ pub(crate) async fn handle_queue(
             Ok(())
         }
         QueueCommand::Enqueue(args) => {
+            // Deprecation notice (behavior unchanged): the legacy `--task-id` /
+            // `--requirement-id` selectors still resolve exactly as before, but
+            // `--subject-id <kind>:<id>` is now the canonical single dispatch
+            // selector. Only warn when the deprecated flag is the actual
+            // selector (i.e. `--subject-id` was not also passed). Suppressed in
+            // `--json` mode: the error/ok envelope is emitted to stderr too, so
+            // a bare warning line would corrupt the `animus.cli.v1` stream that
+            // scripted/MCP callers parse (the MCP tool schema already documents
+            // the deprecation).
+            if !json && args.subject_id.is_none() {
+                // Pass the raw selector value: the helper qualifies it with the
+                // same rule the dispatch uses, so an already-qualified id is
+                // preserved and the hint never names a different subject.
+                if let Some(id) = args.task_id.as_deref() {
+                    eprintln!("{}", deprecated_subject_flag_warning("--task-id", "task", id));
+                }
+                if let Some(id) = args.requirement_id.as_deref() {
+                    eprintln!("{}", deprecated_subject_flag_warning("--requirement-id", "requirement", id));
+                }
+            }
             let mut input = args.input_json.clone().map(|value| serde_json::from_str(&value)).transpose()?;
             inject_conversation_id_from_env(&mut input);
             let dispatch = if let Some(subject_id) = args.subject_id.clone() {

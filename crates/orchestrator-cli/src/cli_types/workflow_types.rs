@@ -280,10 +280,15 @@ pub(crate) struct WorkflowRunArgs {
         long,
         value_name = "TASK_ID",
         group = "subject",
-        help = "Task to run the workflow for. Accepts a bare id (TASK-001) or the qualified form (task:TASK-001)."
+        help = "Task to run the workflow for. Accepts a bare id (TASK-001) or the qualified form (task:TASK-001). [DEPRECATED: use --subject-id task:<id>; --subject-id is the single dispatch selector]"
     )]
     pub(crate) task_id: Option<String>,
-    #[arg(long, value_name = "REQ_ID", group = "subject", help = "Requirement id to run the workflow for.")]
+    #[arg(
+        long,
+        value_name = "REQ_ID",
+        group = "subject",
+        help = "Requirement id to run the workflow for. [DEPRECATED: use --subject-id requirement:<id>; --subject-id is the single dispatch selector]"
+    )]
     pub(crate) requirement_id: Option<String>,
     #[arg(long, value_name = "TITLE", group = "subject", help = "Custom workflow title for freeform execution.")]
     pub(crate) title: Option<String>,

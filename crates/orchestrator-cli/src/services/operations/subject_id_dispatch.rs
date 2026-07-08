@@ -45,6 +45,67 @@ pub(crate) fn subject_ref_for_kind(kind: &str, id: impl Into<String>) -> Subject
     }
 }
 
+/// Compute the `--subject-id` value that is EXACTLY equivalent to a legacy
+/// `--<kind>-id <id>` dispatch, or `None` when no direct drop-in exists.
+///
+/// A legacy `--task-id X` / `--requirement-id X` always dispatches under the
+/// built-in `kind`. The generic `--subject-id V` path instead reads the kind
+/// from the prefix before `V`'s first `:`. So the two agree only when:
+/// - `id` is bare (no `:`)                → `--subject-id <kind>:<id>`, or
+/// - `id` is qualified with the SAME kind (`task:TASK-1`) → `--subject-id <id>`.
+///
+/// When `id` carries a FOREIGN qualifier (e.g. `--task-id linear:ENG-9`, which
+/// still resolves under kind `task`), no `--subject-id` value reproduces it
+/// (the prefix would be read as kind `linear`), so this returns `None` and the
+/// caller emits a generic hint rather than a wrong, non-equivalent id.
+fn equivalent_subject_id(kind: &str, id: &str) -> Option<String> {
+    let trimmed = id.trim();
+    match trimmed.split_once(':') {
+        None => Some(format!("{}:{trimmed}", kind.trim())),
+        Some((prefix, _)) if prefix.trim().eq_ignore_ascii_case(kind.trim()) => Some(trimmed.to_string()),
+        Some(_) => None,
+    }
+}
+
+/// Build the one-line deprecation warning emitted to stderr when a dispatch
+/// surface is invoked with a legacy `--task-id` / `--requirement-id` selector
+/// (CLI) or the matching `task_id` / `requirement_id` MCP input. Returns the
+/// message so it stays unit-testable; the caller writes it to stderr.
+///
+/// `flag` is the deprecated selector name (e.g. `--task-id`), `kind` is the
+/// canonical subject kind token (`task` / `requirement`), and `id` is the
+/// selector value the dispatch actually resolves (bare or already qualified).
+/// When an exactly-equivalent `--subject-id` value exists (see
+/// [`equivalent_subject_id`]) the hint names it; for a foreign-qualified id it
+/// falls back to a generic pointer so it never suggests a different subject.
+///
+/// The hint maps the SELECTOR (subject identity): `--task-id TASK-1` and
+/// `--subject-id task:TASK-1` resolve the same subject. It intentionally does
+/// NOT promise identical DEFAULT workflow selection when `--workflow-ref` is
+/// omitted: the legacy `--requirement-id` path defaults via
+/// `resolve_requirement_workflow_ref`, and `workflow run --task-id` for an
+/// in-tree frontend task can pick `ui-ux-standard`, whereas the generic
+/// `--subject-id` path uses the project default. That asymmetry is by design
+/// (see this repo's dispatch KEY INSIGHT: task/requirement resolution is kept
+/// on its own path and is NOT rerouted through `--subject-id`), so a caller
+/// that relies on a non-default workflow should pass `--workflow-ref`.
+// TODO(codex-p2): the default workflow_ref for a bare `--subject-id` migration
+// can differ from the legacy requirement/frontend-task defaulting; equalizing
+// it would require rerouting those paths, which the task scope forbids.
+pub(crate) fn deprecated_subject_flag_warning(flag: &str, kind: &str, id: &str) -> String {
+    match equivalent_subject_id(kind, id) {
+        Some(subject_id) => format!(
+            "warning: {flag} is deprecated and will be removed in a future release; \
+             use --subject-id {subject_id} instead. \
+             --subject-id is the single dispatch selector."
+        ),
+        None => format!(
+            "warning: {flag} is deprecated and will be removed in a future release; \
+             use --subject-id (the single dispatch selector) instead of {flag}."
+        ),
+    }
+}
+
 /// Abstraction over the subject router used to resolve a bare id's real kind.
 /// Split out as a trait so the resolution logic is unit-testable with a stub
 /// router (no plugin processes spawned).
@@ -195,6 +256,42 @@ mod tests {
         async fn subject_exists(&self, kind: &str, qualified_id: &str) -> Result<bool> {
             Ok(self.existing.get(&(kind.to_string(), qualified_id.to_string())).copied().unwrap_or(false))
         }
+    }
+
+    #[test]
+    fn deprecated_subject_flag_warning_names_flag_and_canonical_form() {
+        let msg = deprecated_subject_flag_warning("--task-id", "task", "TASK-1");
+        assert!(msg.contains("deprecated"), "got: {msg}");
+        assert!(msg.contains("--subject-id task:TASK-1"), "got: {msg}");
+    }
+
+    #[test]
+    fn deprecated_subject_flag_warning_keeps_same_kind_qualifier() {
+        // `--task-id task:TASK-1` is exactly equivalent to `--subject-id
+        // task:TASK-1`, so the hint names it verbatim (no double-prefix).
+        let msg = deprecated_subject_flag_warning("--task-id", "task", "task:TASK-1");
+        assert!(msg.contains("--subject-id task:TASK-1"), "got: {msg}");
+        assert!(!msg.contains("task:task:TASK-1"), "must not double-qualify: {msg}");
+    }
+
+    #[test]
+    fn deprecated_subject_flag_warning_foreign_qualifier_gives_generic_hint() {
+        // `--task-id linear:ENG-9` still dispatches under kind=task, but no
+        // `--subject-id` value reproduces that (the prefix would be read as
+        // kind=linear), so the hint must NOT prescribe a non-equivalent id.
+        let msg = deprecated_subject_flag_warning("--task-id", "task", "linear:ENG-9");
+        assert!(msg.contains("deprecated"), "got: {msg}");
+        assert!(!msg.contains("--subject-id linear:ENG-9"), "must not suggest a foreign-kind id: {msg}");
+        assert!(!msg.contains("--subject-id task:ENG-9"), "must not re-qualify a foreign id: {msg}");
+        assert!(msg.contains("--subject-id"), "still points at the canonical selector: {msg}");
+    }
+
+    #[test]
+    fn equivalent_subject_id_maps_bare_and_same_kind_and_rejects_foreign() {
+        assert_eq!(equivalent_subject_id("task", "TASK-1").as_deref(), Some("task:TASK-1"));
+        assert_eq!(equivalent_subject_id("task", "task:TASK-1").as_deref(), Some("task:TASK-1"));
+        assert_eq!(equivalent_subject_id("requirement", "REQ-42").as_deref(), Some("requirement:REQ-42"));
+        assert_eq!(equivalent_subject_id("task", "linear:ENG-9"), None);
     }
 
     #[test]

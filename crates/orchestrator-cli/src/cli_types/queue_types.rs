@@ -31,14 +31,14 @@ pub(crate) struct QueueEnqueueArgs {
         long,
         value_name = "TASK_ID",
         group = "subject",
-        help = "Task subject to enqueue (e.g. TASK-001). Mutually exclusive with --requirement-id / --title."
+        help = "Task subject to enqueue (e.g. TASK-001). Mutually exclusive with --requirement-id / --title. [DEPRECATED: use --subject-id task:<id>; --subject-id is the single dispatch selector]"
     )]
     pub(crate) task_id: Option<String>,
     #[arg(
         long,
         value_name = "REQ_ID",
         group = "subject",
-        help = "Requirement subject to enqueue (e.g. REQ-042). Mutually exclusive with --task-id / --title."
+        help = "Requirement subject to enqueue (e.g. REQ-042). Mutually exclusive with --task-id / --title. [DEPRECATED: use --subject-id requirement:<id>; --subject-id is the single dispatch selector]"
     )]
     pub(crate) requirement_id: Option<String>,
     #[arg(
