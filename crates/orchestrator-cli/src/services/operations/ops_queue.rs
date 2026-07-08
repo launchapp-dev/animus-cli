@@ -5,10 +5,11 @@ pub(crate) use control_routing::build_queue_routing;
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
-use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub, workflow_ref_for_task};
+use orchestrator_core::{load_workflow_config_or_default, services::ServiceHub};
 use protocol::{SubjectDispatch, SubjectDispatchExt};
 
 use super::ops_workflow::resolve_requirement_workflow_ref;
+use super::subject_id_dispatch::{resolve_subject_id_ref, subject_ref_for_kind, RouterSubjectProbe, SubjectKindProbe};
 use crate::{invalid_input_error, print_ok, print_value, CliError, CliErrorKind, QueueCommand, QueueSubjectArgs};
 
 /// Build a genuinely subjectless (ad-hoc) dispatch with NO bound subject.
@@ -29,7 +30,6 @@ fn subjectless_dispatch(workflow_ref: String, input: Option<serde_json::Value>) 
 
 #[allow(clippy::too_many_arguments)]
 async fn resolve_enqueue_dispatch(
-    hub: Arc<dyn ServiceHub>,
     project_root: &str,
     task_id: Option<String>,
     requirement_id: Option<String>,
@@ -49,24 +49,26 @@ async fn resolve_enqueue_dispatch(
     }
     match (task_id, requirement_id, title) {
         (Some(task_id), None, None) => {
-            let task = hub.tasks().get(&task_id).await?;
-            let workflow_ref = workflow_ref.unwrap_or_else(|| workflow_ref_for_task(&task));
-            Ok(SubjectDispatch::for_task_with_metadata(
-                task.id.clone(),
-                workflow_ref,
-                "manual-queue-enqueue",
-                chrono::Utc::now(),
-            )
-            .with_input(input))
+            // Resolve the task's existence through the installed subject_backend
+            // plugin(s) — the SAME store `subject get/list/status` read — instead
+            // of the in-tree file-backed task store. On a deployment whose
+            // subjects live in a plugin backend (e.g. animus-postgres) the
+            // in-tree store is empty, so the legacy `hub.tasks().get()` path
+            // returned not_found for subjects that demonstrably exist. This keeps
+            // enqueue-by-id consistent with the generic `--subject-id` path.
+            let workflow_ref = workflow_ref.unwrap_or_else(|| {
+                load_workflow_config_or_default(std::path::Path::new(project_root)).config.default_workflow_ref
+            });
+            let probe = RouterSubjectProbe::discover(std::path::Path::new(project_root)).await?;
+            resolve_builtin_kind_dispatch("task", &task_id, workflow_ref, input, &probe).await
         }
         (None, Some(requirement_id), None) => {
-            hub.planning().get_requirement(&requirement_id).await?;
-            Ok(SubjectDispatch::for_requirement(
-                requirement_id,
-                workflow_ref.unwrap_or(resolve_requirement_workflow_ref(project_root)?),
-                "manual-queue-enqueue",
-            )
-            .with_input(input))
+            let workflow_ref = match workflow_ref {
+                Some(workflow_ref) => workflow_ref,
+                None => resolve_requirement_workflow_ref(project_root)?,
+            };
+            let probe = RouterSubjectProbe::discover(std::path::Path::new(project_root)).await?;
+            resolve_builtin_kind_dispatch("requirement", &requirement_id, workflow_ref, input, &probe).await
         }
         (None, None, Some(title)) => Ok(SubjectDispatch::for_custom(
             title,
@@ -86,6 +88,36 @@ async fn resolve_enqueue_dispatch(
     }
 }
 
+/// Resolve a built-in `--task-id` / `--requirement-id` enqueue by confirming the
+/// subject's existence through the subject router (the installed
+/// `subject_backend` plugin), then building a kind-correct dispatch carrying the
+/// backend-qualified id.
+///
+/// The existence probe routes `<kind>/get` to the same plugin store that
+/// `subject get/list/status` and the generic `--subject-id` enqueue path use,
+/// so a subject created through a plugin backend resolves here too. A missing
+/// subject surfaces a clean `not_found` (exit class 3); a genuinely unhealthy
+/// backend propagates as an error rather than masquerading as not-found.
+async fn resolve_builtin_kind_dispatch(
+    kind: &str,
+    native_id: &str,
+    workflow_ref: String,
+    input: Option<serde_json::Value>,
+    probe: &dyn SubjectKindProbe,
+) -> Result<SubjectDispatch> {
+    let qualified_id = crate::qualify_subject_id(native_id, kind);
+    if !probe.subject_exists(kind, &qualified_id).await? {
+        return Err(crate::not_found_error(format!("{kind} not found: {native_id}")));
+    }
+    Ok(SubjectDispatch::for_subject_with_metadata(
+        subject_ref_for_kind(kind, qualified_id),
+        workflow_ref,
+        "manual-queue-enqueue",
+        chrono::Utc::now(),
+    )
+    .with_input(input))
+}
+
 /// Resolve a generic `--subject-id` enqueue into a kind-correct
 /// [`SubjectDispatch`]. The subject's real kind is taken from the qualified
 /// prefix or discovered by probing the installed subject backends, so a
@@ -97,7 +129,6 @@ async fn resolve_enqueue_dispatch_for_subject_id(
     workflow_ref: Option<String>,
     input: Option<serde_json::Value>,
 ) -> Result<SubjectDispatch> {
-    use super::subject_id_dispatch::{resolve_subject_id_ref, RouterSubjectProbe};
     let probe = RouterSubjectProbe::discover(std::path::Path::new(project_root)).await?;
     let subject_ref = resolve_subject_id_ref(subject_id, &probe).await?;
     let workflow_ref = workflow_ref.unwrap_or_else(|| {
@@ -162,7 +193,7 @@ fn queue_plugin_required(operation: &str) -> anyhow::Error {
 
 pub(crate) async fn handle_queue(
     command: QueueCommand,
-    hub: Arc<dyn ServiceHub>,
+    _hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
@@ -200,7 +231,6 @@ pub(crate) async fn handle_queue(
                     .await?
             } else {
                 resolve_enqueue_dispatch(
-                    hub.clone(),
                     project_root,
                     args.task_id.clone(),
                     args.requirement_id.clone(),
@@ -750,13 +780,56 @@ async fn lookup_plugin_entries_by_subject_set(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
-    use orchestrator_core::{
-        builtin_workflow_config, write_agent_runtime_config, write_workflow_config, InMemoryServiceHub,
-    };
+    use async_trait::async_trait;
+    use orchestrator_core::{builtin_workflow_config, write_agent_runtime_config, write_workflow_config};
 
     use super::*;
+
+    /// Stub subject probe: reports whether a given `(kind, qualified_id)` exists,
+    /// so the built-in `--task-id` / `--requirement-id` resolution can be tested
+    /// without spawning a real subject_backend plugin.
+    struct StubProbe {
+        exists: bool,
+    }
+
+    #[async_trait]
+    impl SubjectKindProbe for StubProbe {
+        fn candidate_kinds(&self) -> Vec<String> {
+            vec!["task".to_string(), "requirement".to_string()]
+        }
+
+        async fn subject_exists(&self, _kind: &str, _qualified_id: &str) -> Result<bool> {
+            Ok(self.exists)
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_builtin_kind_dispatch_resolves_existing_task_via_router() {
+        // The router (subject_backend plugin) owns the id — enqueue must resolve
+        // it and build a kind=task dispatch carrying the backend-qualified id.
+        let probe = StubProbe { exists: true };
+        let dispatch = resolve_builtin_kind_dispatch("task", "TASK-216", "standard-workflow".to_string(), None, &probe)
+            .await
+            .expect("existing task resolves");
+        // `task` canonicalizes to the namespaced built-in kind, and the id is
+        // carried in the backend-qualified `task:<native>` form the subject
+        // backend resolves (matching the generic `--subject-id` path).
+        assert_eq!(dispatch.subject_kind(), Some("animus.task"));
+        assert_eq!(dispatch.subject_id(), Some("task:TASK-216"));
+        assert_eq!(dispatch.workflow_ref, "standard-workflow");
+    }
+
+    #[tokio::test]
+    async fn resolve_builtin_kind_dispatch_missing_subject_is_not_found() {
+        // The router does not own the id — enqueue must surface a clean not_found
+        // (exit class 3) rather than a generic internal error.
+        let probe = StubProbe { exists: false };
+        let err = resolve_builtin_kind_dispatch("task", "TASK-999", "standard-workflow".to_string(), None, &probe)
+            .await
+            .expect_err("missing subject should fail");
+        assert!(err.to_string().contains("task not found: TASK-999"), "got: {err}");
+        assert_eq!(crate::classify_cli_error_kind(&err), CliErrorKind::NotFound);
+    }
 
     #[test]
     fn queue_plugin_required_keeps_message_and_kind_but_adds_structured_remediation() {
@@ -781,20 +854,10 @@ mod tests {
         write_agent_runtime_config(temp.path(), &crate::shared::seeded_agent_runtime_config())
             .expect("write runtime config");
 
-        let hub = Arc::new(InMemoryServiceHub::new());
-        let err = resolve_enqueue_dispatch(
-            hub,
-            temp.path().to_string_lossy().as_ref(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-        )
-        .await
-        .expect_err("missing subject should fail");
+        let err =
+            resolve_enqueue_dispatch(temp.path().to_string_lossy().as_ref(), None, None, None, None, None, None, false)
+                .await
+                .expect_err("missing subject should fail");
 
         let msg = err.to_string();
         assert!(msg.contains("--task-id"), "error should mention --task-id");
@@ -807,11 +870,9 @@ mod tests {
     #[tokio::test]
     async fn resolve_enqueue_dispatch_adhoc_builds_subjectless_dispatch() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let hub = Arc::new(InMemoryServiceHub::new());
         // A subjectless run: no task/requirement/title selector, --adhoc set with
         // an explicit workflow ref. It must build a valid dispatch (not error).
         let dispatch = resolve_enqueue_dispatch(
-            hub,
             temp.path().to_string_lossy().as_ref(),
             None,
             None,
@@ -834,20 +895,10 @@ mod tests {
     #[tokio::test]
     async fn resolve_enqueue_dispatch_adhoc_requires_workflow_ref() {
         let temp = tempfile::tempdir().expect("tempdir");
-        let hub = Arc::new(InMemoryServiceHub::new());
-        let err = resolve_enqueue_dispatch(
-            hub,
-            temp.path().to_string_lossy().as_ref(),
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            true,
-        )
-        .await
-        .expect_err("adhoc without workflow ref should fail");
+        let err =
+            resolve_enqueue_dispatch(temp.path().to_string_lossy().as_ref(), None, None, None, None, None, None, true)
+                .await
+                .expect_err("adhoc without workflow ref should fail");
         assert!(err.to_string().contains("--workflow-ref"), "error names the missing workflow ref: {err}");
     }
 
@@ -872,9 +923,7 @@ mod tests {
         write_agent_runtime_config(temp.path(), &crate::shared::seeded_agent_runtime_config())
             .expect("write runtime config");
 
-        let hub = Arc::new(InMemoryServiceHub::new());
         let err = resolve_enqueue_dispatch(
-            hub,
             temp.path().to_string_lossy().as_ref(),
             Some("TASK-1".to_string()),
             Some("REQ-1".to_string()),
