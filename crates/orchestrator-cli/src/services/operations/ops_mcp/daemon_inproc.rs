@@ -6,10 +6,11 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 use crate::services::runtime::{
-    canonicalize_lossy, overlay_runtime_pause, read_daemon_pid, remove_daemon_pid, set_daemon_pid,
+    canonicalize_lossy, overlay_budget_health, overlay_daily_cap_status, overlay_runtime_pause, read_daemon_pid,
+    remove_daemon_pid, set_daemon_pid,
 };
 
-fn resolve_project_root(default_root: &str, override_value: Option<String>) -> String {
+pub(super) fn resolve_project_root(default_root: &str, override_value: Option<String>) -> String {
     let candidate = override_value
         .as_deref()
         .map(str::trim)
@@ -27,9 +28,11 @@ pub(super) async fn daemon_status_inproc(default_project_root: &str, project_roo
         match client.daemon_status().await {
             Ok(response) => {
                 // Wire types are pinned out-of-tree; overlay the pause state
-                // so MCP consumers see it too (matches the CLI's JSON path).
+                // and fleet daily-cap flags so MCP consumers see them too
+                // (matches the CLI's JSON path).
                 let mut value = serde_json::to_value(response)?;
                 overlay_runtime_pause(&mut value, &project_root);
+                overlay_daily_cap_status(&mut value, &project_root);
                 return Ok(value);
             }
             Err(err) if orchestrator_daemon_runtime::control::is_method_unavailable(&err) => {
@@ -71,6 +74,7 @@ pub(super) async fn daemon_health_inproc(default_project_root: &str, project_roo
                 if let Some(map) = value.as_object_mut() {
                     map.insert("healthy".to_string(), Value::Bool(healthy));
                 }
+                overlay_budget_health(&mut value, &project_root);
                 overlay_runtime_pause(&mut value, &project_root);
                 return Ok(value);
             }
@@ -88,7 +92,9 @@ pub(super) async fn daemon_health_inproc(default_project_root: &str, project_roo
         remove_daemon_pid(&project_root);
         let _ = set_daemon_pid(&project_root, None);
     }
-    Ok(serde_json::to_value(health)?)
+    let mut value = serde_json::to_value(health)?;
+    overlay_budget_health(&mut value, &project_root);
+    Ok(value)
 }
 
 pub(super) async fn daemon_agents_inproc(default_project_root: &str, project_root: Option<String>) -> Result<Value> {

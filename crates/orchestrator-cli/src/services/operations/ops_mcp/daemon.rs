@@ -26,6 +26,10 @@ pub(super) fn build_daemon_config_set_args(input: &DaemonConfigSetInput) -> Vec<
     push_opt_usize(&mut args, "--max-tasks-per-tick", input.max_tasks_per_tick);
     push_opt_num(&mut args, "--stale-threshold-hours", input.stale_threshold_hours);
     push_opt_num(&mut args, "--phase-timeout-secs", input.phase_timeout_secs);
+    if let Some(max_daily_usd) = input.max_daily_usd {
+        args.push("--max-daily-usd".to_string());
+        args.push(max_daily_usd.to_string());
+    }
     push_opt(&mut args, "--notification-config-json", input.notification_config_json.clone());
     push_opt(&mut args, "--notification-config-file", input.notification_config_file.clone());
     if input.clear_notification_config {

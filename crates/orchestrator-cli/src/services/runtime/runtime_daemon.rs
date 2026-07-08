@@ -130,6 +130,7 @@ pub(crate) async fn handle_daemon_status_command(project_root: &str, json: bool)
                     // consumers can tell a paused runtime from an active one.
                     let mut value = serde_json::to_value(&response)?;
                     overlay_runtime_pause(&mut value, project_root);
+                    overlay_daily_cap_status(&mut value, project_root);
                     return print_value(value, true);
                 }
                 Err(err) if orchestrator_daemon_runtime::control::is_method_unavailable(&err) => {
@@ -172,50 +173,72 @@ pub(crate) async fn handle_daemon_status_command(project_root: &str, json: bool)
 /// it cannot compute the paused/active split — see
 /// [`crate::services::cost::breach_summary`]).
 #[derive(serde::Serialize)]
-struct BudgetHealthSlice {
+pub(crate) struct BudgetHealthSlice {
     enabled: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_sweep_at: Option<String>,
     breaches: crate::services::cost::BudgetBreachSummary,
     /// Fleet daily spend cap: configured cap, today's rolling-24h spend,
     /// remaining headroom, and whether new dispatch is currently paused.
-    daily_cap: BudgetHealthDailyCap,
+    daily_cap: crate::services::cost::DailyCapReport,
 }
 
-#[derive(serde::Serialize)]
-struct BudgetHealthDailyCap {
-    window_hours: i64,
-    spent_usd: f64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    max_daily_usd: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    remaining_usd: Option<f64>,
-    exceeded: bool,
-    /// `true` when the daemon is suppressing new dispatch on the latch.
-    dispatch_paused: bool,
-}
-
-fn budget_health_slice(project_root: &str) -> BudgetHealthSlice {
+pub(crate) fn budget_health_slice(project_root: &str) -> BudgetHealthSlice {
     let path = Path::new(project_root);
     let status = crate::services::cost::load_budget_enforcement_status(path);
     let records = crate::services::cost::read_decision_records(path).unwrap_or_default();
     // Cheap reads only on the health path: the cached cost-state JSON for
     // the spend rollup and the persisted latch — no live run rescan.
-    let cost_state = crate::services::cost::load_cost_state(path).unwrap_or_default();
-    let cap_status = crate::services::cost::DailyCapStatus::evaluate(path, &cost_state);
-    let dispatch_paused = crate::services::cost::daily_cap::is_dispatch_paused(path);
     BudgetHealthSlice {
         enabled: status.as_ref().map(|s| s.enabled).unwrap_or_else(crate::services::cost::budget_enforcement_enabled),
         last_sweep_at: status.map(|s| s.last_sweep_at.to_rfc3339()),
         breaches: crate::services::cost::summarize_breaches(&records, None),
-        daily_cap: BudgetHealthDailyCap {
-            window_hours: cap_status.window_hours,
-            spent_usd: cap_status.spent_usd,
-            max_daily_usd: cap_status.max_daily_usd,
-            remaining_usd: cap_status.remaining_usd,
-            exceeded: cap_status.exceeded,
-            dispatch_paused,
-        },
+        daily_cap: crate::services::cost::daily_cap_report(path),
+    }
+}
+
+/// Merge the budget-enforcement slice into a daemon-health JSON object so
+/// MCP / CLI consumers see the fleet daily cap alongside the pinned wire
+/// fields. When the daily cap has latched (`dispatch_paused`), also surface
+/// a `last_error` (only if the wire path did not already set one) and append
+/// a `degraded_reasons` entry — so a paused fleet is no longer a silent
+/// `healthy: true`.
+pub(crate) fn overlay_budget_health(value: &mut serde_json::Value, project_root: &str) {
+    let slice = budget_health_slice(project_root);
+    let paused_reason = slice
+        .daily_cap
+        .dispatch_paused
+        .then(|| crate::services::cost::budget_report::dispatch_paused_reason_text(&slice.daily_cap));
+    let Some(map) = value.as_object_mut() else { return };
+    if let Ok(slice_value) = serde_json::to_value(&slice) {
+        map.insert("budget_enforcement".to_string(), slice_value);
+    }
+    if let Some(reason) = paused_reason {
+        // Do not clobber a wire `last_error` (e.g. a supervisor-disabled
+        // plugin message); only fill it when absent so the cap reason is
+        // still visible on the offline snapshot path.
+        if map.get("last_error").and_then(serde_json::Value::as_str).is_none() {
+            map.insert("last_error".to_string(), serde_json::Value::String(reason.clone()));
+        }
+        let reasons = map.entry("degraded_reasons").or_insert_with(|| serde_json::Value::Array(Vec::new()));
+        if let Some(array) = reasons.as_array_mut() {
+            if !array.iter().any(|entry| entry.as_str() == Some(reason.as_str())) {
+                array.push(serde_json::Value::String(reason));
+            }
+        }
+    }
+}
+
+/// Merge the compact fleet-pause flags into a daemon-status JSON object.
+/// `daemon status` carries only liveness on the wire, so surface
+/// `dispatch_paused` + `daily_cap_exceeded` there too — the fleet cap
+/// latches while the daemon is still running, which is exactly when an
+/// operator checks status.
+pub(crate) fn overlay_daily_cap_status(value: &mut serde_json::Value, project_root: &str) {
+    let report = crate::services::cost::daily_cap_report(Path::new(project_root));
+    if let Some(map) = value.as_object_mut() {
+        map.insert("dispatch_paused".to_string(), serde_json::Value::Bool(report.dispatch_paused));
+        map.insert("daily_cap_exceeded".to_string(), serde_json::Value::Bool(report.exceeded));
     }
 }
 
@@ -234,6 +257,17 @@ fn render_budget_health_human(slice: &BudgetHealthSlice) {
     } else {
         println!("  breaches in last 24h: 0");
     }
+    let cap = &slice.daily_cap;
+    if cap.dispatch_paused {
+        println!("  dispatch: PAUSED (fleet daily cap exceeded — new work suppressed until spend ages out or the cap is raised)");
+    }
+    if let Some(max) = cap.max_daily_usd {
+        let remaining = cap.remaining_usd.unwrap_or(0.0);
+        println!(
+            "  daily cap: ${:.2} spent / ${:.2} cap (${:.2} remaining, {}h window)",
+            cap.spent_usd, max, remaining, cap.window_hours
+        );
+    }
 }
 
 pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool) -> Result<()> {
@@ -248,8 +282,8 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
                     let mut value = serde_json::to_value(&response)?;
                     if let Some(map) = value.as_object_mut() {
                         map.insert("healthy".to_string(), serde_json::Value::Bool(healthy));
-                        map.insert("budget_enforcement".to_string(), serde_json::to_value(&budget)?);
                     }
+                    overlay_budget_health(&mut value, project_root);
                     overlay_runtime_pause(&mut value, project_root);
                     return print_value(value, true);
                 }
@@ -277,9 +311,7 @@ pub(crate) async fn handle_daemon_health_command(project_root: &str, json: bool)
         return Ok(());
     }
     let mut value = serde_json::to_value(&health)?;
-    if let Some(map) = value.as_object_mut() {
-        map.insert("budget_enforcement".to_string(), serde_json::to_value(&budget)?);
-    }
+    overlay_budget_health(&mut value, project_root);
     print_value(value, json)
 }
 
@@ -2171,6 +2203,82 @@ mod tests {
         let slice = budget_health_slice(project_root.to_string_lossy().as_ref());
         assert!(!slice.enabled, "persisted disabled flag wins over env default");
         assert!(slice.last_sweep_at.is_some());
+    }
+
+    #[test]
+    fn overlay_budget_health_surfaces_latched_daily_cap() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set("HOME", Some(tmp.path().to_string_lossy().as_ref()));
+        let state_root = tmp.path().join("scope");
+        std::fs::create_dir_all(&state_root).unwrap();
+        let _override = EnvVarGuard::set("ANIMUS_COST_STATE_ROOT", Some(state_root.to_string_lossy().as_ref()));
+        let project_root = tmp.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+
+        // Configure a $5 fleet cap and record $7 of rolling spend so the cap
+        // reads as exceeded (is_dispatch_paused's live check latches).
+        let config = orchestrator_core::DaemonProjectConfig {
+            extra: std::iter::once(("max_daily_usd".to_string(), serde_json::json!(5.0))).collect(),
+            ..Default::default()
+        };
+        orchestrator_core::write_daemon_project_config(&project_root, &config).unwrap();
+        let mut cost_state = crate::services::cost::CostState::default();
+        let now = chrono::Utc::now();
+        let mut workflow = crate::services::cost::WorkflowCost::new("flow", now);
+        workflow.updated_at = Some(now);
+        workflow.total_cost_usd = 7.0;
+        cost_state.workflows.insert("wf-1".to_string(), workflow);
+        crate::services::cost::save_cost_state(&project_root, &cost_state).unwrap();
+
+        // A healthy-looking base snapshot with no last_error, as the offline
+        // path produces before the overlay runs.
+        let mut value = serde_json::json!({ "healthy": true, "status": "Running" });
+        overlay_budget_health(&mut value, project_root.to_string_lossy().as_ref());
+
+        let daily_cap = value.pointer("/budget_enforcement/daily_cap").expect("daily_cap present");
+        assert_eq!(daily_cap.get("dispatch_paused").and_then(serde_json::Value::as_bool), Some(true));
+        assert_eq!(daily_cap.get("exceeded").and_then(serde_json::Value::as_bool), Some(true));
+        let last_error = value.get("last_error").and_then(serde_json::Value::as_str).expect("last_error filled");
+        assert!(last_error.contains("dispatch paused"), "last_error names the pause: {last_error}");
+        let reasons =
+            value.get("degraded_reasons").and_then(serde_json::Value::as_array).expect("degraded_reasons array");
+        assert!(reasons.iter().any(|r| r.as_str().is_some_and(|s| s.contains("dispatch paused"))));
+    }
+
+    #[test]
+    fn overlay_budget_health_leaves_existing_last_error_intact() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _home = EnvVarGuard::set("HOME", Some(tmp.path().to_string_lossy().as_ref()));
+        let state_root = tmp.path().join("scope");
+        std::fs::create_dir_all(&state_root).unwrap();
+        let _override = EnvVarGuard::set("ANIMUS_COST_STATE_ROOT", Some(state_root.to_string_lossy().as_ref()));
+        let project_root = tmp.path().join("project");
+        std::fs::create_dir_all(&project_root).unwrap();
+
+        let config = orchestrator_core::DaemonProjectConfig {
+            extra: std::iter::once(("max_daily_usd".to_string(), serde_json::json!(5.0))).collect(),
+            ..Default::default()
+        };
+        orchestrator_core::write_daemon_project_config(&project_root, &config).unwrap();
+        let mut cost_state = crate::services::cost::CostState::default();
+        let now = chrono::Utc::now();
+        let mut workflow = crate::services::cost::WorkflowCost::new("flow", now);
+        workflow.updated_at = Some(now);
+        workflow.total_cost_usd = 7.0;
+        cost_state.workflows.insert("wf-1".to_string(), workflow);
+        crate::services::cost::save_cost_state(&project_root, &cost_state).unwrap();
+
+        // A wire snapshot that already carries a last_error (e.g. a
+        // supervisor-disabled plugin) must not be clobbered by the cap reason.
+        let mut value = serde_json::json!({ "healthy": true, "last_error": "plugin X disabled" });
+        overlay_budget_health(&mut value, project_root.to_string_lossy().as_ref());
+        assert_eq!(value.get("last_error").and_then(serde_json::Value::as_str), Some("plugin X disabled"));
+        // The cap reason still lands in degraded_reasons so it is not lost.
+        let reasons =
+            value.get("degraded_reasons").and_then(serde_json::Value::as_array).expect("degraded_reasons array");
+        assert!(reasons.iter().any(|r| r.as_str().is_some_and(|s| s.contains("dispatch paused"))));
     }
 
     #[test]
