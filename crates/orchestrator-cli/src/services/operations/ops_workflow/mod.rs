@@ -472,8 +472,10 @@ pub(crate) async fn handle_workflow(
             let workflow_ref = args.pipeline.clone();
             // Generic BaaS subject path: resolve the subject's real kind once
             // (qualified prefix or router probe) and build a kind-correct
-            // dispatch carrying the resolved SubjectRef (kind=blog,
-            // id=blog:BLOG-001, ...) plus this run's workflow_ref / input / vars.
+            // dispatch carrying the resolved SubjectRef (kind=blog, id=BLOG-001 —
+            // the bare native id the backend keys on; a dynamic kind is NOT
+            // re-qualified, so `subject_key()` stays the clean `blog::BLOG-001`)
+            // plus this run's workflow_ref / input / vars.
             // The runner protocol requires generic (non-task/requirement)
             // subjects to travel as a `subject_dispatch`, so both the sync and
             // detached paths consume this single envelope rather than coercing
