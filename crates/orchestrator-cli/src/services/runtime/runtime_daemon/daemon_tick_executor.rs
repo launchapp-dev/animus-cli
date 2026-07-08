@@ -4,13 +4,13 @@ use crate::services::runtime::runtime_daemon::daemon_reconciliation::{
     journal_resume_enabled, reconcile_manual_phase_timeouts, recover_orphaned_running_workflows,
     resumable_orphans_for_redispatch,
 };
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use orchestrator_core::services::ServiceHub;
-use orchestrator_core::{TaskStatus, WorkflowStateManager, WorkflowStatus};
+use orchestrator_core::{Assignee, TaskStatus, WorkflowStateManager, WorkflowStatus};
 use orchestrator_daemon_runtime::{
-    default_slim_project_tick_driver, BudgetBreachEvent, CompletedProcess, CompletedProcessReconciliation,
-    DefaultProjectTickServices, DefaultSlimProjectTickDriver, DispatchNotice, DispatchWorkflowStartSummary,
-    ProcessManager, ProjectTickSnapshot,
+    default_slim_project_tick_driver, resolve_subject_dispatch, BudgetBreachEvent, CompletedProcess,
+    CompletedProcessReconciliation, DefaultProjectTickServices, DefaultSlimProjectTickDriver, DispatchNotice,
+    DispatchWorkflowStartSummary, ProcessManager, ProjectTickSnapshot, SubjectPluginDispatch,
 };
 use orchestrator_logging::Logger;
 use std::sync::Arc;
@@ -232,12 +232,31 @@ impl DefaultProjectTickServices for CliProjectTickServices {
     async fn reconcile_stale_in_progress_tasks(
         &mut self,
         hub: Arc<dyn ServiceHub>,
-        _root: &str,
+        root: &str,
         active_subject_ids: &std::collections::HashSet<String>,
         stale_threshold_hours: u64,
     ) -> Result<usize> {
         let grace_secs = i64::try_from(stale_threshold_hours.saturating_mul(3600)).unwrap_or(i64::MAX);
-        reconcile_stale_in_progress_tasks_for_hub(hub, active_subject_ids, grace_secs).await
+        // Prefer the installed subject_backend plugin — the same store `subject
+        // get/list/status` and the enqueue-by-id fix (TASK-215) route through —
+        // so plugin-backed in-progress subjects are reconciled. On a
+        // plugin-backed deployment (e.g. animus-postgres on the portal) the
+        // legacy in-tree task store is empty, so the pre-routing sweep saw none
+        // of them. Falls back to the in-tree store for the stock scaffold / when
+        // no subject plugin owns `task`.
+        let store = resolve_stale_task_store(root, hub.clone()).await;
+        match reconcile_stale_in_progress_tasks_with_store(store.as_ref(), hub, active_subject_ids, grace_secs).await {
+            Ok(reconciled) => Ok(reconciled),
+            Err(error) => {
+                // A subject_backend list/status failure (e.g. a transient plugin
+                // timeout) must NOT abort the housekeeping tick — the in-tree
+                // sweep this replaces could never make an installed subject
+                // plugin block the later dispatch legs. Log and treat as "no
+                // reconciliations this tick"; the next heartbeat retries.
+                self.logger.warn("reconciliation", format!("stale in-progress reconciliation skipped: {error}")).emit();
+                Ok(0)
+            }
+        }
     }
 
     async fn cleanup_stale_workflows(
@@ -362,7 +381,22 @@ impl DefaultProjectTickServices for CliProjectTickServices {
     }
 }
 
-/// Reconcile InProgress tasks against their workflow records.
+/// In-tree hub entry point retained for the daemon's existing hub-based unit
+/// tests, which drive the reconcile logic against a populated in-tree task
+/// store. Production selects the store via [`resolve_stale_task_store`] so
+/// plugin-backed subjects are reconciled too, so this wrapper is test-only.
+#[cfg(test)]
+pub(crate) async fn reconcile_stale_in_progress_tasks_for_hub(
+    hub: Arc<dyn ServiceHub>,
+    active_subject_ids: &std::collections::HashSet<String>,
+    grace_secs: i64,
+) -> Result<usize> {
+    let store = HubStaleTaskStore::new(hub.clone());
+    reconcile_stale_in_progress_tasks_with_store(&store, hub, active_subject_ids, grace_secs).await
+}
+
+/// Reconcile InProgress tasks sourced from `store` (the in-tree task store OR
+/// the installed subject_backend plugin) against their in-tree workflow records.
 ///
 /// Two cases:
 ///
@@ -383,13 +417,21 @@ impl DefaultProjectTickServices for CliProjectTickServices {
 ///    may legitimately hold a claim without any workflow row, and there
 ///    is no post-hoc marker distinguishing a daemon dispatch whose runner
 ///    died pre-bootstrap from a manual claim.
-pub(crate) async fn reconcile_stale_in_progress_tasks_for_hub(
+///
+/// The task read/write surface is abstracted behind [`StaleTaskStore`] so the
+/// daemon can source in-progress subjects from the plugin the rest of the
+/// subject surface uses — the in-tree store is empty on a plugin-backed
+/// deployment, so the pre-routing sweep reconciled nothing there. Workflow
+/// records (the terminal-status cross-reference) still come from the in-tree
+/// [`WorkflowStateManager`] via `hub`, which the daemon populates locally on
+/// every deployment.
+pub(crate) async fn reconcile_stale_in_progress_tasks_with_store(
+    store: &dyn StaleTaskStore,
     hub: Arc<dyn ServiceHub>,
     active_subject_ids: &std::collections::HashSet<String>,
     grace_secs: i64,
 ) -> Result<usize> {
-    let tasks = hub.tasks().list().await?;
-    let in_progress_tasks: Vec<_> = tasks.iter().filter(|t| t.status == TaskStatus::InProgress).collect();
+    let in_progress_tasks = store.list_in_progress().await?;
     if in_progress_tasks.is_empty() {
         return Ok(0);
     }
@@ -397,18 +439,30 @@ pub(crate) async fn reconcile_stale_in_progress_tasks_for_hub(
     let workflows = hub.workflows().list().await?;
     let now = chrono::Utc::now();
     let mut reconciled = 0usize;
-    for task in in_progress_tasks {
-        let last_transition_at = task.metadata.status_changed_at.unwrap_or(task.metadata.updated_at);
-        let task_workflows: Vec<_> = workflows.iter().filter(|w| w.task_id == task.id).collect();
+    for task in &in_progress_tasks {
+        let last_transition_at = task.last_transition_at;
+        // A plugin id is kind-qualified (`task:TASK-1`); the in-tree workflow
+        // record may key on the bare native id. Match on either form so the
+        // cross-reference works for both stores (bare-vs-bare is unchanged).
+        let task_workflows: Vec<_> = workflows.iter().filter(|w| task_ids_match(&w.task_id, &task.id)).collect();
         if task_workflows.is_empty() {
-            if active_subject_ids.contains(&task.id) {
+            // Skip a subject with a live runner. Normalize both sides so a
+            // qualified plugin id (`task:TASK-1`) matches a bare active id (and
+            // vice versa); bare-vs-bare stays an exact match. Without this a
+            // plugin-backed task whose runner has not written a workflow row yet
+            // could be reset to Ready out from under its live runner.
+            if active_subject_ids.iter().any(|active| task_ids_match(active, &task.id)) {
                 continue;
             }
-            if matches!(task.assignee, orchestrator_core::Assignee::Human { .. }) {
+            if task.is_human_assignee {
                 continue;
             }
             if (now - last_transition_at).num_milliseconds() > grace_secs.saturating_mul(1000) {
-                let _ = hub.tasks().set_status(&task.id, TaskStatus::Ready, false).await;
+                // Propagate a write failure (the caller logs + skips the leg) so
+                // a plugin timeout/rejection is visible and the subject is
+                // retried next tick, and only count a write that actually
+                // landed — never report a reconciliation that did not happen.
+                store.set_status(&task.id, TaskStatus::Ready).await?;
                 reconciled += 1;
             }
             continue;
@@ -437,25 +491,258 @@ pub(crate) async fn reconcile_stale_in_progress_tasks_for_hub(
                 if latest_terminal_at.is_some_and(|terminal_at| last_transition_at >= terminal_at) {
                     continue;
                 }
-                // A workflow that died Cancelled in a crash window must
-                // project the task Cancelled, not Blocked. Reuse the shared
-                // terminal projection so the mapping stays in one place.
-                if latest.is_some_and(|w| w.status == WorkflowStatus::Cancelled) {
-                    orchestrator_core::project_task_terminal_workflow_status(
-                        hub.clone(),
-                        &task.id,
-                        WorkflowStatus::Cancelled,
-                        None,
-                    )
-                    .await;
+                // A workflow that died Cancelled in a crash window must project
+                // the task Cancelled, not Blocked. The subject is InProgress here
+                // (filtered above), so a bare `set_status(Cancelled)` matches the
+                // shared terminal projection's behaviour for a non-terminal task.
+                let next_status = if latest.is_some_and(|w| w.status == WorkflowStatus::Cancelled) {
+                    TaskStatus::Cancelled
                 } else {
-                    let _ = hub.tasks().set_status(&task.id, TaskStatus::Blocked, false).await;
-                }
+                    TaskStatus::Blocked
+                };
+                // As above: surface a write failure and count only a landed write.
+                store.set_status(&task.id, next_status).await?;
                 reconciled += 1;
             }
         }
     }
     Ok(reconciled)
+}
+
+/// Two task ids match when equal, or equal after unwrapping ONLY a `task:`
+/// qualifier from either side. Unwrapping just the `task:` prefix (not any
+/// `<kind>:`) keeps this task-scoped: an unrelated qualified subject such as
+/// `blog:BLOG-1` must not alias `task:BLOG-1` — otherwise a live non-task runner
+/// could shield a stale task from reconciliation, or a foreign workflow row
+/// could be mis-attributed to it.
+fn task_ids_match(a: &str, b: &str) -> bool {
+    a == b || crate::bare_task_id(a) == crate::bare_task_id(b)
+}
+
+/// Minimal projection of an in-progress task the stale-reconciler needs,
+/// sourced either from the in-tree task store or a subject_backend plugin.
+#[derive(Debug, Clone)]
+pub(crate) struct StaleInProgressTask {
+    /// Backend-qualified (plugin) or bare (in-tree) subject id.
+    pub id: String,
+    /// A human holds this subject. A person may legitimately claim a task with
+    /// no workflow row, so it is exempt from the reset-to-Ready sweep.
+    pub is_human_assignee: bool,
+    /// Best available last-status-transition timestamp: the in-tree store uses
+    /// `metadata.status_changed_at` (falling back to `updated_at`); the plugin
+    /// wire carries only `updated_at`.
+    pub last_transition_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Task read/write surface the stale-in-progress reconciler drives. Split out
+/// so the daemon tick can source in-progress subjects from the installed
+/// `subject_backend` plugin (the store the rest of the subject surface uses)
+/// instead of the legacy in-tree task store, which is empty on a plugin-backed
+/// deployment. A stub impl keeps the reconcile logic unit-testable.
+#[async_trait::async_trait]
+pub(crate) trait StaleTaskStore: Send + Sync {
+    /// In-progress tasks, in no particular order.
+    async fn list_in_progress(&self) -> Result<Vec<StaleInProgressTask>>;
+    /// Apply a reconciled ready/terminal status to a task by id.
+    async fn set_status(&self, id: &str, status: TaskStatus) -> Result<()>;
+}
+
+/// In-tree task-store view. Behaviour identical to the pre-routing reconciler;
+/// used by the stock scaffold (no subject plugin owning `task`) and the daemon's
+/// existing hub-based unit tests.
+pub(crate) struct HubStaleTaskStore {
+    hub: Arc<dyn ServiceHub>,
+}
+
+impl HubStaleTaskStore {
+    pub(crate) fn new(hub: Arc<dyn ServiceHub>) -> Self {
+        Self { hub }
+    }
+}
+
+#[async_trait::async_trait]
+impl StaleTaskStore for HubStaleTaskStore {
+    async fn list_in_progress(&self) -> Result<Vec<StaleInProgressTask>> {
+        let tasks = self.hub.tasks().list().await?;
+        Ok(tasks
+            .into_iter()
+            .filter(|t| t.status == TaskStatus::InProgress)
+            .map(|t| StaleInProgressTask {
+                is_human_assignee: matches!(t.assignee, Assignee::Human { .. }),
+                last_transition_at: t.metadata.status_changed_at.unwrap_or(t.metadata.updated_at),
+                id: t.id,
+            })
+            .collect())
+    }
+
+    async fn set_status(&self, id: &str, status: TaskStatus) -> Result<()> {
+        self.hub.tasks().set_status(id, status, false).await.map(|_| ())
+    }
+}
+
+/// Subject-router view: sources in-progress tasks from the installed
+/// `subject_backend` plugin (the same store `subject get/list/status` and the
+/// TASK-215 enqueue-by-id fix route through), so plugin-backed subjects the
+/// empty in-tree store never sees are reconciled.
+pub(crate) struct RouterStaleTaskStore {
+    dispatch: SubjectPluginDispatch,
+}
+
+impl RouterStaleTaskStore {
+    pub(crate) fn new(dispatch: SubjectPluginDispatch) -> Self {
+        Self { dispatch }
+    }
+
+    /// `true` when a subject_backend plugin can serve the built-in `task` kind,
+    /// so routing the reconciler through it is meaningful. Accepts an explicit
+    /// `task` kind or a catch-all (`*`) backend, which `task/list` routes to
+    /// as well.
+    fn routes_tasks(dispatch: &SubjectPluginDispatch) -> bool {
+        dispatch.is_active() && dispatch.kinds().iter().any(|kind| kind == "task" || kind == "*")
+    }
+}
+
+#[async_trait::async_trait]
+impl StaleTaskStore for RouterStaleTaskStore {
+    async fn list_in_progress(&self) -> Result<Vec<StaleInProgressTask>> {
+        // Page through every `task/list` response so a cursor-paginating (or
+        // limit-clamping) backend does not hide stale in-progress subjects
+        // beyond the first page. Bounded so a backend that never clears
+        // `next_cursor` cannot loop the housekeeping leg forever. The status
+        // filter is applied server-side and re-checked client-side.
+        let mut tasks: Vec<StaleInProgressTask> = Vec::new();
+        let mut cursor: Option<serde_json::Value> = None;
+        for _ in 0..MAX_SUBJECT_LIST_PAGES {
+            let mut params = serde_json::Map::new();
+            params.insert("kind".to_string(), serde_json::json!(["task"]));
+            params.insert("status".to_string(), serde_json::json!(["in-progress"]));
+            if let Some(cursor) = cursor.take() {
+                params.insert("cursor".to_string(), cursor);
+            }
+            let raw = self
+                .dispatch
+                .route_call("task/list", Some(serde_json::Value::Object(params)))
+                .await
+                .map_err(|err| anyhow!("subject backend task/list failed ({}): {}", err.code, err.message))?;
+            tasks.extend(extract_in_progress_tasks(&raw));
+            match extract_next_cursor(&raw) {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        Ok(tasks)
+    }
+
+    async fn set_status(&self, id: &str, status: TaskStatus) -> Result<()> {
+        let params = serde_json::json!({ "id": id, "status": wire_status(status) });
+        self.dispatch
+            .route_call("task/status", Some(params))
+            .await
+            .map(|_| ())
+            .map_err(|err| anyhow!("subject backend task/status failed ({}): {}", err.code, err.message))
+    }
+}
+
+/// Choose the task store the stale-reconciler reads/writes through: the subject
+/// router when a `subject_backend` plugin owns `task` (production / portal),
+/// else the in-tree store (stock scaffold / no plugins). A routing-discovery
+/// failure falls back to the in-tree store so a transient plugin problem never
+/// takes the housekeeping leg down.
+async fn resolve_stale_task_store(root: &str, hub: Arc<dyn ServiceHub>) -> Box<dyn StaleTaskStore> {
+    match resolve_subject_dispatch(std::path::Path::new(root)).await {
+        Ok(resolution) if RouterStaleTaskStore::routes_tasks(&resolution.selected) => {
+            Box::new(RouterStaleTaskStore::new(resolution.selected))
+        }
+        _ => Box::new(HubStaleTaskStore::new(hub)),
+    }
+}
+
+/// Wire status token the subject_backend plugin expects. `TaskStatus` already
+/// serializes kebab-case, matching the `SubjectStatus` vocabulary for the
+/// states the reconciler writes (`ready` / `blocked` / `cancelled`).
+fn wire_status(status: TaskStatus) -> String {
+    serde_json::to_value(status).ok().and_then(|value| value.as_str().map(str::to_string)).unwrap_or_default()
+}
+
+/// Upper bound on `task/list` pages [`RouterStaleTaskStore::list_in_progress`]
+/// follows. At the default backend page size this covers very large stores
+/// while guaranteeing the housekeeping leg never hangs on a backend that
+/// returns a non-empty `next_cursor` indefinitely. Mirrors the status
+/// dashboard's paging bound.
+const MAX_SUBJECT_LIST_PAGES: usize = 1_000;
+
+/// Pull a non-empty pagination cursor out of a `task/list` response. `None`
+/// when the backend omits `next_cursor`, sets it to null, or returns an empty
+/// string — any of which signals the final page.
+fn extract_next_cursor(result: &serde_json::Value) -> Option<serde_json::Value> {
+    match result.as_object()?.get("next_cursor")? {
+        serde_json::Value::Null => None,
+        serde_json::Value::String(s) if s.trim().is_empty() => None,
+        other => Some(other.clone()),
+    }
+}
+
+/// Project a `task/list` response into the fields the reconciler needs,
+/// tolerating the common envelope wrappers (`subjects` / `items` / `tasks` /
+/// `results`) or a bare top-level array.
+fn extract_in_progress_tasks(result: &serde_json::Value) -> Vec<StaleInProgressTask> {
+    let subjects = if let Some(array) = result.as_array() {
+        array.clone()
+    } else if let Some(map) = result.as_object() {
+        ["subjects", "items", "tasks", "results"]
+            .iter()
+            .find_map(|key| map.get(*key).and_then(|value| value.as_array()).cloned())
+            .unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    subjects.iter().filter_map(subject_value_to_stale_task).collect()
+}
+
+/// Convert one wire subject object into a [`StaleInProgressTask`]. Re-checks the
+/// status client-side (normalized so `in_progress` / casing variants are not
+/// dropped) so a backend that ignores the `status` filter cannot make the
+/// reconciler act on a subject that is not in-progress.
+fn subject_value_to_stale_task(subject: &serde_json::Value) -> Option<StaleInProgressTask> {
+    let id = subject.get("id").and_then(|value| value.as_str())?.to_string();
+    // Only reconcile task-kind rows: a catch-all (`*`) or lax backend may return
+    // other kinds from `task/list`, and this leg mutates via `task/status` — a
+    // non-task row (e.g. `blog:BLOG-1`) must never be swept.
+    let kind = subject.get("kind").and_then(|value| value.as_str()).unwrap_or_default();
+    let is_task = kind == "task" || kind == orchestrator_core::SUBJECT_KIND_TASK || id.starts_with("task:");
+    if !is_task {
+        return None;
+    }
+    let status = subject.get("status").and_then(|value| value.as_str()).unwrap_or_default();
+    if normalize_status(status) != "in-progress" {
+        return None;
+    }
+    // Wire subjects carry no Agent/Human tag: an Animus agent claim is
+    // conventionally `agent:<name>`. Treat any other non-empty assignee as a
+    // human hold so a person's manual claim is not reset out from under them.
+    // Read the top-level `assignee` first, falling back to `custom.assignee`
+    // for backends that persist the assignee in custom data — resetting a
+    // human's claim is destructive, so bias toward preserving it.
+    let assignee = subject
+        .get("assignee")
+        .and_then(|value| value.as_str())
+        .or_else(|| subject.pointer("/custom/assignee").and_then(|value| value.as_str()));
+    let is_human_assignee =
+        assignee.map(|assignee| !assignee.trim().is_empty() && !assignee.starts_with("agent:")).unwrap_or(false);
+    let last_transition_at = subject
+        .get("updated_at")
+        .and_then(|value| value.as_str())
+        .and_then(|raw| chrono::DateTime::parse_from_rfc3339(raw).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or_else(chrono::Utc::now);
+    Some(StaleInProgressTask { id, is_human_assignee, last_transition_at })
+}
+
+/// Fold a backend status string to its canonical spelling: lowercase with `_`
+/// collapsed to `-`, so `in_progress` / `In-Progress` all compare equal to the
+/// canonical `in-progress`. Mirrors the status dashboard's normalization.
+fn normalize_status(raw: &str) -> String {
+    raw.trim().to_ascii_lowercase().replace('_', "-")
 }
 
 pub(crate) type SlimProjectTickDriver<'a> = DefaultSlimProjectTickDriver<'a, CliProjectTickServices>;
@@ -747,5 +1034,251 @@ mod tests {
             .expect("reconciliation should run");
         assert_eq!(reconciled, 0);
         assert_eq!(hub.tasks().get(&task_id).await.expect("task should reload").status, TaskStatus::InProgress);
+    }
+
+    /// Stub [`StaleTaskStore`] standing in for a subject_backend plugin: it
+    /// returns a fixed in-progress set and records every status write, so the
+    /// reconcile logic is exercised without spawning a plugin or touching the
+    /// (empty) in-tree store.
+    struct StubStaleTaskStore {
+        tasks: Vec<super::StaleInProgressTask>,
+        status_writes: std::sync::Mutex<Vec<(String, TaskStatus)>>,
+        fail_writes: bool,
+    }
+
+    impl StubStaleTaskStore {
+        fn new(tasks: Vec<super::StaleInProgressTask>) -> Self {
+            Self { tasks, status_writes: std::sync::Mutex::new(Vec::new()), fail_writes: false }
+        }
+
+        /// A store whose `set_status` always fails, standing in for a plugin
+        /// timeout/rejection.
+        fn failing(tasks: Vec<super::StaleInProgressTask>) -> Self {
+            Self { tasks, status_writes: std::sync::Mutex::new(Vec::new()), fail_writes: true }
+        }
+
+        fn writes(&self) -> Vec<(String, TaskStatus)> {
+            self.status_writes.lock().unwrap_or_else(|p| p.into_inner()).clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl super::StaleTaskStore for StubStaleTaskStore {
+        async fn list_in_progress(&self) -> super::Result<Vec<super::StaleInProgressTask>> {
+            Ok(self.tasks.clone())
+        }
+
+        async fn set_status(&self, id: &str, status: TaskStatus) -> super::Result<()> {
+            if self.fail_writes {
+                return Err(anyhow::anyhow!("simulated subject backend task/status failure"));
+            }
+            self.status_writes.lock().unwrap_or_else(|p| p.into_inner()).push((id.to_string(), status));
+            Ok(())
+        }
+    }
+
+    // Core of the fix: a plugin-backed, kind-qualified in-progress subject that
+    // the empty in-tree store would never surface is reconciled — the stale
+    // sweep resets it to Ready through the SAME store it was read from. Empty
+    // in-tree workflow records (no run for the subject) drive the
+    // reset-to-Ready leg.
+    #[tokio::test]
+    async fn plugin_backed_stale_in_progress_task_is_reset_to_ready_via_store() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let store = StubStaleTaskStore::new(vec![super::StaleInProgressTask {
+            id: "task:TASK-900".to_string(),
+            is_human_assignee: false,
+            last_transition_at: chrono::Utc::now() - chrono::Duration::hours(48),
+        }]);
+
+        let reconciled = super::reconcile_stale_in_progress_tasks_with_store(&store, hub, &HashSet::new(), 24 * 3600)
+            .await
+            .expect("reconciliation should run");
+
+        assert_eq!(reconciled, 1, "the plugin-backed stale subject is reconciled");
+        assert_eq!(
+            store.writes(),
+            vec![("task:TASK-900".to_string(), TaskStatus::Ready)],
+            "the reconciled subject is reset to Ready through the plugin store"
+        );
+    }
+
+    // A human-held plugin-backed subject is exempt from the reset sweep, even
+    // when stale past the grace window (mirrors the in-tree human-assignee
+    // exemption).
+    #[tokio::test]
+    async fn plugin_backed_human_held_task_is_not_reset() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let store = StubStaleTaskStore::new(vec![super::StaleInProgressTask {
+            id: "task:TASK-901".to_string(),
+            is_human_assignee: true,
+            last_transition_at: chrono::Utc::now() - chrono::Duration::hours(48),
+        }]);
+
+        let reconciled = super::reconcile_stale_in_progress_tasks_with_store(&store, hub, &HashSet::new(), 24 * 3600)
+            .await
+            .expect("reconciliation should run");
+
+        assert_eq!(reconciled, 0, "a human-held subject is never auto-reset");
+        assert!(store.writes().is_empty(), "no status write for a human-held subject");
+    }
+
+    // A failed status write (plugin timeout/rejection) must surface as an error
+    // — not be swallowed while still counting a reconciliation that never
+    // landed. The daemon's outer handler downgrades this to a logged skip.
+    #[tokio::test]
+    async fn plugin_status_write_failure_propagates_and_is_not_counted() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let store = StubStaleTaskStore::failing(vec![super::StaleInProgressTask {
+            id: "task:TASK-902".to_string(),
+            is_human_assignee: false,
+            last_transition_at: chrono::Utc::now() - chrono::Duration::hours(48),
+        }]);
+
+        let err = super::reconcile_stale_in_progress_tasks_with_store(&store, hub, &HashSet::new(), 24 * 3600)
+            .await
+            .expect_err("a failed status write must propagate");
+        assert!(err.to_string().contains("task/status failure"), "surfaced error identifies the failed write: {err}");
+    }
+
+    // A live runner shields a plugin-backed subject from the reset sweep even
+    // when the active-process set keys on the BARE id while the plugin lists the
+    // qualified form — otherwise the reconciler could reset a task out from
+    // under its running workflow, allowing duplicate dispatch.
+    #[tokio::test]
+    async fn plugin_backed_task_with_active_bare_runner_is_not_reset() {
+        let hub: Arc<dyn ServiceHub> = Arc::new(orchestrator_core::InMemoryServiceHub::new());
+        let store = StubStaleTaskStore::new(vec![super::StaleInProgressTask {
+            id: "task:TASK-1".to_string(),
+            is_human_assignee: false,
+            last_transition_at: chrono::Utc::now() - chrono::Duration::hours(48),
+        }]);
+        // Active set carries the bare native id; the plugin lists the qualified
+        // form. The normalized membership test must still match.
+        let active: HashSet<String> = HashSet::from(["TASK-1".to_string()]);
+
+        let reconciled = super::reconcile_stale_in_progress_tasks_with_store(&store, hub, &active, 24 * 3600)
+            .await
+            .expect("reconciliation should run");
+
+        assert_eq!(reconciled, 0, "a live runner (bare id) shields the qualified plugin subject");
+        assert!(store.writes().is_empty(), "no status write while a runner is active");
+    }
+
+    // The router `task/list` parser projects only in-progress subjects, keys on
+    // the backend-qualified id, reads `updated_at` as the last-transition
+    // timestamp, and classifies an `agent:` assignee as non-human (eligible)
+    // while any other assignee is a human hold (exempt).
+    #[test]
+    fn extract_in_progress_tasks_parses_wire_list_shape() {
+        let payload = serde_json::json!({
+            "subjects": [
+                {
+                    "id": "task:TASK-1",
+                    "kind": "task",
+                    "title": "agent-held in-progress",
+                    "status": "in-progress",
+                    "assignee": "agent:builder",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-02-01T12:00:00Z"
+                },
+                {
+                    "id": "task:TASK-2",
+                    "kind": "task",
+                    "title": "human-held in-progress",
+                    "status": "in-progress",
+                    "assignee": "alice",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-02-02T00:00:00Z"
+                },
+                {
+                    "id": "task:TASK-4",
+                    "kind": "task",
+                    "title": "human-held via custom.assignee",
+                    "status": "in-progress",
+                    "custom": { "assignee": "bob" },
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-02-04T00:00:00Z"
+                },
+                {
+                    "id": "task:TASK-3",
+                    "kind": "task",
+                    "title": "already done — must be skipped",
+                    "status": "done",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-02-03T00:00:00Z"
+                },
+                {
+                    "id": "blog:BLOG-1",
+                    "kind": "blog",
+                    "title": "non-task row from a catch-all backend — must be skipped",
+                    "status": "in-progress",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-02-05T00:00:00Z"
+                }
+            ]
+        });
+
+        let tasks = super::extract_in_progress_tasks(&payload);
+        assert_eq!(tasks.len(), 3, "only in-progress task-kind subjects are projected");
+        assert!(tasks.iter().all(|t| t.id.starts_with("task:")), "non-task rows are excluded from reconciliation");
+        assert_eq!(tasks[0].id, "task:TASK-1");
+        assert!(!tasks[0].is_human_assignee, "an agent:<name> claim is not a human hold");
+        assert_eq!(tasks[0].last_transition_at.to_rfc3339(), "2026-02-01T12:00:00+00:00");
+        assert_eq!(tasks[1].id, "task:TASK-2");
+        assert!(tasks[1].is_human_assignee, "a plain assignee is treated as a human hold");
+        assert_eq!(tasks[2].id, "task:TASK-4");
+        assert!(tasks[2].is_human_assignee, "a custom.assignee hold is honored too");
+    }
+
+    #[test]
+    fn extract_in_progress_tasks_normalizes_status_and_alt_envelopes() {
+        // A backend that spells the status `in_progress` and wraps rows under
+        // `items` (not `subjects`) must still be projected — otherwise the
+        // stale reconciler would silently skip the whole store.
+        let payload = serde_json::json!({
+            "items": [
+                {
+                    "id": "task:TASK-7",
+                    "status": "in_progress",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-02-01T00:00:00Z"
+                }
+            ]
+        });
+        let tasks = super::extract_in_progress_tasks(&payload);
+        assert_eq!(tasks.len(), 1, "in_progress spelling under `items` is projected");
+        assert_eq!(tasks[0].id, "task:TASK-7");
+    }
+
+    #[test]
+    fn extract_next_cursor_treats_null_and_empty_as_final_page() {
+        assert_eq!(
+            super::extract_next_cursor(&serde_json::json!({ "next_cursor": "abc" })),
+            Some(serde_json::json!("abc"))
+        );
+        assert_eq!(super::extract_next_cursor(&serde_json::json!({ "next_cursor": serde_json::Value::Null })), None);
+        assert_eq!(super::extract_next_cursor(&serde_json::json!({ "next_cursor": "  " })), None);
+        assert_eq!(super::extract_next_cursor(&serde_json::json!({ "subjects": [] })), None);
+    }
+
+    #[test]
+    fn wire_status_matches_subject_status_vocabulary() {
+        assert_eq!(super::wire_status(TaskStatus::Ready), "ready");
+        assert_eq!(super::wire_status(TaskStatus::Blocked), "blocked");
+        assert_eq!(super::wire_status(TaskStatus::Cancelled), "cancelled");
+    }
+
+    #[test]
+    fn task_ids_match_tolerates_task_qualifier_only() {
+        assert!(super::task_ids_match("TASK-1", "TASK-1"));
+        assert!(super::task_ids_match("task:TASK-1", "TASK-1"));
+        assert!(super::task_ids_match("TASK-1", "task:TASK-1"));
+        assert!(super::task_ids_match("task:TASK-1", "task:TASK-1"));
+        assert!(!super::task_ids_match("task:TASK-1", "task:TASK-2"));
+        // A different kind sharing the native id must NOT alias the task: a live
+        // `blog:BLOG-1` runner must not shield a stale `task:BLOG-1`.
+        assert!(!super::task_ids_match("blog:BLOG-1", "task:BLOG-1"));
+        assert!(!super::task_ids_match("blog:BLOG-1", "BLOG-1"));
     }
 }
