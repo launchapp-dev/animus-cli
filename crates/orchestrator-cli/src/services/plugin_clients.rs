@@ -52,13 +52,22 @@ const PLUGIN_KIND_QUEUE: &str = "queue";
 const PLUGIN_CALL_TIMEOUT_SHORT: Duration = Duration::from_secs(30);
 const PLUGIN_CALL_TIMEOUT_LONG: Duration = Duration::from_hours(1);
 
-/// Discover a plugin by `plugin_kind` value from its manifest.
+/// Discover a plugin that serves `plugin_kind`.
+///
+/// Matches a plugin's primary `plugin_kind` OR any of its additional
+/// `plugin_kinds` via [`PluginManifest::serves_kind`] (v0.7 multi-kind), so a
+/// consolidated multi-role plugin (e.g. `animus-postgres`, whose queue role is
+/// one of several it advertises) is recognized as the queue backend. This is
+/// the same role-based resolution the daemon uses
+/// (`orchestrator_plugin_host::discover_by_kind`); a bare
+/// `plugin_kind == plugin_kind` comparison would miss such a plugin and wrongly
+/// report the role as unsatisfied.
 fn find_plugin_for_kind(project_root: &Path, plugin_kind: &str) -> Result<Option<DiscoveredPlugin>> {
     let discovered = PluginDiscovery::new()
         .with_project_root(project_root.to_path_buf())
         .discover()
         .context("plugin discovery failed")?;
-    Ok(discovered.into_iter().find(|p| p.manifest.plugin_kind == plugin_kind))
+    Ok(discovered.into_iter().find(|p| p.manifest.serves_kind(plugin_kind)))
 }
 
 /// Spawn a plugin process and run the v0.5 initialize handshake with the
@@ -362,10 +371,14 @@ pub fn probe_active_plugin_roles(project_root: &Path) -> Result<ActivePluginRole
     let mut workflow_runner = false;
     let mut queue = false;
     for plugin in &discovered {
-        match plugin.manifest.plugin_kind.as_str() {
-            PLUGIN_KIND_WORKFLOW_RUNNER => workflow_runner = true,
-            PLUGIN_KIND_QUEUE => queue = true,
-            _ => {}
+        // Role-based (v0.7 multi-kind): a consolidated plugin advertising the
+        // role via `plugin_kinds` counts, not just plugins whose primary
+        // `plugin_kind` matches.
+        if plugin.manifest.serves_kind(PLUGIN_KIND_WORKFLOW_RUNNER) {
+            workflow_runner = true;
+        }
+        if plugin.manifest.serves_kind(PLUGIN_KIND_QUEUE) {
+            queue = true;
         }
     }
     Ok(ActivePluginRoles { workflow_runner, queue })
@@ -377,4 +390,80 @@ pub(crate) fn workflow_runner_kind() -> &'static str {
 
 pub(crate) fn queue_kind() -> &'static str {
     PLUGIN_KIND_QUEUE
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use protocol::test_utils::EnvVarGuard;
+
+    use super::*;
+
+    fn write_stub_plugin(dir: &Path, name: &str, manifest: &Value) -> std::path::PathBuf {
+        let path = dir.join(name);
+        fs::write(&path, format!("#!/bin/sh\nprintf '{manifest}\\n'\n")).expect("write plugin");
+        let mut perms = fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod");
+        path
+    }
+
+    /// A consolidated multi-role plugin whose PRIMARY `plugin_kind` is
+    /// `subject_backend` but which ALSO advertises the `queue` role via
+    /// `plugin_kinds` (mirrors `animus-postgres` on the portal) must resolve as
+    /// the queue backend — proving the CLI queue-client resolves by ROLE, like
+    /// the daemon, rather than by primary kind or default name/repo (TASK-228).
+    #[test]
+    fn find_plugin_for_kind_resolves_multi_role_plugin_by_queue_role() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root).expect("project dir");
+
+        // Hermetic discovery: redirect the global config home (which is where
+        // the operator-installed plugin registry lives, and the tier
+        // `find_plugin_for_kind` consults — the project-local registry is NOT
+        // walked by default). Point the install dir at an empty dir so only our
+        // stub registry contributes.
+        let config_home = temp.path().join("animus-home");
+        fs::create_dir_all(&config_home).expect("config home");
+        let empty_install = temp.path().join("empty-install");
+        fs::create_dir_all(&empty_install).expect("install dir");
+        let _config = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(config_home.to_string_lossy().as_ref()));
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(empty_install.to_string_lossy().as_ref()));
+
+        let bin_dir = temp.path().join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        let manifest = json!({
+            "name": "animus-postgres",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "plugin_kinds": ["queue", "config_source"],
+            "description": "consolidated baas",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        let bin = write_stub_plugin(&bin_dir, "animus-postgres", &manifest);
+
+        // Register the stub in the GLOBAL registry (`<ANIMUS_CONFIG_DIR>/plugins.yaml`),
+        // the operator-install tier discovery reads by default.
+        fs::write(
+            config_home.join("plugins.yaml"),
+            format!("plugins:\n  animus-postgres:\n    binary: {}\n", bin.to_string_lossy()),
+        )
+        .expect("write registry");
+
+        let resolved = find_plugin_for_kind(&project_root, PLUGIN_KIND_QUEUE).expect("plugin discovery succeeds");
+        let plugin = resolved.expect("multi-role plugin resolves the queue role");
+        assert_eq!(plugin.name, "animus-postgres");
+        assert!(plugin.manifest.serves_kind(PLUGIN_KIND_QUEUE), "advertises the queue role");
+        // Primary kind is NOT queue — proving resolution is by ROLE, not by the
+        // primary `plugin_kind` (the pre-fix bug returned None here).
+        assert_ne!(plugin.manifest.plugin_kind, PLUGIN_KIND_QUEUE);
+
+        // probe_active_plugin_roles must agree the queue role is satisfied.
+        let roles = probe_active_plugin_roles(&project_root).expect("probe roles");
+        assert!(roles.queue, "queue role reported satisfied by the multi-role plugin");
+    }
 }
