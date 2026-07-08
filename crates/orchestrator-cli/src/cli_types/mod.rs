@@ -1440,6 +1440,24 @@ mod tests {
     }
 
     #[test]
+    fn subject_update_accepts_title_flag() {
+        // TASK-192: `animus subject update --title` must parse and land in
+        // SubjectUpdateArgs so a subject can be renamed. Before the fix clap
+        // rejected `--title` as an unknown argument.
+        let cli = Cli::try_parse_from([
+            "animus", "subject", "update", "--kind", "task", "--id", "TASK-1", "--title", "New name",
+        ])
+        .expect("subject update --title should parse");
+        match cli.command {
+            Command::Subject { command: SubjectCommand::Update(args) } => {
+                assert_eq!(args.title.as_deref(), Some("New name"));
+                assert_eq!(args.id, "TASK-1");
+            }
+            other => panic!("expected subject update command, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn crate_map_matches_live_workspace_members() {
         let mut live = live_workspace_crates();
         let mut documented = documented_workspace_crates();

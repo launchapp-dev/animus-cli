@@ -1658,6 +1658,7 @@ fn mcp_subject_update_requires_at_least_one_field_args() {
     let input = SubjectUpdateInput {
         kind: "task".to_string(),
         id: "TASK-1".to_string(),
+        title: None,
         status: Some("in_progress".to_string()),
         priority: None,
         labels: vec![],
@@ -1676,6 +1677,38 @@ fn mcp_subject_update_requires_at_least_one_field_args() {
             "TASK-1".to_string(),
             "--status".to_string(),
             "in_progress".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn mcp_subject_update_forwards_title_flag() {
+    // The `title` input field must reach the CLI as `--title` so an MCP
+    // caller can rename a subject (TASK-192: the schema advertised `title`
+    // but the arg was never forwarded, so `animus subject update` rejected
+    // the unknown `--title`).
+    let input = SubjectUpdateInput {
+        kind: "task".to_string(),
+        id: "TASK-1".to_string(),
+        title: Some("Renamed title".to_string()),
+        status: None,
+        priority: None,
+        labels: vec![],
+        body: None,
+        project_root: None,
+    };
+    let args = build_subject_update_args(&input);
+    assert_eq!(
+        args,
+        vec![
+            "subject".to_string(),
+            "update".to_string(),
+            "--kind".to_string(),
+            "task".to_string(),
+            "--id".to_string(),
+            "TASK-1".to_string(),
+            "--title".to_string(),
+            "Renamed title".to_string(),
         ]
     );
 }

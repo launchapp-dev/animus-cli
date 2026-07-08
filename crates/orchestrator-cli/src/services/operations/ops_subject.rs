@@ -167,6 +167,13 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
     }
     let id = crate::qualify_subject_id(&args.id, &kind);
     let mut patch = serde_json::Map::new();
+    if let Some(title) = args.title.as_deref() {
+        let title = title.trim();
+        if title.is_empty() {
+            return Err(invalid_input_error("--title must not be empty"));
+        }
+        patch.insert("title".to_string(), json!(title));
+    }
     if let Some(status) = args.status.as_deref() {
         patch.insert("status".to_string(), json!(status));
     }
@@ -181,7 +188,7 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
     }
     if patch.is_empty() {
         return Err(invalid_input_error(
-            "subject update requires at least one of --status / --priority / --labels / --body",
+            "subject update requires at least one of --title / --status / --priority / --labels / --body",
         ));
     }
     let params = Some(json!({ "id": id, "patch": Value::Object(patch) }));

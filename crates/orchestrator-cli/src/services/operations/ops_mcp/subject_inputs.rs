@@ -49,6 +49,9 @@ pub(super) struct SubjectCreateInput {
 pub(super) struct SubjectUpdateInput {
     pub(super) kind: String,
     pub(super) id: String,
+    /// Rename the subject. Replaces the subject's title with this value.
+    #[serde(default)]
+    pub(super) title: Option<String>,
     #[serde(default)]
     pub(super) status: Option<String>,
     #[serde(default)]
