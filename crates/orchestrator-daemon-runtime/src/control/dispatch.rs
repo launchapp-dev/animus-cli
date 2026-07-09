@@ -1563,6 +1563,7 @@ mod health_probe_env_tests {
             capabilities: Vec::new(),
             env_required: required,
             notification_buffer_size: None,
+            supports_mcp: None,
         }
     }
 

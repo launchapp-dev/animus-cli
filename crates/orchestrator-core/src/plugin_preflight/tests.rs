@@ -304,6 +304,7 @@ fn discovered_subject_plugin(name: &str, native_kind: &str) -> DiscoveredPlugin 
             capabilities: vec![format!("subject_kind:{native_kind}")],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         },
         source: DiscoverySource::PluginPath,
     }

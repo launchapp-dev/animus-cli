@@ -1242,6 +1242,18 @@ impl DiscoveredProviderPlugin {
     }
 }
 
+/// Resolve a provider's MCP-consume decision from its DECLARED manifest
+/// capability (TASK-277 / REQUIREMENT-039), rather than a hardcoded per-tool
+/// default.
+///
+/// Back-compat: an undeclared field (`None` — older plugins built before
+/// protocol 1.2.0, which omit the field entirely) means the provider keeps the
+/// historical default of MCP-capable. Only an explicit `Some(false)` opts a
+/// provider out of host MCP-server injection.
+fn declared_supports_mcp_from_manifest(manifest: &animus_plugin_protocol::PluginManifest) -> bool {
+    manifest.supports_mcp.unwrap_or(true)
+}
+
 /// Inspect manifests of every discovered plugin under `project_root` and return only
 /// the provider-kind plugins. Provider tool name defaults to the plugin name minus the
 /// `animus-provider-` prefix.
@@ -1260,11 +1272,7 @@ pub fn discover_provider_plugins(project_root: &std::path::Path) -> Vec<Discover
                 .unwrap_or_else(|| plugin.name.clone());
             let env_required = plugin.manifest.env_required.clone();
             let declared_methods = plugin.manifest.capabilities.clone();
-            // Every provider plugin consumes MCP; the protocol carries no
-            // per-plugin MCP-consume flag yet (TASK-277 sources this from a
-            // first-class manifest/handshake capability). Until then, a
-            // discovered provider declares MCP-capable.
-            let declared_supports_mcp = true;
+            let declared_supports_mcp = declared_supports_mcp_from_manifest(&plugin.manifest);
             let notification_buffer_size = plugin.manifest.notification_buffer_size;
             DiscoveredProviderPlugin {
                 plugin_name: plugin.name,
@@ -1818,6 +1826,41 @@ mod tests {
         let opted_out =
             PluginSessionBackend::new("q", PathBuf::from("/nonexistent/q"), "q").with_declared_supports_mcp(false);
         assert!(!opted_out.capabilities().supports_mcp, "declared supports_mcp:false must be honored");
+    }
+
+    #[test]
+    fn declared_supports_mcp_from_manifest_sources_the_declared_field() {
+        fn manifest(supports_mcp: Option<bool>) -> animus_plugin_protocol::PluginManifest {
+            animus_plugin_protocol::PluginManifest {
+                name: "animus-provider-portal".to_string(),
+                version: "0.1.0".to_string(),
+                plugin_kind: animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string(),
+                plugin_kinds: Vec::new(),
+                description: "out-of-tree provider".to_string(),
+                protocol_version: "1.2.0".to_string(),
+                capabilities: vec!["agent/run".to_string()],
+                env_required: Vec::new(),
+                notification_buffer_size: None,
+                supports_mcp,
+            }
+        }
+
+        // Back-compat: an older plugin that omits the field (None) keeps the
+        // historical MCP-capable default.
+        assert!(
+            declared_supports_mcp_from_manifest(&manifest(None)),
+            "undeclared supports_mcp must default to MCP-capable (back-compat)"
+        );
+        // An explicit opt-out is honored.
+        assert!(
+            !declared_supports_mcp_from_manifest(&manifest(Some(false))),
+            "declared supports_mcp:false must be sourced from the manifest"
+        );
+        // An explicit opt-in is honored.
+        assert!(
+            declared_supports_mcp_from_manifest(&manifest(Some(true))),
+            "declared supports_mcp:true must be sourced from the manifest"
+        );
     }
 
     fn env_req(name: &str) -> EnvRequirement {

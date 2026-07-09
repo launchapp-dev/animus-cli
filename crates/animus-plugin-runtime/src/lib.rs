@@ -66,6 +66,12 @@ impl ProviderInfo {
             ],
             env_required: Vec::new(),
             notification_buffer_size: None,
+            // TODO(codex-p2): plumb an opt-out through `ProviderInfo` so a
+            // runtime-built provider can declare `supports_mcp: false`. For now
+            // it stays undeclared (None) => the kernel's historical MCP-capable
+            // default, matching the protocol repo's `provider_main` deferral
+            // (REQUIREMENT-039).
+            supports_mcp: None,
         }
     }
 

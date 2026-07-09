@@ -626,6 +626,7 @@ mod tests {
                 capabilities: vec![],
                 env_required: vec![],
                 notification_buffer_size: None,
+                supports_mcp: None,
             },
             source: DiscoverySource::ProjectLocal,
         }

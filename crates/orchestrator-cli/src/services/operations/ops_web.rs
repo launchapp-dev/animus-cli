@@ -678,6 +678,7 @@ mod tests {
                 capabilities: capabilities.iter().map(|s| s.to_string()).collect(),
                 env_required: Vec::new(),
                 notification_buffer_size: None,
+                supports_mcp: None,
             },
             source: DiscoverySource::ExplicitConfig,
         }

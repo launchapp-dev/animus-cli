@@ -30,18 +30,18 @@ categories = ["command-line-utilities", "development-tools"]
 # animus-subject-protocol resolves to one source (no duplicate-crate type
 # mismatches). animus-plugin-protocol/runtime remain in-tree pending a
 # follow-up move.
-animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5" }
-animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5" }
-animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5" }
-animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5" }
-animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5" }
-animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5" }
-animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5" }
+animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp" }
+animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp" }
+animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp" }
+animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp" }
+animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp" }
+animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp" }
+animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp" }
 # v0.7: environment plugin kind — EnvironmentSpec/HarnessCommand/ExecRequest wire
 # types + prepare/exec/exec_stream/teardown methods. Consumed by the routing
 # resolver + the follow-on runtime EnvironmentClient (not yet built).
-animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5" }
-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.5", package = "protocol" }
+animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp" }
+protocol = { git = "https://github.com/launchapp-dev/animus-protocol", branch = "agent/v0.7.0/declared-supports-mcp", package = "protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-plugin-host = { path = "crates/orchestrator-plugin-host" }
