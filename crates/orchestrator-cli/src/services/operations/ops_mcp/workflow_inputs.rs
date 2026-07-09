@@ -8,8 +8,11 @@ pub(super) struct WorkflowListInput {
     pub(super) status: Option<String>,
     #[serde(default)]
     pub(super) workflow_ref: Option<String>,
+    /// Filter workflows linked to a subject id. Matched exactly against the id
+    /// the workflow stored — built-in kinds (task/requirement) store the
+    /// qualified form, so filter with `task:TASK-001`.
     #[serde(default)]
-    pub(super) task_id: Option<String>,
+    pub(super) subject_id: Option<String>,
     #[serde(default)]
     pub(super) phase_id: Option<String>,
     #[serde(default)]
@@ -27,16 +30,11 @@ pub(super) struct WorkflowListInput {
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct WorkflowRunInput {
     #[serde(default)]
-    pub(super) task_id: Option<String>,
-    #[serde(default)]
-    pub(super) requirement_id: Option<String>,
-    #[serde(default)]
     pub(super) title: Option<String>,
-    /// For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like
-    /// blog/post/etc.), pass `subject_id` (the kernel resolves the kind)
-    /// instead of `task_id`. Accepts a qualified id (`blog:BLOG-001` — kind
-    /// trusted) or a bare id (`BLOG-001` — kind resolved via the subject
-    /// router). Mutually exclusive with `task_id` / `requirement_id` / `title`.
+    /// Subject to run the workflow for, any kind (task, requirement, or dynamic
+    /// kinds like blog/post). Accepts a qualified id (`task:TASK-001` /
+    /// `blog:BLOG-001` — kind trusted) or a bare id (`TASK-001` — kind resolved
+    /// via the subject router). Mutually exclusive with `title`.
     #[serde(default)]
     pub(super) subject_id: Option<String>,
     #[serde(default)]
@@ -51,7 +49,9 @@ pub(super) struct WorkflowRunInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct BulkWorkflowRunItem {
-    pub(super) task_id: String,
+    /// Subject to run the workflow for. Accepts a qualified id (`task:TASK-001`)
+    /// or a bare id (`TASK-001`, kind resolved via the subject router).
+    pub(super) subject_id: String,
     #[serde(default)]
     pub(super) workflow_ref: Option<String>,
     #[serde(default)]
@@ -118,7 +118,10 @@ pub(super) struct WorkflowConfigEntityRemoveInput {
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema)]
 pub(super) struct WorkflowExecuteInput {
-    pub(super) task_id: String,
+    /// Subject to execute the workflow for. Accepts a qualified id
+    /// (`task:TASK-001`) or a bare id (`TASK-001`, kind resolved via the subject
+    /// router).
+    pub(super) subject_id: String,
     #[serde(default)]
     pub(super) workflow_ref: Option<String>,
     #[serde(default)]

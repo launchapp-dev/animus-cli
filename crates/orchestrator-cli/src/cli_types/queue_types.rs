@@ -8,11 +8,11 @@ pub(crate) enum QueueCommand {
     List,
     /// Show queue statistics.
     Stats,
-    /// Enqueue a subject dispatch for a task, requirement, or custom title.
+    /// Enqueue a subject dispatch for any subject kind or a custom title.
     ///
     /// Examples:
-    ///   animus queue enqueue --task-id TASK-001
-    ///   animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
+    ///   animus queue enqueue --subject-id TASK-001
+    ///   animus queue enqueue --subject-id requirement:REQ-042 --workflow-ref ops
     ///   animus queue enqueue --title "Investigate flaky test" --description "Suite fails intermittently on CI"
     Enqueue(QueueEnqueueArgs),
     /// Hold one or more queued subjects.
@@ -29,36 +29,22 @@ pub(crate) enum QueueCommand {
 pub(crate) struct QueueEnqueueArgs {
     #[arg(
         long,
-        value_name = "TASK_ID",
-        group = "subject",
-        help = "Task subject to enqueue (e.g. TASK-001). Mutually exclusive with --requirement-id / --title."
-    )]
-    pub(crate) task_id: Option<String>,
-    #[arg(
-        long,
-        value_name = "REQ_ID",
-        group = "subject",
-        help = "Requirement subject to enqueue (e.g. REQ-042). Mutually exclusive with --task-id / --title."
-    )]
-    pub(crate) requirement_id: Option<String>,
-    #[arg(
-        long,
         value_name = "TITLE",
         group = "subject",
-        help = "Custom subject title for ad-hoc dispatches. Mutually exclusive with --task-id / --requirement-id."
+        help = "Custom subject title for ad-hoc dispatches. Mutually exclusive with --subject-id / --adhoc."
     )]
     pub(crate) title: Option<String>,
     #[arg(
         long = "subject-id",
         value_name = "SUBJECT_ID",
         group = "subject",
-        help = "Generic subject to enqueue for any kind (BaaS dynamic kinds like blog/post). Accepts a qualified id (blog:BLOG-001 — kind trusted; the recommended form) or a bare id (BLOG-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form). Mutually exclusive with --task-id / --requirement-id / --title."
+        help = "Subject to enqueue for any kind. Accepts a qualified id (task:TASK-001 / requirement:REQ-042 / blog:BLOG-001 — kind trusted; the recommended form) or a bare id (TASK-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form). Mutually exclusive with --title / --adhoc."
     )]
     pub(crate) subject_id: Option<String>,
     #[arg(
         long,
         group = "subject",
-        help = "Dispatch a subjectless (ad-hoc) run with NO bound subject. The workflow runs without subject-bound template vars — use for subject-less-by-design workflows (e.g. relate) fired without a target. Requires --workflow-ref. Mutually exclusive with --task-id / --requirement-id / --title / --subject-id. NOTE: not yet supported through the installed queue plugin (its RPC protocol still requires a subject); dispatch such runs directly for now."
+        help = "Dispatch a subjectless (ad-hoc) run with NO bound subject. The workflow runs without subject-bound template vars — use for subject-less-by-design workflows (e.g. relate) fired without a target. Requires --workflow-ref. Mutually exclusive with --subject-id / --title. NOTE: not yet supported through the installed queue plugin (its RPC protocol still requires a subject); dispatch such runs directly for now."
     )]
     pub(crate) adhoc: bool,
     #[arg(long, value_name = "TEXT", help = "Custom subject description (used with --title).")]

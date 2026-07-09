@@ -75,7 +75,7 @@ animus logs tail
 ## Testing a Workflow Before Enabling the Daemon
 
 ```bash
-animus workflow run --task-id TASK-001 --sync
+animus workflow run --subject-id TASK-001 --sync
 ```
 
 Use synchronous runs to debug a workflow definition, prompt, or plugin setup in

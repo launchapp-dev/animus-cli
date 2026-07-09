@@ -34,7 +34,7 @@ use crate::{
 /// empty-state hint when there are no runs yet.
 fn print_workflow_list_table(items: &[protocol::orchestrator::OrchestratorWorkflow]) {
     if items.is_empty() {
-        println!("No workflow runs yet. Start one with: animus workflow run <pipeline> --task-id <id>");
+        println!("No workflow runs yet. Start one with: animus workflow run <pipeline> --subject-id <id>");
         return;
     }
     let rows: Vec<Vec<String>> = items
@@ -65,72 +65,18 @@ async fn resolve_subject_id_ref_via_router(
     resolve_subject_id_ref(subject_id, &probe).await
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn resolve_workflow_run_dispatch(
-    hub: Arc<dyn ServiceHub>,
+/// Build a freeform `--title` custom dispatch. Subjects of any concrete kind
+/// (task/requirement/blog/…) travel the generic `--subject-id` path instead;
+/// this only handles the titled, subjectless-by-title custom run.
+fn resolve_workflow_run_dispatch(
     project_root: &str,
-    task_id: Option<String>,
-    requirement_id: Option<String>,
     title: Option<String>,
     description: Option<String>,
     workflow_ref: Option<String>,
     vars: std::collections::HashMap<String, String>,
 ) -> Result<protocol::SubjectDispatch> {
-    match (task_id, requirement_id, title) {
-        (Some(tid), None, None) => {
-            // v0.4.12+: task data may live in an installed `subject_backend` plugin
-            // rather than the in-tree task store. Try the in-tree store first (so
-            // legacy projects keep working); if that misses, route through the
-            // subject_resolver so the plugin fallback path engages. Either way we
-            // need the resolved task id (and `is_frontend_related()` if available)
-            // to pick a workflow ref.
-            let (resolved_id, default_ref) = match hub.tasks().get(&tid).await {
-                Ok(task) => (task.id.clone(), default_workflow_ref_for_task(&task, project_root)),
-                Err(in_tree_err) => {
-                    let subject = protocol::orchestrator::SubjectRef::task(tid.clone());
-                    match hub.subject_resolver().resolve_subject_context(&subject, None, None).await {
-                        Ok(ctx) => (ctx.subject_id, default_project_workflow_ref(project_root)),
-                        Err(plugin_err) => {
-                            return Err(anyhow!(
-                                "task '{tid}' not found (in-tree: {in_tree_err}; plugin: {plugin_err})"
-                            ));
-                        }
-                    }
-                }
-            };
-            Ok(protocol::SubjectDispatch::for_task_with_metadata(
-                resolved_id,
-                workflow_ref.unwrap_or(default_ref),
-                "manual-cli-run",
-                Utc::now(),
-            ))
-            .map(|dispatch| dispatch.with_vars(vars))
-        }
-        (None, Some(rid), None) => {
-            // Mirror the task path: try in-tree, fall back to plugin-backed
-            // subject resolver so requirement-kind plugins (e.g. linear) work.
-            let resolved_id = match hub.planning().get_requirement(&rid).await {
-                Ok(_) => rid,
-                Err(in_tree_err) => {
-                    let subject = protocol::orchestrator::SubjectRef::requirement(rid.clone());
-                    match hub.subject_resolver().resolve_subject_context(&subject, None, None).await {
-                        Ok(ctx) => ctx.subject_id,
-                        Err(plugin_err) => {
-                            return Err(anyhow!(
-                                "requirement '{rid}' not found (in-tree: {in_tree_err}; plugin: {plugin_err})"
-                            ));
-                        }
-                    }
-                }
-            };
-            Ok(protocol::SubjectDispatch::for_requirement(
-                resolved_id,
-                workflow_ref.unwrap_or(resolve_requirement_workflow_ref(project_root)?),
-                "manual-cli-run",
-            ))
-            .map(|dispatch| dispatch.with_vars(vars))
-        }
-        (None, None, Some(t)) => Ok(protocol::SubjectDispatch::for_custom(
+    match title {
+        Some(t) => Ok(protocol::SubjectDispatch::for_custom(
             t,
             description.unwrap_or_default(),
             workflow_ref.unwrap_or_else(|| default_project_workflow_ref(project_root)),
@@ -138,8 +84,7 @@ async fn resolve_workflow_run_dispatch(
             "manual-cli-run",
         )
         .with_vars(vars)),
-        (None, None, None) => Err(anyhow!("one of --task-id, --requirement-id, or --title must be provided")),
-        _ => Err(anyhow!("--task-id, --requirement-id, and --title are mutually exclusive")),
+        None => Err(anyhow!("one of --subject-id or --title must be provided")),
     }
 }
 
@@ -404,7 +349,11 @@ fn build_workflow_query(args: crate::WorkflowListArgs) -> Result<WorkflowQuery> 
         filter: WorkflowFilter {
             status: parse_workflow_status_opt(args.status.as_deref())?,
             workflow_ref: args.workflow_ref,
-            task_id: args.task_id,
+            // The workflow record's subject-linkage column stores the id in the
+            // exact form the dispatch carried (built-in kinds keep the qualified
+            // `task:TASK-001`; the filter is an exact match), so pass the
+            // `--subject-id` value through verbatim rather than normalizing it.
+            task_id: args.subject_id,
             phase_id: args.phase_id,
             search_text: args.search,
         },
@@ -463,12 +412,7 @@ pub(crate) async fn handle_workflow(
                 print_value(pruned, json)
             }
         },
-        WorkflowCommand::Run(mut args) => {
-            // Accept either a bare task id (`TASK-001`) or the `task:`-qualified
-            // form (`task:TASK-001`); the task store keys on the bare native id,
-            // so normalize at the CLI boundary. Only the `task:` qualifier is
-            // stripped so a foreign-kind qualifier is not silently rewritten.
-            args.task_id = args.task_id.map(|id| crate::bare_task_id(&id));
+        WorkflowCommand::Run(args) => {
             let workflow_ref = args.pipeline.clone();
             // Generic BaaS subject path: resolve the subject's real kind once
             // (qualified prefix or router probe) and build a kind-correct
@@ -509,8 +453,6 @@ pub(crate) async fn handle_workflow(
             if args.sync {
                 let execute_args = WorkflowExecuteArgs {
                     workflow_id: args.workflow_id,
-                    task_id: args.task_id,
-                    requirement_id: args.requirement_id,
                     title: args.title,
                     subject_dispatch: subject_id_dispatch.clone(),
                     description: args.description,
@@ -535,20 +477,13 @@ pub(crate) async fn handle_workflow(
                 execute::handle_workflow_execute(execute_args, hub, project_root, json).await?;
                 Ok(())
             } else {
-                // C6.5: when JSON mode + task id + daemon is running,
-                // route the start through the control wire so the
-                // daemon's WorkflowService owns the run lifecycle. The
-                // wire response is a WorkflowRunStart (id + status +
-                // started_at) which is a strict subset of the local
-                // OrchestratorWorkflow shape; that's the intentional
-                // trade for the cross-transport story. Requirement /
-                // title / freeform paths and any --input-json path stay
-                // local — the wire surface only covers `workflow/run`
-                // for task subjects today.
-                // Parse --var KEY=VALUE pairs up front so both the
-                // control-wire path and the local path receive the same
-                // validated map. Otherwise the wire path would silently
-                // drop user-supplied vars when the daemon is running.
+                // C6.5: the daemon's WorkflowService owns the run lifecycle when
+                // the subject travels the control wire. Since a subject now always
+                // arrives as a kind-correct `--subject-id` dispatch (or a `--title`
+                // freeform / `--input-json` payload), those non-subject_id paths
+                // stay local.
+                // Parse --var KEY=VALUE pairs up front so the local path receives
+                // the validated map (matching the sync path).
                 let parsed_vars = if args.input_json.is_none() {
                     parse_workflow_vars(&args.vars)?
                 } else {
@@ -564,21 +499,6 @@ pub(crate) async fn handle_workflow(
                     // inbound control request supplies its own actor instead.
                     actor: asserted_actor.clone(),
                 };
-                if json && args.input_json.is_none() && args.requirement_id.is_none() && args.title.is_none() {
-                    if let Some(task_id) = args.task_id.as_ref() {
-                        if let Some(start) = try_workflow_run_via_control(
-                            project_root,
-                            task_id,
-                            workflow_ref.clone(),
-                            &parsed_vars,
-                            &runner_overrides,
-                        )
-                        .await?
-                        {
-                            return print_value(start, true);
-                        }
-                    }
-                }
                 let dispatch = if let Some(subject_dispatch) = subject_id_dispatch {
                     // Generic subject: the kind-correct dispatch was built up
                     // front; the detached runner resolves it via `<kind>/get`.
@@ -588,19 +508,13 @@ pub(crate) async fn handle_workflow(
                         Some(raw) => {
                             resolve_workflow_run_dispatch_from_raw_input(hub.clone(), project_root, &raw).await?
                         }
-                        None => {
-                            resolve_workflow_run_dispatch(
-                                hub.clone(),
-                                project_root,
-                                args.task_id,
-                                args.requirement_id,
-                                args.title,
-                                args.description,
-                                workflow_ref,
-                                parsed_vars,
-                            )
-                            .await?
-                        }
+                        None => resolve_workflow_run_dispatch(
+                            project_root,
+                            args.title,
+                            args.description,
+                            workflow_ref,
+                            parsed_vars,
+                        )?,
                     }
                 };
                 // Post-v0.5 there is no in-process executor: a bare
@@ -885,7 +799,7 @@ pub(crate) async fn handle_workflow(
 /// wire: the wire request only carries status/cursor/limit, has no
 /// sort parameter, and collapses `escalated` into `Failed`.
 fn workflow_list_expressible_on_wire(args: &crate::WorkflowListArgs) -> bool {
-    if args.workflow_ref.is_some() || args.task_id.is_some() || args.phase_id.is_some() || args.search.is_some() {
+    if args.workflow_ref.is_some() || args.subject_id.is_some() || args.phase_id.is_some() || args.search.is_some() {
         return false;
     }
     match parse_workflow_query_sort_opt(args.sort.as_deref()) {
@@ -942,63 +856,6 @@ async fn try_workflow_get_via_control(
         Ok(response) => Ok(Some(response)),
         Err(err) if is_method_unavailable(&err) => {
             tracing::debug!(error = %err, "workflow/get wire returned unavailable; falling back to local");
-            Ok(None)
-        }
-        Err(err) => Err(err),
-    }
-}
-
-async fn try_workflow_run_via_control(
-    project_root: &str,
-    task_id: &str,
-    definition: Option<String>,
-    vars: &std::collections::HashMap<String, String>,
-    overrides: &phases::DetachedRunnerOverrides,
-) -> Result<Option<animus_control_protocol::types::WorkflowRunStart>> {
-    use animus_control_protocol::types::WorkflowRunRequest as WireRequest;
-    use orchestrator_daemon_runtime::control::{is_method_unavailable, ControlClient};
-
-    let project_root_path = Path::new(project_root);
-    let Some(client) = ControlClient::try_connect(project_root_path).await? else {
-        return Ok(None);
-    };
-    // Plumb --var KEY=VALUE pairs through the control wire via the
-    // `params` map under the well-known `vars` key so they reach
-    // `WorkflowRunInput::with_vars` on the daemon side. See the
-    // matching extraction in `ops_workflow::control_routing::workflow_run`.
-    let mut params: std::collections::BTreeMap<String, serde_json::Value> = std::collections::BTreeMap::new();
-    if !vars.is_empty() {
-        let vars_obj: serde_json::Map<String, serde_json::Value> =
-            vars.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
-        params.insert("vars".to_string(), serde_json::Value::Object(vars_obj));
-    }
-    // Same trick for --model / --tool / --phase-timeout-secs under the
-    // well-known `overrides` key so the daemon-spawned runner honors the
-    // same execution overrides as the local async path. Older daemons
-    // ignore the extra key.
-    if overrides.model.is_some() || overrides.tool.is_some() || overrides.phase_timeout_secs.is_some() {
-        let mut overrides_obj = serde_json::Map::new();
-        if let Some(model) = overrides.model.as_deref() {
-            overrides_obj.insert("model".to_string(), serde_json::Value::String(model.to_string()));
-        }
-        if let Some(tool) = overrides.tool.as_deref() {
-            overrides_obj.insert("tool".to_string(), serde_json::Value::String(tool.to_string()));
-        }
-        if let Some(timeout) = overrides.phase_timeout_secs {
-            overrides_obj.insert("phase_timeout_secs".to_string(), serde_json::Value::from(timeout));
-        }
-        params.insert("overrides".to_string(), serde_json::Value::Object(overrides_obj));
-    }
-    // Relay the transport-asserted actor (from an explicit `--actor-json`) over
-    // the control wire so the daemon scopes the run to that user. With no flag
-    // `overrides.actor` is `None` and the run is global — the CLI client never
-    // synthesizes an actor from local context; authenticated actors are
-    // asserted only by the caller (the flag) or the transport plugins.
-    let request = WireRequest { task_id: task_id.to_string(), definition, params, actor: overrides.actor.clone() };
-    match client.workflow_run(request).await {
-        Ok(response) => Ok(Some(response)),
-        Err(err) if is_method_unavailable(&err) => {
-            tracing::debug!(error = %err, "workflow/run wire returned unavailable; falling back to local");
             Ok(None)
         }
         Err(err) => Err(err),
@@ -1095,7 +952,7 @@ mod tests {
         crate::WorkflowListArgs {
             status: None,
             workflow_ref: None,
-            task_id: None,
+            subject_id: None,
             phase_id: None,
             search: None,
             sort: None,
@@ -1126,7 +983,7 @@ mod tests {
         assert!(!workflow_list_expressible_on_wire(&args));
 
         let mut args = list_args();
-        args.task_id = Some("TASK-1".to_string());
+        args.subject_id = Some("TASK-1".to_string());
         assert!(!workflow_list_expressible_on_wire(&args));
 
         let mut args = list_args();
@@ -1166,40 +1023,26 @@ mod tests {
         assert!(message.contains("workflow agent-runtime set --help"));
     }
 
-    #[tokio::test]
-    async fn resolve_workflow_run_dispatch_builds_task_dispatch_with_concrete_workflow_ref() {
-        let hub = Arc::new(InMemoryServiceHub::new());
-        let task = hub
-            .tasks()
-            .create(TaskCreateInput {
-                title: "dispatch me".to_string(),
-                description: "task dispatch builder test".to_string(),
-                task_type: Some(TaskType::Feature),
-                priority: Some(Priority::Medium),
-                created_by: Some("test".to_string()),
-                tags: Vec::new(),
-                linked_requirements: Vec::new(),
-                linked_architecture_entities: Vec::new(),
-            })
-            .await
-            .expect("task should be created");
-
+    #[test]
+    fn resolve_workflow_run_dispatch_builds_custom_title_dispatch() {
         let dispatch = resolve_workflow_run_dispatch(
-            hub,
             "/tmp/unused",
-            Some(task.id.clone()),
-            None,
-            None,
-            None,
-            None,
+            Some("Investigate flaky test".to_string()),
+            Some("Suite fails intermittently".to_string()),
+            Some("standard-workflow".to_string()),
             std::collections::HashMap::new(),
         )
-        .await
-        .expect("dispatch should resolve");
+        .expect("custom dispatch should resolve");
 
-        assert_eq!(dispatch.subject_id(), Some(task.id.as_str()));
-        assert_eq!(dispatch.workflow_ref, orchestrator_core::workflow_ref_for_task(&task));
+        assert_eq!(dispatch.workflow_ref, "standard-workflow");
         assert_eq!(dispatch.trigger_source, "manual-cli-run");
+    }
+
+    #[test]
+    fn resolve_workflow_run_dispatch_requires_title_or_subject() {
+        let err = resolve_workflow_run_dispatch("/tmp/unused", None, None, None, std::collections::HashMap::new())
+            .expect_err("no title should error");
+        assert!(err.to_string().contains("--subject-id"), "got: {err}");
     }
 
     #[tokio::test]

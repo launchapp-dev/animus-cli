@@ -72,12 +72,6 @@ pub(crate) struct IdArgs {
 }
 
 #[derive(Debug, Args)]
-pub(crate) struct TaskIdArgs {
-    #[arg(short, long, value_name = "TASK_ID", help = "Task identifier.")]
-    pub(crate) task_id: String,
-}
-
-#[derive(Debug, Args)]
 pub(crate) struct LogArgs {
     #[arg(
         long,

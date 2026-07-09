@@ -68,10 +68,10 @@ The command surface converges on a small set of conventions:
   existing install, remove a dirty worktree, bypass a reference guard), not
   for skipping confirmation. `workflow pause/cancel --confirm <id>` is a
   deliberate repeat-the-id safety pattern for remote mutation and stays as-is.
-- **IDs**: domain-prefixed id flags (`--task-id`, `--run-id`,
-  `--workflow-id`) are accepted wherever the domain is unambiguous; workflow
-  commands take `--workflow-id` as an alias of `--id`. `subject --id` stays
-  kind-generic by design.
+- **IDs**: id flags (`--subject-id`, `--run-id`, `--workflow-id`) are accepted
+  wherever the domain is unambiguous; workflow commands take `--workflow-id` as
+  an alias of `--id`. `subject --id` and `--subject-id` stay kind-generic by
+  design — pass a bare id or a `kind:id`-qualified id.
 - **Durations**: age/window flags accept unit suffixes `s`/`m`/`h`/`d`
   (`--since 2h`, `workflow prune --older-than 12h`). Bare numbers keep their
   historical default unit (`--older-than 30` still means 30 days).
@@ -859,12 +859,17 @@ other subject kind. By default the entry is dispatched as soon as the daemon
 has capacity.
 
 ```bash
-animus queue enqueue --task-id TASK-001
-animus queue enqueue --requirement-id REQ-042 --workflow-ref ops
+animus queue enqueue --subject-id TASK-001
+animus queue enqueue --subject-id requirement:REQ-042 --workflow-ref ops
 animus queue enqueue --title "Investigate flaky test" --description "Fails on CI"
-animus queue enqueue --subject-id blog:BLOG-001                      # BaaS dynamic kind
+animus queue enqueue --subject-id blog:BLOG-001                      # dynamic kind
 animus queue enqueue --adhoc --workflow-ref relate                   # subjectless (ad-hoc) run
 ```
+
+> **Removed in v0.7 (breaking).** The deprecated `--task-id` / `--requirement-id`
+> flags were removed. `task` and `requirement` are ordinary subject kinds now —
+> use `--subject-id` (qualified `task:TASK-001` / `requirement:REQ-042`, or a
+> bare `TASK-001`) for every kind.
 
 **Subjectless (ad-hoc) runs (`--adhoc`).** A workflow that finds its own
 target (or needs none) can be dispatched with NO bound subject via `--adhoc`
@@ -872,20 +877,18 @@ plus a required `--workflow-ref`. The run has no subject-bound template vars,
 so a subjectless-by-design workflow (e.g. `relate`) is a first-class mode, not
 an error. Each ad-hoc dispatch carries a unique id so a burst of subjectless
 runs is never deduped into one queue entry. `--adhoc` is mutually exclusive
-with `--task-id` / `--requirement-id` / `--title` / `--subject-id`.
+with `--subject-id` / `--title`.
 
-**Generic subjects (`--subject-id`).** For a subject that is **not**
-`kind=task`/`requirement` (a BaaS dynamic kind such as `blog`, `post`, etc.),
-use `--subject-id` instead of `--task-id`. It accepts either a **qualified**
-id (`blog:BLOG-001` — the kind before the `:` is trusted; the recommended
-form) or a **bare** id (`BLOG-001` — the kind is resolved by probing the
-installed subject backends that declare concrete kinds). A backend that
-declares only the `subject_kind:*` catch-all (a pure dynamic-kind backend)
-cannot enumerate a bare id's kind, so it requires the qualified form.
-The resolved kind is preserved in the dispatch, so the queue lease and runner
-resolve the subject via `<kind>/get` rather than coercing it to a task.
-`--subject-id` is mutually exclusive with `--task-id` / `--requirement-id` /
-`--title`.
+**Subjects (`--subject-id`).** `--subject-id` enqueues a subject of **any**
+kind — `task`, `requirement`, or a dynamic kind such as `blog`/`post`. It
+accepts either a **qualified** id (`task:TASK-001` / `blog:BLOG-001` — the kind
+before the `:` is trusted; the recommended form) or a **bare** id (`TASK-001` —
+the kind is resolved by probing the installed subject backends that declare
+concrete kinds). A backend that declares only the `subject_kind:*` catch-all
+(a pure dynamic-kind backend) cannot enumerate a bare id's kind, so it requires
+the qualified form. The resolved kind is preserved in the dispatch, so the
+queue lease and runner resolve the subject via `<kind>/get`. `--subject-id` is
+mutually exclusive with `--title` / `--adhoc`.
 
 **Deferred dispatch.** `--at` schedules the entry for a future time; it stays
 queued (counted under `pending`, and broken out as `deferred` in
@@ -893,9 +896,9 @@ queued (counted under `pending`, and broken out as `deferred` in
 the next daemon pickup.
 
 ```bash
-animus queue enqueue --task-id TASK-001 --at 2026-06-13T15:00:00Z   # absolute (RFC 3339)
-animus queue enqueue --task-id TASK-001 --at 2h                     # relative: 90s / 30m / 2h / 3d
-animus queue enqueue --task-id TASK-001 --at 2h --expire-after 10m  # drop if not dispatched within grace
+animus queue enqueue --subject-id TASK-001 --at 2026-06-13T15:00:00Z   # absolute (RFC 3339)
+animus queue enqueue --subject-id TASK-001 --at 2h                     # relative: 90s / 30m / 2h / 3d
+animus queue enqueue --subject-id TASK-001 --at 2h --expire-after 10m  # drop if not dispatched within grace
 ```
 
 | Flag | Description |
@@ -1172,7 +1175,7 @@ Recommended pack installs are per-pack and never abort init: each pack reports
 `installed`, `already_installed`, or `failed` (with the manual
 `git clone ... && animus pack install --path ... --activate` recovery command).
 After a successful install, init prints the first runnable workflow command
-(`animus workflow run animus.task/standard --task-id ... --sync`). The
+(`animus workflow run animus.task/standard --subject-id ... --sync`). The
 `ANIMUS_INIT_PACK_SOURCE_DIR` env var overrides the GitHub clone with a local
 `<dir>/<pack-id>` source directory for offline installs and tests.
 
@@ -1820,7 +1823,7 @@ Priority is displayed in `p0`–`p3` bucket notation in all human-readable views
 ### ID normalization
 
 `subject get/update/status --id`, `queue hold/release/drop`, and
-`workflow run --task-id` all accept **either** the bare native id (e.g.
+`workflow run --subject-id` all accept **either** the bare native id (e.g.
 `TASK-001`) or the kind-qualified form (e.g. `task:TASK-001`). The bare form
 is normalized to the qualified form at the CLI boundary, so both resolve the
 same subject. You do not need to run any command in `--json` mode to discover
@@ -1835,15 +1838,14 @@ id never falls through to the `task`-favoring config default. This is what lets
 a workflow `mark-running` command (`animus subject status --id <kind>:<id>
 --status in-progress`) target the right backend without a `task` default.
 
-For subjects of an arbitrary kind (BaaS dynamic kinds like `blog`, `post`),
-`queue enqueue --subject-id` and `workflow run --subject-id` accept a
-qualified id (`blog:BLOG-001`, kind trusted — the recommended form) or a bare
-id (`BLOG-001`, kind resolved by probing installed backends that declare
-concrete kinds; a pure `subject_kind:*` catch-all backend requires the
-qualified form). The resolved kind is preserved on the dispatch so the subject
-is leased/run under its real kind (via `<kind>/get`) instead of being coerced
-to `task`. `--subject-id` is mutually exclusive with `--task-id` /
-`--requirement-id` / `--title`.
+For subjects of **any** kind — `task`, `requirement`, or a dynamic kind like
+`blog`/`post` — `queue enqueue --subject-id` and `workflow run --subject-id`
+accept a qualified id (`task:TASK-001` / `blog:BLOG-001`, kind trusted — the
+recommended form) or a bare id (`TASK-001`, kind resolved by probing installed
+backends that declare concrete kinds; a pure `subject_kind:*` catch-all backend
+requires the qualified form). The resolved kind is preserved on the dispatch so
+the subject is leased/run under its real kind (via `<kind>/get`). `--subject-id`
+is mutually exclusive with `--title` (and `--adhoc` for `queue enqueue`).
 
 ### `animus pack search` (positional query)
 
@@ -1874,7 +1876,7 @@ validate`, and `animus chat send` accept `--actor-json <JSON>` — a JSON-encode
 user, mirroring `animus mcp serve --actor-json`:
 
 ```bash
-animus workflow run --task-id TASK-1 --actor-json '{"user_id":"alice"}'
+animus workflow run --subject-id task:TASK-1 --actor-json '{"user_id":"alice"}'
 animus workflow config get  --actor-json '{"user_id":"alice"}'
 animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":["admin"]}'
 ```

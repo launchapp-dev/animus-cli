@@ -203,7 +203,7 @@ animus daemon preflight                          # verify all required plugins a
 
 # Option 1: run a workflow on demand
 animus subject create --kind task --title "Add rate limiting" --priority p1
-animus workflow run --task-id TASK-001
+animus workflow run --subject-id TASK-001
 
 # Option 2: go fully autonomous
 animus daemon start                              # daemon executes ready subjects continuously

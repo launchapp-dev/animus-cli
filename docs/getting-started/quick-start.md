@@ -13,7 +13,7 @@ flowchart TD
     --> START["4b. animus daemon start (preflight)"]
     --> INSPECT["5. animus status / workflow list"]
 
-    START -. "optional dry run" .-> SYNC["animus workflow run --task-id ... --sync"]
+    START -. "optional dry run" .-> SYNC["animus workflow run --subject-id ... --sync"]
 ```
 
 ## 0. Five-Minute Walkthrough
@@ -103,7 +103,7 @@ animus status
 ## Test a Workflow Before Running the Daemon
 
 ```bash
-animus workflow run --task-id TASK-001 --sync
+animus workflow run --subject-id TASK-001 --sync
 ```
 
 ## Requirement-First Flow

@@ -251,27 +251,25 @@ mod tests {
         match cli.command {
             Command::Queue { command: QueueCommand::Enqueue(args) } => {
                 assert_eq!(args.subject_id.as_deref(), Some("blog:BLOG-001"));
-                assert!(args.task_id.is_none());
+                assert!(args.title.is_none());
             }
             other => panic!("expected queue enqueue, got {other:?}"),
         }
     }
 
     #[test]
-    fn queue_enqueue_subject_id_conflicts_with_kind_flags() {
-        for other in [["--task-id", "TASK-1"], ["--requirement-id", "REQ-1"], ["--title", "x"]] {
-            let error = Cli::try_parse_from([
-                "animus",
-                "queue",
-                "enqueue",
-                "--subject-id",
-                "blog:BLOG-001",
-                other[0],
-                other[1],
-            ])
-            .expect_err("--subject-id must be mutually exclusive with the kind flags");
-            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "flag {}: {error}", other[0]);
-        }
+    fn queue_enqueue_subject_id_conflicts_with_title() {
+        let error =
+            Cli::try_parse_from(["animus", "queue", "enqueue", "--subject-id", "blog:BLOG-001", "--title", "x"])
+                .expect_err("--subject-id must be mutually exclusive with --title");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{error}");
+    }
+
+    #[test]
+    fn queue_enqueue_rejects_removed_task_id_flag() {
+        let error = Cli::try_parse_from(["animus", "queue", "enqueue", "--task-id", "TASK-1"])
+            .expect_err("--task-id was removed");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{error}");
     }
 
     #[test]
@@ -281,20 +279,24 @@ mod tests {
         match cli.command {
             Command::Workflow { command: WorkflowCommand::Run(args) } => {
                 assert_eq!(args.subject_id.as_deref(), Some("blog:BLOG-001"));
-                assert!(args.task_id.is_none());
+                assert!(args.title.is_none());
             }
             other => panic!("expected workflow run, got {other:?}"),
         }
     }
 
     #[test]
-    fn workflow_run_subject_id_conflicts_with_kind_flags() {
-        for other in [["--task-id", "TASK-1"], ["--requirement-id", "REQ-1"], ["--title", "x"]] {
-            let error =
-                Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "blog:BLOG-001", other[0], other[1]])
-                    .expect_err("--subject-id must be mutually exclusive with the kind flags");
-            assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "flag {}: {error}", other[0]);
-        }
+    fn workflow_run_subject_id_conflicts_with_title() {
+        let error = Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "blog:BLOG-001", "--title", "x"])
+            .expect_err("--subject-id must be mutually exclusive with --title");
+        assert_eq!(error.kind(), ErrorKind::ArgumentConflict, "{error}");
+    }
+
+    #[test]
+    fn workflow_run_rejects_removed_task_id_flag() {
+        let error = Cli::try_parse_from(["animus", "workflow", "run", "--task-id", "TASK-1"])
+            .expect_err("--task-id was removed");
+        assert_eq!(error.kind(), ErrorKind::UnknownArgument, "{error}");
     }
 
     #[test]
@@ -711,12 +713,13 @@ mod tests {
 
     #[test]
     fn parses_queue_enqueue_command() {
-        let cli = Cli::try_parse_from(["animus", "queue", "enqueue", "--task-id", "TASK-123", "--workflow-ref", "ops"])
-            .expect("queue enqueue command should parse");
+        let cli =
+            Cli::try_parse_from(["animus", "queue", "enqueue", "--subject-id", "TASK-123", "--workflow-ref", "ops"])
+                .expect("queue enqueue command should parse");
 
         match cli.command {
             Command::Queue { command: QueueCommand::Enqueue(args) } => {
-                assert_eq!(args.task_id.as_deref(), Some("TASK-123"));
+                assert_eq!(args.subject_id.as_deref(), Some("TASK-123"));
                 assert_eq!(args.workflow_ref.as_deref(), Some("ops"));
             }
             _ => panic!("expected queue enqueue command"),
@@ -786,13 +789,14 @@ mod tests {
 
     #[test]
     fn parses_workflow_run_with_positional_pipeline() {
-        let cli = Cli::try_parse_from(["animus", "workflow", "run", "animus.task/standard", "--task-id", "TASK-123"])
-            .expect("workflow run should parse");
+        let cli =
+            Cli::try_parse_from(["animus", "workflow", "run", "animus.task/standard", "--subject-id", "task:TASK-123"])
+                .expect("workflow run should parse");
 
         match cli.command {
             Command::Workflow { command: WorkflowCommand::Run(args) } => {
                 assert_eq!(args.pipeline.as_deref(), Some("animus.task/standard"));
-                assert_eq!(args.task_id.as_deref(), Some("TASK-123"));
+                assert_eq!(args.subject_id.as_deref(), Some("task:TASK-123"));
             }
             _ => panic!("expected workflow run command"),
         }
@@ -962,8 +966,16 @@ mod tests {
     #[test]
     fn workflow_run_parses_actor_json_for_transport_scoping() {
         let actor_json = r#"{"user_id":"alice","claims":["admin"],"tenant_id":"acme"}"#;
-        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--task-id", "TASK-1", "--actor-json", actor_json])
-            .expect("workflow run --actor-json should parse");
+        let cli = Cli::try_parse_from([
+            "animus",
+            "workflow",
+            "run",
+            "--subject-id",
+            "task:TASK-1",
+            "--actor-json",
+            actor_json,
+        ])
+        .expect("workflow run --actor-json should parse");
         match cli.command {
             Command::Workflow { command: WorkflowCommand::Run(args) } => {
                 assert_eq!(args.actor_json.as_deref(), Some(actor_json));
@@ -971,7 +983,7 @@ mod tests {
             other => panic!("expected workflow run, got {other:?}"),
         }
         // No flag => None => global scope.
-        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--task-id", "TASK-1"])
+        let cli = Cli::try_parse_from(["animus", "workflow", "run", "--subject-id", "task:TASK-1"])
             .expect("bare workflow run should parse");
         match cli.command {
             Command::Workflow { command: WorkflowCommand::Run(args) } => assert_eq!(args.actor_json, None),

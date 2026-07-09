@@ -724,7 +724,7 @@ async fn resolve_hook_decision(
         None,
         timeout_secs,
         args.workflow_id.as_deref(),
-        args.task_id.as_deref(),
+        args.subject_id.as_deref(),
     )
     .await;
     let decision = approval_decision_from_outcome(outcome, timeout_secs);
@@ -969,7 +969,7 @@ phases:
                     agent_id: "swe".to_string(),
                     format: crate::ApproveHookFormat::Generic,
                     workflow_id: None,
-                    task_id: None,
+                    subject_id: None,
                     timeout_secs: Some(1),
                 };
 
