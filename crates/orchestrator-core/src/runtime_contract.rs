@@ -106,6 +106,28 @@ pub fn cli_capabilities_for_tool(tool: &str) -> Option<CliCapabilities> {
     }
 }
 
+/// Capabilities for a provider tool the kernel does not recognize as a built-in
+/// CLI — i.e. a provider PLUGIN (every provider ships out-of-tree as of
+/// v0.4.12). The plugin session backend spawns the provider process and
+/// advertises `supports_mcp: true` (see `PluginSessionBackend::capabilities`),
+/// so the assembled runtime contract must also mark the tool MCP-capable;
+/// otherwise the daemon skips MCP-server injection entirely and the agent
+/// never receives its profile/skill-declared servers (including OAuth-proxied
+/// ones). The launch-time flags are conservative: the kernel never spawns a
+/// plugin provider via `cli.launch`, so they only inform prompt/context
+/// heuristics.
+fn plugin_provider_capabilities() -> CliCapabilities {
+    CliCapabilities {
+        supports_file_editing: false,
+        supports_streaming: true,
+        supports_tool_use: true,
+        supports_vision: false,
+        supports_long_context: true,
+        max_context_tokens: None,
+        supports_mcp: true,
+    }
+}
+
 fn cli_capabilities_from_tool_config(config: &CliToolConfig) -> CliCapabilities {
     CliCapabilities {
         supports_file_editing: config.supports_file_editing.unwrap_or(false),
@@ -368,14 +390,36 @@ pub fn build_runtime_contract(
     mcp_agent_id: Option<&str>,
 ) -> Option<Value> {
     let normalized = normalized_tool(tool);
-    let launch = build_cli_launch_contract(&normalized, model_id, prompt, resume_plan, command_override)?;
-    let capabilities = cli_capabilities_for_tool(&normalized)?;
+    let launch = build_cli_launch_contract(&normalized, model_id, prompt, resume_plan, command_override);
+    let capabilities = cli_capabilities_for_tool(&normalized);
+
+    // Resolve the CLI shape. A tool the kernel recognizes as a built-in CLI has
+    // BOTH a launch-table entry and a capability-table entry. A tool it does NOT
+    // recognize is a provider PLUGIN: the plugin session backend spawns it and
+    // advertises `supports_mcp`, and the kernel never launches it via
+    // `cli.launch`. Give such a tool a generic MCP-capable capability set with
+    // NO `cli.launch` block so the daemon still assembles a runtime contract and
+    // injects the agent's profile/skill MCP servers. Without this the whole
+    // contract is `None` and a plugin-provider agent (e.g. `tool: portal`)
+    // receives ZERO daemon-injected MCP servers — only whatever the provider
+    // self-wires. Downstream `/cli/launch` mutators are all `if let Some(..)`, so
+    // an absent launch block is safe.
+    let (launch, capabilities) = match (launch, capabilities) {
+        (Some(launch), Some(capabilities)) => (Some(launch), capabilities),
+        // Unknown to both tables → provider plugin. MCP-capable, no cli.launch.
+        (None, None) => (None, plugin_provider_capabilities()),
+        // Known to exactly one table is a partial/non-CLI built-in entry;
+        // preserve the historical "unsupported" (None) result.
+        _ => return None,
+    };
     let enforce_mcp_only = mcp_endpoint.is_some() && capabilities.supports_mcp;
 
     let mut cli = serde_json::Map::new();
     cli.insert("name".to_string(), json!(normalized));
     cli.insert("capabilities".to_string(), json!(capabilities));
-    cli.insert("launch".to_string(), launch);
+    if let Some(launch) = launch {
+        cli.insert("launch".to_string(), launch);
+    }
 
     if let Some(plan) = resume_plan {
         cli.insert(
@@ -466,6 +510,35 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(allowed_prefixes.contains(&"animus."));
         assert!(allowed_prefixes.contains(&"mcp__animus__"));
+    }
+
+    #[test]
+    fn build_runtime_contract_marks_plugin_provider_tool_mcp_capable() {
+        // A provider tool the kernel does not know as a built-in CLI (every
+        // provider ships as a plugin now, e.g. LaunchApp's `portal`) must still
+        // assemble a runtime contract flagged `supports_mcp: true`, so the
+        // daemon injects the agent's profile/skill MCP servers. Regression for
+        // the OAuth/krisp bridge: without this the contract was `None` and the
+        // portal provider received zero daemon-injected MCP servers.
+        let contract = build_runtime_contract("portal", "z-ai/glm-5.2", "hi", None, None, None, None)
+            .expect("plugin-provider runtime contract should build");
+
+        assert_eq!(contract.pointer("/cli/name").and_then(Value::as_str), Some("portal"));
+        assert_eq!(contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(true));
+        // The kernel never launches a plugin provider via `cli.launch`; the
+        // block is intentionally absent so downstream launch-arg mutators no-op.
+        assert!(
+            contract.pointer("/cli/launch").is_none(),
+            "plugin-provider contract must omit cli.launch; got {contract}"
+        );
+    }
+
+    #[test]
+    fn build_runtime_contract_still_none_for_partial_builtin_tools() {
+        // `custom`/`cursor`/`cline` have a capability-table entry but no
+        // launch-table entry: they must stay unsupported (None), not fall into
+        // the plugin-provider path.
+        assert!(build_runtime_contract("custom", "m", "hi", None, None, None, None).is_none());
     }
 
     #[test]
