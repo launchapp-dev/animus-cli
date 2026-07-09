@@ -40,8 +40,8 @@ dispatch them through the workflow engine:
 
 | Operator Entry Point | Canonical Ref | Notes |
 |---|---|---|
-| `animus workflow run animus.task/standard --task-id TASK-001` | `animus.task/standard` | Explicit workflow ref execution through the CLI |
-| `animus workflow run animus.requirement/execute --requirement-id REQ-001` | `animus.requirement/execute` | Requirement execution resolves to the canonical pack ref |
+| `animus workflow run animus.task/standard --subject-id TASK-001` | `animus.task/standard` | Explicit workflow ref execution through the CLI |
+| `animus workflow run animus.requirement/execute --subject-id requirement:REQ-001` | `animus.requirement/execute` | Requirement execution resolves to the canonical pack ref |
 | `animus workflow run standard-workflow` | `animus.task/standard` | Repository-specific workflows can wrap canonical pack refs |
 
 The first-party pack boundary is currently most visible in task, requirement,

@@ -16,6 +16,12 @@ pub(crate) async fn reconcile_completed_processes(
 ) -> CompletedProcessReconciliation {
     let plan = build_completion_reconciliation_plan(completed_processes);
 
+    // Route task-status projections through the installed subject backend when
+    // one owns `task` (portal); the in-tree `hub.tasks()` store is empty there,
+    // so projecting a terminal status into it left the plugin-backed task stuck
+    // InProgress until the 24h stale sweep.
+    let store = orchestrator_daemon_runtime::resolve_task_projection_store(root, hub.clone()).await;
+
     for fact in &plan.execution_facts {
         for event in &fact.runner_events {
             debug!(
@@ -34,7 +40,7 @@ pub(crate) async fn reconcile_completed_processes(
         // (`completed`/`failed`/`cancelled`).
         finalize_plugin_queue_entry(root, fact).await;
 
-        if !project_execution_fact(hub.clone(), root, fact).await {
+        if !project_execution_fact(store.as_ref(), fact).await {
             info!(
                 actor = protocol::ACTOR_DAEMON,
                 subject_id = %fact.subject_id,

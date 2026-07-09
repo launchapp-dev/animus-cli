@@ -41,7 +41,7 @@ use anyhow::{Context, Result};
 use futures_core::Stream;
 use futures_util::StreamExt;
 use orchestrator_plugin_host::{
-    discover_plugins, DiscoveredPlugin, KindAliasMap, PluginLockfile, SubjectPluginSpec, SubjectRouter,
+    discover_by_kind, DiscoveredPlugin, KindAliasMap, PluginLockfile, SubjectPluginSpec, SubjectRouter,
 };
 use serde_json::Value;
 
@@ -478,9 +478,12 @@ pub fn subject_plugins_disable_env_set() -> bool {
 }
 
 /// Filter the project's installed plugins down to subject backends.
+///
+/// v0.7 multi-kind: matches a plugin's primary `plugin_kind` OR any of its
+/// additional `plugin_kinds` via [`discover_by_kind`], so a consolidated
+/// plugin that serves `subject_backend` as a secondary role is still routed.
 pub fn discover_subject_backends(project_root: &Path) -> Result<Vec<DiscoveredPlugin>> {
-    let plugins = discover_plugins(project_root)?;
-    Ok(plugins.into_iter().filter(|p| p.manifest.plugin_kind == PLUGIN_KIND_SUBJECT_BACKEND).collect())
+    discover_by_kind(project_root, PLUGIN_KIND_SUBJECT_BACKEND)
 }
 
 /// Outcome of [`resolve_subject_dispatch`].

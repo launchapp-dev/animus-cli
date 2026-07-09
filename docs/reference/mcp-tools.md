@@ -190,11 +190,11 @@ bounded fetch for recent entries, not a live stream.
 
 | Tool | Description | Key Parameters |
 |---|---|---|
-| `animus.workflow.run` | Start a workflow for a subject (async, via daemon). For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like blog/post), pass `subject_id` (the kernel resolves the kind) instead of `task_id` | `task_id`, `requirement_id`, `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `project_root` |
-| `animus.workflow.run-multiple` | Batch-run workflows for multiple tasks | `runs[]` (each: `task_id`, `workflow_ref`, `input_json`), `on_error`, `project_root` |
-| `animus.workflow.execute` | Execute a workflow synchronously (no daemon) | `task_id`, `workflow_ref`, `phase`, `model`, `tool`, `phase_timeout_secs`, `input_json`, `project_root` |
+| `animus.workflow.run` | Start a workflow for a subject (async, via daemon). Pass `subject_id` for any kind — qualified `task:TASK-001` / `blog:BLOG-001` (kind trusted) or bare `TASK-001` (kind resolved by the router) | `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `project_root` |
+| `animus.workflow.run-multiple` | Batch-run workflows for multiple subjects | `runs[]` (each: `subject_id`, `workflow_ref`, `input_json`), `on_error`, `project_root` |
+| `animus.workflow.execute` | Execute a workflow synchronously (no daemon) | `subject_id`, `workflow_ref`, `phase`, `model`, `tool`, `phase_timeout_secs`, `input_json`, `project_root` |
 | `animus.workflow.get` | Get full workflow state by ID | `id`, `project_root` |
-| `animus.workflow.list` | List workflow executions | `status`, `workflow_ref`, `task_id`, `phase_id`, `search`, `sort`, `limit`, `offset`, `max_tokens`, `project_root` |
+| `animus.workflow.list` | List workflow executions | `status`, `workflow_ref`, `subject_id`, `phase_id`, `search`, `sort`, `limit`, `offset`, `max_tokens`, `project_root` |
 | `animus.workflow.pause` | Pause a running workflow | `id`, `confirm`, `dry_run`, `project_root` |
 | `animus.workflow.cancel` | Cancel a running workflow permanently | `id`, `confirm`, `dry_run`, `project_root` |
 | `animus.workflow.resume` | Resume a paused workflow | `id`, `project_root` |
@@ -226,7 +226,7 @@ bounded fetch for recent entries, not a live stream.
 |---|---|---|
 | `animus.queue.list` | List queued subject dispatches | `project_root` |
 | `animus.queue.stats` | Get aggregate queue depth and status counts | `project_root` |
-| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`). For subjects that are NOT kind=task/requirement (BaaS dynamic kinds like blog/post), pass `subject_id` (qualified `blog:BLOG-001` or bare `BLOG-001`; the kernel resolves the kind) instead of `task_id` | `task_id`, `requirement_id`, `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `run_at`, `expire_after`, `project_root` |
+| `animus.queue.enqueue` | Add a subject dispatch to the queue (immediate, or deferred via `run_at`). Pass `subject_id` for any kind — qualified `task:TASK-001` / `blog:BLOG-001` (kind trusted) or bare `TASK-001` (kind resolved by the router) | `title`, `subject_id`, `description`, `workflow_ref`, `input_json`, `run_at`, `expire_after`, `project_root` |
 | `animus.queue.reorder` | Set preferred dispatch order | `subject_ids[]`, `project_root` |
 | `animus.queue.hold` | Hold one or more pending subjects from dispatch | `subject_id`, `subject_ids[]`, `project_root` |
 | `animus.queue.release` | Release one or more held subjects for dispatch | `subject_id`, `subject_ids[]`, `project_root` |

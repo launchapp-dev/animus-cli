@@ -1701,7 +1701,17 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
     };
 
     if let Some(manifest_for_check) = source_manifest.as_ref() {
-        enforce_provider_tool_policy(manifest_for_check, req.allow_shadow_builtin, provenance.owner.as_deref())?;
+        // Resolve the name this install will actually be dispatched under so the
+        // reserved-provider guard checks the same string runtime discovery will
+        // (override / release basename / source basename), not just the manifest
+        // name (codex round-5/6 P1).
+        let effective_name = effective_install_name(req.name.as_deref(), &default_name, &source_path)?;
+        enforce_provider_tool_policy(
+            manifest_for_check,
+            Some(effective_name.as_str()),
+            req.allow_shadow_builtin,
+            provenance.owner.as_deref(),
+        )?;
         if let (Some(owner), Some(repo)) = (provenance.owner.as_deref(), provenance.repo.as_deref()) {
             enforce_manifest_name_matches_repo(manifest_for_check, owner, repo, req.force)?;
         }
@@ -1725,21 +1735,10 @@ pub(crate) async fn run_plugin_install(req: PluginInstallRequest) -> Result<Plug
         SignaturePolicyOutcome::Proceed => {}
     }
 
-    let (plugin_name, name_override_for_yaml) = match req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
-        Some(name) => (name.to_string(), Some(name.to_string())),
-        None => {
-            let derived = if !default_name.is_empty() {
-                default_name
-            } else {
-                source_path
-                    .file_name()
-                    .and_then(|f| f.to_str())
-                    .ok_or_else(|| invalid_input_error("could not derive plugin name from source path"))?
-                    .to_string()
-            };
-            (derived, None)
-        }
-    };
+    let plugin_name = effective_install_name(req.name.as_deref(), &default_name, &source_path)?;
+    // The YAML `name_override` is recorded ONLY when the operator passed an
+    // explicit `--name`; a source-derived default name is not an override.
+    let name_override_for_yaml = req.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map(str::to_string);
 
     let install_dir = scope_paths.install_dir.clone();
     let installed_path = install_dir.join(&plugin_name);
@@ -2563,7 +2562,10 @@ fn rename_eligible_native_kind(manifest: &PluginManifest) -> Option<String> {
 /// declared kinds collides with an existing install, not just the
 /// primary.
 fn all_rename_eligible_native_kinds(manifest: &PluginManifest) -> Vec<String> {
-    if manifest.plugin_kind != "subject_backend" {
+    // v0.7 multi-kind: a plugin serving `subject_backend` as a NON-primary
+    // `plugin_kinds` role is routed by the daemon, so its declared
+    // `subject_kind:*` capabilities must also be collision-checked at install.
+    if !manifest.serves_kind("subject_backend") {
         return Vec::new();
     }
     let mut out: Vec<String> = Vec::new();
@@ -2616,7 +2618,10 @@ fn current_subject_kinds_for_collision_check(
     };
     let mut out: Vec<String> = Vec::new();
     for plugin in discovered {
-        if plugin.name == current_plugin_name || plugin.manifest.plugin_kind != "subject_backend" {
+        // v0.7 multi-kind: include plugins that serve `subject_backend` as a
+        // secondary role — the daemon routes them, so their claimed kinds count
+        // toward the collision inventory.
+        if plugin.name == current_plugin_name || !plugin.manifest.serves_kind("subject_backend") {
             continue;
         }
         let lock_entry = lockfile.find(&plugin.name);
@@ -5148,15 +5153,55 @@ fn probe_manifest(binary_path: &Path) -> Result<PluginManifest> {
 /// (`launchapp-dev`): a canonical `animus-provider-<tool>` from that org is the
 /// rightful first-party provider, not a squatter, so it installs with NO flag.
 /// Any other source claiming a reserved name must pass `--allow-shadow-builtin`.
+/// Resolve the name discovery will record for an install — the same value the
+/// SubjectRouter / `discover_*` paths later see as `DiscoveredPlugin::name` and
+/// (for providers) strip to compute `provider_tool`. Precedence mirrors the
+/// install-name binding: explicit `--name` override, else the source-derived
+/// `default_name` (release/repo basename), else the source file basename.
+/// Extracted so the reserved-name guard and the install-name binding key off
+/// one shared derivation and cannot drift (codex round-5/6 P1).
+fn effective_install_name(name_override: Option<&str>, default_name: &str, source_path: &Path) -> Result<String> {
+    match name_override.map(str::trim).filter(|n| !n.is_empty()) {
+        Some(name) => Ok(name.to_string()),
+        None if !default_name.is_empty() => Ok(default_name.to_string()),
+        None => source_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .map(str::to_string)
+            .ok_or_else(|| invalid_input_error("could not derive plugin name from source path")),
+    }
+}
+
 fn enforce_provider_tool_policy(
     manifest: &PluginManifest,
+    effective_installed_name: Option<&str>,
     allow_shadow_builtin: bool,
     owner: Option<&str>,
 ) -> Result<()> {
-    if manifest.plugin_kind != animus_plugin_protocol::PLUGIN_KIND_PROVIDER {
+    // v0.7 multi-kind: the reserved-name guard must fire whenever the plugin
+    // SERVES the provider role — primary `plugin_kind` OR a secondary
+    // `plugin_kinds` entry — because runtime `discover_provider_plugins` now
+    // dispatches secondary-role providers too. Gating on the primary field
+    // alone would let a consolidated plugin named `animus-provider-claude`
+    // (primary e.g. `subject_backend`, `plugin_kinds: ["provider"]`) install
+    // without `--allow-shadow-builtin` and then hijack the `claude` dispatch
+    // path.
+    if !manifest.serves_kind(animus_plugin_protocol::PLUGIN_KIND_PROVIDER) {
         return Ok(());
     }
-    let derived_tool = manifest.name.strip_prefix("animus-provider-").unwrap_or(manifest.name.as_str());
+    // Derive the reserved-tool check from the EFFECTIVE installed name (the
+    // name discovery records as `DiscoveredPlugin::name` and
+    // `discover_provider_plugins` strips to compute `provider_tool` at
+    // dispatch) — NOT `manifest.name`. Callers pass the resolved install name
+    // (see `effective_install_name`: `--name` override, else release/basename
+    // default); unit tests pass `None` to fall back to the manifest name.
+    // Checking `manifest.name` alone would let a non-reserved manifest
+    // installed under a reserved dispatch name (`--name animus-provider-claude`,
+    // or a release/repo basename of `animus-provider-claude`) slip through and
+    // hijack the `claude` provider path.
+    let effective_name =
+        effective_installed_name.map(str::trim).filter(|n| !n.is_empty()).unwrap_or(manifest.name.as_str());
+    let derived_tool = effective_name.strip_prefix("animus-provider-").unwrap_or(effective_name);
     if !is_reserved_provider_tool(derived_tool) {
         return Ok(());
     }
@@ -8171,21 +8216,22 @@ name = "same"
     #[test]
     fn install_refuses_reserved_provider_tool_without_flag() {
         let manifest = provider_manifest("animus-provider-claude");
-        let err = enforce_provider_tool_policy(&manifest, false, None).expect_err("must refuse claude provider plugin");
+        let err =
+            enforce_provider_tool_policy(&manifest, None, false, None).expect_err("must refuse claude provider plugin");
         assert!(format!("{err}").contains("reserved first-party provider name"));
     }
 
     #[test]
     fn install_allows_reserved_with_explicit_flag() {
         let manifest = provider_manifest("animus-provider-codex");
-        let ok = enforce_provider_tool_policy(&manifest, true, None);
+        let ok = enforce_provider_tool_policy(&manifest, None, true, None);
         assert!(ok.is_ok(), "--allow-shadow-builtin must let install through");
     }
 
     #[test]
     fn install_allows_non_reserved_provider_plugin() {
         let manifest = provider_manifest("animus-provider-mock");
-        let ok = enforce_provider_tool_policy(&manifest, false, None);
+        let ok = enforce_provider_tool_policy(&manifest, None, false, None);
         assert!(ok.is_ok(), "non-reserved provider tools must install without the override");
     }
 
@@ -8193,8 +8239,98 @@ name = "same"
     fn install_skips_provider_check_for_non_provider_plugins() {
         let mut manifest = provider_manifest("animus-provider-claude");
         manifest.plugin_kind = animus_plugin_protocol::PLUGIN_KIND_SUBJECT_BACKEND.to_string();
-        let ok = enforce_provider_tool_policy(&manifest, false, None);
+        let ok = enforce_provider_tool_policy(&manifest, None, false, None);
         assert!(ok.is_ok(), "subject backends are never gated by reserved provider tools");
+    }
+
+    /// v0.7 multi-kind regression (codex round-4 P1): the reserved-name guard
+    /// must fire when `provider` is a SECONDARY declared role, not just the
+    /// primary `plugin_kind`. Otherwise a consolidated plugin named
+    /// `animus-provider-claude` (primary `subject_backend`,
+    /// `plugin_kinds: ["provider"]`) — which runtime `discover_provider_plugins`
+    /// now dispatches — could install without `--allow-shadow-builtin` and
+    /// hijack the `claude` provider dispatch path.
+    #[test]
+    fn install_refuses_reserved_provider_tool_declared_as_secondary_role() {
+        let mut manifest = provider_manifest("animus-provider-claude");
+        manifest.plugin_kind = animus_plugin_protocol::PLUGIN_KIND_SUBJECT_BACKEND.to_string();
+        manifest.plugin_kinds = vec![animus_plugin_protocol::PLUGIN_KIND_PROVIDER.to_string()];
+        let err = enforce_provider_tool_policy(&manifest, None, false, None)
+            .expect_err("must refuse a secondary-role provider claiming a reserved name");
+        assert!(format!("{err}").contains("reserved first-party provider name"));
+        // ...and the explicit override still lets it through.
+        assert!(
+            enforce_provider_tool_policy(&manifest, None, true, None).is_ok(),
+            "--allow-shadow-builtin must still permit the secondary-role provider"
+        );
+    }
+
+    /// Codex round-5 P2 regression: the reserved-name guard checks the
+    /// EFFECTIVE installed name (`--name`/`name_override`), not just the
+    /// manifest name. A non-reserved manifest installed as
+    /// `--name animus-provider-claude` would otherwise pass the guard and then
+    /// be dispatched as the `claude` provider (runtime derives `provider_tool`
+    /// from the recorded install name).
+    #[test]
+    fn install_refuses_reserved_name_override_over_non_reserved_manifest() {
+        let manifest = provider_manifest("animus-provider-mock");
+        // Without the override the non-reserved manifest installs freely.
+        assert!(
+            enforce_provider_tool_policy(&manifest, None, false, None).is_ok(),
+            "non-reserved manifest with no override must install"
+        );
+        // With a reserved `--name` override it must be refused.
+        let err = enforce_provider_tool_policy(&manifest, Some("animus-provider-claude"), false, None)
+            .expect_err("reserved --name override must be refused");
+        assert!(format!("{err}").contains("reserved first-party provider name"));
+        // ...and the explicit opt-in still lets it through.
+        assert!(
+            enforce_provider_tool_policy(&manifest, Some("animus-provider-claude"), true, None).is_ok(),
+            "--allow-shadow-builtin must permit a reserved --name override"
+        );
+    }
+
+    /// codex round-6 P1: the reserved-name guard must also fire for a
+    /// source-DERIVED install name (release/repo basename) even when `--name`
+    /// is omitted — `effective_install_name` resolves that basename and the
+    /// runtime dispatches under it, so a repo basename of
+    /// `animus-provider-claude` with a non-reserved manifest must be refused.
+    #[test]
+    fn effective_install_name_resolves_basename_and_guards_reserved_default() {
+        let source = std::path::Path::new("/tmp/x/animus-provider-claude");
+        // No override, empty default_name -> basename.
+        assert_eq!(effective_install_name(None, "", source).unwrap(), "animus-provider-claude");
+        // No override, non-empty default_name -> default_name wins.
+        assert_eq!(effective_install_name(None, "animus-provider-mock", source).unwrap(), "animus-provider-mock");
+        // Explicit override wins over both.
+        assert_eq!(
+            effective_install_name(Some("animus-provider-gemini"), "animus-provider-mock", source).unwrap(),
+            "animus-provider-gemini"
+        );
+
+        // Guard fires against the resolved default/basename name with NO --name.
+        let manifest = provider_manifest("animus-provider-mock");
+        let resolved = effective_install_name(None, "animus-provider-claude", source).unwrap();
+        let err = enforce_provider_tool_policy(&manifest, Some(resolved.as_str()), false, None)
+            .expect_err("reserved release/basename default must be refused without --allow-shadow-builtin");
+        assert!(format!("{err}").contains("reserved first-party provider name"));
+    }
+
+    /// v0.7 multi-kind regression (codex round-4 P2): a plugin serving
+    /// `subject_backend` as a SECONDARY role still contributes its declared
+    /// `subject_kind:*` capabilities to install-time collision detection.
+    #[test]
+    fn rename_eligible_kinds_cover_secondary_subject_backend_role() {
+        let mut manifest = provider_manifest("animus-plugin-consolidated");
+        manifest.plugin_kind = animus_plugin_protocol::PLUGIN_KIND_QUEUE.to_string();
+        manifest.plugin_kinds = vec![animus_plugin_protocol::PLUGIN_KIND_SUBJECT_BACKEND.to_string()];
+        manifest.capabilities = vec!["subject_kind:task".to_string(), "subject_kind:requirement".to_string()];
+        let kinds = all_rename_eligible_native_kinds(&manifest);
+        assert_eq!(
+            kinds,
+            vec!["task".to_string(), "requirement".to_string()],
+            "secondary-role subject_backend must expose its subject_kind capabilities for collision checks"
+        );
     }
 
     #[test]
@@ -8204,17 +8340,17 @@ name = "same"
         let manifest = provider_manifest("animus-provider-claude");
         let trusted = BUILTIN_TRUSTED_ORGS[0];
         assert!(
-            enforce_provider_tool_policy(&manifest, false, Some(trusted)).is_ok(),
+            enforce_provider_tool_policy(&manifest, None, false, Some(trusted)).is_ok(),
             "first-party {trusted}/animus-provider-claude must install without --allow-shadow-builtin"
         );
         // An untrusted org claiming the same reserved name is still blocked.
         assert!(
-            enforce_provider_tool_policy(&manifest, false, Some("attacker")).is_err(),
+            enforce_provider_tool_policy(&manifest, None, false, Some("attacker")).is_err(),
             "an untrusted org claiming a reserved provider name must still be rejected"
         );
         // ...unless the operator explicitly opts in.
         assert!(
-            enforce_provider_tool_policy(&manifest, true, Some("attacker")).is_ok(),
+            enforce_provider_tool_policy(&manifest, None, true, Some("attacker")).is_ok(),
             "--allow-shadow-builtin is the explicit opt-in for non-first-party reserved names"
         );
     }
@@ -8226,7 +8362,7 @@ name = "same"
             let repo_basename = slug.rsplit('/').next().unwrap_or(slug);
             let manifest = provider_manifest(repo_basename);
 
-            let curated_install = enforce_provider_tool_policy(&manifest, true, None);
+            let curated_install = enforce_provider_tool_policy(&manifest, None, true, None);
             assert!(
                 curated_install.is_ok(),
                 "curated install-defaults (allow_shadow_builtin=true) must accept '{repo_basename}'"
@@ -8235,7 +8371,7 @@ name = "same"
             let derived_tool = repo_basename.strip_prefix("animus-provider-").unwrap_or(repo_basename);
             if is_reserved_provider_tool(derived_tool) {
                 at_least_one_reserved = true;
-                let user_install = enforce_provider_tool_policy(&manifest, false, None);
+                let user_install = enforce_provider_tool_policy(&manifest, None, false, None);
                 assert!(
                     user_install.is_err(),
                     "user-typed install MUST still be blocked for reserved name '{repo_basename}'"
@@ -8267,8 +8403,9 @@ name = "same"
         let req =
             PluginInstallRequest { source: Some("attacker/animus-provider-claude".to_string()), ..Default::default() };
         assert!(!req.allow_shadow_builtin, "user-default request must NOT bypass shadow-builtin guard");
-        let err = enforce_provider_tool_policy(&manifest, req.allow_shadow_builtin, Some("attacker"))
-            .expect_err("user-typed install of reserved name must still be rejected");
+        let err =
+            enforce_provider_tool_policy(&manifest, req.name.as_deref(), req.allow_shadow_builtin, Some("attacker"))
+                .expect_err("user-typed install of reserved name must still be rejected");
         assert!(format!("{err}").contains("reserved first-party provider name"));
     }
 

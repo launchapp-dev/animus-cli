@@ -4,6 +4,25 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- **BREAKING — removed the deprecated `--task-id` / `--requirement-id` flags.**
+  `task` and `requirement` are ordinary subject kinds now, so there is no
+  task/requirement-specific CLI or MCP surface. Use `--subject-id` for every
+  kind on `queue enqueue`, `workflow run`, `workflow prompt render`, and the
+  `workflow list` filter (accepts a qualified `task:TASK-001` /
+  `requirement:REQ-042` / `blog:BLOG-001` or a bare `TASK-001`); the
+  `agent approve-hook` escalation context moves from `--task-id` to
+  `--subject-id`. The matching `animus mcp serve` tool inputs
+  (`animus.queue.enqueue`, `animus.workflow.run`, `.execute`, `.run-multiple`,
+  `.list`) drop `task_id` / `requirement_id` for `subject_id`. `--title` and
+  `--adhoc` are unchanged. The flags were already deprecated in v0.7 (TASK-247);
+  callers that shell the CLI or MCP should pass `--subject-id` / `subject_id`.
+  Note: because requirement runs no longer have a privileged kind-specific
+  default, a requirement dispatched via `--subject-id requirement:REQ-001`
+  without an explicit workflow ref uses the project default workflow (the old
+  `--requirement-id` flag defaulted to `animus.requirement/plan`) — name the
+  workflow explicitly, e.g. `animus workflow run animus.requirement/plan
+  --subject-id requirement:REQ-001`.
+
 ## [0.7.0-rc.1] - 2026-07-03
 
 **v0.7.0-rc.1 — Composable, multi-tenant platform (release candidate).**

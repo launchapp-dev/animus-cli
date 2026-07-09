@@ -303,34 +303,52 @@ fn active_flavor_for_project(project_root: &Path) -> Option<String> {
 /// surfacing it as healthy here would produce a false-green; match the
 /// `animus plugin status` executability semantics exactly.
 ///
-/// v0.5.9: previously delegated to `discover_provider_plugins`, which
-/// ran the full `discover_plugins` pipeline — including a `--manifest`
-/// probe on every installed plugin. With 30+ subject-backend plugins
-/// installed, `animus daemon status` was spending ~3s probing binaries
-/// it didn't care about just to confirm one provider was alive. Walk
-/// the plugin install dir directly: any `animus-provider-*` entry that's
-/// executable counts. No spawn, no probe, no manifest read.
-fn provider_plugins_healthy_for(_project_root: &Path) -> bool {
-    use orchestrator_plugin_host::plugin_install_dir;
+/// v0.7 multi-kind: two-tier resolution so a common-case status/health call
+/// stays probe-free while an out-of-tree or renamed provider is no longer a
+/// health false-negative.
+///
+/// 1. FAST PATH (v0.5.9): walk the plugin install dir for an executable
+///    `animus-provider-*` binary. No spawn, no `--manifest` probe — so the
+///    hot `animus daemon status` path stays sub-second even with 30+ plugins
+///    installed. Any provider under the canonical filename resolves here.
+/// 2. ROLE FALLBACK (v0.7): only when the filename walk finds nothing do we
+///    pay for manifest-based [`orchestrator_plugin_host::discover_by_kind`],
+///    which resolves a plugin declaring the `provider` role as its primary
+///    `plugin_kind` OR a secondary `plugin_kinds` entry — even under a
+///    non-`animus-provider-` binary name. The manifest cache keeps the warm
+///    path cheap; the cold cost is bounded to installs that have no
+///    canonically-named provider at all.
+///
+/// A path that exists but has lost its execute bit fails to spawn at run
+/// time, so both tiers gate on executability to match the
+/// `animus plugin status` semantics exactly (no false-green).
+fn provider_plugins_healthy_for(project_root: &Path) -> bool {
+    use orchestrator_plugin_host::{discover_by_kind, plugin_install_dir};
+
+    // Tier 1: canonical-filename fast path (no probe).
     let dir = plugin_install_dir();
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        return false;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
-        };
-        if !name_str.starts_with("animus-provider-") {
-            continue;
-        }
-        let path = entry.path();
-        let candidate = if path.is_dir() { path.join(name_str) } else { path };
-        if is_binary_executable(&candidate) {
-            return true;
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else {
+                continue;
+            };
+            if !name_str.starts_with("animus-provider-") {
+                continue;
+            }
+            let path = entry.path();
+            let candidate = if path.is_dir() { path.join(name_str) } else { path };
+            if is_binary_executable(&candidate) {
+                return true;
+            }
         }
     }
-    false
+
+    // Tier 2: role-based fallback (probe-backed) — catches renamed/out-of-tree
+    // providers only when the fast path found nothing.
+    discover_by_kind(project_root, animus_plugin_protocol::PLUGIN_KIND_PROVIDER)
+        .map(|providers| providers.iter().any(|plugin| is_binary_executable(&plugin.path)))
+        .unwrap_or(false)
 }
 
 #[cfg(unix)]

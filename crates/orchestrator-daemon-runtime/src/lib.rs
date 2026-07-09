@@ -8,6 +8,7 @@ pub mod metrics;
 pub mod quotas;
 mod schedule;
 mod subject_dispatch;
+mod task_projection;
 mod tick;
 
 pub use audit::{
@@ -59,6 +60,7 @@ pub use subject_dispatch::{
     discover_subject_backends, resolve_subject_dispatch, subject_plugins_disable_env_set, SubjectDispatchResolution,
     SubjectPluginDispatch, SUBJECT_PLUGINS_DISABLE_ENV,
 };
+pub use task_projection::{resolve_task_projection_store, RouterTaskProjectionStore};
 pub use tick::{
     default_slim_project_tick_driver, run_project_tick, run_project_tick_at, BudgetBreachEvent,
     DefaultProjectTickServices, DefaultSlimProjectTickDriver, ProjectTickContext, ProjectTickExecutionOutcome,

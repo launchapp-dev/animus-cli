@@ -12,8 +12,6 @@ use animus_workflow_runner_protocol as workflow_proto;
 #[derive(Debug)]
 pub(crate) struct WorkflowExecuteArgs {
     pub(crate) workflow_id: Option<String>,
-    pub(crate) task_id: Option<String>,
-    pub(crate) requirement_id: Option<String>,
     pub(crate) title: Option<String>,
     /// Generic, kind-correct subject dispatch for the BaaS `--subject-id` path.
     /// When set (and not re-attaching to an existing workflow), it is relayed
@@ -42,14 +40,11 @@ pub(crate) struct WorkflowExecuteArgs {
 }
 
 pub(crate) async fn handle_workflow_execute(
-    mut args: WorkflowExecuteArgs,
+    args: WorkflowExecuteArgs,
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
     json: bool,
 ) -> Result<()> {
-    if args.requirement_id.is_some() && args.workflow_ref.is_none() {
-        args.workflow_ref = Some(super::resolve_requirement_workflow_ref(project_root)?);
-    }
     if args.workflow_id.is_some() && !args.vars.is_empty() {
         anyhow::bail!(
             "--var cannot be used with --workflow-id; persisted workflow vars are authoritative for existing workflows"
@@ -66,10 +61,7 @@ pub(crate) async fn handle_workflow_execute(
         hub.daemon().start(Default::default()).await?;
     }
 
-    let task_id_for_sync = args.task_id.clone();
     let phase_filter = args.phase.clone();
-    let task_id_for_output = args.task_id.clone();
-    let requirement_id_for_output = args.requirement_id.clone();
 
     // Re-attaching to an existing workflow record: the persisted record is
     // authoritative for subject, input, and vars. Register this process in
@@ -124,8 +116,11 @@ pub(crate) async fn handle_workflow_execute(
             workflow_id: None,
             subject_dispatch: args.subject_dispatch.clone(),
             subject_ref: None,
-            task_id: args.task_id.clone(),
-            requirement_id: args.requirement_id.clone(),
+            // task/requirement are ordinary subjects now: a concrete-kind subject
+            // arrives as `subject_dispatch` (from `--subject-id`); only a freeform
+            // `--title` custom run travels via `title`.
+            task_id: None,
+            requirement_id: None,
             title: args.title.clone(),
             description: args.description.clone(),
             workflow_ref: args.workflow_ref.clone(),
@@ -162,23 +157,12 @@ pub(crate) async fn handle_workflow_execute(
         | workflow_proto::workflow_status::Parsed::Unknown(_) => None,
     };
     if phase_filter.is_none() {
-        if let (Some(task_id), Some(status)) = (task_id_for_sync.as_deref(), parsed_status) {
-            project_terminal_workflow_result(
-                hub.clone(),
-                project_root,
-                plugin_result.subject_id.as_str(),
-                Some(task_id),
-                Some(plugin_result.workflow_ref.as_str()),
-                Some(plugin_result.workflow_id.as_str()),
-                status,
-                None,
-            )
-            .await;
-        } else if let (true, Some(status)) = (existing_workflow.is_some(), parsed_status) {
+        if let (true, Some(status)) = (existing_workflow.is_some(), parsed_status) {
             // workflow-id-only invocations (detached async-run children,
-            // manual `--sync --workflow-id` resumes) carry no --task-id;
-            // derive the subject from the persisted record so the task
-            // status projection still lands.
+            // manual `--sync --workflow-id` resumes) carry no bound subject on
+            // the args; derive the subject from the persisted record so the
+            // subject status projection still lands. Fresh `--subject-id` runs
+            // are projected by the workflow_runner plugin that owns the run.
             if let Ok(reloaded) = hub.workflows().get(plugin_result.workflow_id.as_str()).await {
                 project_terminal_workflow_result(
                     hub.clone(),
@@ -201,8 +185,6 @@ pub(crate) async fn handle_workflow_execute(
                 "workflow_ref": plugin_result.workflow_ref,
                 "workflow_status": plugin_result.workflow_status,
                 "subject_id": plugin_result.subject_id,
-                "task_id": task_id_for_output,
-                "requirement_id": requirement_id_for_output,
                 "execution_cwd": plugin_result.execution_cwd,
                 "phases_requested": plugin_result.phases_requested,
                 "total_duration_secs": plugin_result.total_duration_secs,

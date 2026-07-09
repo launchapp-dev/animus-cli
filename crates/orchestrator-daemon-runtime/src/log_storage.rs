@@ -28,7 +28,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use orchestrator_logging::Logger;
-use orchestrator_plugin_host::{discover_plugins, DiscoveredPlugin, PluginHost, PluginSpawnOptions};
+use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, PluginHost, PluginSpawnOptions};
 use serde_json::Value;
 use tokio::sync::RwLock as TokioRwLock;
 
@@ -109,9 +109,13 @@ pub fn log_storage_disable_env_set() -> bool {
 }
 
 /// Filter the project's installed plugins down to log storage backends.
+///
+/// v0.7 multi-kind: matches a plugin's primary `plugin_kind` OR any of its
+/// additional `plugin_kinds` via [`discover_by_kind`], so a consolidated
+/// plugin that serves `log_storage_backend` as a secondary role is resolved
+/// instead of silently falling back to file logging.
 pub fn discover_log_storage_backends(project_root: &Path) -> Result<Vec<DiscoveredPlugin>> {
-    let plugins = discover_plugins(project_root)?;
-    Ok(plugins.into_iter().filter(|p| p.manifest.plugin_kind == PLUGIN_KIND_LOG_STORAGE_BACKEND).collect())
+    discover_by_kind(project_root, PLUGIN_KIND_LOG_STORAGE_BACKEND)
 }
 
 /// Outcome of [`resolve_log_storage_dispatch`].

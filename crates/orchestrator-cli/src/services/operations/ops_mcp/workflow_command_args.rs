@@ -4,7 +4,7 @@ pub(super) fn build_workflow_list_args(input: &super::WorkflowListInput) -> Vec<
     let mut args = vec!["workflow".to_string(), "list".to_string()];
     push_opt(&mut args, "--status", input.status.clone());
     push_opt(&mut args, "--workflow-ref", input.workflow_ref.clone());
-    push_opt(&mut args, "--task-id", input.task_id.clone());
+    push_opt(&mut args, "--subject-id", input.subject_id.clone());
     push_opt(&mut args, "--phase-id", input.phase_id.clone());
     push_opt(&mut args, "--search", input.search.clone());
     push_opt(&mut args, "--sort", input.sort.clone());
@@ -16,8 +16,8 @@ pub(super) fn build_bulk_workflow_run_item_args(item: &BulkWorkflowRunItem) -> V
     if let Some(workflow_ref) = item.workflow_ref.clone() {
         args.push(workflow_ref);
     }
-    args.push("--task-id".to_string());
-    args.push(item.task_id.clone());
+    args.push("--subject-id".to_string());
+    args.push(item.subject_id.clone());
     push_opt(&mut args, "--input-json", item.input_json.clone());
     args
 }
@@ -33,8 +33,8 @@ pub(super) fn validate_workflow_run_multiple_input(
         return Err(format!("{tool_name}: runs count {} exceeds maximum {MAX_BATCH_SIZE}", runs.len()));
     }
     for (i, item) in runs.iter().enumerate() {
-        if item.task_id.trim().is_empty() {
-            return Err(format!("{tool_name}: item[{i}].task_id must not be empty"));
+        if item.subject_id.trim().is_empty() {
+            return Err(format!("{tool_name}: item[{i}].subject_id must not be empty"));
         }
     }
     Ok(())

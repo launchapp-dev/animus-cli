@@ -1,22 +1,23 @@
 mod project_requirement_workflow_status;
 mod project_task_terminal_workflow_status;
 mod projector_registry;
+mod task_projection_store;
 
 use std::path::Path;
-use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::Utc;
 use protocol::SubjectExecutionFact;
 
-use crate::{
-    load_schedule_state, save_schedule_state, services::ServiceHub, OrchestratorTask, TaskStatus, WorkflowStatus,
-};
+use crate::{load_schedule_state, save_schedule_state, TaskStatus, WorkflowStatus};
 
 pub use project_requirement_workflow_status::project_requirement_workflow_status;
 pub use project_task_terminal_workflow_status::project_task_terminal_workflow_status;
 pub use projector_registry::{
     builtin_execution_projector_registry, execution_fact_subject_kind, ExecutionProjector, ExecutionProjectorRegistry,
+};
+pub use task_projection_store::{
+    hub_task_projection_store, HubTaskProjectionStore, TaskProjectionStore, TaskProjectionView,
 };
 
 pub const WORKFLOW_RUNNER_BLOCKED_PREFIX: &str = "workflow runner failed: ";
@@ -36,29 +37,17 @@ pub const WORKFLOW_RUNNER_BLOCKED_PREFIX: &str = "workflow runner failed: ";
 /// string, so both bare and detail-bearing markers clear on resume.
 pub const WORKFLOW_PAUSED_REASON_PREFIX: &str = "paused by workflow ";
 
-pub async fn project_task_status(hub: Arc<dyn ServiceHub>, task_id: &str, status: TaskStatus) -> Result<()> {
-    hub.tasks().set_status(task_id, status, false).await?;
-    Ok(())
+pub async fn project_task_status(store: &dyn TaskProjectionStore, task_id: &str, status: TaskStatus) -> Result<()> {
+    store.set_status(task_id, status).await
 }
 
 pub async fn project_task_blocked_with_reason(
-    hub: Arc<dyn ServiceHub>,
-    task: &OrchestratorTask,
+    store: &dyn TaskProjectionStore,
+    task_id: &str,
     reason: String,
     blocked_by: Option<String>,
 ) -> Result<()> {
-    let mut updated = task.clone();
-    updated.status = TaskStatus::Blocked;
-    updated.paused = true;
-    updated.blocked_reason = Some(reason);
-    updated.blocked_at = Some(Utc::now());
-    updated.blocked_phase = None;
-    updated.blocked_by = blocked_by;
-    updated.metadata.updated_at = Utc::now();
-    updated.metadata.updated_by = protocol::ACTOR_DAEMON.to_string();
-    updated.metadata.version = updated.metadata.version.saturating_add(1);
-    hub.tasks().replace(updated).await?;
-    Ok(())
+    store.block_with_reason(task_id, reason, blocked_by).await
 }
 
 /// Build the `blocked_reason` marker for a paused workflow. The head is
@@ -89,15 +78,15 @@ pub fn is_workflow_paused_reason(reason: &str, workflow_id: &str) -> bool {
 /// and no ghost state can be left behind. `reason_detail` (when present)
 /// appends a human cause to the marker (e.g. a budget breach summary).
 pub async fn project_task_workflow_paused(
-    hub: Arc<dyn ServiceHub>,
+    store: &dyn TaskProjectionStore,
     task_id: &str,
     workflow_id: &str,
     reason_detail: Option<&str>,
 ) -> Result<()> {
-    let Ok(mut task) = hub.tasks().get(task_id).await else {
+    let Ok(view) = store.get(task_id).await else {
         return Ok(());
     };
-    if matches!(task.status, TaskStatus::Done | TaskStatus::Cancelled) {
+    if matches!(view.status, TaskStatus::Done | TaskStatus::Cancelled) {
         return Ok(());
     }
     // Never clobber a foreign blocked_reason (a real failure projection or
@@ -108,7 +97,7 @@ pub async fn project_task_workflow_paused(
     // (e.g. `animus workflow pause` on an already-paused workflow) must NOT
     // downgrade an enriched marker back to bare and lose the breach cause.
     let bare_marker = workflow_paused_reason(workflow_id, None);
-    if let Some(existing) = task.blocked_reason.as_deref() {
+    if let Some(existing) = view.blocked_reason.as_deref() {
         if !is_workflow_paused_reason(existing, workflow_id) {
             return Ok(());
         }
@@ -120,58 +109,42 @@ pub async fn project_task_workflow_paused(
             return Ok(());
         }
     }
-    task.blocked_reason = Some(workflow_paused_reason(workflow_id, reason_detail));
-    if task.blocked_by.is_none() {
-        task.blocked_by = Some(workflow_id.to_string());
-    }
-    task.metadata.updated_at = Utc::now();
-    task.metadata.updated_by = protocol::ACTOR_CORE.to_string();
-    task.metadata.version = task.metadata.version.saturating_add(1);
-    hub.tasks().replace(task).await?;
-    Ok(())
+    let set_blocked_by = if view.blocked_by.is_none() { Some(workflow_id.to_string()) } else { None };
+    store.annotate_blocked_reason(task_id, workflow_paused_reason(workflow_id, reason_detail), set_blocked_by).await
 }
 
 /// Clear the pause annotation written by [`project_task_workflow_paused`] when
 /// the workflow resumes. Only the matching marker is cleared — a genuine
 /// `blocked_reason` written by a failure projection is left alone.
 pub async fn project_task_workflow_pause_cleared(
-    hub: Arc<dyn ServiceHub>,
+    store: &dyn TaskProjectionStore,
     task_id: &str,
     workflow_id: &str,
 ) -> Result<()> {
-    let Ok(mut task) = hub.tasks().get(task_id).await else {
+    let Ok(view) = store.get(task_id).await else {
         return Ok(());
     };
     // Match both the bare `paused by workflow <id>` head and any enriched
     // `… — <detail>` variant (e.g. a budget breach summary). A genuine
     // `blocked_reason` written by a failure projection is left alone.
-    if !task.blocked_reason.as_deref().is_some_and(|reason| is_workflow_paused_reason(reason, workflow_id)) {
+    if !view.blocked_reason.as_deref().is_some_and(|reason| is_workflow_paused_reason(reason, workflow_id)) {
         return Ok(());
     }
-    task.blocked_reason = None;
-    if task.blocked_by.as_deref() == Some(workflow_id) {
-        task.blocked_by = None;
-    }
-    task.metadata.updated_at = Utc::now();
-    task.metadata.updated_by = protocol::ACTOR_CORE.to_string();
-    task.metadata.version = task.metadata.version.saturating_add(1);
-    hub.tasks().replace(task).await?;
-    Ok(())
+    let clear_blocked_by = view.blocked_by.as_deref() == Some(workflow_id);
+    store.clear_blocked_reason(task_id, clear_blocked_by).await
 }
 
 pub async fn project_task_workflow_start(
-    hub: Arc<dyn ServiceHub>,
+    store: &dyn TaskProjectionStore,
     task_id: &str,
     role: String,
     model: Option<String>,
     updated_by: String,
 ) -> Result<()> {
-    hub.tasks().set_status(task_id, TaskStatus::InProgress, false).await?;
-    hub.tasks().assign_agent(task_id, role, model, updated_by).await?;
-    Ok(())
+    store.start_workflow(task_id, role, model, updated_by).await
 }
 
-pub async fn project_task_execution_fact(hub: Arc<dyn ServiceHub>, _root: &str, fact: &SubjectExecutionFact) {
+pub async fn project_task_execution_fact(store: &dyn TaskProjectionStore, fact: &SubjectExecutionFact) {
     let Some(task_id) = fact.task_id.as_deref() else {
         return;
     };
@@ -186,7 +159,7 @@ pub async fn project_task_execution_fact(hub: Arc<dyn ServiceHub>, _root: &str, 
                 return;
             }
             WorkflowStatus::Cancelled => {
-                let _ = project_task_status(hub, task_id, TaskStatus::Cancelled).await;
+                let _ = project_task_status(store, task_id, TaskStatus::Cancelled).await;
                 return;
             }
             WorkflowStatus::Failed | WorkflowStatus::Escalated => {}
@@ -200,17 +173,20 @@ pub async fn project_task_execution_fact(hub: Arc<dyn ServiceHub>, _root: &str, 
     }
 
     if let Some(reason) = fact.failure_reason.clone() {
-        if let Ok(task) = hub.tasks().get(task_id).await {
-            let _ = project_task_blocked_with_reason(hub, &task, reason, None).await;
+        // Gate on the task being readable so a failure with a reason lands as
+        // a blocked-with-reason (matching the pre-routing behaviour); an
+        // unreadable task falls through to a plain Blocked set.
+        if store.get(task_id).await.is_ok() {
+            let _ = project_task_blocked_with_reason(store, task_id, reason, None).await;
             return;
         }
     }
 
-    let _ = project_task_status(hub, task_id, TaskStatus::Blocked).await;
+    let _ = project_task_status(store, task_id, TaskStatus::Blocked).await;
 }
 
-pub async fn project_execution_fact(hub: Arc<dyn ServiceHub>, root: &str, fact: &SubjectExecutionFact) -> bool {
-    match builtin_execution_projector_registry().project(hub.clone(), root, fact).await {
+pub async fn project_execution_fact(store: &dyn TaskProjectionStore, fact: &SubjectExecutionFact) -> bool {
+    match builtin_execution_projector_registry().project(store, fact).await {
         Ok(projected) => projected,
         Err(err) => {
             let kind = execution_fact_subject_kind(fact).unwrap_or("unknown");
@@ -295,6 +271,7 @@ mod tests {
     use super::{
         execution_fact_subject_kind, is_workflow_paused_reason, project_execution_fact,
         project_task_workflow_pause_cleared, project_task_workflow_paused, workflow_paused_reason,
+        HubTaskProjectionStore,
     };
     use crate::{
         services::ServiceHub, InMemoryServiceHub, OrchestratorTask, Priority, ResourceRequirements, Scope,
@@ -424,7 +401,7 @@ mod tests {
             runner_events: Vec::new(),
         };
 
-        let projected = project_execution_fact(hub.clone(), ".", &fact).await;
+        let projected = project_execution_fact(&HubTaskProjectionStore::new(hub.clone()), &fact).await;
 
         assert!(projected);
         let updated = hub.tasks().get("TASK-1").await.expect("task should exist");
@@ -450,7 +427,7 @@ mod tests {
             runner_events: Vec::new(),
         };
 
-        let projected = project_execution_fact(hub.clone(), ".", &fact).await;
+        let projected = project_execution_fact(&HubTaskProjectionStore::new(hub.clone()), &fact).await;
 
         assert!(projected);
         assert_eq!(execution_fact_subject_kind(&fact), Some(SUBJECT_KIND_TASK));
@@ -475,7 +452,7 @@ mod tests {
             runner_events: Vec::new(),
         };
 
-        let projected = project_execution_fact(hub, ".", &fact).await;
+        let projected = project_execution_fact(&HubTaskProjectionStore::new(hub), &fact).await;
 
         assert!(!projected);
     }
@@ -509,7 +486,7 @@ mod tests {
         let hub = Arc::new(InMemoryServiceHub::new());
         upsert_task(&hub, "TASK-1", TaskStatus::InProgress).await;
         project_task_workflow_paused(
-            hub.clone(),
+            &HubTaskProjectionStore::new(hub.clone()),
             "TASK-1",
             "wf-1",
             Some("budget exceeded ($7.50 > $5.00 max_cost_usd)"),
@@ -524,7 +501,7 @@ mod tests {
         assert_eq!(task.blocked_by.as_deref(), Some("wf-1"));
 
         // Resume clears the enriched marker.
-        project_task_workflow_pause_cleared(hub.clone(), "TASK-1", "wf-1").await.unwrap();
+        project_task_workflow_pause_cleared(&HubTaskProjectionStore::new(hub.clone()), "TASK-1", "wf-1").await.unwrap();
         let task = hub.tasks().get("TASK-1").await.unwrap();
         assert!(task.blocked_reason.is_none());
         assert!(task.blocked_by.is_none());
@@ -537,12 +514,17 @@ mod tests {
         // marker (not bail on "blocked_reason already set").
         let hub = Arc::new(InMemoryServiceHub::new());
         upsert_task(&hub, "TASK-1", TaskStatus::InProgress).await;
-        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", None).await.unwrap();
+        project_task_workflow_paused(&HubTaskProjectionStore::new(hub.clone()), "TASK-1", "wf-1", None).await.unwrap();
         assert_eq!(hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(), Some("paused by workflow wf-1"));
 
-        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", Some("budget exceeded ($9 > $5 max_cost_usd)"))
-            .await
-            .unwrap();
+        project_task_workflow_paused(
+            &HubTaskProjectionStore::new(hub.clone()),
+            "TASK-1",
+            "wf-1",
+            Some("budget exceeded ($9 > $5 max_cost_usd)"),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(),
             Some("paused by workflow wf-1 — budget exceeded ($9 > $5 max_cost_usd)")
@@ -556,11 +538,16 @@ mod tests {
         // None) on the same already-paused workflow must NOT erase the cause.
         let hub = Arc::new(InMemoryServiceHub::new());
         upsert_task(&hub, "TASK-1", TaskStatus::InProgress).await;
-        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", Some("budget exceeded ($9 > $5 max_cost_usd)"))
-            .await
-            .unwrap();
+        project_task_workflow_paused(
+            &HubTaskProjectionStore::new(hub.clone()),
+            "TASK-1",
+            "wf-1",
+            Some("budget exceeded ($9 > $5 max_cost_usd)"),
+        )
+        .await
+        .unwrap();
         // Generic re-pause with no detail.
-        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", None).await.unwrap();
+        project_task_workflow_paused(&HubTaskProjectionStore::new(hub.clone()), "TASK-1", "wf-1", None).await.unwrap();
         assert_eq!(
             hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(),
             Some("paused by workflow wf-1 — budget exceeded ($9 > $5 max_cost_usd)"),
@@ -578,7 +565,9 @@ mod tests {
         task.blocked_by = Some("wf-legacy".to_string());
         hub.tasks().replace(task).await.unwrap();
 
-        project_task_workflow_pause_cleared(hub.clone(), "TASK-1", "wf-legacy").await.unwrap();
+        project_task_workflow_pause_cleared(&HubTaskProjectionStore::new(hub.clone()), "TASK-1", "wf-legacy")
+            .await
+            .unwrap();
         let task = hub.tasks().get("TASK-1").await.unwrap();
         assert!(task.blocked_reason.is_none(), "old bare marker must still clear");
     }
@@ -591,13 +580,20 @@ mod tests {
         hub.tasks().replace(task).await.unwrap();
 
         // Pause annotation must not clobber a real failure reason.
-        project_task_workflow_paused(hub.clone(), "TASK-1", "wf-1", Some("budget exceeded")).await.unwrap();
+        project_task_workflow_paused(
+            &HubTaskProjectionStore::new(hub.clone()),
+            "TASK-1",
+            "wf-1",
+            Some("budget exceeded"),
+        )
+        .await
+        .unwrap();
         assert_eq!(
             hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(),
             Some("workflow runner failed: boom")
         );
         // Resume-clear must leave the foreign reason intact.
-        project_task_workflow_pause_cleared(hub.clone(), "TASK-1", "wf-1").await.unwrap();
+        project_task_workflow_pause_cleared(&HubTaskProjectionStore::new(hub.clone()), "TASK-1", "wf-1").await.unwrap();
         assert_eq!(
             hub.tasks().get("TASK-1").await.unwrap().blocked_reason.as_deref(),
             Some("workflow runner failed: boom")

@@ -324,6 +324,11 @@ pub async fn reconcile_manual_phase_timeouts(hub: Arc<dyn ServiceHub>, project_r
     let mut reconciled = 0usize;
     let now = chrono::Utc::now();
 
+    // Route task-status projections through the installed subject backend when
+    // one owns `task` (portal), else the in-tree store. Resolved once for the
+    // sweep.
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
+
     for workflow in workflows {
         if workflow.status != WorkflowStatus::Paused {
             continue;
@@ -373,6 +378,7 @@ pub async fn reconcile_manual_phase_timeouts(hub: Arc<dyn ServiceHub>, project_r
         let reason = format!("manual phase '{}' timed out after {} seconds", phase_id, timeout_secs);
         let outcome = dispatch_workflow_event(
             hub.clone(),
+            task_store.as_ref(),
             project_root,
             WorkflowEvent::RejectManualPhase {
                 workflow_id: workflow.id.clone(),

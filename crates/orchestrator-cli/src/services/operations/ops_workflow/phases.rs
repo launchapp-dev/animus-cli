@@ -281,6 +281,11 @@ pub(crate) async fn start_workflow_with_runner(
     // workflow resolves at run-time, not only from the global view. The same
     // actor is relayed to the detached runner child via WORKFLOW_ACTOR_ENV.
     let workflow = hub.workflows().run(input, overrides.actor.as_ref()).await?;
+    // Route the Ready->InProgress transition through the installed subject
+    // backend when one owns `task` (portal); the in-tree store is empty there,
+    // so the transition would silently no-op and the daemon would re-dispatch
+    // the task after its workflow finished.
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     // Mirror the daemon's ready-dispatch contract: a dispatched task moves
     // to InProgress. Terminal projection never auto-completes tasks, so a
     // task left Ready here would be re-dispatched by the daemon after its
@@ -288,11 +293,10 @@ pub(crate) async fn start_workflow_with_runner(
     // runner's terminal projection cannot be overwritten afterwards.
     let mut task_status_before_dispatch = None;
     if !workflow.task_id.is_empty() {
-        if let Ok(task) = hub.tasks().get(&workflow.task_id).await {
-            if matches!(task.status, orchestrator_core::TaskStatus::Ready | orchestrator_core::TaskStatus::Backlog) {
-                let _ =
-                    hub.tasks().set_status(&workflow.task_id, orchestrator_core::TaskStatus::InProgress, false).await;
-                task_status_before_dispatch = Some(task.status);
+        if let Ok(view) = task_store.get(&workflow.task_id).await {
+            if matches!(view.status, orchestrator_core::TaskStatus::Ready | orchestrator_core::TaskStatus::Backlog) {
+                let _ = task_store.set_status(&workflow.task_id, orchestrator_core::TaskStatus::InProgress).await;
+                task_status_before_dispatch = Some(view.status);
             }
         }
     }
@@ -328,7 +332,7 @@ pub(crate) async fn start_workflow_with_runner(
     if let Err(error) = spawn_detached_workflow_runner(project_root, &workflow.id, &overrides) {
         let _ = hub.workflows().cancel(&workflow.id).await;
         if let Some(previous_status) = task_status_before_dispatch {
-            let _ = hub.tasks().set_status(&workflow.task_id, previous_status, false).await;
+            let _ = task_store.set_status(&workflow.task_id, previous_status).await;
         }
         return Err(error.context(format!("failed to start workflow runner for workflow '{}'", workflow.id)));
     }
@@ -392,8 +396,12 @@ pub(crate) async fn resume_workflow_with_runner(
     }
     ensure_workflow_runner_plugin(Path::new(project_root))?;
     register_workflow_runner_pid(Path::new(project_root), workflow_id, std::process::id())?;
+    // Route task-status projections through the installed subject backend when
+    // one owns `task` (portal), else the in-tree store.
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     let outcome = match dispatch_workflow_event(
         hub.clone(),
+        task_store.as_ref(),
         project_root,
         WorkflowEvent::Resume { workflow_id: workflow_id.to_string(), feedback },
     )
@@ -416,8 +424,13 @@ pub(crate) async fn resume_workflow_with_runner(
         if let Ok(repaused) = hub.workflows().pause(workflow_id).await {
             if repaused.status == orchestrator_core::WorkflowStatus::Paused {
                 if let Some(task_id) = orchestrator_core::workflow_task_id(&repaused) {
-                    let _ =
-                        orchestrator_core::project_task_workflow_paused(hub.clone(), &task_id, workflow_id, None).await;
+                    let _ = orchestrator_core::project_task_workflow_paused(
+                        task_store.as_ref(),
+                        &task_id,
+                        workflow_id,
+                        None,
+                    )
+                    .await;
                 }
             }
         }
@@ -656,8 +669,10 @@ pub(crate) async fn approve_manual_phase(
 ) -> Result<Value> {
     let _runner_pid_guard = WorkflowRunnerPidGuard::register(project_root, workflow_id)?;
     let approval_timestamp = Utc::now().to_rfc3339();
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     let outcome = dispatch_workflow_event(
         hub.clone(),
+        task_store.as_ref(),
         project_root,
         WorkflowEvent::ApproveManualPhase {
             workflow_id: workflow_id.to_string(),
@@ -776,8 +791,10 @@ pub(crate) async fn reject_manual_phase(
     phase_id: &str,
     note: &str,
 ) -> Result<Value> {
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     let outcome = dispatch_workflow_event(
         hub.clone(),
+        task_store.as_ref(),
         project_root,
         WorkflowEvent::RejectManualPhase {
             workflow_id: workflow_id.to_string(),
