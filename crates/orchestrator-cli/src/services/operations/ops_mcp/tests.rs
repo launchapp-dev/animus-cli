@@ -1795,3 +1795,40 @@ async fn daemon_agents_inproc_returns_value_without_subprocess() {
     let value = daemon_agents_inproc(&project_root, None).await.expect("inproc agents should not panic");
     assert!(value.is_object(), "expected agents object, got {value}");
 }
+
+#[test]
+fn resolve_call_arguments_parses_inline_json_object() {
+    let args = resolve_call_arguments(Some(r#"{"query":"x","limit":3}"#), None)
+        .expect("valid JSON object parses")
+        .expect("arguments present");
+    assert_eq!(args.get("query").and_then(|v| v.as_str()), Some("x"));
+    assert_eq!(args.get("limit").and_then(|v| v.as_u64()), Some(3));
+}
+
+#[test]
+fn resolve_call_arguments_defaults_to_none() {
+    assert!(resolve_call_arguments(None, None).expect("no args is ok").is_none());
+    // Whitespace-only inline args collapse to no arguments rather than an error.
+    assert!(resolve_call_arguments(Some("   "), None).expect("blank is ok").is_none());
+}
+
+#[test]
+fn resolve_call_arguments_rejects_non_object_json() {
+    let err = resolve_call_arguments(Some("[1,2,3]"), None).expect_err("a JSON array is not a valid argument map");
+    assert!(err.to_string().contains("must be a JSON object"), "got: {err}");
+}
+
+#[test]
+fn resolve_call_arguments_rejects_malformed_json() {
+    let err = resolve_call_arguments(Some("{not json"), None).expect_err("malformed JSON must error");
+    assert!(err.to_string().contains("must be valid JSON"), "got: {err}");
+}
+
+#[test]
+fn resolve_call_arguments_reads_from_file() {
+    let temp = TempDir::new().expect("tempdir");
+    let path = temp.path().join("args.json");
+    std::fs::write(&path, r#"{"from_file":true}"#).expect("write args file");
+    let args = resolve_call_arguments(None, Some(&path)).expect("file parses").expect("arguments present");
+    assert_eq!(args.get("from_file").and_then(|v| v.as_bool()), Some(true));
+}

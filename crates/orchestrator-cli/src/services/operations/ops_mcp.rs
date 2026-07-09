@@ -490,10 +490,144 @@ pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str, cli_json
             service.waiting().await?;
             Ok(())
         }
+        McpCommand::Tools(args) => handle_mcp_tools(args, project_root, cli_json).await,
+        McpCommand::Call(args) => handle_mcp_call(args, project_root, cli_json).await,
         McpCommand::Auth(args) => handle_mcp_auth(args, project_root, cli_json).await,
         McpCommand::AuthStatus(args) => handle_mcp_auth_status(args, project_root, cli_json).await,
         McpCommand::AuthLogout(args) => handle_mcp_auth_logout(args, project_root, cli_json).await,
     }
+}
+
+/// `animus mcp tools <server>` — open an MCP session against the configured
+/// server (proxy for OAuth, direct for plain-HTTP), run initialize +
+/// tools/list, and print the tools. The session (and any spawned proxy child)
+/// is always torn down before returning.
+async fn handle_mcp_tools(args: crate::McpToolsArgs, project_root: &str, cli_json: bool) -> Result<()> {
+    let root = Path::new(project_root);
+    let timeout = std::time::Duration::from_secs(args.timeout);
+    let session = animus_mcp_oauth::McpSession::connect(root, &args.server, args.url.as_deref(), timeout).await?;
+
+    let result = tokio::time::timeout(timeout, session.list_tools()).await;
+    // Tear down the session (and proxy child) regardless of outcome.
+    session.shutdown().await;
+    let tools = result.map_err(|_| {
+        crate::unavailable_error(format!("MCP `tools/list` on `{}` timed out after {}s", args.server, args.timeout))
+    })??;
+
+    let tools_json: Vec<Value> = tools
+        .iter()
+        .map(|tool| {
+            json!({
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+            })
+        })
+        .collect();
+
+    if cli_json {
+        return crate::shared::print_value(json!({ "server": args.server, "tools": tools_json }), true);
+    }
+
+    if tools.is_empty() {
+        println!("MCP server `{}` exposes no tools.", args.server);
+        return Ok(());
+    }
+    println!("Tools on `{}`:", args.server);
+    for tool in &tools {
+        match tool.description.as_deref().map(str::trim).filter(|d| !d.is_empty()) {
+            Some(desc) => println!("  {} — {}", tool.name, first_line(desc)),
+            None => println!("  {}", tool.name),
+        }
+    }
+    Ok(())
+}
+
+/// `animus mcp call <server> <tool>` — open an MCP session against the
+/// configured server, run initialize + tools/call, and print the result. The
+/// session (and any spawned proxy child) is always torn down before returning.
+async fn handle_mcp_call(args: crate::McpCallArgs, project_root: &str, cli_json: bool) -> Result<()> {
+    let arguments = resolve_call_arguments(args.args.as_deref(), args.args_file.as_deref())?;
+
+    let root = Path::new(project_root);
+    let timeout = std::time::Duration::from_secs(args.timeout);
+    let session = animus_mcp_oauth::McpSession::connect(root, &args.server, args.url.as_deref(), timeout).await?;
+
+    let result = tokio::time::timeout(timeout, session.call_tool(&args.tool, arguments)).await;
+    session.shutdown().await;
+    let call = result.map_err(|_| {
+        crate::unavailable_error(format!(
+            "MCP `tools/call` for `{}` on `{}` timed out after {}s",
+            args.tool, args.server, args.timeout
+        ))
+    })??;
+
+    if cli_json {
+        // Serialize the full CallToolResult (content, structured_content,
+        // is_error) so scripts can inspect the in-band error flag; a tool that
+        // reported an in-band error is still a successful round-trip.
+        return crate::shared::print_value(json!({ "server": args.server, "tool": args.tool, "result": call }), true);
+    }
+
+    if call.is_error.unwrap_or(false) {
+        println!("Tool `{}` on `{}` reported an error:", args.tool, args.server);
+    }
+    print_call_result_human(&call);
+    Ok(())
+}
+
+/// Resolve the `tools/call` arguments from `--args <JSON>` or `--args-file
+/// <PATH>` into a JSON object map. Returns `None` for a no-argument call.
+/// `--args` and `--args-file` are mutually exclusive (enforced by clap).
+fn resolve_call_arguments(
+    args: Option<&str>,
+    args_file: Option<&std::path::Path>,
+) -> Result<Option<rmcp::model::JsonObject>> {
+    let raw = match (args, args_file) {
+        (Some(inline), _) => inline.to_string(),
+        (None, Some(path)) => std::fs::read_to_string(path).map_err(|err| {
+            crate::invalid_input_error(format!("failed to read --args-file {}: {err}", path.display()))
+        })?,
+        (None, None) => return Ok(None),
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let value: Value = serde_json::from_str(trimmed)
+        .map_err(|err| crate::invalid_input_error(format!("tool arguments must be valid JSON: {err}")))?;
+    match value {
+        Value::Object(map) => Ok(Some(map)),
+        _ => {
+            Err(crate::invalid_input_error("tool arguments must be a JSON object (e.g. {\"query\":\"x\"})".to_string()))
+        }
+    }
+}
+
+/// Print a [`rmcp::model::CallToolResult`] for a human reader: the text content
+/// blocks, then any structured content as pretty JSON. Non-text content blocks
+/// are rendered as their JSON so nothing is silently dropped.
+fn print_call_result_human(call: &rmcp::model::CallToolResult) {
+    for content in &call.content {
+        match serde_json::to_value(&content.raw) {
+            Ok(Value::Object(ref obj)) if obj.get("type").and_then(Value::as_str) == Some("text") => {
+                if let Some(text) = obj.get("text").and_then(Value::as_str) {
+                    println!("{text}");
+                }
+            }
+            Ok(other) => println!("{}", serde_json::to_string_pretty(&other).unwrap_or_else(|_| other.to_string())),
+            Err(_) => {}
+        }
+    }
+    if let Some(structured) = &call.structured_content {
+        println!("{}", serde_json::to_string_pretty(structured).unwrap_or_else(|_| structured.to_string()));
+    }
+}
+
+/// First non-empty line of a tool description, for the compact `mcp tools`
+/// human listing.
+fn first_line(text: &str) -> &str {
+    text.lines().map(str::trim).find(|line| !line.is_empty()).unwrap_or(text)
 }
 
 async fn handle_mcp_auth(args: crate::McpAuthArgs, project_root: &str, cli_json: bool) -> Result<()> {

@@ -15,6 +15,7 @@
 //! `AuthorizationManager` / `AuthorizationSession` drive the protocol.
 
 pub mod callback;
+pub mod client;
 pub mod config;
 pub mod flow;
 pub mod keychain_store;
@@ -22,6 +23,7 @@ pub mod pending;
 pub mod proxy;
 pub mod state_store;
 
+pub use client::McpSession;
 pub use config::{resolve_principal_id, resolve_server_url, ServerResolution, ServerResolutionError};
 pub use flow::{
     auth_logout, auth_status, begin_auth, complete_auth, run_auth, AuthOutcome, AuthPreview, AuthResult, AuthStatus,

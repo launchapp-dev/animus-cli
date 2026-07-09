@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::Subcommand;
 
 #[derive(Debug, Subcommand)]
@@ -6,6 +8,14 @@ pub(crate) enum McpCommand {
     Serve(McpServeArgs),
     /// Start the memory context MCP server for workflow phases.
     Memory,
+    /// List the tools a configured MCP server exposes (initialize +
+    /// tools/list), so command phases and scripts can discover tool names
+    /// deterministically without spending an LLM agent.
+    Tools(McpToolsArgs),
+    /// Call a tool on a configured MCP server (initialize + tools/call) and
+    /// print the result. Deterministic MCP tool use for command phases +
+    /// scripts (krisp transcript pulls, github ops, ...).
+    Call(McpCallArgs),
     /// Authenticate an OAuth-protected MCP server interactively
     /// (discovery + DCR + auth_code/PKCE + browser login). Tokens are
     /// stored in the OS keychain.
@@ -50,6 +60,46 @@ pub(crate) struct McpServeArgs {
     /// never from agent output, workflow YAML, or subject content.
     #[arg(long, value_name = "JSON")]
     pub actor_json: Option<String>,
+}
+
+/// Default overall timeout (seconds) for a one-shot `mcp tools` / `mcp call`
+/// session: the connect handshake plus the single tools/list or tools/call.
+const DEFAULT_MCP_CALL_TIMEOUT_SECS: u64 = 60;
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct McpToolsArgs {
+    /// Logical MCP server name (matches the workflow/project config key).
+    pub server: String,
+    /// Override the upstream MCP URL (for a server not yet in config, or to
+    /// point at an explicit plain-HTTP endpoint).
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Overall timeout in seconds for the session (connect + tools/list).
+    #[arg(long, value_name = "SECS", default_value_t = DEFAULT_MCP_CALL_TIMEOUT_SECS)]
+    pub timeout: u64,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct McpCallArgs {
+    /// Logical MCP server name (matches the workflow/project config key).
+    pub server: String,
+    /// The tool name to invoke (as reported by `animus mcp tools <server>`).
+    pub tool: String,
+    /// Tool arguments as an inline JSON object, e.g. `--args '{"query":"x"}'`.
+    /// Mutually exclusive with `--args-file`.
+    #[arg(long, value_name = "JSON", conflicts_with = "args_file")]
+    pub args: Option<String>,
+    /// Read the tool arguments (a JSON object) from a file. Mutually exclusive
+    /// with `--args`.
+    #[arg(long = "args-file", value_name = "PATH", conflicts_with = "args")]
+    pub args_file: Option<PathBuf>,
+    /// Override the upstream MCP URL (for a server not yet in config, or to
+    /// point at an explicit plain-HTTP endpoint).
+    #[arg(long)]
+    pub url: Option<String>,
+    /// Overall timeout in seconds for the session (connect + tools/call).
+    #[arg(long, value_name = "SECS", default_value_t = DEFAULT_MCP_CALL_TIMEOUT_SECS)]
+    pub timeout: u64,
 }
 
 #[derive(Debug, clap::Args)]
