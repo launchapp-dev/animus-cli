@@ -956,6 +956,65 @@ agents:
     }
 
     #[test]
+    fn plugin_provider_tool_receives_profile_scoped_mcp_servers_on_the_wire() {
+        // Regression for the OAuth/krisp bridge: a PLUGIN-provider tool (a tool
+        // name the kernel does not recognize as a built-in CLI, e.g. LaunchApp's
+        // `portal`) must still get its `--agent` profile's `mcp_servers` injected
+        // into `extras.mcp_servers`. Before the plugin-provider capability fix,
+        // `build_runtime_contract` returned `None` for such tools, so the whole
+        // contract was skipped and the agent received ZERO daemon-injected MCP
+        // servers (only whatever the provider self-wired).
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let root_str = root.to_string_lossy().into_owned();
+        let bearer_env = "ANIMUS_TEST_PORTAL_WIRE_BEARER";
+        std::env::set_var(bearer_env, "tok-portal-secret");
+        std::fs::create_dir_all(root.join(".animus")).unwrap();
+        std::fs::write(
+            root.join(".animus").join("workflows.yaml"),
+            format!(
+                r#"
+mcp_servers:
+  trading:
+    transport: http
+    url: "https://trading.example.com/mcp"
+    oauth:
+      flow: manual_bearer
+      bearer_env: {bearer_env}
+agents:
+  trader:
+    description: "Trading agent"
+    tool: portal
+    mcp_servers: [trading]
+"#
+            ),
+        )
+        .unwrap();
+
+        let _config_source_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
+        let mut args = base_args(&root_str);
+        // A plugin-provider tool name unknown to the kernel's built-in CLI tables.
+        args.tool = "portal".to_string();
+        args.model = Some("z-ai/glm-5.2".to_string());
+        args.agent = Some("trader".to_string());
+        let request = session_request_from_args(&args, &root_str).expect("request builds");
+        std::env::remove_var(bearer_env);
+
+        let servers = request
+            .extras
+            .pointer("/mcp_servers")
+            .and_then(Value::as_object)
+            .expect("a plugin-provider agent's profile servers must ride extras.mcp_servers");
+        let trading = servers.get("trading").expect("the profile-scoped server is in the wire map");
+        let command = trading.get("command").and_then(Value::as_str).expect("proxy stdio entry carries command");
+        assert!(command.contains("animus-mcp-proxy"), "expected the proxy binary; got {command}");
+        assert!(trading.get("url").is_none(), "proxy entry carries no upstream url; got {trading}");
+        let serialized = serde_json::to_string(&request.extras).unwrap();
+        assert!(!serialized.contains("tok-portal-secret"), "resolved bearer must never appear: {serialized}");
+    }
+
+    #[test]
     fn agent_run_without_permission_mode_leaves_request_field_unset() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
