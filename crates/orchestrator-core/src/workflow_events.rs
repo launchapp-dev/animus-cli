@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 use crate::{
     load_agent_runtime_config_or_default, project_task_status, project_task_terminal_workflow_status,
     project_task_workflow_pause_cleared, project_task_workflow_paused, services::ServiceHub, OrchestratorTask,
-    OrchestratorWorkflow, PhaseExecutionMode, PhaseManualDefinition, TaskStatus, WorkflowStatus,
+    OrchestratorWorkflow, PhaseExecutionMode, PhaseManualDefinition, TaskProjectionStore, TaskStatus, WorkflowStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -50,6 +50,7 @@ pub struct WorkflowEventOutcome {
 
 pub async fn dispatch_workflow_event(
     hub: Arc<dyn ServiceHub>,
+    store: &dyn TaskProjectionStore,
     project_root: &str,
     event: WorkflowEvent,
 ) -> Result<WorkflowEventOutcome> {
@@ -63,8 +64,7 @@ pub async fn dispatch_workflow_event(
             let task = if let Some(task_id) =
                 (workflow.status == WorkflowStatus::Paused).then(|| workflow_task_id(&workflow)).flatten()
             {
-                let _ =
-                    project_task_workflow_paused(hub.clone(), &task_id, &workflow_id, reason_detail.as_deref()).await;
+                let _ = project_task_workflow_paused(store, &task_id, &workflow_id, reason_detail.as_deref()).await;
                 hub.tasks().get(&task_id).await.ok()
             } else {
                 None
@@ -81,7 +81,7 @@ pub async fn dispatch_workflow_event(
             // Clear the matching "paused by workflow <id>" annotation; a
             // genuine failure-projected blocked_reason is left alone.
             let task = if let Some(task_id) = workflow_task_id(&workflow) {
-                let _ = project_task_workflow_pause_cleared(hub.clone(), &task_id, &workflow_id).await;
+                let _ = project_task_workflow_pause_cleared(store, &task_id, &workflow_id).await;
                 hub.tasks().get(&task_id).await.ok()
             } else {
                 None
@@ -100,7 +100,7 @@ pub async fn dispatch_workflow_event(
             let task = if let Some(task_id) =
                 (workflow.status == WorkflowStatus::Cancelled).then(|| workflow_task_id(&workflow)).flatten()
             {
-                project_task_terminal_workflow_status(hub.clone(), &task_id, WorkflowStatus::Cancelled, None).await;
+                project_task_terminal_workflow_status(store, &task_id, WorkflowStatus::Cancelled, None).await;
                 hub.tasks().get(&task_id).await.ok()
             } else {
                 None
@@ -132,7 +132,7 @@ pub async fn dispatch_workflow_event(
                     // This is a resume path too: clear any "paused by
                     // workflow <id>" annotation left on the task by a pause.
                     if let Some(task_id) = workflow_task_id(&workflow) {
-                        let _ = project_task_workflow_pause_cleared(hub.clone(), &task_id, &workflow_id).await;
+                        let _ = project_task_workflow_pause_cleared(store, &task_id, &workflow_id).await;
                     }
                 }
                 WorkflowStatus::Running => {}
@@ -177,7 +177,7 @@ pub async fn dispatch_workflow_event(
                     // This is a resume path too: clear any "paused by
                     // workflow <id>" annotation left on the task by a pause.
                     if let Some(task_id) = workflow_task_id(&workflow) {
-                        let _ = project_task_workflow_pause_cleared(hub.clone(), &task_id, &workflow_id).await;
+                        let _ = project_task_workflow_pause_cleared(store, &task_id, &workflow_id).await;
                     }
                 }
                 WorkflowStatus::Running => {}
@@ -195,7 +195,7 @@ pub async fn dispatch_workflow_event(
             Ok(WorkflowEventOutcome { workflow: Some(updated), ..WorkflowEventOutcome::default() })
         }
         WorkflowEvent::StaleReset { task_id, reason } => {
-            project_task_status(hub.clone(), &task_id, TaskStatus::Ready).await?;
+            project_task_status(store, &task_id, TaskStatus::Ready).await?;
             let task = hub.tasks().get(&task_id).await.ok();
             let _ = reason;
             Ok(WorkflowEventOutcome { task, ..WorkflowEventOutcome::default() })
@@ -243,9 +243,9 @@ mod tests {
 
     use super::{dispatch_workflow_event, WorkflowEvent};
     use crate::{
-        services::ServiceHub, InMemoryServiceHub, OrchestratorTask, Priority, ResourceRequirements, Scope,
-        TaskMetadata, TaskStatus, TaskType, WorkflowMetadata, WorkflowRunInput, WorkflowStatus,
-        WORKFLOW_PAUSED_REASON_PREFIX,
+        services::ServiceHub, HubTaskProjectionStore, InMemoryServiceHub, OrchestratorTask, Priority,
+        ResourceRequirements, Scope, TaskMetadata, TaskStatus, TaskType, WorkflowMetadata, WorkflowRunInput,
+        WorkflowStatus, WORKFLOW_PAUSED_REASON_PREFIX,
     };
 
     async fn upsert_task(hub: &Arc<InMemoryServiceHub>, id: &str, status: TaskStatus) -> OrchestratorTask {
@@ -314,6 +314,7 @@ mod tests {
 
         let outcome = dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
             ".",
             WorkflowEvent::Pause { workflow_id: workflow_id.clone(), reason_detail: None },
         )
@@ -336,6 +337,7 @@ mod tests {
 
         dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
             ".",
             WorkflowEvent::Pause { workflow_id: workflow_id.clone(), reason_detail: None },
         )
@@ -343,6 +345,7 @@ mod tests {
         .expect("pause dispatch");
         dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
             ".",
             WorkflowEvent::Resume { workflow_id: workflow_id.clone(), feedback: None },
         )
@@ -365,6 +368,7 @@ mod tests {
 
         dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
             ".",
             WorkflowEvent::Resume { workflow_id, feedback: None },
         )
@@ -390,6 +394,7 @@ mod tests {
 
         dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
             ".",
             WorkflowEvent::Pause { workflow_id, reason_detail: None },
         )
@@ -411,10 +416,14 @@ mod tests {
         upsert_task(&hub, "TASK-4", TaskStatus::InProgress).await;
         let workflow_id = start_workflow_for_task(&hub, "TASK-4").await;
 
-        let outcome =
-            dispatch_workflow_event(hub.clone() as Arc<dyn ServiceHub>, ".", WorkflowEvent::Cancel { workflow_id })
-                .await
-                .expect("cancel dispatch");
+        let outcome = dispatch_workflow_event(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
+            ".",
+            WorkflowEvent::Cancel { workflow_id },
+        )
+        .await
+        .expect("cancel dispatch");
         assert_eq!(outcome.workflow.expect("workflow").status, WorkflowStatus::Cancelled);
 
         let task = hub.tasks().get("TASK-4").await.expect("task");
@@ -431,9 +440,14 @@ mod tests {
         upsert_task(&hub, "TASK-5", TaskStatus::Done).await;
         let workflow_id = start_workflow_for_task(&hub, "TASK-5").await;
 
-        dispatch_workflow_event(hub.clone() as Arc<dyn ServiceHub>, ".", WorkflowEvent::Cancel { workflow_id })
-            .await
-            .expect("cancel dispatch");
+        dispatch_workflow_event(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
+            ".",
+            WorkflowEvent::Cancel { workflow_id },
+        )
+        .await
+        .expect("cancel dispatch");
 
         let task = hub.tasks().get("TASK-5").await.expect("task");
         assert_eq!(task.status, TaskStatus::Done, "cancel must not regress an already-done task");
@@ -446,6 +460,7 @@ mod tests {
         let workflow_id = start_workflow_for_task(&hub, "TASK-6").await;
         dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
             ".",
             WorkflowEvent::Pause { workflow_id, reason_detail: None },
         )
@@ -481,6 +496,7 @@ mod tests {
 
         let outcome = dispatch_workflow_event(
             hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
             ".",
             WorkflowEvent::Pause { workflow_id, reason_detail: None },
         )
@@ -501,10 +517,14 @@ mod tests {
         let workflow_id = start_workflow_for_task(&hub, "TASK-9").await;
         complete_workflow(&hub, &workflow_id).await;
 
-        let outcome =
-            dispatch_workflow_event(hub.clone() as Arc<dyn ServiceHub>, ".", WorkflowEvent::Cancel { workflow_id })
-                .await
-                .expect("cancel dispatch");
+        let outcome = dispatch_workflow_event(
+            hub.clone() as Arc<dyn ServiceHub>,
+            &HubTaskProjectionStore::new(hub.clone()),
+            ".",
+            WorkflowEvent::Cancel { workflow_id },
+        )
+        .await
+        .expect("cancel dispatch");
         assert_eq!(outcome.workflow.expect("workflow").status, WorkflowStatus::Completed, "cancel is a no-op");
 
         let task = hub.tasks().get("TASK-9").await.expect("task");

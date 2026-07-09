@@ -269,9 +269,12 @@ impl WorkflowRouting for WorkflowRoutingImpl {
 
     async fn workflow_pause(&self, request: WirePauseRequest) -> Result<Unit, ControlError> {
         let hub = self.hub()?;
+        let root = self.project_root_str();
+        let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(&root, hub.clone()).await;
         let _ = dispatch_workflow_event(
             hub,
-            &self.project_root_str(),
+            task_store.as_ref(),
+            &root,
             WorkflowEvent::Pause { workflow_id: request.id, reason_detail: None },
         )
         .await
@@ -293,8 +296,10 @@ impl WorkflowRouting for WorkflowRoutingImpl {
 
     async fn workflow_cancel(&self, request: WireCancelRequest) -> Result<Unit, ControlError> {
         let hub = self.hub()?;
+        let root = self.project_root_str();
+        let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(&root, hub.clone()).await;
         let _ =
-            dispatch_workflow_event(hub, &self.project_root_str(), WorkflowEvent::Cancel { workflow_id: request.id })
+            dispatch_workflow_event(hub, task_store.as_ref(), &root, WorkflowEvent::Cancel { workflow_id: request.id })
                 .await
                 .map_err(internal)?;
         Ok(Unit::default())

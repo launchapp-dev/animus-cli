@@ -833,7 +833,15 @@ impl SubjectRouter {
             Some(kind) => self.plugin_for_kind(kind).map(|name| vec![name.to_string()]).unwrap_or_default(),
             None => {
                 let mut names: Vec<String> = Vec::new();
-                for name in self.exact_kinds.values().chain(self.glob_kinds.iter().map(|(_, n)| n)) {
+                // Include the catch-all (`*`) backend alongside the exact/glob
+                // plugins: an unscoped watch must receive events for every
+                // mounted backend, including the wildcard that serves
+                // runtime-declared dynamic kinds (e.g. a portal `declare_kind`).
+                // Omitting it dropped all catch-all-served kinds from the merged
+                // `subject/changed` stream.
+                for name in
+                    self.exact_kinds.values().chain(self.glob_kinds.iter().map(|(_, n)| n)).chain(self.catch_all.iter())
+                {
                     if !names.iter().any(|existing| existing == name) {
                         names.push(name.clone());
                     }
@@ -1509,6 +1517,42 @@ done
             assert!(router.is_subject_method("task/list"));
             assert!(!router.is_subject_method("blog/list"));
             assert!(!router.is_subject_method("config/load"));
+        }
+
+        #[test]
+        fn unscoped_watch_includes_catch_all_backend() {
+            // An unscoped (`kind = None`) watch must ask every mounted backend
+            // to watch — including the `*` catch-all that serves runtime dynamic
+            // kinds — so the merged `subject/changed` stream does not silently
+            // drop catch-all-served kinds.
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("spawns.log");
+            let specs = vec![spec(dir.path(), "tasks", "task", &log), spec(dir.path(), "baas", "*", &log)];
+            let router = SubjectRouter::from_lazy_specs(specs, KindAliasMap::default()).expect("router builds");
+
+            let mut names = router.watch_plugin_names(None);
+            names.sort();
+            assert_eq!(
+                names,
+                vec!["baas".to_string(), "tasks".to_string()],
+                "unscoped watch must include the catch-all"
+            );
+
+            // A scoped watch is unchanged: it resolves the single owning plugin.
+            assert_eq!(router.watch_plugin_names(Some("task")), vec!["tasks".to_string()]);
+        }
+
+        #[test]
+        fn unscoped_watch_dedupes_multi_kind_backend() {
+            // A backend claiming several kinds is watched only once, and the
+            // catch-all is not double-counted when it is the same plugin name.
+            let dir = tempfile::tempdir().unwrap();
+            let log = dir.path().join("spawns.log");
+            let specs = vec![spec(dir.path(), "tasks", "task", &log), spec(dir.path(), "reqs", "requirement", &log)];
+            let router = SubjectRouter::from_lazy_specs(specs, KindAliasMap::default()).expect("router builds");
+            let mut names = router.watch_plugin_names(None);
+            names.sort();
+            assert_eq!(names, vec!["reqs".to_string(), "tasks".to_string()]);
         }
 
         #[test]

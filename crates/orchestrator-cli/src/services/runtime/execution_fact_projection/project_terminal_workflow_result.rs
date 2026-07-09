@@ -91,5 +91,16 @@ pub(crate) async fn project_terminal_workflow_result(
         return;
     };
 
-    project_task_terminal_workflow_status(hub, task_id, workflow_status, failure_reason.map(ToOwned::to_owned)).await;
+    // Route the task-status projection through the installed subject backend
+    // when one owns `task` (portal); the in-tree `hub.tasks()` store is empty
+    // there, so a terminal projection into it would leave the plugin-backed
+    // task stuck InProgress.
+    let store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub).await;
+    project_task_terminal_workflow_status(
+        store.as_ref(),
+        task_id,
+        workflow_status,
+        failure_reason.map(ToOwned::to_owned),
+    )
+    .await;
 }

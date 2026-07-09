@@ -5,15 +5,13 @@ use anyhow::Result;
 use async_trait::async_trait;
 use protocol::{SubjectExecutionFact, SUBJECT_KIND_CUSTOM, SUBJECT_KIND_REQUIREMENT, SUBJECT_KIND_TASK};
 
-use crate::services::ServiceHub;
-
-use super::project_task_execution_fact;
+use super::{project_task_execution_fact, TaskProjectionStore};
 
 #[async_trait]
 pub trait ExecutionProjector: Send + Sync {
     fn kind(&self) -> &'static str;
 
-    async fn project(&self, hub: Arc<dyn ServiceHub>, root: &str, fact: &SubjectExecutionFact) -> Result<()>;
+    async fn project(&self, store: &dyn TaskProjectionStore, fact: &SubjectExecutionFact) -> Result<()>;
 }
 
 #[derive(Clone, Default)]
@@ -33,11 +31,11 @@ impl ExecutionProjectorRegistry {
         self
     }
 
-    pub async fn project(&self, hub: Arc<dyn ServiceHub>, root: &str, fact: &SubjectExecutionFact) -> Result<bool> {
+    pub async fn project(&self, store: &dyn TaskProjectionStore, fact: &SubjectExecutionFact) -> Result<bool> {
         let Some(projector) = self.projector_for_fact(fact) else {
             return Ok(false);
         };
-        projector.project(hub, root, fact).await?;
+        projector.project(store, fact).await?;
         Ok(true)
     }
 
@@ -74,8 +72,8 @@ impl ExecutionProjector for TaskExecutionProjector {
         SUBJECT_KIND_TASK
     }
 
-    async fn project(&self, hub: Arc<dyn ServiceHub>, root: &str, fact: &SubjectExecutionFact) -> Result<()> {
-        project_task_execution_fact(hub, root, fact).await;
+    async fn project(&self, store: &dyn TaskProjectionStore, fact: &SubjectExecutionFact) -> Result<()> {
+        project_task_execution_fact(store, fact).await;
         Ok(())
     }
 }
@@ -96,7 +94,7 @@ impl ExecutionProjector for NoopExecutionProjector {
         self.kind
     }
 
-    async fn project(&self, _hub: Arc<dyn ServiceHub>, _root: &str, _fact: &SubjectExecutionFact) -> Result<()> {
+    async fn project(&self, _store: &dyn TaskProjectionStore, _fact: &SubjectExecutionFact) -> Result<()> {
         Ok(())
     }
 }
