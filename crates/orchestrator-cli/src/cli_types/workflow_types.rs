@@ -83,14 +83,18 @@ pub(crate) struct WorkflowListArgs {
     pub(crate) status: Option<String>,
     #[arg(long, value_name = "WORKFLOW_REF", help = "Filter workflows by workflow definition/reference id.")]
     pub(crate) workflow_ref: Option<String>,
-    #[arg(long, value_name = "TASK_ID", help = "Filter workflows linked to a task id.")]
-    pub(crate) task_id: Option<String>,
+    #[arg(
+        long = "subject-id",
+        value_name = "SUBJECT_ID",
+        help = "Filter workflows linked to a subject id. Matched exactly against the id the workflow stored — built-in kinds (task/requirement) store the qualified form, so filter with `task:TASK-001`."
+    )]
+    pub(crate) subject_id: Option<String>,
     #[arg(long, value_name = "PHASE_ID", help = "Filter workflows containing a phase id.")]
     pub(crate) phase_id: Option<String>,
     #[arg(
         long,
         value_name = "TEXT",
-        help = "Case-insensitive text search over workflow id, task id, ref, and phases."
+        help = "Case-insensitive text search over workflow id, subject id, ref, and phases."
     )]
     pub(crate) search: Option<String>,
     #[arg(long, value_name = "SORT", help = WORKFLOW_SORT_HELP)]
@@ -276,22 +280,13 @@ pub(crate) struct WorkflowRunArgs {
         help = "Workflow definition name from project YAML or an installed pack (e.g. standard-workflow, hotfix-workflow, vendor.pack/review)."
     )]
     pub(crate) pipeline: Option<String>,
-    #[arg(
-        long,
-        value_name = "TASK_ID",
-        group = "subject",
-        help = "Task to run the workflow for. Accepts a bare id (TASK-001) or the qualified form (task:TASK-001)."
-    )]
-    pub(crate) task_id: Option<String>,
-    #[arg(long, value_name = "REQ_ID", group = "subject", help = "Requirement id to run the workflow for.")]
-    pub(crate) requirement_id: Option<String>,
     #[arg(long, value_name = "TITLE", group = "subject", help = "Custom workflow title for freeform execution.")]
     pub(crate) title: Option<String>,
     #[arg(
         long = "subject-id",
         value_name = "SUBJECT_ID",
         group = "subject",
-        help = "Generic subject to run the workflow for, any kind (BaaS dynamic kinds like blog/post). Accepts a qualified id (blog:BLOG-001 — kind trusted; the recommended form) or a bare id (BLOG-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form). Mutually exclusive with --task-id / --requirement-id / --title."
+        help = "Subject to run the workflow for, any kind. Accepts a qualified id (task:TASK-001 / requirement:REQ-042 / blog:BLOG-001 — kind trusted; the recommended form) or a bare id (TASK-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form). Mutually exclusive with --title."
     )]
     pub(crate) subject_id: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]
@@ -337,15 +332,13 @@ pub(crate) struct WorkflowPromptRenderArgs {
         help = "Existing workflow id to render from persisted workflow state."
     )]
     pub(crate) workflow_id: Option<String>,
-    #[arg(long, value_name = "TASK_ID", group = "subject", help = "Task id for ad-hoc prompt rendering.")]
-    pub(crate) task_id: Option<String>,
     #[arg(
-        long,
-        value_name = "REQ_ID",
+        long = "subject-id",
+        value_name = "SUBJECT_ID",
         group = "subject",
-        help = "Requirement id for ad-hoc prompt rendering (alternative to --task-id)."
+        help = "Subject to render an ad-hoc prompt for, any kind. Accepts a qualified id (task:TASK-001 / requirement:REQ-042 / blog:BLOG-001 — kind trusted; the recommended form) or a bare id (TASK-001 — kind probed across backends that declare concrete kinds; pure catch-all dynamic backends require the qualified form)."
     )]
-    pub(crate) requirement_id: Option<String>,
+    pub(crate) subject_id: Option<String>,
     #[arg(long, value_name = "TITLE", group = "subject", help = "Custom workflow title for ad-hoc prompt rendering.")]
     pub(crate) title: Option<String>,
     #[arg(long, value_name = "TEXT", help = "Custom workflow description (used with --title).")]

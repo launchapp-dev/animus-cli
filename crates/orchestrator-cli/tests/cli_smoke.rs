@@ -161,8 +161,8 @@ fn help_uses_explicit_value_names_and_repeatable_flag_guidance() -> Result<(), B
         "workflow run help should expose the pipeline positional argument"
     );
     assert!(
-        workflow_run_stdout.contains("--task-id <TASK_ID>"),
-        "workflow run help should expose the explicit TASK_ID value name"
+        workflow_run_stdout.contains("--subject-id <SUBJECT_ID>"),
+        "workflow run help should expose the explicit SUBJECT_ID value name"
     );
     assert!(
         workflow_run_stdout.contains("When provided, values in this payload override individual CLI flags."),

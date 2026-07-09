@@ -25,7 +25,7 @@ animus status
 
 ```bash
 animus subject status --kind task --id task:TASK-001 --status in_progress
-animus workflow run --task-id TASK-001 --sync
+animus workflow run --subject-id TASK-001 --sync
 animus subject status --kind task --id task:TASK-001 --status done
 ```
 

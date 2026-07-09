@@ -81,8 +81,12 @@ pub(crate) struct AgentApproveHookArgs {
     pub(crate) format: ApproveHookFormat,
     #[arg(long, value_name = "WORKFLOW_ID", help = "Optional workflow id context recorded on any escalation.")]
     pub(crate) workflow_id: Option<String>,
-    #[arg(long, value_name = "TASK_ID", help = "Optional task id context recorded on any escalation.")]
-    pub(crate) task_id: Option<String>,
+    #[arg(
+        long = "subject-id",
+        value_name = "SUBJECT_ID",
+        help = "Optional subject id context recorded on any escalation."
+    )]
+    pub(crate) subject_id: Option<String>,
     #[arg(
         long,
         value_name = "SECONDS",
