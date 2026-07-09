@@ -1132,6 +1132,7 @@ mod tests {
                 capabilities: Vec::new(),
                 env_required: Vec::new(),
                 notification_buffer_size: None,
+                supports_mcp: None,
             },
             source: orchestrator_plugin_host::DiscoverySource::ExplicitConfig,
         }

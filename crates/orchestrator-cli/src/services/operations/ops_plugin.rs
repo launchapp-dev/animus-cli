@@ -8209,6 +8209,7 @@ name = "same"
             capabilities: vec!["agent/run".to_string()],
             env_required: Vec::new(),
             notification_buffer_size: None,
+            supports_mcp: None,
         }
     }
 
@@ -10124,6 +10125,7 @@ required = ["launchapp-dev/animus-queue-default"]
             capabilities: vec!["subject_kind:task".into(), "subject_kind:incident".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         assert_eq!(rename_eligible_native_kind(&manifest).as_deref(), Some("task"));
     }
@@ -10140,6 +10142,7 @@ required = ["launchapp-dev/animus-queue-default"]
             capabilities: vec!["provider_tool:claude".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         // v0.5.7 only renames subject_backend kinds; provider dispatch
         // does not consult plugins.lock yet, so providers must skip the
@@ -10163,6 +10166,7 @@ required = ["launchapp-dev/animus-queue-default"]
             capabilities: vec!["subject_kind:task.*".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         assert_eq!(rename_eligible_native_kind(&manifest), None);
     }
@@ -10179,6 +10183,7 @@ required = ["launchapp-dev/animus-queue-default"]
             capabilities: vec!["subject_kind:task.*".into(), "subject_kind:incident".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         assert_eq!(rename_eligible_native_kind(&manifest).as_deref(), Some("incident"));
     }
@@ -10195,6 +10200,7 @@ required = ["launchapp-dev/animus-queue-default"]
             capabilities: vec!["http_routes:foo".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         assert_eq!(rename_eligible_native_kind(&manifest), None);
     }
@@ -10329,6 +10335,7 @@ required = ["launchapp-dev/animus-queue-default"]
             ],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let kinds = all_rename_eligible_native_kinds(&manifest);
         assert_eq!(kinds, vec!["task".to_string(), "requirement".to_string(), "incident".to_string()]);
@@ -10351,6 +10358,7 @@ required = ["launchapp-dev/animus-queue-default"]
             ],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let kinds = all_rename_eligible_native_kinds(&manifest);
         assert_eq!(kinds, vec!["task".to_string(), "requirement".to_string()]);
@@ -10388,6 +10396,7 @@ required = ["launchapp-dev/animus-queue-default"]
             capabilities: vec!["subject_kind:task".into(), "subject_kind:requirement".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let err = compute_kind_assignment(Some(&manifest), &lock, &[], "subject-multi", None)
             .expect_err("secondary kind collision must refuse the install");
@@ -10469,6 +10478,7 @@ required = ["launchapp-dev/animus-queue-default"]
             capabilities: vec!["subject_kind:task".into(), "subject_kind:incident".into()],
             env_required: vec![],
             notification_buffer_size: None,
+            supports_mcp: None,
         };
         let (assigned, native) = compute_kind_assignment(Some(&manifest), &lock, &[], "subject-multi", None)
             .expect("primary auto-increment with free secondary must succeed");
