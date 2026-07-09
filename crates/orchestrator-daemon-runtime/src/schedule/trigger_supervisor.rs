@@ -40,7 +40,7 @@ use chrono::Utc;
 use orchestrator_core::workflow_config::TriggerType;
 use orchestrator_core::WebhookEvent;
 use orchestrator_logging::Logger;
-use orchestrator_plugin_host::{discover_plugins, DiscoveredPlugin, PluginHost, PluginSpawnOptions, PluginStderrSink};
+use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, PluginHost, PluginSpawnOptions, PluginStderrSink};
 use serde_json::json;
 use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
@@ -143,9 +143,13 @@ impl TriggerSupervisor {
 }
 
 /// Filter the project's installed plugins down to trigger backends.
+///
+/// v0.7 multi-kind: matches a plugin's primary `plugin_kind` OR any of its
+/// additional `plugin_kinds` via [`discover_by_kind`], so a consolidated
+/// plugin that serves `trigger_backend` as a secondary role is still spawned
+/// instead of its webhook/event triggers silently never firing.
 pub fn discover_trigger_plugins(project_root: &Path) -> Result<Vec<DiscoveredPlugin>> {
-    let plugins = discover_plugins(project_root)?;
-    Ok(plugins.into_iter().filter(|p| p.manifest.plugin_kind == PLUGIN_KIND_TRIGGER_BACKEND).collect())
+    discover_by_kind(project_root, PLUGIN_KIND_TRIGGER_BACKEND)
 }
 
 /// Outcome reported by one trigger plugin session.

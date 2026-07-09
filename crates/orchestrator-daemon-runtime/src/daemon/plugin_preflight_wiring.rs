@@ -180,7 +180,7 @@ pub fn workflow_runner_warnings(project_root: &str) -> Vec<String> {
     };
     plugins
         .iter()
-        .filter(|p| p.manifest.plugin_kind == "workflow_runner")
+        .filter(|p| p.manifest.serves_kind("workflow_runner"))
         .filter_map(|p| orchestrator_core::workflow_runner_underpin_warning(&p.name, &p.manifest.version))
         .collect()
 }
@@ -196,7 +196,7 @@ pub fn queue_warnings(project_root: &str) -> Vec<String> {
     };
     plugins
         .iter()
-        .filter(|p| p.manifest.plugin_kind == "queue")
+        .filter(|p| p.manifest.serves_kind("queue"))
         .filter_map(|p| orchestrator_core::queue_underpin_warning(&p.name, &p.manifest.version))
         .collect()
 }

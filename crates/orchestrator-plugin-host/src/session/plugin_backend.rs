@@ -1246,12 +1246,15 @@ impl DiscoveredProviderPlugin {
 /// the provider-kind plugins. Provider tool name defaults to the plugin name minus the
 /// `animus-provider-` prefix.
 pub fn discover_provider_plugins(project_root: &std::path::Path) -> Vec<DiscoveredProviderPlugin> {
-    use crate::discover_plugins;
+    use crate::discover_by_kind;
     let project_root = project_root.to_path_buf();
-    discover_plugins(&project_root)
+    // v0.7 multi-kind: `discover_by_kind` matches a plugin's primary
+    // `plugin_kind` OR any of its additional `plugin_kinds`, so a
+    // consolidated plugin that serves `provider` as a secondary role is
+    // resolved for agent dispatch.
+    discover_by_kind(&project_root, animus_plugin_protocol::PLUGIN_KIND_PROVIDER)
         .unwrap_or_default()
         .into_iter()
-        .filter(|plugin| plugin.manifest.plugin_kind == animus_plugin_protocol::PLUGIN_KIND_PROVIDER)
         .map(|plugin| {
             let provider_tool = plugin
                 .name
