@@ -2764,6 +2764,7 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
     let root = temp.path().to_string_lossy().to_string();
     crate::dispatch_workflow_event(
         hub.clone(),
+        &crate::HubTaskProjectionStore::new(hub.clone()),
         &root,
         crate::WorkflowEvent::Pause { workflow_id: workflow.id.clone(), reason_detail: None },
     )
@@ -2778,6 +2779,7 @@ async fn manual_phase_approval_resume_clears_task_pause_marker() {
 
     crate::dispatch_workflow_event(
         hub.clone(),
+        &crate::HubTaskProjectionStore::new(hub.clone()),
         &root,
         crate::WorkflowEvent::ApproveManualPhase {
             workflow_id: workflow.id.clone(),

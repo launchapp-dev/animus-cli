@@ -9,8 +9,10 @@ pub(crate) async fn cancel_orphaned_running_workflow(
     project_root: &str,
     workflow: &OrchestratorWorkflow,
 ) -> bool {
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
     let outcome = match dispatch_workflow_event(
         hub.clone(),
+        task_store.as_ref(),
         project_root,
         WorkflowEvent::Cancel { workflow_id: workflow.id.clone() },
     )
