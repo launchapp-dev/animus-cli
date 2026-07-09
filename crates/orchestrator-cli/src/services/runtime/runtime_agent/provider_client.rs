@@ -955,20 +955,55 @@ agents:
         );
     }
 
+    /// Write an executable `#!/bin/sh` provider-plugin stub that answers a
+    /// `--manifest` probe with a provider manifest declaring `capabilities`, so
+    /// plugin discovery treats it as an installed provider whose DECLARED
+    /// capabilities drive MCP support.
+    #[cfg(unix)]
+    fn write_fake_provider_plugin(install_dir: &std::path::Path, name: &str, capabilities: &[&str]) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(install_dir).unwrap();
+        let manifest = json!({
+            "name": name,
+            "version": "0.1.0",
+            "plugin_kind": "provider",
+            "description": "test provider",
+            "protocol_version": "1.0.0",
+            "capabilities": capabilities,
+        })
+        .to_string();
+        let path = install_dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).unwrap();
+        let mut perms = std::fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).unwrap();
+    }
+
+    #[cfg(unix)]
     #[test]
     fn plugin_provider_tool_receives_profile_scoped_mcp_servers_on_the_wire() {
-        // Regression for the OAuth/krisp bridge: a PLUGIN-provider tool (a tool
-        // name the kernel does not recognize as a built-in CLI, e.g. LaunchApp's
-        // `portal`) must still get its `--agent` profile's `mcp_servers` injected
-        // into `extras.mcp_servers`. Before the plugin-provider capability fix,
-        // `build_runtime_contract` returned `None` for such tools, so the whole
-        // contract was skipped and the agent received ZERO daemon-injected MCP
-        // servers (only whatever the provider self-wired).
+        // End-to-end proof for the OAuth/krisp bridge: a provider tool with NO
+        // entry in any hardcoded capability table (LaunchApp's `portal`) gets
+        // its `--agent` profile's `mcp_servers` injected onto the wire PURELY
+        // because its installed plugin DECLARES `supports_mcp` — the plugin's
+        // own manifest capability, resolved uniformly, not a name heuristic.
+        // Isolate HOME + the global plugin install dir so discovery sees only
+        // our fake provider.
+        let _lock = test_env_lock().lock().unwrap_or_else(|p| p.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().canonicalize().unwrap();
         let root_str = root.to_string_lossy().into_owned();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let install_dir = root.join("plugins");
+        // No opt-out token => the provider DECLARES it consumes MCP (default).
+        write_fake_provider_plugin(&install_dir, "animus-provider-portal", &["agent/run"]);
+        let _home_guard = EnvVarGuard::set("HOME", Some(home.to_string_lossy().as_ref()));
+        let _config_guard = EnvVarGuard::set("ANIMUS_CONFIG_DIR", Some(""));
+        let _plugin_dir_guard = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", Some(install_dir.to_string_lossy().as_ref()));
+
         let bearer_env = "ANIMUS_TEST_PORTAL_WIRE_BEARER";
-        std::env::set_var(bearer_env, "tok-portal-secret");
+        let _bearer_guard = EnvVarGuard::set(bearer_env, Some("tok-portal-secret"));
         std::fs::create_dir_all(root.join(".animus")).unwrap();
         std::fs::write(
             root.join(".animus").join("workflows.yaml"),
@@ -994,12 +1029,11 @@ agents:
         let _config_source_seam =
             orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(&root);
         let mut args = base_args(&root_str);
-        // A plugin-provider tool name unknown to the kernel's built-in CLI tables.
+        // A plugin-provider tool name with no entry in any hardcoded CLI table.
         args.tool = "portal".to_string();
         args.model = Some("z-ai/glm-5.2".to_string());
         args.agent = Some("trader".to_string());
         let request = session_request_from_args(&args, &root_str).expect("request builds");
-        std::env::remove_var(bearer_env);
 
         let servers = request
             .extras

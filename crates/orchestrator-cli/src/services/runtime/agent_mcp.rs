@@ -888,13 +888,13 @@ mod tests {
     }
 
     #[test]
-    fn unknown_tool_is_treated_as_an_mcp_capable_plugin_provider() {
-        // A tool the kernel does not recognize as a built-in CLI is a provider
-        // PLUGIN (every provider ships out-of-tree now). It must assemble an
-        // MCP-capable contract so the daemon can inject the agent's MCP servers;
-        // here, with no scope selected, that is the baseline `animus` stdio
-        // server. (Previously an unknown tool built no contract at all, which
-        // silently stripped every named MCP server from plugin-provider agents.)
+    fn unknown_tool_falls_back_to_the_mcp_capable_provider_shape() {
+        // MCP support for a provider tool is decided by the loaded plugin's
+        // DECLARED capability (see the discovery-backed wire test in
+        // `runtime_agent::provider_client`). When NO provider plugin backs the
+        // tool (e.g. an unknown name that cannot be dispatched anyway), the
+        // built-in provider fallback still assembles an MCP-capable contract —
+        // here, with no scope selected, the baseline `animus` stdio server.
         let tmp = tempfile::tempdir().unwrap();
         let contract = assemble_agent_mcp_contract(
             tmp.path(),
@@ -909,11 +909,11 @@ mod tests {
             None,
         )
         .unwrap()
-        .expect("an unknown tool is a plugin provider and must assemble an MCP-capable contract");
+        .expect("the built-in provider fallback assembles an MCP-capable contract");
         assert_eq!(contract.pointer("/cli/capabilities/supports_mcp").and_then(Value::as_bool), Some(true));
         assert!(
             contract.pointer("/mcp/stdio/command").and_then(Value::as_str).is_some(),
-            "the baseline animus stdio server must be injected for a plugin-provider agent; got {contract}"
+            "the baseline animus stdio server must be injected; got {contract}"
         );
     }
 
