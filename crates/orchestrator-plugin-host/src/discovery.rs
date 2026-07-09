@@ -1548,6 +1548,84 @@ mod tests {
         assert_eq!(by_kind[0].name, "a-workflow-runner-default");
     }
 
+    /// v0.7 multi-kind regression: a consolidated plugin whose PRIMARY
+    /// `plugin_kind` is `subject_backend` but which ALSO declares
+    /// `log_storage_backend` as a NON-primary `plugin_kinds` entry MUST be
+    /// resolved by [`discover_by_kind`] for that secondary role. This is the
+    /// property TASK-275 exists to guarantee: role resolution keys off
+    /// `PluginManifest::serves_kind`, not the single primary field.
+    ///
+    /// Drives the real `discover_by_kind` entry point (not a hand-rolled
+    /// `serves_kind` filter) so a regression that reverted it to
+    /// `plugin_kind ==` matching would fail here.
+    #[cfg(unix)]
+    #[test]
+    fn discover_by_kind_resolves_non_primary_declared_role() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _config_dir = EnvVarGuard::set("ANIMUS_CONFIG_DIR", temp.path().join("animus-home"));
+
+        // Install the plugin into a scanned $ANIMUS_PLUGIN_DIR so the real
+        // `discover_by_kind` -> `discover_plugins` pipeline picks it up. Clear
+        // $ANIMUS_PLUGIN_PATH so a developer/CI environment pointing at extra
+        // plugin dirs can't leak unrelated plugins into the `len() == 1` and
+        // `provider`-is-empty assertions below (keeps the test hermetic).
+        let install_dir = temp.path().join("install-dir");
+        fs::create_dir_all(&install_dir).expect("mkdir install dir");
+        let _plugin_dir = EnvVarGuard::set("ANIMUS_PLUGIN_DIR", &install_dir);
+        let _clear_plugin_path = EnvVarGuard::set("ANIMUS_PLUGIN_PATH", "");
+
+        // Consolidated plugin: primary kind subject_backend, additional kinds
+        // include log_storage_backend + queue (served as NON-primary roles).
+        let name = "animus-plugin-consolidated-backend";
+        let path = install_dir.join(name);
+        let manifest = serde_json::json!({
+            "name": name,
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "plugin_kinds": ["log_storage_backend", "queue"],
+            "description": "test",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        fs::write(&path, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).expect("chmod");
+
+        let project_root = temp.path().join("project");
+        fs::create_dir_all(&project_root).expect("mkdir project root");
+
+        // Resolved via the REAL helper for the NON-primary declared role.
+        let as_log_storage = discover_by_kind(&project_root, "log_storage_backend").expect("discover log_storage");
+        assert_eq!(
+            as_log_storage.len(),
+            1,
+            "discover_by_kind must resolve the consolidated plugin for its non-primary log_storage_backend role"
+        );
+        assert_eq!(as_log_storage[0].name, name);
+
+        // Still resolved for its PRIMARY role too.
+        assert_eq!(
+            discover_by_kind(&project_root, "subject_backend").expect("discover subject_backend").len(),
+            1,
+            "discover_by_kind must still resolve the plugin for its primary subject_backend role"
+        );
+        // And for its other secondary role.
+        assert_eq!(
+            discover_by_kind(&project_root, "queue").expect("discover queue").len(),
+            1,
+            "discover_by_kind must resolve the plugin for its second non-primary queue role"
+        );
+        // NOT resolved for a role it does not declare.
+        assert!(
+            discover_by_kind(&project_root, "provider").expect("discover provider").is_empty(),
+            "discover_by_kind must not resolve the plugin for an undeclared role"
+        );
+    }
+
     #[test]
     fn configured_plugin_can_use_non_prefixed_binary() {
         let _guard = ENV_GUARD.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
