@@ -81,6 +81,9 @@ cargo animus-fmt-check
 # Lint check
 cargo animus-lint
 
+# Docs/code sync check
+npm run docs:check-sync
+
 # Test all crates
 cargo test --workspace
 ```

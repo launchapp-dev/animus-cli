@@ -6,11 +6,13 @@ Animus uses GitHub Actions for continuous integration and release automation. Th
 
 ### Rust Workspace CI (`rust-workspace-ci.yml`)
 
-Runs on every push and pull request. Checks the workspace and lints with `-D warnings`:
+Runs on every push and pull request. The current jobs are:
 
+- `bash scripts/check-doc-sync.sh` fails fast when `docs/reference/cli/index.md`, `docs/reference/mcp-tools.md`, `docs/guides/agents.md`, and the count-sensitive docs drift from the live Rust surface.
+- `cargo fmt --all -- --check` enforces Rust formatting.
 - `cargo check --workspace --all-targets` covers every crate (runtime-critical and otherwise) in one cached job — no per-crate matrix to drift against this doc.
 - `cargo clippy --workspace --all-targets -- -D warnings` gates every PR on a clean strict lint (the same gate `cargo animus-lint-strict` runs locally).
-- `cargo test --workspace` for the full test suite.
+- `cargo run --locked -p orchestrator-cli --bin animus -- --help` provides a final smoke check after the workspace compiles.
 - Concurrency grouping cancels superseded runs on the same branch.
 
 ### Rust-Only Dependency Policy (`rust-only-dependency-policy.yml`)
@@ -22,10 +24,6 @@ Enforces the project rule that Animus is Rust-only -- no desktop shell framework
 The web UI now lives in the external `launchapp-dev/animus-web-ui` repository
 and ships its own CI. The Animus monorepo no longer builds or tests the
 web bundle.
-
-### Release Rollback Validation (`release-rollback-validation.yml`)
-
-Validates that release artifacts can be produced correctly and that the release process is reversible.
 
 ## Build Commands
 
