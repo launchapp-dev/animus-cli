@@ -27,10 +27,11 @@ Rust Cargo workspace with the current members listed below. Main binary: `animus
 web stack (transport + UI) lives in external plugins under
 [`launchapp-dev`](https://github.com/launchapp-dev). The workspace also depends
 on external protocol crates from that repo. The authoritative pins live in
-`Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`; current builds mix the
-workspace-wide `animus-protocol` pin at `v0.1.24`, legacy CLI wire crates at
-`v0.1.13`, plus newer `animus-queue-protocol` / `animus-subject-protocol`
-pins at `v0.5.10` and `animus-workflow-runner-protocol` at `v0.5.3`.
+`Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`; current builds pin the
+`animus-protocol` family to the unified `v0.1.26` tag so `protocol`,
+`animus-config-protocol`, `animus-subject-protocol`, `animus-provider-protocol`,
+`animus-session-backend`, `animus-journal-protocol`, and `animus-actor` resolve
+from the same source.
 
 Current workspace members from `Cargo.toml`:
 
