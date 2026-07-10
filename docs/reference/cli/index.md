@@ -327,10 +327,10 @@ animus
 ├── subject                  List, get, create, update, status, and delete subjects via installed subject_backend plugins
 │   ├── list                 List subjects for a given kind via the active subject_backend plugin
 │   ├── get                  Fetch a single subject by id from the active subject_backend plugin
-│   ├── create               Create a subject through the active subject_backend plugin
-│   ├── batch-create         Create up to 100 subjects from a JSON `--file` items array; `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-create` MCP tool
-│   ├── update               Update a subject through the active subject_backend plugin (`--title` renames it; `--status` / `--priority` / `--labels` / `--body`)
-│   ├── batch-update         Patch up to 100 subjects from a JSON `--file` items array; `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-update` MCP tool
+│   ├── create               Create a subject through the active subject_backend plugin (`--data '{..}'` sets structured custom fields — declared kind fields with no dedicated flag — merged into the subject's `data`)
+│   ├── batch-create         Create up to 100 subjects from a JSON `--file` items array (each item may carry a `data` object); `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-create` MCP tool
+│   ├── update               Update a subject through the active subject_backend plugin (`--title` renames it; `--status` / `--priority` / `--labels` / `--body`; `--data '{..}'` sets structured custom fields merged into the subject's `data` via `patch.custom`)
+│   ├── batch-update         Patch up to 100 subjects from a JSON `--file` items array (each item may carry a `data` object → `patch.custom`; a data-only item is valid); `--on-error stop|continue`; exits non-zero when any item failed (payload under `/error/details`); mirrors the `animus.subject.batch-update` MCP tool
 │   ├── next                 Return the highest-priority Ready subject for the given kind
 │   ├── status               Set the status of a subject by id through the active subject_backend
 │   └── delete               Delete a subject by id; requires --yes to confirm (otherwise prints preview)
