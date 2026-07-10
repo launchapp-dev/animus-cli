@@ -42,6 +42,7 @@ pub(super) fn build_subject_create_args(input: &SubjectCreateInput) -> Vec<Strin
         args.push(input.labels.join(","));
     }
     push_opt(&mut args, "--body", input.body.clone());
+    push_opt(&mut args, "--data", input.data.as_ref().map(|v| v.to_string()));
     args
 }
 
@@ -62,6 +63,7 @@ pub(super) fn build_subject_update_args(input: &SubjectUpdateInput) -> Vec<Strin
         args.push(input.labels.join(","));
     }
     push_opt(&mut args, "--body", input.body.clone());
+    push_opt(&mut args, "--data", input.data.as_ref().map(|v| v.to_string()));
     args
 }
 
@@ -73,6 +75,7 @@ pub(super) fn build_subject_batch_create_item_args(kind: &str, item: &SubjectBat
         priority: item.priority.clone(),
         labels: item.labels.clone(),
         body: item.body.clone(),
+        data: item.data.clone(),
         project_root: None,
     })
 }
@@ -87,6 +90,7 @@ pub(super) fn build_subject_batch_update_item_args(kind: &str, item: &SubjectBat
         priority: item.priority.clone(),
         labels: item.labels.clone(),
         body: None,
+        data: item.data.clone(),
         project_root: None,
     })
 }
@@ -128,8 +132,8 @@ pub(super) fn validate_subject_batch_update_input(
         if item.id.trim().is_empty() {
             return Err(format!("{tool_name}: item[{i}].id must not be empty"));
         }
-        if item.status.is_none() && item.priority.is_none() && item.labels.is_empty() {
-            return Err(format!("{tool_name}: item[{i}] requires at least one of status / priority / labels"));
+        if item.status.is_none() && item.priority.is_none() && item.labels.is_empty() && item.data.is_none() {
+            return Err(format!("{tool_name}: item[{i}] requires at least one of status / priority / labels / data"));
         }
     }
     Ok(())

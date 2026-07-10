@@ -24,6 +24,30 @@ const MAX_BATCH_SIZE: usize = 100;
 /// results) is identical.
 const CLI_BATCH_RESULT_SCHEMA: &str = "animus.cli.batch.result.v1";
 
+/// Parse the `--data` flag value into a JSON object map, ready to merge into a
+/// subject's `data` custom fields. Rejects any non-object JSON (arrays,
+/// scalars) so callers get an actionable `InvalidInput` instead of the backend
+/// silently ignoring a malformed channel.
+fn parse_data_object(raw: &str) -> Result<serde_json::Map<String, Value>> {
+    let value: Value = serde_json::from_str(raw)
+        .map_err(|err| invalid_input_error(format!("--data must be a valid JSON object: {err}")))?;
+    match value {
+        Value::Object(map) => Ok(map),
+        _ => Err(invalid_input_error("--data must be a JSON object")),
+    }
+}
+
+/// Validate an already-parsed batch item `data` value is a JSON object and
+/// return it as a map. Batch items carry `data` as a `Value` decoded from the
+/// items file (not a string flag), so this validates the shape without
+/// re-parsing. `label` names the offending item for the error message.
+fn batch_data_object(value: &Value, label: &str) -> Result<serde_json::Map<String, Value>> {
+    match value {
+        Value::Object(map) => Ok(map.clone()),
+        _ => Err(invalid_input_error(format!("{label} must be a JSON object"))),
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct SubjectCallResponse {
     kind: String,
@@ -156,6 +180,9 @@ async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json
     if let Some(body) = args.body.as_deref() {
         payload.insert("body".to_string(), json!(body));
     }
+    if let Some(data) = args.data.as_deref() {
+        payload.insert("data".to_string(), Value::Object(parse_data_object(data)?));
+    }
     let params = Some(Value::Object(payload));
     dispatch(&kind, "create", params, project_root, json).await
 }
@@ -186,9 +213,12 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
     if let Some(body) = args.body.as_deref() {
         patch.insert("body".to_string(), json!(body));
     }
+    if let Some(data) = args.data.as_deref() {
+        patch.insert("custom".to_string(), Value::Object(parse_data_object(data)?));
+    }
     if patch.is_empty() {
         return Err(invalid_input_error(
-            "subject update requires at least one of --title / --status / --priority / --labels / --body",
+            "subject update requires at least one of --title / --status / --priority / --labels / --body / --data",
         ));
     }
     let params = Some(json!({ "id": id, "patch": Value::Object(patch) }));
@@ -209,6 +239,8 @@ struct BatchCreateItem {
     labels: Vec<String>,
     #[serde(default)]
     body: Option<String>,
+    #[serde(default)]
+    data: Option<Value>,
 }
 
 /// One item of a `subject batch-update` request. Mirrors the MCP
@@ -222,6 +254,8 @@ struct BatchUpdateItem {
     priority: Option<String>,
     #[serde(default)]
     labels: Vec<String>,
+    #[serde(default)]
+    data: Option<Value>,
 }
 
 /// Read and deserialize a JSON items array from `--file`. Accepts either a
@@ -421,6 +455,12 @@ async fn handle_subject_batch_create(args: SubjectBatchCreateArgs, project_root:
         if let Some(body) = item.body.as_deref() {
             payload.insert("body".to_string(), json!(body));
         }
+        if let Some(data) = item.data.as_ref() {
+            payload.insert(
+                "data".to_string(),
+                Value::Object(batch_data_object(data, &format!("{tool_name}: item[{i}].data"))?),
+            );
+        }
         calls.push((item.title.trim().to_string(), Some(Value::Object(payload))));
     }
     run_subject_batch(tool_name, &kind, "create", calls, args.on_error, project_root, json).await
@@ -452,9 +492,15 @@ async fn handle_subject_batch_update(args: SubjectBatchUpdateArgs, project_root:
         if !item.labels.is_empty() {
             patch.insert("labels".to_string(), json!(item.labels));
         }
+        if let Some(data) = item.data.as_ref() {
+            patch.insert(
+                "custom".to_string(),
+                Value::Object(batch_data_object(data, &format!("{tool_name}: item[{i}].data"))?),
+            );
+        }
         if patch.is_empty() {
             return Err(invalid_input_error(format!(
-                "{tool_name}: item[{i}] requires at least one of status / priority / labels"
+                "{tool_name}: item[{i}] requires at least one of status / priority / labels / data"
             )));
         }
         calls.push((id.to_string(), Some(json!({ "id": id, "patch": Value::Object(patch) }))));
@@ -1273,6 +1319,71 @@ mod tests {
         assert_eq!(subject_field_str(&s, "id"), "task:T-1");
         assert_eq!(subject_field_str(&s, "title"), "--");
         assert_eq!(subject_field_str(&s, "missing"), "--");
+    }
+
+    #[test]
+    fn parse_data_object_accepts_object_and_rejects_non_object() {
+        let map = parse_data_object(r#"{"source":"krisp","occurred_at":"2026-07-09T21:00:00Z"}"#)
+            .expect("valid object parses");
+        assert_eq!(map.get("source").and_then(Value::as_str), Some("krisp"));
+        assert_eq!(map.get("occurred_at").and_then(Value::as_str), Some("2026-07-09T21:00:00Z"));
+
+        // Non-object JSON (array, scalar) and malformed JSON all error as InvalidInput.
+        for raw in [r#"[1,2,3]"#, r#""just a string""#, "42", "{not json}"] {
+            let err = parse_data_object(raw).expect_err("non-object / malformed rejected");
+            assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::InvalidInput, "raw: {raw}");
+            assert!(err.to_string().contains("--data"), "error names the flag: {err}");
+        }
+    }
+
+    #[test]
+    fn create_payload_carries_parsed_data_object() {
+        // Mirror the payload build in handle_subject_create: a valid --data
+        // object lands at top-level `data` for the BaaS `payload.data` channel.
+        let mut payload = serde_json::Map::new();
+        payload.insert("title".to_string(), json!("Weekly sync"));
+        payload.insert("data".to_string(), Value::Object(parse_data_object(r#"{"source":"krisp"}"#).expect("parses")));
+        let params = Value::Object(payload);
+        assert_eq!(params.pointer("/data/source").and_then(Value::as_str), Some("krisp"));
+    }
+
+    #[test]
+    fn update_patch_carries_parsed_data_at_custom() {
+        // Mirror handle_subject_update: --data lands at `patch.custom` for the
+        // BaaS `payload.patch.custom` channel.
+        let mut patch = serde_json::Map::new();
+        patch.insert("custom".to_string(), Value::Object(parse_data_object(r#"{"summary":"done"}"#).expect("parses")));
+        let params = json!({ "id": "transcript:TRANSCRIPT-1", "patch": Value::Object(patch) });
+        assert_eq!(params.pointer("/patch/custom/summary").and_then(Value::as_str), Some("done"));
+    }
+
+    #[test]
+    fn batch_data_object_validates_shape() {
+        let map = batch_data_object(&json!({ "participants": ["a", "b"] }), "item[0].data").expect("object ok");
+        assert_eq!(map.get("participants").and_then(Value::as_array).map(|a| a.len()), Some(2));
+        let err = batch_data_object(&json!([1, 2]), "item[3].data").expect_err("array rejected");
+        assert_eq!(crate::classify_cli_error_kind(&err), crate::CliErrorKind::InvalidInput);
+        assert!(err.to_string().contains("item[3].data must be a JSON object"), "got: {err}");
+    }
+
+    #[test]
+    fn batch_create_item_threads_data_into_payload() {
+        // A batch-create item carrying `data` (already-parsed Value from the
+        // items file) threads it through to the per-item create payload.
+        let item = BatchCreateItem {
+            title: "Weekly sync".to_string(),
+            status: None,
+            priority: None,
+            labels: Vec::new(),
+            body: None,
+            data: Some(json!({ "source": "krisp" })),
+        };
+        let mut payload = serde_json::Map::new();
+        payload.insert("title".to_string(), json!(item.title.trim()));
+        if let Some(data) = item.data.as_ref() {
+            payload.insert("data".to_string(), Value::Object(batch_data_object(data, "item[0].data").expect("object")));
+        }
+        assert_eq!(Value::Object(payload).pointer("/data/source").and_then(Value::as_str), Some("krisp"));
     }
 
     #[test]

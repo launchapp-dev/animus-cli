@@ -160,12 +160,12 @@ plugin (e.g. `linear`, `jira`, `github-issue`).
 |---|---|---|
 | `animus.subject.list` | List subjects for a kind via the active `subject_backend` plugin. Returns a bounded page by default (`limit` defaults to 50; pass `limit: 0` to remove the cap); the result carries `next_cursor` (and `total` when the backend reports it) — pass `cursor` to fetch the next page. | `kind`, `status`, `limit`, `cursor`, `project_root` |
 | `animus.subject.get` | Fetch a subject by wire id (`<kind>:<native_id>`) | `kind`, `id`, `project_root` |
-| `animus.subject.create` | Create a subject through the active `subject_backend` plugin | `kind`, `title`, `priority`, `status`, `labels[]`, `body`, `project_root` |
-| `animus.subject.update` | Update a subject through the active `subject_backend` plugin | `kind`, `id`, `title`, `priority`, `status`, `labels[]`, `body`, `project_root` |
+| `animus.subject.create` | Create a subject through the active `subject_backend` plugin. `data` is a JSON object of structured custom fields (declared kind fields with no dedicated arg, e.g. a transcript's `source` / `occurred_at`) merged into the subject's `data`. | `kind`, `title`, `priority`, `status`, `labels[]`, `body`, `data`, `project_root` |
+| `animus.subject.update` | Update a subject through the active `subject_backend` plugin. `data` is a JSON object of structured custom fields merged into the subject's `data` (via `patch.custom`). | `kind`, `id`, `title`, `priority`, `status`, `labels[]`, `body`, `data`, `project_root` |
 | `animus.subject.next` | Return the highest-priority Ready subject for the given kind | `kind`, `project_root` |
 | `animus.subject.status` | Set the status of a subject by id through the active `subject_backend` | `kind`, `id`, `status`, `project_root` |
-| `animus.subject.batch-create` | Create up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`title`, `status`, `priority`, `labels[]`, `body`), `on_error`, `project_root` |
-| `animus.subject.batch-update` | Patch up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`id`, `status`, `priority`, `labels[]`), `on_error`, `project_root` |
+| `animus.subject.batch-create` | Create up to 100 subjects of one kind in a single call (per-item dispatch) | `kind`, `items[]` (`title`, `status`, `priority`, `labels[]`, `body`, `data`), `on_error`, `project_root` |
+| `animus.subject.batch-update` | Patch up to 100 subjects of one kind in a single call (per-item dispatch). A per-item `data` object (→ `patch.custom`) makes a data-only item valid. | `kind`, `items[]` (`id`, `status`, `priority`, `labels[]`, `data`), `on_error`, `project_root` |
 
 ---
 

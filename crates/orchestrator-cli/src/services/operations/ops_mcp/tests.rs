@@ -251,7 +251,14 @@ fn validate_workflow_run_multiple_rejects_over_max() {
 }
 
 fn batch_create_item(title: &str) -> SubjectBatchCreateItem {
-    SubjectBatchCreateItem { title: title.to_string(), status: None, priority: None, labels: Vec::new(), body: None }
+    SubjectBatchCreateItem {
+        title: title.to_string(),
+        status: None,
+        priority: None,
+        labels: Vec::new(),
+        body: None,
+        data: None,
+    }
 }
 
 fn batch_update_item(id: &str, status: Option<&str>) -> SubjectBatchUpdateItem {
@@ -260,6 +267,7 @@ fn batch_update_item(id: &str, status: Option<&str>) -> SubjectBatchUpdateItem {
         status: status.map(str::to_string),
         priority: None,
         labels: Vec::new(),
+        data: None,
     }
 }
 
@@ -1636,6 +1644,7 @@ fn mcp_subject_create_builds_labels_csv() {
         priority: Some("p1".to_string()),
         labels: vec!["bug".to_string(), "urgent".to_string()],
         body: Some("Body text".to_string()),
+        data: None,
         project_root: None,
     };
     let args = build_subject_create_args(&input);
@@ -1668,6 +1677,7 @@ fn mcp_subject_update_requires_at_least_one_field_args() {
         priority: None,
         labels: vec![],
         body: None,
+        data: None,
         project_root: None,
     };
     let args = build_subject_update_args(&input);
@@ -1700,6 +1710,7 @@ fn mcp_subject_update_forwards_title_flag() {
         priority: None,
         labels: vec![],
         body: None,
+        data: None,
         project_root: None,
     };
     let args = build_subject_update_args(&input);
@@ -1716,6 +1727,63 @@ fn mcp_subject_update_forwards_title_flag() {
             "Renamed title".to_string(),
         ]
     );
+}
+
+#[test]
+fn mcp_subject_create_forwards_data_flag() {
+    // A `data` object input must reach the CLI as `--data <json>` so an MCP
+    // caller can set declared kind fields that have no dedicated arg.
+    let input = SubjectCreateInput {
+        kind: "transcript".to_string(),
+        title: "Weekly sync".to_string(),
+        status: None,
+        priority: None,
+        labels: vec![],
+        body: None,
+        data: Some(json!({ "source": "krisp" })),
+        project_root: None,
+    };
+    let args = build_subject_create_args(&input);
+    let idx = args.iter().position(|a| a == "--data").expect("--data forwarded");
+    let rendered: Value = serde_json::from_str(&args[idx + 1]).expect("data flag is valid json");
+    assert_eq!(rendered.pointer("/source").and_then(Value::as_str), Some("krisp"));
+}
+
+#[test]
+fn mcp_subject_update_forwards_data_flag() {
+    let input = SubjectUpdateInput {
+        kind: "transcript".to_string(),
+        id: "TRANSCRIPT-1".to_string(),
+        title: None,
+        status: None,
+        priority: None,
+        labels: vec![],
+        body: None,
+        data: Some(json!({ "occurred_at": "2026-07-09T21:00:00Z" })),
+        project_root: None,
+    };
+    let args = build_subject_update_args(&input);
+    let idx = args.iter().position(|a| a == "--data").expect("--data forwarded");
+    let rendered: Value = serde_json::from_str(&args[idx + 1]).expect("data flag is valid json");
+    assert_eq!(rendered.pointer("/occurred_at").and_then(Value::as_str), Some("2026-07-09T21:00:00Z"));
+}
+
+#[test]
+fn mcp_subject_batch_update_item_forwards_data() {
+    let item = SubjectBatchUpdateItem {
+        id: "TRANSCRIPT-1".to_string(),
+        status: None,
+        priority: None,
+        labels: Vec::new(),
+        data: Some(json!({ "summary": "done" })),
+    };
+    // A data-only batch-update item is valid and forwards `--data`.
+    validate_subject_batch_update_input("animus.subject.batch-update", "transcript", std::slice::from_ref(&item))
+        .expect("data-only item is valid");
+    let args = build_subject_batch_update_item_args("transcript", &item);
+    let idx = args.iter().position(|a| a == "--data").expect("--data forwarded");
+    let rendered: Value = serde_json::from_str(&args[idx + 1]).expect("data flag is valid json");
+    assert_eq!(rendered.pointer("/summary").and_then(Value::as_str), Some("done"));
 }
 
 #[test]

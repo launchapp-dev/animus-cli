@@ -135,6 +135,12 @@ pub(crate) struct SubjectCreateArgs {
     /// Optional free-form body / description.
     #[arg(long, value_name = "BODY")]
     pub body: Option<String>,
+    /// Structured custom fields as a JSON object, merged into the subject's
+    /// `data` (e.g. `--data '{"source":"krisp","occurred_at":"2026-07-09T21:00:00Z"}'`).
+    /// Lets command-phase / scripted callers set declared kind fields that
+    /// have no dedicated flag. Merges with (does not replace) other fields.
+    #[arg(long, value_name = "JSON")]
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -164,6 +170,12 @@ pub(crate) struct SubjectUpdateArgs {
     /// long-form content onto a subject (e.g. an agent's findings).
     #[arg(long, value_name = "BODY")]
     pub body: Option<String>,
+    /// Structured custom fields as a JSON object, merged into the subject's
+    /// `data` (e.g. `--data '{"source":"krisp","occurred_at":"2026-07-09T21:00:00Z"}'`).
+    /// Lets command-phase / scripted callers set declared kind fields that
+    /// have no dedicated flag. Merges with (does not replace) other fields.
+    #[arg(long, value_name = "JSON")]
+    pub data: Option<String>,
 }
 
 #[derive(Debug, Args)]
