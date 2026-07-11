@@ -104,22 +104,18 @@ pinned in the root `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`.
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. The deploy helper
 runs the sync check directly, uses the repo-local `vitepress` binary from
-`node_modules/.bin` for the site build, then prefers a repo-local or cached
-`vercel` binary before falling back to `npx vercel --yes --prod`. When it
-does need `npx`, it points npm at a temporary cache directory so the deploy
-command does not depend on a writable `~/.npm/`.
+`node_modules/.bin` for the site build, then always publishes with
+`npx vercel --yes --prod`. It points npm at a temporary cache directory so
+the deploy command does not depend on a writable `~/.npm/`.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
-falling back to `npx`, it also assumes the runner can reach
-`registry.npmjs.org` to resolve `vercel`. In restricted environments, expect
-the deploy phase to fail once it needs fresh network access, even when the
-docs are otherwise in sync.
+using `npx`, it also assumes the runner can reach `registry.npmjs.org` to
+resolve `vercel`. In restricted environments, expect the deploy phase to fail
+once it needs fresh network access, even when the docs are otherwise in sync.
 If `npm`/`npx` are missing from `PATH`, `scripts/deploy-docs.sh` now also
 checks the active Node install's sibling `bin/`, common `nvm`/`volta`/`fnm`/
 `asdf` locations, and Homebrew paths before giving up. If none of those
-locations contain `npx`, the local sync/build preflight can still run when
-`node_modules` or a cached Vercel CLI is already installed, but the final
-Vercel deploy still cannot proceed without usable credentials and network.
+locations contain `npx`, the final Vercel deploy cannot proceed.
 
 Protocol schema exports live at the repo root:
 
