@@ -38,15 +38,19 @@ The core goals are:
 | Core services | `orchestrator-core` (includes the v0.5.3 folded-in `subject_adapter` and `store` modules), `orchestrator-config` |
 | Runtime | `orchestrator-daemon-runtime`, `animus-runtime-shared` |
 | Plugin foundation | `orchestrator-plugin-host` (includes `session::*`, the v0.5.3 folded-in session backend bridge), `animus-plugin-protocol`, `animus-plugin-runtime` |
-| Support | `orchestrator-logging`, `protocol`, `animus-mcp-oauth` |
+| Support | `orchestrator-logging`, `animus-mcp-oauth` |
 
 The workspace also depends on external `launchapp-dev/animus-protocol` crates.
 The authoritative dependency pins live in the repo's `Cargo.toml` files,
 especially the workspace root and `crates/orchestrator-cli/Cargo.toml`; the
-current runtime mixes workspace-wide `v0.1.24` config/session/provider pins,
-legacy CLI wire crates at `v0.1.13`, `animus-queue-protocol` /
-`animus-subject-protocol-v05` at `v0.5.10`, and
-`animus-workflow-runner-protocol` at `v0.5.3`.
+current runtime pins the main protocol family (`protocol`,
+`animus-config-protocol`, `animus-subject-protocol`,
+`animus-provider-protocol`, `animus-session-backend`,
+`animus-journal-protocol`, and `animus-actor`) to `v0.1.26`. The CLI-specific
+`animus-control-protocol`, `animus-log-storage-protocol`,
+`animus-subject-protocol-wire`, and `animus-workflow-runner-protocol` crates
+are also pinned to `v0.1.26`, while `animus-queue-protocol` and the separate
+`animus-subject-protocol-v05` compatibility line remain on `v0.5.10`.
 
 The release/runtime binary set is:
 
@@ -170,16 +174,17 @@ graph TB
 
     subgraph Scoped["~/.animus/&lt;repo-scope&gt;/ (per-repo runtime)"]
         S1["core-state.json"]
-        S2["workflow.db"]
-        S3["config/ (compiled runtime)"]
-        S4["daemon/ runs/ logs/ worktrees/"]
+        S2["resume-config.json + workflow.db"]
+        S3["chat/ config/ daemon/ docs/"]
+        S4["logs/ metrics/ runs/ artifacts/"]
+        S5["secrets/ state/ worktrees/"]
     end
 
     subgraph Global["protocol::Config::global_config_dir()"]
         G1["global config.json"]
-        G2["credentials"]
-        G3["plugins.yaml registry"]
-        G4["daemon event files"]
+        G2["credentials.json"]
+        G3["daemon-events.jsonl + cli-tracker.json"]
+        G4["runner-sessions/"]
     end
 
     Local -.compiles into.-> Scoped
@@ -202,22 +207,25 @@ Scoped runtime state in `~/.animus/<repo-scope>/`:
 - `core-state.json`
 - `resume-config.json`
 - `workflow.db`
+- `chat/`
 - `config/`
 - `daemon/`
 - `docs/`
 - `logs/`
-- `runner/`
+- `metrics/`
+- `runs/`
+- `artifacts/`
+- `secrets/`
 - `state/`
 - `worktrees/`
 
 Global state in `protocol::Config::global_config_dir()`:
 
 - global `config.json`
-- credentials
-- daemon event files
+- `credentials.json`
+- `daemon-events.jsonl`
 - CLI tracker state
-- plugin registry
-- runner socket and runner config files
+- `runner-sessions/`
 
 `<repo-scope>` is `<sanitized-repo-name>-<12 hex sha256(canonical-root)>`.
 The scope is what lets multiple repositories or linked worktrees avoid sharing

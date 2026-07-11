@@ -52,17 +52,14 @@ for the kernel wire types (`protocol`), the `config_source` contract
 (`animus-config-protocol`), provider/session contracts, plus
 queue/workflow/subject plugin routing. The root `Cargo.toml` pins `protocol`,
 `animus-config-protocol`, `animus-provider-protocol`,
-`animus-session-backend`, and `animus-subject-protocol` to the same
-`animus-protocol` tag (`v0.1.24`); `crates/orchestrator-cli/Cargo.toml` adds
+`animus-session-backend`, `animus-subject-protocol`,
+`animus-journal-protocol`, and `animus-actor` to the same
+`animus-protocol` tag (`v0.1.26`); `crates/orchestrator-cli/Cargo.toml` adds
 crate-local pins for `animus-control-protocol`,
-`animus-log-storage-protocol`, and `animus-subject-protocol-wire` at
-`v0.1.13`, plus `animus-queue-protocol` / `animus-subject-protocol-v05` at
-`v0.5.10` and `animus-workflow-runner-protocol` at `v0.5.3`.
-
-## Repo-Local Directories Outside The Workspace
-
-| Crate | Responsibility |
-|---|---|
+`animus-log-storage-protocol`, `animus-subject-protocol-wire`, and
+`animus-workflow-runner-protocol` at `v0.1.26`, while
+`animus-queue-protocol` and `animus-subject-protocol-v05` stay on the matched
+`v0.5.10` compatibility pair.
 
 ## Web
 
