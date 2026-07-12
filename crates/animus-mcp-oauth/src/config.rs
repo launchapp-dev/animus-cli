@@ -32,6 +32,10 @@ pub enum ServerResolutionError {
     WorkflowConfig(String),
     #[error("failed to load project config: {0}")]
     ProjectConfig(String),
+    /// Resolving the pinned confidential client secret (`client_secret_env`)
+    /// from the process env / project keychain failed.
+    #[error("failed to resolve OAuth client secret for MCP server `{0}`: {1}")]
+    ClientSecret(String, String),
 }
 
 /// Outcome of resolving a server's OAuth shape from config.
@@ -45,6 +49,10 @@ pub struct ServerResolution {
     pub scopes: Vec<String>,
     /// Pre-registered client id, if the config pins one (skips DCR).
     pub client_id: Option<String>,
+    /// Resolved confidential client secret for a pinned pre-registered app,
+    /// when the `authorization_code` oauth block sets `client_secret_env`.
+    /// `None` for public (PKCE-only) pinned clients and for DCR.
+    pub client_secret: Option<String>,
     /// True when the resolved server's oauth block is an
     /// `authorization_code` flow (vs absent / a machine-to-machine flow).
     pub is_authorization_code: bool,
@@ -130,7 +138,7 @@ pub fn resolve_server_url(
         }
     };
     if let Some(def) = loaded.as_ref().and_then(|loaded| loaded.config.mcp_servers.get(server)) {
-        return finalize(server, url_override, def.url.clone(), def.oauth.clone());
+        return finalize(project_root, server, url_override, def.url.clone(), def.oauth.clone());
     }
 
     // Project config mcp_servers next.
@@ -138,7 +146,7 @@ pub fn resolve_server_url(
         .map_err(|err| ServerResolutionError::ProjectConfig(err.to_string()))?;
     if let Some(entry) = project_config.mcp_servers.get(server) {
         let oauth = entry.oauth.as_ref().and_then(|value| serde_json::from_value::<OauthConfig>(value.clone()).ok());
-        return finalize(server, url_override, entry.url.clone(), oauth);
+        return finalize(project_root, server, url_override, entry.url.clone(), oauth);
     }
 
     // Not in config: only proceed if the user passed an explicit URL.
@@ -147,6 +155,7 @@ pub fn resolve_server_url(
             url: url.to_string(),
             scopes: Vec::new(),
             client_id: None,
+            client_secret: None,
             is_authorization_code: true,
             broker_oauth: None,
         }),
@@ -155,6 +164,7 @@ pub fn resolve_server_url(
 }
 
 fn finalize(
+    project_root: &Path,
     server: &str,
     url_override: Option<&str>,
     config_url: Option<String>,
@@ -165,17 +175,22 @@ fn finalize(
         .or(config_url)
         .ok_or_else(|| ServerResolutionError::MissingUrl(server.to_string()))?;
     match oauth {
-        Some(cfg) if cfg.flow == OauthFlow::AuthorizationCode => Ok(ServerResolution {
-            url,
-            scopes: cfg.scopes,
-            client_id: cfg.client_id,
-            is_authorization_code: true,
-            broker_oauth: None,
-        }),
+        Some(cfg) if cfg.flow == OauthFlow::AuthorizationCode => {
+            let client_secret = resolve_client_secret(project_root, server, &cfg)?;
+            Ok(ServerResolution {
+                url,
+                scopes: cfg.scopes,
+                client_id: cfg.client_id,
+                client_secret,
+                is_authorization_code: true,
+                broker_oauth: None,
+            })
+        }
         Some(cfg) => Ok(ServerResolution {
             url,
             scopes: Vec::new(),
             client_id: None,
+            client_secret: None,
             is_authorization_code: false,
             broker_oauth: Some(cfg),
         }),
@@ -183,10 +198,37 @@ fn finalize(
             url,
             scopes: Vec::new(),
             client_id: None,
+            client_secret: None,
             is_authorization_code: false,
             broker_oauth: None,
         }),
     }
+}
+
+/// Resolve the confidential pre-registered client secret for an
+/// `authorization_code` server, if its oauth block pins one via
+/// `client_secret_env`. The name is looked up in the process environment first
+/// (explicit parent env wins, matching the `${VAR}`/keychain precedence used
+/// elsewhere), then the project keychain the `animus secret` surface writes to.
+/// Returns `None` when no `client_secret_env` is set or it resolves to empty —
+/// a public (PKCE-only) pinned client or DCR.
+fn resolve_client_secret(
+    project_root: &Path,
+    server: &str,
+    cfg: &OauthConfig,
+) -> Result<Option<String>, ServerResolutionError> {
+    let Some(name) = cfg.client_secret_env.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(None);
+    };
+    if let Ok(value) = std::env::var(name) {
+        if !value.is_empty() {
+            return Ok(Some(value));
+        }
+    }
+    let store = build_secret_store(project_root)?;
+    let value =
+        store.get(name).map_err(|err| ServerResolutionError::ClientSecret(server.to_string(), err.to_string()))?;
+    Ok(value.filter(|v| !v.is_empty()))
 }
 
 #[cfg(test)]

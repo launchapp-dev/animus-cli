@@ -3412,6 +3412,80 @@ fn validation_rejects_authorization_code_with_blank_client_id() {
 }
 
 #[test]
+fn validation_accepts_authorization_code_with_pinned_client_and_secret_env() {
+    // A confidential pre-registered app (REQ-044 Phase 2): a pinned client_id
+    // plus a client_secret_env is the supported confidential shape.
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "hubspot".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::AuthorizationCode,
+            token_url: None,
+            client_id_env: None,
+            client_secret_env: Some("HUBSPOT_CLIENT_SECRET".to_string()),
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+            client_id: Some("app-123".to_string()),
+        }),
+    );
+    validate_workflow_config(&config)
+        .expect("authorization_code with a pinned client_id + client_secret_env should validate");
+}
+
+#[test]
+fn validation_rejects_authorization_code_secret_env_without_client_id() {
+    // A client_secret_env with no pinned client_id makes no sense: DCR mints the
+    // client, so there is nothing to attach the secret to.
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "hubspot".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::AuthorizationCode,
+            token_url: None,
+            client_id_env: None,
+            client_secret_env: Some("HUBSPOT_CLIENT_SECRET".to_string()),
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+            client_id: None,
+        }),
+    );
+    let err = validate_workflow_config(&config)
+        .expect_err("client_secret_env without a pinned client_id must fail validation");
+    let msg = err.to_string();
+    assert!(msg.contains("client_secret_env"), "should name client_secret_env: {msg}");
+    assert!(msg.contains("client_id"), "should require a pinned client_id: {msg}");
+}
+
+#[test]
+fn validation_rejects_authorization_code_blank_secret_env() {
+    // A blank client_secret_env name is a typo — reject it even with a client_id.
+    let mut config = builtin_workflow_config();
+    config.mcp_servers.insert(
+        "hubspot".to_string(),
+        http_oauth_server(OauthConfig {
+            flow: OauthFlow::AuthorizationCode,
+            token_url: None,
+            client_id_env: None,
+            client_secret_env: Some("   ".to_string()),
+            refresh_token_env: None,
+            bearer_env: None,
+            scopes: vec![],
+            audience: None,
+            cache: true,
+            client_id: Some("app-123".to_string()),
+        }),
+    );
+    let err = validate_workflow_config(&config).expect_err("blank client_secret_env must fail validation");
+    assert!(err.to_string().contains("client_secret_env"), "should reject blank client_secret_env: {err}");
+}
+
+#[test]
 fn validation_accepts_oauth_client_credentials() {
     let mut config = builtin_workflow_config();
     config.mcp_servers.insert(
