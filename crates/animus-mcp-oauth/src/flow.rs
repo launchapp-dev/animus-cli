@@ -448,7 +448,14 @@ pub async fn run_auth(project_root: &Path, server: &str, opts: RunAuthOptions<'_
     //   pinned id, failing on servers that don't support DCR.
     // - No pinned id: `AuthorizationSession::new` performs DCR.
     let (auth_url, csrf_state, exchange) = if let Some(client_id) = pinned_client_id {
-        let config = OAuthClientConfig::new(client_id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        let mut config =
+            OAuthClientConfig::new(client_id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        // Confidential pre-registered app: attach the resolved client_secret so
+        // the token exchange authenticates as that app (public/PKCE clients
+        // leave this unset).
+        if let Some(secret) = resolution.client_secret.as_deref() {
+            config = config.with_client_secret(secret.to_string());
+        }
         manager
             .configure_client(config)
             .map_err(|err| anyhow!("failed to configure pinned client_id for `{server}`: {err}"))?;
@@ -608,11 +615,18 @@ pub async fn begin_auth(project_root: &Path, server: &str, opts: BeginOptions<'_
     // still return a confidential client; carry the secret so completion can
     // authenticate the exchange with the same client begin registered.
     let (client_id, client_secret) = if let Some(id) = pinned_client_id {
-        let config = OAuthClientConfig::new(id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        let mut config = OAuthClientConfig::new(id.to_string(), redirect_uri.clone()).with_scopes(scopes.clone());
+        // Confidential pre-registered app: carry the resolved client_secret into
+        // the pending record so `complete_auth` authenticates the exchange as the
+        // same app. Public/PKCE pinned clients leave it `None`.
+        let pinned_secret = resolution.client_secret.clone();
+        if let Some(secret) = pinned_secret.as_deref() {
+            config = config.with_client_secret(secret.to_string());
+        }
         manager
             .configure_client(config)
             .map_err(|err| anyhow!("failed to configure pinned client_id for `{server}`: {err}"))?;
-        (id.to_string(), None)
+        (id.to_string(), pinned_secret)
     } else {
         // register_client runs DCR and internally calls configure_client.
         let config = manager
