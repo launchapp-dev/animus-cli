@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use orchestrator_config::workflow_config::{
-    load_workflow_config_or_default, load_workflow_config_with_metadata, OauthConfig, OauthFlow,
+    try_load_workflow_config, OauthConfig, OauthFlow, WorkflowConfigAvailability,
 };
 use orchestrator_core::SecretStore;
 use protocol::repository_scope::{repository_scope_for_path, scoped_state_root};
@@ -21,6 +21,13 @@ pub enum ServerResolutionError {
     UnknownServer(String),
     #[error("MCP server `{0}` has no `url`; an HTTP-transport URL is required for OAuth")]
     MissingUrl(String),
+    /// The `config_source` failed to load (spawn / RPC / DB overload / validation),
+    /// so the server's config could NOT be determined. This is distinct from
+    /// [`UnknownServer`], which fires only when the config loaded and the server
+    /// is genuinely absent. Callers should retry / report a transient source
+    /// error rather than "server not configured".
+    #[error("MCP server `{0}` could not be resolved: the workflow config source failed to load ({1}). This is a config-source error, not a missing-server error — retry shortly or check the `config_source` plugin.")]
+    ConfigSourceUnavailable(String, String),
     #[error("failed to load workflow config: {0}")]
     WorkflowConfig(String),
     #[error("failed to load project config: {0}")]
@@ -99,22 +106,30 @@ pub fn resolve_server_url(
 ) -> Result<ServerResolution, ServerResolutionError> {
     // Workflow config mcp_servers first (authoritative for daemon runs).
     //
-    // A malformed `.animus/workflows.yaml` must surface its YAML/validation
-    // error rather than silently falling back to the builtin default (which
-    // would mislead the user into "unknown server"). But an *absent* workflow
-    // config is normal (project-config-only setups), and
-    // `load_workflow_config_with_metadata` returns a "missing" error in that
-    // case. So: only propagate the load error when a workflow YAML source
-    // actually exists; otherwise fall back to the builtin default and continue
-    // to project config.
-    let loaded = match load_workflow_config_with_metadata(project_root, None) {
-        Ok(loaded) => loaded,
-        Err(err) if workflow_yaml_present(project_root) => {
-            return Err(ServerResolutionError::WorkflowConfig(err.to_string()));
+    // Use the NON-SWALLOWING loader so a transient `config_source` failure (DB
+    // overload under bulk `mcp call`) is NOT degraded into an empty config that
+    // then misreports the server as "not defined". `try_load_workflow_config`
+    // distinguishes three cases:
+    //   * Loaded          — use its `mcp_servers`.
+    //   * NoSource        — no config_source configured; benign, fall through to
+    //                       project config (project-config-only setups).
+    //   * SourceUnavailable — the source failed; surface a DISTINCT retryable
+    //                       error. We do this EVEN when the caller supplied a
+    //                       `--url`: a `--url` overrides only the upstream
+    //                       endpoint, not the server's oauth FLOW/block, so
+    //                       synthesizing an `authorization_code` resolution from
+    //                       the URL alone would misroute a broker-flow server
+    //                       (`manual_bearer` / `client_credentials` /
+    //                       `refresh_token`) to the keychain path. Erroring lets
+    //                       the caller retry once the source recovers.
+    let loaded = match try_load_workflow_config(project_root, None) {
+        WorkflowConfigAvailability::Loaded(loaded) => Some(loaded),
+        WorkflowConfigAvailability::NoSource => None,
+        WorkflowConfigAvailability::SourceUnavailable(err) => {
+            return Err(ServerResolutionError::ConfigSourceUnavailable(server.to_string(), err.to_string()));
         }
-        Err(_) => load_workflow_config_or_default(project_root),
     };
-    if let Some(def) = loaded.config.mcp_servers.get(server) {
+    if let Some(def) = loaded.as_ref().and_then(|loaded| loaded.config.mcp_servers.get(server)) {
         return finalize(server, url_override, def.url.clone(), def.oauth.clone());
     }
 
@@ -137,21 +152,6 @@ pub fn resolve_server_url(
         }),
         None => Err(ServerResolutionError::UnknownServer(server.to_string())),
     }
-}
-
-/// True when a workflow YAML source exists at `.animus/workflows.yaml` or
-/// any `.animus/workflows/*.yaml`. Used to decide whether a workflow-config
-/// load failure is a real (malformed-config) error worth propagating vs the
-/// benign "no workflow config" case.
-fn workflow_yaml_present(project_root: &Path) -> bool {
-    let animus = project_root.join(".animus");
-    if animus.join("workflows.yaml").exists() {
-        return true;
-    }
-    let dir = animus.join("workflows");
-    std::fs::read_dir(&dir)
-        .map(|entries| entries.flatten().any(|e| e.path().extension().is_some_and(|ext| ext == "yaml" || ext == "yml")))
-        .unwrap_or(false)
 }
 
 fn finalize(
@@ -186,5 +186,104 @@ fn finalize(
             is_authorization_code: false,
             broker_oauth: None,
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use orchestrator_config::workflow_config::builtin_workflow_config;
+    use orchestrator_config::workflow_config::config_source_client::test_seam;
+    use std::sync::{Mutex, MutexGuard, OnceLock};
+
+    // These tests mutate the process-global config_source test seam + HOME env,
+    // so serialize them under one lock held for the whole test body.
+    fn serial() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    /// RAII guard that points `HOME` at a temp dir for the test and RESTORES the
+    /// previous value on drop, so the mutation never leaks to sibling tests.
+    struct HomeGuard {
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn set(path: &Path) -> Self {
+            let prev = std::env::var_os("HOME");
+            std::env::set_var("HOME", path);
+            Self { prev }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var("HOME", v),
+                None => std::env::remove_var("HOME"),
+            }
+        }
+    }
+
+    /// Common fixture: hold the serial lock, isolate `HOME` to a fresh tempdir
+    /// (restored on drop). Bound in the caller in declaration order so the
+    /// tempdir drops LAST — after `HomeGuard` has restored `HOME`.
+    fn fixture() -> (MutexGuard<'static, ()>, tempfile::TempDir, HomeGuard) {
+        let guard = serial().lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let home = HomeGuard::set(temp.path());
+        (guard, temp, home)
+    }
+
+    /// TASK-326 (fix d): a transient config_source failure must surface as the
+    /// DISTINCT `ConfigSourceUnavailable`, NOT `UnknownServer` — otherwise the
+    /// caller concludes "krisp isn't configured" when the source is merely down.
+    #[test]
+    fn source_failure_yields_config_source_unavailable_not_unknown_server() {
+        let (_guard, temp, _home) = fixture();
+        let root = temp.path();
+
+        let _fail = test_seam::install_failure(root, "config_source RPC timed out");
+        let err = resolve_server_url(root, "krisp", None).expect_err("must fail when source is down");
+        assert!(
+            matches!(err, ServerResolutionError::ConfigSourceUnavailable(ref s, _) if s == "krisp"),
+            "expected ConfigSourceUnavailable, got {err:?}"
+        );
+    }
+
+    /// Even with an explicit `--url`, a source outage yields
+    /// `ConfigSourceUnavailable` (never a synthesized `authorization_code`
+    /// resolution): a `--url` overrides only the upstream endpoint, not the
+    /// server's oauth FLOW, so guessing the flow could misroute a broker server
+    /// to the keychain path. The caller retries once the source recovers.
+    #[test]
+    fn explicit_url_still_errors_when_source_unavailable() {
+        let (_guard, temp, _home) = fixture();
+        let root = temp.path();
+
+        let _fail = test_seam::install_failure(root, "config_source RPC timed out");
+        let err = resolve_server_url(root, "krisp", Some("https://example.test/mcp"))
+            .expect_err("a source outage must error even with --url, to avoid misrouting a broker server");
+        assert!(
+            matches!(err, ServerResolutionError::ConfigSourceUnavailable(ref s, _) if s == "krisp"),
+            "expected ConfigSourceUnavailable, got {err:?}"
+        );
+    }
+
+    /// When the config LOADS but the server is genuinely absent, the error is
+    /// `UnknownServer` (the pre-existing behavior) — never `ConfigSourceUnavailable`.
+    #[test]
+    fn loaded_config_missing_server_yields_unknown_server() {
+        let (_guard, temp, _home) = fixture();
+        let root = temp.path();
+
+        // A base with no mcp_servers loads cleanly; the server is simply absent.
+        let _base = test_seam::install(root, builtin_workflow_config());
+        let err = resolve_server_url(root, "krisp", None).expect_err("absent server must error");
+        assert!(
+            matches!(err, ServerResolutionError::UnknownServer(ref s) if s == "krisp"),
+            "expected UnknownServer, got {err:?}"
+        );
     }
 }

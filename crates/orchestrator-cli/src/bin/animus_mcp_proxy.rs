@@ -35,6 +35,14 @@ struct Args {
     #[arg(long)]
     url: Option<String>,
 
+    /// The caller (CLI `mcp call`) already resolved this as an
+    /// `authorization_code` (keychain) server and passed the upstream `--url`.
+    /// With both set, the proxy TRUSTS the URL and skips the `config_source`
+    /// round-trip entirely — the reduction that keeps bulk `mcp call` from
+    /// re-saturating the source on every spawn. Ignored without `--url`.
+    #[arg(long = "auth-code")]
+    auth_code: bool,
+
     /// Project root. Defaults to the current working directory.
     #[arg(long)]
     project_root: Option<PathBuf>,
@@ -73,8 +81,25 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| ".".to_string());
     let root = std::path::Path::new(&project_root);
 
+    // Fast path: the caller already resolved an `authorization_code` (keychain)
+    // server and handed us the upstream `--url`. Trust it and skip the
+    // `config_source` lookup entirely — this is the amplification cut that keeps
+    // bulk `mcp call` from re-loading the source on every proxy spawn. Keychain
+    // principal + secret store come from the OS keychain / on-disk scoped state,
+    // never the config source.
+    if args.auth_code {
+        if let Some(url) = args.url.as_deref().map(str::trim).filter(|u| !u.is_empty()) {
+            return animus_mcp_oauth::proxy::run_authorization_code(&args.server, url, root).await;
+        }
+    }
+
     // stdout is the MCP stdio channel and must carry only JSON-RPC frames.
     // The proxy never logs tokens; diagnostics go to stderr.
+    //
+    // The single `config_source` resolution needed to split broker vs keychain
+    // flows. The resolved URL is threaded onward (broker path passes it to
+    // `run_with_bearer_source`; keychain path to `run_authorization_code`) so
+    // NEITHER downstream re-resolves — one source touch per spawn, not two.
     let resolution = animus_mcp_oauth::resolve_server_url(root, &args.server, args.url.as_deref())?;
     match resolution.broker_oauth {
         Some(oauth) => {
@@ -82,6 +107,6 @@ async fn main() -> Result<()> {
                 Arc::new(BrokerBearerSource { server: args.server.clone(), project_root: project_root.clone(), oauth });
             animus_mcp_oauth::proxy::run_with_bearer_source(&args.server, &resolution.url, source).await
         }
-        None => animus_mcp_oauth::proxy::run(root, &args.server, args.url.as_deref()).await,
+        None => animus_mcp_oauth::proxy::run_authorization_code(&args.server, &resolution.url, root).await,
     }
 }

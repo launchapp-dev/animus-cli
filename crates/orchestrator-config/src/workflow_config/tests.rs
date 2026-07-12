@@ -4120,6 +4120,77 @@ mod cache_token_short_circuit {
     }
 }
 
+// TASK-326: the non-swallowing loader must distinguish a genuinely-absent
+// config source (benign) from a present-but-failing source (transient), so
+// credential/OAuth resolvers never degrade a config_source outage into an empty
+// config that misreports servers as "not defined".
+mod try_load_availability {
+    use super::*;
+    use crate::workflow_config::config_source_client::test_seam;
+    use crate::workflow_config::loading::try_load_workflow_config;
+    use crate::workflow_config::WorkflowConfigAvailability;
+
+    #[test]
+    fn injected_base_classifies_as_loaded() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let root = temp.path();
+
+        let mut base = builtin_workflow_config();
+        base.tools_allowlist = vec!["marker-loaded".to_string()];
+        let _guard = test_seam::install(root, base);
+
+        match try_load_workflow_config(root, None) {
+            WorkflowConfigAvailability::Loaded(loaded) => {
+                assert!(loaded.config.tools_allowlist.contains(&"marker-loaded".to_string()));
+            }
+            other => panic!("expected Loaded, got {}", availability_label(&other)),
+        }
+    }
+
+    #[test]
+    fn no_installed_source_classifies_as_no_source() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let root = temp.path();
+
+        // No injected base, no installed plugin => resolve_plugin_base is
+        // Ok(None) => a benign "no source", NOT an error.
+        match try_load_workflow_config(root, None) {
+            WorkflowConfigAvailability::NoSource => {}
+            other => panic!("expected NoSource, got {}", availability_label(&other)),
+        }
+    }
+
+    #[test]
+    fn failing_source_classifies_as_source_unavailable() {
+        let _lock = env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home_guard = EnvVarGuard::set("HOME", temp.path());
+        let root = temp.path();
+
+        // A present-but-failing source (DB overload under bulk mcp call) must
+        // NOT be swallowed into an empty config.
+        let _guard = test_seam::install_failure(root, "config_source RPC timed out");
+        match try_load_workflow_config(root, None) {
+            WorkflowConfigAvailability::SourceUnavailable(err) => {
+                assert!(err.to_string().contains("config_source RPC timed out"), "err: {err}");
+            }
+            other => panic!("expected SourceUnavailable, got {}", availability_label(&other)),
+        }
+    }
+
+    fn availability_label(a: &WorkflowConfigAvailability) -> &'static str {
+        match a {
+            WorkflowConfigAvailability::Loaded(_) => "Loaded",
+            WorkflowConfigAvailability::NoSource => "NoSource",
+            WorkflowConfigAvailability::SourceUnavailable(_) => "SourceUnavailable",
+        }
+    }
+}
+
 mod unenforced_field_warnings {
     use super::super::validation::{unenforced_project_yaml_warnings, unenforced_yaml_field_warnings};
     use std::fs;
