@@ -59,33 +59,55 @@ impl McpSession {
         timeout: Duration,
     ) -> Result<Self> {
         crate::ensure_crypto_provider();
+        // The ONE `config_source` resolution per `mcp call`. The resolved URL +
+        // flow are threaded to the spawned proxy (`--url` + `--auth-code`) so the
+        // proxy TRUSTS them and does NOT re-resolve — collapsing the historical
+        // 3× config_source spawn amplification (CLI + proxy-bin + proxy-connect)
+        // down to this single touch.
         let resolution = resolve_server_url(project_root, server, url_override)?;
         // OAuth servers (every flow) are served through the local proxy, which
         // resolves + injects the live bearer itself; plain-HTTP servers are
         // connected directly.
         let uses_oauth = resolution.is_authorization_code || resolution.broker_oauth.is_some();
         if uses_oauth {
-            Self::connect_via_proxy(project_root, server, url_override, timeout).await
+            Self::connect_via_proxy(project_root, server, &resolution, timeout).await
         } else {
             Self::connect_http(&resolution.url, timeout).await
         }
     }
 
-    /// Spawn `animus-mcp-proxy --server <server> [--url <url>] --project-root
-    /// <root>` and connect an MCP client to its stdio. The proxy injects the
-    /// cached bearer; no secret is passed on argv or read here. stderr is
-    /// inherited so proxy diagnostics (e.g. "run `animus mcp auth`") reach the
-    /// user; stdout carries only JSON-RPC frames.
+    /// Spawn `animus-mcp-proxy --server <server> --url <resolved-url>
+    /// [--auth-code] --project-root <root>` and connect an MCP client to its
+    /// stdio. The proxy injects the cached bearer; no secret is passed on argv
+    /// or read here. stderr is inherited so proxy diagnostics (e.g. "run `animus
+    /// mcp auth`") reach the user; stdout carries only JSON-RPC frames.
+    ///
+    /// Passing the already-resolved `--url` (and, for keychain servers,
+    /// `--auth-code`) lets the proxy skip its own `config_source` lookup — so a
+    /// bulk `mcp call` burst does one source resolution per call, here, instead
+    /// of one per proxy spawn.
     async fn connect_via_proxy(
         project_root: &Path,
         server: &str,
-        url_override: Option<&str>,
+        resolution: &crate::config::ServerResolution,
         timeout: Duration,
     ) -> Result<Self> {
         let mut cmd = Command::new(mcp_proxy_command());
         cmd.arg("--server").arg(server).arg("--project-root").arg(project_root);
-        if let Some(url) = url_override.filter(|u| !u.trim().is_empty()) {
-            cmd.arg("--url").arg(url);
+        // Pass the resolved `--url` for BOTH flows so the proxy binds the exact
+        // upstream the parent selected (honoring a `--url` override) instead of
+        // re-resolving the server name to a possibly-different same-named entry.
+        if !resolution.url.trim().is_empty() {
+            cmd.arg("--url").arg(&resolution.url);
+        }
+        // `--auth-code` is added ONLY for keychain (`authorization_code`) servers:
+        // it tells the proxy to trust `--url` and skip its own config_source
+        // lookup entirely (the amplification cut). Broker flows omit it because
+        // they still need their full oauth block from config; the proxy re-resolves
+        // those — and if the source is down it errors cleanly (ConfigSourceUnavailable)
+        // rather than misrouting the broker server to the keychain path.
+        if resolution.is_authorization_code {
+            cmd.arg("--auth-code");
         }
         // `TokioChildProcess::new` pipes stdin/stdout and inherits stderr; the
         // child is killed on drop of the returned transport (held by the

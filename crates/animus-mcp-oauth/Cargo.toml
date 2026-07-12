@@ -33,6 +33,7 @@ rmcp = { version = "1.7", features = [
 
 [dev-dependencies]
 protocol = { workspace = true, features = ["test-utils"] }
+orchestrator-config = { workspace = true, features = ["test-utils"] }
 tempfile = "3"
 axum = "0.8"
 http = "1"

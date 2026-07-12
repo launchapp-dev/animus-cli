@@ -68,7 +68,8 @@ pub use environment_routing::resolve_environment;
 pub use loading::{
     ensure_workflow_config_compiled, ensure_workflow_config_file, legacy_workflow_config_paths, load_workflow_config,
     load_workflow_config_or_default, load_workflow_config_or_default_for_actor, load_workflow_config_with_metadata,
-    workflow_config_hash, workflow_config_path, write_workflow_config,
+    try_load_workflow_config, workflow_config_hash, workflow_config_path, write_workflow_config,
+    WorkflowConfigAvailability,
 };
 pub use resolution::{
     resolve_workflow_phase_plan, resolve_workflow_rework_attempts, resolve_workflow_skip_guards,

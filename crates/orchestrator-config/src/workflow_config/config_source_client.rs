@@ -154,6 +154,16 @@ pub fn config_source_installed(project_root: &Path) -> bool {
 /// caller surfaces an actionable "no config_source plugin installed" error.
 /// Returns `(base WorkflowConfig, cache_token_version)`.
 pub fn resolve_plugin_base(project_root: &Path, actor: Option<&Actor>) -> Result<Option<(WorkflowConfig, String)>> {
+    // Test-only seam: simulate a config_source plugin whose load FAILS (spawn /
+    // handshake / RPC / DB overload) so tests can exercise the non-swallowing
+    // classification in `try_load_workflow_config` (a present-but-failing source
+    // must surface as `SourceUnavailable`, never as an empty config). Checked
+    // before the success seam so an installed-failure wins.
+    #[cfg(any(test, feature = "test-utils"))]
+    if let Some(message) = test_seam::failure_for(project_root) {
+        return Err(anyhow!(message));
+    }
+
     // Test-only seam: a synthetic base config injected via
     // `set_test_plugin_base` stands in for an installed config_source plugin so
     // unit tests can exercise the kernel's pack-merge + validate pipeline (which
@@ -550,6 +560,13 @@ pub mod test_seam {
         REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
     }
 
+    // Roots for which `resolve_plugin_base` should simulate a config_source
+    // load FAILURE (an installed-but-failing plugin), keyed to an error message.
+    fn failure_registry() -> &'static Mutex<HashMap<PathBuf, String>> {
+        static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, String>>> = OnceLock::new();
+        REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+    }
+
     // Normalize the key so a test that installs against `tempdir().path()` is
     // still found when the loader resolves the project root via git-common-root
     // (which canonicalizes, e.g. /var -> /private/var on macOS). Falls back to
@@ -575,6 +592,23 @@ pub mod test_seam {
         let key = (normalize(project_root), actor_cache_key(Some(actor)));
         actor_registry().lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), base);
         ActorTestBaseGuard { key }
+    }
+
+    /// Install a simulated config_source load FAILURE for `project_root`.
+    /// `resolve_plugin_base` returns `Err(message)` while the guard is held, so
+    /// tests can prove a present-but-failing source surfaces as
+    /// `SourceUnavailable` (never as an empty config).
+    #[must_use]
+    pub fn install_failure(project_root: &Path, message: &str) -> FailureGuard {
+        let key = normalize(project_root);
+        failure_registry().lock().unwrap_or_else(|p| p.into_inner()).insert(key.clone(), message.to_string());
+        FailureGuard { key }
+    }
+
+    /// The simulated failure message installed for `project_root`, if any.
+    pub fn failure_for(project_root: &Path) -> Option<String> {
+        let root = normalize(project_root);
+        failure_registry().lock().unwrap_or_else(|p| p.into_inner()).get(&root).cloned()
     }
 
     /// Clone the synthetic base installed for `(project_root, actor)`. Prefers an
@@ -612,6 +646,17 @@ pub mod test_seam {
             actor_registry().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
         }
     }
+
+    /// RAII guard that clears the simulated config_source failure on drop.
+    pub struct FailureGuard {
+        key: PathBuf,
+    }
+
+    impl Drop for FailureGuard {
+        fn drop(&mut self) {
+            failure_registry().lock().unwrap_or_else(|p| p.into_inner()).remove(&self.key);
+        }
+    }
 }
 
 /// v0.6 cross-crate test seam: stand in for an installed `config_source` plugin
@@ -638,6 +683,16 @@ pub fn install_yaml_config_source_base(project_root: &Path) -> test_seam::TestBa
         .expect("compile project yaml base")
         .unwrap_or_else(super::builtin_workflow_config);
     test_seam::install(project_root, base)
+}
+
+/// v0.6 cross-crate test seam: simulate an installed `config_source` plugin
+/// whose base load FAILS, so dependent crates' tests can drive the
+/// non-swallowing `try_load_workflow_config` classification (a present-but-
+/// failing source must surface as `SourceUnavailable`, never as an empty
+/// config). Returns a guard that clears the failure on drop.
+#[cfg(any(test, feature = "test-utils"))]
+pub fn install_config_source_failure(project_root: &Path, message: &str) -> test_seam::FailureGuard {
+    test_seam::install_failure(project_root, message)
 }
 
 #[cfg(test)]
