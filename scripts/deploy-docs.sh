@@ -47,6 +47,32 @@ resolve_node_package_manager_bin() {
   return 1
 }
 
+resolve_vercel_bin() {
+  local candidate
+
+  if command -v vercel >/dev/null 2>&1; then
+    command -v vercel
+    return 0
+  fi
+
+  for candidate in \
+    "$repo_root/node_modules/.bin/vercel" \
+    "$HOME/.nvm/versions/node"/*/bin/vercel \
+    "$HOME/.volta/bin/vercel" \
+    "$HOME/.fnm"/*/bin/vercel \
+    "$HOME/.asdf/shims/vercel" \
+    /opt/homebrew/bin/vercel \
+    /usr/local/bin/vercel
+  do
+    if [[ -x "$candidate" ]]; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 if command -v vitepress >/dev/null 2>&1; then
   rm -rf docs/.vitepress/.temp docs/.vitepress/cache
   vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
@@ -68,14 +94,20 @@ fi
 echo "Deploying docs with Vercel..."
 echo "Prerequisites: network access for Vercel and a valid Vercel login."
 
+if vercel_bin="$(resolve_vercel_bin)"; then
+  echo "Using installed vercel binary for the production deploy via $vercel_bin."
+  "$vercel_bin" --yes --prod
+  exit 0
+fi
+
 npx_bin="$(resolve_node_package_manager_bin npx)" || {
-  echo "Unable to find npx. Install npm/npx or expose an existing Node install." >&2
+  echo "Unable to find a vercel binary or npx. Install Vercel CLI or expose an existing Node install." >&2
   exit 1
 }
 
 npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
 trap 'rm -rf "$npx_cache_dir"' EXIT
-echo "Using npx vercel for the production deploy via $npx_bin."
+echo "No installed vercel binary found; falling back to npx via $npx_bin."
 echo "Using temporary npm cache at $npx_cache_dir."
 npm_config_cache="$npx_cache_dir" \
 npm_config_fetch_retries=0 \
