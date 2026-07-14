@@ -170,7 +170,7 @@ pub use workflow_config::{
     load_workflow_config_with_metadata, merge_yaml_into_config, missing_project_skill_reference_warnings,
     missing_skill_reference_warnings_for_sources, missing_skill_yaml_warnings, parse_yaml_workflow_config,
     remove_agent_profile, remove_generated_workflow_phase, remove_workflow_definition, resolve_workflow_phase_plan,
-    resolve_workflow_rework_attempts, resolve_workflow_skip_guards, resolve_workflow_variables,
+    resolve_workflow_rework_attempts, resolve_workflow_skip_guards, resolve_workflow_variables, set_phase_definition,
     resolve_workflow_verdict_routing, unenforced_project_yaml_warnings, unenforced_yaml_field_warnings,
     upsert_agent_profile, upsert_generated_workflow_phase, upsert_generated_workflow_pipeline,
     upsert_workflow_definition, validate_and_compile_yaml_workflows, validate_workflow_and_runtime_configs,

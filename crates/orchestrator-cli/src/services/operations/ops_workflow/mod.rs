@@ -756,6 +756,9 @@ pub(crate) async fn handle_workflow(
             WorkflowConfigCommand::AgentRemove(args) => {
                 print_value(config::remove_config_agent_payload(project_root, &args.id)?, json)
             }
+            WorkflowConfigCommand::PhaseSet(args) => {
+                print_value(config::set_config_phase_payload(project_root, &args.id, &args.input_json)?, json)
+            }
             WorkflowConfigCommand::WorkflowSet(args) => {
                 print_value(config::set_config_workflow_payload(project_root, &args.input_json)?, json)
             }
@@ -1021,6 +1024,17 @@ mod tests {
         let message = error.to_string();
         assert!(message.contains("invalid --input-json payload"));
         assert!(message.contains("workflow agent-runtime set --help"));
+    }
+
+    #[test]
+    fn set_config_phase_payload_reports_actionable_json_error() {
+        let error =
+            set_config_phase_payload("/tmp/unused", "my-phase", "{invalid").expect_err("invalid payload should fail");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("invalid phase execution definition JSON for workflow config phase-set"),
+            "expected actionable phase-set JSON error, got: {message}"
+        );
     }
 
     #[test]

@@ -61,8 +61,8 @@ pub use animus_config_protocol::overlay::{
 // ---------------------------------------------------------------------------
 
 pub use config_write::{
-    remove_agent_profile, remove_workflow_definition, upsert_agent_profile, upsert_workflow_definition,
-    write_full_workflow_config,
+    remove_agent_profile, remove_workflow_definition, set_phase_definition, upsert_agent_profile,
+    upsert_workflow_definition, write_full_workflow_config,
 };
 pub use environment_routing::resolve_environment;
 pub use loading::{

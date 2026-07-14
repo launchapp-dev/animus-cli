@@ -12,7 +12,7 @@ use std::path::Path;
 
 use anyhow::{anyhow, Context, Result};
 
-use animus_config_protocol::agent_types::AgentProfileOverlay;
+use animus_config_protocol::agent_types::{AgentProfileOverlay, PhaseExecutionDefinition};
 
 use super::config_source_client::{resolve_plugin_base, write_plugin_config};
 use super::loading::compile_workflow_config_onto_base;
@@ -94,6 +94,34 @@ pub fn remove_agent_profile(project_root: &Path, agent_id: &str) -> Result<Workf
         if config.agent_profiles.remove(agent_id).is_none() {
             return Err(anyhow!("no agent profile with id '{agent_id}' exists in the current config"));
         }
+        Ok(())
+    })
+}
+
+/// Upsert (create or replace) a phase definition keyed by `phase_id` on the RAW
+/// config_source base's `phase_definitions`. This is the config-source authoring
+/// path — distinct from the agent-runtime overlay that `animus workflow phases
+/// upsert` writes. Writing here means a subsequently-set workflow that references
+/// the phase resolves during the post-pack-merge validation, instead of failing
+/// with "references unknown phase". The kernel validates the resulting full
+/// config before it is written.
+pub fn set_phase_definition(
+    project_root: &Path,
+    phase_id: &str,
+    definition: PhaseExecutionDefinition,
+) -> Result<WorkflowConfig> {
+    let phase_id = phase_id.trim();
+    if phase_id.is_empty() {
+        return Err(anyhow!("phase id must not be empty"));
+    }
+    read_modify_write(project_root, |config| {
+        // Phase ids resolve case-insensitively everywhere else (validation's
+        // reference check and the runtime `phase_execution` lookup both use
+        // `eq_ignore_ascii_case`). Drop any existing key that differs only by
+        // case before inserting, so an upsert REPLACES the phase instead of
+        // leaving a stale duplicate that could win by map order.
+        config.phase_definitions.retain(|existing, _| !existing.eq_ignore_ascii_case(phase_id));
+        config.phase_definitions.insert(phase_id.to_string(), definition);
         Ok(())
     })
 }
@@ -221,6 +249,46 @@ mod tests {
         let err = write_full_workflow_config(dir.path(), &config).expect_err("invalid config must be rejected");
         let msg = format!("{err:#}");
         assert!(msg.contains("invalid"), "error must flag the invalid config, got: {msg}");
+    }
+
+    #[test]
+    fn phase_authored_on_base_lets_a_referencing_workflow_validate() {
+        // The whole point of `set_phase_definition`: a phase written to the
+        // config_source base's `phase_definitions` must resolve when a
+        // subsequently-set workflow references it — no "references unknown
+        // phase". We drive the validate gate directly (write_full_workflow_config
+        // validates BEFORE it attempts the plugin write), so phase-reference
+        // resolution is exercised without a live writable plugin.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut config = builtin_workflow_config();
+        // Minimal valid phase definition (agent mode needs no agent_id).
+        let phase: PhaseExecutionDefinition = serde_json::from_str(r#"{"mode":"agent"}"#).expect("valid phase json");
+        config.phase_definitions.insert("authored-phase".to_string(), phase);
+        let mut wf = sample_workflow("uses-authored");
+        wf.phases =
+            vec![animus_config_protocol::workflow_types::WorkflowPhaseEntry::Simple("authored-phase".to_string())];
+        config.workflows = vec![wf];
+
+        // Validation PASSES: the only remaining failure is the write step (no
+        // writable config_source plugin under test), never an "unknown phase".
+        let err = write_full_workflow_config(dir.path(), &config).expect_err("no writable source under test");
+        let msg = format!("{err:#}");
+        assert!(!msg.contains("unknown phase"), "phase authored on the base must resolve; got: {msg}");
+        assert!(
+            msg.contains("no config_source plugin") || msg.contains("does not support writes"),
+            "should fail only at the write step, got: {msg}"
+        );
+
+        // Control: WITHOUT the phase definition the same workflow reference is
+        // rejected as unknown — proving it is the authored phase that unblocks it.
+        let mut missing = builtin_workflow_config();
+        let mut wf2 = sample_workflow("uses-authored");
+        wf2.phases =
+            vec![animus_config_protocol::workflow_types::WorkflowPhaseEntry::Simple("authored-phase".to_string())];
+        missing.workflows = vec![wf2];
+        let err2 = write_full_workflow_config(dir.path(), &missing).expect_err("unknown phase must be rejected");
+        let msg2 = format!("{err2:#}");
+        assert!(msg2.contains("unknown phase"), "control must fail as unknown phase; got: {msg2}");
     }
 
     #[test]

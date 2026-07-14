@@ -170,6 +170,11 @@ pub(crate) enum WorkflowConfigCommand {
     AgentSet(WorkflowConfigAgentSetArgs),
     /// Remove one agent definition (read-modify-write the full config).
     AgentRemove(WorkflowConfigEntityIdArgs),
+    /// Create or replace one phase definition on the config_source base
+    /// (read-modify-write). Writes `WorkflowConfig.phase_definitions`, NOT the
+    /// agent-runtime overlay that `workflow phases upsert` writes — so a
+    /// subsequently-set workflow that references the phase validates.
+    PhaseSet(WorkflowConfigPhaseSetArgs),
     /// Create or replace one workflow definition (read-modify-write).
     WorkflowSet(WorkflowConfigWorkflowSetArgs),
     /// Remove one workflow definition (read-modify-write).
@@ -201,6 +206,18 @@ pub(crate) struct WorkflowConfigAgentSetArgs {
     #[arg(long, value_name = "AGENT_ID", help = "Agent definition id to create or replace.")]
     pub(crate) id: String,
     #[arg(long, value_name = "JSON", help = "Agent profile overlay JSON payload (the value of agent_profiles.<id>).")]
+    pub(crate) input_json: String,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowConfigPhaseSetArgs {
+    #[arg(long, value_name = "PHASE_ID", help = "Phase definition id to create or replace.")]
+    pub(crate) id: String,
+    #[arg(
+        long,
+        value_name = "JSON",
+        help = "Phase execution definition JSON payload (the value of phase_definitions.<id>)."
+    )]
     pub(crate) input_json: String,
 }
 
