@@ -469,6 +469,27 @@ pub(crate) fn list(
     Ok(resp.runs.into_iter().filter_map(|run| from_journal_run(run).ok()).collect())
 }
 
+/// Like [`list`] but bounded to the `limit` newest rows in a SINGLE RPC — the
+/// fast path for the workflow-list UI. Replaces `query_ids` + a per-id `load`
+/// loop (N+1 — one RPC per run), which serialized behind other traffic on the
+/// journal plugin's stdio host and made the list intermittently slow.
+pub(crate) fn list_page(
+    plugin: &DiscoveredPlugin,
+    project_root: &Path,
+    status: Option<WorkflowStatus>,
+    limit: usize,
+) -> Result<Vec<OrchestratorWorkflow>> {
+    let query = JournalQuery {
+        status: status.map(|s| vec![status_wire(s).to_string()]).unwrap_or_default(),
+        workflow_ref: None,
+        updated_since: None,
+        limit: Some(limit as u32),
+    };
+    let value = run_blocking(call(plugin, project_root, METHOD_JOURNAL_LIST, query))??;
+    let resp: ListResult = serde_json::from_value(value).context("decoding journal ListResult")?;
+    Ok(resp.runs.into_iter().filter_map(|run| from_journal_run(run).ok()).collect())
+}
+
 /// All run ids matching `status` (None = all). The caller paginates client-side.
 pub(crate) fn query_ids(
     plugin: &DiscoveredPlugin,

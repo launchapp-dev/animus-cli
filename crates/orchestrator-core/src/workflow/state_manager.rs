@@ -362,6 +362,23 @@ impl WorkflowStateManager {
         Ok(workflows)
     }
 
+    /// The `limit` newest runs (optionally status-filtered) in a SINGLE journal
+    /// RPC — the fast path for the workflow-list first page (avoids the per-id
+    /// load loop / N+1). Backend order (newest-first) mirrors `query_ids`.
+    pub fn list_page(
+        &self,
+        status: Option<crate::types::WorkflowStatus>,
+        limit: usize,
+    ) -> Result<Vec<OrchestratorWorkflow>> {
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::list_page(plugin, &self.project_root, status, limit);
+        }
+        // SQLite dev fallback: fetch all and truncate (no plugin round-trips).
+        let mut all = self.list_all()?;
+        all.truncate(limit);
+        Ok(all)
+    }
+
     pub fn list_all(&self) -> Result<Vec<OrchestratorWorkflow>> {
         if let Some(plugin) = self.journal_plugin() {
             return super::journal_client::list(plugin, &self.project_root, &[]);
