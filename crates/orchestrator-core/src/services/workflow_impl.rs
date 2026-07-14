@@ -369,6 +369,19 @@ impl WorkflowServiceApi for FileServiceHub {
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>> {
         if workflow_query_can_use_db_page(&query) {
             let manager = self.workflow_manager();
+            // Fast path for the first page (the workflow-list UI + graphql poll):
+            // fetch the bounded runs in ONE journal RPC, plus a cheap ids-only
+            // query for `total`, instead of query_ids + a per-id load loop (N+1 —
+            // one RPC per run, which serialized behind other journal traffic and
+            // made the list intermittently multi-second).
+            if query.page.offset == 0 {
+                if let Some(limit) = query.page.limit {
+                    let (_ids, total) = manager.query_ids(query.page, query.filter.status)?;
+                    let items = manager.list_page(query.filter.status, limit)?;
+                    return Ok(ListPage::new(items, total, query.page));
+                }
+            }
+            // Offset > 0: the journal list RPC has no offset, so keep the id-walk.
             let (ids, total) = manager.query_ids(query.page, query.filter.status)?;
             let mut items = Vec::with_capacity(ids.len());
             for id in ids {
