@@ -11,22 +11,23 @@ flowchart LR
         cfg[".animus/config.json"]
         wfy[".animus/workflows.yaml"]
         wfd[".animus/workflows/*.yaml"]
-        plg[".animus/plugins/"]
+        plg[".animus/plugins/ + plugins.lock"]
+        skl[".animus/skills/ + config/skill_definitions/"]
     end
 
     subgraph scope["Repo-scoped runtime (~/.animus/&lt;repo-scope&gt;/)"]
         direction TB
         db["workflow.db<br/>(workflows, checkpoints, tasks, requirements)"]
-        st["state/<br/>(review, history, errors, schedules, QA)"]
-        dmn["daemon/<br/>(pm-config.json, lock, control.sock)"]
-        cmp["config/<br/>(compiled workflow + agent-runtime config)"]
+        st["state/<br/>(history, errors, schedules, pack-selection, ...)"]
+        dmn["daemon/<br/>(pm-config.json, daemon.log, daemon-state.json, daemon.pid)"]
+        cmp["config/<br/>(workflow-config.v2.json,<br/>agent-runtime-config.v2.json,<br/>state-machines.v1.json)"]
         wt["worktrees/<br/>(managed task worktrees)"]
-        logs["logs/ + docs/ + artifacts/"]
+        logs["logs/ + docs/ + runs/ + artifacts/ + chat/ + metrics/ + secrets/"]
     end
 
     wfy -.->|"compiles into"| cmp
     wfd -.->|"compiles into"| cmp
-    cfg -.->|"CLI settings"| dmn
+    cfg -.->|"repo-local config"| dmn
 
     note["Authored by you"] -.- repo
     note2["Tool-managed, regenerated"] -.- scope
@@ -39,12 +40,17 @@ The repository keeps only the configuration you are expected to author:
 ```text
 .animus/
 ├── config.json
+├── config/
+│   └── skill_definitions/
 ├── workflows.yaml
 ├── workflows/
+├── plugins.lock
+├── skills/
 └── plugins/
 ```
 
-These files define workflow behavior, overrides, and local pack customizations.
+These files define workflow behavior, skill sources, plugin lock state, and
+local pack or plugin overrides.
 
 ## Repo-Scoped Runtime State
 
@@ -57,7 +63,13 @@ Runtime state lives under `~/.animus/<repo-scope>/`, not in the repository:
 ├── workflow.db
 ├── config/
 ├── daemon/
+├── chat/
 ├── docs/
+├── logs/
+├── metrics/
+├── runs/
+├── artifacts/
+├── secrets/
 ├── state/
 └── worktrees/
 ```
@@ -65,9 +77,14 @@ Runtime state lives under `~/.animus/<repo-scope>/`, not in the repository:
 Important runtime stores:
 
 - `workflow.db` for workflows, checkpoints, tasks, and requirements
-- `logs/` for redacted structured runtime events and run logs
-- `runner/` for repo-scoped runner auth and socket state
-- `state/` for review, history, error, schedule, QA, and pack-selection state
+- `config/` for compiled workflow, agent-runtime, and state-machine documents
+- `daemon/` for persisted daemon settings and daemon process state
+- `chat/` for conversation transcripts and continuity records
+- `logs/` for redacted structured runtime events and log-storage-backed run logs
+- `metrics/` for buffered anonymous telemetry when opt-in is enabled
+- `runs/` and `artifacts/` for per-run execution state and outputs
+- `secrets/` for the per-scope secret-name index (values stay in the OS keychain)
+- `state/` for history, error, schedule, and pack-selection state
 - `worktrees/` for managed task worktrees
 - `docs/` for generated planning artifacts such as `product-vision.md`
 
@@ -87,7 +104,6 @@ Animus still resolves workflows from layered sources:
 1. project pack overrides in `.animus/plugins/`
 2. project YAML in `.animus/workflows.yaml` and `.animus/workflows/*.yaml`
 3. installed packs in `~/.animus/packs/`
-4. bundled workflow content compiled into the CLI
 
 State location and workflow resolution are related but different concerns:
 

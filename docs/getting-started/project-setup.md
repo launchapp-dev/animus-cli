@@ -22,10 +22,12 @@ flowchart LR
 
     LOCAL --> CFG["config.json (project config)"]
     LOCAL --> WF["workflows.yaml + workflows/ (YAML overlays)"]
+    LOCAL --> SK["skills/ + config/skill_definitions/"]
 
     SCOPED --> RT["config/ (compiled runtime config)"]
-    SCOPED --> DB["workflow.db + runs/ + logs/"]
-    SCOPED --> DAEMON["daemon/ (daemon settings)"]
+    SCOPED --> DB["workflow.db + runs/ + logs/ + artifacts/"]
+    SCOPED --> DAEMON["daemon/ (settings + process state)"]
+    SCOPED --> CHAT["chat/ + metrics/ + secrets/"]
 
     WF -. "compiles into" .-> RT
 ```
@@ -35,9 +37,12 @@ flowchart LR
 ```text
 .animus/
 ├── config.json
+├── config/
+│   └── skill_definitions/      # optional project-scoped YAML skill definitions
 ├── plugins/                    # optional project-local plugins and pack overrides
-├── workflows.yaml
 ├── plugins.lock                # appears after project-scoped plugin install/update activity
+├── skills/                     # optional project-scoped Markdown skills
+├── workflows.yaml
 └── workflows/
     ├── custom.yaml
     ├── standard-workflow.yaml
@@ -58,11 +63,15 @@ files.
 ├── core-state.json
 ├── resume-config.json
 ├── workflow.db
+├── chat/
 ├── config/
 ├── daemon/
 ├── docs/
 ├── logs/
-├── runner/
+├── metrics/
+├── runs/
+├── artifacts/
+├── secrets/
 ├── state/
 └── worktrees/
 ```
