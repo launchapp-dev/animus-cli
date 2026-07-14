@@ -80,7 +80,7 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
         let envelope = CliErrorEnvelope {
             schema: CLI_SCHEMA,
             ok: false,
-            error: CliErrorBody { code: code.to_string(), message: err.to_string(), exit_code, details },
+            error: CliErrorBody { code: code.to_string(), message: json_error_message(err), exit_code, details },
         };
         eprintln!("{}", serialize_compact_json(&envelope).unwrap_or_else(|_| {
             format!("{{\"schema\":\"{}\",\"ok\":false,\"error\":{{\"code\":\"internal\",\"message\":\"serialization failure\",\"exit_code\":1}}}}", CLI_SCHEMA_ID)
@@ -91,6 +91,17 @@ pub(crate) fn emit_cli_error(err: &anyhow::Error, json: bool) {
             eprintln!("hint: run with --help to view accepted arguments and values");
         }
     }
+}
+
+/// Build the `--json` error message from an anyhow error.
+///
+/// Uses anyhow's alternate Display (`{:#}`) so the message carries the FULL
+/// context chain — the outer `.context(...)` plus every underlying source,
+/// joined by ": " — matching what the human (`error: {:#}`) path prints. Plain
+/// `err.to_string()` yields ONLY the top-level context and silently drops the
+/// real cause, which made `--json` consumers blind to the underlying failure.
+fn json_error_message(err: &anyhow::Error) -> String {
+    format!("{err:#}")
 }
 
 fn should_emit_help_hint(message: &str) -> bool {
@@ -214,6 +225,30 @@ mod tests {
         let long = invalid_input_error("invalid priority '<empty>'; expected one of: critical|high|medium|low");
         assert_eq!(classify_exit_code(&short), 2);
         assert_eq!(classify_exit_code(&long), 2);
+    }
+
+    #[test]
+    fn json_error_message_includes_full_context_chain() {
+        use anyhow::Context;
+        // Mirror the real failure shape: an inner cause wrapped by an outer
+        // `.context(...)`. The --json message must surface BOTH — the outer
+        // context and the inner source — not just the top-level context.
+        let err = Err::<(), anyhow::Error>(anyhow!(
+            "workflow 'X' references unknown phase 'Y'; add it to phase_catalog or define it under phases"
+        ))
+        .context("the config to write is invalid once pack overlays are merged; refusing to persist")
+        .unwrap_err();
+        let message = json_error_message(&err);
+        assert!(
+            message.contains("the config to write is invalid once pack overlays are merged"),
+            "message must contain the outer context, got: {message}"
+        );
+        assert!(
+            message.contains("references unknown phase 'Y'"),
+            "message must contain the inner source cause, got: {message}"
+        );
+        // Plain Display would drop the cause; assert we improved on it.
+        assert_ne!(message, err.to_string(), "alternate Display must add the source chain");
     }
 
     #[test]

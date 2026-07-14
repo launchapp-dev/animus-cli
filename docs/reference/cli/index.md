@@ -186,6 +186,7 @@ animus
 │   │   ├── set              Replace the full config via the writable config_source plugin (validates first; rejected on read-only sources)
 │   │   ├── agent-set        Create or replace one agent definition (read-modify-write the full config)
 │   │   ├── agent-remove     Remove one agent definition (read-modify-write the full config)
+│   │   ├── phase-set        Create or replace one phase definition on the config_source base (read-modify-write; writes phase_definitions, not the agent-runtime overlay)
 │   │   ├── workflow-set     Create or replace one workflow definition (read-modify-write)
 │   │   └── workflow-remove  Remove one workflow definition (read-modify-write)
 │   ├── state-machine
@@ -1925,6 +1926,15 @@ the plugin — nothing is partially written.
   model back. This is the **definition**-management verb; it does not collide
   with the runtime `animus agent {list,get,run,...}` surface.
 - `animus workflow config agent-remove --id <id>` — remove one agent.
+- `animus workflow config phase-set --id <phase_id> --input-json <json>` — upsert
+  one phase definition on the RAW config_source base
+  (`WorkflowConfig.phase_definitions`). Read-modify-write, same validate-before-write
+  path as the other entity verbs. This writes the **config_source base**, NOT the
+  agent-runtime overlay that `animus workflow phases upsert` writes — so a phase
+  authored here resolves when a subsequently-set workflow references it, instead of
+  failing `workflow-set` with "references unknown phase". The JSON is a
+  `PhaseExecutionDefinition` (the value of `phase_definitions.<id>`), e.g.
+  `--input-json '{"mode":"agent","agent_id":"builder"}'`.
 - `animus workflow config workflow-set --input-json <json>` — upsert one
   workflow definition (the JSON must include an `id`).
 - `animus workflow config workflow-remove --id <id>` — remove one workflow.
@@ -1941,7 +1951,7 @@ watch (gated on the `config_watch` capability).
 | Metric | Count |
 |---|---|
 | Top-level commands | 28 |
-| Nested command entries (all levels) | 214 |
+| Nested command entries (all levels) | 215 |
 
 Counting basis: counts are derived from the command tree above. "Top-level
 commands" counts the column-0 tree roots (`animus <command>`); "Nested
