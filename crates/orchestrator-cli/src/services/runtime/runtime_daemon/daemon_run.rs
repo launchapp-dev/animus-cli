@@ -773,6 +773,16 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     // bind failure is non-fatal — the runner then falls back to its own
     // per-phase environment path.
     process_manager.environment_routing = workflow_config.config.environment_routing.clone();
+    // Map each workflow's `environment:` override (id -> environment id, lowercased
+    // keys) so the broker gate can honor a workflow-level environment even when no
+    // kind-level routing rule exists — the common deploy shape. Without this the
+    // broker never engaged and each phase prepared its own node. TASK-431 / REQ-051.
+    process_manager.workflow_environments = workflow_config
+        .config
+        .workflows
+        .iter()
+        .filter_map(|workflow| workflow.environment.as_ref().map(|env| (workflow.id.to_ascii_lowercase(), env.clone())))
+        .collect();
     match orchestrator_daemon_runtime::EnvironmentBroker::start(project_root).await {
         Ok(broker) => {
             process_manager = process_manager.with_environment_broker(broker);

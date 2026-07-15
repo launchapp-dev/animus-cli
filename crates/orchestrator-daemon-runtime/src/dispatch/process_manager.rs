@@ -205,6 +205,13 @@ pub struct ProcessManager {
     /// Drives the daemon-side decision of whether a dispatch routes to a
     /// non-local environment (and thus through the [`EnvironmentBroker`]).
     pub environment_routing: Option<animus_config_protocol::workflow_types::EnvironmentRouting>,
+    /// Per-workflow `environment:` overrides (workflow id -> environment plugin
+    /// id, lowercased keys). The broker gate resolves the dispatch's workflow to
+    /// its `environment:` and feeds it to `resolve_environment` as `workflow_env`
+    /// — without this a workflow-level environment (the only environment config
+    /// on many deployments) was invisible to the daemon, so the broker never
+    /// engaged and each phase prepared its OWN node. See TASK-431 / REQ-051.
+    pub workflow_environments: std::collections::HashMap<String, String>,
     /// REQ-048: the cross-phase ephemeral-environment broker. When wired AND the
     /// dispatch routes to a non-local environment, the daemon sets the four
     /// `ANIMUS_ENVIRONMENT_BROKER_*` env vars on the runner so it acquires the
@@ -245,6 +252,7 @@ impl ProcessManager {
             pipe_root: None,
             workflow_concurrency_max,
             environment_routing: None,
+            workflow_environments: std::collections::HashMap::new(),
             environment_broker: None,
         }
     }
@@ -552,15 +560,25 @@ impl ProcessManager {
         command: &mut Command,
     ) -> Option<String> {
         let broker = self.environment_broker.as_ref()?;
-        // Config-level routing only (kind rules + default): the daemon dispatches
-        // per phase and cannot know the phase's harness/`environment:` override
-        // here, and the node is per-RUN anyway, so a single run-level environment
-        // is the correct granularity for the broker decision.
+        // The daemon dispatches per phase and cannot know a PHASE-level
+        // `environment:` override here, but the node is per-RUN anyway, so a
+        // single run-level environment is the correct granularity. Feed the
+        // dispatch's WORKFLOW-level `environment:` as `workflow_env` (the runner
+        // does the same when it resolves each phase) so a workflow-level
+        // environment engages the broker even with no kind-level routing rule —
+        // otherwise the broker never fired and every phase owned its own node.
+        // See TASK-431 / REQ-051.
+        let workflow_ref = dispatch.workflow_ref.trim();
+        let workflow_env = if workflow_ref.is_empty() {
+            None
+        } else {
+            self.workflow_environments.get(&workflow_ref.to_ascii_lowercase()).map(String::as_str)
+        };
         let environment_id = orchestrator_config::workflow_config::resolve_environment(
             dispatch.subject_kind(),
             None,
             None,
-            None,
+            workflow_env,
             self.environment_routing.as_ref(),
         )?;
         if is_local_environment(&environment_id) {
