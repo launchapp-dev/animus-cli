@@ -158,6 +158,11 @@ pub trait WorkflowServiceApi: Send + Sync {
     /// reconcile uses this instead of [`Self::list`] so its heartbeat sweep never
     /// fetches + deserializes every run's opaque blob.
     async fn list_summaries(&self) -> Result<Vec<crate::workflow::WorkflowRunSummary>>;
+    /// Only the NON-terminal runs (pending/running/paused), with full blobs. The
+    /// daemon's per-tick reconciliation legs (orphan recovery, journal-resume,
+    /// manual-timeout) act only on active runs, so this avoids the all-runs
+    /// full-blob scan (`list`) that ran every heartbeat.
+    async fn list_active(&self) -> Result<Vec<OrchestratorWorkflow>>;
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>>;
     async fn get(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>>;

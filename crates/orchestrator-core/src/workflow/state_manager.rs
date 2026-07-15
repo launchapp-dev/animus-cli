@@ -434,6 +434,7 @@ impl WorkflowStateManager {
             out.push(WorkflowRunSummary {
                 workflow_id,
                 task_id: task_id.unwrap_or_default(),
+                workflow_ref: None,
                 status,
                 started_at,
                 completed_at,
@@ -1202,11 +1203,11 @@ pub fn load_workflow_ref_index(project_root: &std::path::Path) -> Result<std::co
     if let Some(plugin) = super::journal_client::plugin_for(project_root) {
         // Best-effort, matching the SQLite path: a backend error yields an empty
         // index rather than failing the caller (cost attribution degrades, not breaks).
-        let runs = super::journal_client::list(&plugin, project_root, &[]).unwrap_or_default();
-        return Ok(runs
-            .into_iter()
-            .filter_map(|workflow| workflow.workflow_ref.clone().map(|r| (workflow.id.clone(), r)))
-            .collect());
+        // No-blob summaries: id + workflow_ref are both indexed columns, so this
+        // avoids the all-runs full-blob fetch (this index is rebuilt every
+        // housekeeping tick by the budget-enforcement scan).
+        let runs = super::journal_client::list_summaries(&plugin, project_root).unwrap_or_default();
+        return Ok(runs.into_iter().filter_map(|run| run.workflow_ref.map(|r| (run.workflow_id, r))).collect());
     }
     let conn = match open_project_db(project_root) {
         Ok(conn) => conn,

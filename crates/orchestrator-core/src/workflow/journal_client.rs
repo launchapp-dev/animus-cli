@@ -503,6 +503,7 @@ pub struct WorkflowRunSummary {
     /// `TASK-1`; kind-qualified for generic kinds), cross-referenced against a
     /// task id via the daemon's `task_ids_match`.
     pub task_id: String,
+    pub workflow_ref: Option<String>,
     pub status: WorkflowStatus,
     pub started_at: chrono::DateTime<chrono::Utc>,
     /// The terminal timestamp for a terminal run; `None` for a live run.
@@ -521,6 +522,7 @@ impl WorkflowRunSummary {
         Self {
             workflow_id: w.id.clone(),
             task_id,
+            workflow_ref: w.workflow_ref.clone(),
             status: w.status,
             started_at: w.started_at,
             completed_at: w.completed_at,
@@ -563,6 +565,7 @@ fn summary_from_value(v: &serde_json::Value) -> Option<WorkflowRunSummary> {
     let workflow_id = obj.get("workflow_id")?.as_str()?.to_string();
     let status = status_from_wire(obj.get("status")?.as_str()?)?;
     let task_id = obj.get("subject_id").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+    let workflow_ref = obj.get("workflow_ref").and_then(|s| s.as_str()).map(str::to_string);
     let started_at =
         obj.get("created_at").and_then(|s| s.as_str()).and_then(parse_summary_ts).unwrap_or_else(chrono::Utc::now);
     let updated_at = obj.get("updated_at").and_then(|s| s.as_str()).and_then(parse_summary_ts);
@@ -571,7 +574,7 @@ fn summary_from_value(v: &serde_json::Value) -> Option<WorkflowRunSummary> {
         WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::Escalated
     );
     let completed_at = if terminal { updated_at } else { None };
-    Some(WorkflowRunSummary { workflow_id, task_id, status, started_at, completed_at })
+    Some(WorkflowRunSummary { workflow_id, task_id, workflow_ref, status, started_at, completed_at })
 }
 
 fn parse_summary_ts(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {

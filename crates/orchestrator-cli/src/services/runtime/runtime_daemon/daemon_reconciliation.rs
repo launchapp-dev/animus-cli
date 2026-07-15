@@ -76,7 +76,7 @@ pub async fn recover_orphaned_running_workflows(
     active_subject_ids: &HashSet<String>,
     resume_orphans: bool,
 ) -> usize {
-    let workflows = match hub.workflows().list().await {
+    let workflows = match hub.workflows().list_active().await {
         Ok(workflows) => workflows,
         Err(error) => {
             warn!(
@@ -196,7 +196,7 @@ pub(crate) async fn resumable_orphans_for_redispatch(
     if !journal_resume_enabled(project_root) {
         return Vec::new();
     }
-    let workflows = match hub.workflows().list().await {
+    let workflows = match hub.workflows().list_active().await {
         Ok(workflows) => workflows,
         Err(error) => {
             warn!(
@@ -310,7 +310,7 @@ pub(crate) async fn resumable_orphans_for_redispatch(
 
 pub async fn reconcile_manual_phase_timeouts(hub: Arc<dyn ServiceHub>, project_root: &str) -> Result<usize> {
     let runtime = load_agent_runtime_config_or_default(Path::new(project_root));
-    let workflows = match hub.workflows().list().await {
+    let workflows = match hub.workflows().list_active().await {
         Ok(workflows) => workflows,
         Err(error) => {
             warn!(
