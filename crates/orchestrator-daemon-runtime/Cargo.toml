@@ -24,6 +24,7 @@ orchestrator-core = { workspace = true }
 orchestrator-logging = { workspace = true }
 orchestrator-plugin-host = { workspace = true }
 animus-plugin-protocol = { workspace = true }
+animus-config-protocol = { workspace = true }
 # All animus-protocol git deps pin the SAME tag (v0.1.26) so the transitively
 # pulled `animus-subject-protocol` resolves to ONE source rev. v0.1.26 additively
 # adds `actor: Option<Actor>` to the control request types relayed by the daemon.
@@ -45,7 +46,7 @@ animus-runtime-shared = { workspace = true }
 # v0.5.1 fold-in (item 7): unified Unix-socket + Windows-named-pipe client
 # for the reattach back-channel. Replaces the previous `cfg(unix)`-only
 # `tokio::net::UnixStream` path with a single cross-platform implementation.
-interprocess = "2.4"
+interprocess = { version = "2.4", features = ["tokio"] }
 
 [dev-dependencies]
 protocol = { workspace = true, features = ["test-utils"] }

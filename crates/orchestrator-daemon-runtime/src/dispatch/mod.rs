@@ -22,6 +22,7 @@ mod dispatch_selection_source;
 mod dispatch_support;
 mod dispatch_workflow_start;
 mod dispatch_workflow_start_summary;
+pub mod environment_broker;
 pub mod event_pipe;
 mod process_manager;
 mod ready_dispatch_plan;
@@ -44,6 +45,10 @@ pub use dispatch_support::{
 };
 pub use dispatch_workflow_start::DispatchWorkflowStart;
 pub use dispatch_workflow_start_summary::DispatchWorkflowStartSummary;
+pub use environment_broker::{
+    is_local_environment, EnvironmentBroker, ANIMUS_ENVIRONMENT_BROKER_ENVIRONMENT_ID_ENV,
+    ANIMUS_ENVIRONMENT_BROKER_RUN_ID_ENV, ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, ANIMUS_ENVIRONMENT_BROKER_TOKEN_ENV,
+};
 #[cfg(unix)]
 #[allow(unused_imports)]
 pub use event_pipe::SubprocessEventPipe;
