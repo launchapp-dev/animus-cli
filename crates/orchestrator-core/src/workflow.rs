@@ -17,7 +17,7 @@ pub use environment_client::{shutdown_resident_hosts as shutdown_environment_hos
 
 pub use journal_client::{
     durable_journal_active, import_local_sqlite_into_plugin, record_wire_event as journal_record_wire_event,
-    shutdown_resident_hosts as shutdown_journal_hosts, JournalImportStats,
+    shutdown_resident_hosts as shutdown_journal_hosts, JournalImportStats, WorkflowRunSummary,
 };
 
 pub use lifecycle_executor::WorkflowLifecycleExecutor;

@@ -154,6 +154,10 @@ pub trait TaskServiceApi: Send + Sync {
 #[async_trait]
 pub trait WorkflowServiceApi: Send + Sync {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>>;
+    /// Lightweight no-blob run summaries — the daemon's stale-in-progress
+    /// reconcile uses this instead of [`Self::list`] so its heartbeat sweep never
+    /// fetches + deserializes every run's opaque blob.
+    async fn list_summaries(&self) -> Result<Vec<crate::workflow::WorkflowRunSummary>>;
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>>;
     async fn get(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn decisions(&self, id: &str) -> Result<Vec<crate::types::WorkflowDecisionRecord>>;

@@ -163,6 +163,10 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         Ok(self.state.read().await.workflows.values().cloned().collect())
     }
 
+    async fn list_summaries(&self) -> Result<Vec<crate::workflow::WorkflowRunSummary>> {
+        Ok(self.state.read().await.workflows.values().map(crate::workflow::WorkflowRunSummary::from_workflow).collect())
+    }
+
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>> {
         let workflows = WorkflowServiceApi::list(self).await?;
         Ok(query_workflows(workflows, &query))
@@ -364,6 +368,10 @@ impl WorkflowServiceApi for InMemoryServiceHub {
 impl WorkflowServiceApi for FileServiceHub {
     async fn list(&self) -> Result<Vec<OrchestratorWorkflow>> {
         self.workflow_manager().list_all()
+    }
+
+    async fn list_summaries(&self) -> Result<Vec<crate::workflow::WorkflowRunSummary>> {
+        self.workflow_manager().list_all_summaries()
     }
 
     async fn query(&self, query: WorkflowQuery) -> Result<ListPage<OrchestratorWorkflow>> {

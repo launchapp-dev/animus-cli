@@ -394,6 +394,54 @@ impl WorkflowStateManager {
         Ok(workflows)
     }
 
+    /// Every run's lightweight [`super::journal_client::WorkflowRunSummary`] via
+    /// the no-blob projection. The daemon's stale-in-progress reconcile uses this
+    /// instead of [`Self::list_all`] so its heartbeat sweep never fetches +
+    /// deserializes every run's opaque blob (the ~6s all-runs scan that
+    /// head-of-line-blocked the shared journal host). Plugin backend: ONE
+    /// `journal/list { summary: true }` RPC. SQLite backend: project the columns.
+    pub fn list_all_summaries(&self) -> Result<Vec<super::journal_client::WorkflowRunSummary>> {
+        use super::journal_client::WorkflowRunSummary;
+        if let Some(plugin) = self.journal_plugin() {
+            return super::journal_client::list_summaries(plugin, &self.project_root);
+        }
+        let conn = self.open_db()?;
+        let mut stmt = conn.prepare("SELECT id, task_id, status, started_at, completed_at FROM workflows")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (workflow_id, task_id, status, started_at, completed_at) = row?;
+            let Some(status) = super::journal_client::status_from_wire(&status) else {
+                continue;
+            };
+            let started_at = started_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(chrono::Utc::now);
+            let completed_at = completed_at
+                .as_deref()
+                .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                .map(|dt| dt.with_timezone(&chrono::Utc));
+            out.push(WorkflowRunSummary {
+                workflow_id,
+                task_id: task_id.unwrap_or_default(),
+                status,
+                started_at,
+                completed_at,
+            });
+        }
+        Ok(out)
+    }
+
     /// Inter-workflow fan-in coordinator (see [`super::dependency`]). Snapshots
     /// every run from the journal and returns the held JOIN runs that are ready to
     /// FIRE or should be CANCELLED right now, per their declared upstream barrier.

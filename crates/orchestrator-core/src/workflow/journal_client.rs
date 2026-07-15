@@ -490,6 +490,94 @@ pub(crate) fn list_page(
     Ok(resp.runs.into_iter().filter_map(|run| from_journal_run(run).ok()).collect())
 }
 
+/// Lightweight run summary sourced from the journal's no-blob projection
+/// (`journal/list { summary: true }`). Carries only the fields the daemon's
+/// stale-in-progress reconcile needs to cross-reference a run to its subject —
+/// deliberately NOT the full `OrchestratorWorkflow`, so that heartbeat sweep
+/// never fetches + deserializes every run's opaque blob (the ~6s all-runs scan
+/// that head-of-line-blocked the shared journal host).
+#[derive(Debug, Clone)]
+pub struct WorkflowRunSummary {
+    pub workflow_id: String,
+    /// Denormalized subject id (bare native id for task/requirement, e.g.
+    /// `TASK-1`; kind-qualified for generic kinds), cross-referenced against a
+    /// task id via the daemon's `task_ids_match`.
+    pub task_id: String,
+    pub status: WorkflowStatus,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    /// The terminal timestamp for a terminal run; `None` for a live run.
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+impl WorkflowRunSummary {
+    /// Project a full run to a summary. Used by the in-memory service hub and any
+    /// caller that already holds the whole workflow. Mirrors the `subject_id`
+    /// denormalization in [`to_journal_run`] so it matches the plugin projection.
+    pub fn from_workflow(w: &OrchestratorWorkflow) -> Self {
+        let task_id = match w.subject.as_ref().map(|s| s.id()) {
+            None | Some("") => w.task_id.clone(),
+            Some(id) => id.to_string(),
+        };
+        Self {
+            workflow_id: w.id.clone(),
+            task_id,
+            status: w.status,
+            started_at: w.started_at,
+            completed_at: w.completed_at,
+        }
+    }
+}
+
+pub(crate) fn status_from_wire(s: &str) -> Option<WorkflowStatus> {
+    Some(match s {
+        "pending" => WorkflowStatus::Pending,
+        "running" => WorkflowStatus::Running,
+        "paused" => WorkflowStatus::Paused,
+        "completed" => WorkflowStatus::Completed,
+        "failed" => WorkflowStatus::Failed,
+        "escalated" => WorkflowStatus::Escalated,
+        "cancelled" => WorkflowStatus::Cancelled,
+        _ => return None,
+    })
+}
+
+/// Max rows a summary sweep pulls in one RPC. Equal to the reference backend's
+/// `MAX_QUERY_LIMIT`, so a project with fewer runs than this gets ALL of them
+/// (the reconcile needs every run to cross-reference its in-progress subjects).
+const SUMMARY_QUERY_LIMIT: u32 = 10_000;
+
+/// Every run's [`WorkflowRunSummary`] via the journal's no-blob projection —
+/// ONE bounded RPC that skips the opaque blob column entirely (`summary: true`).
+/// Replaces `list()`-then-drop-the-blob for the daemon's stale-in-progress
+/// reconcile, which only needs subject id + status + timestamps. Rows missing a
+/// workflow_id/status, or carrying an unknown wire status, are skipped.
+pub(crate) fn list_summaries(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<Vec<WorkflowRunSummary>> {
+    let params = serde_json::json!({ "status": [], "summary": true, "limit": SUMMARY_QUERY_LIMIT });
+    let value = run_blocking(call(plugin, project_root, METHOD_JOURNAL_LIST, params))??;
+    let runs = value.get("runs").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or_default();
+    Ok(runs.iter().filter_map(summary_from_value).collect())
+}
+
+fn summary_from_value(v: &serde_json::Value) -> Option<WorkflowRunSummary> {
+    let obj = v.as_object()?;
+    let workflow_id = obj.get("workflow_id")?.as_str()?.to_string();
+    let status = status_from_wire(obj.get("status")?.as_str()?)?;
+    let task_id = obj.get("subject_id").and_then(|s| s.as_str()).unwrap_or_default().to_string();
+    let started_at =
+        obj.get("created_at").and_then(|s| s.as_str()).and_then(parse_summary_ts).unwrap_or_else(chrono::Utc::now);
+    let updated_at = obj.get("updated_at").and_then(|s| s.as_str()).and_then(parse_summary_ts);
+    let terminal = matches!(
+        status,
+        WorkflowStatus::Completed | WorkflowStatus::Failed | WorkflowStatus::Cancelled | WorkflowStatus::Escalated
+    );
+    let completed_at = if terminal { updated_at } else { None };
+    Some(WorkflowRunSummary { workflow_id, task_id, status, started_at, completed_at })
+}
+
+fn parse_summary_ts(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
 /// All run ids matching `status` (None = all). The caller paginates client-side.
 pub(crate) fn query_ids(
     plugin: &DiscoveredPlugin,

@@ -436,7 +436,11 @@ pub(crate) async fn reconcile_stale_in_progress_tasks_with_store(
         return Ok(0);
     }
 
-    let workflows = hub.workflows().list().await?;
+    // No-blob summaries, NOT the full runs: this sweep only needs subject id +
+    // status + terminal timestamp to cross-reference in-progress tasks. Fetching
+    // every run's opaque blob here (`list()`) was a ~6s all-runs scan that ran
+    // every heartbeat and head-of-line-blocked the shared journal host.
+    let workflows = hub.workflows().list_summaries().await?;
     let now = chrono::Utc::now();
     let mut reconciled = 0usize;
     for task in &in_progress_tasks {
