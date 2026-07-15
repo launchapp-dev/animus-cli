@@ -766,6 +766,25 @@ pub(super) async fn handle_daemon_run(args: DaemonRunArgs, project_root: &str, j
     let mut process_manager = ProcessManager::new().with_timeout(runtime_options.phase_timeout_secs);
     process_manager.phase_routing = daemon_config.and_then(|d| d.phase_routing.clone());
     process_manager.mcp_config = daemon_config.and_then(|d| d.mcp.clone());
+    // REQ-048 cross-phase environment broker: route non-local environments
+    // through a daemon-owned node shared by every phase of a run. The routing
+    // table decides which dispatches are brokered; the broker binds a private
+    // local socket and reaps any nodes leaked by a prior daemon instance. A
+    // bind failure is non-fatal — the runner then falls back to its own
+    // per-phase environment path.
+    process_manager.environment_routing = workflow_config.config.environment_routing.clone();
+    match orchestrator_daemon_runtime::EnvironmentBroker::start(project_root).await {
+        Ok(broker) => {
+            process_manager = process_manager.with_environment_broker(broker);
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "animus.runtime.environment_broker",
+                %error,
+                "failed to start environment broker; workflow runners fall back to per-phase environment preparation"
+            );
+        }
+    }
     let mut host = CliDaemonRunHost::new(project_root, json, start_config);
     let logger = host.logger();
     let mut driver: SlimProjectTickDriver<'_> =
