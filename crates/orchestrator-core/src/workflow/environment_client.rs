@@ -108,6 +108,17 @@ const ENVIRONMENT_RPC_TIMEOUT: Duration = Duration::from_secs(60);
 /// return `timed_out = true` before the host gives up on the RPC.
 const EXEC_RPC_TIMEOUT_HEADROOM: Duration = Duration::from_secs(30);
 
+/// `environment/prepare` gets its OWN (much longer) RPC timeout, separate from
+/// the 60s control-op bound. Materializing a real execution context can be slow
+/// and fail-prone: the Railway environment plugin, for example, creates a
+/// service, waits for it to deploy, and blocks up to its dial timeout (default
+/// 300s) for the container to dial home — plus workspace clone time on top. If
+/// the host-side timeout fired mid-create, `control_rpc`'s retry-once would spin
+/// up a SECOND node while the first was still deploying (a guaranteed leak +
+/// failure on slow deploys). Six minutes comfortably covers dial + clone + margin.
+#[allow(clippy::duration_suboptimal_units)]
+const ENVIRONMENT_PREPARE_TIMEOUT: Duration = Duration::from_secs(360);
+
 /// Host-side client bound to one installed `environment` plugin for one project
 /// root. Cheap to construct (discovery only, no spawn); the warm plugin process
 /// is spawned lazily on the first RPC and PINNED for the client's lifetime.
@@ -172,7 +183,7 @@ impl EnvironmentClient {
     /// `spec` and return its [`EnvironmentHandle`].
     pub fn prepare(&self, spec: EnvironmentSpec) -> Result<EnvironmentHandle> {
         let request = PrepareRequest { spec };
-        let value = self.call_blocking(METHOD_ENVIRONMENT_PREPARE, request, ENVIRONMENT_RPC_TIMEOUT)?;
+        let value = self.call_blocking(METHOD_ENVIRONMENT_PREPARE, request, ENVIRONMENT_PREPARE_TIMEOUT)?;
         let resp: PrepareResponse = serde_json::from_value(value)
             .with_context(|| format!("decoding PrepareResponse from environment plugin {}", self.plugin.name))?;
         Ok(resp.handle)
