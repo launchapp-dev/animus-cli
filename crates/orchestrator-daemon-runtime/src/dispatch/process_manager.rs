@@ -537,10 +537,13 @@ impl ProcessManager {
     /// runner then uses its legacy owned-environment path).
     ///
     /// The run_id must be STABLE across every phase of a workflow run so all
-    /// phases share one node: a phase-boundary RESUME dispatch reuses the
-    /// persisted `resume_workflow_id`; the FIRST (fresh) phase mints one, which
-    /// the runner adopts as its workflow id so later resume phases key on the
-    /// SAME id.
+    /// phases acquire the SAME node. It is keyed on the SUBJECT: every phase is a
+    /// separate dispatch for the same subject, so `subject_id()` is identical
+    /// across phases and known before phase 1. Keying on a workflow id does NOT
+    /// work — the runner mints its own id and `--workflow-id` means "resume an
+    /// EXISTING workflow", so a daemon-minted id cannot be handed down for a
+    /// fresh phase. A subjectless adhoc run falls back to the resume id / a fresh
+    /// mint (single-phase only — no cross-phase sharing without a subject).
     fn configure_environment_broker(
         &self,
         dispatch: &SubjectDispatch,
@@ -563,9 +566,12 @@ impl ProcessManager {
         if is_local_environment(&environment_id) {
             return None;
         }
-        let run_id = match resume_workflow_id {
-            Some(id) => id.to_string(),
-            None => format!("wf-{}", uuid::Uuid::new_v4().simple()),
+        let run_id = match dispatch.subject_id() {
+            Some(subject) if !subject.is_empty() => format!("run-{subject}"),
+            _ => match resume_workflow_id {
+                Some(id) => id.to_string(),
+                None => format!("wf-{}", uuid::Uuid::new_v4().simple()),
+            },
         };
         broker.register_run(&run_id, project_root, &environment_id);
         command.env(ANIMUS_ENVIRONMENT_BROKER_SOCKET_ENV, broker.socket_path());
