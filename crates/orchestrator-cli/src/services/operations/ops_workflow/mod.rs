@@ -802,7 +802,9 @@ pub(crate) async fn handle_workflow(
 /// wire: the wire request only carries status/cursor/limit, has no
 /// sort parameter, and collapses `escalated` into `Failed`.
 fn workflow_list_expressible_on_wire(args: &crate::WorkflowListArgs) -> bool {
-    if args.workflow_ref.is_some() || args.subject_id.is_some() || args.phase_id.is_some() || args.search.is_some() {
+    // `workflow_ref` (the type filter) is wire-expressible as of control-protocol
+    // v0.7.0-rc.7; subject/phase/search filters still fall back to local.
+    if args.subject_id.is_some() || args.phase_id.is_some() || args.search.is_some() {
         return false;
     }
     match parse_workflow_query_sort_opt(args.sort.as_deref()) {
@@ -833,7 +835,7 @@ async fn try_workflow_list_via_control(
     };
     let limit = args.limit.map(|l| u32::try_from(l).unwrap_or(u32::MAX));
     let cursor = if args.offset == 0 { None } else { Some(args.offset.to_string()) };
-    let request = WireRequest { status, cursor, limit };
+    let request = WireRequest { status, cursor, limit, workflow_ref: args.workflow_ref.clone() };
     match client.workflow_list(request).await {
         Ok(response) => Ok(Some(response)),
         Err(err) if is_method_unavailable(&err) => {
@@ -977,14 +979,15 @@ mod tests {
         let mut args = list_args();
         args.sort = Some("started-at".to_string());
         assert!(workflow_list_expressible_on_wire(&args), "default sort is expressible");
+
+        // The workflow-type filter is wire-expressible as of control-protocol rc.7.
+        let mut args = list_args();
+        args.workflow_ref = Some("standard".to_string());
+        assert!(workflow_list_expressible_on_wire(&args), "workflow_ref is expressible on the wire");
     }
 
     #[test]
     fn workflow_list_expressible_on_wire_gates_local_only_filters() {
-        let mut args = list_args();
-        args.workflow_ref = Some("standard".to_string());
-        assert!(!workflow_list_expressible_on_wire(&args));
-
         let mut args = list_args();
         args.subject_id = Some("TASK-1".to_string());
         assert!(!workflow_list_expressible_on_wire(&args));

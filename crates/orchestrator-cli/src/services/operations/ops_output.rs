@@ -125,6 +125,30 @@ fn resolve_run_id_arg(project_root: &str, run_id: Option<String>, workflow_id: O
     }
 }
 
+/// Resolve the run id for a SPECIFIC `(workflow_id, phase_id)` from the phase
+/// session checkpoints (`runs/<workflow_id>/phases/*.session.json`). Lets the UI
+/// load one phase's transcript instead of only the workflow's latest run.
+fn resolve_run_id_for_workflow_phase(project_root: &str, workflow_id: &str, phase_id: &str) -> Result<String> {
+    let Some(workflow_run_dir) = resolve_run_dir_for_lookup(project_root, workflow_id)? else {
+        return Err(not_found_error(format!("no run directory recorded for workflow {workflow_id}")));
+    };
+    let phases_dir = workflow_run_dir.join("phases");
+    if phases_dir.is_dir() {
+        for entry in fs::read_dir(&phases_dir).with_context(|| format!("read phases dir {}", phases_dir.display()))? {
+            let path = entry?.path();
+            if !path.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.ends_with(".session.json")) {
+                continue;
+            }
+            if let Ok(Some(checkpoint)) = phase_session::read_path(&path) {
+                if checkpoint.phase_id == phase_id {
+                    return Ok(checkpoint.run_id);
+                }
+            }
+        }
+    }
+    Err(not_found_error(format!("no run recorded for phase '{phase_id}' of workflow {workflow_id}")))
+}
+
 fn extract_timestamp_hint(line: &str) -> Option<String> {
     let parsed = serde_json::from_str::<Value>(line).ok()?;
     parsed
@@ -277,7 +301,12 @@ pub(crate) fn get_phase_outputs(
 pub(crate) async fn handle_output(command: OutputCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
         OutputCommand::Read(args) => {
-            let run_id = resolve_run_id_arg(project_root, args.run_id, args.workflow_id)?;
+            let run_id = match (&args.phase, &args.workflow_id) {
+                (Some(phase), Some(workflow_id)) => {
+                    resolve_run_id_for_workflow_phase(project_root, workflow_id, phase)?
+                }
+                _ => resolve_run_id_arg(project_root, args.run_id, args.workflow_id)?,
+            };
             let run_dir = resolve_run_dir_for_lookup(project_root, &run_id)?
                 .ok_or_else(|| not_found_error(format!("run directory not found for {run_id}")))?;
             let events_path = run_dir.join("events.jsonl");
