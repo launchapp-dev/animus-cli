@@ -2,7 +2,7 @@
   "private": true,
   "scripts": {
     "docs:dev": "vitepress dev docs",
-    "docs:build": "rm -rf docs/.vitepress/.temp docs/.vitepress/cache && vitepress build docs",
+    "docs:build": "rm -rf docs/.vitepress/.temp docs/.vitepress/.cache && vitepress build docs",
     "docs:preview": "vitepress preview docs",
     "docs:check-sync": "bash scripts/check-doc-sync.sh",
     "docs:deploy": "bash scripts/deploy-docs.sh"

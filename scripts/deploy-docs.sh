@@ -48,7 +48,7 @@ resolve_node_package_manager_bin() {
 }
 
 if command -v vitepress >/dev/null 2>&1; then
-  rm -rf docs/.vitepress/.temp docs/.vitepress/cache
+  rm -rf docs/.vitepress/.temp docs/.vitepress/.cache
   vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
   if ! vitepress build docs >"$vitepress_build_log" 2>&1; then
     if rg -q '@rollup/rollup-darwin-arm64|ERR_DLOPEN_FAILED|Team IDs' "$vitepress_build_log"; then
