@@ -622,3 +622,4 @@ rm -f ~/.local/bin/animus \
 </div>
 
 ![footer](https://capsule-render.vercel.app/api?type=waving&color=0:0d1117,50:161b22,100:1f6feb&height=100&section=footer)
+<!-- nested-animus daemon-mode: node ran a workflow on its own daemon with live event streaming upstream -->
