@@ -78,9 +78,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use animus_environment_protocol::{
-    EnvironmentHandle, EnvironmentSpec, ExecRequest, ExecResponse, ExecStream, HarnessCommand, PrepareRequest,
-    PrepareResponse, TeardownRequest, TeardownResponse, METHOD_ENVIRONMENT_EXEC, METHOD_ENVIRONMENT_EXEC_STREAM,
-    METHOD_ENVIRONMENT_PREPARE, METHOD_ENVIRONMENT_TEARDOWN, NOTIFICATION_ENVIRONMENT_OUTPUT,
+    EnvironmentHandle, EnvironmentSpec, ExecRequest, ExecResponse, ExecSessionRequest, ExecSessionResponse, ExecStream,
+    HarnessCommand, PrepareRequest, PrepareResponse, TeardownRequest, TeardownResponse, METHOD_ENVIRONMENT_EXEC,
+    METHOD_ENVIRONMENT_EXEC_SESSION, METHOD_ENVIRONMENT_EXEC_STREAM, METHOD_ENVIRONMENT_PREPARE,
+    METHOD_ENVIRONMENT_TEARDOWN, NOTIFICATION_ENVIRONMENT_JOURNAL, NOTIFICATION_ENVIRONMENT_OUTPUT,
 };
 use animus_plugin_protocol::PLUGIN_KIND_ENVIRONMENT;
 use anyhow::{anyhow, Context, Result};
@@ -255,6 +256,39 @@ impl EnvironmentClient {
 
         serde_json::from_value(value)
             .with_context(|| format!("decoding ExecResponse from environment plugin {}", self.plugin.name))
+    }
+
+    /// `environment/exec_session`: dispatch a SUBJECT to the environment's own
+    /// animus (REQ-052 remote-animus). The node runs the workflow through its own
+    /// provider/session layer; each `environment/journal` notification for THIS
+    /// handle is forwarded to `on_journal` as it arrives, and the call resolves
+    /// with the node-local run's terminal [`ExecSessionResponse`].
+    ///
+    /// Unbounded (no RPC timeout): an agent run's duration is not known up front,
+    /// so a wedged node surfaces via the resident host's death path, not a clamp.
+    /// AT-MOST-ONCE like [`Self::exec_stream`] — never retried.
+    pub fn exec_session<F>(
+        &self,
+        handle: &EnvironmentHandle,
+        subject_id: String,
+        workflow_ref: Option<String>,
+        dispatch_input: Option<String>,
+        on_journal: F,
+    ) -> Result<ExecSessionResponse>
+    where
+        F: Fn(&EnvironmentJournalEvent) + Send + Sync,
+    {
+        let request = ExecSessionRequest { handle: handle.clone(), subject_id, workflow_ref, dispatch_input };
+        let handle_id = handle.id.clone();
+        let params =
+            serde_json::to_value(&request).context("serializing ExecSessionRequest for environment/exec_session")?;
+
+        let value = run_blocking(self.with_pinned_host(move |host| async move {
+            exec_session_call(&host, params, &handle_id, &on_journal).await
+        }))??;
+
+        serde_json::from_value(value)
+            .with_context(|| format!("decoding ExecSessionResponse from environment plugin {}", self.plugin.name))
     }
 
     /// `environment/teardown`: dispose of the context named by `handle`.
@@ -610,6 +644,98 @@ where
     {
         if note_handle == handle_id {
             on_output(stream, &text);
+        }
+    }
+}
+
+/// A journal event forwarded from an in-flight `environment/exec_session` — the
+/// node's own workflow-journal event, relayed verbatim (REQ-052).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EnvironmentJournalEvent {
+    /// Handle id of the environment this session runs in.
+    pub handle_id: String,
+    /// The node-local run id this event belongs to, when known.
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    /// The journal event kind (e.g. `phase_started`, `output_chunk`, `tool_call`).
+    pub event_kind: String,
+    /// Phase this event belongs to, when phase-scoped.
+    #[serde(default)]
+    pub phase_id: Option<String>,
+    /// Event status discriminator, when present.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Event timestamp (RFC 3339).
+    pub ts: String,
+    /// The event's full payload, forwarded verbatim.
+    pub payload: Value,
+    /// True on the final event (the node-local run reached a terminal status).
+    #[serde(default)]
+    pub terminal: bool,
+}
+
+/// `environment/exec_session` against a resident host clone: subscribe to the
+/// host's notifications BEFORE issuing the request (so no early
+/// `environment/journal` frame is lost), then drive the request while forwarding
+/// each matching journal event to `on_journal`. Mirrors [`exec_stream_call`].
+async fn exec_session_call<F>(
+    host: &PluginHost,
+    params: Value,
+    handle_id: &str,
+    on_journal: &F,
+) -> std::result::Result<Value, ResidentCallError>
+where
+    F: Fn(&EnvironmentJournalEvent) + Send + Sync,
+{
+    use tokio::sync::broadcast::error::RecvError;
+
+    let mut notifications = host.subscribe_notifications();
+    // Unbounded: an agent session's duration is not known up front, so no RPC
+    // timeout is applied (the environment/node enforces its own policy).
+    let request = async { host.request_typed(METHOD_ENVIRONMENT_EXEC_SESSION, Some(params)).await };
+    tokio::pin!(request);
+
+    let response = loop {
+        tokio::select! {
+            note = notifications.recv() => {
+                match note {
+                    Ok(note) => forward_journal(&note, handle_id, on_journal),
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break request.await,
+                }
+            }
+            result = &mut request => break result,
+        }
+    };
+
+    let buffered = notifications.len();
+    for _ in 0..buffered {
+        match notifications.try_recv() {
+            Ok(note) => forward_journal(&note, handle_id, on_journal),
+            Err(_) => break,
+        }
+    }
+
+    response.map_err(ResidentCallError::from_host_error)
+}
+
+/// Decode an `environment/journal` notification and, when it targets `handle_id`,
+/// forward it to `on_journal`. Non-journal methods and other handles are ignored;
+/// a malformed payload is dropped (the terminal ExecSessionResponse remains the
+/// source of truth).
+fn forward_journal<F>(note: &animus_plugin_protocol::RpcNotification, handle_id: &str, on_journal: &F)
+where
+    F: Fn(&EnvironmentJournalEvent),
+{
+    if note.method != NOTIFICATION_ENVIRONMENT_JOURNAL {
+        return;
+    }
+    let Some(params) = note.params.clone() else {
+        return;
+    };
+    if let Ok(event) = serde_json::from_value::<EnvironmentJournalEvent>(params) {
+        if event.handle_id == handle_id {
+            on_journal(&event);
         }
     }
 }

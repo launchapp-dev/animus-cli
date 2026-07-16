@@ -13,7 +13,9 @@ pub use dependency::{
     RunSnapshot, UpstreamFailurePolicy, UpstreamOutcome, DEPENDS_ON_VAR, JOIN_POLICY_VAR,
 };
 
-pub use environment_client::{shutdown_resident_hosts as shutdown_environment_hosts, EnvironmentClient};
+pub use environment_client::{
+    shutdown_resident_hosts as shutdown_environment_hosts, EnvironmentClient, EnvironmentJournalEvent,
+};
 
 pub use journal_client::{
     durable_journal_active, import_local_sqlite_into_plugin, record_wire_event as journal_record_wire_event,
