@@ -201,7 +201,7 @@ bounded fetch for recent entries, not a live stream.
 | `animus.workflow.phase.approve` | Approve a gated workflow phase | `workflow_id`, `phase_id` (alias: `phase`), `feedback` (alias: `note`), `project_root` |
 | `animus.workflow.phase.reject` | Reject a gated workflow phase (mirror of approve, on the decline path). Requires a pending gate phase; `reason` (the rejection note) is required | `workflow_id`, `phase_id` (alias: `phase`), `reason` (alias: `note`/`feedback`), `project_root` |
 
-### Definition Tools (5)
+### Definition & Config Tools (10)
 
 | Tool | Description | Key Parameters |
 |---|---|---|

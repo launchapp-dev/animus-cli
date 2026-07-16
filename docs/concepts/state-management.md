@@ -162,7 +162,10 @@ Excluded by default (use `--include-runs` / `--include-artifacts` to add):
 
 - `runs/` and `artifacts/` — potentially large per-run execution state.
 - `daemon/` runtime files (`daemon.lock`, `daemon.log`, `control.sock`, etc.).
-- `config/` — compiled workflow and agent-runtime config (regenerated on first run).
+- `config/` — compiled workflow, agent-runtime, and state-machine config
+  (regenerated on first run).
+- `worktrees/` — managed task worktrees are excluded because they can be large
+  and are derivable from repository state plus queued/runtime metadata.
 - `.project-root`, `.git-origin` — machine-local paths and credentials in the
   remote URL; both are re-created automatically.
 
