@@ -581,6 +581,13 @@ fn parse_summary_ts(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     chrono::DateTime::parse_from_rfc3339(s).ok().map(|dt| dt.with_timezone(&chrono::Utc))
 }
 
+/// Ceiling on the id set `query_ids` pulls in one RPC. The caller derives the
+/// list `total` from `ids.len()`, so an unset limit (which the reference backend
+/// defaults to 1000) would cap the reported total — and the numbered pager — at
+/// 1000 even with more runs. Request the backend's max so the count is accurate
+/// up to this ceiling (ids are cheap — just the id column, no blobs).
+const QUERY_IDS_LIMIT: u32 = 10_000;
+
 /// All run ids matching `status` (None = all). The caller paginates client-side.
 pub(crate) fn query_ids(
     plugin: &DiscoveredPlugin,
@@ -591,7 +598,7 @@ pub(crate) fn query_ids(
         status: status.map(|s| vec![status_wire(s).to_string()]).unwrap_or_default(),
         workflow_ref: None,
         updated_since: None,
-        limit: None,
+        limit: Some(QUERY_IDS_LIMIT),
     };
     let value = run_blocking(call(plugin, project_root, METHOD_JOURNAL_QUERY_IDS, query))??;
     let resp: QueryIdsResult = serde_json::from_value(value).context("decoding journal QueryIdsResult")?;
