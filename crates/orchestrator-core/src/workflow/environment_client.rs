@@ -935,6 +935,37 @@ mod tests {
                         )
                         .await;
                     }
+                    METHOD_ENVIRONMENT_EXEC_SESSION => {
+                        let req: ExecSessionRequest = serde_json::from_value(request.params.clone().unwrap_or(Value::Null))
+                            .expect("exec_session params");
+                        let handle_id = req.handle.id.clone();
+                        // Emit a non-terminal phase event then a terminal one, then the reply.
+                        for (event_kind, terminal) in [("phase_started", false), ("run_completed", true)] {
+                            let note = ExecNotification::Journal {
+                                handle_id: handle_id.clone(),
+                                workflow_id: Some("node-wf-1".to_string()),
+                                event_kind: event_kind.to_string(),
+                                phase_id: Some("code-implement".to_string()),
+                                status: None,
+                                ts: "2026-07-16T00:00:00Z".to_string(),
+                                payload: serde_json::json!({ "subject": req.subject_id }),
+                                terminal,
+                            };
+                            let frame = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "method": note.method(),
+                                "params": note.payload(),
+                            });
+                            write_line(&mut plugin_writer, &frame).await;
+                        }
+                        let resp =
+                            ExecSessionResponse { workflow_id: Some("node-wf-1".to_string()), status: "completed".to_string() };
+                        write_response(
+                            &mut plugin_writer,
+                            RpcResponse::ok(request.id, serde_json::to_value(resp).unwrap()),
+                        )
+                        .await;
+                    }
                     METHOD_ENVIRONMENT_TEARDOWN => {
                         write_response(
                             &mut plugin_writer,
@@ -1121,6 +1152,47 @@ mod tests {
             got,
             vec![(ExecStream::Stdout, "chunk-out".to_string()), (ExecStream::Stderr, "chunk-err".to_string())],
             "both output deltas forwarded to the callback in order"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exec_session_forwards_journal_and_returns_response() {
+        let _guard = registry_lock().lock().await;
+        let registry = fresh_registry().await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fake-env");
+        std::fs::write(&path, b"binary").unwrap();
+        let spawns = Arc::new(AtomicUsize::new(0));
+
+        let lease = lease_fake(&registry, &path, spawns.clone()).await;
+        let collected: Arc<Mutex<Vec<(String, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = collected.clone();
+        let params = serde_json::to_value(ExecSessionRequest {
+            handle: sample_handle(),
+            subject_id: "task:TASK-1".to_string(),
+            workflow_ref: Some("coding".to_string()),
+            dispatch_input: None,
+        })
+        .unwrap();
+
+        let value = exec_session_call(lease.host(), params, "env-1", &move |ev: &EnvironmentJournalEvent| {
+            sink.lock().unwrap_or_else(|p| p.into_inner()).push((ev.event_kind.clone(), ev.terminal));
+        })
+        .await
+        .map_err(|e| match e {
+            ResidentCallError::Death(e) | ResidentCallError::Other(e) => e,
+        })
+        .expect("exec_session ok");
+
+        let resp: ExecSessionResponse = serde_json::from_value(value).unwrap();
+        assert_eq!(resp.workflow_id.as_deref(), Some("node-wf-1"));
+        assert_eq!(resp.status, "completed");
+
+        let got = collected.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(
+            got,
+            vec![("phase_started".to_string(), false), ("run_completed".to_string(), true)],
+            "both journal events forwarded in order, terminal flag on the last"
         );
     }
 
