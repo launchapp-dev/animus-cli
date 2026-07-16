@@ -368,13 +368,17 @@ impl WorkflowStateManager {
     pub fn list_page(
         &self,
         status: Option<crate::types::WorkflowStatus>,
+        workflow_ref: Option<&str>,
         limit: usize,
     ) -> Result<Vec<OrchestratorWorkflow>> {
         if let Some(plugin) = self.journal_plugin() {
-            return super::journal_client::list_page(plugin, &self.project_root, status, limit);
+            return super::journal_client::list_page(plugin, &self.project_root, status, workflow_ref, limit);
         }
-        // SQLite dev fallback: fetch all and truncate (no plugin round-trips).
+        // SQLite dev fallback: fetch all, filter by ref, truncate (no plugin round-trips).
         let mut all = self.list_all()?;
+        if let Some(wref) = workflow_ref {
+            all.retain(|w| w.workflow_ref.as_deref() == Some(wref));
+        }
         all.truncate(limit);
         Ok(all)
     }
@@ -476,15 +480,29 @@ impl WorkflowStateManager {
         &self,
         page: ListPageRequest,
         status: Option<crate::types::WorkflowStatus>,
+        workflow_ref: Option<&str>,
     ) -> Result<(Vec<String>, usize)> {
         if let Some(plugin) = self.journal_plugin() {
             // The journal protocol's query_ids has no offset/total, so fetch the
-            // full matching id set from the plugin and paginate client-side to
-            // preserve the (page, total) contract.
-            let all_ids = super::journal_client::query_ids(plugin, &self.project_root, status)?;
+            // full matching id set from the plugin (status + workflow_ref filtered
+            // server-side) and paginate client-side to preserve the (page, total)
+            // contract.
+            let all_ids = super::journal_client::query_ids(plugin, &self.project_root, status, workflow_ref)?;
             let total = all_ids.len();
             let (start, end) = page.bounds(total);
             let ids = all_ids.into_iter().skip(start).take(end.saturating_sub(start)).collect();
+            return Ok((ids, total));
+        }
+        // SQLite dev fallback: a workflow_ref filter is applied in memory (small
+        // local store) to avoid a combinatorial SQL branch; the plugin path above
+        // is the production one.
+        if let Some(wref) = workflow_ref {
+            let mut runs = self.list_all()?;
+            runs.retain(|w| status.is_none_or(|s| w.status == s) && w.workflow_ref.as_deref() == Some(wref));
+            runs.sort_by(|a, b| b.started_at.cmp(&a.started_at).then_with(|| a.id.cmp(&b.id)));
+            let total = runs.len();
+            let (start, end) = page.bounds(total);
+            let ids = runs[start..end].iter().map(|w| w.id.clone()).collect();
             return Ok((ids, total));
         }
         let conn = self.open_db()?;

@@ -149,9 +149,11 @@ fn query_workflows(workflows: Vec<OrchestratorWorkflow>, query: &WorkflowQuery) 
 }
 
 fn workflow_query_can_use_db_page(query: &WorkflowQuery) -> bool {
+    // `workflow_ref` (the type filter) is pushed down to the journal backend's
+    // bounded list/query_ids, so it stays on the fast DB-page path; task_id /
+    // phase_id / search still fall back to the in-memory scan.
     query.page.limit.is_some()
         && matches!(query.sort, WorkflowQuerySort::StartedAt)
-        && query.filter.workflow_ref.is_none()
         && query.filter.task_id.is_none()
         && query.filter.phase_id.is_none()
         && query.filter.search_text.as_deref().is_none_or(|value| value.trim().is_empty())
@@ -398,15 +400,16 @@ impl WorkflowServiceApi for FileServiceHub {
             // query for `total`, instead of query_ids + a per-id load loop (N+1 —
             // one RPC per run, which serialized behind other journal traffic and
             // made the list intermittently multi-second).
+            let workflow_ref = query.filter.workflow_ref.as_deref();
             if query.page.offset == 0 {
                 if let Some(limit) = query.page.limit {
-                    let (_ids, total) = manager.query_ids(query.page, query.filter.status)?;
-                    let items = manager.list_page(query.filter.status, limit)?;
+                    let (_ids, total) = manager.query_ids(query.page, query.filter.status, workflow_ref)?;
+                    let items = manager.list_page(query.filter.status, workflow_ref, limit)?;
                     return Ok(ListPage::new(items, total, query.page));
                 }
             }
             // Offset > 0: the journal list RPC has no offset, so keep the id-walk.
-            let (ids, total) = manager.query_ids(query.page, query.filter.status)?;
+            let (ids, total) = manager.query_ids(query.page, query.filter.status, workflow_ref)?;
             let mut items = Vec::with_capacity(ids.len());
             for id in ids {
                 if let Ok(workflow) = manager.load(&id) {

@@ -477,11 +477,12 @@ pub(crate) fn list_page(
     plugin: &DiscoveredPlugin,
     project_root: &Path,
     status: Option<WorkflowStatus>,
+    workflow_ref: Option<&str>,
     limit: usize,
 ) -> Result<Vec<OrchestratorWorkflow>> {
     let query = JournalQuery {
         status: status.map(|s| vec![status_wire(s).to_string()]).unwrap_or_default(),
-        workflow_ref: None,
+        workflow_ref: workflow_ref.map(str::to_string),
         updated_since: None,
         limit: Some(limit as u32),
     };
@@ -593,10 +594,11 @@ pub(crate) fn query_ids(
     plugin: &DiscoveredPlugin,
     project_root: &Path,
     status: Option<WorkflowStatus>,
+    workflow_ref: Option<&str>,
 ) -> Result<Vec<String>> {
     let query = JournalQuery {
         status: status.map(|s| vec![status_wire(s).to_string()]).unwrap_or_default(),
-        workflow_ref: None,
+        workflow_ref: workflow_ref.map(str::to_string),
         updated_since: None,
         limit: Some(QUERY_IDS_LIMIT),
     };
