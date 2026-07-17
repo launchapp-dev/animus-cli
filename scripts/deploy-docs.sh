@@ -61,11 +61,23 @@ resolve_timeout_bin() {
   return 1
 }
 
-if command -v vitepress >/dev/null 2>&1; then
+build_docs_once() {
+  local vitepress_build_log="$1"
+
   rm -rf docs/.vitepress/.temp docs/.vitepress/.cache
+  vitepress build docs >"$vitepress_build_log" 2>&1
+}
+
+if command -v vitepress >/dev/null 2>&1; then
   vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
-  if ! vitepress build docs >"$vitepress_build_log" 2>&1; then
-    if rg -q '@rollup/rollup-darwin-arm64|ERR_DLOPEN_FAILED|Team IDs' "$vitepress_build_log"; then
+  if ! build_docs_once "$vitepress_build_log"; then
+    if rg -q "ERR_MODULE_NOT_FOUND.*docs/.vitepress/.temp.*\\.md\\.js|Cannot find module '.*/docs/.vitepress/.temp/.*\\.md\\.js'" "$vitepress_build_log"; then
+      echo "VitePress hit the transient missing-temp-module render failure; retrying once after a clean temp/cache reset." >&2
+      if ! build_docs_once "$vitepress_build_log"; then
+        cat "$vitepress_build_log" >&2
+        exit 1
+      fi
+    elif rg -q '@rollup/rollup-darwin-arm64|ERR_DLOPEN_FAILED|Team IDs' "$vitepress_build_log"; then
       echo "Local VitePress build is blocked by the known Rollup macOS native-module signing issue." >&2
       echo "Continuing to Vercel so the remote build can validate and publish the docs." >&2
     else
@@ -82,10 +94,20 @@ fi
 echo "Deploying docs with Vercel..."
 echo "Prerequisites: network access for Vercel and a valid Vercel login."
 
-npx_bin="$(resolve_node_package_manager_bin npx)" || {
-  echo "Unable to find npx. Install Node tooling or expose an existing Node install." >&2
-  exit 1
-}
+vercel_bin=""
+vercel_runner=()
+
+if command -v vercel >/dev/null 2>&1; then
+  vercel_bin="$(command -v vercel)"
+  vercel_runner=("$vercel_bin" --yes --prod)
+else
+  npx_bin="$(resolve_node_package_manager_bin npx)" || {
+    echo "Unable to find npx. Install Node tooling or expose an existing Node install." >&2
+    exit 1
+  }
+  vercel_bin="$npx_bin"
+  vercel_runner=("$npx_bin" vercel --yes --prod)
+fi
 
 npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
 trap 'rm -rf "$npx_cache_dir"' EXIT
@@ -96,7 +118,7 @@ timeout_bin="$(resolve_timeout_bin)" || {
   exit 1
 }
 vercel_timeout_seconds="${ANIMUS_VERCEL_TIMEOUT_SECONDS:-300}"
-echo "Using npx via $npx_bin."
+echo "Using Vercel command via $vercel_bin."
 echo "Using temporary npm cache at $npx_cache_dir."
 echo "Bounding Vercel deploy to ${vercel_timeout_seconds}s via $timeout_bin."
 
@@ -107,7 +129,7 @@ npm_config_fetch_retries=0 \
 npm_config_fetch_timeout=10000 \
 npm_config_fetch_retry_maxtimeout=10000 \
   "$timeout_bin" --foreground "${vercel_timeout_seconds}s" \
-  "$npx_bin" vercel --yes --prod >"$vercel_deploy_log" 2>&1
+  "${vercel_runner[@]}" >"$vercel_deploy_log" 2>&1
 vercel_exit_code=$?
 set -e
 

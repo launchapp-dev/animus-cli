@@ -104,22 +104,28 @@ pinned in the root `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`.
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. The deploy helper
 runs the sync check directly, uses the repo-local `vitepress` binary from
-`node_modules/.bin` for the site build, then runs `npx vercel --yes --prod`
-through `timeout`/`gtimeout`. The `npx` path points npm at a temporary cache
+`node_modules/.bin` for the site build, then prefers a directly installed
+`vercel` binary and falls back to `npx vercel --yes --prod` through
+`timeout`/`gtimeout`. The `npx` fallback points npm at a temporary cache
 directory so the deploy command does not depend on a writable `~/.npm/`.
+If VitePress hits the transient missing `.vitepress/.temp/*.md.js` render
+failure, the helper clears temp/cache state and retries the local build once
+before failing.
 The deploy timeout defaults to `300` seconds and can be raised with
 `ANIMUS_VERCEL_TIMEOUT_SECONDS=<seconds> npm run docs:deploy`.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
-using `npx`, it also assumes the runner can reach `registry.npmjs.org` to
+using the `npx` fallback, it also assumes the runner can reach
+`registry.npmjs.org` to
 resolve `vercel`. In restricted environments, expect the deploy phase to fail
 once it needs fresh network access, even when the docs are otherwise in sync.
 If `npm`/`npx` are missing from `PATH`, `scripts/deploy-docs.sh` also checks
 the repo-local `node_modules/.bin`, the active Node install's sibling `bin/`,
 common `nvm`/`volta`/`fnm`/`asdf` locations, and Homebrew paths before giving
-up. If none of those locations contain `npx`, the final Vercel deploy cannot
-proceed. The script also requires `timeout` (GNU coreutils) or `gtimeout`
-to bound the Vercel deploy step.
+up. The same PATH search applies to a directly installed `vercel` binary
+before the script falls back to `npx`. If neither route is available, the
+final Vercel deploy cannot proceed. The script also requires `timeout` (GNU
+coreutils) or `gtimeout` to bound the Vercel deploy step.
 
 Protocol schema exports live at the repo root:
 
