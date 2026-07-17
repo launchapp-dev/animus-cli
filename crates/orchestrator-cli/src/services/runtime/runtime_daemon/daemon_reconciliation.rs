@@ -70,6 +70,21 @@ fn is_resumable_orphan(workflow: &OrchestratorWorkflow) -> bool {
     workflow.current_phase.is_some() || workflow.phases.get(workflow.current_phase_index).is_some()
 }
 
+/// Normalize a subject id to its BARE form by stripping a leading `kind:`
+/// prefix (`task:TASK-1` -> `TASK-1`; a bare `TASK-1` is unchanged).
+///
+/// A remote-animus (REQ-052) node runs the delegated workflow standalone and
+/// journals its run's subject UPSTREAM into this daemon's journal in the BARE
+/// form, while the delegating runner registers that subject QUALIFIED in
+/// `active_subject_ids`. Comparing the two raw forms never matches, so the
+/// node's own `Running` row is misclassified as a resumable orphan mid-session
+/// and re-dispatched — spawning a duplicate ephemeral node every reconciliation
+/// tick until dispatch is paused. Normalizing BOTH sides to bare before the
+/// exclusion checks closes that fan-out loop.
+fn bare_subject_id(id: &str) -> &str {
+    id.split_once(':').map_or(id, |(_, rest)| rest)
+}
+
 pub async fn recover_orphaned_running_workflows(
     hub: Arc<dyn ServiceHub>,
     project_root: &str,
@@ -99,6 +114,9 @@ pub async fn recover_orphaned_running_workflows(
         }
     };
     let now = chrono::Utc::now();
+    // Compare a node's BARE upstream-journaled subject against the delegating
+    // runner's QUALIFIED active id (see `bare_subject_id`).
+    let active_subject_bare: HashSet<&str> = active_subject_ids.iter().map(|s| bare_subject_id(s)).collect();
 
     let mut recovered = 0usize;
     for workflow in workflows {
@@ -113,7 +131,7 @@ pub async fn recover_orphaned_running_workflows(
         }
         if active_subject_ids.contains(&workflow.id)
             || externally_active_workflows.contains(&workflow.id)
-            || workflow.subject.as_ref().is_some_and(|s| active_subject_ids.contains(s.id()))
+            || workflow.subject.as_ref().is_some_and(|s| active_subject_bare.contains(bare_subject_id(s.id())))
         {
             continue;
         }
@@ -267,6 +285,10 @@ pub(crate) async fn resumable_orphans_for_redispatch(
         None => HashSet::new(),
     };
     let now = chrono::Utc::now();
+    // Normalize to BARE form so a node's upstream-journaled subject matches the
+    // delegating runner's QUALIFIED active/orphan ids (see `bare_subject_id`).
+    let active_subject_bare: HashSet<&str> = active_subject_ids.iter().map(|s| bare_subject_id(s)).collect();
+    let live_orphan_bare: HashSet<&str> = live_orphan_subjects.iter().map(|s| bare_subject_id(s)).collect();
 
     let mut candidates = Vec::new();
     for workflow in workflows {
@@ -281,14 +303,14 @@ pub(crate) async fn resumable_orphans_for_redispatch(
         }
         if active_subject_ids.contains(&workflow.id)
             || externally_active_workflows.contains(&workflow.id)
-            || workflow.subject.as_ref().is_some_and(|s| active_subject_ids.contains(s.id()))
+            || workflow.subject.as_ref().is_some_and(|s| active_subject_bare.contains(bare_subject_id(s.id())))
         {
             continue;
         }
         // Skip subjects whose detached runner from a previous daemon is still
         // alive (see `live_orphan_subjects` above).
-        if workflow.subject.as_ref().is_some_and(|s| live_orphan_subjects.contains(s.id()))
-            || (!workflow.task_id.is_empty() && live_orphan_subjects.contains(&workflow.task_id))
+        if workflow.subject.as_ref().is_some_and(|s| live_orphan_bare.contains(bare_subject_id(s.id())))
+            || (!workflow.task_id.is_empty() && live_orphan_bare.contains(bare_subject_id(&workflow.task_id)))
         {
             continue;
         }
@@ -447,6 +469,26 @@ mod tests {
             .status()
             .expect("git commit should run");
         assert!(commit.success(), "initial commit should succeed");
+    }
+
+    // REQ-052 fan-out fix: a delegating runner registers a QUALIFIED subject id
+    // (`task:TASK-1`) in `active_subject_ids`, while the remote node journals
+    // the same run's subject UPSTREAM in the BARE form (`TASK-1`). The orphan
+    // sweep's exclusion checks now normalize BOTH sides via `bare_subject_id`
+    // so they match; without it the node's own Running row was re-dispatched
+    // every tick, spawning a duplicate node.
+    #[test]
+    fn bare_subject_id_strips_leading_kind_prefix() {
+        use super::bare_subject_id;
+        assert_eq!(bare_subject_id("task:TASK-632"), "TASK-632");
+        assert_eq!(bare_subject_id("TASK-632"), "TASK-632"); // already bare — unchanged
+        assert_eq!(bare_subject_id("requirement:REQ-1"), "REQ-1");
+        assert_eq!(bare_subject_id("transcript:TRANSCRIPT-001"), "TRANSCRIPT-001");
+        // only the FIRST ':' is the kind separator; the remainder is preserved
+        assert_eq!(bare_subject_id("task:weird:id"), "weird:id");
+        assert_eq!(bare_subject_id(""), "");
+        // the qualified/bare pair that caused the fan-out must normalize equal
+        assert_eq!(bare_subject_id("task:TASK-632"), bare_subject_id("TASK-632"));
     }
 
     #[tokio::test]
