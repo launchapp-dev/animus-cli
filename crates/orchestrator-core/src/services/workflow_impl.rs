@@ -264,6 +264,13 @@ impl WorkflowServiceApi for InMemoryServiceHub {
         Ok(workflow.clone())
     }
 
+    async fn force_failed(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
+        let mut lock = self.state.write().await;
+        let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
+        WorkflowLifecycleExecutor::default().force_failed(workflow, error);
+        Ok(workflow.clone())
+    }
+
     async fn mark_merge_conflict(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
         let mut lock = self.state.write().await;
         let workflow = lock.workflows.get_mut(id).ok_or_else(|| not_found(format!("workflow not found: {id}")))?;
@@ -620,6 +627,26 @@ impl WorkflowServiceApi for FileServiceHub {
             state_machines,
         )
         .mark_completed_failed(&mut workflow, error);
+        manager.save(&workflow)?;
+        let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
+
+        self.state.write().await.workflows.insert(id.to_string(), workflow.clone());
+        Ok(workflow)
+    }
+
+    async fn force_failed(&self, id: &str, error: String) -> Result<OrchestratorWorkflow> {
+        let manager = self.workflow_manager();
+        let mut workflow = manager.load(id)?;
+        let state_machines = load_compiled_state_machines(self.project_root.as_path())?;
+        WorkflowLifecycleExecutor::with_state_machines(
+            crate::resolve_phase_plan_for_workflow_ref_for_actor(
+                Some(self.project_root.as_path()),
+                workflow.workflow_ref.as_deref(),
+                manager.load_workflow_actor(id).as_ref(),
+            )?,
+            state_machines,
+        )
+        .force_failed(&mut workflow, error);
         manager.save(&workflow)?;
         let workflow = manager.save_checkpoint(&workflow, CheckpointReason::StatusChange)?;
 

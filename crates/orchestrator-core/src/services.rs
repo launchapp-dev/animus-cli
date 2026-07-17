@@ -177,6 +177,11 @@ pub trait WorkflowServiceApi: Send + Sync {
     ) -> Result<OrchestratorWorkflow>;
     async fn fail_current_phase(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn mark_completed_failed(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
+
+    /// REQ-052 one-id backstop: force a NON-terminal run to `Failed`, no-op on
+    /// any terminal status (never clobbers a node-written terminal). Distinct
+    /// from `mark_completed_failed`, which only demotes a `Completed` run.
+    async fn force_failed(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn mark_merge_conflict(&self, id: &str, error: String) -> Result<OrchestratorWorkflow>;
     async fn resolve_merge_conflict(&self, id: &str) -> Result<OrchestratorWorkflow>;
     async fn record_feedback(&self, id: &str, feedback: String) -> Result<()>;

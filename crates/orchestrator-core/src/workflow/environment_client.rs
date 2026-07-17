@@ -273,12 +273,14 @@ impl EnvironmentClient {
         subject_id: String,
         workflow_ref: Option<String>,
         dispatch_input: Option<String>,
+        workflow_id: Option<String>,
         on_journal: F,
     ) -> Result<ExecSessionResponse>
     where
         F: Fn(&EnvironmentJournalEvent) + Send + Sync,
     {
-        let request = ExecSessionRequest { handle: handle.clone(), subject_id, workflow_ref, dispatch_input };
+        let request =
+            ExecSessionRequest { handle: handle.clone(), subject_id, workflow_ref, dispatch_input, workflow_id };
         let handle_id = handle.id.clone();
         let params =
             serde_json::to_value(&request).context("serializing ExecSessionRequest for environment/exec_session")?;
@@ -1172,6 +1174,7 @@ mod tests {
             subject_id: "task:TASK-1".to_string(),
             workflow_ref: Some("coding".to_string()),
             dispatch_input: None,
+            workflow_id: None,
         })
         .unwrap();
 
