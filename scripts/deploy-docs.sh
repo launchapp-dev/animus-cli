@@ -10,86 +10,19 @@ PATH="$repo_root/node_modules/.bin:$PATH"
 
 bash scripts/check-doc-sync.sh
 
-resolve_node_package_manager_bin() {
-  local bin_name="$1"
-  local node_bin
-  local sibling
-  local candidate
+source "$repo_root/scripts/docs-env.sh"
 
-  if command -v "$bin_name" >/dev/null 2>&1; then
-    command -v "$bin_name"
-    return 0
+vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
+if ! bash scripts/build-docs.sh >"$vitepress_build_log" 2>&1; then
+  if rg -q '@rollup/rollup-darwin-arm64|ERR_DLOPEN_FAILED|Team IDs' "$vitepress_build_log"; then
+    echo "Local VitePress build is blocked by the known Rollup macOS native-module signing issue." >&2
+    echo "Continuing to Vercel so the remote build can validate and publish the docs." >&2
+  else
+    cat "$vitepress_build_log" >&2
+    exit 1
   fi
-
-  if command -v node >/dev/null 2>&1; then
-    node_bin="$(command -v node)"
-    sibling="$(dirname "$node_bin")/$bin_name"
-    if [[ -x "$sibling" ]]; then
-      echo "$sibling"
-      return 0
-    fi
-  fi
-
-  for candidate in \
-    "$HOME/.nvm/versions/node"/*/bin/"$bin_name" \
-    "$HOME/.volta/bin/$bin_name" \
-    "$HOME/.fnm"/*/bin/"$bin_name" \
-    "$HOME/.asdf/shims/$bin_name" \
-    /opt/homebrew/bin/"$bin_name" \
-    /usr/local/bin/"$bin_name"
-  do
-    if [[ -x "$candidate" ]]; then
-      echo "$candidate"
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-resolve_timeout_bin() {
-  if command -v timeout >/dev/null 2>&1; then
-    command -v timeout
-    return 0
-  fi
-
-  if command -v gtimeout >/dev/null 2>&1; then
-    command -v gtimeout
-    return 0
-  fi
-
-  return 1
-}
-
-build_docs_once() {
-  local vitepress_build_log="$1"
-
-  rm -rf docs/.vitepress/.temp docs/.vitepress/.cache
-  vitepress build docs >"$vitepress_build_log" 2>&1
-}
-
-if command -v vitepress >/dev/null 2>&1; then
-  vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
-  if ! build_docs_once "$vitepress_build_log"; then
-    if rg -q "ERR_MODULE_NOT_FOUND.*docs/.vitepress/.temp.*\\.md\\.js|Cannot find module '.*/docs/.vitepress/.temp/.*\\.md\\.js'" "$vitepress_build_log"; then
-      echo "VitePress hit the transient missing-temp-module render failure; retrying once after a clean temp/cache reset." >&2
-      if ! build_docs_once "$vitepress_build_log"; then
-        cat "$vitepress_build_log" >&2
-        exit 1
-      fi
-    elif rg -q '@rollup/rollup-darwin-arm64|ERR_DLOPEN_FAILED|Team IDs' "$vitepress_build_log"; then
-      echo "Local VitePress build is blocked by the known Rollup macOS native-module signing issue." >&2
-      echo "Continuing to Vercel so the remote build can validate and publish the docs." >&2
-    else
-      cat "$vitepress_build_log" >&2
-      exit 1
-    fi
-  fi
-  rm -f "$vitepress_build_log"
-else
-  echo "vitepress not found. Install docs dependencies first (for example: npm install)." >&2
-  exit 1
 fi
+rm -f "$vitepress_build_log"
 
 echo "Deploying docs with Vercel..."
 echo "Prerequisites: network access for Vercel and a valid Vercel login."

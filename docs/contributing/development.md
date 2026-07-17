@@ -108,8 +108,9 @@ runs the sync check directly, uses the repo-local `vitepress` binary from
 `vercel` binary and falls back to `npx vercel --yes --prod` through
 `timeout`/`gtimeout`. The `npx` fallback points npm at a temporary cache
 directory so the deploy command does not depend on a writable `~/.npm/`.
-If VitePress hits the transient missing `.vitepress/.temp/*.md.js` render
-failure, the helper clears temp/cache state and retries the local build once
+`npm run docs:build` and `npm run docs:deploy` both use the same helper. If
+VitePress hits the transient missing `.vitepress/.temp/*.md.js` render
+failure, that helper clears temp/cache state and retries the local build once
 before failing.
 The deploy timeout defaults to `300` seconds and can be raised with
 `ANIMUS_VERCEL_TIMEOUT_SECONDS=<seconds> npm run docs:deploy`.
