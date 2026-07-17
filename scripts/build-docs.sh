@@ -24,8 +24,8 @@ vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
 trap 'rm -f "$vitepress_build_log"' EXIT
 
 if ! build_docs_once "$vitepress_build_log"; then
-  if rg -q "ERR_MODULE_NOT_FOUND.*docs/.vitepress/.temp.*\\.md\\.js|Cannot find module '.*/docs/.vitepress/.temp/.*\\.md\\.js'" "$vitepress_build_log"; then
-    echo "VitePress hit the transient missing-temp-module render failure; retrying once after a clean temp/cache reset." >&2
+  if rg -q "ERR_MODULE_NOT_FOUND.*docs/.vitepress/.temp/.*\\.js|Cannot find module '.*/docs/.vitepress/.temp/.*\\.js'" "$vitepress_build_log"; then
+    echo "VitePress hit the transient missing-temp-module render failure under docs/.vitepress/.temp; retrying once after a clean temp/cache reset." >&2
     if ! build_docs_once "$vitepress_build_log"; then
       cat "$vitepress_build_log" >&2
       exit 1
