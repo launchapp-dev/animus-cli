@@ -47,6 +47,20 @@ resolve_node_package_manager_bin() {
   return 1
 }
 
+resolve_timeout_bin() {
+  if command -v timeout >/dev/null 2>&1; then
+    command -v timeout
+    return 0
+  fi
+
+  if command -v gtimeout >/dev/null 2>&1; then
+    command -v gtimeout
+    return 0
+  fi
+
+  return 1
+}
+
 if command -v vitepress >/dev/null 2>&1; then
   rm -rf docs/.vitepress/.temp docs/.vitepress/.cache
   vitepress_build_log="$(mktemp "${TMPDIR:-/tmp}/animus-vitepress.XXXXXX")"
@@ -75,10 +89,37 @@ npx_bin="$(resolve_node_package_manager_bin npx)" || {
 
 npx_cache_dir="$(mktemp -d "${TMPDIR:-/tmp}/animus-vercel.XXXXXX")"
 trap 'rm -rf "$npx_cache_dir"' EXIT
+vercel_deploy_log="$(mktemp "${TMPDIR:-/tmp}/animus-vercel-deploy.XXXXXX")"
+trap 'rm -rf "$npx_cache_dir"; rm -f "$vercel_deploy_log"' EXIT
+timeout_bin="$(resolve_timeout_bin)" || {
+  echo "Unable to find timeout/gtimeout. Install coreutils or expose timeout in PATH." >&2
+  exit 1
+}
+vercel_timeout_seconds="${ANIMUS_VERCEL_TIMEOUT_SECONDS:-300}"
 echo "Using npx via $npx_bin."
 echo "Using temporary npm cache at $npx_cache_dir."
+echo "Bounding Vercel deploy to ${vercel_timeout_seconds}s via $timeout_bin."
+
+set +e
+CI=1 \
 npm_config_cache="$npx_cache_dir" \
 npm_config_fetch_retries=0 \
 npm_config_fetch_timeout=10000 \
 npm_config_fetch_retry_maxtimeout=10000 \
-  "$npx_bin" vercel --yes --prod
+  "$timeout_bin" --foreground "${vercel_timeout_seconds}s" \
+  "$npx_bin" vercel --yes --prod >"$vercel_deploy_log" 2>&1
+vercel_exit_code=$?
+set -e
+
+cat "$vercel_deploy_log"
+
+if [[ $vercel_exit_code -eq 124 ]]; then
+  echo "Vercel deploy timed out after ${vercel_timeout_seconds}s." >&2
+  echo "Increase ANIMUS_VERCEL_TIMEOUT_SECONDS if the site legitimately needs more time." >&2
+  exit 124
+fi
+
+if [[ $vercel_exit_code -ne 0 ]]; then
+  echo "Vercel deploy failed with exit code $vercel_exit_code." >&2
+  exit "$vercel_exit_code"
+fi

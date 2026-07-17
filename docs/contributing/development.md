@@ -104,9 +104,11 @@ pinned in the root `Cargo.toml` and `crates/orchestrator-cli/Cargo.toml`.
 `npm run docs:deploy` wraps the required preflight in order: sync check,
 production site build, then a Vercel production deploy. The deploy helper
 runs the sync check directly, uses the repo-local `vitepress` binary from
-`node_modules/.bin` for the site build, then runs `npx vercel --yes --prod`.
-The `npx` path points npm at a temporary cache directory so the deploy
-command does not depend on a writable `~/.npm/`.
+`node_modules/.bin` for the site build, then runs `npx vercel --yes --prod`
+through `timeout`/`gtimeout`. The `npx` path points npm at a temporary cache
+directory so the deploy command does not depend on a writable `~/.npm/`.
+The deploy timeout defaults to `300` seconds and can be raised with
+`ANIMUS_VERCEL_TIMEOUT_SECONDS=<seconds> npm run docs:deploy`.
 
 The deploy step assumes the shell is already authenticated with Vercel. When
 using `npx`, it also assumes the runner can reach `registry.npmjs.org` to
@@ -116,7 +118,8 @@ If `npm`/`npx` are missing from `PATH`, `scripts/deploy-docs.sh` also checks
 the repo-local `node_modules/.bin`, the active Node install's sibling `bin/`,
 common `nvm`/`volta`/`fnm`/`asdf` locations, and Homebrew paths before giving
 up. If none of those locations contain `npx`, the final Vercel deploy cannot
-proceed.
+proceed. The script also requires `timeout` (GNU coreutils) or `gtimeout`
+to bound the Vercel deploy step.
 
 Protocol schema exports live at the repo root:
 
