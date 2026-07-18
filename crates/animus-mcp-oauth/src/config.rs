@@ -52,11 +52,16 @@ pub struct ServerResolution {
 /// Build a keychain-backed [`SecretStore`] for `project_root`, mirroring the
 /// `animus secret` surface so OAuth tokens share the project's keychain
 /// scope.
+///
+/// Consults both the global `~/.animus/config.json` and the project-level
+/// `.animus/config.json` for the `secrets` configuration block so that
+/// per-project key-source overrides (e.g. `key_source = user-key`) are
+/// honored by `mcp auth --complete` and every other OAuth code path.
 pub fn build_secret_store(project_root: &Path) -> Result<Arc<dyn SecretStore>, ServerResolutionError> {
     let scoped_root = scoped_state_root(project_root)
         .ok_or_else(|| ServerResolutionError::NoScopedRoot(project_root.display().to_string()))?;
     let scope = resolve_keychain_scope(project_root, &scoped_root);
-    Ok(Arc::from(orchestrator_core::build_secret_store(&scope, scoped_root)))
+    Ok(Arc::from(orchestrator_core::build_secret_store_for_project(&scope, scoped_root, project_root)))
 }
 
 /// Pick the keychain service-scope string from the adopted scoped state

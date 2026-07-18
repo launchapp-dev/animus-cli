@@ -64,12 +64,18 @@ trait KeySource { fn key(&self) -> Result<Zeroizing<[u8; 32]>>; fn id(&self) -> 
 
 Selected by config `secret_key_source`:
 
-- `auto` (default): resolves to `device-id` today. The hardware key sources
-  (Secure Enclave / DPAPI / TPM) are deferred — see "Platform support" below —
-  so `auto` does not currently reach for an OS-hardware key.
+- `auto` (default): resolves in priority order — (1) `ANIMUS_SECRET_KEY` env var
+  → `user-key`; (2) `key_file` configured in the `secrets` block → `user-key`;
+  (3) `ANIMUS_SECRET_PASSPHRASE` env var → `passphrase`; (4) `device-id` fallback
+  (interactive hosts). Steps 1–3 make headless/server deployments work without
+  setting `key_source` explicitly: supplying the key via env or file is enough, and
+  `auto` selects the right source automatically. This avoids the
+  keyring-unavailable hard error and prevents the device-id redeploy wipe caused by
+  a new machine-id on container rebuild. The hardware key sources (Secure Enclave /
+  DPAPI / TPM) are deferred — see "Platform support" below.
 - `user-key`: operator-supplied 32-byte key from `ANIMUS_SECRET_KEY`
-  (hex or base64) or a `secret_key_file` path. For headless/server with a
-  deploy-injected key (systemd `LoadCredential`, mounted secret, external KMS).
+  (hex or base64) or a `key_file` path. For headless/server with a deploy-injected
+  key (systemd `LoadCredential`, mounted secret, external KMS).
 - `passphrase`: `Argon2id(passphrase, salt)`. The passphrase arrives via
   `ANIMUS_SECRET_PASSPHRASE` for both the CLI and the daemon — env-driven and
   script-safe, with no TTY-only path that would break under automation. In

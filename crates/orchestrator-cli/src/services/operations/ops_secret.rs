@@ -46,8 +46,10 @@ pub(crate) async fn handle_secret(
 }
 
 /// Copy every secret between backends (keyring <-> device store). Builds both
-/// ends explicitly via `build_backend` (independent of the configured default),
-/// verifies each copy, and only clears the source when `--remove-source` is set.
+/// ends explicitly via `build_backend_for_project` (independent of the configured
+/// default), verifies each copy, and only clears the source when `--remove-source`
+/// is set. Using the project-aware builder ensures `key_source`/`key_file` from
+/// `.animus/config.json` are honored when the device backend is the source or target.
 fn handle_migrate(
     args: SecretMigrateArgs,
     project_root: &Path,
@@ -61,8 +63,8 @@ fn handle_migrate(
         "keyring" => ("device", "keyring"),
         other => return Err(anyhow!("unknown migrate target '{other}' (expected: device or keyring)")),
     };
-    let source = orchestrator_core::build_backend(&scope, scoped_root.to_path_buf(), source_name);
-    let target = orchestrator_core::build_backend(&scope, scoped_root.to_path_buf(), target_name);
+    let source = orchestrator_core::build_backend_for_project(&scope, scoped_root.to_path_buf(), source_name, project_root);
+    let target = orchestrator_core::build_backend_for_project(&scope, scoped_root.to_path_buf(), target_name, project_root);
 
     let MigrationOutcome { migrated, remove_failures } =
         migrate_secrets(source.as_ref(), target.as_ref(), args.remove_source)?;
@@ -286,7 +288,7 @@ fn build_store(project_root: &Path) -> Result<Box<dyn SecretStore>> {
     let scoped_root = scoped_state_root(project_root)
         .ok_or_else(|| anyhow!("could not resolve scoped state root for project at {}", project_root.display()))?;
     let scope = resolve_keychain_scope(project_root, &scoped_root);
-    Ok(orchestrator_core::build_secret_store(&scope, scoped_root))
+    Ok(orchestrator_core::build_secret_store_for_project(&scope, scoped_root, project_root))
 }
 
 /// Pick the keychain service-scope string from the adopted scoped state

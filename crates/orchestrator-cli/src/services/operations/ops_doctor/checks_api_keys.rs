@@ -73,7 +73,7 @@ fn keychain_store(project_root: &Path) -> Option<Box<dyn SecretStore>> {
         .and_then(|s| s.to_str())
         .map(|s| s.to_string())
         .unwrap_or_else(|| repository_scope_for_path(project_root));
-    Some(orchestrator_core::build_secret_store(&scope, scoped_root))
+    Some(orchestrator_core::build_secret_store_for_project(&scope, scoped_root, project_root))
 }
 
 /// True when `name` resolves to a non-empty value in the project secret store.

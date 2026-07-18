@@ -319,27 +319,33 @@ fn restrict_dir(_path: &Path) {}
 /// Build the configured [`SecretStore`] for a repo scope. Reads the global
 /// `secrets` config to choose the backend. Conservative default: the OS keyring
 /// (existing installs are unchanged). Uses the device-encrypted store when
-/// `backend = device`, or when an encrypted store already exists for this scope
-/// (a migrated install keeps using it). This is the single seam the rest of the
-/// codebase constructs through, replacing direct `KeyringSecretStore::new`.
+/// `backend = device`, when an encrypted store already exists for this scope
+/// (a migrated install keeps using it), or when a server key source is
+/// configured/injected (headless install — avoids the keyring-unavailable error).
+/// This is the single seam the rest of the codebase constructs through.
 pub fn build_secret_store(repo_scope: &str, scoped_root: impl Into<PathBuf>) -> Box<dyn SecretStore> {
-    let scoped_root = scoped_root.into();
     let cfg = protocol::Config::load_global_if_exists().and_then(|c| c.secrets).unwrap_or_default();
-    let resolved = match cfg.backend.as_deref().unwrap_or("auto") {
-        "device" => "device",
-        "keyring" | "env" => "keyring",
-        // auto: keep using the device store once one exists (post-migration),
-        // otherwise stay on the keyring so existing secrets are never stranded.
-        _ => {
-            let device = DeviceEncryptedSecretStore::new(scoped_root.clone(), key_source_config(&cfg));
-            if device.path().exists() {
-                "device"
-            } else {
-                "keyring"
-            }
-        }
-    };
-    build_backend(repo_scope, scoped_root, resolved)
+    build_with_cfg(repo_scope, scoped_root.into(), &cfg)
+}
+
+/// Build the configured [`SecretStore`], consulting both the global config
+/// (`~/.animus/config.json`) and the project-level `.animus/config.json`. The
+/// project config's `secrets` block takes precedence over the global config's,
+/// so per-project deployments can override the key source without touching the
+/// global config.
+///
+/// Use this instead of [`build_secret_store`] in surfaces that have access to
+/// the project root (e.g. `mcp auth --complete`) so that writing `key_source`
+/// into the project-level config is honored end-to-end.
+pub fn build_secret_store_for_project(
+    repo_scope: &str,
+    scoped_root: impl Into<PathBuf>,
+    project_root: &Path,
+) -> Box<dyn SecretStore> {
+    let global = protocol::Config::load_global_if_exists().and_then(|c| c.secrets).unwrap_or_default();
+    let project = load_project_secrets_config(project_root);
+    let cfg = merge_secrets_config(global, project);
+    build_with_cfg(repo_scope, scoped_root.into(), &cfg)
 }
 
 /// Build a SPECIFIC backend by name (`"device"` or anything else → keyring),
@@ -352,6 +358,96 @@ pub fn build_backend(repo_scope: &str, scoped_root: impl Into<PathBuf>, backend:
         Box::new(DeviceEncryptedSecretStore::new(scoped_root, key_source_config(&cfg)))
     } else {
         Box::new(crate::secret_store::KeyringSecretStore::new(repo_scope, scoped_root))
+    }
+}
+
+/// Same as [`build_backend`] but also loads the project-level `.animus/config.json`
+/// so `key_source`/`key_file` set in the project config are honored when explicitly
+/// building the device backend (e.g. for `animus secret migrate`). The project
+/// config's `secrets` block wins field-by-field over the global config.
+pub fn build_backend_for_project(
+    repo_scope: &str,
+    scoped_root: impl Into<PathBuf>,
+    backend: &str,
+    project_root: &Path,
+) -> Box<dyn SecretStore> {
+    let scoped_root = scoped_root.into();
+    if backend == "device" {
+        let global = protocol::Config::load_global_if_exists().and_then(|c| c.secrets).unwrap_or_default();
+        let project = load_project_secrets_config(project_root);
+        let cfg = merge_secrets_config(global, project);
+        Box::new(DeviceEncryptedSecretStore::new(scoped_root, key_source_config(&cfg)))
+    } else {
+        Box::new(crate::secret_store::KeyringSecretStore::new(repo_scope, scoped_root))
+    }
+}
+
+/// Core builder: choose backend from `cfg` and construct the store.
+fn build_with_cfg(repo_scope: &str, scoped_root: PathBuf, cfg: &protocol::SecretsConfig) -> Box<dyn SecretStore> {
+    let backend = resolve_auto_backend(cfg, &scoped_root);
+    if backend == "device" {
+        Box::new(DeviceEncryptedSecretStore::new(scoped_root, key_source_config(cfg)))
+    } else {
+        Box::new(crate::secret_store::KeyringSecretStore::new(repo_scope, scoped_root))
+    }
+}
+
+/// Resolve which storage backend to use given a [`protocol::SecretsConfig`].
+///
+/// `auto` rules (applied in order):
+/// 1. An operator-configured or env-injected server key source (`user-key` /
+///    `passphrase` / `ANIMUS_SECRET_KEY` / `ANIMUS_SECRET_PASSPHRASE`) →
+///    `device`. The operator has signaled they want device-encrypted storage;
+///    on headless hosts this avoids the OS-keyring-unavailable hard error.
+/// 2. A device-encrypted store already exists for this scope → `device`.
+///    Post-migration installs continue using the device store.
+/// 3. Fall back to `keyring` (existing desktop installs are unchanged).
+fn resolve_auto_backend(cfg: &protocol::SecretsConfig, scoped_root: &Path) -> &'static str {
+    match cfg.backend.as_deref().unwrap_or("auto") {
+        "device" => "device",
+        "keyring" | "env" => "keyring",
+        _ => {
+            if has_server_key_configured(cfg) {
+                return "device";
+            }
+            let device = DeviceEncryptedSecretStore::new(scoped_root.to_path_buf(), key_source_config(cfg));
+            if device.path().exists() { "device" } else { "keyring" }
+        }
+    }
+}
+
+/// True when a server-appropriate key source is available: explicitly configured
+/// via `key_source`, a `key_file` path (honored by `auto` and `user-key`), or
+/// injected via the corresponding env var.
+fn has_server_key_configured(cfg: &protocol::SecretsConfig) -> bool {
+    use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
+    matches!(cfg.key_source.as_deref(), Some("user-key") | Some("user_key") | Some("passphrase"))
+        || cfg.key_file.is_some()
+        || std::env::var(ENV_USER_KEY).is_ok()
+        || std::env::var(ENV_PASSPHRASE).is_ok()
+}
+
+/// Read the project-level `.animus/config.json` and return its `secrets` block.
+/// Returns `None` when the file is absent or unparseable (side-effect-free).
+fn load_project_secrets_config(project_root: &Path) -> Option<protocol::SecretsConfig> {
+    let path = project_root.join(".animus").join("config.json");
+    if !path.exists() {
+        return None;
+    }
+    let content = std::fs::read_to_string(&path).ok()?;
+    serde_json::from_str::<protocol::Config>(&content).ok()?.secrets
+}
+
+/// Merge two [`protocol::SecretsConfig`] values; `project` wins field-by-field.
+fn merge_secrets_config(
+    global: protocol::SecretsConfig,
+    project: Option<protocol::SecretsConfig>,
+) -> protocol::SecretsConfig {
+    let Some(proj) = project else { return global };
+    protocol::SecretsConfig {
+        backend: proj.backend.or(global.backend),
+        key_source: proj.key_source.or(global.key_source),
+        key_file: proj.key_file.or(global.key_file),
     }
 }
 
@@ -377,6 +473,7 @@ fn key_source_config(cfg: &protocol::SecretsConfig) -> KeySourceConfig {
 mod tests {
     use super::*;
     use crate::secret_keysource::{KeySourceConfig, KeySourceKind};
+    use crate::secret_keysource::tests::env_lock;
 
     // A user-key store backed by a per-test key FILE, so tests need no shared
     // process env and never race each other.
@@ -392,6 +489,9 @@ mod tests {
 
     #[test]
     fn round_trip_set_get_list_delete() {
+        // UserKeySource::resolve checks ANIMUS_SECRET_KEY first; hold env_lock
+        // so tests that mutate the var cannot race this key-file-based test.
+        let _guard = env_lock().lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let s = store(tmp.path());
         assert_eq!(s.get("API_KEY").unwrap(), None);
@@ -409,6 +509,7 @@ mod tests {
 
     #[test]
     fn file_is_not_plaintext() {
+        let _guard = env_lock().lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let s = store(tmp.path());
         s.set("API_KEY", "PLAINTEXT_NEEDLE").unwrap();
@@ -418,6 +519,7 @@ mod tests {
 
     #[test]
     fn tamper_fails_closed() {
+        let _guard = env_lock().lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         let s = store(tmp.path());
         s.set("API_KEY", "v").unwrap();
@@ -430,10 +532,189 @@ mod tests {
 
     #[test]
     fn wrong_device_key_cannot_decrypt() {
+        let _guard = env_lock().lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         store_with_key(tmp.path(), "right.key", [3u8; KEY_LEN]).set("API_KEY", "v").unwrap();
         // Simulate the file moved to a machine with a different key.
         let wrong = store_with_key(tmp.path(), "wrong.key", [9u8; KEY_LEN]);
         assert!(wrong.get("API_KEY").is_err(), "a different device/user key must not decrypt the store");
+    }
+
+    // --- build_secret_store_for_project / merge / resolve_auto_backend ---
+
+    fn write_project_secrets_config(project_root: &Path, key_source: Option<&str>, key_file: Option<&str>) {
+        let animus_dir = project_root.join(".animus");
+        std::fs::create_dir_all(&animus_dir).unwrap();
+        let cfg = serde_json::json!({
+            "secrets": {
+                "key_source": key_source,
+                "key_file": key_file,
+                "backend": "device"
+            }
+        });
+        std::fs::write(animus_dir.join("config.json"), serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn merge_secrets_config_project_wins_field_by_field() {
+        let global = protocol::SecretsConfig {
+            backend: Some("keyring".to_string()),
+            key_source: Some("device-id".to_string()),
+            key_file: Some("/global/key".to_string()),
+        };
+        let project = Some(protocol::SecretsConfig {
+            backend: None,
+            key_source: Some("user-key".to_string()),
+            key_file: None,
+        });
+        let merged = merge_secrets_config(global, project);
+        // project key_source wins; global backend/key_file kept where project has None
+        assert_eq!(merged.key_source.as_deref(), Some("user-key"));
+        assert_eq!(merged.backend.as_deref(), Some("keyring"));
+        assert_eq!(merged.key_file.as_deref(), Some("/global/key"));
+    }
+
+    #[test]
+    fn merge_secrets_config_no_project_returns_global() {
+        let global = protocol::SecretsConfig {
+            backend: Some("device".to_string()),
+            key_source: Some("user-key".to_string()),
+            key_file: Some("/k".to_string()),
+        };
+        let merged = merge_secrets_config(global.clone(), None);
+        assert_eq!(merged, global);
+    }
+
+    #[test]
+    fn has_server_key_configured_env_user_key() {
+        use crate::secret_keysource::ENV_USER_KEY;
+        let cfg = protocol::SecretsConfig::default();
+        let _guard = env_lock().lock().unwrap();
+        let prev = std::env::var(ENV_USER_KEY).ok();
+        // Use a valid 32-byte hex key so other tests do not see an invalid value
+        // if this key somehow outlives its lock window.
+        std::env::set_var(ENV_USER_KEY, hex::encode([0xEEu8; KEY_LEN]));
+        let result = has_server_key_configured(&cfg);
+        match &prev {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        assert!(result, "has_server_key_configured must be true when ANIMUS_SECRET_KEY is set");
+    }
+
+    #[test]
+    fn has_server_key_configured_via_config_key_source() {
+        let cfg = protocol::SecretsConfig { key_source: Some("user-key".to_string()), ..Default::default() };
+        assert!(has_server_key_configured(&cfg));
+        let cfg2 = protocol::SecretsConfig { key_source: Some("passphrase".to_string()), ..Default::default() };
+        assert!(has_server_key_configured(&cfg2));
+        let cfg3 = protocol::SecretsConfig { key_source: Some("device-id".to_string()), ..Default::default() };
+        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
+        use crate::secret_keysource::tests::env_lock;
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::remove_var(ENV_PASSPHRASE);
+        let result = has_server_key_configured(&cfg3);
+        if let Some(v) = prev_key { std::env::set_var(ENV_USER_KEY, v) }
+        if let Some(v) = prev_pass { std::env::set_var(ENV_PASSPHRASE, v) }
+        assert!(!result, "device-id key source must not count as a server key");
+    }
+
+    #[test]
+    fn has_server_key_configured_with_key_file() {
+        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
+        let cfg = protocol::SecretsConfig { key_file: Some("/srv/animus/secret.key".to_string()), ..Default::default() };
+        // Remove env vars so only key_file drives the result.
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::remove_var(ENV_PASSPHRASE);
+        let result = has_server_key_configured(&cfg);
+        if let Some(v) = prev_key { std::env::set_var(ENV_USER_KEY, v) }
+        if let Some(v) = prev_pass { std::env::set_var(ENV_PASSPHRASE, v) }
+        assert!(result, "key_file in secrets config must count as a server key source");
+    }
+
+    #[test]
+    fn build_secret_store_for_project_reads_project_config() {
+        crate::test_env::stable_test_home();
+        let _guard = env_lock().lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let key = [0xABu8; KEY_LEN];
+        let key_file = tmp.path().join("server.key");
+        std::fs::write(&key_file, hex::encode(key)).unwrap();
+        write_project_secrets_config(&project_dir, Some("user-key"), Some(key_file.to_str().unwrap()));
+        let scope = "test-project-scope";
+        let scoped_root = tmp.path().join("state");
+        std::fs::create_dir_all(&scoped_root).unwrap();
+        // Ensure ANIMUS_SECRET_KEY is not set so the key file is used.
+        use crate::secret_keysource::ENV_USER_KEY;
+        let prev = std::env::var(ENV_USER_KEY).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        let store = build_secret_store_for_project(scope, scoped_root, &project_dir);
+        let set_result = store.set("FOO", "bar");
+        if let Some(v) = prev { std::env::set_var(ENV_USER_KEY, v) }
+        set_result.expect("project-config-sourced store must accept writes");
+        assert_eq!(store.get("FOO").unwrap().as_deref(), Some("bar"));
+    }
+
+    #[test]
+    fn resolve_auto_backend_uses_device_when_server_key_in_cfg() {
+        let cfg = protocol::SecretsConfig {
+            backend: None,
+            key_source: Some("user-key".to_string()),
+            key_file: None,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        // No pre-existing device store — but server key is configured.
+        assert_eq!(resolve_auto_backend(&cfg, dir.path()), "device");
+    }
+
+    #[test]
+    fn resolve_auto_backend_falls_back_to_keyring_without_server_key() {
+        use crate::secret_keysource::{ENV_PASSPHRASE, ENV_USER_KEY};
+        use crate::secret_keysource::tests::env_lock;
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::remove_var(ENV_PASSPHRASE);
+        let cfg = protocol::SecretsConfig::default();
+        let dir = tempfile::tempdir().unwrap();
+        let result = resolve_auto_backend(&cfg, dir.path());
+        if let Some(v) = prev_key { std::env::set_var(ENV_USER_KEY, v) }
+        if let Some(v) = prev_pass { std::env::set_var(ENV_PASSPHRASE, v) }
+        assert_eq!(result, "keyring", "auto without a server key and no existing store must fall back to keyring");
+    }
+
+    #[test]
+    fn build_backend_for_project_honors_project_key_source() {
+        crate::test_env::stable_test_home();
+        let _guard = env_lock().lock().unwrap();
+        use crate::secret_keysource::ENV_USER_KEY;
+        let tmp = tempfile::tempdir().unwrap();
+        let project_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let key = [0xCDu8; KEY_LEN];
+        let key_file = tmp.path().join("migrate.key");
+        std::fs::write(&key_file, hex::encode(key)).unwrap();
+        // Write project config with user-key source and a key_file.
+        write_project_secrets_config(&project_dir, Some("user-key"), Some(key_file.to_str().unwrap()));
+        let scope = "test-migrate-scope";
+        let scoped_root = tmp.path().join("state");
+        std::fs::create_dir_all(&scoped_root).unwrap();
+        // Remove env var so only the key_file drives the device store key.
+        let prev = std::env::var(ENV_USER_KEY).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        let store = build_backend_for_project(scope, scoped_root, "device", &project_dir);
+        let set_result = store.set("MIGRATE_KEY", "value");
+        if let Some(v) = prev { std::env::set_var(ENV_USER_KEY, v) }
+        set_result.expect("build_backend_for_project must honor project key_file for the device backend");
+        assert_eq!(store.get("MIGRATE_KEY").unwrap().as_deref(), Some("value"));
     }
 }

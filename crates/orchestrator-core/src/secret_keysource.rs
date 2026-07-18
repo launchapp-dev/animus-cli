@@ -306,20 +306,59 @@ pub fn resolve_key_source(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<d
             Ok(Box::new(PassphraseKeySource::resolve(config.passphrase.as_ref().map(|p| p.as_str()), salt)?))
         }
         KeySourceKind::DeviceId => Ok(Box::new(DeviceIdKeySource::resolve(salt)?)),
-        KeySourceKind::Auto => resolve_auto(salt),
+        KeySourceKind::Auto => resolve_auto(config, salt),
     }
 }
 
 /// `auto`: prefer an OS hardware-backed key, fall back to `device-id`. Hardware
 /// providers (Secure Enclave / DPAPI / TPM) are wired in per platform; until a
-/// platform's provider lands, `auto` resolves to `device-id` there.
-fn resolve_auto(salt: &[u8]) -> Result<Box<dyn KeySource>> {
+/// platform's provider lands, `auto` resolves per the following priority:
+///
+/// 1. `ANIMUS_SECRET_KEY` env var → `user-key` (runtime-injected key; highest priority)
+/// 2. `key_file` from `config` → `user-key` (operator-configured file; headless-safe)
+/// 3. `ANIMUS_SECRET_PASSPHRASE` env var → `passphrase` (Argon2id KDF; headless-safe)
+/// 4. `device-id` (fallback; interactive hosts only — binding, not on-device-secret-safe)
+///
+/// Steps 1–3 let headless/server deployments work without setting
+/// `secret_key_source` explicitly: they just supply the key material (via env
+/// or file) and `auto` does the right thing. This avoids the keyring-unavailable
+/// hard error and prevents the device-id redeploy wipe caused by a new machine-id.
+///
+/// The priority here MUST mirror `has_server_key_configured` in
+/// `secret_device_store` — that function picks the `device` backend for the
+/// same set of conditions; if a condition triggers backend=device but this
+/// function falls through to `device-id`, the store will be sealed with the
+/// wrong key and reads will fail.
+fn resolve_auto(config: &KeySourceConfig, salt: &[u8]) -> Result<Box<dyn KeySource>> {
+    // Prefer operator-supplied key: env var wins over key_file so runtime
+    // injection (e.g. Docker secrets via envFrom) takes precedence over a
+    // file configured in the project/global config. If only key_file is set,
+    // UserKeySource::resolve will still try the env first then the file.
+    if std::env::var(ENV_USER_KEY).is_ok() || config.key_file.is_some() {
+        return Ok(Box::new(UserKeySource::resolve(config.key_file.as_deref())?));
+    }
+    // Passphrase env var: also a headless-safe server source. The backend
+    // selector (`has_server_key_configured`) already counts this as a
+    // "server key" and picks the device backend; resolve to the matching
+    // key source here so the two paths stay in sync.
+    if std::env::var(ENV_PASSPHRASE).is_ok() {
+        return Ok(Box::new(PassphraseKeySource::resolve(None, salt)?));
+    }
     Ok(Box::new(DeviceIdKeySource::resolve(salt)?))
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use std::sync::{Mutex, OnceLock};
+
+    /// Serialize all tests that mutate process-wide env vars so they cannot
+    /// race each other. Any test that calls `set_var`/`remove_var` must hold
+    /// this lock for the duration of the mutation + observation window.
+    pub(crate) fn env_lock() -> &'static Mutex<()> {
+        static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        ENV_LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn key_source_kind_parse_round_trips() {
@@ -350,6 +389,79 @@ mod tests {
         let b = PassphraseKeySource::derive(b"correct horse", &salt_b).unwrap();
         assert_eq!(*a1.key().unwrap(), *a2.key().unwrap(), "same passphrase+salt must derive the same key");
         assert_ne!(*a1.key().unwrap(), *b.key().unwrap(), "different salt must derive a different key");
+    }
+
+    #[test]
+    fn resolve_auto_uses_user_key_when_env_is_set() {
+        use base64::Engine;
+        let raw = [0x42u8; KEY_LEN];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+        let _guard = env_lock().lock().unwrap();
+        let prev = std::env::var(ENV_USER_KEY).ok();
+        std::env::set_var(ENV_USER_KEY, &b64);
+        let salt = [0u8; 16];
+        let result = resolve_auto(&KeySourceConfig::default(), &salt);
+        match &prev {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        let src = result.expect("resolve_auto with ANIMUS_SECRET_KEY set should succeed");
+        assert_eq!(src.id(), "user-key", "auto must resolve to user-key when ANIMUS_SECRET_KEY is set");
+        assert_eq!(*src.key().unwrap(), raw);
+    }
+
+    #[test]
+    fn resolve_auto_uses_user_key_when_key_file_configured() {
+        let raw = [0x55u8; KEY_LEN];
+        let tmp = tempfile::tempdir().unwrap();
+        let key_file = tmp.path().join("server.key");
+        std::fs::write(&key_file, hex::encode(raw)).unwrap();
+        let _guard = env_lock().lock().unwrap();
+        let prev = std::env::var(ENV_USER_KEY).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        let config = KeySourceConfig { kind_override: None, key_file: Some(key_file), passphrase: None };
+        let salt = [0u8; 16];
+        let result = resolve_auto(&config, &salt);
+        match &prev {
+            Some(v) => std::env::set_var(ENV_USER_KEY, v),
+            None => std::env::remove_var(ENV_USER_KEY),
+        }
+        let src = result.expect("resolve_auto with key_file configured should succeed");
+        assert_eq!(src.id(), "user-key", "auto must resolve to user-key when key_file is configured");
+        assert_eq!(*src.key().unwrap(), raw);
+    }
+
+    #[test]
+    fn resolve_auto_uses_passphrase_when_passphrase_env_is_set() {
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::remove_var(ENV_USER_KEY);
+        std::env::set_var(ENV_PASSPHRASE, "headless-passphrase");
+        let salt = [0xAAu8; 16];
+        let result = resolve_auto(&KeySourceConfig::default(), &salt);
+        match &prev_key { Some(v) => std::env::set_var(ENV_USER_KEY, v), None => std::env::remove_var(ENV_USER_KEY) }
+        match &prev_pass { Some(v) => std::env::set_var(ENV_PASSPHRASE, v), None => std::env::remove_var(ENV_PASSPHRASE) }
+        let src = result.expect("resolve_auto with ANIMUS_SECRET_PASSPHRASE set should succeed");
+        assert_eq!(src.id(), "passphrase", "auto must resolve to passphrase when ANIMUS_SECRET_PASSPHRASE is set");
+    }
+
+    #[test]
+    fn resolve_auto_user_key_wins_over_passphrase() {
+        use base64::Engine;
+        let raw = [0x99u8; KEY_LEN];
+        let b64 = base64::engine::general_purpose::STANDARD.encode(raw);
+        let _guard = env_lock().lock().unwrap();
+        let prev_key = std::env::var(ENV_USER_KEY).ok();
+        let prev_pass = std::env::var(ENV_PASSPHRASE).ok();
+        std::env::set_var(ENV_USER_KEY, &b64);
+        std::env::set_var(ENV_PASSPHRASE, "also-set");
+        let salt = [0u8; 16];
+        let result = resolve_auto(&KeySourceConfig::default(), &salt);
+        match &prev_key { Some(v) => std::env::set_var(ENV_USER_KEY, v), None => std::env::remove_var(ENV_USER_KEY) }
+        match &prev_pass { Some(v) => std::env::set_var(ENV_PASSPHRASE, v), None => std::env::remove_var(ENV_PASSPHRASE) }
+        let src = result.expect("resolve_auto with both env vars set should succeed");
+        assert_eq!(src.id(), "user-key", "user-key env must take priority over passphrase env");
     }
 
     #[test]
