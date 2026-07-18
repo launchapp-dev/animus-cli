@@ -30,18 +30,18 @@ categories = ["command-line-utilities", "development-tools"]
 # animus-subject-protocol resolves to one source (no duplicate-crate type
 # mismatches). animus-plugin-protocol/runtime remain in-tree pending a
 # follow-up move.
-animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6" }
-animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6" }
-animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6" }
-animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6" }
-animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6" }
-animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6" }
-animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6" }
+animus-plugin-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9" }
+animus-actor = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9" }
+animus-config-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9" }
+animus-journal-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9" }
+animus-provider-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9" }
+animus-session-backend = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9" }
+animus-subject-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9" }
 # v0.7: environment plugin kind — EnvironmentSpec/HarnessCommand/ExecRequest wire
 # types + prepare/exec/exec_stream/teardown methods. Consumed by the routing
 # resolver + the follow-on runtime EnvironmentClient (not yet built).
-animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6" }
-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.6", package = "protocol" }
+animus-environment-protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9" }
+protocol = { git = "https://github.com/launchapp-dev/animus-protocol", tag = "v0.7.0-rc.9", package = "protocol" }
 orchestrator-daemon-runtime = { path = "crates/orchestrator-daemon-runtime" }
 orchestrator-logging = { path = "crates/orchestrator-logging" }
 orchestrator-plugin-host = { path = "crates/orchestrator-plugin-host" }

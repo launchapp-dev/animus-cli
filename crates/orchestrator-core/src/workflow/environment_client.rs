@@ -20,25 +20,44 @@
 //!
 //! ## Resident-host model
 //!
-//! Mirrors [`super::journal_client`] and
-//! `orchestrator_config::workflow_config::config_source_client`: the client
-//! routes every RPC through the process-global [`ResidentHostRegistry`] — ONE
-//! warm plugin host per binary, kept across calls, with a death-aware
-//! reap+respawn+retry-once wrapper ([`with_resident_host`]) and a sync↔async
-//! bridge ([`run_blocking`]).
+//! Draws on the process-global [`ResidentHostRegistry`] like
+//! [`super::journal_client`] and
+//! `orchestrator_config::workflow_config::config_source_client`, but with a
+//! crucial difference: those roles are STATELESS, so they take a fresh lease per
+//! call and let the host be shared / evicted between calls. Environment plugins
+//! are STATEFUL across the three-call contract — `prepare` registers an in-memory
+//! run (e.g. a live WS relay to a remote node) that `exec` / `exec_stream` /
+//! `teardown` reuse by handle — so this client instead acquires ONE
+//! [`ResidentHostLease`] on the first RPC and PINS it for its lifetime (see
+//! [`EnvironmentClient::pinned_host`]). Every RPC therefore lands on the SAME warm
+//! process, and the lease keeps that process safe from LRU eviction /
+//! ping-reaping between `prepare` and `exec` (which would otherwise drop the
+//! in-memory registration and surface as `no live relay connection for handle`).
+//! A sync↔async bridge ([`run_blocking`]) drives the calls from the sync API.
+//!
+//! Death handling splits by call kind. `exec` / `exec_stream` are AT-MOST-ONCE: a
+//! death-like failure is NOT retried — the RPC may already have run with side
+//! effects, and the run's in-memory state died with the process, so the call
+//! fails and any orphaned remote node is reclaimed by the plugin's own GC sweep.
+//! The idempotent CONTROL ops (`prepare` / `teardown`) DO retry once: a `prepare`
+//! that died before returning its handle left nothing usable, so a fresh prepare
+//! on a fresh host is the correct recovery (and re-pins that host for the rest of
+//! the run), and `teardown` is a dispose-by-id. Either way a dead lease is REAPED
+//! — dropped from this client and its generation invalidated in the registry — so
+//! the retry (or the NEXT run) spawns a live process instead of re-leasing the
+//! corpse (which would otherwise keep failing with `ConnectionLost` until
+//! LRU/shutdown).
 //!
 //! Environment plugins spawn with the same base context as `config_source` /
-//! `workflow_journal` (full parent env forwarded, no working dir), so a single
-//! plugin binary that ALSO serves one of those roles collapses to one shared
-//! process (see [`orchestrator_plugin_host::resident_host_registry`] for the
-//! spawn-context fingerprint semantics). Environment plugins run full-env because
-//! they materialize workspaces (clone URLs, region/host config) the same way
-//! config_source replaces the kernel's env-reading interpolator. Unlike those
-//! non-streaming roles, environment honors the manifest's
-//! `notification_buffer_size` (it is the streaming role — `exec_stream` fans
-//! `environment/output` through the host broadcast channel), so a plugin that
-//! declares a larger buffer gets its own correctly-sized host; a plugin that
-//! declares none still shares the collapsed process.
+//! `workflow_journal` (full parent env forwarded, no working dir); the pinned
+//! lease is keyed by the same binary-path + mtime + spawn-context fingerprint
+//! (see [`orchestrator_plugin_host::resident_host_registry`]). Environment plugins
+//! run full-env because they materialize workspaces (clone URLs, region/host
+//! config) the same way config_source replaces the kernel's env-reading
+//! interpolator. Unlike those non-streaming roles, environment honors the
+//! manifest's `notification_buffer_size` (it is the streaming role — `exec_stream`
+//! fans `environment/output` through the host broadcast channel), so a plugin that
+//! declares a larger buffer gets a correctly-sized host.
 //!
 //! ## Discovery
 //!
@@ -59,9 +78,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use animus_environment_protocol::{
-    EnvironmentHandle, EnvironmentSpec, ExecRequest, ExecResponse, ExecStream, HarnessCommand, PrepareRequest,
-    PrepareResponse, TeardownRequest, TeardownResponse, METHOD_ENVIRONMENT_EXEC, METHOD_ENVIRONMENT_EXEC_STREAM,
-    METHOD_ENVIRONMENT_PREPARE, METHOD_ENVIRONMENT_TEARDOWN, NOTIFICATION_ENVIRONMENT_OUTPUT,
+    EnvironmentHandle, EnvironmentSpec, ExecRequest, ExecResponse, ExecSessionRequest, ExecSessionResponse, ExecStream,
+    HarnessCommand, PrepareRequest, PrepareResponse, TeardownRequest, TeardownResponse, METHOD_ENVIRONMENT_EXEC,
+    METHOD_ENVIRONMENT_EXEC_SESSION, METHOD_ENVIRONMENT_EXEC_STREAM, METHOD_ENVIRONMENT_PREPARE,
+    METHOD_ENVIRONMENT_TEARDOWN, NOTIFICATION_ENVIRONMENT_JOURNAL, NOTIFICATION_ENVIRONMENT_OUTPUT,
 };
 use animus_plugin_protocol::PLUGIN_KIND_ENVIRONMENT;
 use anyhow::{anyhow, Context, Result};
@@ -91,11 +111,36 @@ const EXEC_RPC_TIMEOUT_HEADROOM: Duration = Duration::from_secs(30);
 
 /// Host-side client bound to one installed `environment` plugin for one project
 /// root. Cheap to construct (discovery only, no spawn); the warm plugin process
-/// is spawned lazily on the first RPC and shared via the resident-host registry.
-#[derive(Debug, Clone)]
+/// is spawned lazily on the first RPC and PINNED for the client's lifetime.
+///
+/// Environment plugins are STATEFUL across the three-call contract: `prepare`
+/// registers an in-memory run (e.g. a live WS relay connection to a remote node)
+/// that `exec` / `exec_stream` / `teardown` then reuse by handle. A per-call
+/// resident-host lease (as the stateless `config_source` / `journal` roles use)
+/// would drop the lease between calls, letting the shared registry LRU-evict or
+/// ping-reap the process BETWEEN `prepare` and `exec` — losing that in-memory
+/// state (surfacing as `no live relay connection for handle`). This client
+/// therefore holds ONE [`ResidentHostLease`] for its own lifetime, so every RPC
+/// lands on the SAME pinned process. Non-`Clone` on purpose: callers share it via
+/// `Arc` so the single lease is not duplicated.
 pub struct EnvironmentClient {
     plugin: DiscoveredPlugin,
     project_root: PathBuf,
+    /// The resident-host lease pinned for this client's lifetime, acquired lazily
+    /// on the first RPC (see [`Self::pinned_host`]) and then reused by every
+    /// subsequent call so `prepare` → `exec`/`exec_stream` → `teardown` share the
+    /// SAME plugin process (and thus its in-memory run state).
+    pinned: tokio::sync::Mutex<Option<ResidentHostLease>>,
+}
+
+impl std::fmt::Debug for EnvironmentClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // `pinned` holds a `ResidentHostLease` (not `Debug`); omit it.
+        f.debug_struct("EnvironmentClient")
+            .field("plugin", &self.plugin)
+            .field("project_root", &self.project_root)
+            .finish_non_exhaustive()
+    }
 }
 
 impl EnvironmentClient {
@@ -116,7 +161,7 @@ impl EnvironmentClient {
             ));
         }
         let plugin = select_environment_plugin(plugins, plugin_id)?;
-        Ok(Self { plugin, project_root: project_root.to_path_buf() })
+        Ok(Self { plugin, project_root: project_root.to_path_buf(), pinned: tokio::sync::Mutex::new(None) })
     }
 
     /// The bound plugin's discovered name.
@@ -145,12 +190,12 @@ impl EnvironmentClient {
     /// its own limit; `timeout = None` leaves the RPC unbounded (the environment
     /// enforces its own policy) so an un-timed long command is not aborted.
     ///
-    /// AT-MOST-ONCE: unlike the control RPCs, exec is NOT retried on a death-like
-    /// host failure — a harness command may have side effects (file mutations,
-    /// git, deploys) and could already have run before the plugin died, so a
-    /// blind retry risks double-execution. A spawn happens once (the command has
-    /// not run yet at spawn time); a failure after the request is sent surfaces
-    /// as an error for the caller to handle.
+    /// AT-MOST-ONCE: exec runs against the client's pinned host and is NOT retried
+    /// on a death-like host failure — a harness command may have side effects (file
+    /// mutations, git, deploys) and could already have run before the plugin died,
+    /// so a blind retry risks double-execution; and the pinned process holds the
+    /// run's in-memory state, which a fresh process could not recover anyway. A
+    /// failure surfaces as an error for the caller to handle.
     pub fn exec(
         &self,
         handle: &EnvironmentHandle,
@@ -162,7 +207,7 @@ impl EnvironmentClient {
         let request = build_exec_request(handle, command, extra_env, stdin, timeout);
         let rpc_timeout = exec_rpc_timeout(request.timeout_secs);
         let params = serde_json::to_value(&request).context("serializing ExecRequest for environment/exec")?;
-        let value = run_blocking(with_resident_host_once(&self.plugin, &self.project_root, move |host| async move {
+        let value = run_blocking(self.with_pinned_host(move |host| async move {
             environment_rpc(&host, METHOD_ENVIRONMENT_EXEC, params, rpc_timeout).await
         }))??;
         serde_json::from_value(value)
@@ -205,12 +250,47 @@ impl EnvironmentClient {
         let handle_id = handle.id.clone();
         let params = serde_json::to_value(&request).context("serializing ExecRequest for environment/exec_stream")?;
 
-        let value = run_blocking(with_resident_host_once(&self.plugin, &self.project_root, move |host| async move {
+        let value = run_blocking(self.with_pinned_host(move |host| async move {
             exec_stream_call(&host, params, &handle_id, rpc_timeout, &on_output).await
         }))??;
 
         serde_json::from_value(value)
             .with_context(|| format!("decoding ExecResponse from environment plugin {}", self.plugin.name))
+    }
+
+    /// `environment/exec_session`: dispatch a SUBJECT to the environment's own
+    /// animus (REQ-052 remote-animus). The node runs the workflow through its own
+    /// provider/session layer; each `environment/journal` notification for THIS
+    /// handle is forwarded to `on_journal` as it arrives, and the call resolves
+    /// with the node-local run's terminal [`ExecSessionResponse`].
+    ///
+    /// Unbounded (no RPC timeout): an agent run's duration is not known up front,
+    /// so a wedged node surfaces via the resident host's death path, not a clamp.
+    /// AT-MOST-ONCE like [`Self::exec_stream`] — never retried.
+    pub fn exec_session<F>(
+        &self,
+        handle: &EnvironmentHandle,
+        subject_id: String,
+        workflow_ref: Option<String>,
+        dispatch_input: Option<String>,
+        workflow_id: Option<String>,
+        on_journal: F,
+    ) -> Result<ExecSessionResponse>
+    where
+        F: Fn(&EnvironmentJournalEvent) + Send + Sync,
+    {
+        let request =
+            ExecSessionRequest { handle: handle.clone(), subject_id, workflow_ref, dispatch_input, workflow_id };
+        let handle_id = handle.id.clone();
+        let params =
+            serde_json::to_value(&request).context("serializing ExecSessionRequest for environment/exec_session")?;
+
+        let value = run_blocking(self.with_pinned_host(move |host| async move {
+            exec_session_call(&host, params, &handle_id, &on_journal).await
+        }))??;
+
+        serde_json::from_value(value)
+            .with_context(|| format!("decoding ExecSessionResponse from environment plugin {}", self.plugin.name))
     }
 
     /// `environment/teardown`: dispose of the context named by `handle`.
@@ -223,24 +303,147 @@ impl EnvironmentClient {
         Ok(())
     }
 
-    /// Serialize `params`, run a CONTROL RPC (prepare / teardown) against the
-    /// resident host (spawning it once if absent), reap+respawn+retry-once on a
-    /// death-like failure, and return the raw response `Value`.
+    /// Serialize `params` and run a CONTROL RPC (prepare / teardown) against this
+    /// client's PINNED resident host, returning the raw response `Value`.
     ///
-    /// Retry is safe here because the control ops are effectively idempotent from
-    /// the caller's view: a teardown re-issues a dispose-by-id (a no-op if
-    /// already gone), and a prepare that died before returning its handle left no
-    /// handle the caller can use, so a fresh prepare is the correct recovery.
-    /// Exec is deliberately NOT routed through this path (see [`Self::exec`]).
+    /// Control RPCs go through the single pinned host so the whole `prepare` → …
+    /// → `teardown` sequence reuses one process (and its in-memory run state).
+    /// Unlike `exec`, a control RPC is RETRIED ONCE on a death-like failure (see
+    /// [`Self::control_rpc`]): a control op is safe to replay — a `prepare` that
+    /// died before returning its handle left no usable handle (a fresh prepare
+    /// on a fresh host is the correct recovery, and it re-pins that fresh host for
+    /// the subsequent exec/teardown), and `teardown` is an idempotent
+    /// dispose-by-id.
     fn call_blocking<P>(&self, method: &'static str, params: P, timeout: Duration) -> Result<Value>
     where
         P: serde::Serialize + Send + 'static,
     {
         let params = serde_json::to_value(&params).with_context(|| format!("serializing params for {method}"))?;
-        run_blocking(with_resident_host(&self.plugin, &self.project_root, move |host| {
-            let params = params.clone();
-            async move { environment_rpc(&host, method, params, Some(timeout)).await }
-        }))?
+        run_blocking(self.control_rpc(method, params, timeout))?
+    }
+
+    /// A control RPC (prepare / teardown) against the pinned host, retried ONCE on
+    /// a death-like failure.
+    ///
+    /// The first attempt's [`Self::run_once`] already reaped the dead lease, so the
+    /// retry's [`Self::pinned_host`] leases a freshly-spawned host — and stores it
+    /// in `self.pinned`, so a retried `prepare` re-pins that live host for the rest
+    /// of the run. A structured (non-death) error is NOT retried; it would only
+    /// fail the same way. Retry is safe ONLY for these idempotent control ops —
+    /// `exec` / `exec_stream` deliberately go through [`Self::with_pinned_host`]
+    /// (at-most-once) instead.
+    async fn control_rpc(&self, method: &'static str, params: Value, timeout: Duration) -> Result<Value> {
+        let params_retry = params.clone();
+        match self
+            .run_once(move |host| async move { environment_rpc(&host, method, params, Some(timeout)).await })
+            .await
+        {
+            Ok(value) => Ok(value),
+            Err(ResidentCallError::Other(err)) => Err(err),
+            Err(ResidentCallError::Death(_)) => match self
+                .run_once(move |host| async move { environment_rpc(&host, method, params_retry, Some(timeout)).await })
+                .await
+            {
+                Ok(value) => Ok(value),
+                Err(ResidentCallError::Death(err)) | Err(ResidentCallError::Other(err)) => Err(err),
+            },
+        }
+    }
+
+    /// The client's pinned resident host plus its lease GENERATION, acquiring the
+    /// lease on first use.
+    ///
+    /// The lease is stored in `self.pinned` and held for the client's whole
+    /// lifetime, so it never becomes LRU-evictable or ping-reapable between RPCs —
+    /// every call returns a clone of the SAME [`PluginHost`], preserving the
+    /// plugin's in-memory run registration across `prepare` → exec → `teardown`.
+    /// The returned generation identifies exactly this host so a death-like failure
+    /// reaps only this generation (see [`Self::reap_pinned`]).
+    async fn pinned_host(&self) -> Result<(PluginHost, u64)> {
+        let mut guard = self.pinned.lock().await;
+        if guard.is_none() {
+            let lease = acquire_resident_lease(
+                &global_resident_host_registry(),
+                &self.plugin,
+                binary_mtime_nanos(&self.plugin.path),
+                &environment_spawn_context(self.plugin.manifest.notification_buffer_size),
+            )
+            .await?;
+            *guard = Some(lease);
+        }
+        let lease = guard.as_ref().expect("lease populated above");
+        Ok((lease.host().clone(), lease.generation()))
+    }
+
+    /// Run `call` against this client's pinned host EXACTLY once (no retry),
+    /// mapping a resident-call error back to `anyhow`.
+    ///
+    /// Used by `exec` / `exec_stream`: the pinned host holds the run's in-memory
+    /// state (the WS relay registration), so a death-like failure means that state
+    /// is already gone and a fresh process could not recover it, and the RPC may
+    /// already have run with side effects — so the call fails (at-most-once) and
+    /// any orphaned remote node is reclaimed by the plugin's own GC sweep. The dead
+    /// lease is still reaped (inside [`Self::run_once`]) so the NEXT run spawns a
+    /// live process; reaping is not a replay.
+    async fn with_pinned_host<T, F, Fut>(&self, call: F) -> Result<T>
+    where
+        F: FnOnce(PluginHost) -> Fut,
+        Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
+    {
+        match self.run_once(call).await {
+            Ok(value) => Ok(value),
+            Err(ResidentCallError::Death(err)) | Err(ResidentCallError::Other(err)) => Err(err),
+        }
+    }
+
+    /// Acquire the pinned host and run `call` once, REAPING the pinned lease on a
+    /// death-like failure (so the next acquire spawns a fresh host) and returning
+    /// the classified error so the caller can decide whether to retry. Never
+    /// replays `call`.
+    async fn run_once<T, F, Fut>(&self, call: F) -> std::result::Result<T, ResidentCallError>
+    where
+        F: FnOnce(PluginHost) -> Fut,
+        Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
+    {
+        let (host, generation) = self.pinned_host().await.map_err(ResidentCallError::Other)?;
+        match call(host).await {
+            Ok(value) => Ok(value),
+            Err(ResidentCallError::Death(err)) => {
+                self.reap_pinned(generation).await;
+                Err(ResidentCallError::Death(err))
+            }
+            Err(other) => Err(other),
+        }
+    }
+
+    /// Reap the host generation `generation` that just failed: drop this client's
+    /// pinned lease iff it is still that exact generation, and invalidate that
+    /// generation in the shared registry, so a dead host is not re-leased by the
+    /// next run.
+    ///
+    /// Strictly generation-scoped, which makes it safe under concurrent RPCs on one
+    /// `Arc<EnvironmentClient>`: if another call has meanwhile re-acquired a FRESH
+    /// lease (a different generation), this leaves BOTH `self.pinned` and the
+    /// registry entry for that new host untouched — a late failure of the OLD
+    /// generation can never evict the healthy replacement. Idempotent: reaping the
+    /// same generation twice is a no-op the second time.
+    async fn reap_pinned(&self, generation: u64) {
+        {
+            let mut guard = self.pinned.lock().await;
+            if guard.as_ref().is_some_and(|lease| lease.generation() == generation) {
+                // Drops the dead lease, releasing its `active` ref so the registry
+                // can evict the entry below.
+                *guard = None;
+            }
+        }
+        global_resident_host_registry()
+            .invalidate_generation(
+                &self.plugin.path,
+                binary_mtime_nanos(&self.plugin.path),
+                &environment_spawn_context(self.plugin.manifest.notification_buffer_size),
+                generation,
+            )
+            .await;
     }
 }
 
@@ -447,134 +650,95 @@ where
     }
 }
 
-/// Acquire the shared resident host for `plugin` and run `call` against a clone
-/// of it, retrying once (reap + re-spawn) on a death-like failure. All other
-/// errors propagate without a re-spawn.
-///
-/// The host lives in the process-global [`ResidentHostRegistry`] keyed by the
-/// plugin's binary path + mtime + spawn-context, shared with the other
-/// full-env resident roles. The lease is held across the RPC `.await` so LRU
-/// pressure from another role can never evict the host mid-call.
-async fn with_resident_host<T, F, Fut>(plugin: &DiscoveredPlugin, _project_root: &Path, mut call: F) -> Result<T>
-where
-    F: FnMut(PluginHost) -> Fut,
-    Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
-{
-    let registry = global_resident_host_registry();
-    let mtime = binary_mtime_nanos(&plugin.path);
-    let context = environment_spawn_context(plugin.manifest.notification_buffer_size);
+/// A journal event forwarded from an in-flight `environment/exec_session` — the
+/// node's own workflow-journal event, relayed verbatim (REQ-052).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EnvironmentJournalEvent {
+    /// Handle id of the environment this session runs in.
+    pub handle_id: String,
+    /// The node-local run id this event belongs to, when known.
+    #[serde(default)]
+    pub workflow_id: Option<String>,
+    /// The journal event kind (e.g. `phase_started`, `output_chunk`, `tool_call`).
+    pub event_kind: String,
+    /// Phase this event belongs to, when phase-scoped.
+    #[serde(default)]
+    pub phase_id: Option<String>,
+    /// Event status discriminator, when present.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Event timestamp (RFC 3339).
+    pub ts: String,
+    /// The event's full payload, forwarded verbatim.
+    pub payload: Value,
+    /// True on the final event (the node-local run reached a terminal status).
+    #[serde(default)]
+    pub terminal: bool,
+}
 
-    let lease = acquire_resident_lease(&registry, plugin, mtime, &context).await?;
-    let generation = lease.generation();
-    match call(lease.host().clone()).await {
-        Ok(value) => Ok(value),
-        Err(ResidentCallError::Other(err)) => Err(err),
-        Err(ResidentCallError::Death(err)) => {
-            // Reap ONLY the exact host that failed (a concurrent caller may have
-            // already replaced it), then re-spawn once and retry.
-            drop(lease);
-            registry.invalidate_generation(&plugin.path, mtime, &context, generation).await;
-            let lease = acquire_resident_lease(&registry, plugin, mtime, &context).await?;
-            match call(lease.host().clone()).await {
-                Ok(value) => Ok(value),
-                Err(ResidentCallError::Other(retry_err)) => Err(retry_err),
-                Err(ResidentCallError::Death(retry_err)) => Err(retry_err.context(format!(
-                    "environment plugin {} still failing after one re-spawn (first error: {err})",
-                    plugin.name
-                ))),
+/// `environment/exec_session` against a resident host clone: subscribe to the
+/// host's notifications BEFORE issuing the request (so no early
+/// `environment/journal` frame is lost), then drive the request while forwarding
+/// each matching journal event to `on_journal`. Mirrors [`exec_stream_call`].
+async fn exec_session_call<F>(
+    host: &PluginHost,
+    params: Value,
+    handle_id: &str,
+    on_journal: &F,
+) -> std::result::Result<Value, ResidentCallError>
+where
+    F: Fn(&EnvironmentJournalEvent) + Send + Sync,
+{
+    use tokio::sync::broadcast::error::RecvError;
+
+    let mut notifications = host.subscribe_notifications();
+    // Unbounded: an agent session's duration is not known up front, so no RPC
+    // timeout is applied (the environment/node enforces its own policy).
+    let request = async { host.request_typed(METHOD_ENVIRONMENT_EXEC_SESSION, Some(params)).await };
+    tokio::pin!(request);
+
+    let response = loop {
+        tokio::select! {
+            note = notifications.recv() => {
+                match note {
+                    Ok(note) => forward_journal(&note, handle_id, on_journal),
+                    Err(RecvError::Lagged(_)) => {}
+                    Err(RecvError::Closed) => break request.await,
+                }
             }
+            result = &mut request => break result,
+        }
+    };
+
+    let buffered = notifications.len();
+    for _ in 0..buffered {
+        match notifications.try_recv() {
+            Ok(note) => forward_journal(&note, handle_id, on_journal),
+            Err(_) => break,
         }
     }
+
+    response.map_err(ResidentCallError::from_host_error)
 }
 
-/// AT-MOST-ONCE variant of [`with_resident_host`]: run the side-effectful `call`
-/// against the shared resident host EXACTLY once, but heal a stale/idle-dead
-/// cached host FIRST so the single attempt lands on a live process. Used by
-/// `exec` / `exec_stream`.
-///
-/// Liveness preflight (closes the idle-death window without risking a double
-/// run): the resident registry hands back a cached host without checking its
-/// process is still alive, so a host that exited while idle would fail the first
-/// exec with `ConnectionLost` even though the command never ran. Before sending
-/// the command we `$/ping` the leased host; a death-like ping failure means the
-/// process is already gone, so we reap that generation and re-spawn a fresh host
-/// — the command has NOT been sent, so this is safe. A structured ping error (or
-/// a plugin that does not implement `$/ping`) counts as alive; only a death-like
-/// ping outcome triggers the pre-send re-spawn.
-///
-/// After the ping-verified send, a death-like failure is NOT retried — the
-/// command may already have run with side effects on the now-dead process, so a
-/// blind re-issue risks double-execution. The dead generation is still reaped so
-/// the NEXT exec spawns a fresh host rather than leasing the wedged one.
-async fn with_resident_host_once<T, F, Fut>(plugin: &DiscoveredPlugin, _project_root: &Path, call: F) -> Result<T>
+/// Decode an `environment/journal` notification and, when it targets `handle_id`,
+/// forward it to `on_journal`. Non-journal methods and other handles are ignored;
+/// a malformed payload is dropped (the terminal ExecSessionResponse remains the
+/// source of truth).
+fn forward_journal<F>(note: &animus_plugin_protocol::RpcNotification, handle_id: &str, on_journal: &F)
 where
-    F: FnOnce(PluginHost) -> Fut,
-    Fut: Future<Output = std::result::Result<T, ResidentCallError>>,
+    F: Fn(&EnvironmentJournalEvent),
 {
-    let registry = global_resident_host_registry();
-    let mtime = binary_mtime_nanos(&plugin.path);
-    let context = environment_spawn_context(plugin.manifest.notification_buffer_size);
-
-    // Lease + liveness preflight. A freshly-spawned host (cache miss) was just
-    // handshaked, so it is live and needs no ping; only a cache-reused host can
-    // be idle-dead. We ping unconditionally for simplicity — it is a sub-ms
-    // round-trip on a healthy host — and re-spawn once if the ping is death-like.
-    let mut lease = acquire_resident_lease(&registry, plugin, mtime, &context).await?;
-    if ping_is_dead(lease.host()).await {
-        let dead_generation = lease.generation();
-        drop(lease);
-        registry.invalidate_generation(&plugin.path, mtime, &context, dead_generation).await;
-        // Re-spawn a fresh host; if THIS one is also unusable we surface the
-        // spawn/handshake error (still nothing executed).
-        lease = acquire_resident_lease(&registry, plugin, mtime, &context).await?;
+    if note.method != NOTIFICATION_ENVIRONMENT_JOURNAL {
+        return;
     }
-
-    let generation = lease.generation();
-    match call(lease.host().clone()).await {
-        Ok(value) => Ok(value),
-        Err(ResidentCallError::Other(err)) => Err(err),
-        Err(ResidentCallError::Death(err)) => {
-            // Do NOT re-run the command (it may already have executed with side
-            // effects), but the host's process is presumed dead — reap this exact
-            // generation so the NEXT exec spawns a fresh host instead of leasing a
-            // wedged one and failing until a control call happens to invalidate it.
-            drop(lease);
-            registry.invalidate_generation(&plugin.path, mtime, &context, generation).await;
-            Err(err)
+    let Some(params) = note.params.clone() else {
+        return;
+    };
+    if let Ok(event) = serde_json::from_value::<EnvironmentJournalEvent>(params) {
+        if event.handle_id == handle_id {
+            on_journal(&event);
         }
-    }
-}
-
-/// `$/ping` the host and report whether its transport is dead. For a LIVENESS
-/// probe, any plugin response — success OR any RPC error (including a structured
-/// error, or a plugin that does not implement `$/ping`) — proves the process is
-/// alive; only a CLOSED transport (connection lost / process exited) counts as
-/// dead, so the exec preflight never re-spawns a live-but-quiet plugin. This
-/// deliberately does NOT use `classify`, which maps unstructured `Rpc` errors to
-/// `DeathLike` for its retry-decision purpose — the opposite interpretation of
-/// what a liveness probe needs.
-///
-/// A `Timeout` is treated as ALIVE, not dead: the resident host is shared across
-/// roles and callers, so a plugin busy serving another in-flight `exec` may not
-/// answer `$/ping` within the short probe window even though its process is fine.
-/// Reaping that generation here would `shutdown()` the process and abort the
-/// concurrent command. A genuinely wedged host still fails the subsequent exec on
-/// its own — same outcome, no collateral damage to a live sibling call. Only a
-/// closed transport is an unambiguous death signal (the idle-exit case this
-/// preflight exists to catch surfaces as `ConnectionLost`).
-async fn ping_is_dead(host: &PluginHost) -> bool {
-    const PING_TIMEOUT: Duration = Duration::from_secs(2);
-    match host.request_typed_with_timeout("$/ping", None, PING_TIMEOUT).await {
-        Ok(_) => false,
-        // Any RPC error frame came back over a live transport: the plugin is up.
-        Err(HostError::Rpc(_)) => false,
-        // A protocol/capability rejection is still a response from a live process.
-        Err(HostError::IncompatibleProtocol(_)) | Err(HostError::CapabilityNotSupported(_)) => false,
-        // Ambiguous (busy vs wedged) — err toward alive so a busy shared host is
-        // never killed out from under a concurrent in-flight command.
-        Err(HostError::Timeout(_)) => false,
-        // Closed transport: the process is gone / unreachable — unambiguously dead.
-        Err(HostError::ConnectionLost) | Err(HostError::ProcessExited(_)) => true,
     }
 }
 
@@ -773,6 +937,37 @@ mod tests {
                         )
                         .await;
                     }
+                    METHOD_ENVIRONMENT_EXEC_SESSION => {
+                        let req: ExecSessionRequest = serde_json::from_value(request.params.clone().unwrap_or(Value::Null))
+                            .expect("exec_session params");
+                        let handle_id = req.handle.id.clone();
+                        // Emit a non-terminal phase event then a terminal one, then the reply.
+                        for (event_kind, terminal) in [("phase_started", false), ("run_completed", true)] {
+                            let note = ExecNotification::Journal {
+                                handle_id: handle_id.clone(),
+                                workflow_id: Some("node-wf-1".to_string()),
+                                event_kind: event_kind.to_string(),
+                                phase_id: Some("code-implement".to_string()),
+                                status: None,
+                                ts: "2026-07-16T00:00:00Z".to_string(),
+                                payload: serde_json::json!({ "subject": req.subject_id }),
+                                terminal,
+                            };
+                            let frame = serde_json::json!({
+                                "jsonrpc": "2.0",
+                                "method": note.method(),
+                                "params": note.payload(),
+                            });
+                            write_line(&mut plugin_writer, &frame).await;
+                        }
+                        let resp =
+                            ExecSessionResponse { workflow_id: Some("node-wf-1".to_string()), status: "completed".to_string() };
+                        write_response(
+                            &mut plugin_writer,
+                            RpcResponse::ok(request.id, serde_json::to_value(resp).unwrap()),
+                        )
+                        .await;
+                    }
                     METHOD_ENVIRONMENT_TEARDOWN => {
                         write_response(
                             &mut plugin_writer,
@@ -826,61 +1021,6 @@ mod tests {
 
     fn sample_handle() -> EnvironmentHandle {
         EnvironmentHandle { id: "env-1".to_string(), workspace_root: "/work".to_string(), metadata: Value::Null }
-    }
-
-    /// A host whose plugin task answers `initialize` then exits, so its reader
-    /// closes and any subsequent request (e.g. `$/ping`) sees `ConnectionLost`.
-    async fn dead_after_handshake_host() -> PluginHost {
-        let (host_reader, mut plugin_writer) = duplex(8192);
-        let (plugin_reader, host_writer) = duplex(8192);
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(plugin_reader);
-            let mut line = String::new();
-            if reader.read_line(&mut line).await.expect("read line") > 0 {
-                let request: RpcRequest = serde_json::from_str(line.trim()).expect("parse request");
-                let result = InitializeResult {
-                    protocol_version: "1.0.0".to_string(),
-                    plugin_info: PluginInfo {
-                        name: "dead".to_string(),
-                        version: "0.1.0".to_string(),
-                        plugin_kind: PLUGIN_KIND_ENVIRONMENT.to_string(),
-                        plugin_kinds: vec![PLUGIN_KIND_ENVIRONMENT.to_string()],
-                        description: None,
-                    },
-                    capabilities: PluginCapabilities::default(),
-                    kind_capabilities: std::collections::HashMap::new(),
-                };
-                write_response(&mut plugin_writer, RpcResponse::ok(request.id, serde_json::json!(result))).await;
-            }
-            // Read the follow-up `$/ping` request (so the handshake response is
-            // fully consumed by the host before we drop the transport), then
-            // return WITHOUT responding: the task ends, both duplex ends drop,
-            // and the pending `$/ping` awaiter observes ConnectionLost.
-            let mut ping = String::new();
-            let _ = reader.read_line(&mut ping).await;
-            // Task returns here: both duplex ends drop, the host's reader closes.
-        });
-        PluginHost::from_streams("dead", host_reader, host_writer)
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ping_treats_method_not_supported_as_alive() {
-        // The fake answers `$/ping` with METHOD_NOT_SUPPORTED (a structured
-        // error): the process is up, so the exec preflight must NOT re-spawn it.
-        let spawns = Arc::new(AtomicUsize::new(0));
-        let host = fake_environment_host(spawns).await;
-        host.handshake().await.expect("handshake");
-        assert!(!ping_is_dead(&host).await, "a live plugin that lacks $/ping is alive, not dead");
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn ping_detects_a_dead_host() {
-        // The plugin exits right after the handshake, so `$/ping` sees the
-        // transport close (ConnectionLost) — death-like, so the preflight
-        // re-spawns before sending a side-effectful exec.
-        let host = dead_after_handshake_host().await;
-        host.handshake().await.expect("handshake");
-        assert!(ping_is_dead(&host).await, "a plugin whose transport closed is dead");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1014,6 +1154,48 @@ mod tests {
             got,
             vec![(ExecStream::Stdout, "chunk-out".to_string()), (ExecStream::Stderr, "chunk-err".to_string())],
             "both output deltas forwarded to the callback in order"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn exec_session_forwards_journal_and_returns_response() {
+        let _guard = registry_lock().lock().await;
+        let registry = fresh_registry().await;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("fake-env");
+        std::fs::write(&path, b"binary").unwrap();
+        let spawns = Arc::new(AtomicUsize::new(0));
+
+        let lease = lease_fake(&registry, &path, spawns.clone()).await;
+        let collected: Arc<Mutex<Vec<(String, bool)>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = collected.clone();
+        let params = serde_json::to_value(ExecSessionRequest {
+            handle: sample_handle(),
+            subject_id: "task:TASK-1".to_string(),
+            workflow_ref: Some("coding".to_string()),
+            dispatch_input: None,
+            workflow_id: None,
+        })
+        .unwrap();
+
+        let value = exec_session_call(lease.host(), params, "env-1", &move |ev: &EnvironmentJournalEvent| {
+            sink.lock().unwrap_or_else(|p| p.into_inner()).push((ev.event_kind.clone(), ev.terminal));
+        })
+        .await
+        .map_err(|e| match e {
+            ResidentCallError::Death(e) | ResidentCallError::Other(e) => e,
+        })
+        .expect("exec_session ok");
+
+        let resp: ExecSessionResponse = serde_json::from_value(value).unwrap();
+        assert_eq!(resp.workflow_id.as_deref(), Some("node-wf-1"));
+        assert_eq!(resp.status, "completed");
+
+        let got = collected.lock().unwrap_or_else(|p| p.into_inner()).clone();
+        assert_eq!(
+            got,
+            vec![("phase_started".to_string(), false), ("run_completed".to_string(), true)],
+            "both journal events forwarded in order, terminal flag on the last"
         );
     }
 

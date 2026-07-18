@@ -1168,6 +1168,40 @@ impl WorkflowLifecycleExecutor {
         ));
     }
 
+    /// REQ-052 one-id backstop: force a NON-terminal delegated run to `Failed`.
+    /// Unlike [`Self::mark_completed_failed`] (which only demotes a `Completed`
+    /// post-success run), this drives `Pending`/`Running`/`Paused` -> `Failed`,
+    /// and NO-OPS on any already-terminal status so it can never clobber the
+    /// node's richer terminal (Completed / Escalated / Cancelled) already
+    /// journaled into the shared row. The terminal check is re-evaluated HERE,
+    /// inside the calling service op's load-mutate-save (not by the caller),
+    /// which narrows the clobber window to that critical section.
+    pub fn force_failed(&self, workflow: &mut OrchestratorWorkflow, error: String) {
+        if matches!(
+            workflow.status,
+            WorkflowStatus::Completed
+                | WorkflowStatus::Failed
+                | WorkflowStatus::Escalated
+                | WorkflowStatus::Cancelled
+        ) {
+            return;
+        }
+        let phase_id =
+            workflow.phases.last().map(|phase| phase.phase_id.clone()).unwrap_or_else(|| "remote-session".to_string());
+        workflow.machine_state = WorkflowMachineState::Failed;
+        workflow.sync_status();
+        workflow.failure_reason = Some(error.clone());
+        workflow.completed_at = Some(Utc::now());
+        workflow.decision_history.push(self.decision_record(
+            phase_id,
+            WorkflowDecisionAction::Fail,
+            None,
+            error,
+            1.0,
+            WorkflowDecisionRisk::High,
+        ));
+    }
+
     fn resolve_failure_transition(
         &self,
         current_phase_id: &str,
