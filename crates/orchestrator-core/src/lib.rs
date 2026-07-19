@@ -186,7 +186,8 @@ pub use workflow_config::{
 pub use workflow_config::{YamlDiagnostic, YamlExcerpt};
 pub use workflow_events::{dispatch_workflow_event, workflow_task_id, WorkflowEvent, WorkflowEventOutcome};
 pub use workflow_runner_registry::{
-    active_workflow_runner_ids, register_workflow_runner_pid, unregister_workflow_runner_pid,
+    active_workflow_runner_ids, register_workflow_runner_pid, unregister_workflow_runner_pid, workflow_runner_liveness,
+    RunnerLiveness,
 };
 
 #[cfg(test)]

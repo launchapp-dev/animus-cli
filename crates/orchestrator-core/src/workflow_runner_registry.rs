@@ -79,6 +79,54 @@ fn runner_is_live(pid_alive: bool, recorded_start: Option<&str>, current_start: 
     }
 }
 
+/// A read-only diagnostic snapshot of the runner-pid registry entry for a single
+/// `workflow_id`, resolving the SAME facts `active_workflow_runner_ids` uses to
+/// decide liveness (see `runner_is_live`) WITHOUT its side effect of pruning a
+/// stale pid file. The orphan reconciler reads this to explain, in logs, why a
+/// run's registered runner did (or did not) shield it from the sweep — in
+/// particular why a pid that is alive is still classified dead (a REUSED pid: the
+/// recorded start time no longer matches the current holder's).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunnerLiveness {
+    /// A pid file exists for this `workflow_id`.
+    pub present: bool,
+    /// The pid recorded in that file, if it parsed.
+    pub pid: Option<u32>,
+    /// Whether that pid is currently alive (bare OS liveness check).
+    pub pid_alive: bool,
+    /// The process start time recorded at registration (the REUSE guard), if any.
+    pub recorded_start: Option<String>,
+    /// The start time of whatever process now holds that pid, if resolvable.
+    pub current_start: Option<String>,
+    /// The final liveness decision (`runner_is_live`): the pid is alive AND
+    /// (both start times match, or either is absent — the legacy/non-`proc`
+    /// fallback). A live-but-reused pid is `false`.
+    pub live: bool,
+}
+
+/// Resolve the [`RunnerLiveness`] snapshot for `workflow_id`, mirroring the
+/// per-file liveness logic in [`active_workflow_runner_ids`] but WITHOUT removing
+/// a stale file — so the reconciler can log the raw facts (recorded vs current
+/// start time) that `active_workflow_runner_ids` would otherwise erase by
+/// pruning the file it just judged dead.
+pub fn workflow_runner_liveness(project_root: &Path, workflow_id: &str) -> RunnerLiveness {
+    let path = workflow_runner_pid_path(project_root, workflow_id);
+    let raw = match fs::read_to_string(&path) {
+        Ok(raw) => raw,
+        Err(_) => return RunnerLiveness::default(),
+    };
+    let mut lines = raw.lines();
+    let pid = lines.next().and_then(|value| value.trim().parse::<u32>().ok());
+    let recorded_start = lines.next().map(|value| value.trim().to_string()).filter(|value| !value.is_empty());
+    let pid_alive = pid.map(protocol::is_process_alive).unwrap_or(false);
+    let current_start = pid.and_then(process_start_time);
+    let live = match pid {
+        Some(_) => runner_is_live(pid_alive, recorded_start.as_deref(), current_start.as_deref()),
+        None => false,
+    };
+    RunnerLiveness { present: true, pid, pid_alive, recorded_start, current_start, live }
+}
+
 pub fn active_workflow_runner_ids(project_root: &Path) -> Result<HashSet<String>> {
     let dir = workflow_runner_pid_dir(project_root);
     if !dir.exists() {
@@ -125,7 +173,9 @@ pub fn active_workflow_runner_ids(project_root: &Path) -> Result<HashSet<String>
 
 #[cfg(test)]
 mod tests {
-    use super::runner_is_live;
+    use super::{register_workflow_runner_pid, runner_is_live, workflow_runner_liveness, workflow_runner_pid_path};
+    use std::fs;
+    use tempfile::TempDir;
 
     #[test]
     fn reused_pid_after_restart_is_never_live() {
@@ -140,5 +190,70 @@ mod tests {
         assert!(runner_is_live(true, None, Some("8421")));
         // No current start time (non-Linux dev) => bare-liveness fallback.
         assert!(runner_is_live(true, Some("8421"), None));
+    }
+
+    // The diagnostic accessor mirrors `active_workflow_runner_ids`' per-file
+    // liveness resolution WITHOUT pruning stale files, so the reconciler can log
+    // the raw facts. Cases: absent, live (self), dead, legacy, and reused.
+    #[test]
+    fn workflow_runner_liveness_reports_registry_facts() {
+        let temp = TempDir::new().expect("temp dir");
+        let root = temp.path();
+
+        // Absent: no pid file => not present, not live.
+        let absent = workflow_runner_liveness(root, "WF-absent");
+        assert!(!absent.present, "no pid file => not present");
+        assert!(!absent.live);
+        assert_eq!(absent.pid, None);
+
+        // Live: register the current (alive) process. On Linux the recorded and
+        // current start times match; on platforms without `/proc` both are None
+        // and the bare-liveness fallback still yields live.
+        let me = std::process::id();
+        register_workflow_runner_pid(root, "WF-live", me).expect("pid should register");
+        let live = workflow_runner_liveness(root, "WF-live");
+        assert!(live.present, "registered pid file => present");
+        assert_eq!(live.pid, Some(me));
+        assert!(live.pid_alive, "the current process is alive");
+        assert!(live.live, "a live, non-reused runner must resolve live");
+
+        // Dead: a pid that is not alive => not live regardless of start times.
+        // u32::MAX is never a real pid.
+        fs::write(workflow_runner_pid_path(root, "WF-dead"), u32::MAX.to_string()).expect("write dead pid");
+        let dead = workflow_runner_liveness(root, "WF-dead");
+        assert!(dead.present);
+        assert_eq!(dead.pid, Some(u32::MAX));
+        assert!(!dead.pid_alive, "u32::MAX is not a live pid");
+        assert!(!dead.live);
+        // Read-only: the accessor must NOT prune the stale file it just judged dead.
+        assert!(workflow_runner_pid_path(root, "WF-dead").exists(), "accessor must not delete pid files");
+
+        // Legacy: a pid-only file (no recorded start) for an alive pid => the
+        // bare-liveness fallback keeps it live, and recorded_start is None.
+        fs::write(workflow_runner_pid_path(root, "WF-legacy"), me.to_string()).expect("write legacy pid");
+        let legacy = workflow_runner_liveness(root, "WF-legacy");
+        assert!(legacy.present);
+        assert_eq!(legacy.pid, Some(me));
+        assert_eq!(legacy.recorded_start, None, "legacy file records no start time");
+        assert!(legacy.live, "legacy file falls back to bare liveness");
+
+        // Reused: an alive pid whose recorded start time is a sentinel that can
+        // never match the real one. The accessor must READ that recorded start
+        // verbatim (the KEY reap diagnostic); on Linux, where the current start
+        // resolves, the mismatch makes it non-live.
+        fs::write(workflow_runner_pid_path(root, "WF-reused"), format!("{me}\nsentinel-start-0"))
+            .expect("write reused pid");
+        let reused = workflow_runner_liveness(root, "WF-reused");
+        assert!(reused.present);
+        assert_eq!(reused.pid, Some(me));
+        assert!(reused.pid_alive);
+        assert_eq!(reused.recorded_start.as_deref(), Some("sentinel-start-0"), "recorded start must be surfaced");
+        #[cfg(target_os = "linux")]
+        {
+            // On Linux the current start time resolves and differs from the
+            // sentinel, so the reused pid is correctly classified dead.
+            assert!(reused.current_start.is_some(), "current start resolves on Linux");
+            assert!(!reused.live, "a live-but-reused pid must resolve NOT live");
+        }
     }
 }

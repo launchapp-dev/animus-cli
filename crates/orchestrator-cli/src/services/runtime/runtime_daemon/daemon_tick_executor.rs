@@ -46,7 +46,8 @@ impl CliProjectTickServices {
             }
         };
         let active_subject_ids = process_manager.active_subject_ids();
-        let candidates = resumable_orphans_for_redispatch(hub, root, &active_subject_ids).await;
+        // Steady-state: shield live delegated (remote) runs from local re-dispatch.
+        let candidates = resumable_orphans_for_redispatch(hub, root, &active_subject_ids, true).await;
         if candidates.is_empty() {
             return 0;
         }
@@ -161,7 +162,9 @@ impl DefaultProjectTickServices for CliProjectTickServices {
         // SQLite path `journal_resume_enabled` is false and this is the
         // byte-identical pre-BU-4 cancel behavior.
         let resume_orphans = journal_resume_enabled(root);
-        Ok(recover_orphaned_running_workflows(hub, root, active_subject_ids, resume_orphans).await)
+        // Steady-state: the remote delegate is alive on its node, so skip live
+        // delegated runs (see `recover_orphaned_running_workflows`).
+        Ok(recover_orphaned_running_workflows(hub, root, active_subject_ids, resume_orphans, true).await)
     }
 
     async fn reconcile_manual_timeouts(&mut self, hub: Arc<dyn ServiceHub>, root: &str) -> Result<usize> {

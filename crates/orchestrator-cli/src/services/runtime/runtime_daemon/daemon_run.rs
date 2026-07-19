@@ -654,11 +654,18 @@ impl DaemonRunHooks for CliDaemonRunHost {
         // steady-state dispatch leg on the first tick after boot.
         let resume_orphans = journal_resume_enabled(project_root);
 
+        // STARTUP passes `skip_live_delegated = false`: `EnvironmentBroker::start`
+        // → `reap_prior_daemon_records` has already torn down the prior daemon
+        // instance's remote nodes, so a delegated `Running` row surviving into
+        // startup is DEAD and must be handled here (resumed/cancelled) — shielding
+        // it would strand it `Running` forever. Only the steady-state sweep, where
+        // the delegate is still alive on its node, passes `true`.
         let orphans = recover_orphaned_running_workflows(
             startup_hub as Arc<dyn ServiceHub>,
             project_root,
             &resumable_workflow_ids,
             resume_orphans,
+            false,
         )
         .await;
 
