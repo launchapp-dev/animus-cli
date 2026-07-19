@@ -772,6 +772,18 @@ impl ProcessManager {
                         workflow_status = Some(WorkflowStatus::Failed);
                     }
 
+                    // Record WHY the runner exited (code/signal/duration + stderr
+                    // tail) so a mid-run death — e.g. the ~60s exec_session
+                    // severance / SIGKILL / OOM that leaves a delegated run a
+                    // "running" ghost — is diagnosable from the logs instead of
+                    // silent (TASK-799).
+                    emit_runner_exit_diagnostic(
+                        workflow_id.as_deref(),
+                        &status,
+                        process.started_at,
+                        &process.stderr_lines,
+                    );
+
                     // Terminal workflow state => tear the run's shared node down
                     // (one node per run). Non-terminal (Running/Paused between
                     // phases) => KEEP the node for the next phase's runner.
@@ -949,6 +961,100 @@ fn latest_runner_workflow_status(events: &[RunnerEvent]) -> Option<WorkflowStatu
     events.iter().rev().find_map(|event| event.workflow_status)
 }
 
+/// Max stderr lines included in the `runner-exit` diagnostic tail (a bounded
+/// slice of the already-captured stderr — enough to name the exit reason).
+const RUNNER_STDERR_TAIL_LINES: usize = 40;
+
+/// Hard char budget for the diagnostic stderr tail — bounds the log line AND the
+/// transient allocation while building it.
+const RUNNER_STDERR_TAIL_MAX_CHARS: usize = 2000;
+
+/// Build a single-line, newline-escaped, char-budgeted tail from the last few
+/// stderr lines WITHOUT ever allocating the (potentially huge) full content: it
+/// copies at most `max_chars` chars, so a pathological megabyte-long stderr line
+/// can never OOM the daemon during reap (codex). Lines are joined with an escaped
+/// `\n`; embedded newlines are escaped the same way.
+fn capped_escaped_tail(lines: &[String], max_chars: usize) -> String {
+    let mut out = String::new();
+    let mut budget = max_chars;
+    for (idx, line) in lines.iter().enumerate() {
+        if budget == 0 {
+            break;
+        }
+        if idx > 0 {
+            if budget < 2 {
+                break;
+            }
+            out.push_str("\\n");
+            budget -= 2;
+        }
+        for ch in line.chars() {
+            if ch == '\n' {
+                if budget < 2 {
+                    return out;
+                }
+                out.push_str("\\n");
+                budget -= 2;
+            } else {
+                if budget == 0 {
+                    return out;
+                }
+                out.push(ch);
+                budget -= 1;
+            }
+        }
+    }
+    out
+}
+
+/// Emit one greppable `runner-exit` line to STDOUT (the daemon's log stream,
+/// which reaches Railway — same channel as the reconcile-* lines) when a
+/// dispatched workflow runner exits. Records exit code, signal (SIGKILL=OOM/
+/// supervision), wall-clock duration, and the stderr tail — the definitive "why
+/// did the delegating runner die" signal (TASK-799). Safe here (unlike the local
+/// CLI spawn path): the daemon is a long-lived supervisor, not a `--json` command.
+fn emit_runner_exit_diagnostic(
+    workflow_id: Option<&str>,
+    status: &std::process::ExitStatus,
+    started_at: std::time::Instant,
+    stderr_lines: &Arc<Mutex<Vec<String>>>,
+) {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal()
+    };
+    #[cfg(not(unix))]
+    let signal: Option<i32> = None;
+    let tail_capped = stderr_lines
+        .lock()
+        .map(|buf| {
+            let start = buf.len().saturating_sub(RUNNER_STDERR_TAIL_LINES);
+            capped_escaped_tail(&buf[start..], RUNNER_STDERR_TAIL_MAX_CHARS)
+        })
+        .unwrap_or_default();
+    println!(
+        "{}",
+        format_runner_exit_line(workflow_id, status.code(), signal, started_at.elapsed().as_secs(), &tail_capped)
+    );
+}
+
+/// Pure formatter for the `runner-exit` line (kept separate so it is testable).
+/// `tail_capped` is expected to be pre-capped + single-lined by
+/// [`capped_escaped_tail`], so this only interpolates.
+fn format_runner_exit_line(
+    workflow_id: Option<&str>,
+    code: Option<i32>,
+    signal: Option<i32>,
+    duration_secs: u64,
+    tail_capped: &str,
+) -> String {
+    format!(
+        "runner-exit workflow_id={} code={code:?} signal={signal:?} duration_secs={duration_secs} stderr_tail={tail_capped}",
+        workflow_id.unwrap_or("-"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::await_holding_lock)]
@@ -961,6 +1067,38 @@ mod tests {
 
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn runner_exit_line_formats_signal_and_pre_capped_tail() {
+        // A SIGKILL (OOM / external supervision) — the "why did the delegating
+        // runner die" record for a mid-run death.
+        let tail = capped_escaped_tail(&["boom".to_string(), "exec_session closed".to_string()], 2000);
+        let line = format_runner_exit_line(Some("wf-abc"), None, Some(9), 61, &tail);
+        assert!(line.starts_with("runner-exit workflow_id=wf-abc"));
+        assert!(line.contains("code=None"));
+        assert!(line.contains("signal=Some(9)"));
+        assert!(line.contains("duration_secs=61"));
+        // Lines joined + newlines escaped so the record stays one greppable line.
+        assert!(line.contains("stderr_tail=boom\\nexec_session closed"));
+        assert!(!line.contains('\n'), "the record must stay one greppable line");
+        // A clean exit renders code/workflow_id defaults.
+        let clean = format_runner_exit_line(None, Some(0), None, 5, "");
+        assert!(clean.contains("workflow_id=-"));
+        assert!(clean.contains("code=Some(0)"));
+    }
+
+    #[test]
+    fn capped_escaped_tail_bounds_memory_and_escapes_newlines() {
+        // A pathological megabyte-long single stderr line must NOT be copied
+        // whole — the cap applies while building, so the result is <= max_chars.
+        let huge = "x".repeat(1_000_000);
+        let out = capped_escaped_tail(std::slice::from_ref(&huge), 2000);
+        assert_eq!(out.chars().count(), 2000);
+        // Embedded newlines and the inter-line join are both escaped to `\n`.
+        let escaped = capped_escaped_tail(&["a\nb".to_string(), "c".to_string()], 2000);
+        assert_eq!(escaped, "a\\nb\\nc");
+        assert!(!escaped.contains('\n'));
+    }
 
     fn test_env_lock() -> &'static Mutex<()> {
         // Use the dispatch-wide shared lock so we serialize with sibling
