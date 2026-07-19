@@ -262,6 +262,9 @@ async fn run(cli: Cli) -> Result<()> {
         Command::Trigger { command } => services::operations::handle_trigger(command, &project_root, cli.json).await,
         Command::Logs { command } => services::operations::handle_logs(command, &project_root, cli.json).await,
         Command::Subject { command } => services::operations::handle_subject(command, &project_root, cli.json).await,
+        Command::Environment { command } => {
+            services::operations::handle_environment(command, &project_root, cli.json).await
+        }
         Command::Flavor { command } => services::operations::handle_flavor(command, &project_root, cli.json).await,
         Command::Update(args) => services::operations::handle_update(args, &project_root, cli.json).await,
         Command::Cost { command } => services::operations::handle_cost(command, &project_root, cli.json).await,
@@ -325,6 +328,7 @@ async fn run(cli: Cli) -> Result<()> {
                 | Command::Trigger { .. }
                 | Command::Logs { .. }
                 | Command::Subject { .. }
+                | Command::Environment { .. }
                 | Command::Flavor { .. }
                 | Command::Update(_)
                 | Command::Cost { .. }
@@ -414,6 +418,7 @@ fn cli_command_group(command: &Command) -> services::metrics::CommandGroup {
         Command::Trigger { .. } => CommandGroup::Trigger,
         Command::Logs { .. } => CommandGroup::Logs,
         Command::Subject { .. } => CommandGroup::Subject,
+        Command::Environment { .. } => CommandGroup::Environment,
         Command::Flavor { .. } => CommandGroup::Flavor,
         Command::Update(_) => CommandGroup::Update,
         Command::Cost { .. } => CommandGroup::Cost,

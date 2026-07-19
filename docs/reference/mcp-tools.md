@@ -1,14 +1,14 @@
 # MCP Tools Reference
 
 All MCP tools exposed by `animus mcp serve`. The current top-level server
-registers 93 built-in tools across daemon, cost, queue, agent, output,
+registers 97 built-in tools across daemon, cost, queue, agent, output,
 workflow, plugin, skill, subject, logs, tool-discovery, and top-level memory families. These
 tools allow AI agents to interact with the Animus orchestrator over the Model
 Context Protocol. Each tool wraps an `animus` CLI command, accepting JSON input
 and returning structured results.
 
-That headline 93 counts the full management-mode surface. A default
-agent-injected server (`animus mcp serve` without `--management`) exposes 91:
+That headline 97 counts the full management-mode surface. A default
+agent-injected server (`animus mcp serve` without `--management`) exposes 95:
 the two `animus.interactions.*` management tools are gated behind
 `--management` so an agent can never list or answer its own pending approvals.
 
@@ -181,6 +181,24 @@ bounded fetch for recent entries, not a live stream.
 | Tool | Description | Key Parameters |
 |---|---|---|
 | `animus.logs.tail` | Tail recent log entries from the active `log_storage_backend` | `plugin`, `level`, `since`, `limit`, `project_root` |
+
+---
+
+## Environment Operations (4 tools)
+
+Surface the CLI's `animus environment {list,get,teardown,reap}` node-management
+verbs to MCP callers. They drive the installed `environment` plugin's node-
+management surface (`environment/list` · `/get` · `/teardown_node` · `/reap`) so
+agents + the portal can inspect and reap ephemeral run nodes without a dashboard
+delete. `reap` defaults to deleting only DEAD (FAILED/CRASHED) nodes — always
+safe, since a live node is never dead; `all`+`force` also reaps healthy orphans.
+
+| Tool | Description | Key Parameters |
+|---|---|---|
+| `animus.environment.list` | List managed environment nodes with their state + orphan flag | `environment`, `project_root` |
+| `animus.environment.get` | Describe one managed node by substrate id or name | `id`, `environment`, `project_root` |
+| `animus.environment.teardown` | Destroy one managed node by substrate id or name (idempotent) | `id`, `environment`, `project_root` |
+| `animus.environment.reap` | Reap orphaned/dead nodes (default: only dead) | `all`, `force`, `dry_run`, `older_than_secs`, `environment`, `project_root` |
 
 ---
 

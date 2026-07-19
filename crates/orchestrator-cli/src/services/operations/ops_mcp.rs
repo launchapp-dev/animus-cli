@@ -47,6 +47,8 @@ mod daemon_inproc;
 mod daemon_inputs;
 #[path = "ops_mcp/daemon_tools.rs"]
 mod daemon_tools;
+#[path = "ops_mcp/environment_tools.rs"]
+mod environment_tools;
 #[path = "ops_mcp/exec.rs"]
 mod exec;
 #[path = "ops_mcp/exec_errors.rs"]
@@ -298,6 +300,7 @@ fn new_ao_mcp_server_with_options(
         + AoMcpServer::plugin_marketplace_tool_router()
         + AoMcpServer::skill_tool_router()
         + AoMcpServer::subject_tool_router()
+        + AoMcpServer::environment_tool_router()
         + AoMcpServer::logs_tool_router()
         + AoMcpServer::memory_tool_router_for_ao()
         + AoMcpServer::interaction_tool_router()

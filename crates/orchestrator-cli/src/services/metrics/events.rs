@@ -101,6 +101,7 @@ pub(crate) enum CommandGroup {
     Trigger,
     Logs,
     Subject,
+    Environment,
     Flavor,
     Update,
     Cost,

@@ -336,6 +336,12 @@ animus
 │   ├── status               Set the status of a subject by id through the active subject_backend
 │   └── delete               Delete a subject by id; requires --yes to confirm (otherwise prints preview)
 │
+├── environment              Manage environment nodes (ephemeral run instances) via the installed environment plugin
+│   ├── list                 List managed environment nodes with their state + orphan flag
+│   ├── get                  Describe one managed node by substrate id or name
+│   ├── teardown             Destroy one managed node by substrate id or name (idempotent)
+│   └── reap                 Reap orphaned/dead nodes (`--dry-run` previews; `--all --force` also reaps healthy orphans)
+│
 ├── flavor                   Inspect or install Animus flavor manifests (`flavors/<name>.toml`) — v0.5
 │   ├── list                 List available flavor manifests on disk
 │   ├── current              Show the active flavor and drift against the manifest

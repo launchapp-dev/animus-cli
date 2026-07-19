@@ -93,6 +93,82 @@ use orchestrator_plugin_host::resident_host_registry::{
 use orchestrator_plugin_host::session::plugin_supervisor::{classify, RetryDecision};
 use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, HostError, PluginHost, PluginSpawnOptions};
 
+// Node-management wire methods + types (list / get / teardown_node / reap,
+// TASK-807). These MIRROR `animus-environment-protocol` v0.7.0-rc.10's
+// `EnvironmentNode` + `*Request`/`*Response`; they are defined locally because
+// this crate pins protocol rc.7 (the line carrying `WorkflowList.total`), while
+// rc.10 lives on the diverged one-id branch that removed it. Switch to the
+// protocol imports once those two protocol lines reconcile.
+const METHOD_ENVIRONMENT_LIST: &str = "environment/list";
+const METHOD_ENVIRONMENT_GET: &str = "environment/get";
+const METHOD_ENVIRONMENT_TEARDOWN_NODE: &str = "environment/teardown_node";
+const METHOD_ENVIRONMENT_REAP: &str = "environment/reap";
+
+/// A managed environment instance ("node") reported by the node-management
+/// surface. Substrate-agnostic (a Railway service, a container, a pod).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EnvironmentNode {
+    pub id: String,
+    pub name: String,
+    pub state: String,
+    #[serde(default)]
+    pub run_id: Option<String>,
+    #[serde(default)]
+    pub image: Option<String>,
+    #[serde(default)]
+    pub created_at: Option<String>,
+    #[serde(default)]
+    pub orphan: bool,
+}
+
+/// Outcome of `environment/reap`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ReapReport {
+    #[serde(default)]
+    pub deleted: Vec<String>,
+    #[serde(default)]
+    pub kept: Vec<EnvironmentNode>,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct ListNodesResponse {
+    #[serde(default)]
+    nodes: Vec<EnvironmentNode>,
+}
+
+#[derive(serde::Serialize)]
+struct GetNodeRequest {
+    id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct GetNodeResponse {
+    #[serde(default)]
+    node: Option<EnvironmentNode>,
+}
+
+#[derive(serde::Serialize)]
+struct TeardownNodeRequest {
+    id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct TeardownNodeResponse {
+    #[serde(default)]
+    deleted: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct ReapRequest {
+    all: bool,
+    force: bool,
+    dry_run: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    older_than_secs: Option<u64>,
+}
+
 /// Default wall-clock timeout for a single `environment/*` RPC round-trip. This
 /// bounds the JSON-RPC call itself, NOT the wrapped command — a long-running
 /// command carries its own [`HarnessCommand`] timeout via
@@ -276,6 +352,43 @@ impl EnvironmentClient {
         let _resp: TeardownResponse = serde_json::from_value(value)
             .with_context(|| format!("decoding TeardownResponse from environment plugin {}", self.plugin.name))?;
         Ok(())
+    }
+
+    /// `environment/list`: every managed node this environment plugin owns.
+    pub fn list_nodes(&self) -> Result<Vec<EnvironmentNode>> {
+        let value = self.call_blocking(METHOD_ENVIRONMENT_LIST, serde_json::json!({}), ENVIRONMENT_RPC_TIMEOUT)?;
+        let resp: ListNodesResponse = serde_json::from_value(value)
+            .with_context(|| format!("decoding ListNodesResponse from environment plugin {}", self.plugin.name))?;
+        Ok(resp.nodes)
+    }
+
+    /// `environment/get`: describe one managed node by substrate id or name.
+    pub fn get_node(&self, id: &str) -> Result<Option<EnvironmentNode>> {
+        let request = GetNodeRequest { id: id.to_string() };
+        let value = self.call_blocking(METHOD_ENVIRONMENT_GET, request, ENVIRONMENT_RPC_TIMEOUT)?;
+        let resp: GetNodeResponse = serde_json::from_value(value)
+            .with_context(|| format!("decoding GetNodeResponse from environment plugin {}", self.plugin.name))?;
+        Ok(resp.node)
+    }
+
+    /// `environment/teardown_node`: destroy one managed node by id or name.
+    /// Returns the substrate ids actually deleted (empty when already gone).
+    pub fn teardown_node(&self, id: &str) -> Result<Vec<String>> {
+        let request = TeardownNodeRequest { id: id.to_string() };
+        let value = self.call_blocking(METHOD_ENVIRONMENT_TEARDOWN_NODE, request, ENVIRONMENT_RPC_TIMEOUT)?;
+        let resp: TeardownNodeResponse = serde_json::from_value(value)
+            .with_context(|| format!("decoding TeardownNodeResponse from environment plugin {}", self.plugin.name))?;
+        Ok(resp.deleted)
+    }
+
+    /// `environment/reap`: destroy orphaned/dead managed nodes. Default (all=
+    /// false) reaps only dead nodes; `all`+`force` also reaps healthy orphans;
+    /// `dry_run` reports the plan without deleting.
+    pub fn reap(&self, all: bool, force: bool, dry_run: bool, older_than_secs: Option<u64>) -> Result<ReapReport> {
+        let request = ReapRequest { all, force, dry_run, older_than_secs };
+        let value = self.call_blocking(METHOD_ENVIRONMENT_REAP, request, ENVIRONMENT_RPC_TIMEOUT)?;
+        serde_json::from_value(value)
+            .with_context(|| format!("decoding ReapReport from environment plugin {}", self.plugin.name))
     }
 
     /// Serialize `params` and run a CONTROL RPC (prepare / teardown) against this
