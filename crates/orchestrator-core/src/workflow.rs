@@ -14,7 +14,7 @@ pub use dependency::{
 };
 
 pub use environment_client::{
-    shutdown_resident_hosts as shutdown_environment_hosts, EnvironmentClient, EnvironmentNode, ReapReport,
+    shutdown_resident_hosts as shutdown_environment_hosts, EnvironmentClient, EnvironmentNode, ReapResponse,
 };
 
 pub use journal_client::{

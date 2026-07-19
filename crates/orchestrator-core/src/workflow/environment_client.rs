@@ -78,10 +78,15 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use animus_environment_protocol::{
-    EnvironmentHandle, EnvironmentSpec, ExecRequest, ExecResponse, ExecStream, HarnessCommand, PrepareRequest,
-    PrepareResponse, TeardownRequest, TeardownResponse, METHOD_ENVIRONMENT_EXEC, METHOD_ENVIRONMENT_EXEC_STREAM,
-    METHOD_ENVIRONMENT_PREPARE, METHOD_ENVIRONMENT_TEARDOWN, NOTIFICATION_ENVIRONMENT_OUTPUT,
+    EnvironmentHandle, EnvironmentSpec, ExecRequest, ExecResponse, ExecStream, GetNodeRequest, GetNodeResponse,
+    HarnessCommand, ListNodesResponse, PrepareRequest, PrepareResponse, ReapRequest, TeardownNodeRequest,
+    TeardownNodeResponse, TeardownRequest, TeardownResponse, METHOD_ENVIRONMENT_EXEC, METHOD_ENVIRONMENT_EXEC_STREAM,
+    METHOD_ENVIRONMENT_GET, METHOD_ENVIRONMENT_LIST, METHOD_ENVIRONMENT_PREPARE, METHOD_ENVIRONMENT_REAP,
+    METHOD_ENVIRONMENT_TEARDOWN, METHOD_ENVIRONMENT_TEARDOWN_NODE, NOTIFICATION_ENVIRONMENT_OUTPUT,
 };
+// Re-export the canonical node-management types so consumers (the `animus
+// environment` CLI) get them through orchestrator-core (TASK-807).
+pub use animus_environment_protocol::{EnvironmentNode, ReapResponse};
 use animus_plugin_protocol::PLUGIN_KIND_ENVIRONMENT;
 use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
@@ -92,82 +97,6 @@ use orchestrator_plugin_host::resident_host_registry::{
 };
 use orchestrator_plugin_host::session::plugin_supervisor::{classify, RetryDecision};
 use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, HostError, PluginHost, PluginSpawnOptions};
-
-// Node-management wire methods + types (list / get / teardown_node / reap,
-// TASK-807). These MIRROR `animus-environment-protocol` v0.7.0-rc.10's
-// `EnvironmentNode` + `*Request`/`*Response`; they are defined locally because
-// this crate pins protocol rc.7 (the line carrying `WorkflowList.total`), while
-// rc.10 lives on the diverged one-id branch that removed it. Switch to the
-// protocol imports once those two protocol lines reconcile.
-const METHOD_ENVIRONMENT_LIST: &str = "environment/list";
-const METHOD_ENVIRONMENT_GET: &str = "environment/get";
-const METHOD_ENVIRONMENT_TEARDOWN_NODE: &str = "environment/teardown_node";
-const METHOD_ENVIRONMENT_REAP: &str = "environment/reap";
-
-/// A managed environment instance ("node") reported by the node-management
-/// surface. Substrate-agnostic (a Railway service, a container, a pod).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct EnvironmentNode {
-    pub id: String,
-    pub name: String,
-    pub state: String,
-    #[serde(default)]
-    pub run_id: Option<String>,
-    #[serde(default)]
-    pub image: Option<String>,
-    #[serde(default)]
-    pub created_at: Option<String>,
-    #[serde(default)]
-    pub orphan: bool,
-}
-
-/// Outcome of `environment/reap`.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct ReapReport {
-    #[serde(default)]
-    pub deleted: Vec<String>,
-    #[serde(default)]
-    pub kept: Vec<EnvironmentNode>,
-    #[serde(default)]
-    pub dry_run: bool,
-}
-
-#[derive(serde::Deserialize)]
-struct ListNodesResponse {
-    #[serde(default)]
-    nodes: Vec<EnvironmentNode>,
-}
-
-#[derive(serde::Serialize)]
-struct GetNodeRequest {
-    id: String,
-}
-
-#[derive(serde::Deserialize)]
-struct GetNodeResponse {
-    #[serde(default)]
-    node: Option<EnvironmentNode>,
-}
-
-#[derive(serde::Serialize)]
-struct TeardownNodeRequest {
-    id: String,
-}
-
-#[derive(serde::Deserialize)]
-struct TeardownNodeResponse {
-    #[serde(default)]
-    deleted: Vec<String>,
-}
-
-#[derive(serde::Serialize)]
-struct ReapRequest {
-    all: bool,
-    force: bool,
-    dry_run: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    older_than_secs: Option<u64>,
-}
 
 /// Default wall-clock timeout for a single `environment/*` RPC round-trip. This
 /// bounds the JSON-RPC call itself, NOT the wrapped command — a long-running
@@ -384,11 +313,11 @@ impl EnvironmentClient {
     /// `environment/reap`: destroy orphaned/dead managed nodes. Default (all=
     /// false) reaps only dead nodes; `all`+`force` also reaps healthy orphans;
     /// `dry_run` reports the plan without deleting.
-    pub fn reap(&self, all: bool, force: bool, dry_run: bool, older_than_secs: Option<u64>) -> Result<ReapReport> {
+    pub fn reap(&self, all: bool, force: bool, dry_run: bool, older_than_secs: Option<u64>) -> Result<ReapResponse> {
         let request = ReapRequest { all, force, dry_run, older_than_secs };
         let value = self.call_blocking(METHOD_ENVIRONMENT_REAP, request, ENVIRONMENT_RPC_TIMEOUT)?;
         serde_json::from_value(value)
-            .with_context(|| format!("decoding ReapReport from environment plugin {}", self.plugin.name))
+            .with_context(|| format!("decoding ReapResponse from environment plugin {}", self.plugin.name))
     }
 
     /// Serialize `params` and run a CONTROL RPC (prepare / teardown) against this

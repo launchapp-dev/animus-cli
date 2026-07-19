@@ -162,7 +162,7 @@ pub use workflow::{
     durable_journal_active, is_terminal_workflow_run_status, select_workflow_prune_candidates, WorkflowRunDeletion,
     WorkflowRunPruneCandidate, WorkflowRunPruneFilter, WorkflowRunPruneReport,
 };
-pub use workflow::{shutdown_environment_hosts, EnvironmentClient, EnvironmentNode, ReapReport};
+pub use workflow::{shutdown_environment_hosts, EnvironmentClient, EnvironmentNode, ReapResponse};
 pub use workflow_config::{
     builtin_workflow_config, compile_yaml_workflow_files, ensure_workflow_config_compiled, ensure_workflow_config_file,
     expand_variables, expand_workflow_phases, generated_workflow_phase_is_defined, legacy_workflow_config_paths,
