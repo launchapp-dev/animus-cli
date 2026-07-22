@@ -252,39 +252,142 @@ fn degraded_reasons_for(project_root: &Path, status: &DaemonStatus) -> Vec<Strin
     reasons
 }
 
-/// Probe whether the installed subject-backend plugins can route the
-/// kernel-required `task` and `requirement` kinds. An install dir with no
-/// executable `animus-subject-*` binary covering those kinds means subject
-/// CRUD will hard-fail at runtime even though the daemon process is alive.
-fn subject_router_degraded_reason(_project_root: &Path) -> Option<String> {
-    use orchestrator_plugin_host::plugin_install_dir;
-    let dir = plugin_install_dir();
-    let entries = std::fs::read_dir(&dir).ok()?;
-    let mut has_executable_subject_backend = false;
-    for entry in entries.flatten() {
-        let name = entry.file_name();
-        let Some(name_str) = name.to_str() else {
-            continue;
-        };
-        if !name_str.starts_with("animus-subject-") {
-            continue;
+/// Env var that, when set to a truthy value, instructs the daemon to run
+/// without any subject-backend dispatch. Mirrors
+/// `SUBJECT_PLUGINS_DISABLE_ENV` in `orchestrator-daemon-runtime`; kept as
+/// a local literal so this crate stays free of an upward dependency on
+/// daemon-runtime.
+const SUBJECT_PLUGINS_DISABLE_ENV: &str = "ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS";
+
+/// Returns `true` when [`SUBJECT_PLUGINS_DISABLE_ENV`] is set to a truthy
+/// value (`1`, `true`, `yes`, `on`, …). Mirrors
+/// `orchestrator_daemon_runtime::subject_plugins_disable_env_set`.
+fn subject_plugins_disabled() -> bool {
+    match std::env::var(SUBJECT_PLUGINS_DISABLE_ENV) {
+        Ok(val) => {
+            let trimmed = val.trim().to_ascii_lowercase();
+            !trimmed.is_empty() && trimmed != "0" && trimmed != "false" && trimmed != "no" && trimmed != "off"
         }
-        let path = entry.path();
-        let candidate = if path.is_dir() { path.join(name_str) } else { path };
-        if is_binary_executable(&candidate) {
-            has_executable_subject_backend = true;
-            break;
-        }
+        Err(_) => false,
     }
-    if has_executable_subject_backend {
-        None
-    } else {
-        Some(
+}
+
+/// Probe whether the configured subject-backend plugins can form a routable
+/// [`orchestrator_plugin_host::SubjectRouter`]. Returns `None` (healthy) when:
+///
+/// - subject plugins are deliberately disabled via
+///   `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS`; or
+/// - at least one `subject_backend` plugin is installed AND its kind routing
+///   table builds without conflicts (duplicate kind claims, etc.).
+///
+/// Returns a degraded reason when:
+///
+/// - plugin discovery itself fails (e.g. a malformed `plugins.yaml`);
+/// - no `subject_backend` plugins are installed; or
+/// - two or more installed plugins claim the same subject kind, preventing
+///   the router from building.
+///
+/// Consolidated backends (e.g. `animus-postgres`) whose binary name does NOT
+/// begin with `animus-subject-` are correctly recognized when registered in
+/// `plugins.yaml` with `plugin_kind = "subject_backend"` — kind-based
+/// detection never applies filename heuristics.
+///
+/// Install-time kind renames recorded in `plugins.lock` are applied before
+/// the duplicate-kind check, matching the logic in `resolve_subject_dispatch`.
+fn subject_router_degraded_reason(project_root: &Path) -> Option<String> {
+    use orchestrator_plugin_host::{discover_by_kind, SubjectPluginSpec, SubjectRouter};
+
+    if subject_plugins_disabled() {
+        return None;
+    }
+
+    let plugins = match discover_by_kind(project_root, "subject_backend") {
+        Ok(p) => p,
+        Err(_) => {
+            return Some(
+                "subject_backend unroutable: plugin discovery failed — \
+                 run `animus plugin status` to diagnose"
+                    .to_string(),
+            );
+        }
+    };
+
+    if plugins.is_empty() {
+        return Some(
             "subject_backend unroutable: no executable subject-backend plugin installed — \
              run `animus plugin install-defaults --include-subjects`"
                 .to_string(),
-        )
+        );
     }
+
+    // Build the kind-routing table (no spawning) to detect conflicts such as
+    // two installed plugins claiming the same subject kind. Mirrors the logic
+    // in `orchestrator_daemon_runtime::resolve_subject_dispatch`.
+    let aliases = load_subject_kind_aliases(project_root, &plugins);
+    let specs: Vec<SubjectPluginSpec> = plugins
+        .iter()
+        .map(|p| SubjectPluginSpec {
+            name: p.name.clone(),
+            path: p.path.clone(),
+            native_kinds: p
+                .manifest
+                .capabilities
+                .iter()
+                .filter_map(|cap| cap.strip_prefix("subject_kind:"))
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty())
+                .collect(),
+            env_required: p.manifest.env_required.clone(),
+            notification_buffer_size: p.manifest.notification_buffer_size,
+            working_dir: None,
+        })
+        .collect();
+
+    // Detect the case where all installed subject_backend plugins declare no
+    // subject kinds — the router would build successfully but serve nothing.
+    // This is distinct from "no plugins installed": plugins exist but none
+    // claims any subject_kind:* capability, so no request could ever be routed.
+    if specs.iter().all(|s| s.native_kinds.is_empty()) {
+        return Some(
+            "subject_backend unroutable: no installed subject-backend plugin declares any subject kinds — \
+             run `animus plugin status` to diagnose kind registrations"
+                .to_string(),
+        );
+    }
+
+    match SubjectRouter::from_lazy_specs(specs, aliases) {
+        Ok(_) => None,
+        Err(err) => Some(format!(
+            "subject_backend unroutable: router construction failed ({err}) — \
+             run `animus plugin status` to diagnose conflicting kind registrations"
+        )),
+    }
+}
+
+/// Load install-time kind renames from `plugins.lock` for the degraded-reason
+/// router check. Mirrors `load_kind_aliases_from_lockfile` in
+/// `orchestrator_daemon_runtime::subject_dispatch` but lives here to keep
+/// `orchestrator-core` free of an upward dependency on daemon-runtime.
+fn load_subject_kind_aliases(
+    project_root: &Path,
+    candidates: &[orchestrator_plugin_host::DiscoveredPlugin],
+) -> orchestrator_plugin_host::KindAliasMap {
+    use orchestrator_plugin_host::{KindAliasMap, PluginLockfile};
+    let mut aliases = KindAliasMap::default();
+    let Ok(lock) = PluginLockfile::load_default(Some(project_root)) else {
+        return aliases;
+    };
+    let candidate_names: std::collections::HashSet<&str> = candidates.iter().map(|p| p.name.as_str()).collect();
+    for entry in &lock.plugins {
+        if !candidate_names.contains(entry.name.as_str()) {
+            continue;
+        }
+        let (Some(installed), Some(native)) = (entry.effective_installed_kind(), entry.effective_native_kind()) else {
+            continue;
+        };
+        aliases.insert(&entry.name, installed, native);
+    }
+    aliases
 }
 
 /// v0.5: probe the working tree for an `animus.flavor.v1` manifest and
@@ -876,5 +979,328 @@ mod tests {
             cache.insert(temp.path().to_path_buf(), (stale, sample_health(DaemonStatus::Running)));
         }
         assert!(read_daemon_health_cache(temp.path()).is_none(), "stale entry should not be returned");
+    }
+
+    // ---- subject_router_degraded_reason regression tests ----------------
+    //
+    // These tests manipulate process-global env vars that drive plugin
+    // discovery (`ANIMUS_CONFIG_DIR`, `ANIMUS_PLUGIN_DIR`,
+    // `ANIMUS_PLUGIN_PATH`). They must run serially so env mutations from
+    // one test don't race another.
+
+    static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct EnvGuard {
+        key: &'static str,
+        prev: Option<std::ffi::OsString>,
+    }
+    impl EnvGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let prev = std::env::var_os(key);
+            std::env::set_var(key, value.as_ref());
+            Self { key, prev }
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            match self.prev.take() {
+                Some(v) => std::env::set_var(self.key, v),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+
+    /// Redirect the three env vars that drive `discover_by_kind` to isolated
+    /// temp dirs. Returns guards that restore the originals on drop.
+    fn isolate_discovery_env(config_dir: &Path, plugin_dir: &Path) -> (EnvGuard, EnvGuard, EnvGuard) {
+        (
+            EnvGuard::set("ANIMUS_CONFIG_DIR", config_dir),
+            EnvGuard::set("ANIMUS_PLUGIN_DIR", plugin_dir),
+            EnvGuard::set("ANIMUS_PLUGIN_PATH", ""),
+        )
+    }
+
+    /// Regression test for TASK-211: a consolidated backend whose binary name
+    /// does NOT start with `animus-subject-` (e.g. `animus-postgres`) must not
+    /// produce a degraded reason when it declares `plugin_kind = "subject_backend"`
+    /// in its manifest and is registered in `plugins.yaml`.
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_not_degraded_for_consolidated_backend_registered_as_subject_backend() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        // A fake `animus-postgres` binary: its name does not start with
+        // `animus-subject-`, so an old filename-prefix probe would have ignored
+        // it and falsely reported no subject_backend installed.
+        let bin = temp.path().join("animus-postgres");
+        let manifest = serde_json::json!({
+            "name": "animus-postgres",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "Consolidated PostgreSQL subject backend",
+            "protocol_version": "1.0.0",
+            "capabilities": ["subject_kind:task"]
+        });
+        std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).expect("chmod");
+
+        // Register the consolidated backend in the global plugins.yaml.
+        std::fs::write(
+            config_dir.join("plugins.yaml"),
+            format!("plugins:\n  animus-postgres:\n    binary: {}\n", bin.display()),
+        )
+        .expect("write plugins.yaml");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_none(),
+            "consolidated backend `animus-postgres` declared as subject_backend must not produce a degraded reason, got: {reason:?}"
+        );
+    }
+
+    /// A project with no subject_backend plugins at all must produce a degraded
+    /// reason so operators see actionable feedback rather than a silent failure.
+    #[test]
+    fn subject_router_degraded_when_no_subject_backend_plugins_installed() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+        // No plugins.yaml, no binaries — discover_by_kind returns an empty Vec.
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(reason.is_some(), "no subject_backend plugins must produce a degraded reason");
+        let r = reason.unwrap();
+        assert!(
+            r.contains("subject_backend unroutable"),
+            "degraded reason must mention `subject_backend unroutable`, got: {r}"
+        );
+    }
+
+    /// When `discover_by_kind` itself returns an error (e.g. a malformed
+    /// `plugins.yaml`), the probe must report degraded rather than silently
+    /// returning `None` (false-healthy). This was the residual bug after the
+    /// `.ok()?` pattern was left in place post-refactor.
+    #[test]
+    fn subject_router_degraded_on_discovery_failure_not_false_healthy() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        // A bare integer is valid YAML but cannot be deserialized as
+        // PluginsConfig (a struct), so load_plugins_config returns Err and
+        // discover_by_kind propagates it.
+        std::fs::write(config_dir.join("plugins.yaml"), "12345\n").expect("write invalid yaml");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_some(),
+            "plugin discovery failure must produce a degraded reason, not false-healthy (None)"
+        );
+    }
+
+    /// When `ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS` is set to a truthy value,
+    /// the operator has deliberately disabled subject-backend dispatch — this
+    /// is not a degraded state. The probe must return `None` even when no
+    /// subject_backend plugins are installed (which would otherwise trigger the
+    /// "no plugin installed" degraded reason).
+    #[test]
+    fn subject_router_not_degraded_when_subject_plugins_disabled_by_env() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+        // No plugins.yaml, no binaries — would normally degrade as "no subject_backend installed".
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let _disable = EnvGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, "1");
+
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_none(),
+            "ANIMUS_DAEMON_DISABLE_SUBJECT_PLUGINS=1 must suppress the degraded reason, got: {reason:?}"
+        );
+    }
+
+    /// `subject_plugins_disabled` must agree with the real boot parser in
+    /// `orchestrator-daemon-runtime` for every canonical falsy value, including
+    /// mixed-case variants. `"False"`, `"FALSE"`, `"No"`, `"Off"`, and `"0"`
+    /// must all be treated as falsy (plugins NOT disabled), and `"true"`,
+    /// `"True"`, `"TRUE"`, `"1"`, `"yes"`, `"on"` as truthy (plugins disabled).
+    #[test]
+    fn subject_plugins_disabled_matches_boot_parser_for_mixed_case_falsy_values() {
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let falsy = ["", "0", "false", "False", "FALSE", "no", "No", "NO", "off", "Off", "OFF"];
+        for val in &falsy {
+            let _g = EnvGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, val);
+            assert!(
+                !subject_plugins_disabled(),
+                "expected subject_plugins_disabled() == false for {SUBJECT_PLUGINS_DISABLE_ENV}={val:?}"
+            );
+        }
+
+        let truthy = ["1", "true", "True", "TRUE", "yes", "Yes", "YES", "on", "On", "ON"];
+        for val in &truthy {
+            let _g = EnvGuard::set(SUBJECT_PLUGINS_DISABLE_ENV, val);
+            assert!(
+                subject_plugins_disabled(),
+                "expected subject_plugins_disabled() == true for {SUBJECT_PLUGINS_DISABLE_ENV}={val:?}"
+            );
+        }
+    }
+
+    /// A `subject_backend` plugin that declares NO `subject_kind:*` capabilities
+    /// must produce a degraded reason. The router it would build serves nothing —
+    /// any call would fail with "no backend registered for kind". This guards the
+    /// case where `discover_by_kind` returns plugins but `from_lazy_specs` would
+    /// succeed with an empty routing table (false-healthy).
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_degraded_when_subject_backend_declares_no_kinds() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        let bin = temp.path().join("animus-subject-nokind");
+        let manifest = serde_json::json!({
+            "name": "animus-subject-nokind",
+            "version": "0.1.0",
+            "plugin_kind": "subject_backend",
+            "description": "subject backend with no subject kinds",
+            "protocol_version": "1.0.0",
+            "capabilities": []
+        });
+        std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+        let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&bin, perms).expect("chmod");
+
+        std::fs::write(
+            config_dir.join("plugins.yaml"),
+            format!("plugins:\n  animus-subject-nokind:\n    binary: {}\n", bin.display()),
+        )
+        .expect("write plugins.yaml");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_some(),
+            "subject_backend with no subject kinds must produce a degraded reason (false-healthy guard)"
+        );
+        let r = reason.unwrap();
+        assert!(
+            r.contains("subject_backend unroutable"),
+            "degraded reason must mention `subject_backend unroutable`, got: {r}"
+        );
+    }
+
+    /// Two `subject_backend` plugins that both declare `subject_kind:task` cause
+    /// `SubjectRouter::from_lazy_specs` to fail with a duplicate-kind error.
+    /// The probe must surface this as a degraded reason so the operator can
+    /// diagnose the conflicting installations instead of silently routing to
+    /// whichever plugin happened to be discovered first.
+    #[cfg(unix)]
+    #[test]
+    fn subject_router_degraded_on_duplicate_kind_conflict() {
+        use std::os::unix::fs::PermissionsExt;
+        let _lock = TEST_ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+
+        let config_dir = temp.path().join("animus-home");
+        let plugin_dir = temp.path().join("plugins");
+        std::fs::create_dir_all(&config_dir).expect("mkdir config_dir");
+        std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin_dir");
+
+        let make_plugin = |name: &str| -> std::path::PathBuf {
+            let bin = temp.path().join(name);
+            let manifest = serde_json::json!({
+                "name": name,
+                "version": "0.1.0",
+                "plugin_kind": "subject_backend",
+                "description": format!("fake {name}"),
+                "protocol_version": "1.0.0",
+                "capabilities": ["subject_kind:task"]
+            });
+            std::fs::write(&bin, format!("#!/bin/sh\nprintf '{}\\n'\n", manifest)).expect("write plugin");
+            let mut perms = std::fs::metadata(&bin).expect("meta").permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&bin, perms).expect("chmod");
+            bin
+        };
+
+        let bin_a = make_plugin("fake-subject-a");
+        let bin_b = make_plugin("fake-subject-b");
+
+        std::fs::write(
+            config_dir.join("plugins.yaml"),
+            format!(
+                "plugins:\n  fake-subject-a:\n    binary: {}\n  fake-subject-b:\n    binary: {}\n",
+                bin_a.display(),
+                bin_b.display()
+            ),
+        )
+        .expect("write plugins.yaml");
+
+        let project_root = temp.path().join("project");
+        std::fs::create_dir_all(&project_root).expect("mkdir project");
+
+        let _env = isolate_discovery_env(&config_dir, &plugin_dir);
+        let reason = subject_router_degraded_reason(&project_root);
+        assert!(
+            reason.is_some(),
+            "duplicate subject_kind:task claims must produce a degraded reason"
+        );
+        let r = reason.unwrap();
+        assert!(
+            r.contains("subject_backend unroutable"),
+            "degraded reason must mention `subject_backend unroutable`, got: {r}"
+        );
+        assert!(
+            r.contains("router construction failed") || r.contains("duplicate"),
+            "degraded reason must mention the router construction failure or duplicate kind, got: {r}"
+        );
     }
 }
