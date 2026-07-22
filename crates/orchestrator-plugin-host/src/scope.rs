@@ -551,6 +551,7 @@ fn flavor_stub_slugs(parsed: &FlavorManifestStub) -> BTreeSet<String> {
         &parsed.triggers,
         &parsed.durable_store,
         &parsed.memory_store,
+        &parsed.config_source,
     ] {
         for slug in section.required.iter().chain(section.recommended.iter()) {
             out.insert(normalize_flavor_slug_str(slug));
@@ -640,6 +641,8 @@ struct FlavorManifestStub {
     durable_store: FlavorSectionStub,
     #[serde(default)]
     memory_store: FlavorSectionStub,
+    #[serde(default)]
+    config_source: FlavorSectionStub,
 }
 
 #[derive(Debug, Default, Deserialize)]
