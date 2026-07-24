@@ -460,6 +460,25 @@ where
         Err(_) => return report,
     };
     for (_path, checkpoint) in running {
+        // TASK-933: a DELEGATED coding phase's provider session lives INSIDE the
+        // remote node prepared by an `environment` plugin, NOT in a local
+        // provider plugin. The daemon must not try to resume it against a local
+        // plugin — that plugin never issued the session id and would reject it,
+        // mis-blocking the checkpoint with a misleading reinstall hint. Leave it
+        // Running so the companion runner re-dispatch reuses the node (skip
+        // prepare + `--resume` on the live handle); a dead node was already
+        // terminalized by `recover_orphaned_running_workflows`. This branch is
+        // inert until the companion runner persists `environment` (the field is
+        // `None` for every local run and for every runner without the change).
+        if checkpoint.environment.is_some() {
+            tracing::info!(
+                actor = protocol::ACTOR_DAEMON,
+                workflow_id = %checkpoint.workflow_id,
+                phase_id = %checkpoint.phase_id,
+                "delegated phase: skipping local provider resume; preserved for runner re-dispatch to reuse the node (TASK-933)"
+            );
+            continue;
+        }
         // Guard rail: provider plugins can only resume an external session
         // they themselves issued. If no provider_session_id was captured
         // before the daemon crashed, dispatching ANY id (the run_id, an
