@@ -1,7 +1,7 @@
 use super::*;
 use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
 use crate::services::runtime::workflow_mutation_surface::cancel_orphaned_running_workflow;
-use animus_environment_protocol::HarnessCommand;
+use animus_environment_protocol::{ExecResponse, HarnessCommand};
 use animus_runtime_shared::phase_session::{
     mark_environment_torn_down, read_checkpoint, update_session_failed, EnvironmentBinding,
 };
@@ -137,11 +137,44 @@ enum DelegateLiveness {
     Unknown,
 }
 
+/// Number of probe attempts before a delegated node is declared dead. A single
+/// success at any attempt => Alive; only ALL attempts failing terminalizes the
+/// node. This absorbs a transient relay/RPC blip (or a one-off timeout) against
+/// a genuinely-live node during restart reconciliation, which would otherwise
+/// false-kill an in-flight coding job — the exact work-loss this feature
+/// exists to prevent.
+const PROBE_ATTEMPTS: usize = 3;
+
+/// Delay between failed probe attempts. Short enough that a genuinely-dead node
+/// is still detected within the startup window, long enough to ride out a brief
+/// blip. The reconciler is a startup/steady-state sweep, not a hot path, so a
+/// few blocking seconds here are acceptable.
+const PROBE_RETRY_DELAY: Duration = Duration::from_millis(750);
+
+/// Per-attempt exec-probe timeout (the whole probe is bounded by
+/// `PROBE_ATTEMPTS` of this plus the inter-attempt delays).
+const PROBE_EXEC_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Whether a probe error looks like a TRANSIENT transport blip (the node may
+/// still be alive but slow/unreachable for a moment) rather than a definitive
+/// "node is gone" signal. Mirrors `EnvironmentClient::ping_is_dead`'s own
+/// interpretation: a `Timeout` is treated as busy/alive, while a closed
+/// transport (`ConnectionLost` / `ProcessExited`) is an unambiguous death
+/// signal. Only used to decide the ALL-ATTEMPTS-FAILED verdict — a consistently
+/// timing-out node leans to `Unknown` (preserve + re-probe next sweep) instead
+/// of being terminalized.
+fn probe_error_is_transient(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        matches!(cause.downcast_ref::<orchestrator_plugin_host::HostError>(), Some(orchestrator_plugin_host::HostError::Timeout(_)))
+    })
+}
+
 /// Probe a delegated node's liveness. There is no `environment/status` method
 /// (the protocol is prepare/exec/exec_stream/teardown only), so liveness is a
-/// trivial, side-effect-free `exec` of `true` under a short timeout: success =>
-/// Alive; a death-like host/RPC failure => Dead; an unresolvable plugin =>
-/// Unknown.
+/// trivial, side-effect-free `exec` of `true`, RETRIED up to [`PROBE_ATTEMPTS`]
+/// times: the first success => Alive; an unresolvable plugin => Unknown; if all
+/// attempts fail, a consistently-transient (timeout) failure => Unknown (fail
+/// safe — preserve, re-probe next sweep), otherwise => Dead.
 ///
 /// NB: `EnvironmentClient::exec` bridges a blocking RPC; when called from the
 /// daemon's async reconciler it uses `block_in_place`, which requires the
@@ -151,10 +184,38 @@ fn probe_delegate(project_root: &str, binding: &EnvironmentBinding) -> DelegateL
         Ok(client) => client,
         Err(_) => return DelegateLiveness::Unknown,
     };
-    let probe = HarnessCommand { program: "true".to_string(), args: Vec::new(), env: Default::default(), cwd: None };
-    match client.exec(&binding.handle, probe, Default::default(), None, Some(Duration::from_secs(10))) {
-        Ok(_) => DelegateLiveness::Alive,
-        Err(_) => DelegateLiveness::Dead,
+    probe_liveness_with_retry(PROBE_ATTEMPTS, PROBE_RETRY_DELAY, || {
+        let probe =
+            HarnessCommand { program: "true".to_string(), args: Vec::new(), env: Default::default(), cwd: None };
+        client.exec(&binding.handle, probe, Default::default(), None, Some(PROBE_EXEC_TIMEOUT))
+    })
+}
+
+/// Retry loop for [`probe_delegate`], factored out with an injectable exec
+/// producer so the retry/backoff semantics are unit-testable without a live
+/// plugin. Returns `Alive` on the first `Ok`; after all `attempts` fail,
+/// returns `Unknown` when the LAST failure looked transient (so a possibly-live
+/// node is preserved) and `Dead` otherwise.
+fn probe_liveness_with_retry<F>(attempts: usize, retry_delay: Duration, mut exec_probe: F) -> DelegateLiveness
+where
+    F: FnMut() -> anyhow::Result<ExecResponse>,
+{
+    let mut last_error_transient = false;
+    for attempt in 0..attempts {
+        match exec_probe() {
+            Ok(_) => return DelegateLiveness::Alive,
+            Err(err) => {
+                last_error_transient = probe_error_is_transient(&err);
+                if attempt + 1 < attempts && !retry_delay.is_zero() {
+                    std::thread::sleep(retry_delay);
+                }
+            }
+        }
+    }
+    if last_error_transient {
+        DelegateLiveness::Unknown
+    } else {
+        DelegateLiveness::Dead
     }
 }
 
@@ -1078,6 +1139,64 @@ mod tests {
         );
         let reloaded = hub.workflows().get(&workflow_id).await.expect("workflow reloads");
         assert_eq!(reloaded.status, WorkflowStatus::Cancelled, "the dead delegation ghost's workflow is terminalized");
+    }
+
+    fn ok_probe_response() -> animus_environment_protocol::ExecResponse {
+        animus_environment_protocol::ExecResponse {
+            exit_code: Some(0),
+            stdout: String::new(),
+            stderr: String::new(),
+            timed_out: false,
+        }
+    }
+
+    // TASK-793 hardening: a transient blip must NOT false-kill a live node. A
+    // probe that fails once (or twice) then succeeds resolves to Alive — the
+    // retry absorbs the blip.
+    #[test]
+    fn probe_retry_treats_a_transient_blip_then_success_as_alive() {
+        use std::cell::Cell;
+        let calls = Cell::new(0usize);
+        let liveness = super::probe_liveness_with_retry(3, std::time::Duration::ZERO, || {
+            let n = calls.get();
+            calls.set(n + 1);
+            if n == 0 {
+                // First attempt: a transient timeout blip.
+                Err(anyhow::Error::from(orchestrator_plugin_host::HostError::Timeout(std::time::Duration::from_secs(10))))
+            } else {
+                Ok(ok_probe_response())
+            }
+        });
+        assert_eq!(liveness, super::DelegateLiveness::Alive, "a live node that blips once must not be terminalized");
+        assert_eq!(calls.get(), 2, "probe retried once, then succeeded");
+    }
+
+    // A genuinely-gone node fails EVERY attempt with a definitive death signal
+    // (closed transport) => Dead (terminalize).
+    #[test]
+    fn probe_retry_all_attempts_fail_definitively_is_dead() {
+        use std::cell::Cell;
+        let calls = Cell::new(0usize);
+        let liveness = super::probe_liveness_with_retry(3, std::time::Duration::ZERO, || {
+            calls.set(calls.get() + 1);
+            Err(anyhow::Error::from(orchestrator_plugin_host::HostError::ConnectionLost))
+        });
+        assert_eq!(liveness, super::DelegateLiveness::Dead, "a node whose transport is closed on all attempts is dead");
+        assert_eq!(calls.get(), 3, "all three attempts were exhausted before declaring Dead");
+    }
+
+    // A node that TIMES OUT on every attempt (busy/slow but maybe alive) leans
+    // to Unknown => preserve + re-probe next sweep, rather than being killed.
+    #[test]
+    fn probe_retry_all_attempts_time_out_is_unknown_fail_safe() {
+        let liveness = super::probe_liveness_with_retry(3, std::time::Duration::ZERO, || {
+            Err(anyhow::Error::from(orchestrator_plugin_host::HostError::Timeout(std::time::Duration::from_secs(10))))
+        });
+        assert_eq!(
+            liveness,
+            super::DelegateLiveness::Unknown,
+            "a consistently-timing-out node fails safe to Unknown (preserve), never Dead"
+        );
     }
 
     // teardown_delegated_node is a safe no-op when there is no scope, no
