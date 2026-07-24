@@ -230,6 +230,7 @@ name = "animus-runtime-shared"
 version = "0.1.0"
 dependencies = [
  "animus-actor",
+ "animus-environment-protocol",
  "animus-plugin-protocol 0.1.18",
  "anyhow",
  "async-trait",
