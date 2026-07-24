@@ -165,7 +165,10 @@ const PROBE_EXEC_TIMEOUT: Duration = Duration::from_secs(10);
 /// of being terminalized.
 fn probe_error_is_transient(err: &anyhow::Error) -> bool {
     err.chain().any(|cause| {
-        matches!(cause.downcast_ref::<orchestrator_plugin_host::HostError>(), Some(orchestrator_plugin_host::HostError::Timeout(_)))
+        matches!(
+            cause.downcast_ref::<orchestrator_plugin_host::HostError>(),
+            Some(orchestrator_plugin_host::HostError::Timeout(_))
+        )
     })
 }
 
@@ -297,7 +300,11 @@ enum DelegateDecision {
 
 /// Classify a resumable orphan by its delegated-node liveness. Pure decision so
 /// the preserve/terminalize gate is unit-testable without a live plugin.
-fn classify_delegate(scoped_root: Option<&Path>, project_root: &str, workflow: &OrchestratorWorkflow) -> DelegateDecision {
+fn classify_delegate(
+    scoped_root: Option<&Path>,
+    project_root: &str,
+    workflow: &OrchestratorWorkflow,
+) -> DelegateDecision {
     let Some(scoped_root) = scoped_root else { return DelegateDecision::NotDelegated };
     let Some((_, binding)) = current_delegate_binding(scoped_root, workflow) else {
         return DelegateDecision::NotDelegated;
@@ -998,8 +1005,7 @@ mod tests {
     // -----------------------------------------------------------------
 
     use animus_runtime_shared::phase_session::{
-        read_checkpoint, update_session_environment, write_session_pending, EnvironmentBinding,
-        SessionCheckpointStatus,
+        read_checkpoint, update_session_environment, write_session_pending, EnvironmentBinding, SessionCheckpointStatus,
     };
 
     fn sample_binding(node_id: &str) -> EnvironmentBinding {
@@ -1162,7 +1168,9 @@ mod tests {
             calls.set(n + 1);
             if n == 0 {
                 // First attempt: a transient timeout blip.
-                Err(anyhow::Error::from(orchestrator_plugin_host::HostError::Timeout(std::time::Duration::from_secs(10))))
+                Err(anyhow::Error::from(orchestrator_plugin_host::HostError::Timeout(std::time::Duration::from_secs(
+                    10,
+                ))))
             } else {
                 Ok(ok_probe_response())
             }

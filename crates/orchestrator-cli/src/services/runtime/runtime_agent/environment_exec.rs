@@ -1430,10 +1430,8 @@ environment_routing:
         let backend = Arc::new(FakeBackend::new());
         // Arm prepare to PANIC if the resume path ever calls it.
         *backend.prepare_result.lock().unwrap() = Some(Err(anyhow!("prepare must not be called on resume")));
-        *backend.exec_stream_outcome.lock().unwrap() = Some(StreamOutcome::Deltas(
-            vec![(ExecStream::Stdout, "resumed-out".to_string())],
-            Ok(ok_response(0)),
-        ));
+        *backend.exec_stream_outcome.lock().unwrap() =
+            Some(StreamOutcome::Deltas(vec![(ExecStream::Stdout, "resumed-out".to_string())], Ok(ok_response(0))));
 
         let run = spawn_environment_resume(
             backend.clone(),
