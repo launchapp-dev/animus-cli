@@ -605,6 +605,75 @@ fn run_environment_pipeline(
         }
     };
 
+    run_exec_and_teardown(backend, &handle, command, stdin, timeout, backend_label, events);
+}
+
+/// TASK-933 resume entry: drive a delegated run's harness command against an
+/// ALREADY-PREPARED environment handle, skipping `prepare`. Same thread /
+/// forwarder shape as [`spawn_environment_run`], but the caller supplies the
+/// persisted [`EnvironmentHandle`] (from the phase checkpoint's
+/// `EnvironmentBinding`) instead of preparing a fresh node — so a restart
+/// reconnects to the SAME node (and, when `command` is a provider `--resume`
+/// launch, the same in-flight provider session) rather than materializing a
+/// new one and leaking the old.
+///
+/// This is the on-node resume primitive the out-of-tree workflow runner drives
+/// for a delegated coding phase (the daemon does not run coding phases; see the
+/// module scope note). It is intentionally decoupled from `prepare` so it can be
+/// re-entered idempotently against a live node; the AT-MOST-ONCE exec contract
+/// is respected because a `--resume` launch reattaches to the existing session
+/// rather than re-running side effects.
+#[allow(dead_code)] // resume entrypoint for the companion runner / future ad-hoc resume; validated by unit tests below.
+pub(super) fn spawn_environment_resume(
+    backend: Arc<dyn EnvironmentExecBackend>,
+    handle: EnvironmentHandle,
+    command: HarnessCommand,
+    stdin: Option<String>,
+    timeout: Option<Duration>,
+    backend_label: String,
+) -> SessionRun {
+    let (events_tx, events_rx) = mpsc::channel::<SessionEvent>(256);
+    let (pipeline_tx, mut pipeline_rx) = mpsc::unbounded_channel::<SessionEvent>();
+    tokio::spawn(async move {
+        while let Some(event) = pipeline_rx.recv().await {
+            if events_tx.send(event).await.is_err() {
+                break;
+            }
+        }
+    });
+
+    let selected_backend = backend_label.clone();
+    std::thread::spawn(move || {
+        let send = |event: SessionEvent| {
+            let _ = pipeline_tx.send(event);
+        };
+        send(SessionEvent::Started { backend: backend_label.clone(), session_id: None, pid: None });
+        // NO prepare — reuse the persisted handle for exec_stream + teardown.
+        run_exec_and_teardown(backend.as_ref(), &handle, command, stdin, timeout, &backend_label, &pipeline_tx);
+    });
+
+    SessionRun { session_id: None, events: events_rx, selected_backend, fallback_reason: None, pid: None }
+}
+
+/// The exec_stream → teardown → terminal-mapping tail shared by the fresh-run
+/// pipeline ([`run_environment_pipeline`], after `prepare`) and the resume
+/// pipeline ([`spawn_environment_resume`], which skips `prepare`). Emits the
+/// same event grammar in both cases: stdout `TextDelta`s, stderr recoverable
+/// `Error`s, then a terminal `Finished` (or unrecoverable `Error`). Teardown
+/// always runs (idempotent plugin-side); its failure is a recoverable frame.
+fn run_exec_and_teardown(
+    backend: &dyn EnvironmentExecBackend,
+    handle: &EnvironmentHandle,
+    command: HarnessCommand,
+    stdin: Option<String>,
+    timeout: Option<Duration>,
+    backend_label: &str,
+    events: &mpsc::UnboundedSender<SessionEvent>,
+) {
+    let send = |event: SessionEvent| {
+        let _ = events.send(event);
+    };
+
     let stream_events = events.clone();
     let on_output = move |stream: ExecStream, text: &str| {
         let event = match stream {
@@ -614,13 +683,13 @@ fn run_environment_pipeline(
         let _ = stream_events.send(event);
     };
 
-    let result = match backend.exec_stream(&handle, command.clone(), stdin.clone(), timeout, &on_output) {
+    let result = match backend.exec_stream(handle, command.clone(), stdin.clone(), timeout, &on_output) {
         // A plugin without exec_stream support answers METHOD_NOT_SUPPORTED
         // before the command ever starts, so retrying with the buffered exec
         // is safe (no double-execution risk). The aggregated output is then
         // emitted once, post-hoc — deltas were never streamed.
         Err(err) if is_method_not_supported(&err) => {
-            backend.exec(&handle, command, stdin, timeout).inspect(|response| {
+            backend.exec(handle, command, stdin, timeout).inspect(|response| {
                 if !response.stdout.is_empty() {
                     send(SessionEvent::FinalText { text: response.stdout.clone() });
                 }
@@ -634,7 +703,7 @@ fn run_environment_pipeline(
 
     // Teardown regardless of exec outcome; a teardown failure is surfaced as a
     // recoverable frame (the run's verdict is the exec result, not cleanup).
-    if let Err(err) = backend.teardown(&handle) {
+    if let Err(err) = backend.teardown(handle) {
         send(SessionEvent::Error {
             message: format!("environment teardown failed for {backend_label} (handle {}): {err:#}", handle.id),
             recoverable: true,
@@ -1350,6 +1419,46 @@ environment_routing:
             "a signal-killed command must not be reported as success: {events:?}"
         );
         assert!(backend.torn_down.load(Ordering::SeqCst));
+    }
+
+    // TASK-933: the resume entry re-enters at exec_stream against a
+    // PRE-EXISTING handle, skipping prepare, and still streams deltas + tears
+    // down. `prepare` must NEVER be called on the resume path (the node already
+    // exists; preparing a fresh one is the leak this fixes).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn resume_reuses_the_handle_without_preparing_a_new_node() {
+        let backend = Arc::new(FakeBackend::new());
+        // Arm prepare to PANIC if the resume path ever calls it.
+        *backend.prepare_result.lock().unwrap() = Some(Err(anyhow!("prepare must not be called on resume")));
+        *backend.exec_stream_outcome.lock().unwrap() =
+            Some(StreamOutcome::Deltas(vec![(ExecStream::Stdout, "resumed-out".to_string())], Ok(ok_response(0))));
+
+        let run = spawn_environment_resume(
+            backend.clone(),
+            sample_handle(),
+            command_for_test(),
+            None,
+            None,
+            "environment:container".to_string(),
+        );
+        assert_eq!(run.selected_backend, "environment:container");
+        let events = drain(run).await;
+
+        assert_eq!(backend.exec_calls.load(Ordering::SeqCst), 0, "no buffered-exec fallback on a clean exec_stream");
+        assert!(
+            events.iter().any(|e| matches!(e, SessionEvent::TextDelta { text } if text == "resumed-out")),
+            "resume streams stdout deltas through the same channel: {events:?}"
+        );
+        assert!(
+            matches!(events.last(), Some(SessionEvent::Finished { exit_code: Some(0) })),
+            "resume terminates with the exec exit code: {events:?}"
+        );
+        assert!(backend.torn_down.load(Ordering::SeqCst), "resume tears the node down after exec");
+        // The prepare stub was never consumed -> prepare was never called.
+        assert!(
+            backend.prepare_result.lock().unwrap().is_some(),
+            "prepare must not be invoked on the resume path (the node already exists)"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
