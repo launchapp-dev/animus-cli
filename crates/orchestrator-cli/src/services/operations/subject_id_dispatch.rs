@@ -15,6 +15,7 @@
 //! kind so the downstream queue lease / runner dispatch resolves the subject
 //! via `<kind>/get` instead of `task/get`.
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use std::path::Path;
@@ -167,6 +168,7 @@ pub(crate) async fn resolve_subject_id_ref(subject_id: &str, probe: &dyn Subject
 /// dynamic kinds.
 pub(crate) struct RouterSubjectProbe {
     dispatch: SubjectPluginDispatch,
+    actor: Option<Actor>,
 }
 
 impl RouterSubjectProbe {
@@ -174,8 +176,31 @@ impl RouterSubjectProbe {
     /// over the resulting router. No plugin is spawned until a `<kind>/get`
     /// routes to it.
     pub(crate) async fn discover(project_root: &Path) -> Result<Self> {
+        Self::discover_for_actor(project_root, None).await
+    }
+
+    /// Discover installed subject backends and bind every existence probe to
+    /// the transport-asserted actor. Once an actor is present this probe never
+    /// falls back to the legacy v1 route.
+    pub(crate) async fn discover_for_actor(project_root: &Path, actor: Option<&Actor>) -> Result<Self> {
         let resolution = resolve_subject_dispatch(project_root).await?;
-        Ok(Self { dispatch: resolution.selected })
+        let probe = Self { dispatch: resolution.selected, actor: actor.cloned() };
+        tracing::debug!(
+            resolver_mode = probe.resolver_mode(),
+            actor_present = probe.actor.is_some(),
+            actor_user_id = probe.actor.as_ref().map(|actor| actor.user_id.as_str()),
+            actor_tenant_id = probe.actor.as_ref().and_then(|actor| actor.tenant_id.as_deref()),
+            "resolved workflow subject existence probe"
+        );
+        Ok(probe)
+    }
+
+    fn resolver_mode(&self) -> &'static str {
+        if self.actor.is_some() {
+            "actor-v2"
+        } else {
+            "legacy-v1"
+        }
     }
 }
 
@@ -206,7 +231,17 @@ impl SubjectKindProbe for RouterSubjectProbe {
         // plugin) must NOT masquerade as not-found: surface it so a temporarily
         // unhealthy backend yields an actionable error instead of silently
         // failing to dispatch a valid subject.
-        match self.dispatch.route_call(&format!("{kind}/get"), Some(json!({ "id": qualified_id }))).await {
+        let method = format!("{kind}/get");
+        tracing::debug!(
+            resolver_mode = self.resolver_mode(),
+            subject_kind = kind,
+            "probing workflow subject existence"
+        );
+        let result = match self.actor.as_ref() {
+            Some(actor) => self.dispatch.route_actor_call(&method, Some(json!({ "id": qualified_id })), actor).await,
+            None => self.dispatch.route_call(&method, Some(json!({ "id": qualified_id }))).await,
+        };
+        match result {
             Ok(value) => Ok(response_has_subject(&value)),
             Err(err)
                 if matches!(
@@ -260,6 +295,16 @@ mod tests {
         let blog = subject_ref_for_kind("blog", "blog:BLOG-001");
         assert_eq!(blog.kind(), "blog");
         assert_eq!(blog.id(), "blog:BLOG-001");
+    }
+
+    #[test]
+    fn router_probe_mode_is_non_downgradable_when_actor_is_present() {
+        let actor =
+            Actor { user_id: "alice".to_string(), claims: Vec::new(), tenant_id: Some("workspace-a".to_string()) };
+        let actor_probe = RouterSubjectProbe { dispatch: SubjectPluginDispatch::empty(), actor: Some(actor) };
+        let legacy_probe = RouterSubjectProbe { dispatch: SubjectPluginDispatch::empty(), actor: None };
+        assert_eq!(actor_probe.resolver_mode(), "actor-v2");
+        assert_eq!(legacy_probe.resolver_mode(), "legacy-v1");
     }
 
     #[tokio::test]

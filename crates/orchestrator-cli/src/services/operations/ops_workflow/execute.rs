@@ -6,7 +6,7 @@ use orchestrator_core::services::ServiceHub;
 
 use crate::print_value;
 use crate::services::plugin_clients;
-use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
+use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result_for_actor;
 use animus_workflow_runner_protocol as workflow_proto;
 
 #[derive(Debug)]
@@ -164,7 +164,7 @@ pub(crate) async fn handle_workflow_execute(
             // subject status projection still lands. Fresh `--subject-id` runs
             // are projected by the workflow_runner plugin that owns the run.
             if let Ok(reloaded) = hub.workflows().get(plugin_result.workflow_id.as_str()).await {
-                project_terminal_workflow_result(
+                project_terminal_workflow_result_for_actor(
                     hub.clone(),
                     project_root,
                     reloaded.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
@@ -173,6 +173,7 @@ pub(crate) async fn handle_workflow_execute(
                     Some(reloaded.id.as_str()),
                     status,
                     reloaded.failure_reason.as_deref(),
+                    args.actor.as_ref(),
                 )
                 .await;
             }

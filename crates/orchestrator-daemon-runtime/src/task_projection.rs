@@ -15,6 +15,7 @@
 
 use std::sync::Arc;
 
+use animus_actor::Actor;
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -33,12 +34,28 @@ const CATCH_ALL_KIND: &str = "*";
 /// `task/<verb>` through the installed `subject_backend` plugin.
 pub struct RouterTaskProjectionStore {
     dispatch: SubjectPluginDispatch,
+    actor: Option<Actor>,
 }
 
 impl RouterTaskProjectionStore {
     #[must_use]
     pub fn new(dispatch: SubjectPluginDispatch) -> Self {
-        Self { dispatch }
+        Self { dispatch, actor: None }
+    }
+
+    /// Bind every task projection operation to an authenticated actor. This
+    /// store never falls back to the legacy v1 subject route.
+    #[must_use]
+    pub fn for_actor(dispatch: SubjectPluginDispatch, actor: &Actor) -> Self {
+        Self { dispatch, actor: Some(actor.clone()) }
+    }
+
+    fn resolver_mode(&self) -> &'static str {
+        if self.actor.is_some() {
+            "actor-v2"
+        } else {
+            "legacy-v1"
+        }
     }
 
     /// `true` when a `subject_backend` plugin can serve the built-in `task`
@@ -50,10 +67,18 @@ impl RouterTaskProjectionStore {
     }
 
     async fn route(&self, method: &str, params: Value) -> Result<Value> {
-        self.dispatch
-            .route_call(method, Some(params))
-            .await
-            .map_err(|err| anyhow!("subject backend {method} failed ({}): {}", err.code, err.message))
+        tracing::debug!(
+            resolver_mode = self.resolver_mode(),
+            subject_method = method,
+            actor_user_id = self.actor.as_ref().map(|actor| actor.user_id.as_str()),
+            actor_tenant_id = self.actor.as_ref().and_then(|actor| actor.tenant_id.as_deref()),
+            "routing task projection"
+        );
+        let result = match self.actor.as_ref() {
+            Some(actor) => self.dispatch.route_actor_call(method, Some(params), actor).await,
+            None => self.dispatch.route_call(method, Some(params)).await,
+        };
+        result.map_err(|err| anyhow!("subject backend {method} failed ({}): {}", err.code, err.message))
     }
 
     /// Best-effort `task/update` patch for informational fields. A backend that
@@ -159,7 +184,44 @@ impl TaskProjectionStore for RouterTaskProjectionStore {
 /// scaffold / no plugins). A routing-discovery failure falls back to the
 /// in-tree store so a transient plugin problem never takes the projection down.
 pub async fn resolve_task_projection_store(root: &str, hub: Arc<dyn ServiceHub>) -> Box<dyn TaskProjectionStore> {
-    match resolve_subject_dispatch(std::path::Path::new(root)).await {
+    resolve_task_projection_store_for_actor(root, hub, None).await
+}
+
+/// Choose a task projection store with an optional authenticated actor. When
+/// an actor is present and a subject backend owns tasks, every read and write
+/// uses the actor-v2 wire exclusively. If actor-aware routing cannot be
+/// discovered, the returned empty actor-v2 store fails operations closed;
+/// only actor-absent stock/local contexts may use the in-tree fallback.
+pub async fn resolve_task_projection_store_for_actor(
+    root: &str,
+    hub: Arc<dyn ServiceHub>,
+    actor: Option<&Actor>,
+) -> Box<dyn TaskProjectionStore> {
+    let resolution = resolve_subject_dispatch(std::path::Path::new(root)).await;
+    if let Some(actor) = actor {
+        return match resolution {
+            Ok(resolution) if RouterTaskProjectionStore::routes_tasks(&resolution.selected) => {
+                Box::new(RouterTaskProjectionStore::for_actor(resolution.selected, actor))
+            }
+            Ok(_) => {
+                tracing::warn!(
+                    resolver_mode = "actor-v2",
+                    "no actor-aware task backend is mounted; task projection will fail closed"
+                );
+                Box::new(RouterTaskProjectionStore::for_actor(SubjectPluginDispatch::empty(), actor))
+            }
+            Err(error) => {
+                tracing::warn!(
+                    resolver_mode = "actor-v2",
+                    error = %error,
+                    "task-backend discovery failed; actor-bound projection will fail closed"
+                );
+                Box::new(RouterTaskProjectionStore::for_actor(SubjectPluginDispatch::empty(), actor))
+            }
+        };
+    }
+
+    match resolution {
         Ok(resolution) if RouterTaskProjectionStore::routes_tasks(&resolution.selected) => {
             Box::new(RouterTaskProjectionStore::new(resolution.selected))
         }
@@ -315,6 +377,9 @@ mod tests {
                                     "task/get".to_string(),
                                     "task/status".to_string(),
                                     "task/update".to_string(),
+                                    "task/v2/get".to_string(),
+                                    "task/v2/status".to_string(),
+                                    "task/v2/update".to_string(),
                                 ],
                                 ..PluginCapabilities::default()
                             },
@@ -331,7 +396,7 @@ mod tests {
                             .unwrap_or_default()
                             .to_string();
                         recorded.lock().unwrap().push((method.to_string(), routed_id));
-                        let body = if method == "task/get" {
+                        let body = if method == "task/get" || method == "task/v2/get" {
                             serde_json::json!({ "id": "task:TASK-1", "kind": "task", "status": "in-progress" })
                         } else {
                             serde_json::json!({ "ok": true })
@@ -357,6 +422,16 @@ mod tests {
         RouterTaskProjectionStore::new(dispatch)
     }
 
+    async fn actor_router_store_over_task_backend(recorded: Arc<Mutex<Vec<RoutedCall>>>) -> RouterTaskProjectionStore {
+        let mut hosts = HashMap::new();
+        hosts.insert("tasks".to_string(), recording_task_host(recorded).await);
+        let router = SubjectRouter::from_initialized_hosts(hosts).await.expect("router builds");
+        let dispatch = SubjectPluginDispatch::from_router(router, vec!["task".to_string()], 1);
+        let actor =
+            Actor { user_id: "alice".to_string(), claims: Vec::new(), tenant_id: Some("workspace-a".to_string()) };
+        RouterTaskProjectionStore::for_actor(dispatch, &actor)
+    }
+
     fn methods(recorded: &Arc<Mutex<Vec<RoutedCall>>>) -> Vec<String> {
         recorded.lock().unwrap().iter().map(|(method, _)| method.clone()).collect()
     }
@@ -371,6 +446,21 @@ mod tests {
         // A non-blocked transition routes the status AND a clear-annotation
         // update, matching the in-tree `apply_task_status` cleanup.
         assert_eq!(methods(&recorded), vec!["task/status".to_string(), "task/update".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn actor_projection_routes_only_through_subject_v2() {
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let store = actor_router_store_over_task_backend(recorded.clone()).await;
+
+        store.set_status("TASK-1", TaskStatus::Cancelled).await.expect("actor status routes");
+
+        assert_eq!(store.resolver_mode(), "actor-v2");
+        assert_eq!(
+            methods(&recorded),
+            vec!["task/v2/status".to_string(), "task/v2/update".to_string()],
+            "an actor-bound projection must never downgrade to task/status or task/update"
+        );
     }
 
     #[tokio::test]
@@ -477,5 +567,42 @@ mod tests {
         // hub-backed, not a no-op / plugin route.
         let after = hub.tasks().get(&task.id).await.expect("task still present");
         assert_eq!(after.status, TaskStatus::Blocked);
+    }
+
+    #[tokio::test]
+    async fn actor_resolver_never_falls_back_to_global_in_tree_store() {
+        use orchestrator_core::{InMemoryServiceHub, Priority, TaskCreateInput, TaskType};
+        use protocol::test_utils::EnvVarGuard;
+
+        let _disable = EnvVarGuard::set(crate::SUBJECT_PLUGINS_DISABLE_ENV, Some("1"));
+        let temp = tempfile::tempdir().expect("temp dir");
+        let root = temp.path().to_string_lossy().to_string();
+        let hub: Arc<dyn ServiceHub> = Arc::new(InMemoryServiceHub::new());
+        let task = hub
+            .tasks()
+            .create(TaskCreateInput {
+                title: "private".to_string(),
+                description: "must not mutate globally".to_string(),
+                task_type: Some(TaskType::Feature),
+                priority: Some(Priority::Medium),
+                created_by: Some("test".to_string()),
+                tags: Vec::new(),
+                linked_requirements: Vec::new(),
+                linked_architecture_entities: Vec::new(),
+            })
+            .await
+            .expect("create task");
+        let before = hub.tasks().get(&task.id).await.expect("task exists").status;
+        let actor =
+            Actor { user_id: "alice".to_string(), claims: Vec::new(), tenant_id: Some("workspace-a".to_string()) };
+
+        let store = resolve_task_projection_store_for_actor(&root, hub.clone(), Some(&actor)).await;
+        let error = store
+            .set_status(&task.id, TaskStatus::Blocked)
+            .await
+            .expect_err("actor-bound projection without v2 backend must fail closed");
+
+        assert!(error.to_string().contains("actor-aware subject backend"));
+        assert_eq!(hub.tasks().get(&task.id).await.expect("task remains").status, before);
     }
 }

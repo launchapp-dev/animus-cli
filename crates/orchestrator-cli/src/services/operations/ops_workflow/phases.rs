@@ -18,7 +18,9 @@ use crate::services::plugin_clients;
 use super::config::{manual_approvals_path, title_case_phase_id};
 use super::emit_daemon_event;
 use crate::dry_run_envelope;
-use crate::services::runtime::execution_fact_projection::project_terminal_workflow_result;
+use crate::services::runtime::execution_fact_projection::{
+    project_terminal_workflow_result, project_terminal_workflow_result_for_actor,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ManualApprovalRecord {
@@ -165,18 +167,19 @@ pub(crate) struct DetachedRunnerOverrides {
 pub(crate) const WORKFLOW_ACTOR_ENV: &str = "ANIMUS_WORKFLOW_ACTOR_JSON";
 
 /// Read the relayed [`Actor`] from [`WORKFLOW_ACTOR_ENV`], if the daemon set it
-/// on this (detached-runner-child) process. A malformed value is ignored
-/// (logged) rather than failing the run — a dropped actor degrades to global
-/// scope, never a crash.
-pub(crate) fn workflow_actor_from_env() -> Option<Actor> {
-    let raw = std::env::var(WORKFLOW_ACTOR_ENV).ok()?;
-    match serde_json::from_str::<Actor>(&raw) {
-        Ok(actor) => Some(actor),
-        Err(error) => {
-            tracing::warn!(%error, "ignoring malformed {WORKFLOW_ACTOR_ENV}; running with no actor");
-            None
-        }
-    }
+/// on this (detached-runner-child) process. Absence preserves the legacy local
+/// system scope; a present malformed value fails closed and can never erase an
+/// authenticated actor into global scope.
+pub(crate) fn workflow_actor_from_env() -> Result<Option<Actor>> {
+    let Some(raw) = std::env::var_os(WORKFLOW_ACTOR_ENV) else {
+        return Ok(None);
+    };
+    let raw = raw.into_string().map_err(|_| {
+        anyhow!("{WORKFLOW_ACTOR_ENV} is present but is not valid UTF-8; refusing unscoped workflow run")
+    })?;
+    serde_json::from_str::<Actor>(&raw)
+        .map(Some)
+        .with_context(|| format!("{WORKFLOW_ACTOR_ENV} is present but malformed; refusing unscoped workflow run"))
 }
 
 fn detached_runner_command(
@@ -184,7 +187,7 @@ fn detached_runner_command(
     project_root: &str,
     workflow_id: &str,
     overrides: &DetachedRunnerOverrides,
-) -> std::process::Command {
+) -> Result<std::process::Command> {
     let mut command = std::process::Command::new(program);
     command.arg("--project-root").arg(project_root).arg("--json").args([
         "workflow",
@@ -207,21 +210,16 @@ fn detached_runner_command(
     // persisted record (which carries no actor), so this is the only channel
     // that delivers the caller identity to the detached run.
     if let Some(actor) = overrides.actor.as_ref() {
-        match serde_json::to_string(actor) {
-            Ok(json) => {
-                command.env(WORKFLOW_ACTOR_ENV, json);
-            }
-            Err(error) => {
-                tracing::warn!(%error, "failed to encode actor for detached runner; run proceeds with no actor");
-            }
-        }
+        let json = serde_json::to_string(actor)
+            .context("failed to encode actor for detached runner; refusing unscoped workflow run")?;
+        command.env(WORKFLOW_ACTOR_ENV, json);
     }
     command
         .current_dir(project_root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
-    command
+    Ok(command)
 }
 
 /// Spawn a detached `animus workflow run --sync --workflow-id <id>` child
@@ -243,7 +241,7 @@ fn spawn_detached_workflow_runner_with_program(
     workflow_id: &str,
     overrides: &DetachedRunnerOverrides,
 ) -> Result<u32> {
-    let mut command = detached_runner_command(program, project_root, workflow_id, overrides);
+    let mut command = detached_runner_command(program, project_root, workflow_id, overrides)?;
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -285,7 +283,12 @@ pub(crate) async fn start_workflow_with_runner(
     // backend when one owns `task` (portal); the in-tree store is empty there,
     // so the transition would silently no-op and the daemon would re-dispatch
     // the task after its workflow finished.
-    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub.clone()).await;
+    let task_store = orchestrator_daemon_runtime::resolve_task_projection_store_for_actor(
+        project_root,
+        hub.clone(),
+        overrides.actor.as_ref(),
+    )
+    .await;
     // Mirror the daemon's ready-dispatch contract: a dispatched task moves
     // to InProgress. Terminal projection never auto-completes tasks, so a
     // task left Ready here would be re-dispatched by the daemon after its
@@ -316,7 +319,7 @@ pub(crate) async fn start_workflow_with_runner(
         workflow.status,
         orchestrator_core::WorkflowStatus::Running | orchestrator_core::WorkflowStatus::Pending
     ) {
-        project_terminal_workflow_result(
+        project_terminal_workflow_result_for_actor(
             hub.clone(),
             project_root,
             workflow.subject.as_ref().map(|s| s.id()).unwrap_or_default(),
@@ -325,6 +328,7 @@ pub(crate) async fn start_workflow_with_runner(
             Some(workflow.id.as_str()),
             workflow.status,
             workflow.failure_reason.as_deref(),
+            overrides.actor.as_ref(),
         )
         .await;
         return Ok(workflow);
@@ -1372,7 +1376,8 @@ workflows:
             "/tmp/project",
             "wf-123",
             &super::DetachedRunnerOverrides::default(),
-        );
+        )
+        .expect("command should build");
         let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(
             args,
@@ -1389,7 +1394,8 @@ workflows:
                 phase_timeout_secs: Some(120),
                 actor: None,
             },
-        );
+        )
+        .expect("command should build");
         let args: Vec<String> = command.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
         assert_eq!(
             args,
@@ -1433,7 +1439,8 @@ workflows:
             "/tmp/project",
             "wf-actor",
             &super::DetachedRunnerOverrides { actor: Some(actor.clone()), ..Default::default() },
-        );
+        )
+        .expect("actor command should build");
         let (_, value) = command
             .get_envs()
             .find(|(k, _)| *k == std::ffi::OsStr::new(super::WORKFLOW_ACTOR_ENV))
@@ -1441,6 +1448,25 @@ workflows:
         let json = value.expect("actor env must have a value").to_string_lossy().into_owned();
         let decoded: animus_actor::Actor = serde_json::from_str(&json).expect("actor env must be valid JSON");
         assert_eq!(decoded, actor, "actor must round-trip through the env handoff unchanged");
+    }
+
+    #[test]
+    fn malformed_workflow_actor_env_fails_closed() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _actor_env = EnvVarGuard::set(super::WORKFLOW_ACTOR_ENV, Some("{not-json"));
+
+        let error = super::workflow_actor_from_env().expect_err("malformed present actor env must fail");
+        let message = format!("{error:#}");
+        assert!(message.contains(super::WORKFLOW_ACTOR_ENV), "error must identify the trusted channel: {message}");
+        assert!(message.contains("refusing unscoped"), "error must explain the fail-closed outcome: {message}");
+    }
+
+    #[test]
+    fn absent_workflow_actor_env_preserves_local_system_scope() {
+        let _lock = test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let _actor_env = EnvVarGuard::set(super::WORKFLOW_ACTOR_ENV, None);
+
+        assert_eq!(super::workflow_actor_from_env().expect("absent env should be valid"), None);
     }
 
     #[cfg(unix)]

@@ -261,7 +261,7 @@ async fn resolve_ad_hoc_context(
             // Generic subject resolution (qualified `kind:id` or bare-id probe),
             // the same path as `workflow run --subject-id`. task/requirement are
             // ordinary subject kinds here — no privileged branch.
-            let subject = super::resolve_subject_id_ref_via_router(project_root, subject_id).await?;
+            let subject = super::resolve_subject_id_ref_via_router(project_root, subject_id, None).await?;
             let workflow_ref = args.workflow_ref.clone().unwrap_or_else(|| {
                 load_workflow_config_or_default(Path::new(project_root)).config.default_workflow_ref
             });

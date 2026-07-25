@@ -160,9 +160,10 @@ fn print_workflow_list_table(items: &[protocol::orchestrator::OrchestratorWorkfl
 async fn resolve_subject_id_ref_via_router(
     project_root: &str,
     subject_id: &str,
+    actor: Option<&Actor>,
 ) -> Result<protocol::orchestrator::SubjectRef> {
     use super::subject_id_dispatch::{resolve_subject_id_ref, RouterSubjectProbe};
-    let probe = RouterSubjectProbe::discover(std::path::Path::new(project_root)).await?;
+    let probe = RouterSubjectProbe::discover_for_actor(std::path::Path::new(project_root), actor).await?;
     resolve_subject_id_ref(subject_id, &probe).await
 }
 
@@ -584,6 +585,13 @@ pub(crate) async fn handle_workflow(
         },
         WorkflowCommand::Run(args) => {
             let workflow_ref = args.pipeline.clone();
+            // Resolve caller identity before touching the subject backend. A
+            // present actor makes subject existence an actor-v2-only lookup;
+            // malformed relayed context fails closed instead of silently
+            // degrading to the global v1 subject namespace.
+            let asserted_actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+            let relayed_actor = phases::workflow_actor_from_env()?;
+            let effective_actor = asserted_actor.or(relayed_actor);
             // Generic BaaS subject path: resolve the subject's real kind once
             // (qualified prefix or router probe) and build a kind-correct
             // dispatch carrying the resolved SubjectRef (kind=blog, id=BLOG-001 —
@@ -596,7 +604,8 @@ pub(crate) async fn handle_workflow(
             // the subject to task.
             let subject_id_dispatch = match args.subject_id.clone() {
                 Some(sid) => {
-                    let subject_ref = resolve_subject_id_ref_via_router(project_root, &sid).await?;
+                    let subject_ref =
+                        resolve_subject_id_ref_via_router(project_root, &sid, effective_actor.as_ref()).await?;
                     let resolved_ref =
                         workflow_ref.clone().unwrap_or_else(|| default_project_workflow_ref(project_root));
                     let input = args.input_json.as_deref().map(serde_json::from_str).transpose()?;
@@ -614,12 +623,6 @@ pub(crate) async fn handle_workflow(
                 }
                 None => None,
             };
-            // Transport-asserted caller identity for this run. The transport
-            // (e.g. the portal) authenticates the user and passes
-            // `--actor-json`; the kernel relays it verbatim to the runner /
-            // config_source / MCP surfaces (which enforce). A malformed value
-            // hard-fails (fail-closed). Omitted => `None` => global scope.
-            let asserted_actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
             if args.sync {
                 let execute_args = WorkflowExecuteArgs {
                     workflow_id: args.workflow_id,
@@ -642,7 +645,7 @@ pub(crate) async fn handle_workflow(
                     // caller identity. A direct local CLI invocation with no
                     // flag and no env => `None` (never synthesized from local
                     // context, YAML, or subject content).
-                    actor: asserted_actor.clone().or_else(phases::workflow_actor_from_env),
+                    actor: effective_actor.clone(),
                 };
                 execute::handle_workflow_execute(execute_args, hub, project_root, json).await?;
                 Ok(())
@@ -667,7 +670,7 @@ pub(crate) async fn handle_workflow(
                     // to the detached runner child via WORKFLOW_ACTOR_ENV. With
                     // no flag this is `None` => global scope; an authenticated
                     // inbound control request supplies its own actor instead.
-                    actor: asserted_actor.clone(),
+                    actor: effective_actor.clone(),
                 };
                 let dispatch = if let Some(subject_dispatch) = subject_id_dispatch {
                     // Generic subject: the kind-correct dispatch was built up

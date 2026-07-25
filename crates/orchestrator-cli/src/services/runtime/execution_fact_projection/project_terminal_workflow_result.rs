@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use animus_actor::Actor;
 use animus_queue_protocol::{self as queue_proto, QueueCompletionRequest, QueueListRequest};
 use orchestrator_core::{project_task_terminal_workflow_status, services::ServiceHub, WorkflowStatus};
 
@@ -15,6 +16,34 @@ pub(crate) async fn project_terminal_workflow_result(
     workflow_id: Option<&str>,
     workflow_status: WorkflowStatus,
     failure_reason: Option<&str>,
+) {
+    project_terminal_workflow_result_for_actor(
+        hub,
+        project_root,
+        subject_id,
+        task_id,
+        workflow_ref,
+        workflow_id,
+        workflow_status,
+        failure_reason,
+        None,
+    )
+    .await;
+}
+
+/// Actor-aware terminal projection used by authenticated workflow runners.
+/// Subject-backed task mutations remain on v2 for the lifetime of the run.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn project_terminal_workflow_result_for_actor(
+    hub: Arc<dyn ServiceHub>,
+    project_root: &str,
+    subject_id: &str,
+    task_id: Option<&str>,
+    workflow_ref: Option<&str>,
+    workflow_id: Option<&str>,
+    workflow_status: WorkflowStatus,
+    failure_reason: Option<&str>,
+    actor: Option<&Actor>,
 ) {
     if !matches!(
         workflow_status,
@@ -95,7 +124,7 @@ pub(crate) async fn project_terminal_workflow_result(
     // when one owns `task` (portal); the in-tree `hub.tasks()` store is empty
     // there, so a terminal projection into it would leave the plugin-backed
     // task stuck InProgress.
-    let store = orchestrator_daemon_runtime::resolve_task_projection_store(project_root, hub).await;
+    let store = orchestrator_daemon_runtime::resolve_task_projection_store_for_actor(project_root, hub, actor).await;
     project_task_terminal_workflow_status(
         store.as_ref(),
         task_id,
