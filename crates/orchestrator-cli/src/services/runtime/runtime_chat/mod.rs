@@ -355,6 +355,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         &args.tool,
         args.agent.as_deref(),
         args.skill.as_deref(),
+        actor.as_ref(),
     )?;
     // The skill's FULL application binds to this `chat send` invocation and
     // is applied per turn by the turn loop (same lifecycle as the MCP
@@ -378,6 +379,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         crate::services::runtime::runtime_agent::provider_client::profile_permission_mode(
             &project_root_path,
             args.agent.as_deref(),
+            actor.as_ref(),
         )
     });
     if let Some(mode) = permission_mode.as_deref() {
@@ -391,6 +393,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         || crate::services::runtime::runtime_agent::provider_client::profile_has_approval_policy(
             &project_root_path,
             args.agent.as_deref(),
+            actor.as_ref(),
         );
     crate::services::runtime::runtime_agent::provider_client::warn_if_claude_autoapprove_bypass(&args.tool, approvals);
 
@@ -508,13 +511,17 @@ fn handle_chat_get(args: ChatGetArgs, project_root: &str, json: bool) -> Result<
     let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
     let meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
     client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
-    let messages = store.load_messages(&args.id)?;
+    // The current conversation-store protocol returns the full transcript.
+    // Bound the caller-visible result here until the protocol grows cursors.
+    let messages = page(store.load_messages(&args.id)?, args.offset, args.limit);
     print_value(serde_json::json!({ "meta": meta, "messages": messages }), json)
 }
 
 fn handle_chat_list(args: ChatListArgs, project_root: &str, json: bool) -> Result<()> {
     let store = ConversationStoreClient::for_project(Path::new(project_root))?;
-    let summaries = store.list_for_user(args.as_user.as_deref())?;
+    // Ownership filtering must precede pagination or inaccessible rows would
+    // consume page slots and leak information through page shape.
+    let summaries = page(store.list_for_user(args.as_user.as_deref())?, args.offset, args.limit);
     if !json {
         if summaries.is_empty() {
             println!("No chat conversations yet. Start one with: animus chat new");
@@ -537,6 +544,14 @@ fn handle_chat_list(args: ChatListArgs, project_root: &str, json: bool) -> Resul
         return Ok(());
     }
     print_value(summaries, json)
+}
+
+fn page<T>(items: Vec<T>, offset: usize, limit: Option<usize>) -> Vec<T> {
+    let iter = items.into_iter().skip(offset);
+    match limit {
+        Some(limit) => iter.take(limit).collect(),
+        None => iter.collect(),
+    }
 }
 
 #[cfg(test)]
@@ -700,5 +715,13 @@ mod export_tests {
         // limit is respected
         store.append_message("conv-s", &msg(ChatRole::User, "auth again", vec![])).unwrap();
         assert_eq!(search_conversations(&store, "auth", true, 1, None).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn page_applies_offset_then_limit_without_reordering() {
+        assert_eq!(page(vec![1, 2, 3, 4], 1, Some(2)), vec![2, 3]);
+        assert_eq!(page(vec![1, 2], 5, Some(2)), Vec::<i32>::new());
+        assert_eq!(page(vec![1, 2], 0, None), vec![1, 2]);
+        assert_eq!(page(vec![1, 2], 0, Some(0)), Vec::<i32>::new());
     }
 }

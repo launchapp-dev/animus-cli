@@ -1,6 +1,7 @@
 use super::*;
 use crate::services::runtime::daemon_events_log_path;
 use crate::services::runtime::DaemonEventRecord;
+use crate::McpServeArgs;
 use chrono::{Duration, Utc};
 use protocol::CLI_SCHEMA_ID;
 use std::collections::{BTreeSet, HashMap};
@@ -135,6 +136,81 @@ fn documented_reference_tool_names() -> BTreeSet<String> {
             line.split('`').nth(1).map(str::to_string)
         })
         .collect()
+}
+
+#[tokio::test]
+async fn mcp_serve_rejects_malformed_explicit_actor_instead_of_downgrading_scope() {
+    let command = McpCommand::Serve(McpServeArgs {
+        management: false,
+        agent_id: None,
+        workflow_id: None,
+        actor_json: Some("not-json".to_string()),
+        require_actor: false,
+    });
+
+    let error = handle_mcp(command, "/tmp/project", true)
+        .await
+        .expect_err("malformed explicit MCP actor must fail before the server starts");
+    assert!(error.to_string().contains("invalid --actor-json"));
+}
+
+#[tokio::test]
+async fn mcp_serve_require_actor_rejects_missing_identity() {
+    let command = McpCommand::Serve(McpServeArgs {
+        management: false,
+        agent_id: None,
+        workflow_id: None,
+        actor_json: None,
+        require_actor: true,
+    });
+
+    let error = handle_mcp(command, "/tmp/project", true)
+        .await
+        .expect_err("actor-required MCP server must fail before binding stdio");
+    assert!(error.to_string().contains("--actor-json was omitted"));
+}
+
+#[test]
+fn actor_bound_server_exposes_only_actor_enforced_tools() {
+    let actor = Actor { user_id: "alice".to_string(), claims: Vec::new(), tenant_id: Some("tenant-a".to_string()) };
+    let server = new_ao_mcp_server_with_options("/tmp/project", true, None, None, Some(actor));
+    let names: BTreeSet<String> = server.tool_router.list_all().into_iter().map(|tool| tool.name.to_string()).collect();
+    let expected: BTreeSet<String> = ACTOR_BOUND_MCP_TOOLS.iter().map(|name| (*name).to_string()).collect();
+    assert_eq!(names, expected);
+    assert!(names.contains("animus.subject.list"));
+    assert!(names.contains("animus.subject.status"));
+    assert!(!names.contains("animus.subject.next"));
+    assert!(!names.contains("animus.queue.list"));
+    assert!(!names.contains("animus.workflow.config.set"));
+    assert!(!names.contains("animus.memory.get"));
+    assert!(names.contains("animus.interactions.list"));
+    assert!(names.contains("animus.interactions.answer"));
+}
+
+#[test]
+fn actor_bound_tool_audit_attributes_user_and_tenant() {
+    let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let temp = tempfile::tempdir().expect("tempdir");
+    let _home = EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("project root");
+    let actor = Actor { user_id: "alice".to_string(), claims: Vec::new(), tenant_id: Some("tenant-a".to_string()) };
+    let server =
+        new_ao_mcp_server_with_options(project_root.to_string_lossy().as_ref(), false, None, None, Some(actor));
+
+    server.audit_actor_tool_invocation(
+        "animus.workflow.run",
+        &["workflow", "run"].into_iter().map(str::to_string).collect::<Vec<_>>(),
+    );
+
+    let body = std::fs::read_to_string(server.scoped_state_root().join("audit.jsonl")).expect("audit log");
+    let event: Value = serde_json::from_str(body.trim()).expect("audit event json");
+    assert_eq!(event["event"], "mcp_tool_invocation");
+    assert_eq!(event["principal"]["id"], "alice");
+    assert_eq!(event["principal"]["kind"], "user");
+    assert_eq!(event["details"]["tenant_id"], "tenant-a");
+    assert_eq!(event["details"]["tool"], "animus.workflow.run");
+    assert_eq!(event["details"]["decision"], "forward");
 }
 
 #[test]

@@ -77,6 +77,7 @@ pub(crate) async fn handle_subject(command: SubjectCommand, project_root: &str, 
 const DEFAULT_SUBJECT_LIST_LIMIT: u32 = 50;
 
 async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bool) -> Result<()> {
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let query = args.query.as_deref().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
     let mut filter = serde_json::Map::new();
@@ -101,9 +102,9 @@ async fn handle_subject_list(args: SubjectListArgs, project_root: &str, json: bo
     }
     let params = Some(Value::Object(filter));
     if let Some(q) = query {
-        return dispatch_list_filtered(&kind, params, &q, limit, project_root, json).await;
+        return dispatch_list_filtered(&kind, params, &q, limit, project_root, json, actor.as_ref()).await;
     }
-    dispatch(&kind, "list", params, project_root, json).await
+    dispatch(&kind, "list", params, project_root, json, actor.as_ref()).await
 }
 
 /// `subject list --query`: fetch the full set, filter by a case-insensitive
@@ -119,10 +120,11 @@ async fn dispatch_list_filtered(
     limit: u32,
     project_root: &str,
     json: bool,
+    actor: Option<&animus_actor::Actor>,
 ) -> Result<()> {
     let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
     let method = format!("{kind}/list");
-    let raw = route_or_not_found(&resolution.selected, &method, params).await?;
+    let raw = route_or_not_found_for_actor(&resolution.selected, &method, params, actor).await?;
     let needle = query.to_lowercase();
     let mut matches: Vec<Value> = extract_subjects(&raw)
         .into_iter()
@@ -151,16 +153,18 @@ async fn dispatch_list_filtered(
 }
 
 async fn handle_subject_get(args: SubjectGetArgs, project_root: &str, json: bool) -> Result<()> {
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
     if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
     }
     let id = crate::qualify_subject_id(&args.id, &kind);
     let params = Some(json!({ "id": id }));
-    dispatch(&kind, "get", params, project_root, json).await
+    dispatch(&kind, "get", params, project_root, json, actor.as_ref()).await
 }
 
 async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json: bool) -> Result<()> {
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let title = args.title.trim();
     if title.is_empty() {
@@ -184,10 +188,11 @@ async fn handle_subject_create(args: SubjectCreateArgs, project_root: &str, json
         payload.insert("data".to_string(), Value::Object(parse_data_object(data)?));
     }
     let params = Some(Value::Object(payload));
-    dispatch(&kind, "create", params, project_root, json).await
+    dispatch(&kind, "create", params, project_root, json, actor.as_ref()).await
 }
 
 async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json: bool) -> Result<()> {
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
     if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
@@ -222,7 +227,7 @@ async fn handle_subject_update(args: SubjectUpdateArgs, project_root: &str, json
         ));
     }
     let params = Some(json!({ "id": id, "patch": Value::Object(patch) }));
-    dispatch(&kind, "update", params, project_root, json).await
+    dispatch(&kind, "update", params, project_root, json, actor.as_ref()).await
 }
 
 /// One item of a `subject batch-create` request. Mirrors the MCP
@@ -311,6 +316,7 @@ async fn run_subject_batch(
     on_error: BatchOnError,
     project_root: &str,
     json: bool,
+    actor: Option<animus_actor::Actor>,
 ) -> Result<()> {
     let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
     let method = format!("{kind}/{verb}");
@@ -337,7 +343,7 @@ async fn run_subject_batch(
             }));
             continue;
         }
-        match route_or_not_found(&resolution.selected, &method, params).await {
+        match route_or_not_found_for_actor(&resolution.selected, &method, params, actor.as_ref()).await {
             Ok(result) => {
                 any_change = true;
                 outcomes.push(json!({
@@ -434,6 +440,7 @@ async fn run_subject_batch(
 
 async fn handle_subject_batch_create(args: SubjectBatchCreateArgs, project_root: &str, json: bool) -> Result<()> {
     let tool_name = "animus.subject.batch-create";
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let items: Vec<BatchCreateItem> = read_batch_items(&args.file, tool_name, &kind)?;
     let mut calls: Vec<(String, Option<Value>)> = Vec::with_capacity(items.len());
@@ -463,11 +470,12 @@ async fn handle_subject_batch_create(args: SubjectBatchCreateArgs, project_root:
         }
         calls.push((item.title.trim().to_string(), Some(Value::Object(payload))));
     }
-    run_subject_batch(tool_name, &kind, "create", calls, args.on_error, project_root, json).await
+    run_subject_batch(tool_name, &kind, "create", calls, args.on_error, project_root, json, actor).await
 }
 
 async fn handle_subject_batch_update(args: SubjectBatchUpdateArgs, project_root: &str, json: bool) -> Result<()> {
     let tool_name = "animus.subject.batch-update";
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
     let items: Vec<BatchUpdateItem> = read_batch_items(&args.file, tool_name, &kind)?;
     let mut calls: Vec<(String, Option<Value>)> = Vec::with_capacity(items.len());
@@ -505,15 +513,16 @@ async fn handle_subject_batch_update(args: SubjectBatchUpdateArgs, project_root:
         }
         calls.push((id.to_string(), Some(json!({ "id": id, "patch": Value::Object(patch) }))));
     }
-    run_subject_batch(tool_name, &kind, "update", calls, args.on_error, project_root, json).await
+    run_subject_batch(tool_name, &kind, "update", calls, args.on_error, project_root, json, actor).await
 }
 
 async fn handle_subject_next(args: SubjectNextArgs, project_root: &str, json: bool) -> Result<()> {
     let kind = resolve_kind(args.kind.as_deref(), project_root, json)?;
-    dispatch(&kind, "next", None, project_root, json).await
+    dispatch(&kind, "next", None, project_root, json, None).await
 }
 
 async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json: bool) -> Result<()> {
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
     if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
@@ -532,10 +541,23 @@ async fn handle_subject_status(args: SubjectStatusArgs, project_root: &str, json
     let before = if json {
         None
     } else {
-        route_or_not_found(&resolution.selected, &format!("{kind}/get"), Some(json!({ "id": id }))).await.ok()
+        route_or_not_found_for_actor(
+            &resolution.selected,
+            &format!("{kind}/get"),
+            Some(json!({ "id": id })),
+            actor.as_ref(),
+        )
+        .await
+        .ok()
     };
     let method = format!("{kind}/status");
-    let result = route_or_not_found(&resolution.selected, &method, Some(json!({ "id": id, "status": status }))).await?;
+    let result = route_or_not_found_for_actor(
+        &resolution.selected,
+        &method,
+        Some(json!({ "id": id, "status": status })),
+        actor.as_ref(),
+    )
+    .await?;
     orchestrator_daemon_runtime::control::nudge_daemon_scheduler_best_effort(Path::new(project_root)).await;
     if let Some(before) = before.as_ref() {
         if let Some(line) = describe_cleared_block_flags(before, &result) {
@@ -601,6 +623,7 @@ fn describe_cleared_block_flags(before: &Value, after: &Value) -> Option<String>
 }
 
 async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json: bool) -> Result<()> {
+    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
     let kind = resolve_kind_for_id(args.kind.as_deref(), &args.id, project_root, json)?;
     if args.id.trim().is_empty() {
         return Err(invalid_input_error("--id must not be empty"));
@@ -619,7 +642,7 @@ async fn handle_subject_delete(args: SubjectDeleteArgs, project_root: &str, json
         return Ok(());
     }
     let params = Some(json!({ "id": id }));
-    dispatch(&kind, "delete", params, project_root, json).await
+    dispatch(&kind, "delete", params, project_root, json, actor.as_ref()).await
 }
 
 /// Resolve the `--kind` value used for `animus subject <verb>`.
@@ -724,10 +747,17 @@ fn resolve_kind_for_id(raw: Option<&str>, id: &str, project_root: &str, json: bo
 /// command works whether or not the daemon is up. The plugin host
 /// shutdown is implicit (handles dropped at function return), matching
 /// `animus plugin call`'s pattern.
-async fn dispatch(kind: &str, verb: &'static str, params: Option<Value>, project_root: &str, json: bool) -> Result<()> {
+async fn dispatch(
+    kind: &str,
+    verb: &'static str,
+    params: Option<Value>,
+    project_root: &str,
+    json: bool,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<()> {
     let resolution = resolve_subject_dispatch(Path::new(project_root)).await?;
     let method = format!("{kind}/{verb}");
-    let result = route_or_not_found(&resolution.selected, &method, params).await?;
+    let result = route_or_not_found_for_actor(&resolution.selected, &method, params, actor).await?;
     // Write verbs may have made new work dispatchable (e.g. a task flipped
     // to Ready) — wake a running daemon so it picks the change up now
     // instead of on the next heartbeat. Fire-and-forget: silently no-ops
@@ -911,8 +941,17 @@ fn subject_updated(subject: &Value) -> String {
     }
 }
 
-async fn route_or_not_found(dispatch: &SubjectPluginDispatch, method: &str, params: Option<Value>) -> Result<Value> {
-    match dispatch.route_call(method, params).await {
+async fn route_or_not_found_for_actor(
+    dispatch: &SubjectPluginDispatch,
+    method: &str,
+    params: Option<Value>,
+    actor: Option<&animus_actor::Actor>,
+) -> Result<Value> {
+    let response = match actor {
+        Some(actor) => dispatch.route_actor_call(method, params, actor).await,
+        None => dispatch.route_call(method, params).await,
+    };
+    match response {
         Ok(value) => Ok(value),
         Err(rpc_error) => Err(classify_subject_rpc_error(method, &rpc_error)),
     }
@@ -1035,6 +1074,7 @@ mod tests {
             BatchOnError::Continue,
             project_root,
             true,
+            None,
         )
         .await;
         let err = res.expect_err("a batch where items failed must exit non-zero");
@@ -1163,7 +1203,9 @@ mod tests {
     #[tokio::test]
     async fn route_or_not_found_returns_unavailable_for_empty_dispatch() {
         let dispatch = SubjectPluginDispatch::empty();
-        let err = route_or_not_found(&dispatch, "task/list", None).await.expect_err("expect Unavailable");
+        let err = route_or_not_found_for_actor(&dispatch, "task/list", None, None)
+            .await
+            .expect_err("expect Unavailable");
         let message = err.to_string();
         assert!(message.contains("task"), "error message names kind: {message}");
         assert!(

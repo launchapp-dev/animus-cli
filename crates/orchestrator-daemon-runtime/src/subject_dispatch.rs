@@ -130,6 +130,24 @@ impl SubjectPluginDispatch {
         }
     }
 
+    /// Route through the non-downgradable actor-scoped subject v2 wire.
+    pub async fn route_actor_call(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        actor: &animus_actor::Actor,
+    ) -> Result<Value, RpcError> {
+        let kind = method.split('/').next().unwrap_or_default();
+        match self.router.as_deref() {
+            Some(router) => router.route_actor_call(method, params, actor).await,
+            None => Err(RpcError {
+                code: animus_plugin_protocol::error_codes::METHOD_NOT_FOUND,
+                message: format!("no actor-aware subject backend mounted for kind '{kind}'"),
+                data: None,
+            }),
+        }
+    }
+
     /// Open a live `subject/changed` stream sourced from the mounted
     /// subject-backend plugin(s).
     ///

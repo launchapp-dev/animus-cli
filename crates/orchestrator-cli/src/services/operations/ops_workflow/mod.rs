@@ -11,6 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use super::ops_common::project_state_dir;
+use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
 use chrono::Utc;
 use orchestrator_core::{
@@ -29,6 +30,106 @@ use crate::{
     WorkflowConfigCommand, WorkflowDefinitionsCommand, WorkflowPhaseCommand, WorkflowPhasesCommand,
     WorkflowPromptCommand, WorkflowStateMachineCommand,
 };
+
+/// Enforce the persisted workflow ownership boundary for authenticated
+/// application reads. Legacy local CLI calls omit `actor` and retain global
+/// behavior. Once a transport asserts an actor, an unowned workflow, another
+/// user, or another tenant is concealed as not found.
+pub(crate) fn ensure_workflow_actor_access(project_root: &str, workflow_id: &str, actor: Option<&Actor>) -> Result<()> {
+    authorized_workflow_actor(project_root, workflow_id, actor).map(|_| ())
+}
+
+fn authorized_workflow_actor(project_root: &str, workflow_id: &str, actor: Option<&Actor>) -> Result<Option<Actor>> {
+    let Some(actor) = actor else {
+        return Ok(None);
+    };
+    let stored = orchestrator_core::WorkflowStateManager::new(project_root)
+        .load_workflow_actor(workflow_id)
+        .filter(|stored| stored.user_id == actor.user_id && stored.tenant_id == actor.tenant_id);
+    stored.map(Some).ok_or_else(|| crate::not_found_error(format!("workflow not found: {workflow_id}")))
+}
+
+fn workflow_value_for_application<T: serde::Serialize>(
+    workflow: T,
+    runtime: &animus_runtime_shared::config_context::RuntimeConfigContext,
+    owner: Option<&Actor>,
+) -> Result<Value> {
+    let mut value = serde_json::to_value(workflow)?;
+    let current_phase = value
+        .get("current_phase")
+        .and_then(Value::as_str)
+        .or_else(|| value.pointer("/detail/current_phase").and_then(Value::as_str))
+        .map(ToOwned::to_owned);
+    if let Value::Object(map) = &mut value {
+        project_current_agent_fields(map, current_phase.as_deref(), runtime);
+        if let Some(owner) = owner {
+            map.insert(
+                "actor".to_string(),
+                serde_json::json!({ "user_id": owner.user_id, "tenant_id": owner.tenant_id }),
+            );
+            map.insert("workspace_id".to_string(), serde_json::json!(owner.tenant_id));
+            map.insert("initiated_by".to_string(), serde_json::json!(owner.user_id));
+            map.insert("visibility".to_string(), Value::String("private".to_string()));
+            map.insert("audience".to_string(), serde_json::json!([owner.user_id]));
+        }
+    }
+    Ok(value)
+}
+
+fn workflow_current_phase(workflow: &protocol::orchestrator::OrchestratorWorkflow) -> Option<String> {
+    workflow
+        .current_phase
+        .clone()
+        .or_else(|| workflow.phases.get(workflow.current_phase_index).map(|phase| phase.phase_id.clone()))
+}
+
+fn current_phase_agent_id(
+    runtime: &animus_runtime_shared::config_context::RuntimeConfigContext,
+    phase_id: &str,
+) -> Option<String> {
+    use orchestrator_config::agent_runtime_config::PhaseExecutionMode;
+    if matches!(runtime.phase_mode(phase_id), PhaseExecutionMode::Agent) {
+        runtime.phase_agent_id(phase_id).filter(|agent_id| !agent_id.trim().is_empty())
+    } else {
+        None
+    }
+}
+
+fn project_current_agent_fields(
+    map: &mut serde_json::Map<String, Value>,
+    current_phase: Option<&str>,
+    runtime: &animus_runtime_shared::config_context::RuntimeConfigContext,
+) {
+    match current_phase.and_then(|phase_id| current_phase_agent_id(runtime, phase_id)) {
+        Some(agent_id) => {
+            map.insert("agent_id".to_string(), Value::String(agent_id));
+        }
+        None => {
+            map.remove("agent_id");
+        }
+    }
+}
+
+fn actor_owned_workflow_page(
+    project_root: &str,
+    workflows: Vec<protocol::orchestrator::OrchestratorWorkflow>,
+    actor: &Actor,
+    offset: usize,
+    limit: Option<usize>,
+) -> Vec<(protocol::orchestrator::OrchestratorWorkflow, Actor)> {
+    let manager = orchestrator_core::WorkflowStateManager::new(project_root);
+    workflows
+        .into_iter()
+        .filter_map(|workflow| {
+            manager
+                .load_workflow_actor(&workflow.id)
+                .filter(|owner| owner.user_id == actor.user_id && owner.tenant_id == actor.tenant_id)
+                .map(|owner| (workflow, owner))
+        })
+        .skip(offset)
+        .take(limit.unwrap_or(usize::MAX))
+        .collect()
+}
 
 /// Render `workflow list` results as a human-readable table, or an
 /// empty-state hint when there are no runs yet.
@@ -372,6 +473,7 @@ pub(crate) async fn handle_workflow(
 
     match command {
         WorkflowCommand::List(args) => {
+            let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
             // C6.5: prefer the control wire when daemon is running + json
             // mode, so the daemon's view of workflow runs is authoritative.
             // Falls back to the local in-process query when no socket is
@@ -379,25 +481,93 @@ pub(crate) async fn handle_workflow(
             // The wire request only carries status/cursor/limit, so any
             // filter it cannot express must take the local path instead of
             // being silently dropped.
-            if json && workflow_list_expressible_on_wire(&args) {
+            if actor.is_none() && json && workflow_list_expressible_on_wire(&args) {
                 if let Some(response) = try_workflow_list_via_control(project_root, &args).await? {
-                    return print_value(response, true);
+                    let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load(project_root);
+                    let mut value = serde_json::to_value(response)?;
+                    if let Some(runs) = value.get_mut("runs").and_then(Value::as_array_mut) {
+                        for run in runs {
+                            let Some(id) = run.get("id").and_then(Value::as_str).map(ToOwned::to_owned) else {
+                                continue;
+                            };
+                            let Ok(workflow) = workflows.get(&id).await else {
+                                continue;
+                            };
+                            let current_phase = workflow_current_phase(&workflow);
+                            if let Value::Object(run) = run {
+                                if let Some(current_phase) = current_phase {
+                                    run.insert(
+                                        "current_phase".to_string(),
+                                        Value::String(current_phase.clone()),
+                                    );
+                                    project_current_agent_fields(run, Some(&current_phase), &runtime);
+                                } else {
+                                    run.remove("current_phase");
+                                    run.remove("agent_id");
+                                }
+                            }
+                        }
+                    }
+                    return print_value(value, true);
                 }
             }
-            let page = workflows.query(build_workflow_query(args)?).await?;
+            let requested_limit = args.limit;
+            let requested_offset = args.offset;
+            let mut query = build_workflow_query(args)?;
+            if actor.is_some() {
+                // Ownership must be applied before application pagination.
+                // Fetch the filtered/sorted local set without DB paging, then
+                // partition and paginate the actor-visible rows.
+                query.page = ListPageRequest { limit: None, offset: 0 };
+            }
+            let page = workflows.query(query).await?;
+            if let Some(actor) = actor.as_ref() {
+                let owned =
+                    actor_owned_workflow_page(project_root, page.items, actor, requested_offset, requested_limit);
+                if !json {
+                    let items: Vec<_> = owned.into_iter().map(|(workflow, _)| workflow).collect();
+                    print_workflow_list_table(&items);
+                    return Ok(());
+                }
+                let runtime =
+                    animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, Some(actor));
+                let values = owned
+                    .into_iter()
+                    .map(|(workflow, owner)| workflow_value_for_application(workflow, &runtime, Some(&owner)))
+                    .collect::<Result<Vec<_>>>()?;
+                return print_value(values, true);
+            }
             if !json {
                 print_workflow_list_table(&page.items);
                 return Ok(());
             }
-            print_value(page.items, json)
+            let runtime = animus_runtime_shared::config_context::RuntimeConfigContext::load(project_root);
+            let values = page
+                .items
+                .into_iter()
+                .map(|workflow| workflow_value_for_application(workflow, &runtime, None))
+                .collect::<Result<Vec<_>>>()?;
+            print_value(values, json)
         }
         WorkflowCommand::Get(args) => {
+            let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+            let owner = authorized_workflow_actor(project_root, &args.id, actor.as_ref())?;
+            let runtime =
+                animus_runtime_shared::config_context::RuntimeConfigContext::load_for_actor(project_root, actor.as_ref());
             if json {
                 if let Some(run) = try_workflow_get_via_control(project_root, &args.id).await? {
-                    return print_value(run, true);
+                    return print_value(workflow_value_for_application(run, &runtime, owner.as_ref())?, true);
                 }
             }
-            print_value(workflows.get(&args.id).await?, json)
+            let workflow = workflows.get(&args.id).await?;
+            match owner.as_ref() {
+                Some(owner) if json => print_value(
+                    workflow_value_for_application(workflow, &runtime, Some(owner))?,
+                    true,
+                ),
+                None if json => print_value(workflow_value_for_application(workflow, &runtime, None)?, true),
+                _ => print_value(workflow, json),
+            }
         }
         WorkflowCommand::Decisions(args) => print_value(workflows.decisions(&args.id).await?, json),
         WorkflowCommand::Checkpoints { command } => match command {
@@ -802,6 +972,9 @@ pub(crate) async fn handle_workflow(
 /// wire: the wire request only carries status/cursor/limit, has no
 /// sort parameter, and collapses `escalated` into `Failed`.
 fn workflow_list_expressible_on_wire(args: &crate::WorkflowListArgs) -> bool {
+    if args.actor_json.is_some() {
+        return false;
+    }
     // `workflow_ref` (the type filter) is wire-expressible as of control-protocol
     // v0.7.0-rc.7; subject/phase/search filters still fall back to local.
     if args.subject_id.is_some() || args.phase_id.is_some() || args.search.is_some() {
@@ -953,8 +1126,111 @@ mod tests {
     use orchestrator_core::{InMemoryServiceHub, Priority, TaskCreateInput, TaskType};
     use std::sync::Arc;
 
+    fn actor(user_id: &str, tenant_id: &str, claims: &[&str]) -> Actor {
+        Actor {
+            user_id: user_id.to_string(),
+            tenant_id: Some(tenant_id.to_string()),
+            claims: claims.iter().map(|claim| (*claim).to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn workflow_actor_access_uses_stable_identity_and_conceals_cross_partition_reads() {
+        let _lock = crate::shared::test_env_lock().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        let temp = tempfile::tempdir().expect("tempdir");
+        let _home = protocol::test_utils::EnvVarGuard::set("HOME", Some(temp.path().to_string_lossy().as_ref()));
+        let manager = orchestrator_core::WorkflowStateManager::new(temp.path());
+        let workflow = protocol::orchestrator::OrchestratorWorkflow {
+            id: "wf-owned".to_string(),
+            task_id: "TASK-970".to_string(),
+            workflow_ref: Some("standard".to_string()),
+            subject: None,
+            input: None,
+            vars: std::collections::HashMap::new(),
+            status: protocol::orchestrator::WorkflowStatus::Running,
+            current_phase_index: 0,
+            phases: Vec::new(),
+            machine_state: Default::default(),
+            current_phase: None,
+            started_at: chrono::Utc::now(),
+            completed_at: None,
+            failure_reason: None,
+            checkpoint_metadata: Default::default(),
+            rework_counts: std::collections::HashMap::new(),
+            total_reworks: 0,
+            decision_history: Vec::new(),
+        };
+        manager.save(&workflow).expect("save workflow");
+        manager
+            .set_workflow_actor(&workflow.id, Some(&actor("alice", "tenant-a", &["old-claim"])))
+            .expect("persist owner");
+
+        ensure_workflow_actor_access(
+            temp.path().to_string_lossy().as_ref(),
+            &workflow.id,
+            Some(&actor("alice", "tenant-a", &["new-claim"])),
+        )
+        .expect("claims changes must not change identity");
+        for denied in [actor("bob", "tenant-a", &[]), actor("alice", "tenant-b", &[])] {
+            let error =
+                ensure_workflow_actor_access(temp.path().to_string_lossy().as_ref(), &workflow.id, Some(&denied))
+                    .expect_err("cross-user and cross-tenant access must be denied");
+            assert!(error.to_string().contains("workflow not found"));
+        }
+
+        let mut bob_workflow = workflow.clone();
+        bob_workflow.id = "wf-bob".to_string();
+        manager.save(&bob_workflow).expect("save bob workflow");
+        manager.set_workflow_actor(&bob_workflow.id, Some(&actor("bob", "tenant-a", &[]))).expect("persist bob owner");
+        let owned = actor_owned_workflow_page(
+            temp.path().to_string_lossy().as_ref(),
+            vec![bob_workflow, workflow],
+            &actor("alice", "tenant-a", &["changed"]),
+            0,
+            Some(10),
+        );
+        assert_eq!(owned.len(), 1);
+        assert_eq!(owned[0].0.id, "wf-owned");
+        let runtime =
+            animus_runtime_shared::config_context::RuntimeConfigContext::load(temp.path().to_string_lossy().as_ref());
+        let value = workflow_value_for_application(&owned[0].0, &runtime, Some(&owned[0].1))
+            .expect("ownership projection");
+        assert_eq!(value.pointer("/actor/user_id").and_then(Value::as_str), Some("alice"));
+        assert_eq!(value.get("workspace_id").and_then(Value::as_str), Some("tenant-a"));
+        assert_eq!(value.get("initiated_by").and_then(Value::as_str), Some("alice"));
+        assert_eq!(value.get("visibility").and_then(Value::as_str), Some("private"));
+
+        let mut runtime =
+            animus_runtime_shared::config_context::RuntimeConfigContext::load(temp.path().to_string_lossy().as_ref());
+        runtime.workflow_config.config.phase_definitions.insert(
+            "implementation".to_string(),
+            serde_json::from_value(serde_json::json!({ "mode": "agent", "agent_id": "swe" }))
+                .expect("agent phase definition"),
+        );
+        let mut executing = owned[0].0.clone();
+        executing.current_phase = Some("implementation".to_string());
+        let value = workflow_value_for_application(&executing, &runtime, Some(&owned[0].1))
+            .expect("agent projection");
+        assert_eq!(value.get("current_phase").and_then(Value::as_str), Some("implementation"));
+        assert_eq!(value.get("agent_id").and_then(Value::as_str), Some("swe"));
+
+        let mut command_phase: orchestrator_config::agent_runtime_config::PhaseExecutionDefinition =
+            serde_json::from_value(serde_json::json!({ "mode": "agent", "agent_id": "must-not-leak" }))
+                .expect("phase definition");
+        command_phase.mode = orchestrator_config::agent_runtime_config::PhaseExecutionMode::Command;
+        runtime
+            .workflow_config
+            .config
+            .phase_definitions
+            .insert("implementation".to_string(), command_phase);
+        let value =
+            workflow_value_for_application(&executing, &runtime, None).expect("non-agent projection");
+        assert!(value.get("agent_id").is_none());
+    }
+
     fn list_args() -> crate::WorkflowListArgs {
         crate::WorkflowListArgs {
+            actor_json: None,
             status: None,
             workflow_ref: None,
             subject_id: None,
@@ -988,6 +1264,10 @@ mod tests {
 
     #[test]
     fn workflow_list_expressible_on_wire_gates_local_only_filters() {
+        let mut args = list_args();
+        args.actor_json = Some(r#"{"user_id":"alice","tenant_id":"acme","claims":{}}"#.to_string());
+        assert!(!workflow_list_expressible_on_wire(&args), "the daemon wire cannot enforce actor ownership");
+
         let mut args = list_args();
         args.subject_id = Some("TASK-1".to_string());
         assert!(!workflow_list_expressible_on_wire(&args));

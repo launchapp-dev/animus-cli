@@ -70,6 +70,14 @@ dependencies = [
 [[package]]
 name = "animus-actor"
 version = "0.1.0"
+dependencies = [
+ "schemars",
+ "serde",
+]
+
+[[package]]
+name = "animus-actor"
+version = "0.1.0"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
  "schemars",
@@ -81,7 +89,7 @@ name = "animus-config-protocol"
 version = "0.1.1"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-actor",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "anyhow",
  "protocol",
  "schemars",
@@ -96,9 +104,9 @@ name = "animus-control-protocol"
 version = "0.1.15"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-actor",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-log-storage-protocol",
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-subject-protocol 0.1.16",
  "animus-trigger-protocol",
  "anyhow",
@@ -116,7 +124,7 @@ name = "animus-environment-protocol"
 version = "0.1.0"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "schemars",
  "serde",
  "serde_json",
@@ -127,7 +135,7 @@ name = "animus-journal-protocol"
 version = "0.1.15"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "anyhow",
  "async-trait",
  "chrono",
@@ -142,7 +150,7 @@ name = "animus-log-storage-protocol"
 version = "0.1.15"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "anyhow",
  "async-trait",
  "chrono",
@@ -192,6 +200,15 @@ dependencies = [
 [[package]]
 name = "animus-plugin-protocol"
 version = "0.1.18"
+dependencies = [
+ "schemars",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "animus-plugin-protocol"
+version = "0.1.18"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
  "schemars",
@@ -203,7 +220,7 @@ dependencies = [
 name = "animus-plugin-runtime"
 version = "0.1.0"
 dependencies = [
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-session-backend",
  "anyhow",
  "async-trait",
@@ -229,9 +246,9 @@ dependencies = [
 name = "animus-runtime-shared"
 version = "0.1.0"
 dependencies = [
- "animus-actor",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-environment-protocol",
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "anyhow",
  "async-trait",
  "chrono",
@@ -260,8 +277,8 @@ name = "animus-session-backend"
 version = "0.1.15"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-actor",
- "animus-plugin-protocol 0.1.18",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "anyhow",
  "async-trait",
  "serde",
@@ -293,7 +310,23 @@ name = "animus-subject-protocol"
 version = "0.1.16"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-actor",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "futures-core",
+ "schemars",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "animus-subject-protocol"
+version = "0.2.0"
+dependencies = [
+ "animus-actor 0.1.0",
  "animus-plugin-protocol 0.1.18",
  "anyhow",
  "async-trait",
@@ -310,7 +343,7 @@ name = "animus-trigger-protocol"
 version = "0.1.15"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "anyhow",
  "async-trait",
  "chrono",
@@ -326,8 +359,8 @@ name = "animus-workflow-runner-protocol"
 version = "0.2.0"
 source = "git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11#ed98db092ebd0fcc1438b81a46cb82a2682c61ce"
 dependencies = [
- "animus-actor",
- "animus-plugin-protocol 0.1.18",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-subject-protocol 0.1.16",
  "schemars",
  "serde",
@@ -370,7 +403,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -381,7 +414,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1320,7 +1353,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1419,7 +1452,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2588,7 +2621,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2785,12 +2818,12 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 name = "orchestrator-cli"
 version = "0.7.0-rc.29"
 dependencies = [
- "animus-actor",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-control-protocol",
  "animus-environment-protocol",
  "animus-log-storage-protocol",
  "animus-mcp-oauth",
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-queue-protocol",
  "animus-runtime-shared",
  "animus-session-backend",
@@ -2837,7 +2870,7 @@ dependencies = [
 name = "orchestrator-config"
 version = "0.1.0"
 dependencies = [
- "animus-actor",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-config-protocol",
  "anyhow",
  "croner",
@@ -2859,10 +2892,10 @@ dependencies = [
 name = "orchestrator-core"
 version = "0.1.0"
 dependencies = [
- "animus-actor",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-environment-protocol",
  "animus-journal-protocol",
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "anyhow",
  "argon2",
  "async-trait",
@@ -2897,11 +2930,11 @@ dependencies = [
 name = "orchestrator-daemon-runtime"
 version = "0.1.0"
 dependencies = [
- "animus-actor",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-config-protocol",
  "animus-control-protocol",
  "animus-log-storage-protocol",
- "animus-plugin-protocol 0.1.18",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-runtime-shared",
  "animus-subject-protocol 0.1.16",
  "anyhow",
@@ -2949,8 +2982,10 @@ dependencies = [
 name = "orchestrator-plugin-host"
 version = "0.1.0"
 dependencies = [
- "animus-plugin-protocol 0.1.18",
+ "animus-actor 0.1.0 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
+ "animus-plugin-protocol 0.1.18 (git+https://github.com/launchapp-dev/animus-protocol?tag=v0.7.0-rc.11)",
  "animus-session-backend",
+ "animus-subject-protocol 0.2.0",
  "anyhow",
  "async-trait",
  "chrono",
@@ -3611,7 +3646,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3669,7 +3704,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4041,7 +4076,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4181,7 +4216,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4585,7 +4620,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

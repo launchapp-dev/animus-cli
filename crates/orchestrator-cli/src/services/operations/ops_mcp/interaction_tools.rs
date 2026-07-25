@@ -1,7 +1,7 @@
 use super::*;
 use crate::services::runtime::runtime_agent::interactions::{
-    answer_interaction_op_with_resume, emit_interaction_event, pause_workflow_for_suspended_interaction,
-    resume_workflow_for_answered_interaction, AnswerOptions,
+    emit_interaction_event, pause_workflow_for_suspended_interaction, resume_workflow_for_answered_interaction,
+    AnswerOptions,
 };
 use animus_runtime_shared::{InteractionKind, InteractionQuestion, InteractionRecord, InteractionStatus};
 use orchestrator_config::agent_runtime_config::ApprovalPolicyDecision;
@@ -942,8 +942,9 @@ async fn record_llm_approval_decision(
     task_id: Option<&str>,
     allow: bool,
     reason: &str,
+    actor: Option<&animus_actor::Actor>,
 ) -> bool {
-    let created = match animus_runtime_shared::create_approval_interaction(
+    let created = match animus_runtime_shared::create_approval_interaction_for_actor(
         project_root,
         agent_id,
         action,
@@ -953,6 +954,7 @@ async fn record_llm_approval_decision(
         Some(timeout_secs),
         workflow_id,
         task_id,
+        actor,
     ) {
         Ok(record) => record,
         Err(err) => {
@@ -961,7 +963,7 @@ async fn record_llm_approval_decision(
         }
     };
     emit_interaction_event("interaction_created", project_root, &created);
-    let outcome = answer_interaction_op_with_resume(
+    let outcome = crate::services::runtime::runtime_agent::interactions::answer_interaction_op_with_resume_for_actor(
         project_root,
         &created.id,
         AnswerOptions {
@@ -977,6 +979,7 @@ async fn record_llm_approval_decision(
             updated_input: None,
             updated_permissions: None,
         },
+        actor,
     )
     .await;
     match outcome {
@@ -1226,6 +1229,7 @@ pub(crate) async fn decide_approval(
                                     task_id,
                                     true,
                                     &reason,
+                                    None,
                                 )
                                 .await;
                                 if audited {
@@ -1254,6 +1258,7 @@ pub(crate) async fn decide_approval(
                                     task_id,
                                     false,
                                     &reason,
+                                    None,
                                 )
                                 .await;
                                 return DecideApprovalOutcome::Decided(ApprovalDecision::Deny {
@@ -1315,6 +1320,7 @@ impl AoMcpServer {
     )]
     async fn ao_agent_ask(&self, params: Parameters<AgentAskInput>) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "animus.agent.ask";
+        self.audit_actor_tool_decision(TOOL, true, "forward");
         let input = params.0;
         let project_root = self.default_project_root.clone();
         let agent_id = self.bound_agent_id(Some(&input.agent_id));
@@ -1327,8 +1333,9 @@ impl AoMcpServer {
         // judge answers questions on the human's behalf (the question still lands
         // in the inbox, answered_by "llm", for auditability). Resolved once; the
         // flat path uses it. Any failure falls through to human escalation.
-        let runtime_config = orchestrator_core::agent_runtime_config::load_agent_runtime_config_or_default(
+        let runtime_config = orchestrator_core::load_agent_runtime_config_or_default_for_actor(
             std::path::Path::new(&project_root),
+            self.pinned_actor(),
         );
         let autopilot = resolve_llm_autopilot(runtime_config.agent_profile(&agent_id));
 
@@ -1350,7 +1357,7 @@ impl AoMcpServer {
             // record carries the question shapes verbatim (mirrors the native
             // path's preserved tool input).
             let raw_input = json!({ "questions": questions });
-            let created = match animus_runtime_shared::create_structured_question_interaction(
+            let created = match animus_runtime_shared::create_structured_question_interaction_for_actor(
                 &project_root,
                 &agent_id,
                 questions,
@@ -1360,6 +1367,7 @@ impl AoMcpServer {
                 Some(timeout_secs),
                 workflow_id.as_deref(),
                 input.task_id.as_deref(),
+                self.pinned_actor(),
             ) {
                 Ok(record) => record,
                 Err(err) => return structured_err(TOOL, err.to_string()),
@@ -1380,7 +1388,7 @@ impl AoMcpServer {
                 )
                 .await
                 {
-                    let outcome = answer_interaction_op_with_resume(
+                    let outcome = crate::services::runtime::runtime_agent::interactions::answer_interaction_op_with_resume_for_actor(
                         &project_root,
                         &created.id,
                         AnswerOptions {
@@ -1396,6 +1404,7 @@ impl AoMcpServer {
                             updated_input: None,
                             updated_permissions: None,
                         },
+                        self.pinned_actor(),
                     )
                     .await;
                     match outcome {
@@ -1443,7 +1452,7 @@ impl AoMcpServer {
             }
         };
         let options = input.options.unwrap_or_default();
-        let created = match animus_runtime_shared::create_question_interaction(
+        let created = match animus_runtime_shared::create_question_interaction_for_actor(
             &project_root,
             &agent_id,
             &question,
@@ -1451,6 +1460,7 @@ impl AoMcpServer {
             Some(timeout_secs),
             workflow_id.as_deref(),
             input.task_id.as_deref(),
+            self.pinned_actor(),
         ) {
             Ok(record) => record,
             Err(err) => return structured_err(TOOL, err.to_string()),
@@ -1471,8 +1481,24 @@ impl AoMcpServer {
             )
             .await
             {
-                match animus_runtime_shared::answer_interaction(&project_root, &created.id, &answer, None, Some("llm"))
-                {
+                let answered = match self.pinned_actor() {
+                    Some(actor) => animus_runtime_shared::answer_interaction_for_actor(
+                        &project_root,
+                        &created.id,
+                        &answer,
+                        None,
+                        Some("llm"),
+                        actor,
+                    ),
+                    None => animus_runtime_shared::answer_interaction(
+                        &project_root,
+                        &created.id,
+                        &answer,
+                        None,
+                        Some("llm"),
+                    ),
+                };
+                match answered {
                     Ok(record) => {
                         emit_interaction_event("interaction_answered", &project_root, &record);
                         return structured_ok(
@@ -1534,6 +1560,7 @@ impl AoMcpServer {
         params: Parameters<AgentRequestApprovalInput>,
     ) -> Result<CallToolResult, McpError> {
         const TOOL: &str = "animus.agent.request_approval";
+        self.audit_actor_tool_decision(TOOL, true, "forward");
         let input = params.0;
         let agent_id = self.bound_agent_id(input.agent_id.as_deref());
         let project_root = self.default_project_root.clone();
@@ -1564,7 +1591,7 @@ impl AoMcpServer {
                 Ok(questions) => questions,
                 Err(err) => return structured_err(TOOL, err.to_string()),
             };
-            let created = match animus_runtime_shared::create_native_question_interaction(
+            let created = match animus_runtime_shared::create_native_question_interaction_for_actor(
                 &project_root,
                 &agent_id,
                 questions,
@@ -1573,6 +1600,7 @@ impl AoMcpServer {
                 Some(timeout_secs),
                 workflow_id.as_deref(),
                 input.task_id.as_deref(),
+                self.pinned_actor(),
             ) {
                 Ok(record) => record,
                 Err(err) => return structured_err(TOOL, err.to_string()),
@@ -1611,8 +1639,9 @@ impl AoMcpServer {
             },
         };
 
-        let runtime_config = orchestrator_core::agent_runtime_config::load_agent_runtime_config_or_default(
+        let runtime_config = orchestrator_core::load_agent_runtime_config_or_default_for_actor(
             std::path::Path::new(&project_root),
+            self.pinned_actor(),
         );
         let profile = runtime_config.agent_profile(&agent_id);
         if let Some(policy) = profile.and_then(|profile| profile.approval_policy.as_ref()) {
@@ -1669,6 +1698,7 @@ impl AoMcpServer {
                                         input.task_id.as_deref(),
                                         true,
                                         &reason,
+                                        self.pinned_actor(),
                                     )
                                     .await;
                                     if audited {
@@ -1697,6 +1727,7 @@ impl AoMcpServer {
                                         input.task_id.as_deref(),
                                         false,
                                         &reason,
+                                        self.pinned_actor(),
                                     )
                                     .await;
                                     return Ok(CallToolResult::structured(merge_sdk_fields(
@@ -1725,7 +1756,7 @@ impl AoMcpServer {
             }
         }
 
-        let created = match animus_runtime_shared::create_approval_interaction(
+        let created = match animus_runtime_shared::create_approval_interaction_for_actor(
             &project_root,
             &agent_id,
             &action,
@@ -1735,6 +1766,7 @@ impl AoMcpServer {
             Some(timeout_secs),
             workflow_id.as_deref(),
             input.task_id.as_deref(),
+            self.pinned_actor(),
         ) {
             Ok(record) => record,
             Err(err) => return structured_err(TOOL, err.to_string()),
@@ -1781,12 +1813,22 @@ impl AoMcpServer {
     ) -> Result<CallToolResult, McpError> {
         let input = params.0;
         let project_root = interaction_project_root(&self.default_project_root, input.project_root);
-        match animus_runtime_shared::list_interactions(
-            &project_root,
-            input.all.unwrap_or(false),
-            input.agent_id.as_deref(),
-        ) {
+        let records = match self.pinned_actor() {
+            Some(actor) => animus_runtime_shared::list_interactions_for_actor(
+                &project_root,
+                input.all.unwrap_or(false),
+                input.agent_id.as_deref(),
+                actor,
+            ),
+            None => animus_runtime_shared::list_interactions(
+                &project_root,
+                input.all.unwrap_or(false),
+                input.agent_id.as_deref(),
+            ),
+        };
+        match records {
             Ok(mut records) => {
+                self.audit_actor_tool_decision("animus.interactions.list", true, "forward");
                 if let Some(limit) = input.limit {
                     if records.len() > limit {
                         records = records.split_off(records.len() - limit);
@@ -1800,7 +1842,10 @@ impl AoMcpServer {
                     }),
                 )
             }
-            Err(err) => structured_err("animus.interactions.list", err.to_string()),
+            Err(err) => {
+                self.audit_actor_tool_decision("animus.interactions.list", true, "deny");
+                structured_err("animus.interactions.list", err.to_string())
+            }
         }
     }
 
@@ -1827,7 +1872,7 @@ impl AoMcpServer {
                 );
             }
         };
-        match answer_interaction_op_with_resume(
+        match crate::services::runtime::runtime_agent::interactions::answer_interaction_op_with_resume_for_actor(
             &project_root,
             &input.id,
             AnswerOptions {
@@ -1843,17 +1888,22 @@ impl AoMcpServer {
                 updated_input: input.updated_input,
                 updated_permissions: input.updated_permissions,
             },
+            self.pinned_actor(),
         )
         .await
         {
             Ok((record, workflow_resume)) => {
+                self.audit_actor_tool_decision("animus.interactions.answer", true, "forward");
                 let mut payload = interaction_to_json(&record);
                 if let (Value::Object(map), Some(resume)) = (&mut payload, workflow_resume) {
                     map.insert("workflow_resume".to_string(), resume);
                 }
                 structured_ok("animus.interactions.answer", payload)
             }
-            Err(err) => structured_err("animus.interactions.answer", err.to_string()),
+            Err(err) => {
+                self.audit_actor_tool_decision("animus.interactions.answer", true, "deny");
+                structured_err("animus.interactions.answer", err.to_string())
+            }
         }
     }
 }

@@ -73,6 +73,12 @@ pub(crate) struct ChatListArgs {
     /// shared ones. Omit for the full (legacy/admin) listing.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Maximum number of conversations to return after ownership filtering.
+    #[arg(long, value_name = "N")]
+    pub(crate) limit: Option<usize>,
+    /// Number of newest conversations to skip after ownership filtering.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
 }
 
 #[derive(Debug, Args)]
@@ -158,6 +164,12 @@ pub(crate) struct ChatGetArgs {
     /// plugin may use it to enforce read access.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Maximum number of transcript messages to return.
+    #[arg(long, value_name = "N")]
+    pub(crate) limit: Option<usize>,
+    /// Number of transcript messages to skip from the start.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) offset: usize,
 }
 
 #[derive(Debug, Args)]

@@ -21,6 +21,18 @@ operate on the public registry. Plugin mutation tools that touch installed
 binaries can still accept `project_root` so project-local `.animus/plugins.lock`
 participates in integrity tracking when present.
 
+When a trusted host starts the server with `--require-actor --actor-json`,
+Animus pins that actor for the server lifetime. Missing or malformed identity
+stops startup, child commands cannot replace the pin, and the server removes
+every route whose command/protocol cannot enforce it. The retained surface is
+workflow run/list/get, workflow config get/validate, workflow output reads, chat
+send, subject list/get/create/update/batch-create/batch-update/status,
+interaction creation/management, and tool discovery. Subject `next`, queue
+operations, config writes, resources, and other global routes are deliberately
+unavailable rather than silently downgraded. Actor-bound subject calls use the
+v2 subject protocol and never fall back to legacy v1 methods. See
+[Actor-bound application contract](../architecture/actor-bound-application-contract.md).
+
 **OAuth-protected upstream MCP servers.** Connecting *agents* to OAuth-backed
 MCP servers is handled by the `animus mcp auth` CLI surface plus the
 `animus-mcp-proxy` stdio bridge, not by an MCP tool. See

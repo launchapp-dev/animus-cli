@@ -4,6 +4,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use animus_plugin_protocol::{EnvRequirement, RpcError};
+use animus_subject_protocol_v2::{
+    SubjectCreateRequestV2, SubjectDeleteRequestV2, SubjectFilter, SubjectGetRequestV2, SubjectId,
+    SubjectListRequestV2, SubjectRequestContext, SubjectStatusRequestV2, SubjectUpdateRequestV2,
+};
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
@@ -814,6 +818,85 @@ impl SubjectRouter {
         Ok(response)
     }
 
+    /// Route an authenticated application call through the actor-scoped v2
+    /// subject protocol. This is deliberately separate from
+    /// [`Self::route_call`], the explicit legacy v1 edge.
+    pub async fn route_actor_call(
+        &self,
+        method: &str,
+        params: Option<Value>,
+        actor: &animus_actor::Actor,
+    ) -> Result<Value, RpcError> {
+        let invalid = |message: String| RpcError {
+            code: animus_plugin_protocol::error_codes::INVALID_PARAMS,
+            message,
+            data: None,
+        };
+        let v2_actor = serde_json::from_value(
+            serde_json::to_value(actor).map_err(|error| invalid(error.to_string()))?,
+        )
+        .map_err(|error| invalid(format!("failed to convert authenticated actor: {error}")))?;
+        let context = SubjectRequestContext::for_actor(v2_actor);
+        let (kind, verb) = method.split_once('/').ok_or_else(|| {
+            invalid(format!(
+                "actor-scoped subject method must be '<kind>/<verb>', got '{method}'"
+            ))
+        })?;
+        let raw = params.unwrap_or_else(|| serde_json::json!({}));
+        let request = match verb {
+            "list" => {
+                let filter_value = raw.get("filter").cloned().unwrap_or(raw);
+                let filter: SubjectFilter = serde_json::from_value(filter_value)
+                    .map_err(|error| invalid(format!("invalid subject list filter: {error}")))?;
+                serde_json::to_value(SubjectListRequestV2 { context, filter })
+            }
+            "get" => {
+                let id = required_subject_id(&raw, verb).map_err(invalid)?;
+                serde_json::to_value(SubjectGetRequestV2 { context, id })
+            }
+            "create" => serde_json::to_value(SubjectCreateRequestV2 {
+                context,
+                kind: Some(kind.to_string()),
+                payload: raw,
+            }),
+            "update" => {
+                let id = required_subject_id(&raw, verb).map_err(invalid)?;
+                let patch = raw.get("patch").cloned().unwrap_or_else(|| {
+                    let mut patch = raw;
+                    if let Value::Object(map) = &mut patch {
+                        map.remove("id");
+                    }
+                    patch
+                });
+                serde_json::to_value(SubjectUpdateRequestV2 { context, id, patch })
+            }
+            "status" => {
+                let id = required_subject_id(&raw, verb).map_err(invalid)?;
+                let status = raw
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .filter(|status| !status.trim().is_empty())
+                    .ok_or_else(|| invalid("subject status requires `status`".into()))?
+                    .to_string();
+                serde_json::to_value(SubjectStatusRequestV2 { context, id, status })
+            }
+            "delete" => {
+                let id = required_subject_id(&raw, verb).map_err(invalid)?;
+                serde_json::to_value(SubjectDeleteRequestV2 { context, id })
+            }
+            other => {
+                return Err(RpcError {
+                    code: animus_plugin_protocol::error_codes::METHOD_NOT_SUPPORTED,
+                    message: format!("subject actor protocol v2 does not support '{other}'"),
+                    data: None,
+                })
+            }
+        }
+        .map_err(|error| invalid(format!("failed to encode subject v2 request: {error}")))?;
+        self.route_call(&format!("{kind}/v2/{verb}"), Some(request))
+            .await
+    }
+
     pub async fn resolve_subject(&self, subject_kind: &str, subject_id: &str) -> Result<Value, RpcError> {
         self.route_call(&format!("{subject_kind}/get"), Some(serde_json::json!({ "id": subject_id }))).await
     }
@@ -963,6 +1046,16 @@ impl SubjectRouter {
     pub fn aliases_are_identity(&self) -> bool {
         self.aliases.is_empty()
     }
+}
+
+fn required_subject_id(params: &Value, verb: &str) -> std::result::Result<SubjectId, String> {
+    params
+        .get("id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(SubjectId::new)
+        .ok_or_else(|| format!("subject {verb} requires `id`"))
 }
 
 /// Rewrite the top-level `kind` field on known response shapes from the

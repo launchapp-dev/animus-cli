@@ -60,6 +60,11 @@ pub(crate) struct McpServeArgs {
     /// never from agent output, workflow YAML, or subject content.
     #[arg(long, value_name = "JSON")]
     pub actor_json: Option<String>,
+    /// Refuse to start unless `--actor-json` is also present and valid. Portal
+    /// and other authenticated transports should always set this so a caller
+    /// identity lost in transit cannot silently become a global MCP server.
+    #[arg(long, default_value_t = false)]
+    pub require_actor: bool,
 }
 
 /// Default overall timeout (seconds) for a one-shot `mcp tools` / `mcp call`

@@ -1,6 +1,6 @@
 use clap::{ArgAction, Args, Subcommand, ValueEnum};
 
-use super::{parse_positive_u64, ReasoningEffortArg};
+use super::{parse_positive_u64, ReasoningEffortArg, ACTOR_JSON_HELP};
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum AgentCommand {
@@ -112,12 +112,16 @@ pub(crate) struct AgentInteractionsListArgs {
     pub(crate) all: bool,
     #[arg(long, value_name = "AGENT_ID", help = "Filter interactions by requesting agent id.")]
     pub(crate) agent: Option<String>,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
 pub(crate) struct AgentInteractionsShowArgs {
     #[arg(value_name = "ID", help = "Interaction id.")]
     pub(crate) id: String,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -155,6 +159,8 @@ pub(crate) struct AgentInteractionsAnswerArgs {
     pub(crate) updated_input: Option<String>,
     #[arg(long = "by", value_name = "NAME", help = "Who answered. Defaults to 'human'.")]
     pub(crate) answered_by: Option<String>,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]

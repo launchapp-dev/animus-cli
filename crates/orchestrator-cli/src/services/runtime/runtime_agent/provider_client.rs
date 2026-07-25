@@ -128,7 +128,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
         .permission_mode
         .clone()
         .or_else(|| context_str(context_object.as_ref(), "permission_mode"))
-        .or_else(|| profile_permission_mode(&project_root_path, args.agent.as_deref()));
+        .or_else(|| profile_permission_mode(&project_root_path, args.agent.as_deref(), None));
     if let Some(mode) = permission_mode.as_deref() {
         warn_unknown_permission_mode(mode);
     }
@@ -151,7 +151,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
     // `ApprovalPolicy::evaluate` then auto-allows/denies/asks (auto_deny wins).
     // Neither overrides the other; they compose. See
     // `docs/reference/agent-runtime-config.md` and `docs/guides/agents.md`.
-    if args.approvals || profile_has_approval_policy(&project_root_path, args.agent.as_deref()) {
+    if args.approvals || profile_has_approval_policy(&project_root_path, args.agent.as_deref(), None) {
         extras.insert("approvals".to_string(), Value::Bool(true));
     }
 
@@ -195,6 +195,7 @@ pub(crate) fn session_request_from_args(args: &AgentRunArgs, project_root: &str)
             &tool,
             args.agent.as_deref(),
             args.skill.as_deref(),
+            None,
         )?)
     } else {
         None
@@ -436,9 +437,13 @@ pub(super) fn apply_permission_mode_to_launch(contract: &mut Value, tool: &str, 
 /// Resolve the `permission_mode` declared on an agent profile. Reads the
 /// compiled agent runtime config, which already folds workflow YAML
 /// `agents:` overlays onto the builtin profiles.
-pub(crate) fn profile_permission_mode(project_root: &Path, agent_id: Option<&str>) -> Option<String> {
+pub(crate) fn profile_permission_mode(
+    project_root: &Path,
+    agent_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> Option<String> {
     let agent_id = agent_id?;
-    orchestrator_core::load_agent_runtime_config_or_default(project_root)
+    orchestrator_core::load_agent_runtime_config_or_default_for_actor(project_root, actor)
         .agent_profile(agent_id)
         .and_then(|profile| profile.permission_mode.as_deref())
         .map(str::trim)
@@ -448,11 +453,15 @@ pub(crate) fn profile_permission_mode(project_root: &Path, agent_id: Option<&str
 
 /// Whether the agent profile declares an `approval_policy`. Reads the
 /// compiled agent runtime config, same as [`profile_permission_mode`].
-pub(crate) fn profile_has_approval_policy(project_root: &Path, agent_id: Option<&str>) -> bool {
+pub(crate) fn profile_has_approval_policy(
+    project_root: &Path,
+    agent_id: Option<&str>,
+    actor: Option<&animus_actor::Actor>,
+) -> bool {
     let Some(agent_id) = agent_id else {
         return false;
     };
-    orchestrator_core::load_agent_runtime_config_or_default(project_root)
+    orchestrator_core::load_agent_runtime_config_or_default_for_actor(project_root, actor)
         .agent_profile(agent_id)
         .is_some_and(|profile| profile.approval_policy.is_some())
 }

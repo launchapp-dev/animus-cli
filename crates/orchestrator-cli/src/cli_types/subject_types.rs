@@ -71,6 +71,9 @@ pub(crate) enum SubjectCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectListArgs {
+    /// Authenticated actor JSON. Selects the non-downgradable v2 subject wire.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to list (e.g. `task`, `issue`, `linear`). When omitted,
     /// falls back to `default_subject_kind` in `.animus/config.json`
     /// (defaults to `task`).
@@ -102,6 +105,9 @@ pub(crate) struct SubjectListArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectGetArgs {
+    /// Authenticated actor JSON. Selects the non-downgradable v2 subject wire.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -115,6 +121,9 @@ pub(crate) struct SubjectGetArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectCreateArgs {
+    /// Authenticated actor JSON. The created subject is owned by this actor.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -145,6 +154,9 @@ pub(crate) struct SubjectCreateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectUpdateArgs {
+    /// Authenticated actor JSON. Only an owned subject can be updated.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -180,6 +192,9 @@ pub(crate) struct SubjectUpdateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectBatchCreateArgs {
+    /// Authenticated actor JSON applied to every item.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -198,6 +213,9 @@ pub(crate) struct SubjectBatchCreateArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectBatchUpdateArgs {
+    /// Authenticated actor JSON applied to every item.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -225,6 +243,9 @@ pub(crate) struct SubjectNextArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectStatusArgs {
+    /// Authenticated actor JSON. Only an owned subject can be changed.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).
@@ -241,6 +262,9 @@ pub(crate) struct SubjectStatusArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct SubjectDeleteArgs {
+    /// Authenticated actor JSON. Only an owned subject can be deleted.
+    #[arg(long, value_name = "JSON")]
+    pub actor_json: Option<String>,
     /// Subject kind to route through. When omitted, falls back to
     /// `default_subject_kind` in `.animus/config.json` (defaults to
     /// `task`).

@@ -50,11 +50,11 @@ animus chat send "your message" \
   [--conversation <id>] [--tool claude] [--model <model>] [--cwd <path>] \
   [--stream] [--title <title>] [--as-user <user-id>] [--visibility private|shared]
 
-# Read a full transcript
-animus chat get <id> [--as-user <user-id>]
+# Read a transcript, optionally returning a bounded slice
+animus chat get <id> [--as-user <user-id>] [--limit <n>] [--offset <n>]
 
-# List conversations, most-recently-updated first
-animus chat list [--as-user <user-id>]
+# List conversations, most-recently-updated first, optionally paged
+animus chat list [--as-user <user-id>] [--limit <n>] [--offset <n>]
 
 # Set or clear a conversation title
 animus chat rename <id> --title <title> [--as-user <user-id>]
@@ -101,6 +101,14 @@ Each conversation carries two optional identity fields on its `ConversationMeta`
 `--as-user <id>` stamps an owner on `animus chat new` and on an `animus chat send` that auto-creates a conversation; `--visibility` sets the initial visibility. `animus chat list --as-user <id>` returns that user's own conversations PLUS any `shared` ones; `animus chat list` with no `--as-user` returns everything (the legacy/admin view).
 
 Owner filtering is applied at the query layer (the in-tree store has no auth context and `list` always returns everything). Beyond `list`, the kernel also enforces the same owner/shared rule client-side on every **direct-id** verb when `--as-user` is given — `chat get`, `export`, `rename`, `delete`, and a `chat send` into an existing conversation: accessing another user's `private` conversation is rejected as `not found` (a uniform error, so a probe cannot tell a private conversation it may not see from one that does not exist). With no `--as-user`, all access is permitted (the legacy/admin view). When a `conversation_store` plugin is installed, the acting user from `--as-user` ALSO rides every per-conversation RPC (`load_meta`, `save_meta`, `append_message`, `load_messages`, `delete`) so the backend can authorize server-side; the client-side check is a backstop for backends that do not.
+
+For `chat list`, owner filtering happens before `--offset` / `--limit`, so
+inaccessible rows neither consume page slots nor affect the visible page
+shape. `chat get` applies those flags to the ordered `messages` array while
+preserving the `{ meta, messages }` JSON shape. The current
+`conversation_store` protocol has no server-side paging fields, so the backend
+still returns the full candidate list or transcript before the CLI bounds its
+output.
 
 ## Pluggable conversation store
 

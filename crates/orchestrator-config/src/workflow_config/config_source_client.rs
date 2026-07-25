@@ -774,6 +774,24 @@ mod resident_cache_tests {
     }
 
     #[test]
+    fn compiled_cache_never_leaks_across_tenants_for_the_same_user() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let root = dir.path();
+        let tenant_a = Actor { user_id: "alice".into(), claims: Vec::new(), tenant_id: Some("tenant-a".into()) };
+        let tenant_b = Actor { user_id: "alice".into(), claims: Vec::new(), tenant_id: Some("tenant-b".into()) };
+
+        store_compiled(root, Some(&tenant_a), "tok".to_string(), loaded_marked(root, "tenant-a-wf"));
+        assert!(
+            cached_compiled(root, Some(&tenant_b), "tok").is_none(),
+            "same user in another tenant must not hit tenant A's compiled config"
+        );
+        store_compiled(root, Some(&tenant_b), "tok".to_string(), loaded_marked(root, "tenant-b-wf"));
+
+        assert_eq!(cached_compiled(root, Some(&tenant_a), "tok").unwrap().config.default_workflow_ref, "tenant-a-wf");
+        assert_eq!(cached_compiled(root, Some(&tenant_b), "tok").unwrap().config.default_workflow_ref, "tenant-b-wf");
+    }
+
+    #[test]
     fn actor_cache_key_is_claim_order_independent_and_partitions_identity() {
         // (b) actor=None maps to the shared global partition, unchanged from
         // today's behavior.

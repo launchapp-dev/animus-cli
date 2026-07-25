@@ -1822,7 +1822,7 @@ mode. Pass `--json` to get the `animus.cli.v1` envelope instead.
 | `animus workflow list` | Table; empty set prints a "Start one with:" hint |
 | `animus agent list` | Table of configured agent profiles |
 | `animus agent interactions list` | Table of pending interactions with answer-command hints |
-| `animus chat list` | Table, most-recently-updated first; `--as-user <id>` limits to that user's own + shared conversations |
+| `animus chat list` | Table, most-recently-updated first; `--as-user <id>` limits to that user's own + shared conversations, then `--offset <n>` / `--limit <n>` bound the returned page |
 | `animus pack list` | Table; active packs flagged |
 | `animus skill list` | Table; `--verbose` surfaces per-file unparseable-skill warnings (otherwise suppressed/aggregated) |
 | `animus daemon preflight` | Checklist (pass/fail per role), not a JSON blob |
@@ -1879,14 +1879,16 @@ both modes.
 
 ### `--actor-json` (transport-asserted per-user scoping)
 
-`animus workflow run`, `animus workflow config get`, `animus workflow config
-validate`, and `animus chat send` accept `--actor-json <JSON>` — a JSON-encoded
-`Actor` (`{"user_id","claims","tenant_id"}`) that scopes the operation to that
-user, mirroring `animus mcp serve --actor-json`:
+`animus workflow run`, actor-aware workflow/output reads, `animus workflow
+config get/validate`, `animus subject list/get/create/update/batch-create/
+batch-update/status/delete`, and `animus chat send` accept `--actor-json
+<JSON>` — a JSON-encoded `Actor` (`{"user_id","claims","tenant_id"}`) that
+scopes the operation to that user, mirroring `animus mcp serve --actor-json`:
 
 ```bash
 animus workflow run --subject-id task:TASK-1 --actor-json '{"user_id":"alice"}'
 animus workflow config get  --actor-json '{"user_id":"alice"}'
+animus subject get --kind task --id TASK-1 --actor-json '{"user_id":"alice","tenant_id":"workspace-7"}'
 animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":["admin"]}'
 ```
 
@@ -1896,6 +1898,9 @@ animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":
 - `workflow config get` / `validate` return the actor's
   global ∪ private ∪ shared config set; an actor whose `claims` contains
   `admin` sees everything; **no flag = global-only**.
+- Actor-aware subject commands route only to the v2 subject protocol. Subject
+  rows are partitioned by exact user and tenant; an older v1-only backend
+  returns unsupported instead of receiving a downgraded global call.
 - `chat send --actor-json` is the **authz** identity for the turn (binds the
   chat agent's built-in `animus` MCP server to that user). It is distinct from
   `--as-user`, which only stamps **conversation ownership** for the

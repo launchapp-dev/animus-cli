@@ -308,6 +308,9 @@ fn new_ao_mcp_server_with_options(
     if management {
         tool_router += AoMcpServer::interaction_management_tool_router();
     }
+    if pinned_actor.is_some() {
+        restrict_actor_bound_tool_router(&mut tool_router);
+    }
 
     AoMcpServer {
         default_project_root: default_project_root.to_string(),
@@ -316,6 +319,40 @@ fn new_ao_mcp_server_with_options(
         pinned_agent_id: pinned_agent_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
         pinned_workflow_id: pinned_workflow_id.map(|value| value.trim().to_string()).filter(|value| !value.is_empty()),
         pinned_actor,
+    }
+}
+
+const ACTOR_BOUND_MCP_TOOLS: &[&str] = &[
+    "animus.workflow.run",
+    "animus.workflow.list",
+    "animus.workflow.get",
+    "animus.workflow.run-multiple",
+    "animus.workflow.execute",
+    "animus.workflow.config.get",
+    "animus.workflow.config.validate",
+    "animus.output.run",
+    "animus.output.phase-outputs",
+    "animus.subject.list",
+    "animus.subject.get",
+    "animus.subject.create",
+    "animus.subject.update",
+    "animus.subject.batch-create",
+    "animus.subject.batch-update",
+    "animus.subject.status",
+    "animus.agent.ask",
+    "animus.agent.request_approval",
+    "animus.interactions.list",
+    "animus.interactions.answer",
+    "animus.tools.search",
+    "animus.tools.list",
+];
+
+fn restrict_actor_bound_tool_router(tool_router: &mut ToolRouter<AoMcpServer>) {
+    let names: Vec<String> = tool_router.list_all().into_iter().map(|tool| tool.name.to_string()).collect();
+    for name in names {
+        if !ACTOR_BOUND_MCP_TOOLS.contains(&name.as_str()) {
+            tool_router.remove_route(&name);
+        }
     }
 }
 
@@ -331,6 +368,9 @@ impl ServerHandler for AoMcpServer {
         _params: Option<PaginatedRequestParams>,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ListResourcesResult, rmcp::model::ErrorData> {
+        if self.pinned_actor().is_some() {
+            return Ok(ListResourcesResult::with_all_items(Vec::new()));
+        }
         let mut resource_tasks = RawResource::new("animus://project/tasks", "Tasks Index");
         resource_tasks.description = Some("Animus project task index with id, title, status, priority".to_string());
         resource_tasks.mime_type = Some("application/json".to_string());
@@ -385,6 +425,14 @@ impl ServerHandler for AoMcpServer {
         params: ReadResourceRequestParams,
         _ctx: RequestContext<RoleServer>,
     ) -> Result<ReadResourceResult, rmcp::model::ErrorData> {
+        if self.pinned_actor().is_some() {
+            return Err(McpError::new(
+                ErrorCode::INVALID_REQUEST,
+                "actor-bound MCP resources are unavailable until subject and daemon resource protocols enforce Actor"
+                    .to_string(),
+                None,
+            ));
+        }
         let uri = params.uri.to_string();
         let (resource_uri, query) = parse_resource_uri(&uri);
 
@@ -465,17 +513,17 @@ pub(crate) async fn handle_mcp(command: McpCommand, project_root: &str, cli_json
     match command {
         McpCommand::Serve(args) => {
             // Parse the host-relayed actor (see McpServeArgs::actor_json). A
-            // malformed value is ignored (logged) → global scope, never a hard
-            // failure that would kill the agent's MCP server. TRUST BOUNDARY:
-            // this value is set ONLY by the trusted host (the workflow runner,
-            // relaying the authenticated run's actor) — never from agent output.
-            let pinned_actor = args.actor_json.as_deref().and_then(|raw| match serde_json::from_str::<Actor>(raw) {
-                Ok(actor) => Some(actor),
-                Err(error) => {
-                    tracing::warn!(%error, "ignoring malformed --actor-json; MCP server runs with no actor");
-                    None
-                }
-            });
+            // malformed, explicitly supplied value is a hard error: silently
+            // degrading to global scope would cross the identity boundary.
+            // TRUST BOUNDARY: this value is set ONLY by the trusted host (the
+            // workflow runner, relaying the authenticated run's actor) — never
+            // from agent output.
+            let pinned_actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+            if args.require_actor && pinned_actor.is_none() {
+                return Err(crate::invalid_input_error(
+                    "--require-actor was set but --actor-json was omitted; refusing to start a global MCP server",
+                ));
+            }
             let service = new_ao_mcp_server_with_options(
                 project_root,
                 args.management,

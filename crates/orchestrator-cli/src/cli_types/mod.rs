@@ -1049,6 +1049,42 @@ mod tests {
     }
 
     #[test]
+    fn chat_reads_parse_bounded_page_arguments() {
+        let list = Cli::try_parse_from([
+            "animus",
+            "chat",
+            "list",
+            "--as-user",
+            "carol",
+            "--limit",
+            "25",
+            "--offset",
+            "50",
+        ])
+        .expect("bounded chat list should parse");
+        match list.command {
+            Command::Chat { command: ChatCommand::List(args) } => {
+                assert_eq!(args.as_user.as_deref(), Some("carol"));
+                assert_eq!(args.limit, Some(25));
+                assert_eq!(args.offset, 50);
+            }
+            other => panic!("expected chat list, got {other:?}"),
+        }
+
+        let get =
+            Cli::try_parse_from(["animus", "chat", "get", "conv-1", "--limit", "10", "--offset", "20"])
+                .expect("bounded chat get should parse");
+        match get.command {
+            Command::Chat { command: ChatCommand::Get(args) } => {
+                assert_eq!(args.id, "conv-1");
+                assert_eq!(args.limit, Some(10));
+                assert_eq!(args.offset, 20);
+            }
+            other => panic!("expected chat get, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn output_read_is_primary_and_run_alias_is_retired() {
         let cli =
             Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1"]).expect("output read should parse");
@@ -1081,6 +1117,110 @@ mod tests {
         Cli::try_parse_from(["animus", "output", "read", "--run-id", "RUN-1", "--workflow-id", "WF-1"])
             .expect_err("--run-id and --workflow-id must conflict");
         Cli::try_parse_from(["animus", "output", "read"]).expect_err("one of --run-id/--workflow-id is required");
+    }
+
+    #[test]
+    fn portal_owned_read_commands_parse_actor_json() {
+        let actor_json = r#"{"user_id":"alice","tenant_id":"tenant-a","claims":[]}"#;
+        let list = Cli::try_parse_from(["animus", "workflow", "list", "--limit", "20", "--actor-json", actor_json])
+            .expect("workflow list actor");
+        match list.command {
+            Command::Workflow { command: WorkflowCommand::List(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected workflow list, got {other:?}"),
+        }
+
+        let workflow = Cli::try_parse_from(["animus", "workflow", "get", "--id", "wf-1", "--actor-json", actor_json])
+            .expect("workflow get actor");
+        match workflow.command {
+            Command::Workflow { command: WorkflowCommand::Get(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected workflow get, got {other:?}"),
+        }
+
+        let output = Cli::try_parse_from(["animus", "output", "read", "--run-id", "run-1", "--actor-json", actor_json])
+            .expect("output read actor");
+        match output.command {
+            Command::Output { command: OutputCommand::Read(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected output read, got {other:?}"),
+        }
+
+        let phase_outputs = Cli::try_parse_from([
+            "animus",
+            "output",
+            "phase-outputs",
+            "--workflow-id",
+            "wf-1",
+            "--actor-json",
+            actor_json,
+        ])
+        .expect("phase outputs actor");
+        match phase_outputs.command {
+            Command::Output { command: OutputCommand::PhaseOutputs(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected phase outputs, got {other:?}"),
+        }
+
+        let subject = Cli::try_parse_from([
+            "animus",
+            "subject",
+            "get",
+            "--kind",
+            "task",
+            "--id",
+            "TASK-1",
+            "--actor-json",
+            actor_json,
+        ])
+        .expect("subject get actor");
+        match subject.command {
+            Command::Subject { command: SubjectCommand::Get(args) } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+            }
+            other => panic!("expected subject get, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interaction_inbox_commands_parse_actor_json_separately_from_by_attribution() {
+        let actor_json = r#"{"user_id":"bob","tenant_id":"tenant-a","claims":[]}"#;
+        let list = Cli::try_parse_from(["animus", "agent", "interactions", "list", "--actor-json", actor_json])
+            .expect("interaction list actor");
+        match list.command {
+            Command::Agent {
+                command: AgentCommand::Interactions { command: AgentInteractionsCommand::List(args) },
+            } => assert_eq!(args.actor_json.as_deref(), Some(actor_json)),
+            other => panic!("expected interaction list, got {other:?}"),
+        }
+
+        let answer = Cli::try_parse_from([
+            "animus",
+            "agent",
+            "interactions",
+            "answer",
+            "interaction-1",
+            "--text",
+            "yes",
+            "--by",
+            "display-only",
+            "--actor-json",
+            actor_json,
+        ])
+        .expect("interaction answer actor");
+        match answer.command {
+            Command::Agent {
+                command: AgentCommand::Interactions { command: AgentInteractionsCommand::Answer(args) },
+            } => {
+                assert_eq!(args.actor_json.as_deref(), Some(actor_json));
+                assert_eq!(args.answered_by.as_deref(), Some("display-only"));
+            }
+            other => panic!("expected interaction answer, got {other:?}"),
+        }
     }
 
     #[test]

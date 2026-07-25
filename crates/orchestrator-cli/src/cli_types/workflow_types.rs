@@ -13,12 +13,20 @@ pub(crate) struct WorkflowIdArgs {
     pub(crate) id: String,
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct WorkflowGetArgs {
+    #[arg(short, long, alias = "workflow-id", value_name = "WORKFLOW_ID", help = "Workflow identifier.")]
+    pub(crate) id: String,
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum WorkflowCommand {
     /// List workflows.
     List(WorkflowListArgs),
     /// Get workflow details.
-    Get(WorkflowIdArgs),
+    Get(WorkflowGetArgs),
     /// Show workflow decisions.
     Decisions(WorkflowIdArgs),
     /// List and inspect workflow checkpoints.
@@ -79,6 +87,8 @@ pub(crate) enum WorkflowCommand {
 
 #[derive(Debug, Args)]
 pub(crate) struct WorkflowListArgs {
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
     #[arg(long, value_name = "STATUS", help = WORKFLOW_STATUS_HELP)]
     pub(crate) status: Option<String>,
     #[arg(long, value_name = "WORKFLOW_REF", help = "Filter workflows by workflow definition/reference id.")]
