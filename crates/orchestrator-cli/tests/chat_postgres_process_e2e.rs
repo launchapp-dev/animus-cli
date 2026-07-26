@@ -83,7 +83,7 @@ impl Harness {
         fs::create_dir_all(project.join(".animus")).expect("create process E2E project config directory");
         fs::write(
             project.join(".animus/workflows.yaml"),
-            "tools_allowlist:\n  - cargo\nagents:\n  process-mock:\n    system_prompt: Process controls fixture.\n    tool: mock\n    model: mock-fast-1\nphases:\n  work:\n    mode: agent\n    agent_id: process-mock\n",
+            "tools_allowlist:\n  - cargo\nagents:\n  process-mock:\n    system_prompt: Process controls fixture.\n    tool: mock\n    model: mock-fast-1\n    application_chat_controls:\n      approvals: true\n      reasoning_efforts: [high]\n      permission_intents: [default]\nphases:\n  work:\n    mode: agent\n    agent_id: process-mock\n",
         )
         .expect("write process E2E agent profile");
 
@@ -565,10 +565,10 @@ fn two_cli_processes_share_postgres_operation_authority_and_fence_stale_assistan
     harness.create_conversation(&controls_conversation, "controls-setup");
     let selected_provider = database
         .execute(
-            "UPDATE chat_conversation SET tool = 'mock', model = 'mock-fast-1' WHERE tenant_id = $1 AND id = $2",
+            "UPDATE chat_conversation SET tool = 'mock', model = 'mock-fast-1', agent_id = 'process-mock' WHERE tenant_id = $1 AND id = $2",
             &[&TENANT_ID, &controls_conversation],
         )
-        .expect("seed the server-owned provider binding for an unbound application chat");
+        .expect("seed the server-owned provider and canonical policy binding for an application chat");
     assert_eq!(selected_provider, 1, "application chat must have one canonical provider binding");
     harness.hold_provider();
 

@@ -217,7 +217,9 @@ fn application_controls_policy_precondition(
     resolved_agent: Option<&(String, orchestrator_config::agent_runtime_config::AgentProfile)>,
 ) -> Result<()> {
     let Some((agent_id, profile)) = resolved_agent else {
-        return Ok(());
+        return Err(crate::conflict_error(
+            "chat_precondition_failed:binding_unavailable: a canonical agent profile with an explicit application chat controls policy is required",
+        ));
     };
     let policy = profile.application_chat_controls.as_ref().ok_or_else(|| {
         crate::conflict_error(format!(
@@ -1392,6 +1394,45 @@ mod export_tests {
         let selected = ("reviewer".to_string(), profile);
         let error = application_controls_policy_precondition(&wrong_profile, Some(&selected)).unwrap_err();
         assert!(error.to_string().contains("profile_ref"), "{error}");
+    }
+
+    #[test]
+    fn unbound_conversation_rejects_every_direct_application_controls_envelope() {
+        for (field, value) in [
+            ("permission_intent", serde_json::json!("unrestricted")),
+            ("skill_ref", serde_json::json!("security-review")),
+            ("approvals", serde_json::json!(true)),
+            ("reasoning_effort", serde_json::json!("high")),
+        ] {
+            let mut envelope = serde_json::json!({
+                "schema": APPLICATION_CHAT_CONTROLS_SCHEMA,
+            });
+            envelope.as_object_mut().unwrap().insert(field.to_string(), value);
+            let controls: ApplicationChatControls = serde_json::from_value(envelope).unwrap();
+            let error = application_controls_policy_precondition(&controls, None).unwrap_err();
+            assert!(error.to_string().contains("chat_precondition_failed:binding_unavailable:"), "{field}: {error}");
+            assert!(error.to_string().contains("explicit application chat controls policy"), "{field}: {error}");
+        }
+
+        // Portal canonicalizes this compatibility shape to controls omission.
+        // A caller that directly invokes the CLI with the envelope still has
+        // to resolve a canonical profile and its explicit policy.
+        let schema_only: ApplicationChatControls = serde_json::from_value(serde_json::json!({
+            "schema": APPLICATION_CHAT_CONTROLS_SCHEMA,
+        }))
+        .unwrap();
+        let error = application_controls_policy_precondition(&schema_only, None).unwrap_err();
+        assert!(error.to_string().contains("explicit application chat controls policy"), "{error}");
+
+        let explicit_policy: orchestrator_config::AgentProfile = serde_json::from_value(serde_json::json!({
+            "application_chat_controls": {},
+        }))
+        .unwrap();
+        application_controls_policy_precondition(
+            &schema_only,
+            Some(&("reviewer".to_string(), explicit_policy)),
+        )
+        .unwrap();
     }
 
     #[test]

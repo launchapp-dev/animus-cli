@@ -1229,6 +1229,7 @@ mod tests {
         }
 
         for rejected in [
+            r#"{}"#,
             r#"{"schema":"animus.chat.application_controls.v1","env":{"API_KEY":"secret"}}"#,
             r#"{"schema":"animus.chat.application_controls.v1","argv":["--danger"]}"#,
             r#"{"schema":"animus.chat.application_controls.v1","profile_ref":"../../secret"}"#,
