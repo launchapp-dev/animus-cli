@@ -11,7 +11,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{mpsc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use animus_actor::Actor;
@@ -511,18 +511,53 @@ async fn config_load_call(
     }
 }
 
-/// Bridge an async future into the sync config-load path. Works whether or not
-/// a tokio runtime is already running (daemon = inside a runtime; CLI = none).
-fn run_blocking<F: Future>(fut: F) -> Result<F::Output> {
+/// One bounded executor for sync config-source calls made from a current-thread
+/// Tokio runtime (or with no runtime at all). A current-thread executor cannot
+/// use `block_in_place`, and constructing a helper thread/runtime per call would
+/// grow without bound under concurrent callers.
+static CONFIG_SOURCE_BRIDGE_RUNTIME: LazyLock<std::result::Result<tokio::runtime::Runtime, String>> =
+    LazyLock::new(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("animus-config-source")
+            .enable_all()
+            .build()
+            .map_err(|err| format!("building tokio runtime for config_source load: {err}"))
+    });
+
+fn bridge_runtime() -> Result<&'static tokio::runtime::Runtime> {
+    CONFIG_SOURCE_BRIDGE_RUNTIME.as_ref().map_err(|message| anyhow!(message.clone()))
+}
+
+/// Run a future on the bounded bridge while the calling current-thread runtime
+/// remains synchronously blocked. The future is owned and independent of that
+/// caller runtime; config-source I/O is driven by the bridge's single worker.
+fn run_on_bridge<F>(fut: F) -> Result<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let (sender, receiver) = mpsc::sync_channel(1);
+    bridge_runtime()?.spawn(async move {
+        let _ = sender.send(fut.await);
+    });
+    receiver.recv().context("config_source bridge task stopped before returning a result")
+}
+
+/// Bridge an async future into the sync config-load path. Works whether the
+/// caller is outside Tokio, on the daemon's multi-thread runtime, or on a
+/// current-thread runtime used by embedders and tests.
+fn run_blocking<F>(fut: F) -> Result<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
     match tokio::runtime::Handle::try_current() {
-        Ok(handle) => Ok(tokio::task::block_in_place(|| handle.block_on(fut))),
-        Err(_) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .context("building tokio runtime for config_source load")?;
-            Ok(rt.block_on(fut))
+        Ok(handle) if handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread => {
+            Ok(tokio::task::block_in_place(|| handle.block_on(fut)))
         }
+        Ok(_) => run_on_bridge(fut),
+        Err(_) => Ok(bridge_runtime()?.block_on(fut)),
     }
 }
 
@@ -699,6 +734,16 @@ pub fn install_config_source_failure(project_root: &Path, message: &str) -> test
 mod resident_cache_tests {
     use super::*;
     use animus_config_protocol::builtins::builtin_workflow_config;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_blocking_reuses_bounded_bridge_from_current_thread_runtime() {
+        let caller = std::thread::current().id();
+        let first = run_blocking(async { std::thread::current().id() }).expect("first bridge call");
+        let second = run_blocking(async { std::thread::current().id() }).expect("second bridge call");
+
+        assert_ne!(first, caller, "the future must not block its current-thread caller runtime");
+        assert_eq!(first, second, "config_source calls must reuse the one bounded bridge worker");
+    }
 
     fn loaded(root: &Path) -> LoadedWorkflowConfig {
         loaded_marked(root, "")
