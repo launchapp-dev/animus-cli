@@ -73,9 +73,8 @@ pub(crate) struct ChatNewArgs {
     /// Optional human-facing title.
     #[arg(long)]
     pub(crate) title: Option<String>,
-    /// Owner (authenticated user id) to stamp onto the conversation. Used by a
-    /// `conversation_store` plugin for per-user history; advisory for the
-    /// in-tree filesystem store.
+    /// Legacy user assertion. When present, must equal the transport actor's
+    /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
     /// Transport-asserted caller identity. Required when a
@@ -90,8 +89,8 @@ pub(crate) struct ChatNewArgs {
 
 #[derive(Debug, Args)]
 pub(crate) struct ChatListArgs {
-    /// Limit the listing to conversations owned by this user id PLUS any
-    /// shared ones. Omit for the full (legacy/admin) listing.
+    /// Legacy user assertion. When present, must equal the transport actor's
+    /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
     /// Transport-asserted caller identity. Required for plugin-backed chat.
@@ -169,9 +168,8 @@ pub(crate) struct ChatSendArgs {
     /// Drop the built-in `animus` MCP server from the resolved set.
     #[arg(long)]
     pub(crate) no_animus_mcp: bool,
-    /// Owner (authenticated user id) stamped onto a conversation created by
-    /// this send (when `--conversation` is omitted). Advisory for the in-tree
-    /// store; used by a `conversation_store` plugin for per-user history.
+    /// Legacy user assertion. When present, must equal the transport actor's
+    /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
     /// Visibility for a conversation created by this send.
@@ -200,8 +198,8 @@ pub(crate) struct ChatGetArgs {
     /// Conversation id to read.
     #[arg(value_name = "ID")]
     pub(crate) id: String,
-    /// Acting user id. Advisory for the in-tree store; a `conversation_store`
-    /// plugin may use it to enforce read access.
+    /// Legacy user assertion. When present, must equal the transport actor's
+    /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
     /// Transport-asserted caller identity. Required for plugin-backed chat.
@@ -223,8 +221,8 @@ pub(crate) struct ChatRenameArgs {
     /// New title. Pass an empty string to clear it.
     #[arg(long)]
     pub(crate) title: String,
-    /// Acting user id. Advisory for the in-tree store; a `conversation_store`
-    /// plugin may use it to enforce rename (mutation) access.
+    /// Legacy user assertion. When present, must equal the transport actor's
+    /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
     /// Transport-asserted caller identity. Required for plugin-backed chat.
@@ -237,8 +235,8 @@ pub(crate) struct ChatDeleteArgs {
     /// Conversation id to delete.
     #[arg(value_name = "ID")]
     pub(crate) id: String,
-    /// Acting user id. Advisory for the in-tree store; a `conversation_store`
-    /// plugin may use it to enforce delete access.
+    /// Legacy user assertion. When present, must equal the transport actor's
+    /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
     /// Transport-asserted caller identity. Required for plugin-backed chat.
@@ -257,8 +255,8 @@ pub(crate) struct ChatExportArgs {
     /// Write to this file instead of stdout.
     #[arg(long, value_name = "PATH")]
     pub(crate) output: Option<String>,
-    /// Acting user id. Advisory for the in-tree store; a `conversation_store`
-    /// plugin may use it to enforce read access on the exported transcript.
+    /// Legacy user assertion. When present, must equal the transport actor's
+    /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
     /// Transport-asserted caller identity. Required for plugin-backed chat.
@@ -277,8 +275,8 @@ pub(crate) struct ChatSearchArgs {
     /// Match case-sensitively (default is case-insensitive).
     #[arg(long)]
     pub(crate) case_sensitive: bool,
-    /// Limit the search to conversations owned by this user id PLUS any shared
-    /// ones. Omit for the full (legacy/admin) search.
+    /// Legacy user assertion. When present, must equal the transport actor's
+    /// `user_id`; it never establishes caller authority.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
     /// Transport-asserted caller identity. Required for plugin-backed chat.
