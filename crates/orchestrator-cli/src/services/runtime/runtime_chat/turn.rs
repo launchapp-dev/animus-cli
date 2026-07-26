@@ -234,6 +234,38 @@ pub(crate) async fn run_turn(
     sink: &mut dyn ChatStreamSink,
     mut ctx: TurnContext<'_>,
 ) -> Result<u64> {
+    let operation = ctx.operation.take();
+    let user_message = ctx.user_message.to_string();
+    let Some(operation) = operation else {
+        return run_turn_inner(producer, store, sink, ctx, None).await;
+    };
+
+    let result = run_turn_inner(producer, store, sink, ctx, Some(&mut *operation)).await;
+    match result {
+        Ok(assistant_seq) => Ok(assistant_seq),
+        Err(turn_error) => {
+            // Admission happens before every other keyed-send preparation and
+            // turn effect. Reconcile every early-return path, including CAS,
+            // append, acceptance, sink, and provider-start failures. Pending
+            // operations with no canonical user are released immediately;
+            // once the user row exists the operation becomes terminal and its
+            // conversation reservation is cleared.
+            match reconcile_pre_execution_failure(store, operation, &user_message).await {
+                Ok(_) => Err(turn_error),
+                Err(reconcile_error) => Err(turn_error
+                    .context(format!("chat operation failure reconciliation also failed: {reconcile_error:#}"))),
+            }
+        }
+    }
+}
+
+async fn run_turn_inner(
+    producer: &dyn TurnProducer,
+    store: &dyn ConversationStore,
+    sink: &mut dyn ChatStreamSink,
+    ctx: TurnContext<'_>,
+    mut operation: Option<&mut ChatTurnOperation>,
+) -> Result<u64> {
     // Cross-process lock held for the WHOLE turn (read meta → append user →
     // run provider → append assistant → save meta). Two simultaneous sends to
     // one conversation would otherwise both read the same message_count,
@@ -254,7 +286,6 @@ pub(crate) async fn run_turn(
     // the process stopped at that exact filesystem boundary.
     let existing = store.load_messages(ctx.conversation_id)?;
     let canonical_count = existing.iter().map(|message| message.seq.saturating_add(1)).max().unwrap_or(0);
-    let mut operation = ctx.operation.take();
     let operation_id = operation.as_ref().map(|op| op.claim().operation_id.clone());
     let user_message_id = operation
         .as_ref()
@@ -743,7 +774,8 @@ pub(crate) async fn reconcile_pre_execution_failure(
         .ok_or_else(|| anyhow!("conversation '{conversation_id}' disappeared during operation reconciliation"))?;
     let allow_seq_fallback =
         operation.claim().recovered && meta.active_operation_id.as_deref() == Some(operation_id.as_str());
-    let user = store.load_messages(&conversation_id)?.into_iter().find(|message| {
+    let messages = store.load_messages(&conversation_id)?;
+    let user = messages.iter().find(|message| {
         message.id.as_deref() == Some(user_message_id.as_str())
             || (allow_seq_fallback
                 && message.id.is_none()
@@ -757,8 +789,19 @@ pub(crate) async fn reconcile_pre_execution_failure(
                 "idempotency_conflict: recovered user message does not match the failed chat preparation",
             ));
         }
-        let receipt = operation.interrupt_recovered_user(
+        let canonical_assistant_seq = message.seq.checked_add(1);
+        let assistant_seq = messages
+            .iter()
+            .find(|candidate| {
+                candidate.id.as_deref() == Some(operation.assistant_message_id())
+                    || (candidate.id.is_none()
+                        && Some(candidate.seq) == canonical_assistant_seq
+                        && candidate.role == ChatRole::Assistant)
+            })
+            .map(|candidate| candidate.seq);
+        let receipt = operation.reconcile_durable_user(
             message.seq,
+            assistant_seq,
             "chat preparation failed after the user message was accepted; provider execution was not repeated",
         )?;
         if !receipt.status.is_terminal() {
@@ -1328,6 +1371,52 @@ mod tests {
         }
 
         fn append_message(&self, id: &str, message: &ChatMessage) -> Result<()> {
+            self.inner.append_message(id, message)
+        }
+
+        fn load_messages(&self, id: &str) -> Result<Vec<ChatMessage>> {
+            self.inner.load_messages(id)
+        }
+
+        fn list(&self) -> Result<Vec<ConversationSummary>> {
+            self.inner.list()
+        }
+
+        fn delete(&self, id: &str) -> Result<()> {
+            self.inner.delete(id)
+        }
+    }
+
+    struct FailAppendOnceStore {
+        inner: FileConversationStore,
+        append_calls: AtomicUsize,
+    }
+
+    impl ConversationStore for FailAppendOnceStore {
+        fn try_lock_conversation(&self, id: &str) -> Result<Option<ConversationLock>> {
+            self.inner.try_lock_conversation(id)
+        }
+
+        fn create(&self, id: Option<String>) -> Result<ConversationMeta> {
+            self.inner.create(id)
+        }
+
+        fn load_meta(&self, id: &str) -> Result<Option<ConversationMeta>> {
+            self.inner.load_meta(id)
+        }
+
+        fn save_meta(&self, meta: &ConversationMeta) -> Result<()> {
+            self.inner.save_meta(meta)
+        }
+
+        fn save_meta_if_revision(&self, meta: &ConversationMeta, expected: Option<u64>) -> Result<()> {
+            self.inner.save_meta_if_revision(meta, expected)
+        }
+
+        fn append_message(&self, id: &str, message: &ChatMessage) -> Result<()> {
+            if self.append_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                return Err(anyhow!("injected user append failure"));
+            }
             self.inner.append_message(id, message)
         }
 
@@ -2221,6 +2310,94 @@ mod tests {
             ChatStreamEvent::TurnCompleted { status: orchestrator_core::ChatOperationStatus::Completed, seq: 1, .. }
         )));
         assert!(!sink.events.iter().any(|event| matches!(event, ChatStreamEvent::TurnFailed { .. })));
+    }
+
+    #[tokio::test]
+    async fn reservation_cas_failure_releases_pending_authority_immediately() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FailMetaSaveStore { inner: store_for(&tmp), save_calls: AtomicUsize::new(0), fail_on_call: 1 };
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-cas-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("must-not-run", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        let error = run_turn(&producer, &store, &mut sink, context).await.unwrap_err();
+        assert!(error.to_string().contains("injected metadata persistence failure"));
+        assert!(producer.requests().is_empty());
+        assert!(store.load_messages("c1").unwrap().is_empty());
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        assert!(matches!(operation_store.begin(request).unwrap(), orchestrator_core::ChatOperationBegin::Acquired(_)));
+    }
+
+    #[tokio::test]
+    async fn user_append_failure_clears_reservation_and_releases_pending_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = FailAppendOnceStore { inner: store_for(&tmp), append_calls: AtomicUsize::new(0) };
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-append-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        let producer = MockProducer::new(vec![text_turn("must-not-run", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        let error = run_turn(&producer, &store, &mut sink, context).await.unwrap_err();
+        assert!(error.to_string().contains("injected user append failure"));
+        assert!(producer.requests().is_empty());
+        assert!(store.load_messages("c1").unwrap().is_empty());
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        assert!(matches!(operation_store.begin(request).unwrap(), orchestrator_core::ChatOperationBegin::Acquired(_)));
+    }
+
+    #[tokio::test]
+    async fn lost_accept_response_terminalizes_durable_user_without_provider_repetition() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let operation_store =
+            orchestrator_core::ChatOperationStore::at_path(tmp.path().join("chat-operations.db"), "test-repo");
+        let request = operation_store.request("workspace-a", "alice", "c1", "key-accept-fail", "request-hash");
+        let orchestrator_core::ChatOperationBegin::Acquired(claim) = operation_store.begin(request.clone()).unwrap()
+        else {
+            panic!("first operation should acquire");
+        };
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
+        operation.inject_lost_user_accept_response();
+        let producer = MockProducer::new(vec![text_turn("must-not-run", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let mut context = ctx("c1", "claude", "hello", &tmp);
+        context.operation = Some(&mut operation);
+        context.execution_hash = Some("execution-hash");
+
+        let error = run_turn(&producer, &store, &mut sink, context).await.unwrap_err();
+        assert!(error.to_string().contains("injected lost user-accept response"));
+        assert!(producer.requests().is_empty(), "ambiguous acceptance must not start the provider");
+        let messages = store.load_messages("c1").unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, ChatRole::User);
+        assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
+        let orchestrator_core::ChatOperationBegin::Replay(receipt) = operation_store.begin(request).unwrap() else {
+            panic!("accepted user must have a terminal receipt");
+        };
+        assert_eq!(receipt.status, orchestrator_core::ChatOperationStatus::AssistantInterrupted);
+        assert_eq!(receipt.user_seq, Some(0));
     }
 
     #[tokio::test]

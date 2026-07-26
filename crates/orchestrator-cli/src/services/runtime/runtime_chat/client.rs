@@ -38,6 +38,16 @@ const CONVERSATION_STORE_KIND: &str = "conversation_store";
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
 const BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 pub(crate) const SHARED_OPERATION_CAPABILITY: &str = "conversation_operations_shared_v1";
+pub(crate) const FENCED_APPEND_CAPABILITY: &str = "conversation_operation_fenced_append_v1";
+const REQUIRED_SHARED_OPERATION_METHODS: [&str; 7] = [
+    "conversation/operation_begin",
+    "conversation/operation_load",
+    "conversation/operation_renew",
+    "conversation/operation_bind_execution",
+    "conversation/operation_release",
+    "conversation/operation_accept_user",
+    "conversation/operation_terminalize",
+];
 
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
 pub(crate) struct ChatBackendReadiness {
@@ -122,10 +132,11 @@ fn readiness_for(discovered: BackendDiscovery) -> ChatBackendReadiness {
     }
 }
 
-/// Perform a bounded, read-only RPC through the selected plugin. A manifest
-/// capability alone cannot prove that the process starts or its authoritative
-/// database is reachable. Loading a guaranteed-nonexistent conversation keeps
-/// the probe side-effect free while still executing a backend query.
+/// Perform bounded, read-only RPCs through the selected plugin. Static
+/// capability declarations alone cannot prove that the process starts, that
+/// its authoritative database is reachable, or that initialize advertises the
+/// complete shared-operation surface. Both reads use guaranteed-nonexistent
+/// keys and never create production data.
 fn probe_plugin_backend(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<()> {
     let plugin = plugin.clone();
     let project_root = project_root.to_path_buf();
@@ -146,14 +157,16 @@ fn probe_plugin_backend(plugin: &DiscoveredPlugin, project_root: &Path) -> Resul
                 claims: Vec::new(),
                 tenant_id: Some("__animus_readiness_probe__".to_string()),
             };
+            let conversation_id = "__animus_readiness_probe_missing__";
             let request = BoundConversationIdRequest {
                 scope: bound_scope(&project_root, &actor),
-                id: "__animus_readiness_probe_missing__".to_string(),
+                id: conversation_id.to_string(),
                 as_user: actor.user_id.clone(),
             };
             let params = bind_actor_to_params(&actor, &request)?;
             tokio::time::timeout(BACKEND_PROBE_TIMEOUT, async {
-                host.handshake().await?;
+                let initialized = host.handshake().await?;
+                require_complete_operation_surface(&initialized.capabilities.methods)?;
                 let value = host
                     .request_typed_with_timeout(
                         proto::METHOD_CONVERSATION_LOAD_META,
@@ -162,6 +175,29 @@ fn probe_plugin_backend(plugin: &DiscoveredPlugin, project_root: &Path) -> Resul
                     )
                     .await?;
                 let _: BoundConversationMetaResponse = serde_json::from_value(value)?;
+
+                let operation_read = BoundOperationKey {
+                    scope: bound_scope(&project_root, &actor),
+                    conversation_id: conversation_id.to_string(),
+                    caller_key: "__animus_readiness_probe__".to_string(),
+                    as_user: actor.user_id.clone(),
+                };
+                let operation_params = bind_actor_to_params(&actor, &operation_read)?;
+                match host
+                    .request_typed_with_timeout(METHOD_OPERATION_LOAD, Some(operation_params), BACKEND_PROBE_TIMEOUT)
+                    .await
+                {
+                    Ok(value) => {
+                        let _: BoundOperationLoadResponse = serde_json::from_value(value)?;
+                    }
+                    // A backend may authorize the conversation before loading
+                    // its operation row. The deliberately missing conversation
+                    // can therefore return an application-level not-found. It
+                    // still proves the operation route was dispatched; a
+                    // method-not-found response does not contain our sentinel.
+                    Err(error) if operation_probe_rejected_missing_key(&error, conversation_id) => {}
+                    Err(error) => return Err(error).context("probing conversation/operation_load"),
+                }
                 Ok::<_, anyhow::Error>(())
             })
             .await
@@ -174,7 +210,31 @@ fn probe_plugin_backend(plugin: &DiscoveredPlugin, project_root: &Path) -> Resul
 }
 
 fn plugin_supports_shared_authority(plugin: &DiscoveredPlugin) -> bool {
-    plugin.manifest.capabilities.iter().any(|value| value == SHARED_OPERATION_CAPABILITY)
+    let capabilities = &plugin.manifest.capabilities;
+    capabilities.iter().any(|value| value == SHARED_OPERATION_CAPABILITY)
+        && capabilities.iter().any(|value| value == FENCED_APPEND_CAPABILITY)
+        && REQUIRED_SHARED_OPERATION_METHODS.iter().all(|required| capabilities.iter().any(|value| value == required))
+}
+
+fn require_complete_operation_surface(methods: &[String]) -> Result<()> {
+    let missing: Vec<&str> = REQUIRED_SHARED_OPERATION_METHODS
+        .iter()
+        .copied()
+        .filter(|required| !methods.iter().any(|method| method == required))
+        .collect();
+    if missing.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow!("conversation_store initialize omitted required shared operation methods: {}", missing.join(", ")))
+    }
+}
+
+fn operation_probe_rejected_missing_key(error: &impl std::fmt::Display, conversation_id: &str) -> bool {
+    let message = error.to_string().to_ascii_lowercase();
+    message.contains(&conversation_id.to_ascii_lowercase())
+        && (message.contains("not found") || message.contains("not writable"))
+        && !message.contains("method not found")
+        && !message.contains("-32601")
 }
 
 fn require_remote_shared_authority(observed: bool) -> Result<()> {
@@ -182,7 +242,7 @@ fn require_remote_shared_authority(observed: bool) -> Result<()> {
         Ok(())
     } else {
         Err(crate::unavailable_error(
-            "chat_backend_not_ready: plugin conversation_store lacks conversation_operations_shared_v1; keyed sends fail closed",
+            "chat_backend_not_ready: plugin conversation_store lacks the complete shared-operation and fenced-append contract; keyed sends fail closed",
         ))
     }
 }
@@ -697,7 +757,7 @@ struct BoundOperation {
     error_message: Option<String>,
 }
 
-#[derive(Debug, serde::Deserialize)]
+#[derive(serde::Deserialize)]
 struct BoundOperationClaim {
     #[serde(flatten)]
     operation: BoundOperation,
@@ -705,6 +765,18 @@ struct BoundOperationClaim {
     lease_expires_at: i64,
     #[serde(default)]
     recovered: bool,
+}
+
+impl std::fmt::Debug for BoundOperationClaim {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BoundOperationClaim")
+            .field("operation", &self.operation)
+            .field("lease_token", &"<redacted>")
+            .field("lease_expires_at", &self.lease_expires_at)
+            .field("recovered", &self.recovered)
+            .finish()
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -1193,9 +1265,13 @@ fn async_bridge_runtime() -> Result<&'static tokio::runtime::Runtime> {
     }
 }
 
+const ASYNC_BRIDGE_MAX_IN_FLIGHT: usize = 8;
+static ASYNC_BRIDGE_IN_FLIGHT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(ASYNC_BRIDGE_MAX_IN_FLIGHT);
+
 /// Bridge an owned async future into the sync `ConversationStore` trait. All
-/// callers share one bounded worker runtime, so this is safe under both Tokio
-/// runtime flavors and never creates a runtime or thread per RPC.
+/// callers share one bounded worker runtime and a fixed in-flight semaphore,
+/// so this is safe under both Tokio runtime flavors, never creates a runtime
+/// or thread per RPC, and cannot fan out an unbounded number of plugin hosts.
 fn run_blocking<F>(fut: F) -> Result<F::Output>
 where
     F: Future + Send + 'static,
@@ -1203,6 +1279,7 @@ where
 {
     let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
     async_bridge_runtime()?.spawn(async move {
+        let _permit = ASYNC_BRIDGE_IN_FLIGHT.acquire().await.expect("chat RPC bridge semaphore is never closed");
         let _ = result_tx.send(fut.await);
     });
     result_rx.recv().map_err(|_| anyhow!("conversation-store async bridge dropped an RPC result"))
@@ -1359,6 +1436,25 @@ mod tests {
     }
 
     #[test]
+    fn bound_claim_debug_redacts_lease_authority() {
+        let claim: BoundOperationClaim = serde_json::from_value(serde_json::json!({
+            "operation_id":"op-1",
+            "conversation_id":"conv-1",
+            "caller_key":"request-1",
+            "user_message_id":"msg-user-1",
+            "assistant_message_id":"msg-assistant-1",
+            "status":"pending",
+            "lease_token":"do-not-print-this-secret",
+            "lease_expires_at":4_000_000_000_i64,
+            "recovered":false
+        }))
+        .unwrap();
+        let debug = format!("{claim:?}");
+        assert!(!debug.contains("do-not-print-this-secret"));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
     fn hostile_backend_cannot_redirect_replay_or_load_across_operation_key() {
         let client = mock_shared_client(Arc::new(MismatchedOperationTransport));
         let replay_error = client.begin(mock_operation_request()).unwrap_err();
@@ -1442,7 +1538,11 @@ mod tests {
                 plugin_kinds: Vec::new(),
                 description: "test fixture".to_string(),
                 protocol_version: "1.0.0".to_string(),
-                capabilities: vec![SHARED_OPERATION_CAPABILITY.to_string()],
+                capabilities: REQUIRED_SHARED_OPERATION_METHODS
+                    .iter()
+                    .map(ToString::to_string)
+                    .chain([SHARED_OPERATION_CAPABILITY.to_string(), FENCED_APPEND_CAPABILITY.to_string()])
+                    .collect(),
                 env_required: Vec::new(),
                 notification_buffer_size: None,
                 supports_mcp: None,
@@ -1460,6 +1560,89 @@ mod tests {
     async fn async_bridge_is_safe_inside_a_current_thread_runtime() {
         let value = run_blocking(async { 42_u8 }).unwrap();
         assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn shared_authority_requires_marker_fence_and_all_seven_methods() {
+        let mut capabilities: Vec<String> = REQUIRED_SHARED_OPERATION_METHODS.iter().map(ToString::to_string).collect();
+        capabilities.push(SHARED_OPERATION_CAPABILITY.to_string());
+        capabilities.push(FENCED_APPEND_CAPABILITY.to_string());
+        let plugin = |capabilities| DiscoveredPlugin {
+            name: "conversation-store".to_string(),
+            path: PathBuf::from("/unused"),
+            manifest: PluginManifest {
+                name: "conversation-store".to_string(),
+                version: "0.0.0".to_string(),
+                plugin_kind: CONVERSATION_STORE_KIND.to_string(),
+                plugin_kinds: Vec::new(),
+                description: "test fixture".to_string(),
+                protocol_version: "1.0.0".to_string(),
+                capabilities,
+                env_required: Vec::new(),
+                notification_buffer_size: None,
+                supports_mcp: None,
+            },
+            source: DiscoverySource::ExplicitConfig,
+        };
+
+        assert!(plugin_supports_shared_authority(&plugin(capabilities.clone())));
+        for required in REQUIRED_SHARED_OPERATION_METHODS {
+            let missing = capabilities.iter().filter(|value| value.as_str() != required).cloned().collect();
+            assert!(!plugin_supports_shared_authority(&plugin(missing)), "missing {required} must fail closed");
+        }
+        assert!(!plugin_supports_shared_authority(&plugin(
+            capabilities.iter().filter(|value| value.as_str() != SHARED_OPERATION_CAPABILITY).cloned().collect()
+        )));
+        assert!(!plugin_supports_shared_authority(&plugin(
+            capabilities.iter().filter(|value| value.as_str() != FENCED_APPEND_CAPABILITY).cloned().collect()
+        )));
+    }
+
+    #[test]
+    fn live_operation_surface_and_missing_key_probe_fail_closed() {
+        let complete: Vec<String> = REQUIRED_SHARED_OPERATION_METHODS.iter().map(ToString::to_string).collect();
+        require_complete_operation_surface(&complete).unwrap();
+        let incomplete =
+            complete.into_iter().filter(|method| method != METHOD_OPERATION_TERMINALIZE).collect::<Vec<_>>();
+        assert!(require_complete_operation_surface(&incomplete)
+            .unwrap_err()
+            .to_string()
+            .contains(METHOD_OPERATION_TERMINALIZE));
+
+        let missing_id = "__animus_readiness_probe_missing__";
+        assert!(operation_probe_rejected_missing_key(
+            &anyhow!("rpc error -32603: conversation '{missing_id}' not found or not writable for operation authority"),
+            missing_id,
+        ));
+        assert!(!operation_probe_rejected_missing_key(
+            &anyhow!("rpc error -32601: method not found: {missing_id}"),
+            missing_id,
+        ));
+        assert!(!operation_probe_rejected_missing_key(&anyhow!("database unavailable"), missing_id));
+    }
+
+    #[test]
+    fn async_bridge_bounds_concurrent_futures() {
+        let active = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let peak = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut callers = Vec::new();
+        for _ in 0..(ASYNC_BRIDGE_MAX_IN_FLIGHT * 3) {
+            let active = active.clone();
+            let peak = peak.clone();
+            callers.push(std::thread::spawn(move || {
+                run_blocking(async move {
+                    let now = active.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                    peak.fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                    active.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                })
+                .unwrap();
+            }));
+        }
+        for caller in callers {
+            caller.join().unwrap();
+        }
+        assert!(peak.load(std::sync::atomic::Ordering::SeqCst) <= ASYNC_BRIDGE_MAX_IN_FLIGHT);
     }
 
     #[test]

@@ -1086,8 +1086,8 @@ never refuses to start without it. The contract lives in the `conversation_store
 of `crates/animus-plugin-protocol`. See `docs/reference/chat.md` for the full surface.
 For keyed application sends, backend selection also selects operation authority:
 the file store uses local SQLite, while a plugin must advertise
-`conversation_operations_shared_v1` and serve the seven shared
-`conversation/operation_*` methods. A selected plugin without that capability
+`conversation_operations_shared_v1`, `conversation_operation_fenced_append_v1`,
+and serve the seven shared `conversation/operation_*` methods. A selected plugin without that complete contract
 remains usable for ordinary transcript operations, but keyed sends fail closed;
 they never acquire a host-local operation lease beside a shared transcript.
 Multi-replica application callers must pass `--require-shared-authority` on

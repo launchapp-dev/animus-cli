@@ -87,6 +87,8 @@ pub(crate) struct ChatTurnOperation {
     authority: ChatOperationAuthority,
     claim: Box<ChatOperationClaim>,
     heartbeat: Option<LeaseHeartbeat>,
+    #[cfg(test)]
+    fail_after_user_accept_once: bool,
 }
 
 pub(crate) enum ExecutionHashBinding {
@@ -96,7 +98,13 @@ pub(crate) enum ExecutionHashBinding {
 
 impl ChatTurnOperation {
     pub(crate) fn new(authority: ChatOperationAuthority, claim: Box<ChatOperationClaim>) -> Self {
-        Self { authority, claim, heartbeat: None }
+        Self {
+            authority,
+            claim,
+            heartbeat: None,
+            #[cfg(test)]
+            fail_after_user_accept_once: false,
+        }
     }
 
     pub(crate) fn claim(&self) -> &ChatOperationClaim {
@@ -154,33 +162,62 @@ impl ChatTurnOperation {
     }
 
     pub(crate) fn interrupt_recovered_user(&mut self, user_seq: u64, message: &str) -> Result<ChatOperationReceipt> {
+        self.reconcile_durable_user(user_seq, None, message)
+    }
+
+    /// Reconcile an error after the canonical user append. Acceptance RPCs can
+    /// fail ambiguously after the backend commits, so a false/error acceptance
+    /// result does not stop terminalization: the lease-fenced terminal RPC is
+    /// the authoritative second check. A durable assistant row wins and is
+    /// completed; otherwise the accepted user becomes interrupted.
+    pub(crate) fn reconcile_durable_user(
+        &mut self,
+        user_seq: u64,
+        assistant_seq: Option<u64>,
+        interruption_message: &str,
+    ) -> Result<ChatOperationReceipt> {
+        let mut acceptance_error = None;
         if self.claim.status == orchestrator_core::ChatOperationStatus::Pending {
-            if !self.authority.mark_user_accepted(&mut self.claim, user_seq)? {
-                return Err(crate::conflict_error(
-                    "idempotency_in_progress: recovered chat operation lost authority before user reconciliation",
-                ));
+            match self.authority.mark_user_accepted(&mut self.claim, user_seq) {
+                Ok(true) => {}
+                Ok(false) => {
+                    acceptance_error = Some("chat operation authority moved before user reconciliation".to_string());
+                }
+                Err(error) => {
+                    acceptance_error = Some(format!("user acceptance returned an ambiguous error: {error:#}"));
+                }
             }
         } else if self.claim.user_seq != Some(user_seq) {
             return Err(crate::conflict_error(
                 "idempotency_conflict: recovered chat operation has a different canonical user sequence",
             ));
         }
-        if !self.authority.finish(
-            &self.claim,
-            orchestrator_core::ChatOperationStatus::AssistantInterrupted,
-            None,
-            Some("assistant_interrupted"),
-            Some(message),
-        )? {
-            let receipt = self.authority.receipt(&self.claim)?;
+
+        let (status, code, message) = match assistant_seq {
+            Some(_) => (orchestrator_core::ChatOperationStatus::Completed, None, None),
+            None => (
+                orchestrator_core::ChatOperationStatus::AssistantInterrupted,
+                Some("assistant_interrupted"),
+                Some(interruption_message),
+            ),
+        };
+        if !self.authority.finish(&self.claim, status, assistant_seq, code, message)? {
+            let receipt = self.authority.receipt(&self.claim).with_context(|| {
+                acceptance_error
+                    .unwrap_or_else(|| "chat operation lost authority before durable-user terminalization".to_string())
+            })?;
             if receipt.status.is_terminal() {
+                self.claim.status = receipt.status;
                 return Ok(receipt);
             }
             return Err(crate::conflict_error(
                 "idempotency_in_progress: recovered chat operation lost authority before interruption",
             ));
         }
-        self.authority.receipt(&self.claim)
+        let receipt = self.authority.receipt(&self.claim)?;
+        self.claim.status = receipt.status;
+        self.claim.user_seq = receipt.user_seq;
+        Ok(receipt)
     }
 
     pub(crate) fn mark_user_accepted(&mut self, seq: u64) -> Result<()> {
@@ -190,6 +227,10 @@ impl ChatTurnOperation {
                     "idempotency_in_progress: chat operation authority moved before user acceptance",
                 ));
             }
+            #[cfg(test)]
+            if std::mem::take(&mut self.fail_after_user_accept_once) {
+                return Err(anyhow!("injected lost user-accept response"));
+            }
         } else if self.claim.user_seq != Some(seq) {
             return Err(crate::conflict_error(
                 "idempotency_conflict: recovered chat operation has a different canonical user sequence",
@@ -197,6 +238,11 @@ impl ChatTurnOperation {
         }
         self.heartbeat = Some(LeaseHeartbeat::start(self.authority.clone(), self.claim.clone()));
         Ok(())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inject_lost_user_accept_response(&mut self) {
+        self.fail_after_user_accept_once = true;
     }
 
     pub(crate) fn finish_heartbeat(&mut self) -> Result<()> {

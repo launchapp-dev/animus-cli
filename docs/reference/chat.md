@@ -136,9 +136,12 @@ replays its canonical receipt, while a changed request returns
 
 Durable operation authority follows the selected transcript backend. The file
 store creates its SQLite/WAL reservation before the user transcript row. A
-plugin store must advertise `conversation_operations_shared_v1` and implement
-the seven `conversation/operation_*` RPCs; its database clock, operation rows,
-and rotating lease tokens then provide one authority shared by every CLI host.
+plugin store must advertise `conversation_operations_shared_v1`,
+`conversation_operation_fenced_append_v1`, and all seven
+`conversation/operation_*` RPCs. The fenced-append contract prevents a stale
+lease holder from persisting an assistant turn after another host reclaims the
+operation; its database clock, operation rows, and rotating lease tokens then
+provide one authority shared by every CLI host.
 A keyed send fails closed when a selected plugin lacks that capability. It
 never silently falls back to host-local SQLite.
 
@@ -157,10 +160,11 @@ retries replay the same bounded failure receipt. Use `animus --json chat
 capabilities` as the stable Portal capability probe instead of scraping help.
 The probe's live `backend` object reports the selected `kind`, `authority_mode`,
 whether the shared capability was observed, readiness, and a stable
-`error_code`. For a capable plugin, the command also performs a bounded,
-read-only `conversation/load_meta` RPC against a guaranteed-missing probe id;
-this verifies process startup, handshake, and authoritative database access
-without writing application data. Portal multi-replica mode is safe only when it reports
+`error_code`. For a capable plugin, the command also requires the handshake to
+declare all seven methods and performs bounded, read-only
+`conversation/load_meta` and `conversation/operation_load` probes against a
+guaranteed-missing key. This verifies process startup, method routing, and
+authoritative database access without writing application data. Portal multi-replica mode is safe only when it reports
 `kind: "plugin"`, `authority_mode: "shared_conversation_store_rpc"`, and
 `ready: true`.
 

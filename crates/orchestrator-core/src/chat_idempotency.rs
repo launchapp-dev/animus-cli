@@ -123,7 +123,7 @@ fn validate_required(label: &str, value: &str, max_bytes: usize) -> Result<()> {
     Ok(())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ChatOperationClaim {
     request: ChatOperationRequest,
     pub operation_id: String,
@@ -138,6 +138,24 @@ pub struct ChatOperationClaim {
     /// Backend-issued absolute lease expiry in Unix seconds, when available.
     pub lease_expires_at: Option<i64>,
     pub recovered: bool,
+}
+
+impl std::fmt::Debug for ChatOperationClaim {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ChatOperationClaim")
+            .field("request", &self.request)
+            .field("operation_id", &self.operation_id)
+            .field("user_message_id", &self.user_message_id)
+            .field("assistant_message_id", &self.assistant_message_id)
+            .field("status", &self.status)
+            .field("user_seq", &self.user_seq)
+            .field("execution_hash", &self.execution_hash)
+            .field("lease_token", &"<redacted>")
+            .field("lease_expires_at", &self.lease_expires_at)
+            .field("recovered", &self.recovered)
+            .finish()
+    }
 }
 
 impl ChatOperationClaim {
@@ -938,5 +956,18 @@ mod tests {
         };
         assert_eq!(receipt.status, ChatOperationStatus::AssistantFailed);
         assert!(receipt.error_message.unwrap().len() <= MAX_CHAT_OPERATION_ERROR_BYTES);
+    }
+
+    #[test]
+    fn claim_debug_redacts_lease_authority() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ChatOperationStore::with_path_and_lease(tmp.path().join("ops.db"), "repo", 60);
+        let ChatOperationBegin::Acquired(claim) = store.begin(request(&store, "alice", "key", "hash")).unwrap() else {
+            panic!("claim");
+        };
+        let lease = claim.lease_token().to_string();
+        let debug = format!("{claim:?}");
+        assert!(!debug.contains(&lease), "Debug must not expose the authority credential");
+        assert!(debug.contains("<redacted>"));
     }
 }
