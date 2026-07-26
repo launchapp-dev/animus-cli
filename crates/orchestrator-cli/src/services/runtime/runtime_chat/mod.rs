@@ -11,9 +11,10 @@ use anyhow::Context;
 
 use crate::shared::{canonicalize_cwd_in_project, format_age, print_ok, print_value, render_table};
 use crate::{
-    ApplicationPermissionIntent, ChatCommand, ChatDeleteArgs, ChatExportArgs, ChatExportFormat, ChatGetArgs,
-    ChatListArgs, ChatNewArgs, ChatRenameArgs, ChatSearchArgs, ChatSendArgs, ChatVisibilityArg,
-    APPLICATION_CHAT_CONTROLS_SCHEMA, MAX_APPLICATION_CHAT_CONTROLS_BYTES, MAX_APPLICATION_CHAT_CONTROL_REF_BYTES,
+    ApplicationChatControls, ApplicationPermissionIntent, ApplicationReasoningEffort, ChatCommand, ChatDeleteArgs,
+    ChatExportArgs, ChatExportFormat, ChatGetArgs, ChatListArgs, ChatNewArgs, ChatRenameArgs, ChatSearchArgs,
+    ChatSendArgs, ChatVisibilityArg, APPLICATION_CHAT_CONTROLS_SCHEMA, MAX_APPLICATION_CHAT_CONTROLS_BYTES,
+    MAX_APPLICATION_CHAT_CONTROL_REF_BYTES,
 };
 use serde::Serialize;
 
@@ -209,6 +210,85 @@ fn application_permission_mode(intent: Option<ApplicationPermissionIntent>, tool
         }
     };
     Ok(Some(mode.to_string()))
+}
+
+fn application_controls_policy_precondition(
+    controls: &ApplicationChatControls,
+    resolved_agent: Option<&(String, orchestrator_config::agent_runtime_config::AgentProfile)>,
+) -> Result<()> {
+    let Some((agent_id, profile)) = resolved_agent else {
+        return Ok(());
+    };
+    let policy = profile.application_chat_controls.as_ref().ok_or_else(|| {
+        crate::conflict_error(format!(
+            "chat_precondition_failed:binding_unavailable: canonical agent '{agent_id}' no longer authorizes application chat controls"
+        ))
+    })?;
+    if !policy.within_bounds() {
+        return Err(crate::conflict_error(format!(
+            "chat_precondition_failed:binding_unavailable: canonical agent '{agent_id}' has an invalid application chat controls policy"
+        )));
+    }
+    let denied = |field: &str| {
+        crate::conflict_error(format!(
+            "chat_precondition_failed:binding_unavailable: canonical agent '{agent_id}' no longer authorizes {field}"
+        ))
+    };
+    if controls.profile_ref.as_ref().is_some_and(|reference| reference.as_str() != agent_id) {
+        return Err(denied("profile_ref"));
+    }
+    if controls.approvals == Some(true) && policy.approvals == Some(false) {
+        return Err(denied("approvals"));
+    }
+    if let Some(requested) = controls.reasoning_effort {
+        let allowed = policy.reasoning_efforts.as_ref().is_none_or(|values| {
+            values.iter().any(|value| {
+                matches!(
+                    (requested, value),
+                    (ApplicationReasoningEffort::Low, orchestrator_config::ApplicationChatReasoningEffort::Low)
+                        | (
+                            ApplicationReasoningEffort::Medium,
+                            orchestrator_config::ApplicationChatReasoningEffort::Medium
+                        )
+                        | (ApplicationReasoningEffort::High, orchestrator_config::ApplicationChatReasoningEffort::High)
+                )
+            })
+        });
+        if !allowed {
+            return Err(denied("reasoning_effort"));
+        }
+    }
+    if let Some(requested) = controls.permission_intent {
+        use orchestrator_config::ApplicationChatPermissionIntent as ConfigIntent;
+        let configured = match requested {
+            ApplicationPermissionIntent::Default => ConfigIntent::Default,
+            ApplicationPermissionIntent::Review => ConfigIntent::Review,
+            ApplicationPermissionIntent::AutoEdit => ConfigIntent::AutoEdit,
+            ApplicationPermissionIntent::Unrestricted => ConfigIntent::Unrestricted,
+        };
+        let listed = policy.permission_intents.as_ref().map_or(
+            matches!(requested, ApplicationPermissionIntent::Default | ApplicationPermissionIntent::Review),
+            |values| values.contains(&configured),
+        );
+        let permissive =
+            matches!(requested, ApplicationPermissionIntent::AutoEdit | ApplicationPermissionIntent::Unrestricted);
+        if !listed || (permissive && !policy.allow_permissive_intents) {
+            return Err(denied("permission_intent"));
+        }
+    }
+    if let Some(requested) = controls.skill_ref.as_ref().map(|reference| reference.as_str()) {
+        let configured_on_profile = profile.skills.iter().any(|skill| skill == requested);
+        let listed = policy.skill_refs.as_ref().is_none_or(|values| {
+            values
+                .iter()
+                .filter(|value| crate::validate_application_configured_ref(value).is_ok())
+                .any(|value| value == requested)
+        });
+        if !configured_on_profile || !listed {
+            return Err(denied("skill_ref"));
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -588,6 +668,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
             .and_then(|profile| profile.tool.clone())
             .or_else(|| existing_meta.as_ref().and_then(|meta| meta.tool.clone()))
             .unwrap_or_else(|| "claude".to_string());
+        application_controls_policy_precondition(controls, resolved_agent.as_ref())?;
         let scope = crate::services::runtime::agent_mcp::resolve_agent_scope(
             &project_root_path,
             &tool,
@@ -1255,6 +1336,98 @@ mod export_tests {
         let error = resolve_chat_agent(tmp.path(), None, Some("researcher"), Some("writer")).unwrap_err();
         assert!(error.to_string().contains("chat_precondition_failed:binding_conflict:"), "unexpected error: {error}");
         assert!(resolve_chat_agent(tmp.path(), None, None, None).unwrap().is_none(), "legacy chat stays unbound");
+    }
+
+    #[test]
+    fn canonical_profile_policy_authorizes_every_typed_control_field() {
+        let controls: ApplicationChatControls = serde_json::from_value(serde_json::json!({
+            "schema": APPLICATION_CHAT_CONTROLS_SCHEMA,
+            "approvals": true,
+            "reasoning_effort": "high",
+            "permission_intent": "auto_edit",
+            "profile_ref": "reviewer",
+            "skill_ref": "security-review"
+        }))
+        .unwrap();
+        let profile: orchestrator_config::AgentProfile = serde_json::from_value(serde_json::json!({
+            "skills": ["security-review"],
+            "application_chat_controls": {
+                "approvals": true,
+                "reasoning_efforts": ["high"],
+                "permission_intents": ["auto_edit"],
+                "allow_permissive_intents": true,
+                "skill_refs": ["security-review"]
+            }
+        }))
+        .unwrap();
+        let selected = ("reviewer".to_string(), profile.clone());
+        application_controls_policy_precondition(&controls, Some(&selected)).unwrap();
+
+        let mut approvals_denied = profile.clone();
+        approvals_denied.application_chat_controls.as_mut().unwrap().approvals = Some(false);
+        let mut reasoning_denied = profile.clone();
+        reasoning_denied.application_chat_controls.as_mut().unwrap().reasoning_efforts =
+            Some(vec![orchestrator_config::ApplicationChatReasoningEffort::Low]);
+        let mut permission_denied = profile.clone();
+        permission_denied.application_chat_controls.as_mut().unwrap().allow_permissive_intents = false;
+        let mut skill_denied = profile.clone();
+        skill_denied.application_chat_controls.as_mut().unwrap().skill_refs = Some(Vec::new());
+        let denied_profiles = [
+            ("approvals", approvals_denied),
+            ("reasoning_effort", reasoning_denied),
+            ("permission_intent", permission_denied),
+            ("skill_ref", skill_denied),
+        ];
+        for (field, denied_profile) in denied_profiles {
+            let selected = ("reviewer".to_string(), denied_profile);
+            let error = application_controls_policy_precondition(&controls, Some(&selected)).unwrap_err();
+            assert!(error.to_string().contains(field), "{field}: {error}");
+        }
+
+        let wrong_profile: ApplicationChatControls = serde_json::from_value(serde_json::json!({
+            "schema": APPLICATION_CHAT_CONTROLS_SCHEMA,
+            "profile_ref": "other"
+        }))
+        .unwrap();
+        let selected = ("reviewer".to_string(), profile);
+        let error = application_controls_policy_precondition(&wrong_profile, Some(&selected)).unwrap_err();
+        assert!(error.to_string().contains("profile_ref"), "{error}");
+    }
+
+    #[test]
+    fn second_runtime_fails_closed_after_profile_policy_removal() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_agents(
+            tmp.path(),
+            "  reviewer:\n    system_prompt: Review exactly.\n    tool: codex\n    skills: [security-review]\n    application_chat_controls:\n      approvals: true\n      reasoning_efforts: [high]\n      permission_intents: [review]\n      skill_refs: [security-review]",
+            "reviewer",
+        );
+        let controls: ApplicationChatControls = serde_json::from_value(serde_json::json!({
+            "schema": APPLICATION_CHAT_CONTROLS_SCHEMA,
+            "approvals": true,
+            "reasoning_effort": "high",
+            "permission_intent": "review",
+            "profile_ref": "reviewer",
+            "skill_ref": "security-review"
+        }))
+        .unwrap();
+        {
+            let _first_runtime =
+                orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(tmp.path());
+            let selected = resolve_chat_agent(tmp.path(), None, None, Some("reviewer")).unwrap().unwrap();
+            application_controls_policy_precondition(&controls, Some(&selected)).unwrap();
+        }
+
+        seed_agents(
+            tmp.path(),
+            "  reviewer:\n    system_prompt: Review exactly.\n    tool: codex\n    skills: [security-review]",
+            "reviewer",
+        );
+        let _second_runtime =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(tmp.path());
+        let selected = resolve_chat_agent(tmp.path(), None, None, Some("reviewer")).unwrap().unwrap();
+        let error = application_controls_policy_precondition(&controls, Some(&selected)).unwrap_err();
+        assert!(error.to_string().contains("no longer authorizes application chat controls"), "{error}");
     }
 
     #[test]

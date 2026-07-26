@@ -79,6 +79,7 @@ pub(crate) fn seeded_agent_runtime_config() -> orchestrator_config::AgentRuntime
             mcp_servers,
             tool_policy,
             skills,
+            application_chat_controls: None,
             capabilities,
             tool: None,
             tool_profile: None,

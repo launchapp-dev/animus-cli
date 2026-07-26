@@ -82,7 +82,7 @@ pub(crate) struct ApplicationChatControls {
     pub(crate) skill_ref: Option<ApplicationConfiguredRef>,
 }
 
-fn validate_application_configured_ref(value: &str) -> Result<(), String> {
+pub(crate) fn validate_application_configured_ref(value: &str) -> Result<(), String> {
     let bytes = value.as_bytes();
     if bytes.is_empty() || bytes.len() > MAX_APPLICATION_CHAT_CONTROL_REF_BYTES {
         return Err(format!("configured reference must contain 1..={MAX_APPLICATION_CHAT_CONTROL_REF_BYTES} bytes"));
