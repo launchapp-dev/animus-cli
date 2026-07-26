@@ -31,7 +31,13 @@ lines (JSONL passthrough where structured) until interrupted:
 
 `animus --json chat capabilities` is the machine-readable application probe.
 It reports durable chat idempotency support, scope/key constraints, terminal
-JSONL events, and canonical receipt fields. `chat send --idempotency-key
+JSONL events, canonical receipt fields, and the closed
+`animus.chat.application_controls.v1` schema. Application callers pass that
+schema through `chat send --application-controls-json <JSON>` to request only
+bounded approvals, reasoning effort, permission intent, and configured
+profile/skill references. Unknown fields and raw provider argv, environment,
+filesystem, secret, or configuration channels are rejected; the typed envelope
+also conflicts with the corresponding operator flags. `chat send --idempotency-key
 <KEY>` requires `--conversation <ID>`, `--actor-json <JSON>`, and matching
 `--as-user <USER_ID>`; the actor must provide `user_id` and `tenant_id`. Exact
 retries replay the durable receipt, changed payloads return

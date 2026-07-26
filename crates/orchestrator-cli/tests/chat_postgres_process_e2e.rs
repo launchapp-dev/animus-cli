@@ -17,6 +17,7 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
 use std::thread;
@@ -32,7 +33,9 @@ const DATABASE_URL_ENV: &str = "ANIMUS_CHAT_POSTGRES_PROCESS_E2E_DATABASE_URL";
 const PLUGIN_BIN_ENV: &str = "ANIMUS_CHAT_POSTGRES_PROCESS_E2E_PLUGIN_BIN";
 const PROVIDER_COUNTER: &str = ".animus-provider-mock-executions";
 const PROVIDER_RELEASE: &str = ".animus-provider-mock-release";
+const PROVIDER_CONTROLS_TRACE: &str = ".animus-provider-mock-controls.jsonl";
 const PROVIDER_MARKER: &str = "ANIMUS_CHAT_POSTGRES_PROCESS_E2E";
+const CONTROLS_MARKER: &str = "ANIMUS_CHAT_CONTROLS_PROCESS_E2E";
 const ACTOR_ID: &str = "task1005-process-user";
 const TENANT_ID: &str = "task1005-process-tenant";
 
@@ -77,6 +80,12 @@ impl Harness {
         let plugin_dir = root.path().join("plugins");
         fs::create_dir_all(&project).expect("create process E2E project");
         fs::create_dir_all(&plugin_dir).expect("create isolated plugin directory");
+        fs::create_dir_all(project.join(".animus")).expect("create process E2E project config directory");
+        fs::write(
+            project.join(".animus/workflows.yaml"),
+            "tools_allowlist:\n  - cargo\nagents:\n  process-mock:\n    system_prompt: Process controls fixture.\n    tool: mock\n    model: mock-fast-1\nphases:\n  work:\n    mode: agent\n    agent_id: process-mock\n",
+        )
+        .expect("write process E2E agent profile");
 
         let cli = PathBuf::from(env!("CARGO_BIN_EXE_animus"));
         let provider = PathBuf::from(env!("CARGO_BIN_EXE_animus-provider-mock"));
@@ -162,6 +171,16 @@ impl Harness {
         );
         assert_eq!(payload.pointer("/data/backend/ready").and_then(Value::as_bool), Some(true), "{payload:#}");
         assert_eq!(payload.pointer("/data/backend/error_code"), Some(&Value::Null), "{payload:#}");
+        assert_eq!(
+            payload.pointer("/data/send/application_controls/schema").and_then(Value::as_str),
+            Some("animus.chat.application_controls.v1"),
+            "{payload:#}"
+        );
+        assert_eq!(
+            payload.pointer("/data/send/application_controls/unknown_fields").and_then(Value::as_str),
+            Some("reject"),
+            "{payload:#}"
+        );
     }
 
     fn create_conversation(&self, id: &str, runtime: &str) {
@@ -210,6 +229,46 @@ impl Harness {
         command
     }
 
+    fn application_send_command(
+        &self,
+        runtime: &str,
+        conversation: &str,
+        key: &str,
+        message: &str,
+        controls: &str,
+    ) -> Command {
+        let actor = self.actor_json();
+        let mut command = self.command(runtime);
+        command.args([
+            "chat",
+            "send",
+            message,
+            "--conversation",
+            conversation,
+            "--as-user",
+            ACTOR_ID,
+            "--actor-json",
+            &actor,
+            "--idempotency-key",
+            key,
+            "--require-shared-authority",
+            "--application-controls-json",
+            controls,
+        ]);
+        command
+    }
+
+    fn provider_control_traces(&self) -> Vec<Value> {
+        let path = self.project.join(PROVIDER_CONTROLS_TRACE);
+        fs::read_to_string(path)
+            .map(|text| {
+                text.lines()
+                    .map(|line| serde_json::from_str(line).expect("parse provider controls trace line"))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn provider_execution_count(&self) -> usize {
         let counter = self.project.join(PROVIDER_COUNTER);
         fs::read_to_string(counter).map(|text| text.lines().count()).unwrap_or(0)
@@ -235,7 +294,17 @@ impl Harness {
                 return;
             }
             if let Some(status) = child.try_wait().expect("inspect leading CLI process") {
-                panic!("leading CLI exited before provider execution {expected}: {status}");
+                let mut stdout = String::new();
+                let mut stderr = String::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    pipe.read_to_string(&mut stdout).expect("read early CLI stdout");
+                }
+                if let Some(mut pipe) = child.stderr.take() {
+                    pipe.read_to_string(&mut stderr).expect("read early CLI stderr");
+                }
+                panic!(
+                    "leading CLI exited before provider execution {expected}: {status}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                );
             }
             assert!(Instant::now() < deadline, "timed out waiting for provider execution {expected}");
             thread::sleep(Duration::from_millis(25));
@@ -469,6 +538,121 @@ fn two_cli_processes_share_postgres_operation_authority_and_fence_stale_assistan
     );
     assert_eq!(fenced.operation_assistant_seq, None, "fenced operation cannot claim an assistant: {fenced:?}");
 
+    // Canonical application controls: two isolated CLI runtimes share the
+    // same caller hash, a changed envelope conflicts while live without a
+    // second provider start, exact replay is provider-free, and the same
+    // effective controls reach both a fresh provider session and native
+    // resume on a subsequent keyed turn.
+    let controls_conversation = format!("task1014-controls-{}", Uuid::new_v4());
+    let controls_key = format!("task1014-controls-{}", Uuid::new_v4());
+    let controls_next_key = format!("task1014-controls-next-{}", Uuid::new_v4());
+    let controls_message = format!("{PROVIDER_MARKER} {CONTROLS_MARKER}: fresh controlled turn");
+    let controls_next_message = format!("{PROVIDER_MARKER} {CONTROLS_MARKER}: resumed controlled turn");
+    let controls = json!({
+        "schema": "animus.chat.application_controls.v1",
+        "approvals": true,
+        "reasoning_effort": "high",
+        "permission_intent": "default",
+    })
+    .to_string();
+    let drifted_controls = json!({
+        "schema": "animus.chat.application_controls.v1",
+        "approvals": true,
+        "reasoning_effort": "low",
+        "permission_intent": "default",
+    })
+    .to_string();
+    harness.create_conversation(&controls_conversation, "controls-setup");
+    let selected_provider = database
+        .execute(
+            "UPDATE chat_conversation SET tool = 'mock', model = 'mock-fast-1' WHERE tenant_id = $1 AND id = $2",
+            &[&TENANT_ID, &controls_conversation],
+        )
+        .expect("seed the server-owned provider binding for an unbound application chat");
+    assert_eq!(selected_provider, 1, "application chat must have one canonical provider binding");
+    harness.hold_provider();
+
+    let mut controls_leader_command = harness.application_send_command(
+        "controls-leader",
+        &controls_conversation,
+        &controls_key,
+        &controls_message,
+        &controls,
+    );
+    let mut controls_leader = spawn(&mut controls_leader_command, "application-controls leader");
+    harness.wait_for_provider_execution(3, &mut controls_leader);
+
+    let drift = harness
+        .application_send_command(
+            "controls-drift",
+            &controls_conversation,
+            &controls_key,
+            &controls_message,
+            &drifted_controls,
+        )
+        .output()
+        .expect("run changed-controls follower");
+    assert!(!drift.status.success(), "changed controls under one key must conflict");
+    assert!(process_text(&drift).contains("idempotency_conflict"), "unexpected drift result\n{}", process_text(&drift));
+    assert_eq!(harness.provider_execution_count(), 3, "changed controls cannot start another provider");
+
+    harness.release_provider();
+    let controls_leader = wait_for_child(controls_leader, "application-controls leader");
+    assert_process_success("application-controls leader", &controls_leader);
+    let controls_replay = harness
+        .application_send_command(
+            "controls-replay",
+            &controls_conversation,
+            &controls_key,
+            &controls_message,
+            &controls,
+        )
+        .output()
+        .expect("run exact controls replay");
+    assert_process_success("exact application-controls replay", &controls_replay);
+    assert_eq!(harness.provider_execution_count(), 3, "exact controls replay must not invoke provider");
+
+    let first_controls = evidence(&mut database, &controls_conversation, &controls_key);
+    assert_common_terminal_evidence(&first_controls);
+    assert_eq!(first_controls.message_count, 2, "first controlled turn must be canonical: {first_controls:?}");
+    assert_eq!(first_controls.operation_state, "completed");
+
+    let resumed = harness
+        .application_send_command(
+            "controls-resume",
+            &controls_conversation,
+            &controls_next_key,
+            &controls_next_message,
+            &controls,
+        )
+        .output()
+        .expect("run controlled native resume");
+    assert_process_success("controlled native resume", &resumed);
+    assert_eq!(harness.provider_execution_count(), 4, "new keyed turn should execute provider exactly once");
+
+    let traces = harness.provider_control_traces();
+    assert_eq!(traces.len(), 2, "replay/drift must not add provider control traces: {traces:#?}");
+    for trace in &traces {
+        assert_eq!(trace.get("approvals").and_then(Value::as_bool), Some(true), "{trace:#}");
+        assert_eq!(trace.get("reasoning_effort").and_then(Value::as_str), Some("high"), "{trace:#}");
+        assert_eq!(trace.get("permission_mode"), Some(&Value::Null), "{trace:#}");
+    }
+    assert_eq!(traces[0].get("resumed").and_then(Value::as_bool), Some(false), "{:#}", traces[0]);
+    assert_eq!(traces[1].get("resumed").and_then(Value::as_bool), Some(true), "{:#}", traces[1]);
+
+    let second_controls = evidence(&mut database, &controls_conversation, &controls_next_key);
+    assert_eq!(second_controls.conversation_count, 1, "{second_controls:?}");
+    assert_eq!(second_controls.message_count, 4, "two controlled turns must persist once each: {second_controls:?}");
+    assert_eq!(second_controls.user_count, 2, "{second_controls:?}");
+    assert_eq!(second_controls.assistant_count, 2, "{second_controls:?}");
+    assert_eq!(second_controls.metadata_message_count, 4, "{second_controls:?}");
+    assert_eq!(second_controls.operation_state, "completed", "{second_controls:?}");
+    assert_eq!(second_controls.operation_user_seq, Some(2), "{second_controls:?}");
+    assert_eq!(second_controls.operation_assistant_seq, Some(3), "{second_controls:?}");
+    assert!(second_controls.execution_hash.is_some(), "{second_controls:?}");
+    assert!(second_controls.active_operation_id.is_none(), "{second_controls:?}");
+
     delete_conversation(&mut database, &successful_conversation);
     delete_conversation(&mut database, &fenced_conversation);
+    delete_conversation(&mut database, &controls_conversation);
 }

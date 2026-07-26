@@ -11,8 +11,9 @@ use anyhow::Context;
 
 use crate::shared::{canonicalize_cwd_in_project, format_age, print_ok, print_value, render_table};
 use crate::{
-    ChatCommand, ChatDeleteArgs, ChatExportArgs, ChatExportFormat, ChatGetArgs, ChatListArgs, ChatNewArgs,
-    ChatRenameArgs, ChatSearchArgs, ChatSendArgs, ChatVisibilityArg,
+    ApplicationPermissionIntent, ChatCommand, ChatDeleteArgs, ChatExportArgs, ChatExportFormat, ChatGetArgs,
+    ChatListArgs, ChatNewArgs, ChatRenameArgs, ChatSearchArgs, ChatSendArgs, ChatVisibilityArg,
+    APPLICATION_CHAT_CONTROLS_SCHEMA, MAX_APPLICATION_CHAT_CONTROLS_BYTES, MAX_APPLICATION_CHAT_CONTROL_REF_BYTES,
 };
 use serde::Serialize;
 
@@ -117,12 +118,97 @@ fn handle_chat_capabilities(project_root: &str, json: bool) -> Result<()> {
                         "operation_id", "conversation_id", "user_message_id", "user_seq",
                         "message_id", "seq"
                     ],
+                },
+                "application_controls": {
+                    "supported": true,
+                    "schema": APPLICATION_CHAT_CONTROLS_SCHEMA,
+                    "flag": "--application-controls-json",
+                    "encoding": "json",
+                    "max_json_bytes": MAX_APPLICATION_CHAT_CONTROLS_BYTES,
+                    "requires": [
+                        "--conversation", "--actor-json", "--as-user",
+                        "--idempotency-key", "--require-shared-authority"
+                    ],
+                    "unknown_fields": "reject",
+                    "operator_conflicts": "reject",
+                    "conflicting_flags": [
+                        "--tool", "--model", "--cwd", "--reasoning-effort",
+                        "--permission-mode", "--approvals", "--agent", "--skill",
+                        "--mcp-server", "--no-animus-mcp"
+                    ],
+                    "fields": [
+                        { "name": "approvals", "type": "boolean", "required": false },
+                        {
+                            "name": "reasoning_effort", "type": "string", "required": false,
+                            "enum": ["low", "medium", "high"]
+                        },
+                        {
+                            "name": "permission_intent", "type": "string", "required": false,
+                            "enum": ["default", "review", "auto_edit", "unrestricted"]
+                        },
+                        {
+                            "name": "profile_ref", "type": "configured_ref", "required": false,
+                            "source": "configured_agents"
+                        },
+                        {
+                            "name": "skill_ref", "type": "configured_ref", "required": false,
+                            "source": "configured_skills"
+                        }
+                    ],
+                    "configured_ref": {
+                        "max_bytes": MAX_APPLICATION_CHAT_CONTROL_REF_BYTES,
+                        "pattern": "^(?!.*\\.\\.)(?=.{1,64}$)[A-Za-z0-9][A-Za-z0-9._-]*$",
+                        "first_character": "ascii_alphanumeric",
+                        "remaining_characters": "ascii_alphanumeric_or_dot_underscore_hyphen",
+                        "forbidden_sequence": ".."
+                    },
+                    "approvals_semantics": {
+                        "true": "force_kernel_mediation",
+                        "false": "do_not_disable_profile_policy",
+                        "omitted": "inherit_profile_policy"
+                    },
+                    "permission_mapping": {
+                        "default": { "all": null },
+                        "review": { "claude": "default", "codex": "on-request", "gemini": "default" },
+                        "auto_edit": { "claude": "acceptEdits", "codex": "on-failure", "gemini": "auto_edit" },
+                        "unrestricted": { "claude": "bypassPermissions", "codex": "never", "gemini": "yolo" },
+                        "unsupported_provider": "reject_non_default"
+                    },
+                    "raw_controls_accepted": false,
+                    "sensitive_values_accepted": false
                 }
             },
             "backend": backend,
         }),
         json,
     )
+}
+
+fn application_permission_mode(intent: Option<ApplicationPermissionIntent>, tool: &str) -> Result<Option<String>> {
+    let Some(intent) = intent else {
+        return Ok(None);
+    };
+    if intent == ApplicationPermissionIntent::Default {
+        return Ok(None);
+    }
+    let mode = match (intent, tool) {
+        (ApplicationPermissionIntent::Review, "claude") => "default",
+        (ApplicationPermissionIntent::Review, "codex") => "on-request",
+        (ApplicationPermissionIntent::Review, "gemini") => "default",
+        (ApplicationPermissionIntent::AutoEdit, "claude") => "acceptEdits",
+        (ApplicationPermissionIntent::AutoEdit, "codex") => "on-failure",
+        (ApplicationPermissionIntent::AutoEdit, "gemini") => "auto_edit",
+        (ApplicationPermissionIntent::Unrestricted, "claude") => "bypassPermissions",
+        (ApplicationPermissionIntent::Unrestricted, "codex") => "never",
+        (ApplicationPermissionIntent::Unrestricted, "gemini") => "yolo",
+        _ => {
+            return Err(crate::invalid_input_error(format!(
+                "application permission intent '{}' is unsupported for provider '{tool}'",
+                intent.as_str()
+            )))
+        }
+    };
+    Ok(Some(mode.to_string()))
 }
 
 #[derive(Debug, Serialize, PartialEq)]
@@ -484,6 +570,37 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     let cwd = PathBuf::from(canonicalize_cwd_in_project(&raw_cwd, project_root)?);
     let normalized_title = normalize_title_update(args.title.as_deref());
 
+    // Application controls are intentionally resolved before durable
+    // admission. Invalid, hidden, or stale configured references and an
+    // unsupported provider/permission pairing therefore cannot reserve an
+    // operation key or start a provider. Operator sends retain their legacy
+    // replay-before-config-resolution ordering.
+    let application_preflight = if let Some(controls) = args.application_controls_json.as_ref() {
+        let resolved_agent = resolve_chat_agent(
+            &project_root_path,
+            actor.as_ref(),
+            existing_meta.as_ref().and_then(|meta| meta.agent_id.as_deref()),
+            controls.profile_ref.as_ref().map(|reference| reference.as_str()),
+        )?;
+        let agent_id = resolved_agent.as_ref().map(|(id, _)| id.as_str());
+        let agent_profile = resolved_agent.as_ref().map(|(_, profile)| profile);
+        let tool = agent_profile
+            .and_then(|profile| profile.tool.clone())
+            .or_else(|| existing_meta.as_ref().and_then(|meta| meta.tool.clone()))
+            .unwrap_or_else(|| "claude".to_string());
+        let scope = crate::services::runtime::agent_mcp::resolve_agent_scope(
+            &project_root_path,
+            &tool,
+            agent_id,
+            controls.skill_ref.as_ref().map(|reference| reference.as_str()),
+            actor.as_ref(),
+        )?;
+        let permission_mode = application_permission_mode(controls.permission_intent, &tool)?;
+        Some((resolved_agent, tool, scope, permission_mode))
+    } else {
+        None
+    };
+
     // Build the response sink before consulting the journal so a terminal
     // replay never depends on mutable agent profiles, skills, or MCP config.
     let mut sink: Box<dyn ChatStreamSink> = if json {
@@ -505,24 +622,40 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
             .conversation
             .as_deref()
             .ok_or_else(|| crate::invalid_input_error("idempotent chat send requires --conversation"))?;
-        let caller_hash = idempotency::effective_request_hash(serde_json::json!({
-            "version": 3,
-            "conversation_id": conversation_id,
-            "message": args.message,
-            "tool_override": args.tool,
-            "model_override": args.model,
-            "cwd": cwd,
-            "reasoning_effort_override": args.reasoning_effort.map(|value| value.as_str()),
-            "permission_mode_override": args.permission_mode,
-            "approvals": args.approvals,
-            "title_update": normalized_title,
-            "requested_agent_id": args.agent,
-            "expected_revision": args.expected_revision,
-            "skill": args.skill,
-            "mcp_servers": args.mcp_server,
-            "no_animus_mcp": args.no_animus_mcp,
-            "as_user": user.as_deref(),
-        }))?;
+        let caller_hash_input = if let Some(controls) = args.application_controls_json.as_ref() {
+            serde_json::json!({
+                "version": 4,
+                "conversation_id": conversation_id,
+                "message": args.message,
+                "application_controls": controls,
+                "title_update": normalized_title,
+                "expected_revision": args.expected_revision,
+                "as_user": user.as_deref(),
+            })
+        } else {
+            // Preserve the exact legacy v3 hash whenever the application
+            // envelope is omitted, including compatibility with receipts
+            // written by earlier CLI builds.
+            serde_json::json!({
+                "version": 3,
+                "conversation_id": conversation_id,
+                "message": args.message,
+                "tool_override": args.tool,
+                "model_override": args.model,
+                "cwd": cwd,
+                "reasoning_effort_override": args.reasoning_effort.map(|value| value.as_str()),
+                "permission_mode_override": args.permission_mode,
+                "approvals": args.approvals,
+                "title_update": normalized_title,
+                "requested_agent_id": args.agent,
+                "expected_revision": args.expected_revision,
+                "skill": args.skill,
+                "mcp_servers": args.mcp_server,
+                "no_animus_mcp": args.no_animus_mcp,
+                "as_user": user.as_deref(),
+            })
+        };
+        let caller_hash = idempotency::effective_request_hash(caller_hash_input)?;
         let (operation_authority, begin) = idempotency::begin(
             &store,
             &project_root_path,
@@ -590,35 +723,34 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // even when this invocation omits --agent. Deleted/renamed/actor-hidden
     // profiles therefore fail closed instead of silently becoming a default
     // agent. An explicit different profile is a hard conflict.
-    let resolved_agent = prepare_chat_turn!(resolve_chat_agent(
-        &project_root_path,
-        actor.as_ref(),
-        existing_meta.as_ref().and_then(|meta| meta.agent_id.as_deref()),
-        args.agent.as_deref(),
-    ));
+    let (resolved_agent, tool, scope, application_permission_override) = if let Some(preflight) = application_preflight
+    {
+        preflight
+    } else {
+        let resolved_agent = prepare_chat_turn!(resolve_chat_agent(
+            &project_root_path,
+            actor.as_ref(),
+            existing_meta.as_ref().and_then(|meta| meta.agent_id.as_deref()),
+            args.agent.as_deref(),
+        ));
+        let agent_id = resolved_agent.as_ref().map(|(id, _)| id.as_str());
+        let agent_profile = resolved_agent.as_ref().map(|(_, profile)| profile);
+        let tool = args
+            .tool
+            .clone()
+            .or_else(|| agent_profile.and_then(|profile| profile.tool.clone()))
+            .unwrap_or_else(|| "claude".to_string());
+        let scope = prepare_chat_turn!(crate::services::runtime::agent_mcp::resolve_agent_scope(
+            &project_root_path,
+            &tool,
+            agent_id,
+            args.skill.as_deref(),
+            actor.as_ref(),
+        ));
+        (resolved_agent, tool, scope, None)
+    };
     let agent_id = resolved_agent.as_ref().map(|(id, _)| id.as_str());
     let agent_profile = resolved_agent.as_ref().map(|(_, profile)| profile);
-
-    // Explicit provider/model flags remain per-turn overrides. Otherwise a
-    // bound conversation uses its canonical profile config on every start,
-    // native resume, and full-history fallback.
-    let tool = args
-        .tool
-        .clone()
-        .or_else(|| agent_profile.and_then(|profile| profile.tool.clone()))
-        .unwrap_or_else(|| "claude".to_string());
-
-    // Resolve the per-agent MCP server set (profile ∪ skill ∪ --mcp-server
-    // additions − the built-in animus when --no-animus-mcp) ONCE for this
-    // send invocation. The same resolution also carries the skill's full
-    // application (prompt fragments, env, extra_args, model preference, ...).
-    let scope = prepare_chat_turn!(crate::services::runtime::agent_mcp::resolve_agent_scope(
-        &project_root_path,
-        &tool,
-        agent_id,
-        args.skill.as_deref(),
-        actor.as_ref(),
-    ));
     // The skill's FULL application binds to this `chat send` invocation and
     // is applied per turn by the turn loop (same lifecycle as the MCP
     // contract below).
@@ -631,13 +763,20 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         .clone()
         .or_else(|| skill_application.and_then(|skill| skill.model.clone()))
         .or_else(|| agent_profile.and_then(|profile| profile.model.clone()))
+        .or_else(|| {
+            args.application_controls_json
+                .is_some()
+                .then(|| existing_meta.as_ref().and_then(|meta| meta.model.clone()))
+                .flatten()
+        })
         .unwrap_or_else(|| protocol::default_model_for_tool(&tool).unwrap_or("claude-sonnet-4-6").to_string());
 
     // Permission mode: the `--permission-mode` flag wins over the selected
     // `--agent` profile's `permission_mode`. Provider-specific and forwarded
     // verbatim; an unknown value only warns (stderr), never blocks.
-    let permission_mode =
-        args.permission_mode.clone().or_else(|| agent_profile.and_then(|profile| profile.permission_mode.clone()));
+    let permission_mode = application_permission_override
+        .or_else(|| args.permission_mode.clone())
+        .or_else(|| agent_profile.and_then(|profile| profile.permission_mode.clone()));
     if let Some(mode) = permission_mode.as_deref() {
         crate::services::runtime::runtime_agent::provider_client::warn_unknown_permission_mode(mode);
     }
@@ -645,7 +784,9 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // Kernel-mediated approvals: the `--approvals` flag or an
     // `approval_policy` on the selected `--agent` profile sets
     // `extras.approvals = true` on every turn's session request.
-    let approvals = args.approvals || agent_profile.is_some_and(|profile| profile.approval_policy.is_some());
+    let approvals =
+        args.application_controls_json.as_ref().and_then(|controls| controls.approvals).unwrap_or(args.approvals)
+            || agent_profile.is_some_and(|profile| profile.approval_policy.is_some());
     crate::services::runtime::runtime_agent::provider_client::warn_if_claude_autoapprove_bypass(&tool, approvals);
 
     let producer = ResolverTurnProducer::for_project(&project_root_path);
@@ -654,7 +795,9 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // sees the MCP servers its profile/skill declares. Plain chat (no
     // --agent/--skill) defaults to the built-in `animus` server only. When an
     // actor is asserted, the spawned `animus mcp serve` child is bound to it.
-    let scope_selected = agent_id.is_some() || args.skill.is_some();
+    let scope_selected = agent_id.is_some()
+        || args.skill.is_some()
+        || args.application_controls_json.as_ref().and_then(|controls| controls.skill_ref.as_ref()).is_some();
     let mcp_contract = prepare_chat_turn!(crate::services::runtime::agent_mcp::assemble_agent_mcp_contract_with_actor(
         &project_root_path,
         &tool,
@@ -743,8 +886,11 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     }
 
     let reasoning_effort = args
-        .reasoning_effort
+        .application_controls_json
+        .as_ref()
+        .and_then(|controls| controls.reasoning_effort)
         .map(|level| level.as_str().to_string())
+        .or_else(|| args.reasoning_effort.map(|level| level.as_str().to_string()))
         .or_else(|| agent_profile.and_then(|profile| profile.reasoning_effort.clone()));
     let agent_system_prompt =
         agent_profile.map(|profile| profile.system_prompt.trim()).filter(|prompt| !prompt.is_empty());
@@ -758,22 +904,44 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // conversation revision or writing a transcript row. A recovered pending
     // operation can only resume when both snapshots are unchanged.
     let execution_hash = if turn_operation.is_some() {
-        Some(prepare_chat_turn!(idempotency::effective_request_hash(serde_json::json!({
-            "version": 1,
-            "conversation_id": conversation_id,
-            "agent_id": agent_id,
-            "tool": tool,
-            "model": model,
-            "cwd": cwd,
-            "reasoning_effort": reasoning_effort,
-            "permission_mode": permission_mode,
-            "approvals": approvals,
-            "title_update": normalized_title,
-            "agent_system_prompt": agent_system_prompt,
-            "agent_tool_profile": agent_tool_profile,
-            "runtime_contract": mcp_contract,
-            "skill_application": skill_application,
-        }))))
+        let execution_hash_input = if let Some(controls) = args.application_controls_json.as_ref() {
+            serde_json::json!({
+                "version": 2,
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
+                "tool": tool,
+                "model": model,
+                "cwd": cwd,
+                "reasoning_effort": reasoning_effort,
+                "permission_mode": permission_mode,
+                "approvals": approvals,
+                "title_update": normalized_title,
+                "agent_system_prompt": agent_system_prompt,
+                "agent_tool_profile": agent_tool_profile,
+                "runtime_contract": mcp_contract,
+                "skill_application": skill_application,
+                "application_controls": controls,
+            })
+        } else {
+            // Exact legacy v1 shape for pre-envelope operation recovery.
+            serde_json::json!({
+                "version": 1,
+                "conversation_id": conversation_id,
+                "agent_id": agent_id,
+                "tool": tool,
+                "model": model,
+                "cwd": cwd,
+                "reasoning_effort": reasoning_effort,
+                "permission_mode": permission_mode,
+                "approvals": approvals,
+                "title_update": normalized_title,
+                "agent_system_prompt": agent_system_prompt,
+                "agent_tool_profile": agent_tool_profile,
+                "runtime_contract": mcp_contract,
+                "skill_application": skill_application,
+            })
+        };
+        Some(prepare_chat_turn!(idempotency::effective_request_hash(execution_hash_input)))
     } else {
         None
     };
@@ -984,6 +1152,25 @@ mod export_tests {
         assert!(md.contains("### 🤖 Assistant · codex/gpt-5.5"), "{md}");
         assert!(md.contains("hi there"), "{md}");
         assert!(md.contains("_Tools: Read_"), "{md}");
+    }
+
+    #[test]
+    fn application_permission_intents_map_only_to_bounded_provider_modes() {
+        for (intent, claude, codex, gemini) in [
+            (ApplicationPermissionIntent::Review, "default", "on-request", "default"),
+            (ApplicationPermissionIntent::AutoEdit, "acceptEdits", "on-failure", "auto_edit"),
+            (ApplicationPermissionIntent::Unrestricted, "bypassPermissions", "never", "yolo"),
+        ] {
+            assert_eq!(application_permission_mode(Some(intent), "claude").unwrap().as_deref(), Some(claude));
+            assert_eq!(application_permission_mode(Some(intent), "codex").unwrap().as_deref(), Some(codex));
+            assert_eq!(application_permission_mode(Some(intent), "gemini").unwrap().as_deref(), Some(gemini));
+            assert!(application_permission_mode(Some(intent), "custom-provider").is_err());
+        }
+        assert_eq!(application_permission_mode(None, "custom-provider").unwrap(), None);
+        assert_eq!(
+            application_permission_mode(Some(ApplicationPermissionIntent::Default), "custom-provider").unwrap(),
+            None
+        );
     }
 
     #[test]

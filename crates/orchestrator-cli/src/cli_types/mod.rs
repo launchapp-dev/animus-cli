@@ -1195,6 +1195,98 @@ mod tests {
     }
 
     #[test]
+    fn chat_send_application_controls_are_closed_bounded_and_operator_isolated() {
+        let actor_json = r#"{"user_id":"carol","tenant_id":"workspace-a","claims":[]}"#;
+        let base = [
+            "animus",
+            "chat",
+            "send",
+            "hello",
+            "--conversation",
+            "conv-1",
+            "--actor-json",
+            actor_json,
+            "--as-user",
+            "carol",
+            "--idempotency-key",
+            "arena.controls:1",
+            "--require-shared-authority",
+        ];
+        let controls = r#"{"schema":"animus.chat.application_controls.v1","approvals":true,"reasoning_effort":"high","permission_intent":"review","profile_ref":"research.agent-1","skill_ref":"code_review"}"#;
+        let cli = Cli::try_parse_from(base.into_iter().chain(["--application-controls-json", controls]))
+            .expect("canonical application controls should parse");
+        match cli.command {
+            Command::Chat { command: ChatCommand::Send(args) } => {
+                let parsed = args.application_controls_json.expect("controls parsed");
+                assert_eq!(parsed.schema, APPLICATION_CHAT_CONTROLS_SCHEMA);
+                assert_eq!(parsed.approvals, Some(true));
+                assert_eq!(parsed.reasoning_effort, Some(ApplicationReasoningEffort::High));
+                assert_eq!(parsed.permission_intent, Some(ApplicationPermissionIntent::Review));
+                assert_eq!(parsed.profile_ref.as_ref().map(|value| value.as_str()), Some("research.agent-1"));
+                assert_eq!(parsed.skill_ref.as_ref().map(|value| value.as_str()), Some("code_review"));
+            }
+            other => panic!("expected chat send, got {other:?}"),
+        }
+
+        for rejected in [
+            r#"{"schema":"animus.chat.application_controls.v1","env":{"API_KEY":"secret"}}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","argv":["--danger"]}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","profile_ref":"../../secret"}"#,
+            r#"{"schema":"animus.chat.application_controls.v1","skill_ref":"$TOKEN"}"#,
+            r#"{"schema":"animus.chat.application_controls.v2"}"#,
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(base.into_iter().chain(["--application-controls-json", rejected]))
+                    .expect_err("unknown, path-like, secret-like, or wrong-schema control must fail")
+                    .kind(),
+                ErrorKind::ValueValidation
+            );
+        }
+
+        for (conflicting, value) in [
+            ("--tool", "raw-value"),
+            ("--model", "raw-value"),
+            ("--cwd", "raw-value"),
+            ("--reasoning-effort", "high"),
+            ("--permission-mode", "raw-value"),
+            ("--agent", "raw-value"),
+            ("--skill", "raw-value"),
+            ("--mcp-server", "raw-value"),
+        ] {
+            assert_eq!(
+                Cli::try_parse_from(base.into_iter().chain([
+                    "--application-controls-json",
+                    controls,
+                    conflicting,
+                    value
+                ]),)
+                .expect_err("application controls must reject raw operator controls")
+                .kind(),
+                ErrorKind::ArgumentConflict
+            );
+        }
+        for conflicting in ["--approvals", "--no-animus-mcp"] {
+            assert_eq!(
+                Cli::try_parse_from(base.into_iter().chain(["--application-controls-json", controls, conflicting]))
+                    .expect_err("application controls must reject boolean operator controls")
+                    .kind(),
+                ErrorKind::ArgumentConflict
+            );
+        }
+
+        let missing_shared_authority = base
+            .into_iter()
+            .filter(|argument| *argument != "--require-shared-authority")
+            .chain(["--application-controls-json", controls]);
+        assert_eq!(
+            Cli::try_parse_from(missing_shared_authority)
+                .expect_err("application controls require fail-closed shared authority")
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
+    }
+
+    #[test]
     fn chat_send_parses_agent_revision_contract_and_keeps_tool_unset_for_profile_default() {
         let cli = Cli::try_parse_from([
             "animus",

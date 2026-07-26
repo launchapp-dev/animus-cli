@@ -62,6 +62,12 @@ animus --json chat send "your message" --conversation <id> \
   --idempotency-key <key> \
   --require-shared-authority  # required by Portal/multi-replica callers
 
+# The only application-owned execution controls are carried in one typed JSON envelope
+animus --json chat send "your message" --conversation <id> \
+  --actor-json '{"user_id":"alice","tenant_id":"workspace-a","claims":[]}' \
+  --as-user alice --idempotency-key <key> --require-shared-authority \
+  --application-controls-json '{"schema":"animus.chat.application_controls.v1","approvals":true,"reasoning_effort":"high","permission_intent":"review","profile_ref":"researcher","skill_ref":"code-review"}'
+
 # Read a transcript, optionally returning a bounded slice
 animus chat get <id> [--actor-json <json>] [--as-user <user-id>] [--limit <n>] [--offset <n>]
 
@@ -115,6 +121,39 @@ fails closed instead of running against stale identity.
 `send.identity_binding` contract. Application clients must derive `agent_id`
 and `revision` from authorized conversation metadata; `client_selectable` is
 false, so an untrusted request body may never choose or override the agent.
+
+### Typed application chat controls
+
+Authenticated application callers use `--application-controls-json`; they do
+not translate browser input into arbitrary provider arguments. The envelope is
+closed and bounded to 2048 bytes. It requires schema
+`animus.chat.application_controls.v1`, rejects unknown fields, and permits only:
+
+- `approvals`: boolean. `true` forces kernel mediation; `false` or omission
+  never disables an approval policy declared by the selected profile.
+- `reasoning_effort`: `low`, `medium`, or `high`.
+- `permission_intent`: `default`, `review`, `auto_edit`, or `unrestricted`.
+  Animus maps these intents to the provider's bounded permission enum;
+  non-default intents fail for an unknown provider.
+- `profile_ref` and `skill_ref`: configured identifiers, at most 64 ASCII
+  bytes, beginning with a letter or digit and containing only letters, digits,
+  `.`, `_`, or `-` (the sequence `..` is forbidden).
+
+Profile and skill references resolve in the authenticated actor/project scope
+before operation admission or provider execution. On a bound conversation,
+`profile_ref` is an assertion and must match the stored canonical `agent_id`;
+when omitted the stored binding is re-resolved. The application envelope
+requires the same conversation, actor, user assertion, idempotency key, and
+shared-authority policy as a durable Portal send.
+
+The envelope conflicts with `--tool`, `--model`, `--cwd`,
+`--reasoning-effort`, `--permission-mode`, `--approvals`, `--agent`, `--skill`,
+`--mcp-server`, and `--no-animus-mcp`. Consequently browser-supplied raw argv,
+environment, filesystem paths, configuration overrides, and secret-bearing
+values have no admitted channel. `chat capabilities` publishes the exact
+field order, enums, bounds, conflicts, approval semantics, and provider mapping
+under `send.application_controls`; clients must consume that contract instead
+of copying provider-specific flags.
 
 ### Streaming and output modes
 
@@ -171,9 +210,13 @@ authoritative database access without writing application data. Portal multi-rep
 `kind: "plugin"`, `authority_mode: "shared_conversation_store_rpc"`, and
 `ready: true`.
 
-Admission uses two hashes. The first covers normalized caller intent and is
+Admission uses two hashes. The first covers normalized caller intent (including
+the normalized application-controls envelope when present) and is
 checked before mutable agent/profile/MCP resolution, so a terminal receipt can
-replay even after configuration changes. A pending operation then binds exactly
+replay even after configuration changes for legacy/operator sends. Application
+controls deliberately resolve configured profile/skill references before this
+admission, so an invalid or no-longer-authorized reference cannot reserve even
+a replay key. A pending operation then binds exactly
 once to the fully resolved execution snapshot. If that snapshot changes after
 a crash, recovery holds the conversation lock: with no durable user row it can
 safely rebind because no provider could have started; with a durable user row it

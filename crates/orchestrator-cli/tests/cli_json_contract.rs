@@ -86,6 +86,48 @@ fn chat_capabilities_exposes_durable_application_contract() -> Result<()> {
         .and_then(Value::as_array)
         .expect("capability probe should list terminal JSONL events");
     assert!(events.iter().any(|event| event == "turn_failed"));
+    assert_eq!(payload.pointer("/data/send/application_controls/supported").and_then(Value::as_bool), Some(true));
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/schema").and_then(Value::as_str),
+        Some("animus.chat.application_controls.v1")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/flag").and_then(Value::as_str),
+        Some("--application-controls-json")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/unknown_fields").and_then(Value::as_str),
+        Some("reject")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/operator_conflicts").and_then(Value::as_str),
+        Some("reject")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/fields/2/enum").and_then(Value::as_array),
+        Some(&vec![
+            Value::String("default".to_string()),
+            Value::String("review".to_string()),
+            Value::String("auto_edit".to_string()),
+            Value::String("unrestricted".to_string()),
+        ])
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/fields/3/source").and_then(Value::as_str),
+        Some("configured_agents")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/fields/4/source").and_then(Value::as_str),
+        Some("configured_skills")
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/raw_controls_accepted").and_then(Value::as_bool),
+        Some(false)
+    );
+    assert_eq!(
+        payload.pointer("/data/send/application_controls/sensitive_values_accepted").and_then(Value::as_bool),
+        Some(false)
+    );
     assert_eq!(
         payload.pointer("/data/backend/schema").and_then(Value::as_str),
         Some("animus.chat.backend_readiness.v1")

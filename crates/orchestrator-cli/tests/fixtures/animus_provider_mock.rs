@@ -22,6 +22,8 @@ use uuid::Uuid;
 const PROCESS_E2E_MARKER: &str = "ANIMUS_CHAT_POSTGRES_PROCESS_E2E";
 const PROCESS_E2E_COUNTER: &str = ".animus-provider-mock-executions";
 const PROCESS_E2E_RELEASE: &str = ".animus-provider-mock-release";
+const CONTROLS_E2E_MARKER: &str = "ANIMUS_CHAT_CONTROLS_PROCESS_E2E";
+const CONTROLS_E2E_TRACE: &str = ".animus-provider-mock-controls.jsonl";
 const PROCESS_E2E_MAX_HOLD: Duration = Duration::from_secs(15);
 
 const INFO: ProviderInfo = ProviderInfo {
@@ -42,12 +44,25 @@ impl ProviderBackend for MockBackend {
         let prompt = request.prompt.clone();
         let model = request.model.clone();
         let process_e2e = prompt.contains(PROCESS_E2E_MARKER);
+        let controls_e2e = prompt.contains(CONTROLS_E2E_MARKER);
         let process_e2e_release = request.cwd.join(PROCESS_E2E_RELEASE);
         if process_e2e {
             let counter_path = request.cwd.join(PROCESS_E2E_COUNTER);
             let mut counter = OpenOptions::new().create(true).append(true).open(counter_path)?;
             counter.write_all(b"start\n")?;
             counter.sync_all()?;
+        }
+        if controls_e2e {
+            let trace = json!({
+                "resumed": resume_session.is_some(),
+                "approvals": request.extras.get("approvals"),
+                "reasoning_effort": request.extras.get("reasoning_effort"),
+                "permission_mode": request.permission_mode,
+            });
+            let mut trace_file =
+                OpenOptions::new().create(true).append(true).open(request.cwd.join(CONTROLS_E2E_TRACE))?;
+            writeln!(trace_file, "{trace}")?;
+            trace_file.sync_all()?;
         }
         let (tx, rx) = mpsc::channel(16);
         let event_session_id = session_id.clone();

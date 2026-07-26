@@ -1,6 +1,115 @@
 use clap::{Args, Subcommand, ValueEnum};
+use serde::{Deserialize, Serialize};
 
 use super::{ReasoningEffortArg, ACTOR_JSON_HELP};
+
+pub(crate) const APPLICATION_CHAT_CONTROLS_SCHEMA: &str = "animus.chat.application_controls.v1";
+pub(crate) const MAX_APPLICATION_CHAT_CONTROLS_BYTES: usize = 2_048;
+pub(crate) const MAX_APPLICATION_CHAT_CONTROL_REF_BYTES: usize = 64;
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ApplicationReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+impl ApplicationReasoningEffort {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum ApplicationPermissionIntent {
+    Default,
+    Review,
+    AutoEdit,
+    Unrestricted,
+}
+
+impl ApplicationPermissionIntent {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::Review => "review",
+            Self::AutoEdit => "auto_edit",
+            Self::Unrestricted => "unrestricted",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub(crate) struct ApplicationConfiguredRef(String);
+
+impl ApplicationConfiguredRef {
+    pub(crate) fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for ApplicationConfiguredRef {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        validate_application_configured_ref(&value).map_err(serde::de::Error::custom)?;
+        Ok(Self(value))
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ApplicationChatControls {
+    pub(crate) schema: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) approvals: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) reasoning_effort: Option<ApplicationReasoningEffort>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) permission_intent: Option<ApplicationPermissionIntent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) profile_ref: Option<ApplicationConfiguredRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) skill_ref: Option<ApplicationConfiguredRef>,
+}
+
+fn validate_application_configured_ref(value: &str) -> Result<(), String> {
+    let bytes = value.as_bytes();
+    if bytes.is_empty() || bytes.len() > MAX_APPLICATION_CHAT_CONTROL_REF_BYTES {
+        return Err(format!("configured reference must contain 1..={MAX_APPLICATION_CHAT_CONTROL_REF_BYTES} bytes"));
+    }
+    if !bytes[0].is_ascii_alphanumeric()
+        || !bytes.iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+        || value.contains("..")
+    {
+        return Err(
+            "configured reference must start with an ASCII letter or digit, contain only ASCII letters, digits, '.', '_', or '-', and must not contain '..'"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn parse_application_chat_controls(raw: &str) -> Result<ApplicationChatControls, String> {
+    if raw.is_empty() || raw.len() > MAX_APPLICATION_CHAT_CONTROLS_BYTES {
+        return Err(format!("application controls JSON must contain 1..={MAX_APPLICATION_CHAT_CONTROLS_BYTES} bytes"));
+    }
+    let controls: ApplicationChatControls =
+        serde_json::from_str(raw).map_err(|error| format!("invalid application controls JSON: {error}"))?;
+    if controls.schema != APPLICATION_CHAT_CONTROLS_SCHEMA {
+        return Err(format!("application controls schema must be '{APPLICATION_CHAT_CONTROLS_SCHEMA}'"));
+    }
+    Ok(controls)
+}
 
 fn parse_chat_idempotency_key(raw: &str) -> Result<String, String> {
     let bytes = raw.as_bytes();
@@ -197,6 +306,28 @@ pub(crate) struct ChatSendArgs {
     /// host-local SQLite authority.
     #[arg(long, requires = "idempotency_key")]
     pub(crate) require_shared_authority: bool,
+    /// Canonical, bounded application-layer controls. This typed envelope is
+    /// reserved for authenticated application callers and cannot be combined
+    /// with raw provider launch, filesystem, MCP, agent, or skill flags.
+    #[arg(
+        long,
+        value_name = "JSON",
+        value_parser = parse_application_chat_controls,
+        requires_all = ["idempotency_key", "require_shared_authority"],
+        conflicts_with_all = [
+            "tool",
+            "model",
+            "cwd",
+            "reasoning_effort",
+            "permission_mode",
+            "approvals",
+            "agent",
+            "skill",
+            "mcp_server",
+            "no_animus_mcp"
+        ]
+    )]
+    pub(crate) application_controls_json: Option<ApplicationChatControls>,
 }
 
 #[derive(Debug, Args)]
