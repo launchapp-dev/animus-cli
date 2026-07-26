@@ -135,12 +135,56 @@ pub struct ChatOperationClaim {
     /// caller admission and reused by recovered pending operations.
     pub execution_hash: Option<String>,
     lease_token: String,
+    /// Backend-issued absolute lease expiry in Unix seconds, when available.
+    pub lease_expires_at: Option<i64>,
     pub recovered: bool,
 }
 
 impl ChatOperationClaim {
     pub fn request(&self) -> &ChatOperationRequest {
         &self.request
+    }
+
+    /// Opaque authority credential. Receipts and user-facing events never
+    /// serialize this value.
+    pub fn lease_token(&self) -> &str {
+        &self.lease_token
+    }
+
+    /// Construct a lease-bearing claim returned by a non-SQLite authority.
+    #[allow(clippy::too_many_arguments)]
+    pub fn from_authority(
+        request: ChatOperationRequest,
+        operation_id: String,
+        user_message_id: String,
+        assistant_message_id: String,
+        status: ChatOperationStatus,
+        user_seq: Option<u64>,
+        execution_hash: Option<String>,
+        lease_token: String,
+        lease_expires_at: i64,
+        recovered: bool,
+    ) -> Result<Self> {
+        request.validate()?;
+        validate_required("operation id", &operation_id, 128)?;
+        validate_required("user message id", &user_message_id, 128)?;
+        validate_required("assistant message id", &assistant_message_id, 128)?;
+        validate_required("lease token", &lease_token, 128)?;
+        if status.is_terminal() {
+            return Err(anyhow!("chat operation authority returned a terminal acquired claim"));
+        }
+        Ok(Self {
+            request,
+            operation_id,
+            user_message_id,
+            assistant_message_id,
+            status,
+            user_seq,
+            execution_hash,
+            lease_token,
+            lease_expires_at: Some(lease_expires_at),
+            recovered,
+        })
     }
 }
 
@@ -262,7 +306,12 @@ impl ChatOperationStore {
         }
         if inserted {
             tx.commit()?;
-            return Ok(ChatOperationBegin::Acquired(Box::new(row.claim(request, lease_token, false)?)));
+            return Ok(ChatOperationBegin::Acquired(Box::new(row.claim(
+                request,
+                lease_token,
+                Some(lease_expires_at),
+                false,
+            )?)));
         }
         if row.lease_expires_at.unwrap_or(i64::MAX) > now {
             tx.commit()?;
@@ -291,7 +340,7 @@ impl ChatOperationStore {
         )?;
         tx.commit()?;
         if updated == 1 {
-            Ok(ChatOperationBegin::Acquired(Box::new(row.claim(request, lease_token, true)?)))
+            Ok(ChatOperationBegin::Acquired(Box::new(row.claim(request, lease_token, Some(lease_expires_at), true)?)))
         } else {
             Ok(ChatOperationBegin::InProgress)
         }
@@ -544,7 +593,13 @@ struct StoredOperation {
 }
 
 impl StoredOperation {
-    fn claim(&self, request: ChatOperationRequest, lease_token: String, recovered: bool) -> Result<ChatOperationClaim> {
+    fn claim(
+        &self,
+        request: ChatOperationRequest,
+        lease_token: String,
+        lease_expires_at: Option<i64>,
+        recovered: bool,
+    ) -> Result<ChatOperationClaim> {
         Ok(ChatOperationClaim {
             request,
             operation_id: self.operation_id.clone(),
@@ -554,6 +609,7 @@ impl StoredOperation {
             user_seq: self.user_seq.map(u64::try_from).transpose().context("negative user sequence in chat journal")?,
             execution_hash: self.execution_hash.clone(),
             lease_token,
+            lease_expires_at,
             recovered,
         })
     }

@@ -59,7 +59,8 @@ animus --json chat capabilities
 animus --json chat send "your message" --conversation <id> \
   --actor-json '{"user_id":"alice","tenant_id":"workspace-a","claims":[]}' \
   --as-user alice \
-  --idempotency-key <key>
+  --idempotency-key <key> \
+  --require-shared-authority  # required by Portal/multi-replica callers
 
 # Read a transcript, optionally returning a bounded slice
 animus chat get <id> [--actor-json <json>] [--as-user <user-id>] [--limit <n>] [--offset <n>]
@@ -133,13 +134,35 @@ workspace, actor, and conversation. Reuse with an identical effective request
 replays its canonical receipt, while a changed request returns
 `idempotency_conflict` and a live lease returns `idempotency_in_progress`.
 
-The SQLite/WAL reservation is created before the user transcript row. Once the
-user row is accepted, a retry never blindly starts the provider again: an
-expired process is reconciled to the stored assistant row when present, or to
-the terminal `assistant_interrupted` state otherwise. This avoids duplicate
+Durable operation authority follows the selected transcript backend. The file
+store creates its SQLite/WAL reservation before the user transcript row. A
+plugin store must advertise `conversation_operations_shared_v1` and implement
+the seven `conversation/operation_*` RPCs; its database clock, operation rows,
+and rotating lease tokens then provide one authority shared by every CLI host.
+A keyed send fails closed when a selected plugin lacks that capability. It
+never silently falls back to host-local SQLite.
+
+Portal and other multi-replica callers must also pass
+`--require-shared-authority` with every keyed send. The per-send policy rejects
+the file backend, so a plugin that disappears after startup cannot split
+operations into host-local SQLite databases. A discovered plugin is still
+exercised by the operation RPC on each send; process, handshake, or database
+failures therefore fail the request before provider execution.
+
+Once the user row is accepted, a retry never blindly starts the provider again:
+an expired process is reconciled to the stored assistant row when present, or
+to the terminal `assistant_interrupted` state otherwise. This avoids duplicate
 agent/tool side effects. Provider errors persist `assistant_failed`; exact
 retries replay the same bounded failure receipt. Use `animus --json chat
 capabilities` as the stable Portal capability probe instead of scraping help.
+The probe's live `backend` object reports the selected `kind`, `authority_mode`,
+whether the shared capability was observed, readiness, and a stable
+`error_code`. For a capable plugin, the command also performs a bounded,
+read-only `conversation/load_meta` RPC against a guaranteed-missing probe id;
+this verifies process startup, handshake, and authoritative database access
+without writing application data. Portal multi-replica mode is safe only when it reports
+`kind: "plugin"`, `authority_mode: "shared_conversation_store_rpc"`, and
+`ready: true`.
 
 Admission uses two hashes. The first covers normalized caller intent and is
 checked before mutable agent/profile/MCP resolution, so a terminal receipt can
@@ -223,7 +246,7 @@ output.
 
 Chat persistence is served by an **optional** `conversation_store` plugin role. With no plugin installed, the in-tree filesystem store (below) is used — chat works with zero plugins. When a `conversation_store` plugin is discovered, authenticated chat data ops (`create` / `load_meta` / `save_meta` / `append_message` / `load_messages` / `list` / `delete`) route to it over JSON-RPC instead; this is how an out-of-tree Postgres backend serves tenant-isolated history with real per-user ownership + sharing.
 
-The role is optional: it is **not** a required preflight role, and the daemon never refuses to start without it. The tenant contract is committed in `animus-protocol` at `6b88922` and must be published/pinned as rc.12 (or later) before release integration. Until then, the CLI's bound request structs emit that exact additive JSON shape while the workspace remains buildable against rc.11. The `Visibility` enum, `ConversationMeta`, and `ChatMessage` wire shapes match the on-disk `meta.json` / `messages.jsonl` shapes exactly. `conversation/create` can stamp `agent_id` atomically, and `conversation/save_meta` accepts `expected_revision` for compare-and-swap. A durable backend must persist and enforce `active_operation_id` in that same owner-scoped CAS; a different operation cannot replace a live reservation. Cross-process turn serialization (`try_lock_conversation`) is intentionally NOT on the wire — a DB-backed plugin uses a transaction or advisory lock per conversation and MUST enforce the revision precondition. Each plugin call spawns a host, runs one RPC, and reaps the host (`host.shutdown().await`).
+The role is optional: it is **not** a required preflight role, and the daemon never refuses to start without it. The tenant and shared-operation contracts are staged for the next additive `animus-protocol` release. Until that dependency is published and pinned, the CLI's bound request structs emit the exact candidate JSON shape while the workspace remains buildable against rc.11; no machine-local dependency override is required. The `Visibility` enum, `ConversationMeta`, and `ChatMessage` wire shapes match the on-disk `meta.json` / `messages.jsonl` shapes exactly. `conversation/create` can stamp `agent_id` atomically, and `conversation/save_meta` accepts `expected_revision` for compare-and-swap. A durable backend must persist and enforce `active_operation_id` in that same owner-scoped CAS; a different operation cannot replace a live reservation. Cross-process turn serialization (`try_lock_conversation`) is intentionally NOT on the wire — a DB-backed plugin uses a transaction or advisory lock per conversation and MUST enforce the revision precondition. Each plugin call spawns a host, runs one RPC, and reaps the host (`host.shutdown().await`).
 
 ## State layout
 

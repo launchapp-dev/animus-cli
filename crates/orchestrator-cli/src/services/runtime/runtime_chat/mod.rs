@@ -29,7 +29,7 @@ use turn::{run_turn, ResolverTurnProducer, TurnContext};
 
 pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: bool) -> Result<()> {
     match command {
-        ChatCommand::Capabilities => handle_chat_capabilities(json),
+        ChatCommand::Capabilities => handle_chat_capabilities(project_root, json),
         ChatCommand::New(args) => handle_chat_new(args, project_root, json),
         ChatCommand::Send(args) => handle_chat_send(args, project_root, json).await,
         ChatCommand::Get(args) => handle_chat_get(args, project_root, json),
@@ -53,7 +53,8 @@ fn chat_actor(
     Ok((actor, user))
 }
 
-fn handle_chat_capabilities(json: bool) -> Result<()> {
+fn handle_chat_capabilities(project_root: &str, json: bool) -> Result<()> {
+    let backend = client::backend_readiness(Path::new(project_root));
     print_value(
         serde_json::json!({
             "schema": "animus.chat.capabilities.v1",
@@ -81,6 +82,23 @@ fn handle_chat_capabilities(json: bool) -> Result<()> {
                     "max_key_bytes": orchestrator_core::MAX_CHAT_IDEMPOTENCY_KEY_BYTES,
                     "requires": ["--conversation", "--actor-json", "--as-user"],
                     "scope": ["repository", "workspace", "actor", "conversation"],
+                    "authority": {
+                        "schema": "animus.chat.operation_authority.v1",
+                        "selection": "conversation_store_backend",
+                        "file_store": {
+                            "mode": "local_sqlite",
+                            "shared_across_hosts": false,
+                        },
+                        "plugin_store": {
+                            "mode": "shared_conversation_store_rpc",
+                            "required_backend_capability": client::SHARED_OPERATION_CAPABILITY,
+                            "missing_capability": "fail_closed",
+                            "shared_across_hosts": true,
+                        },
+                        "lease_clock": "backend",
+                        "lease_token_exposure": "acquired_claim_only",
+                        "portal_required_flag": "--require-shared-authority",
+                    },
                 },
                 "identity_binding": {
                     "supported": true,
@@ -99,7 +117,8 @@ fn handle_chat_capabilities(json: bool) -> Result<()> {
                         "message_id", "seq"
                     ],
                 }
-            }
+            },
+            "backend": backend,
         }),
         json,
     )
@@ -503,8 +522,15 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
             "no_animus_mcp": args.no_animus_mcp,
             "as_user": user.as_deref(),
         }))?;
-        let (operation_store, begin) =
-            idempotency::begin(&project_root_path, actor, conversation_id, caller_key, caller_hash)?;
+        let (operation_authority, begin) = idempotency::begin(
+            &store,
+            &project_root_path,
+            actor,
+            conversation_id,
+            caller_key,
+            caller_hash,
+            args.require_shared_authority,
+        )?;
         match begin {
             orchestrator_core::ChatOperationBegin::Conflict => {
                 return Err(crate::conflict_error(
@@ -524,12 +550,13 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
             orchestrator_core::ChatOperationBegin::Acquired(claim)
                 if claim.recovered && claim.status == orchestrator_core::ChatOperationStatus::UserAccepted =>
             {
-                let receipt = turn::reconcile_recovered_accepted(&store, &operation_store, &claim).await?;
+                let mut operation = idempotency::ChatTurnOperation::new(operation_authority, claim);
+                let receipt = turn::reconcile_recovered_accepted(&store, &mut operation).await?;
                 emit_operation_receipt(sink.as_mut(), &receipt)?;
                 return replay_result(&receipt);
             }
             orchestrator_core::ChatOperationBegin::Acquired(claim) => {
-                Some(idempotency::ChatTurnOperation::new(operation_store, claim))
+                Some(idempotency::ChatTurnOperation::new(operation_authority, claim))
             }
         }
     } else {

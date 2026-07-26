@@ -191,6 +191,12 @@ pub(crate) struct ChatSendArgs {
         requires_all = ["conversation", "actor_json", "as_user"]
     )]
     pub(crate) idempotency_key: Option<String>,
+    /// Fail unless this keyed send uses operation authority shared by the
+    /// selected conversation-store plugin. Application portals should set
+    /// this on every send so plugin disappearance cannot fall back to a
+    /// host-local SQLite authority.
+    #[arg(long, requires = "idempotency_key")]
+    pub(crate) require_shared_authority: bool,
 }
 
 #[derive(Debug, Args)]

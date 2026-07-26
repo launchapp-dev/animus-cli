@@ -19,11 +19,15 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use animus_actor::Actor;
 use animus_plugin_protocol::conversation_store as proto;
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use orchestrator_core::{
+    ChatOperationBegin, ChatOperationClaim, ChatOperationReceipt, ChatOperationRequest, ChatOperationStatus,
+};
 use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, PluginHost, PluginSpawnOptions};
 
 use super::store::{
@@ -32,6 +36,156 @@ use super::store::{
 
 const CONVERSATION_STORE_KIND: &str = "conversation_store";
 const RPC_TIMEOUT: Duration = Duration::from_secs(30);
+const BACKEND_PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+pub(crate) const SHARED_OPERATION_CAPABILITY: &str = "conversation_operations_shared_v1";
+
+#[derive(Debug, serde::Serialize, PartialEq, Eq)]
+pub(crate) struct ChatBackendReadiness {
+    pub schema: &'static str,
+    pub kind: &'static str,
+    pub authority_mode: &'static str,
+    pub required_capability: &'static str,
+    pub required_capability_observed: bool,
+    pub ready: bool,
+    pub error_code: Option<&'static str>,
+}
+
+pub(crate) fn backend_readiness(project_root: &Path) -> ChatBackendReadiness {
+    let discovered = match discover_by_kind(project_root.to_path_buf(), CONVERSATION_STORE_KIND) {
+        Err(_) => BackendDiscovery::Failed,
+        Ok(plugins) => match plugins.into_iter().next() {
+            None => BackendDiscovery::File,
+            Some(plugin) => {
+                let shared = plugin_supports_shared_authority(&plugin);
+                let probe_succeeded = shared && probe_plugin_backend(&plugin, project_root).is_ok();
+                BackendDiscovery::Plugin { shared, probe_succeeded }
+            }
+        },
+    };
+    readiness_for(discovered)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum BackendDiscovery {
+    Failed,
+    File,
+    Plugin { shared: bool, probe_succeeded: bool },
+}
+
+fn readiness_for(discovered: BackendDiscovery) -> ChatBackendReadiness {
+    match discovered {
+        BackendDiscovery::Failed => ChatBackendReadiness {
+            schema: "animus.chat.backend_readiness.v1",
+            kind: "unavailable",
+            authority_mode: "unavailable",
+            required_capability: SHARED_OPERATION_CAPABILITY,
+            required_capability_observed: false,
+            ready: false,
+            error_code: Some("conversation_store_discovery_failed"),
+        },
+        BackendDiscovery::File => ChatBackendReadiness {
+            schema: "animus.chat.backend_readiness.v1",
+            kind: "file",
+            authority_mode: "local_sqlite",
+            required_capability: SHARED_OPERATION_CAPABILITY,
+            required_capability_observed: false,
+            ready: true,
+            error_code: None,
+        },
+        BackendDiscovery::Plugin { shared: true, probe_succeeded: true } => ChatBackendReadiness {
+            schema: "animus.chat.backend_readiness.v1",
+            kind: "plugin",
+            authority_mode: "shared_conversation_store_rpc",
+            required_capability: SHARED_OPERATION_CAPABILITY,
+            required_capability_observed: true,
+            ready: true,
+            error_code: None,
+        },
+        BackendDiscovery::Plugin { shared: true, probe_succeeded: false } => ChatBackendReadiness {
+            schema: "animus.chat.backend_readiness.v1",
+            kind: "plugin",
+            authority_mode: "unavailable",
+            required_capability: SHARED_OPERATION_CAPABILITY,
+            required_capability_observed: true,
+            ready: false,
+            error_code: Some("conversation_store_probe_failed"),
+        },
+        BackendDiscovery::Plugin { shared: false, .. } => ChatBackendReadiness {
+            schema: "animus.chat.backend_readiness.v1",
+            kind: "plugin",
+            authority_mode: "unavailable",
+            required_capability: SHARED_OPERATION_CAPABILITY,
+            required_capability_observed: false,
+            ready: false,
+            error_code: Some("shared_operation_authority_missing"),
+        },
+    }
+}
+
+/// Perform a bounded, read-only RPC through the selected plugin. A manifest
+/// capability alone cannot prove that the process starts or its authoritative
+/// database is reachable. Loading a guaranteed-nonexistent conversation keeps
+/// the probe side-effect free while still executing a backend query.
+fn probe_plugin_backend(plugin: &DiscoveredPlugin, project_root: &Path) -> Result<()> {
+    let plugin = plugin.clone();
+    let project_root = project_root.to_path_buf();
+    run_blocking(async move {
+        let options = PluginSpawnOptions::for_manifest(
+            plugin.name.clone(),
+            &plugin.manifest.env_required,
+            std::iter::empty::<String>(),
+            None,
+        )
+        .with_working_dir(project_root.clone());
+        let host = PluginHost::spawn_with_options(&plugin.path, &[], options)
+            .await
+            .with_context(|| format!("spawning conversation_store plugin {} for readiness probe", plugin.name))?;
+        let result = async {
+            let actor = Actor {
+                user_id: "__animus_readiness_probe__".to_string(),
+                claims: Vec::new(),
+                tenant_id: Some("__animus_readiness_probe__".to_string()),
+            };
+            let request = BoundConversationIdRequest {
+                scope: bound_scope(&project_root, &actor),
+                id: "__animus_readiness_probe_missing__".to_string(),
+                as_user: actor.user_id.clone(),
+            };
+            let params = bind_actor_to_params(&actor, &request)?;
+            tokio::time::timeout(BACKEND_PROBE_TIMEOUT, async {
+                host.handshake().await?;
+                let value = host
+                    .request_typed_with_timeout(
+                        proto::METHOD_CONVERSATION_LOAD_META,
+                        Some(params),
+                        BACKEND_PROBE_TIMEOUT,
+                    )
+                    .await?;
+                let _: BoundConversationMetaResponse = serde_json::from_value(value)?;
+                Ok::<_, anyhow::Error>(())
+            })
+            .await
+            .map_err(|_| anyhow!("conversation_store readiness probe timed out"))?
+        }
+        .await;
+        let _ = host.shutdown().await;
+        result
+    })?
+}
+
+fn plugin_supports_shared_authority(plugin: &DiscoveredPlugin) -> bool {
+    plugin.manifest.capabilities.iter().any(|value| value == SHARED_OPERATION_CAPABILITY)
+}
+
+fn require_remote_shared_authority(observed: bool) -> Result<()> {
+    if observed {
+        Ok(())
+    } else {
+        Err(crate::unavailable_error(
+            "chat_backend_not_ready: plugin conversation_store lacks conversation_operations_shared_v1; keyed sends fail closed",
+        ))
+    }
+}
 
 /// Runtime-selected conversation store: the in-tree filesystem store, or a
 /// discovered `conversation_store` plugin.
@@ -95,7 +249,33 @@ impl ConversationStoreClient {
     ) -> Result<Vec<super::SearchMatch>> {
         match self {
             Self::File(_) => super::search_conversations(self, query, case_insensitive, limit, as_user),
-            Self::Plugin(plugin) => run_blocking(plugin.search_async(query, case_insensitive, limit, as_user))?,
+            Self::Plugin(plugin) => {
+                let plugin = (**plugin).clone();
+                let query = query.to_string();
+                let as_user = as_user.map(ToOwned::to_owned);
+                run_blocking(
+                    async move { plugin.search_async(&query, case_insensitive, limit, as_user.as_deref()).await },
+                )?
+            }
+        }
+    }
+
+    /// Select durable keyed-send authority from the transcript backend.
+    /// A remote transcript store may never silently use host-local SQLite.
+    pub(crate) fn shared_operation_client(&self, require_shared: bool) -> Result<Option<SharedOperationClient>> {
+        match self {
+            Self::File(_) if require_shared => Err(crate::unavailable_error(
+                "chat_backend_not_ready: --require-shared-authority forbids host-local SQLite operation authority",
+            )),
+            Self::File(_) => Ok(None),
+            Self::Plugin(plugin) => {
+                require_remote_shared_authority(plugin_supports_shared_authority(&plugin.plugin))?;
+                Ok(Some(SharedOperationClient::new(
+                    plugin.plugin.clone(),
+                    plugin.project_root.clone(),
+                    plugin.actor.clone(),
+                )))
+            }
         }
     }
 
@@ -337,6 +517,7 @@ fn filter_for_user(summaries: Vec<ConversationSummary>, as_user: Option<&str>) -
 
 /// JSON-RPC client over a discovered `conversation_store` plugin. Each method
 /// spawns a host, runs one RPC, and reaps the host on every exit path.
+#[derive(Clone)]
 pub(crate) struct PluginConversationStore {
     plugin: DiscoveredPlugin,
     project_root: PathBuf,
@@ -430,6 +611,343 @@ struct BoundConversationListRequest {
 #[derive(serde::Deserialize)]
 struct BoundConversationListResponse {
     conversations: Vec<ConversationSummary>,
+}
+
+const METHOD_OPERATION_BEGIN: &str = "conversation/operation_begin";
+const METHOD_OPERATION_LOAD: &str = "conversation/operation_load";
+const METHOD_OPERATION_RENEW: &str = "conversation/operation_renew";
+const METHOD_OPERATION_BIND_EXECUTION: &str = "conversation/operation_bind_execution";
+const METHOD_OPERATION_RELEASE: &str = "conversation/operation_release";
+const METHOD_OPERATION_ACCEPT_USER: &str = "conversation/operation_accept_user";
+const METHOD_OPERATION_TERMINALIZE: &str = "conversation/operation_terminalize";
+
+#[derive(Clone, serde::Serialize)]
+struct BoundOperationKey {
+    #[serde(flatten)]
+    scope: BoundConversationScope,
+    conversation_id: String,
+    caller_key: String,
+    as_user: String,
+}
+
+#[derive(serde::Serialize)]
+struct BoundOperationBeginRequest {
+    #[serde(flatten)]
+    key: BoundOperationKey,
+    request_hash: String,
+}
+
+#[derive(serde::Serialize)]
+struct BoundOperationLeaseRequest {
+    #[serde(flatten)]
+    key: BoundOperationKey,
+    operation_id: String,
+    lease_token: String,
+}
+
+#[derive(serde::Serialize)]
+struct BoundOperationBindRequest {
+    #[serde(flatten)]
+    lease: BoundOperationLeaseRequest,
+    execution_hash: String,
+    allow_rebind: bool,
+}
+
+#[derive(serde::Serialize)]
+struct BoundOperationAcceptRequest {
+    #[serde(flatten)]
+    lease: BoundOperationLeaseRequest,
+    user_seq: u64,
+}
+
+#[derive(serde::Serialize)]
+struct BoundOperationTerminalRequest {
+    #[serde(flatten)]
+    lease: BoundOperationLeaseRequest,
+    status: ChatOperationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    assistant_seq: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_message: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum BoundOperationBeginOutcome {
+    Acquired,
+    Replay,
+    InProgress,
+    Conflict,
+}
+
+#[derive(Clone, Debug, serde::Deserialize)]
+struct BoundOperation {
+    operation_id: String,
+    conversation_id: String,
+    caller_key: String,
+    user_message_id: String,
+    assistant_message_id: String,
+    status: ChatOperationStatus,
+    execution_hash: Option<String>,
+    user_seq: Option<u64>,
+    assistant_seq: Option<u64>,
+    error_code: Option<String>,
+    error_message: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BoundOperationClaim {
+    #[serde(flatten)]
+    operation: BoundOperation,
+    lease_token: String,
+    lease_expires_at: i64,
+    #[serde(default)]
+    recovered: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BoundOperationBeginResponse {
+    outcome: BoundOperationBeginOutcome,
+    claim: Option<BoundOperationClaim>,
+    operation: Option<BoundOperation>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BoundOperationLoadResponse {
+    operation: Option<BoundOperation>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct BoundOperationMutationResponse {
+    changed: bool,
+}
+
+impl BoundOperation {
+    fn receipt(self) -> Result<ChatOperationReceipt> {
+        if !self.status.is_terminal() {
+            return Err(anyhow!("shared chat operation receipt is not terminal"));
+        }
+        Ok(ChatOperationReceipt {
+            operation_id: self.operation_id,
+            conversation_id: self.conversation_id,
+            user_message_id: self.user_message_id,
+            user_seq: self.user_seq,
+            assistant_message_id: self.assistant_message_id,
+            assistant_seq: self.assistant_seq,
+            status: self.status,
+            error_code: self.error_code,
+            error_message: self.error_message,
+        })
+    }
+}
+
+/// Cloneable RPC authority used by the provider heartbeat thread. It carries
+/// only plugin discovery metadata and the authenticated actor; lease secrets
+/// live solely in `ChatOperationClaim` and never in readiness output.
+#[derive(Clone)]
+pub(crate) struct SharedOperationClient {
+    transport: Arc<dyn SharedOperationTransport>,
+    project_root: PathBuf,
+    actor: Actor,
+}
+
+trait SharedOperationTransport: Send + Sync {
+    fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value>;
+}
+
+#[derive(Clone)]
+struct PluginOperationTransport {
+    plugin: DiscoveredPlugin,
+    project_root: PathBuf,
+}
+
+impl SharedOperationClient {
+    fn new(plugin: DiscoveredPlugin, project_root: PathBuf, actor: Actor) -> Self {
+        Self {
+            transport: Arc::new(PluginOperationTransport { plugin, project_root: project_root.clone() }),
+            project_root,
+            actor,
+        }
+    }
+
+    fn scope(&self) -> BoundConversationScope {
+        bound_scope(&self.project_root, &self.actor)
+    }
+
+    fn key(&self, request: &ChatOperationRequest) -> Result<BoundOperationKey> {
+        let tenant = self.actor.tenant_id.as_deref().unwrap_or_default();
+        if request.workspace_id != tenant || request.actor_id != self.actor.user_id {
+            return Err(crate::invalid_input_error(
+                "shared chat operation scope must match the authenticated conversation actor",
+            ));
+        }
+        Ok(BoundOperationKey {
+            scope: self.scope(),
+            conversation_id: request.conversation_id.clone(),
+            caller_key: request.caller_key.clone(),
+            as_user: self.actor.user_id.clone(),
+        })
+    }
+
+    fn lease_request(&self, claim: &ChatOperationClaim) -> Result<BoundOperationLeaseRequest> {
+        Ok(BoundOperationLeaseRequest {
+            key: self.key(claim.request())?,
+            operation_id: claim.operation_id.clone(),
+            lease_token: claim.lease_token().to_string(),
+        })
+    }
+
+    fn validate_response_key(&self, request: &ChatOperationRequest, operation: &BoundOperation) -> Result<()> {
+        // Re-validate actor/tenant assertions as well as the durable key. A
+        // compromised or buggy shared backend must never redirect a replay or
+        // load across a conversation/key boundary.
+        let _ = self.key(request)?;
+        if operation.conversation_id != request.conversation_id || operation.caller_key != request.caller_key {
+            return Err(anyhow!("shared operation authority returned a mismatched key"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn begin(&self, request: ChatOperationRequest) -> Result<ChatOperationBegin> {
+        request.validate()?;
+        let wire = BoundOperationBeginRequest { key: self.key(&request)?, request_hash: request.request_hash.clone() };
+        let response: BoundOperationBeginResponse = self.call(METHOD_OPERATION_BEGIN, &wire)?;
+        match response.outcome {
+            BoundOperationBeginOutcome::InProgress => Ok(ChatOperationBegin::InProgress),
+            BoundOperationBeginOutcome::Conflict => Ok(ChatOperationBegin::Conflict),
+            BoundOperationBeginOutcome::Replay => {
+                let operation =
+                    response.operation.ok_or_else(|| anyhow!("shared operation replay omitted operation"))?;
+                self.validate_response_key(&request, &operation)?;
+                Ok(ChatOperationBegin::Replay(Box::new(operation.receipt()?)))
+            }
+            BoundOperationBeginOutcome::Acquired => {
+                let claim = response.claim.ok_or_else(|| anyhow!("shared operation acquire omitted claim"))?;
+                self.validate_response_key(&request, &claim.operation)?;
+                Ok(ChatOperationBegin::Acquired(Box::new(ChatOperationClaim::from_authority(
+                    request,
+                    claim.operation.operation_id,
+                    claim.operation.user_message_id,
+                    claim.operation.assistant_message_id,
+                    claim.operation.status,
+                    claim.operation.user_seq,
+                    claim.operation.execution_hash,
+                    claim.lease_token,
+                    claim.lease_expires_at,
+                    claim.recovered,
+                )?)))
+            }
+        }
+    }
+
+    pub(crate) fn renew(&self, claim: &ChatOperationClaim) -> Result<bool> {
+        let response: BoundOperationMutationResponse =
+            self.call(METHOD_OPERATION_RENEW, &self.lease_request(claim)?)?;
+        Ok(response.changed)
+    }
+
+    pub(crate) fn bind_execution(
+        &self,
+        claim: &mut ChatOperationClaim,
+        execution_hash: &str,
+        allow_rebind: bool,
+    ) -> Result<bool> {
+        let request = BoundOperationBindRequest {
+            lease: self.lease_request(claim)?,
+            execution_hash: execution_hash.to_string(),
+            allow_rebind,
+        };
+        let response: BoundOperationMutationResponse = self.call(METHOD_OPERATION_BIND_EXECUTION, &request)?;
+        if response.changed {
+            claim.execution_hash = Some(execution_hash.to_string());
+        }
+        Ok(response.changed)
+    }
+
+    pub(crate) fn release(&self, claim: &ChatOperationClaim) -> Result<bool> {
+        let response: BoundOperationMutationResponse =
+            self.call(METHOD_OPERATION_RELEASE, &self.lease_request(claim)?)?;
+        Ok(response.changed)
+    }
+
+    pub(crate) fn accept_user(&self, claim: &mut ChatOperationClaim, user_seq: u64) -> Result<bool> {
+        let request = BoundOperationAcceptRequest { lease: self.lease_request(claim)?, user_seq };
+        let response: BoundOperationMutationResponse = self.call(METHOD_OPERATION_ACCEPT_USER, &request)?;
+        if response.changed {
+            claim.status = ChatOperationStatus::UserAccepted;
+            claim.user_seq = Some(user_seq);
+        }
+        Ok(response.changed)
+    }
+
+    pub(crate) fn terminalize(
+        &self,
+        claim: &ChatOperationClaim,
+        status: ChatOperationStatus,
+        assistant_seq: Option<u64>,
+        error_code: Option<&str>,
+        error_message: Option<&str>,
+    ) -> Result<bool> {
+        let request = BoundOperationTerminalRequest {
+            lease: self.lease_request(claim)?,
+            status,
+            assistant_seq,
+            error_code: error_code.map(ToOwned::to_owned),
+            error_message: error_message.map(ToOwned::to_owned),
+        };
+        let response: BoundOperationMutationResponse = self.call(METHOD_OPERATION_TERMINALIZE, &request)?;
+        Ok(response.changed)
+    }
+
+    pub(crate) fn receipt(&self, claim: &ChatOperationClaim) -> Result<ChatOperationReceipt> {
+        let response: BoundOperationLoadResponse = self.call(METHOD_OPERATION_LOAD, &self.key(claim.request())?)?;
+        let operation = response.operation.ok_or_else(|| anyhow!("shared chat operation disappeared"))?;
+        self.validate_response_key(claim.request(), &operation)?;
+        operation.receipt()
+    }
+
+    fn call<Req: serde::Serialize, Resp: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        request: &Req,
+    ) -> Result<Resp> {
+        let params = bind_actor_to_params(&self.actor, request)?;
+        let value = self.transport.call(method, params)?;
+        serde_json::from_value(value).with_context(|| format!("decoding {method} response"))
+    }
+}
+
+impl SharedOperationTransport for PluginOperationTransport {
+    fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        let client = self.clone();
+        let method = method.to_string();
+        run_blocking(async move { client.call_async(&method, params).await })?
+    }
+}
+
+impl PluginOperationTransport {
+    async fn call_async(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+        let options = PluginSpawnOptions::for_manifest(
+            self.plugin.name.clone(),
+            &self.plugin.manifest.env_required,
+            std::iter::empty::<String>(),
+            None,
+        )
+        .with_working_dir(self.project_root.clone());
+        let host = PluginHost::spawn_with_options(&self.plugin.path, &[], options)
+            .await
+            .with_context(|| format!("spawning conversation_store plugin {}", self.plugin.name))?;
+        let result = async {
+            host.handshake().await?;
+            let value = host.request_typed_with_timeout(method, Some(params), RPC_TIMEOUT).await?;
+            Ok(value)
+        }
+        .await;
+        let _ = host.shutdown().await;
+        result
+    }
 }
 
 impl PluginConversationStore {
@@ -533,18 +1051,18 @@ impl PluginConversationStore {
         request: &Req,
     ) -> Result<Resp> {
         let params = self.actor_bound_params(request)?;
-        run_blocking(self.call_async(method, params))?
+        let client = self.clone();
+        let method = method.to_string();
+        let response_method = method.clone();
+        let value = run_blocking(async move { client.call_async(&method, params).await })??;
+        serde_json::from_value(value).with_context(|| format!("decoding {response_method} response"))
     }
 
     fn actor_bound_params(&self, request: &impl serde::Serialize) -> Result<serde_json::Value> {
         bind_actor_to_params(&self.actor, request)
     }
 
-    async fn call_async<Resp: serde::de::DeserializeOwned>(
-        &self,
-        method: &str,
-        params: serde_json::Value,
-    ) -> Result<Resp> {
+    async fn call_async(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
         let options = PluginSpawnOptions::for_manifest(
             self.plugin.name.clone(),
             &self.plugin.manifest.env_required,
@@ -563,20 +1081,18 @@ impl PluginConversationStore {
         result
     }
 
-    async fn handshake_and_call<Resp: serde::de::DeserializeOwned>(
+    async fn handshake_and_call(
         &self,
         host: &PluginHost,
         method: &str,
         params: serde_json::Value,
-    ) -> Result<Resp> {
+    ) -> Result<serde_json::Value> {
         host.handshake()
             .await
             .with_context(|| format!("handshake with conversation_store plugin {}", self.plugin.name))?;
-        let value = host
-            .request_typed_with_timeout(method, Some(params), RPC_TIMEOUT)
+        host.request_typed_with_timeout(method, Some(params), RPC_TIMEOUT)
             .await
-            .with_context(|| format!("{method} on conversation_store plugin {}", self.plugin.name))?;
-        serde_json::from_value(value).with_context(|| format!("decoding {method} response"))
+            .with_context(|| format!("{method} on conversation_store plugin {}", self.plugin.name))
     }
 
     /// Run a whole `chat search` over ONE spawned plugin host. The per-rpc
@@ -661,20 +1177,35 @@ impl PluginConversationStore {
     }
 }
 
-/// Bridge an async future into the sync `ConversationStore` trait. Works
-/// whether or not a tokio runtime is already running (daemon = inside a
-/// runtime; CLI = none). Mirrors `config_source_client::run_blocking`.
-fn run_blocking<F: Future>(fut: F) -> Result<F::Output> {
-    match tokio::runtime::Handle::try_current() {
-        Ok(handle) => Ok(tokio::task::block_in_place(|| handle.block_on(fut))),
-        Err(_) => {
-            let rt = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .context("building tokio runtime for conversation_store call")?;
-            Ok(rt.block_on(fut))
-        }
+fn async_bridge_runtime() -> Result<&'static tokio::runtime::Runtime> {
+    static BRIDGE: std::sync::OnceLock<std::result::Result<tokio::runtime::Runtime, String>> =
+        std::sync::OnceLock::new();
+    match BRIDGE.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_name("animus-chat-rpc-bridge")
+            .enable_all()
+            .build()
+            .map_err(|error| format!("building conversation-store async bridge: {error}"))
+    }) {
+        Ok(runtime) => Ok(runtime),
+        Err(error) => Err(anyhow!(error.clone())),
     }
+}
+
+/// Bridge an owned async future into the sync `ConversationStore` trait. All
+/// callers share one bounded worker runtime, so this is safe under both Tokio
+/// runtime flavors and never creates a runtime or thread per RPC.
+fn run_blocking<F>(fut: F) -> Result<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
+    async_bridge_runtime()?.spawn(async move {
+        let _ = result_tx.send(fut.await);
+    });
+    result_rx.recv().map_err(|_| anyhow!("conversation-store async bridge dropped an RPC result"))
 }
 
 fn to_proto_message(message: &ChatMessage) -> Result<proto::ChatMessage> {
@@ -691,6 +1222,264 @@ fn from_proto_message(message: proto::ChatMessage) -> Result<ChatMessage> {
 mod tests {
     use super::*;
     use crate::services::runtime::runtime_chat::store::Visibility;
+    use animus_plugin_protocol::PluginManifest;
+    use orchestrator_plugin_host::DiscoverySource;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct MockOperationState {
+        admitted: bool,
+        terminal: bool,
+        calls: Vec<(String, serde_json::Value)>,
+    }
+
+    #[derive(Default)]
+    struct MockOperationTransport {
+        state: Mutex<MockOperationState>,
+    }
+
+    struct MismatchedOperationTransport;
+
+    impl SharedOperationTransport for MismatchedOperationTransport {
+        fn call(&self, method: &str, _params: serde_json::Value) -> Result<serde_json::Value> {
+            let operation = serde_json::json!({
+                "operation_id": "op-hostile",
+                "conversation_id": "other-conversation",
+                "caller_key": "other-key",
+                "user_message_id": "msg-user-hostile",
+                "assistant_message_id": "msg-assistant-hostile",
+                "status": "completed",
+                "user_seq": 0,
+                "assistant_seq": 1,
+            });
+            match method {
+                METHOD_OPERATION_BEGIN => Ok(serde_json::json!({"outcome":"replay", "operation":operation})),
+                METHOD_OPERATION_LOAD => Ok(serde_json::json!({"operation":operation})),
+                other => Err(anyhow!("unexpected hostile mock method {other}")),
+            }
+        }
+    }
+
+    impl SharedOperationTransport for MockOperationTransport {
+        fn call(&self, method: &str, params: serde_json::Value) -> Result<serde_json::Value> {
+            let mut state = self.state.lock().unwrap();
+            state.calls.push((method.to_string(), params.clone()));
+            let operation = serde_json::json!({
+                "operation_id": "op-1",
+                "conversation_id": "conv-1",
+                "caller_key": "request-1",
+                "user_message_id": "msg-user-1",
+                "assistant_message_id": "msg-assistant-1",
+                "status": if state.terminal { "completed" } else { "pending" },
+                "user_seq": if state.terminal { Some(0) } else { None },
+                "assistant_seq": if state.terminal { Some(1) } else { None },
+            });
+            match method {
+                METHOD_OPERATION_BEGIN if state.terminal => {
+                    Ok(serde_json::json!({"outcome":"replay", "operation": operation}))
+                }
+                METHOD_OPERATION_BEGIN if state.admitted => Ok(serde_json::json!({"outcome":"in_progress"})),
+                METHOD_OPERATION_BEGIN => {
+                    state.admitted = true;
+                    Ok(serde_json::json!({
+                        "outcome":"acquired",
+                        "claim": {
+                            "operation_id":"op-1",
+                            "conversation_id":"conv-1",
+                            "caller_key":"request-1",
+                            "user_message_id":"msg-user-1",
+                            "assistant_message_id":"msg-assistant-1",
+                            "status":"pending",
+                            "lease_token":"secret-lease-token",
+                            "lease_expires_at": 4_000_000_000_i64,
+                            "recovered": false
+                        }
+                    }))
+                }
+                METHOD_OPERATION_TERMINALIZE => {
+                    state.terminal = true;
+                    Ok(serde_json::json!({"changed":true, "operation": operation}))
+                }
+                METHOD_OPERATION_LOAD => Ok(serde_json::json!({"operation": operation})),
+                METHOD_OPERATION_RENEW | METHOD_OPERATION_BIND_EXECUTION | METHOD_OPERATION_ACCEPT_USER => {
+                    Ok(serde_json::json!({"changed":true, "operation": operation}))
+                }
+                METHOD_OPERATION_RELEASE => Ok(serde_json::json!({"changed":false})),
+                other => Err(anyhow!("unexpected mock operation method {other}")),
+            }
+        }
+    }
+
+    fn mock_shared_client(transport: Arc<dyn SharedOperationTransport>) -> SharedOperationClient {
+        SharedOperationClient {
+            transport,
+            project_root: PathBuf::from("/repo"),
+            actor: actor("alice", Some("tenant-a")),
+        }
+    }
+
+    fn mock_operation_request() -> ChatOperationRequest {
+        ChatOperationRequest {
+            project_scope: "repo-scope".into(),
+            workspace_id: "tenant-a".into(),
+            actor_id: "alice".into(),
+            conversation_id: "conv-1".into(),
+            caller_key: "request-1".into(),
+            request_hash: "intent-hash".into(),
+        }
+    }
+
+    #[test]
+    fn two_runtime_shared_rpc_contract_excludes_then_replays_without_leaking_lease() {
+        let transport = Arc::new(MockOperationTransport::default());
+        let runtime_a = mock_shared_client(transport.clone());
+        let runtime_b = mock_shared_client(transport.clone());
+        let ChatOperationBegin::Acquired(mut claim) = runtime_a.begin(mock_operation_request()).unwrap() else {
+            panic!("first runtime must acquire");
+        };
+        assert!(matches!(runtime_b.begin(mock_operation_request()).unwrap(), ChatOperationBegin::InProgress));
+        assert!(runtime_a.bind_execution(&mut claim, "execution-hash", false).unwrap());
+        assert!(runtime_a.accept_user(&mut claim, 0).unwrap());
+        assert!(runtime_a.terminalize(&claim, ChatOperationStatus::Completed, Some(1), None, None).unwrap());
+        let ChatOperationBegin::Replay(receipt) = runtime_b.begin(mock_operation_request()).unwrap() else {
+            panic!("second runtime must replay the shared terminal receipt");
+        };
+        let json = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(json["status"], "completed");
+        assert!(json.get("lease_token").is_none(), "lease credentials must never enter a receipt");
+
+        let state = transport.state.lock().unwrap();
+        assert_eq!(state.calls[0].0, METHOD_OPERATION_BEGIN);
+        assert_eq!(state.calls[0].1["tenant_id"], "tenant-a");
+        assert_eq!(state.calls[0].1["actor"]["user_id"], "alice");
+        assert_eq!(state.calls[0].1["repo_scope"], protocol::repository_scope_for_path(Path::new("/repo")));
+        assert!(state.calls.iter().any(|(method, _)| method == METHOD_OPERATION_BIND_EXECUTION));
+        assert!(state.calls.iter().any(|(method, _)| method == METHOD_OPERATION_ACCEPT_USER));
+        assert!(state.calls.iter().any(|(method, _)| method == METHOD_OPERATION_TERMINALIZE));
+    }
+
+    #[test]
+    fn hostile_backend_cannot_redirect_replay_or_load_across_operation_key() {
+        let client = mock_shared_client(Arc::new(MismatchedOperationTransport));
+        let replay_error = client.begin(mock_operation_request()).unwrap_err();
+        assert!(replay_error.to_string().contains("mismatched key"));
+
+        let claim = ChatOperationClaim::from_authority(
+            mock_operation_request(),
+            "op-1".to_string(),
+            "msg-user-1".to_string(),
+            "msg-assistant-1".to_string(),
+            ChatOperationStatus::UserAccepted,
+            Some(0),
+            Some("execution-hash".to_string()),
+            "lease-secret".to_string(),
+            chrono::Utc::now().timestamp() + 300,
+            false,
+        )
+        .unwrap();
+        let load_error = client.receipt(&claim).unwrap_err();
+        assert!(load_error.to_string().contains("mismatched key"));
+    }
+
+    #[test]
+    fn backend_readiness_has_all_five_stable_variants() {
+        let cases = [
+            (
+                BackendDiscovery::Failed,
+                "unavailable",
+                "unavailable",
+                false,
+                false,
+                Some("conversation_store_discovery_failed"),
+            ),
+            (BackendDiscovery::File, "file", "local_sqlite", false, true, None),
+            (
+                BackendDiscovery::Plugin { shared: true, probe_succeeded: true },
+                "plugin",
+                "shared_conversation_store_rpc",
+                true,
+                true,
+                None,
+            ),
+            (
+                BackendDiscovery::Plugin { shared: true, probe_succeeded: false },
+                "plugin",
+                "unavailable",
+                true,
+                false,
+                Some("conversation_store_probe_failed"),
+            ),
+            (
+                BackendDiscovery::Plugin { shared: false, probe_succeeded: false },
+                "plugin",
+                "unavailable",
+                false,
+                false,
+                Some("shared_operation_authority_missing"),
+            ),
+        ];
+        for (input, kind, mode, observed, ready, error) in cases {
+            let value = readiness_for(input);
+            assert_eq!(value.schema, "animus.chat.backend_readiness.v1");
+            assert_eq!(value.kind, kind);
+            assert_eq!(value.authority_mode, mode);
+            assert_eq!(value.required_capability, SHARED_OPERATION_CAPABILITY);
+            assert_eq!(value.required_capability_observed, observed);
+            assert_eq!(value.ready, ready);
+            assert_eq!(value.error_code, error);
+        }
+    }
+
+    #[test]
+    fn advertised_shared_capability_is_not_ready_when_live_probe_fails() {
+        let plugin = DiscoveredPlugin {
+            name: "dead-conversation-store".to_string(),
+            path: PathBuf::from("/definitely/missing/dead-conversation-store"),
+            manifest: PluginManifest {
+                name: "dead-conversation-store".to_string(),
+                version: "0.0.0".to_string(),
+                plugin_kind: CONVERSATION_STORE_KIND.to_string(),
+                plugin_kinds: Vec::new(),
+                description: "test fixture".to_string(),
+                protocol_version: "1.0.0".to_string(),
+                capabilities: vec![SHARED_OPERATION_CAPABILITY.to_string()],
+                env_required: Vec::new(),
+                notification_buffer_size: None,
+                supports_mcp: None,
+            },
+            source: DiscoverySource::ExplicitConfig,
+        };
+        assert!(plugin_supports_shared_authority(&plugin));
+        assert!(probe_plugin_backend(&plugin, Path::new("/repo")).is_err());
+        let readiness = readiness_for(BackendDiscovery::Plugin { shared: true, probe_succeeded: false });
+        assert!(!readiness.ready);
+        assert_eq!(readiness.error_code, Some("conversation_store_probe_failed"));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn async_bridge_is_safe_inside_a_current_thread_runtime() {
+        let value = run_blocking(async { 42_u8 }).unwrap();
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn remote_authority_capability_is_fail_closed() {
+        require_remote_shared_authority(true).unwrap();
+        let error = require_remote_shared_authority(false).unwrap_err();
+        assert!(error.to_string().contains("keyed sends fail closed"));
+    }
+
+    #[test]
+    fn portal_required_authority_rejects_file_fallback_after_plugin_disappearance() {
+        let root = tempfile::tempdir().unwrap();
+        let store = ConversationStoreClient::with_root_for_test(root.path().to_path_buf());
+        assert!(store.shared_operation_client(false).unwrap().is_none());
+        let error = match store.shared_operation_client(true) {
+            Ok(_) => panic!("portal-required sends must reject local fallback"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("forbids host-local SQLite"));
+    }
 
     fn summary(id: &str, owner: Option<&str>, visibility: Visibility) -> ConversationSummary {
         ConversationSummary {

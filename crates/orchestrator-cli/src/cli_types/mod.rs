@@ -1127,14 +1127,22 @@ mod tests {
             "carol",
             "--idempotency-key",
             "arena.chat_1:retry-0",
+            "--require-shared-authority",
         ])
         .expect("bounded application chat key should parse");
         match cli.command {
             Command::Chat { command: ChatCommand::Send(args) } => {
                 assert_eq!(args.idempotency_key.as_deref(), Some("arena.chat_1:retry-0"));
+                assert!(args.require_shared_authority);
             }
             other => panic!("expected chat send, got {other:?}"),
         }
+        assert_eq!(
+            Cli::try_parse_from(["animus", "chat", "send", "hello", "--require-shared-authority"])
+                .expect_err("shared authority policy requires a durable operation key")
+                .kind(),
+            ErrorKind::MissingRequiredArgument
+        );
 
         for argv in [
             vec!["animus", "chat", "send", "hello", "--conversation", "conv-1", "--idempotency-key", "key"],

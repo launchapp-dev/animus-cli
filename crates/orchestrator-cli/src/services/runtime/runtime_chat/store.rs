@@ -321,6 +321,7 @@ pub(crate) trait ConversationStore: Send + Sync {
 /// Layout per conversation:
 /// * `meta.json` — [`ConversationMeta`] (the continuity pointer).
 /// * `messages.jsonl` — append-only [`ChatMessage`] event log.
+#[derive(Clone)]
 pub(crate) struct FileConversationStore {
     root: PathBuf,
 }

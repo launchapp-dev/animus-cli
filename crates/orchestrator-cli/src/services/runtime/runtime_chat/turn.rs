@@ -46,6 +46,8 @@ use serde_json::{json, Value};
 
 use crate::services::runtime::runtime_agent::provider_client::{graft_skill_launch_contract, skill_has_launch_extras};
 
+#[cfg(test)]
+use super::idempotency::ChatOperationAuthority;
 use super::idempotency::ChatTurnOperation;
 use super::sink::{ChatStreamEvent, ChatStreamSink};
 use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationMeta, ConversationStore, TurnBlock};
@@ -676,13 +678,13 @@ async fn acquire_conversation_lock(
 
 pub(crate) async fn reconcile_recovered_accepted(
     store: &dyn ConversationStore,
-    operation_store: &orchestrator_core::ChatOperationStore,
-    claim: &orchestrator_core::ChatOperationClaim,
+    operation: &mut ChatTurnOperation,
 ) -> Result<orchestrator_core::ChatOperationReceipt> {
+    let claim = operation.claim();
     let conversation_id = &claim.request().conversation_id;
     let _lock = acquire_conversation_lock(store, conversation_id).await?;
-    if !operation_store.renew(claim)? {
-        let receipt = operation_store.receipt(claim)?;
+    if !operation.renew_authority()? {
+        let receipt = operation.receipt()?;
         if !receipt.status.is_terminal() {
             return Err(crate::conflict_error(
                 "idempotency_in_progress: recovered chat operation authority moved while waiting for the conversation lock",
@@ -702,7 +704,7 @@ pub(crate) async fn reconcile_recovered_accepted(
                     && message.role == ChatRole::Assistant)
         })
         .map(|message| message.seq);
-    let receipt = super::idempotency::reconcile_recovered_accepted(operation_store, claim, assistant_seq)?;
+    let receipt = operation.reconcile_recovered_accepted(assistant_seq)?;
     if !receipt.status.is_terminal() {
         return Err(crate::conflict_error(
             "idempotency_in_progress: recovered chat operation authority moved before terminal reconciliation",
@@ -1520,7 +1522,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
         let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
         let mut sink = CapturingSink::new();
         let mut context = TurnContext {
@@ -1561,7 +1563,7 @@ mod tests {
         meta.revision = 5;
         meta.active_operation_id = Some(claim.operation_id.clone());
         store.save_meta(&meta).unwrap();
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
         let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
         let mut sink = CapturingSink::new();
         let mut context = TurnContext {
@@ -1603,7 +1605,7 @@ mod tests {
         meta.active_operation_id = Some(claim.operation_id.clone());
         store.save_meta(&meta).unwrap();
 
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
         let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
         let mut sink = CapturingSink::new();
         let mut context = TurnContext {
@@ -1661,7 +1663,7 @@ mod tests {
             )
             .unwrap();
 
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
         let producer = MockProducer::new(vec![text_turn("must-not-run", "sess-1")]);
         let mut sink = CapturingSink::new();
         let mut context = TurnContext {
@@ -1705,7 +1707,8 @@ mod tests {
         store.save_meta(&meta).unwrap();
 
         let held = store.try_lock_conversation("c1").unwrap().expect("test owns conversation lock");
-        let mut reconciliation = Box::pin(reconcile_recovered_accepted(&store, &operation_store, &claim));
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store), claim);
+        let mut reconciliation = Box::pin(reconcile_recovered_accepted(&store, &mut operation));
         assert!(
             tokio::time::timeout(std::time::Duration::from_millis(40), &mut reconciliation).await.is_err(),
             "recovery must not inspect or terminalize while another turn owns the lock"
@@ -1735,7 +1738,7 @@ mod tests {
         claim.recovered = true;
         meta.active_operation_id = Some(claim.operation_id.clone());
         store.save_meta(&meta).unwrap();
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
 
         assert!(reconcile_pre_execution_failure(&store, &mut operation, "hello").await.unwrap().is_none());
         assert_eq!(store.load_meta("c1").unwrap().unwrap().active_operation_id, None);
@@ -1775,7 +1778,7 @@ mod tests {
                 },
             )
             .unwrap();
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
 
         let receipt = reconcile_pre_execution_failure(&store, &mut operation, "hello")
             .await
@@ -2148,7 +2151,7 @@ mod tests {
         else {
             panic!("first operation should acquire");
         };
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
         let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
         let mut sink = CapturingSink::new();
         let mut context = ctx("c1", "claude", "hello", &tmp);
@@ -2198,7 +2201,7 @@ mod tests {
         else {
             panic!("first operation should acquire");
         };
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
         let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
         let mut sink = CapturingSink::new();
         let mut context = ctx("c1", "claude", "hello", &tmp);
@@ -2232,7 +2235,7 @@ mod tests {
         else {
             panic!("first operation should acquire");
         };
-        let mut operation = ChatTurnOperation::new(operation_store.clone(), claim);
+        let mut operation = ChatTurnOperation::new(ChatOperationAuthority::Local(operation_store.clone()), claim);
         let producer = MockProducer::new(vec![(
             vec![SessionEvent::Error { message: "provider exploded".into(), recoverable: false }],
             None,

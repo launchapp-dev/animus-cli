@@ -1084,6 +1084,15 @@ multi-host backends must implement that precondition rather than ignoring it. Un
 not in `daemon_default()`, `animus daemon preflight` never reports it, and the daemon
 never refuses to start without it. The contract lives in the `conversation_store` module
 of `crates/animus-plugin-protocol`. See `docs/reference/chat.md` for the full surface.
+For keyed application sends, backend selection also selects operation authority:
+the file store uses local SQLite, while a plugin must advertise
+`conversation_operations_shared_v1` and serve the seven shared
+`conversation/operation_*` methods. A selected plugin without that capability
+remains usable for ordinary transcript operations, but keyed sends fail closed;
+they never acquire a host-local operation lease beside a shared transcript.
+Multi-replica application callers must pass `--require-shared-authority` on
+every keyed send to reject file fallback if the plugin disappears after the
+startup readiness check.
 
 ### Optional `environment` plugin role (v0.7+)
 

@@ -5,13 +5,86 @@ use std::collections::BTreeMap;
 use animus_actor::Actor;
 use anyhow::{anyhow, Context, Result};
 use orchestrator_core::{
-    ChatOperationBegin, ChatOperationClaim, ChatOperationReceipt, ChatOperationStore, DEFAULT_CHAT_OPERATION_LEASE_SECS,
+    ChatOperationBegin, ChatOperationClaim, ChatOperationReceipt, ChatOperationStatus, ChatOperationStore,
+    DEFAULT_CHAT_OPERATION_LEASE_SECS,
 };
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::client::{ConversationStoreClient, SharedOperationClient};
+
+#[derive(Clone)]
+pub(crate) enum ChatOperationAuthority {
+    Local(ChatOperationStore),
+    Shared(SharedOperationClient),
+}
+
+impl ChatOperationAuthority {
+    fn renew(&self, claim: &ChatOperationClaim) -> Result<bool> {
+        match self {
+            Self::Local(store) => store.renew(claim),
+            Self::Shared(store) => store.renew(claim),
+        }
+    }
+
+    fn bind_execution_hash(&self, claim: &mut ChatOperationClaim, hash: &str, allow_rebind: bool) -> Result<bool> {
+        match self {
+            Self::Local(store) if allow_rebind => store.rebind_recovered_execution_hash(claim, hash),
+            Self::Local(store) => store.bind_execution_hash(claim, hash),
+            Self::Shared(store) => store.bind_execution(claim, hash, allow_rebind),
+        }
+    }
+
+    fn release_pending(&self, claim: &ChatOperationClaim) -> Result<bool> {
+        match self {
+            Self::Local(store) => store.release_pending(claim),
+            Self::Shared(store) => store.release(claim),
+        }
+    }
+
+    fn mark_user_accepted(&self, claim: &mut ChatOperationClaim, seq: u64) -> Result<bool> {
+        match self {
+            Self::Local(store) => store.mark_user_accepted(claim, seq),
+            Self::Shared(store) => store.accept_user(claim, seq),
+        }
+    }
+
+    fn finish(
+        &self,
+        claim: &ChatOperationClaim,
+        status: orchestrator_core::ChatOperationStatus,
+        assistant_seq: Option<u64>,
+        code: Option<&str>,
+        message: Option<&str>,
+    ) -> Result<bool> {
+        match self {
+            Self::Local(store) => match status {
+                orchestrator_core::ChatOperationStatus::Completed => store.complete(
+                    claim,
+                    assistant_seq.ok_or_else(|| anyhow!("completed operation is missing assistant sequence"))?,
+                ),
+                orchestrator_core::ChatOperationStatus::AssistantFailed => {
+                    store.fail(claim, code.unwrap_or("assistant_failed"), message.unwrap_or("assistant failed"))
+                }
+                orchestrator_core::ChatOperationStatus::AssistantInterrupted => {
+                    store.interrupt(claim, message.unwrap_or("assistant interrupted"))
+                }
+                _ => Err(anyhow!("operation terminalization requires a terminal status")),
+            },
+            Self::Shared(store) => store.terminalize(claim, status, assistant_seq, code, message),
+        }
+    }
+
+    fn receipt(&self, claim: &ChatOperationClaim) -> Result<ChatOperationReceipt> {
+        match self {
+            Self::Local(store) => store.receipt(claim),
+            Self::Shared(store) => store.receipt(claim),
+        }
+    }
+}
+
 pub(crate) struct ChatTurnOperation {
-    store: ChatOperationStore,
+    authority: ChatOperationAuthority,
     claim: Box<ChatOperationClaim>,
     heartbeat: Option<LeaseHeartbeat>,
 }
@@ -22,8 +95,8 @@ pub(crate) enum ExecutionHashBinding {
 }
 
 impl ChatTurnOperation {
-    pub(crate) fn new(store: ChatOperationStore, claim: Box<ChatOperationClaim>) -> Self {
-        Self { store, claim, heartbeat: None }
+    pub(crate) fn new(authority: ChatOperationAuthority, claim: Box<ChatOperationClaim>) -> Self {
+        Self { authority, claim, heartbeat: None }
     }
 
     pub(crate) fn claim(&self) -> &ChatOperationClaim {
@@ -42,7 +115,7 @@ impl ChatTurnOperation {
         if self.claim.execution_hash.as_deref().is_some_and(|stored| stored != execution_hash) {
             return Ok(ExecutionHashBinding::Drifted);
         }
-        if !self.store.bind_execution_hash(&mut self.claim, execution_hash)? {
+        if !self.authority.bind_execution_hash(&mut self.claim, execution_hash, false)? {
             return Err(crate::conflict_error(
                 "idempotency_in_progress: chat operation authority moved before execution was bound",
             ));
@@ -51,7 +124,7 @@ impl ChatTurnOperation {
     }
 
     pub(crate) fn rebind_recovered_execution_hash(&mut self, execution_hash: &str) -> Result<()> {
-        if !self.store.rebind_recovered_execution_hash(&mut self.claim, execution_hash)? {
+        if !self.authority.bind_execution_hash(&mut self.claim, execution_hash, true)? {
             return Err(crate::conflict_error(
                 "idempotency_in_progress: recovered chat operation could not rebind execution authority",
             ));
@@ -60,15 +133,19 @@ impl ChatTurnOperation {
     }
 
     pub(crate) fn renew_authority(&self) -> Result<bool> {
-        self.store.renew(&self.claim)
+        self.authority.renew(&self.claim)
     }
 
     pub(crate) fn receipt(&self) -> Result<ChatOperationReceipt> {
-        self.store.receipt(&self.claim)
+        self.authority.receipt(&self.claim)
+    }
+
+    pub(crate) fn reconcile_recovered_accepted(&self, assistant_seq: Option<u64>) -> Result<ChatOperationReceipt> {
+        reconcile_recovered_accepted(&self.authority, &self.claim, assistant_seq)
     }
 
     pub(crate) fn release_pending(&self) -> Result<()> {
-        if !self.store.release_pending(&self.claim)? {
+        if !self.authority.release_pending(&self.claim)? {
             return Err(crate::conflict_error(
                 "idempotency_in_progress: pending chat operation authority moved before release",
             ));
@@ -78,7 +155,7 @@ impl ChatTurnOperation {
 
     pub(crate) fn interrupt_recovered_user(&mut self, user_seq: u64, message: &str) -> Result<ChatOperationReceipt> {
         if self.claim.status == orchestrator_core::ChatOperationStatus::Pending {
-            if !self.store.mark_user_accepted(&mut self.claim, user_seq)? {
+            if !self.authority.mark_user_accepted(&mut self.claim, user_seq)? {
                 return Err(crate::conflict_error(
                     "idempotency_in_progress: recovered chat operation lost authority before user reconciliation",
                 ));
@@ -88,8 +165,14 @@ impl ChatTurnOperation {
                 "idempotency_conflict: recovered chat operation has a different canonical user sequence",
             ));
         }
-        if !self.store.interrupt(&self.claim, message)? {
-            let receipt = self.store.receipt(&self.claim)?;
+        if !self.authority.finish(
+            &self.claim,
+            orchestrator_core::ChatOperationStatus::AssistantInterrupted,
+            None,
+            Some("assistant_interrupted"),
+            Some(message),
+        )? {
+            let receipt = self.authority.receipt(&self.claim)?;
             if receipt.status.is_terminal() {
                 return Ok(receipt);
             }
@@ -97,12 +180,12 @@ impl ChatTurnOperation {
                 "idempotency_in_progress: recovered chat operation lost authority before interruption",
             ));
         }
-        self.store.receipt(&self.claim)
+        self.authority.receipt(&self.claim)
     }
 
     pub(crate) fn mark_user_accepted(&mut self, seq: u64) -> Result<()> {
         if self.claim.status == orchestrator_core::ChatOperationStatus::Pending {
-            if !self.store.mark_user_accepted(&mut self.claim, seq)? {
+            if !self.authority.mark_user_accepted(&mut self.claim, seq)? {
                 return Err(crate::conflict_error(
                     "idempotency_in_progress: chat operation authority moved before user acceptance",
                 ));
@@ -112,13 +195,13 @@ impl ChatTurnOperation {
                 "idempotency_conflict: recovered chat operation has a different canonical user sequence",
             ));
         }
-        self.heartbeat = Some(LeaseHeartbeat::start(self.store.clone(), self.claim.clone()));
+        self.heartbeat = Some(LeaseHeartbeat::start(self.authority.clone(), self.claim.clone()));
         Ok(())
     }
 
     pub(crate) fn finish_heartbeat(&mut self) -> Result<()> {
         if let Some(heartbeat) = self.heartbeat.take() {
-            if !heartbeat.finish()? || !self.store.renew(&self.claim)? {
+            if !heartbeat.finish()? || !self.authority.renew(&self.claim)? {
                 return Err(crate::conflict_error(
                     "idempotency_in_progress: chat operation authority moved during provider execution",
                 ));
@@ -129,20 +212,32 @@ impl ChatTurnOperation {
 
     pub(crate) fn complete(&mut self, assistant_seq: u64) -> Result<ChatOperationReceipt> {
         self.finish_heartbeat()?;
-        if !self.store.complete(&self.claim, assistant_seq)? {
+        if !self.authority.finish(
+            &self.claim,
+            orchestrator_core::ChatOperationStatus::Completed,
+            Some(assistant_seq),
+            None,
+            None,
+        )? {
             return Err(crate::conflict_error(
                 "idempotency_in_progress: assistant was persisted but canonical chat receipt is reconciling",
             ));
         }
-        self.store.receipt(&self.claim)
+        self.authority.receipt(&self.claim)
     }
 
     pub(crate) fn fail(&mut self, code: &str, error: &str) -> Result<ChatOperationReceipt> {
         if let Some(heartbeat) = self.heartbeat.take() {
             let _ = heartbeat.finish();
         }
-        let changed = self.store.fail(&self.claim, code, error)?;
-        let receipt = self.store.receipt(&self.claim)?;
+        let changed = self.authority.finish(
+            &self.claim,
+            orchestrator_core::ChatOperationStatus::AssistantFailed,
+            None,
+            Some(code),
+            Some(error),
+        )?;
+        let receipt = self.authority.receipt(&self.claim)?;
         if !changed && !receipt.status.is_terminal() {
             return Err(crate::conflict_error(
                 "idempotency_in_progress: chat operation authority moved before failure was recorded",
@@ -158,15 +253,22 @@ struct LeaseHeartbeat {
 }
 
 impl LeaseHeartbeat {
-    fn start(store: ChatOperationStore, claim: Box<ChatOperationClaim>) -> Self {
+    fn start(authority: ChatOperationAuthority, claim: Box<ChatOperationClaim>) -> Self {
         let (stop, receiver) = std::sync::mpsc::channel();
-        let interval =
-            std::time::Duration::from_secs(u64::try_from((DEFAULT_CHAT_OPERATION_LEASE_SECS / 3).max(1)).unwrap_or(1));
+        let db_window = claim
+            .lease_expires_at
+            .map(|expires| expires.saturating_sub(chrono::Utc::now().timestamp()))
+            .unwrap_or(DEFAULT_CHAT_OPERATION_LEASE_SECS);
+        // The expiry comes from the backend clock. Host skew can only make the
+        // interval more conservative: clamp the upper bound to the v1 backend
+        // renewal cadence and the lower bound to one second.
+        let interval_secs = (db_window / 3).clamp(1, (DEFAULT_CHAT_OPERATION_LEASE_SECS / 3).max(1));
+        let interval = std::time::Duration::from_secs(u64::try_from(interval_secs).unwrap_or(1));
         let join = std::thread::spawn(move || loop {
             match receiver.recv_timeout(interval) {
                 Ok(()) | Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return Ok(true),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    if !store.renew(&claim)? {
+                    if !authority.renew(&claim)? {
                         return Ok(false);
                     }
                 }
@@ -215,12 +317,14 @@ pub(crate) fn effective_request_hash(value: Value) -> Result<String> {
 }
 
 pub(crate) fn begin(
+    conversation_store: &ConversationStoreClient,
     project_root: &std::path::Path,
     actor: &Actor,
     conversation_id: &str,
     caller_key: String,
     request_hash: String,
-) -> Result<(ChatOperationStore, ChatOperationBegin)> {
+    require_shared: bool,
+) -> Result<(ChatOperationAuthority, ChatOperationBegin)> {
     if actor.user_id.trim().is_empty() {
         return Err(crate::invalid_input_error("idempotent chat send requires a non-empty actor user_id"));
     }
@@ -230,28 +334,47 @@ pub(crate) fn begin(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| crate::invalid_input_error("idempotent chat send requires actor tenant_id (workspace)"))?;
-    let store = ChatOperationStore::for_project(project_root)?;
-    let request = store.request(workspace_id, actor.user_id.clone(), conversation_id, caller_key, request_hash);
-    let outcome = store.begin(request)?;
-    Ok((store, outcome))
+    let project_scope = protocol::repository_scope_for_path(project_root);
+    let request = orchestrator_core::ChatOperationRequest {
+        project_scope,
+        workspace_id: workspace_id.to_string(),
+        actor_id: actor.user_id.clone(),
+        conversation_id: conversation_id.to_string(),
+        caller_key,
+        request_hash,
+    };
+    match conversation_store.shared_operation_client(require_shared)? {
+        Some(shared) => {
+            let outcome = shared.begin(request)?;
+            Ok((ChatOperationAuthority::Shared(shared), outcome))
+        }
+        None => {
+            let local = ChatOperationStore::for_project(project_root)?;
+            let outcome = local.begin(request)?;
+            Ok((ChatOperationAuthority::Local(local), outcome))
+        }
+    }
 }
 
 pub(crate) fn reconcile_recovered_accepted(
-    store: &ChatOperationStore,
+    authority: &ChatOperationAuthority,
     claim: &ChatOperationClaim,
     assistant_seq: Option<u64>,
 ) -> Result<ChatOperationReceipt> {
     if let Some(seq) = assistant_seq {
-        if !store.complete(claim, seq)? {
-            return store.receipt(claim);
+        if !authority.finish(claim, ChatOperationStatus::Completed, Some(seq), None, None)? {
+            return authority.receipt(claim);
         }
-    } else if !store.interrupt(
+    } else if !authority.finish(
         claim,
-        "the prior process stopped after accepting the user message; provider execution is not repeated automatically",
+        ChatOperationStatus::AssistantInterrupted,
+        None,
+        Some("assistant_interrupted"),
+        Some("the prior process stopped after accepting the user message; provider execution is not repeated automatically"),
     )? {
-        return store.receipt(claim);
+        return authority.receipt(claim);
     }
-    store.receipt(claim)
+    authority.receipt(claim)
 }
 
 #[cfg(test)]
