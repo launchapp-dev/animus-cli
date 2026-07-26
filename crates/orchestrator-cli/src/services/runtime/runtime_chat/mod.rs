@@ -41,10 +41,39 @@ pub(crate) async fn handle_chat(command: ChatCommand, project_root: &str, json: 
     }
 }
 
+/// Parse the transport actor and validate the legacy `--as-user` assertion.
+/// The returned user always comes from the actor; `--as-user` can confirm that
+/// identity but can never create or replace it.
+fn chat_actor(
+    actor_json: Option<&str>,
+    as_user: Option<&str>,
+) -> Result<(Option<animus_actor::Actor>, Option<String>)> {
+    let actor = crate::shared::parse_actor_json_flag(actor_json)?;
+    let user = client::assert_actor_matches_as_user(actor.as_ref(), as_user)?.map(ToOwned::to_owned);
+    Ok((actor, user))
+}
+
 fn handle_chat_capabilities(json: bool) -> Result<()> {
     print_value(
         serde_json::json!({
             "schema": "animus.chat.capabilities.v1",
+            "conversation_store": {
+                "actor_flag": "--actor-json",
+                "actor_required_when_plugin": true,
+                "required_actor_fields": ["user_id", "tenant_id"],
+                "tenant_scope_field": "tenant_id",
+                "legacy_user_assertion_flag": "--as-user",
+                "legacy_user_assertion_must_match_actor": true,
+                "commands": ["new", "list", "get", "rename", "delete", "export", "search", "send"],
+                "features": [
+                    "chat_new_actor", "chat_list_actor", "chat_get_actor", "chat_rename_actor",
+                    "chat_delete_actor", "chat_export_actor", "chat_search_actor", "chat_send_actor"
+                ],
+                "local_store": {
+                    "unscoped_system_mode": true,
+                    "tenant_partitioned_when_actor_scoped": true,
+                },
+            },
             "send": {
                 "durable_idempotency": {
                     "supported": true,
@@ -178,8 +207,9 @@ fn search_conversations(
 }
 
 fn handle_chat_search(args: ChatSearchArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
-    let matches = store.search(&args.query, !args.case_sensitive, args.limit, args.as_user.as_deref())?;
+    let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
+    let store = ConversationStoreClient::for_project_as_actor(Path::new(project_root), actor, args.as_user.as_deref())?;
+    let matches = store.search(&args.query, !args.case_sensitive, args.limit, user.as_deref())?;
     print_value(matches, json)
 }
 
@@ -238,9 +268,10 @@ fn render_markdown(meta: &ConversationMeta, messages: &[ChatMessage]) -> String 
 }
 
 fn handle_chat_export(args: ChatExportArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
+    let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
+    let store = ConversationStoreClient::for_project_as_actor(Path::new(project_root), actor, args.as_user.as_deref())?;
     let meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
-    client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
+    client::ensure_user_may_access(&meta, &args.id, user.as_deref())?;
     let messages = store.load_messages(&args.id)?;
     let (content, format_label) = match args.format {
         ChatExportFormat::Json => {
@@ -296,7 +327,8 @@ fn save_meta_update(store: &impl ConversationStore, meta: &mut ConversationMeta)
 }
 
 fn handle_chat_rename(args: ChatRenameArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
+    let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
+    let store = ConversationStoreClient::for_project_as_actor(Path::new(project_root), actor, args.as_user.as_deref())?;
     let _lock = loop {
         if let Some(lock) = store.try_lock_conversation(&args.id)? {
             break lock;
@@ -304,14 +336,15 @@ fn handle_chat_rename(args: ChatRenameArgs, project_root: &str, json: bool) -> R
         std::thread::sleep(std::time::Duration::from_millis(25));
     };
     let mut meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
-    client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
+    client::ensure_user_may_access(&meta, &args.id, user.as_deref())?;
     meta.title = normalize_title_update(Some(&args.title)).expect("rename always supplies a title update");
     save_meta_update(&store, &mut meta)?;
     print_value(serde_json::json!({ "conversation_id": meta.id, "title": meta.title }), json)
 }
 
 fn handle_chat_delete(args: ChatDeleteArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
+    let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
+    let store = ConversationStoreClient::for_project_as_actor(Path::new(project_root), actor, args.as_user.as_deref())?;
     // Authorize against the loaded meta before deleting: a user-scoped delete of
     // another user's private conversation is rejected as "not found". A missing
     // (or auth-hidden) conversation stays idempotent: with no meta there is
@@ -319,7 +352,7 @@ fn handle_chat_delete(args: ChatDeleteArgs, project_root: &str, json: bool) -> R
     // issue a delete the backend might surface as a forbidden error.
     let existed = match store.load_meta(&args.id)? {
         Some(meta) => {
-            client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
+            client::ensure_user_may_access(&meta, &args.id, user.as_deref())?;
             store.delete(&args.id)?;
             true
         }
@@ -340,8 +373,9 @@ fn handle_chat_new(args: ChatNewArgs, project_root: &str, json: bool) -> Result<
     // Build the client with the acting user so a plugin backend authorizes the
     // follow-up title `save_meta` as the same owner the create stamped, not as
     // an unscoped/admin mutation.
-    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
-    let mut meta = store.create_with_ownership(args.id, args.as_user.clone(), visibility_from_arg(args.visibility))?;
+    let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
+    let store = ConversationStoreClient::for_project_as_actor(Path::new(project_root), actor, args.as_user.as_deref())?;
+    let mut meta = store.create_with_ownership(args.id, user, visibility_from_arg(args.visibility))?;
     if let Some(title) = normalize_title_update(args.title.as_deref()) {
         meta.title = title;
         save_meta_update(&store, &mut meta)?;
@@ -403,32 +437,22 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // malformed value must fail closed BEFORE any store write (conversation
     // create / title rename), so an invalid assertion leaves no state behind.
     // Omitted => `None` => global scope.
-    let actor = crate::shared::parse_actor_json_flag(args.actor_json.as_deref())?;
+    let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
 
     if args.idempotency_key.is_some() {
-        let asserted_user = actor
-            .as_ref()
-            .map(|value| value.user_id.as_str())
-            .ok_or_else(|| crate::invalid_input_error("idempotent chat send requires --actor-json"))?;
-        let acting_user = args
-            .as_user
-            .as_deref()
-            .ok_or_else(|| crate::invalid_input_error("idempotent chat send requires --as-user"))?;
-        if asserted_user != acting_user {
-            return Err(crate::invalid_input_error(
-                "idempotent chat send requires --as-user to equal actor_json.user_id",
-            ));
-        }
+        actor.as_ref().ok_or_else(|| crate::invalid_input_error("idempotent chat send requires --actor-json"))?;
+        user.as_deref().ok_or_else(|| crate::invalid_input_error("idempotent chat send requires --as-user"))?;
     }
 
-    let store = ConversationStoreClient::for_project_as_user(&project_root_path, args.as_user.as_deref())?;
+    let store =
+        ConversationStoreClient::for_project_as_actor(&project_root_path, actor.clone(), args.as_user.as_deref())?;
 
     // Read and authorize existing metadata before resolving any profile. A
     // hidden conversation stays indistinguishable from a missing one.
     let existing_meta = match args.conversation.as_deref() {
         Some(id) => match store.load_meta(id)? {
             Some(meta) => {
-                client::ensure_user_may_access(&meta, id, args.as_user.as_deref())?;
+                client::ensure_user_may_access(&meta, id, user.as_deref())?;
                 Some(meta)
             }
             None => return Err(anyhow!("conversation '{id}' not found; create it with `animus chat new`")),
@@ -477,7 +501,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
             "skill": args.skill,
             "mcp_servers": args.mcp_server,
             "no_animus_mcp": args.no_animus_mcp,
-            "as_user": args.as_user,
+            "as_user": user.as_deref(),
         }))?;
         let (operation_store, begin) =
             idempotency::begin(&project_root_path, actor, conversation_id, caller_key, caller_hash)?;
@@ -677,7 +701,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         None => (
             prepare_chat_turn!(store.create_with_ownership_and_agent(
                 None,
-                args.as_user.clone(),
+                user.clone(),
                 visibility_from_arg(args.visibility),
                 agent_id.map(ToOwned::to_owned),
             ))
@@ -816,9 +840,10 @@ fn replay_result(receipt: &orchestrator_core::ChatOperationReceipt) -> Result<()
 }
 
 fn handle_chat_get(args: ChatGetArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
+    let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
+    let store = ConversationStoreClient::for_project_as_actor(Path::new(project_root), actor, args.as_user.as_deref())?;
     let meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
-    client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
+    client::ensure_user_may_access(&meta, &args.id, user.as_deref())?;
     // The current conversation-store protocol returns the full transcript.
     // Bound the caller-visible result here until the protocol grows cursors.
     let messages = page(store.load_messages(&args.id)?, args.offset, args.limit);
@@ -826,10 +851,11 @@ fn handle_chat_get(args: ChatGetArgs, project_root: &str, json: bool) -> Result<
 }
 
 fn handle_chat_list(args: ChatListArgs, project_root: &str, json: bool) -> Result<()> {
-    let store = ConversationStoreClient::for_project(Path::new(project_root))?;
+    let (actor, user) = chat_actor(args.actor_json.as_deref(), args.as_user.as_deref())?;
+    let store = ConversationStoreClient::for_project_as_actor(Path::new(project_root), actor, args.as_user.as_deref())?;
     // Ownership filtering must precede pagination or inaccessible rows would
     // consume page slots and leak information through page shape.
-    let summaries = page(store.list_for_user(args.as_user.as_deref())?, args.offset, args.limit);
+    let summaries = page(store.list_for_user(user.as_deref())?, args.offset, args.limit);
     if !json {
         if summaries.is_empty() {
             println!("No chat conversations yet. Start one with: animus chat new");

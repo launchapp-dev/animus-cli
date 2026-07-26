@@ -1845,7 +1845,7 @@ mode. Pass `--json` to get the `animus.cli.v1` envelope instead.
 | `animus workflow list` | Table; empty set prints a "Start one with:" hint |
 | `animus agent list` | Table of configured agent profiles |
 | `animus agent interactions list` | Table of pending interactions with answer-command hints |
-| `animus chat list` | Table, most-recently-updated first; `--as-user <id>` limits to that user's own + shared conversations, then `--offset <n>` / `--limit <n>` bound the returned page |
+| `animus chat list` | Table, most-recently-updated first; `--actor-json <json>` supplies the authoritative user/tenant, optional matching `--as-user <id>` is assertion-only, then `--offset <n>` / `--limit <n>` bound the returned page |
 | `animus pack list` | Table; active packs flagged |
 | `animus skill list` | Table; `--verbose` surfaces per-file unparseable-skill warnings (otherwise suppressed/aggregated) |
 | `animus daemon preflight` | Checklist (pass/fail per role), not a JSON blob |
@@ -1904,7 +1904,8 @@ both modes.
 
 `animus workflow run`, actor-aware workflow/output reads, `animus workflow
 config get/validate`, `animus subject list/get/create/update/batch-create/
-batch-update/status/delete`, and `animus chat send` accept `--actor-json
+batch-update/status/delete`, and every conversation-store chat verb (`new`,
+`list`, `get`, `rename`, `delete`, `export`, `search`, `send`) accepts `--actor-json
 <JSON>` — a JSON-encoded `Actor` (`{"user_id","claims","tenant_id"}`) that
 scopes the operation to that user, mirroring `animus mcp serve --actor-json`:
 
@@ -1915,7 +1916,10 @@ animus workflow run animus.task/standard --subject-id task:TASK-1 \
   --idempotency-key arena.launch-01
 animus workflow config get  --actor-json '{"user_id":"alice"}'
 animus subject get --kind task --id TASK-1 --actor-json '{"user_id":"alice","tenant_id":"workspace-7"}'
-animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":["admin"]}'
+animus chat list --as-user alice \
+  --actor-json '{"user_id":"alice","tenant_id":"workspace-7","claims":[]}'
+animus chat send "hi" --as-user alice \
+  --actor-json '{"user_id":"alice","tenant_id":"workspace-7","claims":["admin"]}'
 ```
 
 - `workflow run` relays the actor to the runner (and onward to the per-agent
@@ -1937,10 +1941,15 @@ animus chat send "hi" --as-user alice --actor-json '{"user_id":"alice","claims":
 - Actor-aware subject commands route only to the v2 subject protocol. Subject
   rows are partitioned by exact user and tenant; an older v1-only backend
   returns unsupported instead of receiving a downgraded global call.
-- `chat send --actor-json` is the **authz** identity for the turn (binds the
-  chat agent's built-in `animus` MCP server to that user). It is distinct from
-  `--as-user`, which only stamps **conversation ownership** for the
-  `conversation_store`.
+- For every conversation-store chat verb, `--actor-json` is the authoritative
+  identity. A plugin-backed command requires non-empty `user_id` and
+  `tenant_id`; the actor is injected into every RPC and the tenant is copied to
+  `ConversationScope.tenant_id`. `--as-user` is only a matching legacy
+  assertion and cannot establish or override identity. `chat send` also binds
+  the built-in `animus` MCP server to that same actor.
+- With no conversation-store plugin, an omitted actor is explicit unscoped
+  system/local mode. Tenant-scoped local actors use a hashed tenant directory;
+  they never share file-store paths with another tenant.
 - Omitting the flag = `None` = global scope (system / local runs), unchanged.
 
 **Trust boundary:** the flag is a *transport assertion*. The transport (e.g. a

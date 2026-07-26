@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// Role of a persisted chat turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,6 +331,19 @@ impl FileConversationStore {
         let scoped = protocol::scoped_state_root(project_root)
             .ok_or_else(|| anyhow!("could not resolve scoped runtime root for chat storage"))?;
         Ok(Self { root: scoped.join("chat") })
+    }
+
+    /// Build a tenant-partitioned local store.
+    ///
+    /// The filesystem backend is intentionally local-only, but an explicitly
+    /// tenant-scoped actor must still never share a directory with another
+    /// tenant. Hashing the opaque tenant id avoids turning transport input
+    /// into a path component while preserving a stable partition.
+    pub(crate) fn for_project_tenant(project_root: &Path, tenant_id: &str) -> Result<Self> {
+        let scoped = protocol::scoped_state_root(project_root)
+            .ok_or_else(|| anyhow!("could not resolve scoped runtime root for chat storage"))?;
+        let tenant_key = format!("{:x}", Sha256::digest(tenant_id.as_bytes()));
+        Ok(Self { root: scoped.join("chat").join("tenants").join(tenant_key) })
     }
 
     /// Build a store rooted at an explicit directory. Test-only escape hatch

@@ -8,7 +8,7 @@ pub(crate) const WORKFLOW_SORT_HELP: &str = "Workflow sort: started-at|started_a
 
 /// Help text shared by every `--actor-json` flag (`workflow run`,
 /// `workflow config get/validate`, `chat send`), mirroring `mcp serve`.
-pub(crate) const ACTOR_JSON_HELP: &str = "Transport-asserted caller identity as a JSON-encoded Actor (`{\"user_id\",\"claims\",\"tenant_id\"}`) to scope this operation to that user. TRUST BOUNDARY: the transport authenticates the user, then passes this flag; the kernel does NOT validate the claims, it relays them. Omit for global scope (system/local).";
+pub(crate) const ACTOR_JSON_HELP: &str = "Transport-asserted caller identity as a JSON-encoded Actor (`{\"user_id\",\"claims\",\"tenant_id\"}`) to scope this operation to that user. TRUST BOUNDARY: the transport authenticates the user, then passes this flag; the kernel does NOT validate the claims, it relays them. Omit only where the command supports global scope (system/local); plugin-backed chat requires a non-empty user_id and tenant_id.";
 
 pub(crate) fn parse_positive_u64(value: &str) -> Result<u64, String> {
     let parsed = value.parse::<u64>().map_err(|_| "must be a whole number".to_string())?;

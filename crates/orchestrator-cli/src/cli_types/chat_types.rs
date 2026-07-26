@@ -78,6 +78,11 @@ pub(crate) struct ChatNewArgs {
     /// in-tree filesystem store.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Transport-asserted caller identity. Required when a
+    /// `conversation_store` plugin is selected; `--as-user`, when present,
+    /// must match this actor's `user_id`.
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
     /// Conversation visibility: private (owner-only) or shared.
     #[arg(long, value_enum, default_value = "private")]
     pub(crate) visibility: ChatVisibilityArg,
@@ -89,6 +94,9 @@ pub(crate) struct ChatListArgs {
     /// shared ones. Omit for the full (legacy/admin) listing.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Transport-asserted caller identity. Required for plugin-backed chat.
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
     /// Maximum number of conversations to return after ownership filtering.
     #[arg(long, value_name = "N")]
     pub(crate) limit: Option<usize>,
@@ -196,6 +204,9 @@ pub(crate) struct ChatGetArgs {
     /// plugin may use it to enforce read access.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Transport-asserted caller identity. Required for plugin-backed chat.
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
     /// Maximum number of transcript messages to return.
     #[arg(long, value_name = "N")]
     pub(crate) limit: Option<usize>,
@@ -216,6 +227,9 @@ pub(crate) struct ChatRenameArgs {
     /// plugin may use it to enforce rename (mutation) access.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Transport-asserted caller identity. Required for plugin-backed chat.
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -227,6 +241,9 @@ pub(crate) struct ChatDeleteArgs {
     /// plugin may use it to enforce delete access.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Transport-asserted caller identity. Required for plugin-backed chat.
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -244,6 +261,9 @@ pub(crate) struct ChatExportArgs {
     /// plugin may use it to enforce read access on the exported transcript.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Transport-asserted caller identity. Required for plugin-backed chat.
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -261,4 +281,7 @@ pub(crate) struct ChatSearchArgs {
     /// ones. Omit for the full (legacy/admin) search.
     #[arg(long, value_name = "USER_ID")]
     pub(crate) as_user: Option<String>,
+    /// Transport-asserted caller identity. Required for plugin-backed chat.
+    #[arg(long, value_name = "JSON", help = ACTOR_JSON_HELP)]
+    pub(crate) actor_json: Option<String>,
 }

@@ -1098,7 +1098,8 @@ mod tests {
             }
             other => panic!("expected chat send, got {other:?}"),
         }
-        // No actor flag => None (global authz scope) even with --as-user set.
+        // Clap preserves the legacy assertion shape; runtime validation rejects
+        // `--as-user` without an authenticated actor before store selection.
         let cli = Cli::try_parse_from(["animus", "chat", "send", "hello", "--as-user", "carol"])
             .expect("bare chat send should parse");
         match cli.command {
@@ -1237,6 +1238,34 @@ mod tests {
                 assert_eq!(args.offset, 20);
             }
             other => panic!("expected chat get, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn every_conversation_store_verb_exposes_actor_json() {
+        let actor_json = r#"{"user_id":"alice","tenant_id":"tenant-a","claims":[]}"#;
+        let commands = [
+            vec!["animus", "chat", "new", "--actor-json", actor_json],
+            vec!["animus", "chat", "list", "--actor-json", actor_json],
+            vec!["animus", "chat", "get", "conv-1", "--actor-json", actor_json],
+            vec!["animus", "chat", "rename", "conv-1", "--title", "new", "--actor-json", actor_json],
+            vec!["animus", "chat", "delete", "conv-1", "--actor-json", actor_json],
+            vec!["animus", "chat", "export", "conv-1", "--actor-json", actor_json],
+            vec!["animus", "chat", "search", "needle", "--actor-json", actor_json],
+        ];
+        for argv in commands {
+            let cli = Cli::try_parse_from(argv).expect("chat verb should accept --actor-json");
+            let parsed = match cli.command {
+                Command::Chat { command: ChatCommand::New(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::List(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Get(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Rename(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Delete(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Export(args) } => args.actor_json,
+                Command::Chat { command: ChatCommand::Search(args) } => args.actor_json,
+                other => panic!("expected conversation-store chat verb, got {other:?}"),
+            };
+            assert_eq!(parsed.as_deref(), Some(actor_json));
         }
     }
 

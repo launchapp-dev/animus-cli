@@ -43,13 +43,14 @@ If a resume turn (case 1) comes back with an error indicating the native session
 ```bash
 # Start an empty conversation (prints the conversation id)
 animus chat new [--id <id>] [--title <title>] \
-  [--as-user <user-id>] [--visibility private|shared]
+  [--actor-json <json>] [--as-user <user-id>] [--visibility private|shared]
 
 # Send a turn (creates a conversation if --conversation is omitted)
 animus chat send "your message" \
   [--conversation <id>] [--expected-revision <n>] [--agent <agent-id>] \
   [--tool claude] [--model <model>] [--cwd <path>] \
-  [--stream] [--title <title>] [--as-user <user-id>] [--visibility private|shared]
+  [--stream] [--title <title>] [--actor-json <json>] \
+  [--as-user <user-id>] [--visibility private|shared]
 
 # Probe the application contract without starting a provider
 animus --json chat capabilities
@@ -61,19 +62,24 @@ animus --json chat send "your message" --conversation <id> \
   --idempotency-key <key>
 
 # Read a transcript, optionally returning a bounded slice
-animus chat get <id> [--as-user <user-id>] [--limit <n>] [--offset <n>]
+animus chat get <id> [--actor-json <json>] [--as-user <user-id>] [--limit <n>] [--offset <n>]
 
 # List conversations, most-recently-updated first, optionally paged
-animus chat list [--as-user <user-id>] [--limit <n>] [--offset <n>]
+animus chat list [--actor-json <json>] [--as-user <user-id>] [--limit <n>] [--offset <n>]
 
 # Set or clear a conversation title
-animus chat rename <id> --title <title> [--as-user <user-id>]
+animus chat rename <id> --title <title> [--actor-json <json>] [--as-user <user-id>]
 
 # Permanently delete a conversation
-animus chat delete <id> [--as-user <user-id>]
+animus chat delete <id> [--actor-json <json>] [--as-user <user-id>]
 
 # Export a conversation transcript as Markdown or JSON
-animus chat export <id> [--format markdown|json] [--output <path>] [--as-user <user-id>]
+animus chat export <id> [--format markdown|json] [--output <path>] \
+  [--actor-json <json>] [--as-user <user-id>]
+
+# Search within the authenticated caller's conversation partition
+animus chat search <query> [--limit <n>] [--case-sensitive] \
+  [--actor-json <json>] [--as-user <user-id>]
 ```
 
 `animus chat send --title` names a freshly-created conversation or renames the
@@ -175,7 +181,8 @@ Per-turn `usage` and `cost_usd` are recorded on each assistant `ChatMessage` fro
 
 Each conversation carries these identity/concurrency fields on its `ConversationMeta`:
 
-- `owner` — the authenticated user id that owns the conversation. `None` for **unowned** conversations: legacy on-disk metas (the field is serde-defaulted, so existing conversations load unchanged) and ones created without `--as-user`.
+- `owner` — the authenticated actor's user id. `None` remains valid for legacy
+  unscoped local conversations.
 - `visibility` — `private` (the default) or `shared`.
 - `agent_id` — optional canonical configured profile id. Missing means deliberately unbound; it is never inferred.
 - `revision` — monotonic optimistic-concurrency token (`0` for legacy metadata).
@@ -183,9 +190,26 @@ Each conversation carries these identity/concurrency fields on its `Conversation
   omitted from conversation-list summaries and is not a client-selectable
   application field.
 
-`--as-user <id>` stamps an owner on `animus chat new` and on an `animus chat send` that auto-creates a conversation; `--visibility` sets the initial visibility. `animus chat list --as-user <id>` returns that user's own conversations PLUS any `shared` ones; `animus chat list` with no `--as-user` returns everything (the legacy/admin view).
+Every conversation-store verb accepts `--actor-json`. The transport actor is
+authoritative: its `user_id` supplies the owner and access filter, and its
+`tenant_id` supplies the storage partition. `--as-user`, when present, is only
+a compatibility assertion and must exactly match `actor_json.user_id`; it
+cannot create an identity by itself.
 
-Owner filtering is applied at the query layer (the in-tree store has no auth context and `list` always returns everything). Beyond `list`, the kernel also enforces the same owner/shared rule client-side on every **direct-id** verb when `--as-user` is given — `chat get`, `export`, `rename`, `delete`, and a `chat send` into an existing conversation: accessing another user's `private` conversation is rejected as `not found` (a uniform error, so a probe cannot tell a private conversation it may not see from one that does not exist). With no `--as-user`, all access is permitted (the legacy/admin view). When a `conversation_store` plugin is installed, the acting user from `--as-user` ALSO rides every per-conversation RPC (`load_meta`, `save_meta`, `append_message`, `load_messages`, `delete`) so the backend can authorize server-side; the client-side check is a backstop for backends that do not.
+When a `conversation_store` plugin is installed, all chat data commands require
+a non-empty actor `user_id` and `tenant_id`. The CLI places that tenant in the
+flattened `ConversationScope.tenant_id` field and injects the complete actor at
+the top level of every conversation RPC. The plugin SDK derives its
+authoritative `CallContext` from that actor; legacy `owner` / `as_user` fields
+are matching assertions only. A missing actor, a mismatched assertion, or a
+cross-tenant attempt fails before a store call.
+
+Without a plugin, omitting the actor is an explicit system/local mode that
+retains the legacy repository-scoped store. An actor-scoped local command uses
+the actor user for owner filtering; when `tenant_id` is present, the file store
+uses a hashed tenant subdirectory so two tenants never share conversation
+paths. Direct-id access to another user's private conversation is still
+reported as `not found` to avoid existence probes.
 
 For `chat list`, owner filtering happens before `--offset` / `--limit`, so
 inaccessible rows neither consume page slots nor affect the visible page
@@ -197,9 +221,9 @@ output.
 
 ## Pluggable conversation store
 
-Chat persistence is served by an **optional** `conversation_store` plugin role. With no plugin installed, the in-tree filesystem store (below) is used — chat works with zero plugins. When a `conversation_store` plugin is discovered, the chat data ops (`create` / `load_meta` / `save_meta` / `append_message` / `load_messages` / `list` / `delete`) route to it over JSON-RPC instead; this is how an out-of-tree Postgres backend serves chat history with real per-user ownership + sharing.
+Chat persistence is served by an **optional** `conversation_store` plugin role. With no plugin installed, the in-tree filesystem store (below) is used — chat works with zero plugins. When a `conversation_store` plugin is discovered, authenticated chat data ops (`create` / `load_meta` / `save_meta` / `append_message` / `load_messages` / `list` / `delete`) route to it over JSON-RPC instead; this is how an out-of-tree Postgres backend serves tenant-isolated history with real per-user ownership + sharing.
 
-The role is optional: it is **not** a required preflight role, and the daemon never refuses to start without it. The contract (method names + request/response types) lives in `crates/animus-plugin-protocol/src/lib.rs` under the `conversation_store` module; the `Visibility` enum, `ConversationMeta`, and `ChatMessage` wire shapes match the on-disk `meta.json` / `messages.jsonl` shapes exactly. `conversation/create` can stamp `agent_id` atomically, and `conversation/save_meta` accepts `expected_revision` for compare-and-swap. A durable backend must persist and enforce `active_operation_id` in that same owner-scoped CAS; a different operation cannot replace a live reservation. Cross-process turn serialization (`try_lock_conversation`) is intentionally NOT on the wire — a DB-backed plugin uses a transaction or advisory lock per conversation and MUST enforce the revision precondition. Each plugin call spawns a host, runs one RPC, and reaps the host (`host.shutdown().await`).
+The role is optional: it is **not** a required preflight role, and the daemon never refuses to start without it. The tenant contract is committed in `animus-protocol` at `6b88922` and must be published/pinned as rc.12 (or later) before release integration. Until then, the CLI's bound request structs emit that exact additive JSON shape while the workspace remains buildable against rc.11. The `Visibility` enum, `ConversationMeta`, and `ChatMessage` wire shapes match the on-disk `meta.json` / `messages.jsonl` shapes exactly. `conversation/create` can stamp `agent_id` atomically, and `conversation/save_meta` accepts `expected_revision` for compare-and-swap. A durable backend must persist and enforce `active_operation_id` in that same owner-scoped CAS; a different operation cannot replace a live reservation. Cross-process turn serialization (`try_lock_conversation`) is intentionally NOT on the wire — a DB-backed plugin uses a transaction or advisory lock per conversation and MUST enforce the revision precondition. Each plugin call spawns a host, runs one RPC, and reaps the host (`host.shutdown().await`).
 
 ## State layout
 
@@ -207,6 +231,8 @@ When no `conversation_store` plugin is installed, conversations live under the s
 
 - `~/.animus/<repo-scope>/chat/<conversation-id>/meta.json` — `ConversationMeta` (`agent_id` + `revision` + internal `active_operation_id`, the `session_id` / `tool` / `model` continuity pointer, counts, ownership, and timestamps).
 - `~/.animus/<repo-scope>/chat/<conversation-id>/messages.jsonl` — append-only `ChatMessage` event log. Assistant turns carry both aggregated `content` and, when available, an ordered `blocks[]` timeline for text, thinking text, and tool activity.
+- Actor-scoped local calls with a tenant use
+  `~/.animus/<repo-scope>/chat/tenants/<sha256(tenant-id)>/<conversation-id>/...`.
 
 As with all Animus state, treat these as tool-managed — use the `animus chat` surface rather than hand-editing the JSON.
 

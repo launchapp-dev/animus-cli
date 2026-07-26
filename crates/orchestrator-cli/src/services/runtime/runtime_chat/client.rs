@@ -21,6 +21,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use animus_actor::Actor;
 use animus_plugin_protocol::conversation_store as proto;
 use anyhow::{Context, Result};
 use orchestrator_plugin_host::{discover_by_kind, DiscoveredPlugin, PluginHost, PluginSpawnOptions};
@@ -44,30 +45,38 @@ pub(crate) enum ConversationStoreClient {
 }
 
 impl ConversationStoreClient {
-    /// Resolve the conversation store for `project_root`, with no acting user.
-    /// Routes to an installed `conversation_store` plugin when one is
-    /// discovered, else falls back to the in-tree filesystem store.
+    /// Resolve the conversation store for an explicitly local/system caller.
+    /// A discovered plugin rejects this unscoped construction; authenticated
+    /// plugin calls must use [`Self::for_project_as_actor`].
     pub(crate) fn for_project(project_root: &Path) -> Result<Self> {
-        Self::for_project_as_user(project_root, None)
+        Self::for_project_as_actor(project_root, None, None)
     }
 
-    /// Like [`Self::for_project`] but records the acting user id. When a
-    /// `conversation_store` plugin is selected, that id rides every
-    /// per-conversation RPC (`load_meta`, `save_meta`, `append_message`,
-    /// `load_messages`, `delete`) so the backend can authorize the actor — the
-    /// foundation for per-user access enforcement. The in-tree file store has
-    /// no auth context and ignores it (filtering happens at the query layer).
-    pub(crate) fn for_project_as_user(project_root: &Path, as_user: Option<&str>) -> Result<Self> {
+    /// Resolve a store for a transport-authenticated actor. `as_user` is only
+    /// a compatibility assertion and may never establish caller authority.
+    /// Plugin-backed stores require a non-empty actor user and tenant; local
+    /// file storage remains available without an actor for explicit
+    /// system/local use and is tenant-partitioned when a tenant is supplied.
+    pub(crate) fn for_project_as_actor(
+        project_root: &Path,
+        actor: Option<Actor>,
+        as_user: Option<&str>,
+    ) -> Result<Self> {
+        assert_actor_matches_as_user(actor.as_ref(), as_user)?;
         let plugins = discover_by_kind(project_root.to_path_buf(), CONVERSATION_STORE_KIND)
             .with_context(|| format!("discovering conversation_store plugins for {}", project_root.display()))?;
         match plugins.into_iter().next() {
-            Some(plugin) => Ok(Self::Plugin(Box::new(PluginConversationStore::new(
-                plugin,
-                project_root.to_path_buf(),
-                as_user.map(ToOwned::to_owned),
-                FileConversationStore::for_project(project_root)?,
-            )))),
-            None => Ok(Self::File(FileConversationStore::for_project(project_root)?)),
+            Some(plugin) => {
+                let actor = require_plugin_actor(actor)?;
+                let lock_store = file_store_for_actor(project_root, Some(&actor))?;
+                Ok(Self::Plugin(Box::new(PluginConversationStore::new(
+                    plugin,
+                    project_root.to_path_buf(),
+                    actor,
+                    lock_store,
+                ))))
+            }
+            None => Ok(Self::File(file_store_for_actor(project_root, actor.as_ref())?)),
         }
     }
 
@@ -98,6 +107,64 @@ impl ConversationStoreClient {
     pub(crate) fn with_root_for_test(root: PathBuf) -> Self {
         Self::File(FileConversationStore::with_root_for_test(root))
     }
+}
+
+/// Validate the legacy `--as-user` assertion and return the authoritative user
+/// from the transport actor. An assertion without an actor is impersonation,
+/// not authentication, and therefore fails closed even for the local store.
+pub(crate) fn assert_actor_matches_as_user<'a>(
+    actor: Option<&'a Actor>,
+    as_user: Option<&str>,
+) -> Result<Option<&'a str>> {
+    let Some(actor) = actor else {
+        if as_user.is_some() {
+            return Err(crate::invalid_input_error("--as-user requires --actor-json and may only assert its user_id"));
+        }
+        return Ok(None);
+    };
+    if actor.user_id.trim().is_empty() {
+        return Err(crate::invalid_input_error("--actor-json user_id must be non-empty"));
+    }
+    if let Some(asserted) = as_user {
+        if asserted != actor.user_id {
+            return Err(crate::invalid_input_error("--as-user must equal actor_json.user_id"));
+        }
+    }
+    Ok(Some(actor.user_id.as_str()))
+}
+
+fn require_plugin_actor(actor: Option<Actor>) -> Result<Actor> {
+    let actor = actor.ok_or_else(|| {
+        crate::invalid_input_error("plugin-backed chat requires --actor-json with user_id and tenant_id")
+    })?;
+    if actor.user_id.trim().is_empty() {
+        return Err(crate::invalid_input_error("plugin-backed chat requires a non-empty actor user_id"));
+    }
+    if actor.tenant_id.as_deref().is_none_or(|value| value.trim().is_empty()) {
+        return Err(crate::invalid_input_error("plugin-backed chat requires actor tenant_id"));
+    }
+    Ok(actor)
+}
+
+fn file_store_for_actor(project_root: &Path, actor: Option<&Actor>) -> Result<FileConversationStore> {
+    match actor.and_then(|value| value.tenant_id.as_deref()).filter(|value| !value.trim().is_empty()) {
+        Some(tenant_id) => FileConversationStore::for_project_tenant(project_root, tenant_id),
+        None => FileConversationStore::for_project(project_root),
+    }
+}
+
+fn bind_actor_to_params(actor: &Actor, request: &impl serde::Serialize) -> Result<serde_json::Value> {
+    let mut params = serde_json::to_value(request).context("serializing conversation_store request")?;
+    let object = params
+        .as_object_mut()
+        .ok_or_else(|| anyhow::anyhow!("conversation_store request must serialize as an object"))?;
+    let tenant_id = actor
+        .tenant_id
+        .as_ref()
+        .ok_or_else(|| crate::invalid_input_error("plugin-backed chat requires actor tenant_id"))?;
+    object.insert("tenant_id".to_string(), serde_json::Value::String(tenant_id.clone()));
+    object.insert("actor".to_string(), serde_json::to_value(actor).context("serializing conversation_store actor")?);
+    Ok(params)
 }
 
 impl ConversationStore for ConversationStoreClient {
@@ -273,10 +340,10 @@ fn filter_for_user(summaries: Vec<ConversationSummary>, as_user: Option<&str>) -
 pub(crate) struct PluginConversationStore {
     plugin: DiscoveredPlugin,
     project_root: PathBuf,
-    /// Acting user id (from the chat verb's `--as-user`), threaded onto every
-    /// per-conversation RPC so the backend can authorize the actor. `None` for
-    /// unscoped/admin access.
-    acting_user: Option<String>,
+    /// Authenticated caller supplied by the transport. This exact actor is
+    /// injected at the top level of every conversation RPC, where the SDK
+    /// turns it into the authoritative `CallContext`.
+    actor: Actor,
     /// Host-local file store used SOLELY for its per-conversation cross-process
     /// lock, so the turn loop's whole-turn serialization holds for the plugin
     /// backend too (seq is assigned client-side). No chat data is read or
@@ -284,14 +351,29 @@ pub(crate) struct PluginConversationStore {
     lock_store: FileConversationStore,
 }
 
-// These three wire structs intentionally live in the kernel while the
-// companion animus-plugin-protocol release is staged. They use the canonical
-// JSON field names and keep `agent_id` visible instead of round-tripping
-// through an older tagged protocol struct that would silently discard it.
+// These bound wire structs keep the CLI compatible with the rc.11 dependency
+// while emitting the contract committed in animus-protocol 6b88922. They can
+// collapse back to protocol structs after that contract receives a release
+// tag, without changing the JSON shape.
+#[derive(Clone, serde::Serialize)]
+struct BoundConversationScope {
+    tenant_id: String,
+    project_root: Option<String>,
+    repo_scope: Option<String>,
+}
+
+fn bound_scope(project_root: &Path, actor: &Actor) -> BoundConversationScope {
+    BoundConversationScope {
+        tenant_id: actor.tenant_id.clone().expect("plugin actor tenant validated at construction"),
+        project_root: Some(project_root.to_string_lossy().into_owned()),
+        repo_scope: Some(protocol::repository_scope_for_path(project_root)),
+    }
+}
+
 #[derive(serde::Serialize)]
 struct BoundConversationCreateRequest {
     #[serde(flatten)]
-    scope: proto::ConversationScope,
+    scope: BoundConversationScope,
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -314,12 +396,35 @@ struct BoundConversationCreateResponse {
 #[derive(serde::Serialize)]
 struct BoundConversationSaveMetaRequest<'a> {
     #[serde(flatten)]
-    scope: proto::ConversationScope,
+    scope: BoundConversationScope,
     meta: &'a ConversationMeta,
     #[serde(skip_serializing_if = "Option::is_none")]
     expected_revision: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    as_user: Option<String>,
+    as_user: String,
+}
+
+#[derive(serde::Serialize)]
+struct BoundConversationIdRequest {
+    #[serde(flatten)]
+    scope: BoundConversationScope,
+    id: String,
+    as_user: String,
+}
+
+#[derive(serde::Serialize)]
+struct BoundConversationAppendMessageRequest {
+    #[serde(flatten)]
+    scope: BoundConversationScope,
+    id: String,
+    message: proto::ChatMessage,
+    as_user: String,
+}
+
+#[derive(serde::Serialize)]
+struct BoundConversationListRequest {
+    #[serde(flatten)]
+    scope: BoundConversationScope,
+    as_user: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -328,13 +433,8 @@ struct BoundConversationListResponse {
 }
 
 impl PluginConversationStore {
-    fn new(
-        plugin: DiscoveredPlugin,
-        project_root: PathBuf,
-        acting_user: Option<String>,
-        lock_store: FileConversationStore,
-    ) -> Self {
-        Self { plugin, project_root, acting_user, lock_store }
+    fn new(plugin: DiscoveredPlugin, project_root: PathBuf, actor: Actor, lock_store: FileConversationStore) -> Self {
+        Self { plugin, project_root, actor, lock_store }
     }
 
     fn try_lock_conversation(&self, id: &str) -> Result<Option<ConversationLock>> {
@@ -348,15 +448,12 @@ impl PluginConversationStore {
         self.lock_store.try_lock_conversation(id)
     }
 
-    fn acting_user(&self) -> Option<String> {
-        self.acting_user.clone()
+    fn acting_user(&self) -> String {
+        self.actor.user_id.clone()
     }
 
-    fn scope(&self) -> proto::ConversationScope {
-        proto::ConversationScope {
-            project_root: Some(self.project_root.to_string_lossy().into_owned()),
-            repo_scope: Some(protocol::repository_scope_for_path(&self.project_root)),
-        }
+    fn scope(&self) -> BoundConversationScope {
+        bound_scope(&self.project_root, &self.actor)
     }
 
     fn create(
@@ -366,6 +463,10 @@ impl PluginConversationStore {
         visibility: super::store::Visibility,
         agent_id: Option<String>,
     ) -> Result<ConversationMeta> {
+        if owner.as_deref().is_some_and(|value| value != self.actor.user_id) {
+            return Err(crate::invalid_input_error("conversation owner assertion must equal actor user_id"));
+        }
+        let owner = Some(self.actor.user_id.clone());
         let request = BoundConversationCreateRequest { scope: self.scope(), id, agent_id, owner, visibility };
         let resp: BoundConversationCreateResponse = self.call(proto::METHOD_CONVERSATION_CREATE, &request)?;
         Ok(resp.meta)
@@ -373,7 +474,7 @@ impl PluginConversationStore {
 
     fn load_meta(&self, id: &str) -> Result<Option<ConversationMeta>> {
         let request =
-            proto::ConversationLoadMetaRequest { scope: self.scope(), id: id.to_string(), as_user: self.acting_user() };
+            BoundConversationIdRequest { scope: self.scope(), id: id.to_string(), as_user: self.acting_user() };
         let resp: BoundConversationMetaResponse = self.call(proto::METHOD_CONVERSATION_LOAD_META, &request)?;
         Ok(resp.meta)
     }
@@ -390,7 +491,7 @@ impl PluginConversationStore {
     }
 
     fn append_message(&self, id: &str, message: &ChatMessage) -> Result<()> {
-        let request = proto::ConversationAppendMessageRequest {
+        let request = BoundConversationAppendMessageRequest {
             scope: self.scope(),
             id: id.to_string(),
             message: to_proto_message(message)?,
@@ -402,25 +503,25 @@ impl PluginConversationStore {
     }
 
     fn load_messages(&self, id: &str) -> Result<Vec<ChatMessage>> {
-        let request = proto::ConversationLoadMessagesRequest {
-            scope: self.scope(),
-            id: id.to_string(),
-            as_user: self.acting_user(),
-        };
+        let request =
+            BoundConversationIdRequest { scope: self.scope(), id: id.to_string(), as_user: self.acting_user() };
         let resp: proto::ConversationLoadMessagesResponse =
             self.call(proto::METHOD_CONVERSATION_LOAD_MESSAGES, &request)?;
         resp.messages.into_iter().map(from_proto_message).collect()
     }
 
     fn list(&self, as_user: Option<&str>) -> Result<Vec<ConversationSummary>> {
-        let request = proto::ConversationListRequest { scope: self.scope(), as_user: as_user.map(ToOwned::to_owned) };
+        if as_user.is_some_and(|value| value != self.actor.user_id) {
+            return Err(crate::invalid_input_error("conversation user assertion must equal actor user_id"));
+        }
+        let request = BoundConversationListRequest { scope: self.scope(), as_user: self.acting_user() };
         let resp: BoundConversationListResponse = self.call(proto::METHOD_CONVERSATION_LIST, &request)?;
         Ok(resp.conversations)
     }
 
     fn delete(&self, id: &str) -> Result<()> {
         let request =
-            proto::ConversationDeleteRequest { scope: self.scope(), id: id.to_string(), as_user: self.acting_user() };
+            BoundConversationIdRequest { scope: self.scope(), id: id.to_string(), as_user: self.acting_user() };
         let _: proto::ConversationDeleteResponse = self.call(proto::METHOD_CONVERSATION_DELETE, &request)?;
         Ok(())
     }
@@ -431,8 +532,12 @@ impl PluginConversationStore {
         method: &str,
         request: &Req,
     ) -> Result<Resp> {
-        let params = serde_json::to_value(request).context("serializing conversation_store request")?;
+        let params = self.actor_bound_params(request)?;
         run_blocking(self.call_async(method, params))?
+    }
+
+    fn actor_bound_params(&self, request: &impl serde::Serialize) -> Result<serde_json::Value> {
+        bind_actor_to_params(&self.actor, request)
     }
 
     async fn call_async<Resp: serde::de::DeserializeOwned>(
@@ -489,6 +594,9 @@ impl PluginConversationStore {
         if query.is_empty() || limit == 0 {
             return Ok(Vec::new());
         }
+        if as_user.is_some_and(|value| value != self.actor.user_id) {
+            return Err(crate::invalid_input_error("conversation user assertion must equal actor user_id"));
+        }
         let options = PluginSpawnOptions::for_manifest(
             self.plugin.name.clone(),
             &self.plugin.manifest.env_required,
@@ -505,9 +613,9 @@ impl PluginConversationStore {
             host.handshake()
                 .await
                 .with_context(|| format!("handshake with conversation_store plugin {}", self.plugin.name))?;
-            let list_params = serde_json::to_value(proto::ConversationListRequest {
+            let list_params = self.actor_bound_params(&BoundConversationListRequest {
                 scope: self.scope(),
-                as_user: as_user.map(ToOwned::to_owned),
+                as_user: self.acting_user(),
             })?;
             let list_val = host
                 .request_typed_with_timeout(proto::METHOD_CONVERSATION_LIST, Some(list_params), RPC_TIMEOUT)
@@ -519,7 +627,7 @@ impl PluginConversationStore {
                 if out.len() >= limit {
                     break;
                 }
-                let lm_params = serde_json::to_value(proto::ConversationLoadMessagesRequest {
+                let lm_params = self.actor_bound_params(&BoundConversationIdRequest {
                     scope: self.scope(),
                     id: summary.id.clone(),
                     as_user: self.acting_user(),
@@ -690,8 +798,13 @@ mod tests {
 
     #[test]
     fn plugin_wire_preserves_create_binding_and_save_revision_precondition() {
+        let scope = BoundConversationScope {
+            tenant_id: "tenant-a".into(),
+            project_root: Some("/repo".into()),
+            repo_scope: Some("scope-1".into()),
+        };
         let create = BoundConversationCreateRequest {
-            scope: proto::ConversationScope { project_root: Some("/repo".into()), repo_scope: Some("scope-1".into()) },
+            scope: scope.clone(),
             id: Some("conv-x".into()),
             agent_id: Some("researcher".into()),
             owner: Some("u1".into()),
@@ -700,16 +813,72 @@ mod tests {
         let value = serde_json::to_value(create).unwrap();
         assert_eq!(value["agent_id"], "researcher");
         assert_eq!(value["project_root"], "/repo");
+        assert_eq!(value["tenant_id"], "tenant-a");
 
         let meta = meta_with(Some("u1"), Visibility::Private);
-        let save = BoundConversationSaveMetaRequest {
-            scope: proto::ConversationScope::default(),
-            meta: &meta,
-            expected_revision: Some(7),
-            as_user: Some("u1".into()),
-        };
+        let save =
+            BoundConversationSaveMetaRequest { scope, meta: &meta, expected_revision: Some(7), as_user: "u1".into() };
         let value = serde_json::to_value(save).unwrap();
         assert_eq!(value["expected_revision"], 7);
         assert_eq!(value["meta"]["revision"], 0);
+    }
+
+    fn actor(user_id: &str, tenant_id: Option<&str>) -> Actor {
+        Actor {
+            user_id: user_id.to_string(),
+            claims: vec!["member".to_string()],
+            tenant_id: tenant_id.map(ToOwned::to_owned),
+        }
+    }
+
+    #[test]
+    fn as_user_is_only_a_matching_actor_assertion() {
+        let alice = actor("alice", Some("tenant-a"));
+        assert_eq!(assert_actor_matches_as_user(Some(&alice), Some("alice")).unwrap(), Some("alice"));
+        assert!(assert_actor_matches_as_user(Some(&alice), Some("mallory"))
+            .unwrap_err()
+            .to_string()
+            .contains("must equal"));
+        assert!(assert_actor_matches_as_user(None, Some("mallory"))
+            .unwrap_err()
+            .to_string()
+            .contains("requires --actor-json"));
+    }
+
+    #[test]
+    fn plugin_actor_requires_non_empty_user_and_tenant() {
+        assert!(require_plugin_actor(None).unwrap_err().to_string().contains("requires --actor-json"));
+        assert!(require_plugin_actor(Some(actor("", Some("tenant-a")))).unwrap_err().to_string().contains("user_id"));
+        assert!(require_plugin_actor(Some(actor("alice", None))).unwrap_err().to_string().contains("tenant_id"));
+        assert!(require_plugin_actor(Some(actor("alice", Some("  ")))).unwrap_err().to_string().contains("tenant_id"));
+    }
+
+    #[test]
+    fn actor_bound_wire_uses_one_authoritative_tenant_and_user() {
+        let alice = require_plugin_actor(Some(actor("alice", Some("tenant-a")))).unwrap();
+        let request = BoundConversationListRequest {
+            scope: bound_scope(Path::new("/repo"), &alice),
+            as_user: alice.user_id.clone(),
+        };
+        let value = bind_actor_to_params(&alice, &request).unwrap();
+        assert_eq!(value["tenant_id"], "tenant-a");
+        assert_eq!(value["as_user"], "alice");
+        assert_eq!(value["actor"]["user_id"], "alice");
+        assert_eq!(value["actor"]["tenant_id"], "tenant-a");
+
+        let hostile = actor("mallory", Some("tenant-b"));
+        assert!(assert_actor_matches_as_user(Some(&hostile), Some("alice")).is_err());
+        assert_eq!(bound_scope(Path::new("/repo"), &hostile).tenant_id, "tenant-b");
+        assert_ne!(bound_scope(Path::new("/repo"), &alice).tenant_id, "tenant-b");
+
+        let forged = serde_json::json!({
+            "tenant_id": "tenant-b",
+            "actor": {"user_id": "mallory", "tenant_id": "tenant-b"},
+            "as_user": "alice"
+        });
+        let rebound = bind_actor_to_params(&alice, &forged).unwrap();
+        assert_eq!(rebound["tenant_id"], "tenant-a");
+        assert_eq!(rebound["actor"]["user_id"], "alice");
+        assert_eq!(rebound["actor"]["tenant_id"], "tenant-a");
     }
 }

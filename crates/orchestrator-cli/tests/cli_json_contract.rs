@@ -38,6 +38,19 @@ fn chat_capabilities_exposes_durable_application_contract() -> Result<()> {
     assert_eq!(payload.pointer("/data/send/identity_binding/agent_field").and_then(Value::as_str), Some("agent_id"));
     assert_eq!(payload.pointer("/data/send/identity_binding/revision_field").and_then(Value::as_str), Some("revision"));
     assert_eq!(payload.pointer("/data/send/identity_binding/client_selectable").and_then(Value::as_bool), Some(false));
+    assert_eq!(
+        payload.pointer("/data/conversation_store/actor_required_when_plugin").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        payload.pointer("/data/conversation_store/legacy_user_assertion_must_match_actor").and_then(Value::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        payload.pointer("/data/conversation_store/tenant_scope_field").and_then(Value::as_str),
+        Some("tenant_id")
+    );
+    assert_eq!(payload.pointer("/data/conversation_store/features").and_then(Value::as_array).map(Vec::len), Some(8));
     assert_eq!(payload.pointer("/data/send/partial_success/supported").and_then(Value::as_bool), Some(true));
     let events = payload
         .pointer("/data/send/partial_success/jsonl_events")
