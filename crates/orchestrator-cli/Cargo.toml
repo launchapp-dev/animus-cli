@@ -101,6 +101,7 @@ toml = "1.0"
 [dev-dependencies]
 assert_cmd = "2"
 fs2 = "0.4"
+postgres = "=0.19.10"
 protocol = { workspace = true, features = ["test-utils"] }
 # v0.6: enable the config_source test seam so unit tests can inject a base
 # WorkflowConfig in place of an installed config_source plugin.

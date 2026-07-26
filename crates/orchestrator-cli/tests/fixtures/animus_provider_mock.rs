@@ -9,8 +9,20 @@ use animus_session_backend::session::{SessionEvent, SessionRequest, SessionRun};
 use anyhow::Result;
 use async_trait::async_trait;
 use serde_json::json;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
 use uuid::Uuid;
+
+/// A process-level acceptance test can put this marker in its prompt to make
+/// provider execution externally observable and long enough to overlap a
+/// second independent CLI process. The fixture is test-only, and the counter
+/// remains inside the request's already-authorized working directory.
+const PROCESS_E2E_MARKER: &str = "ANIMUS_CHAT_POSTGRES_PROCESS_E2E";
+const PROCESS_E2E_COUNTER: &str = ".animus-provider-mock-executions";
+const PROCESS_E2E_RELEASE: &str = ".animus-provider-mock-release";
+const PROCESS_E2E_MAX_HOLD: Duration = Duration::from_secs(15);
 
 const INFO: ProviderInfo = ProviderInfo {
     plugin_name: "animus-provider-mock",
@@ -29,6 +41,14 @@ impl ProviderBackend for MockBackend {
         let backend_label = "mock-native".to_string();
         let prompt = request.prompt.clone();
         let model = request.model.clone();
+        let process_e2e = prompt.contains(PROCESS_E2E_MARKER);
+        let process_e2e_release = request.cwd.join(PROCESS_E2E_RELEASE);
+        if process_e2e {
+            let counter_path = request.cwd.join(PROCESS_E2E_COUNTER);
+            let mut counter = OpenOptions::new().create(true).append(true).open(counter_path)?;
+            counter.write_all(b"start\n")?;
+            counter.sync_all()?;
+        }
         let (tx, rx) = mpsc::channel(16);
         let event_session_id = session_id.clone();
         let event_backend = backend_label.clone();
@@ -37,6 +57,12 @@ impl ProviderBackend for MockBackend {
             let _ = tx
                 .send(SessionEvent::Started { backend: event_backend, session_id: Some(event_session_id), pid: None })
                 .await;
+            if process_e2e {
+                let started = Instant::now();
+                while !process_e2e_release.is_file() && started.elapsed() < PROCESS_E2E_MAX_HOLD {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }
             let _ = tx.send(SessionEvent::Thinking { text: "mock: planning response".to_string() }).await;
             let _ = tx
                 .send(SessionEvent::ToolCall {
