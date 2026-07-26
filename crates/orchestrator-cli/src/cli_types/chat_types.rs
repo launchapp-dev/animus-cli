@@ -87,9 +87,15 @@ pub(crate) struct ChatSendArgs {
     /// and its id is reported on the terminal frame.
     #[arg(long, value_name = "ID")]
     pub(crate) conversation: Option<String>,
-    /// CLI provider to execute, for example claude, codex, or gemini.
-    #[arg(long, default_value = "claude")]
-    pub(crate) tool: String,
+    /// Fail unless the conversation still has this revision when the turn
+    /// lock is acquired. Application layers should pass the revision returned
+    /// by `chat get` to close preflight-to-mutation races.
+    #[arg(long, value_name = "N", requires = "conversation")]
+    pub(crate) expected_revision: Option<u64>,
+    /// CLI provider to execute, for example claude, codex, or gemini. Defaults
+    /// to the bound agent profile's tool, then claude for an unbound chat.
+    #[arg(long)]
+    pub(crate) tool: Option<String>,
     /// Model identifier. Defaults to the tool's default model.
     #[arg(long)]
     pub(crate) model: Option<String>,

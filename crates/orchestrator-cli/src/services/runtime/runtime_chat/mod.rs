@@ -236,21 +236,35 @@ fn handle_chat_export(args: ChatExportArgs, project_root: &str, json: bool) -> R
 /// Set (or clear) a conversation's title if `title` is `Some`. A no-op when
 /// `title` is `None` or the conversation is missing. An empty/whitespace title
 /// clears it back to `None`.
+#[cfg(test)]
 fn apply_conversation_title(store: &impl ConversationStore, id: &str, title: Option<&str>) -> Result<()> {
     let Some(title) = title else { return Ok(()) };
     let Some(mut meta) = store.load_meta(id)? else { return Ok(()) };
     let trimmed = title.trim();
     meta.title = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
-    store.save_meta(&meta)
+    save_meta_update(store, &mut meta)
+}
+
+fn save_meta_update(store: &impl ConversationStore, meta: &mut ConversationMeta) -> Result<()> {
+    let expected = meta.revision;
+    meta.revision =
+        meta.revision.checked_add(1).ok_or_else(|| anyhow!("conversation '{}' revision exhausted", meta.id))?;
+    store.save_meta_if_revision(meta, Some(expected))
 }
 
 fn handle_chat_rename(args: ChatRenameArgs, project_root: &str, json: bool) -> Result<()> {
     let store = ConversationStoreClient::for_project_as_user(Path::new(project_root), args.as_user.as_deref())?;
+    let _lock = loop {
+        if let Some(lock) = store.try_lock_conversation(&args.id)? {
+            break lock;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    };
     let mut meta = store.load_meta(&args.id)?.ok_or_else(|| anyhow!("conversation '{}' not found", args.id))?;
     client::ensure_user_may_access(&meta, &args.id, args.as_user.as_deref())?;
     let trimmed = args.title.trim();
     meta.title = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
-    store.save_meta(&meta)?;
+    save_meta_update(&store, &mut meta)?;
     print_value(serde_json::json!({ "conversation_id": meta.id, "title": meta.title }), json)
 }
 
@@ -288,7 +302,7 @@ fn handle_chat_new(args: ChatNewArgs, project_root: &str, json: bool) -> Result<
     let mut meta = store.create_with_ownership(args.id, args.as_user.clone(), visibility_from_arg(args.visibility))?;
     if args.title.is_some() {
         meta.title = args.title;
-        store.save_meta(&meta)?;
+        save_meta_update(&store, &mut meta)?;
     }
     print_value(
         serde_json::json!({
@@ -299,6 +313,37 @@ fn handle_chat_new(args: ChatNewArgs, project_root: &str, json: bool) -> Result<
         }),
         json,
     )
+}
+
+fn resolve_chat_agent(
+    project_root: &Path,
+    actor: Option<&animus_actor::Actor>,
+    stored_agent_id: Option<&str>,
+    requested_agent_id: Option<&str>,
+) -> Result<Option<(String, orchestrator_config::agent_runtime_config::AgentProfile)>> {
+    let resolve =
+        |id: &str| crate::services::runtime::agent_mcp::resolve_canonical_agent_profile(project_root, id, actor);
+
+    match stored_agent_id {
+        Some(stored) => {
+            let (canonical, profile) = resolve(stored)?;
+            if canonical != stored {
+                return Err(anyhow!(
+                    "conversation has non-canonical agent binding '{stored}' (configured id is '{canonical}'); refusing to guess"
+                ));
+            }
+            if let Some(requested) = requested_agent_id {
+                let (requested_canonical, _) = resolve(requested)?;
+                if requested_canonical != canonical {
+                    return Err(anyhow!(
+                        "conversation is bound to agent '{canonical}'; refusing conflicting --agent '{requested_canonical}'"
+                    ));
+                }
+            }
+            Ok(Some((canonical, profile)))
+        }
+        None => requested_agent_id.map(resolve).transpose(),
+    }
 }
 
 async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) -> Result<()> {
@@ -315,36 +360,40 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
 
     let store = ConversationStoreClient::for_project_as_user(&project_root_path, args.as_user.as_deref())?;
 
-    // Resolve (or create) the target conversation.
-    let (conversation_id, auto_created) = match args.conversation {
-        Some(id) => {
-            match store.load_meta(&id)? {
-                // Authorize the actor before sending into an existing
-                // conversation: a user-scoped send into another user's private
-                // conversation is rejected as "not found".
-                Some(meta) => client::ensure_user_may_access(&meta, &id, args.as_user.as_deref())?,
-                None => return Err(anyhow!("conversation '{id}' not found; create it with `animus chat new`")),
+    // Read and authorize existing metadata before resolving any profile. A
+    // hidden conversation stays indistinguishable from a missing one.
+    let existing_meta = match args.conversation.as_deref() {
+        Some(id) => match store.load_meta(id)? {
+            Some(meta) => {
+                client::ensure_user_may_access(&meta, id, args.as_user.as_deref())?;
+                Some(meta)
             }
-            (id, false)
-        }
-        None => {
-            (store.create_with_ownership(None, args.as_user.clone(), visibility_from_arg(args.visibility))?.id, true)
-        }
+            None => return Err(anyhow!("conversation '{id}' not found; create it with `animus chat new`")),
+        },
+        None => None,
     };
 
-    // Apply an optional title — names a freshly-created conversation or renames
-    // the target one. Done before the turn so a crash mid-stream still leaves
-    // the conversation named.
-    apply_conversation_title(&store, &conversation_id, args.title.as_deref())?;
+    // A bound conversation always re-resolves its persisted canonical profile,
+    // even when this invocation omits --agent. Deleted/renamed/actor-hidden
+    // profiles therefore fail closed instead of silently becoming a default
+    // agent. An explicit different profile is a hard conflict.
+    let resolved_agent = resolve_chat_agent(
+        &project_root_path,
+        actor.as_ref(),
+        existing_meta.as_ref().and_then(|meta| meta.agent_id.as_deref()),
+        args.agent.as_deref(),
+    )?;
+    let agent_id = resolved_agent.as_ref().map(|(id, _)| id.as_str());
+    let agent_profile = resolved_agent.as_ref().map(|(_, profile)| profile);
 
-    // Surface an auto-created conversation id up front so the caller can pass
-    // `--conversation <id>` on the next turn (codex round-4 P2). In `--json`
-    // mode the id also rides on the `turn_completed` frame; we print it to
-    // stderr here in the text modes so it never mixes into the assistant
-    // content on stdout.
-    if auto_created && !json {
-        eprintln!("conversation: {conversation_id}");
-    }
+    // Explicit provider/model flags remain per-turn overrides. Otherwise a
+    // bound conversation uses its canonical profile config on every start,
+    // native resume, and full-history fallback.
+    let tool = args
+        .tool
+        .clone()
+        .or_else(|| agent_profile.and_then(|profile| profile.tool.clone()))
+        .unwrap_or_else(|| "claude".to_string());
 
     // Resolve the per-agent MCP server set (profile ∪ skill ∪ --mcp-server
     // additions − the built-in animus when --no-animus-mcp) ONCE for this
@@ -352,8 +401,8 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // application (prompt fragments, env, extra_args, model preference, ...).
     let scope = crate::services::runtime::agent_mcp::resolve_agent_scope(
         &project_root_path,
-        &args.tool,
-        args.agent.as_deref(),
+        &tool,
+        agent_id,
         args.skill.as_deref(),
         actor.as_ref(),
     )?;
@@ -362,12 +411,14 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // contract below).
     let skill_application = scope.skill_application.as_ref().filter(|skill| !skill.is_empty());
 
-    // Model precedence: explicit --model > skill preference > compiled default.
+    // Model precedence: explicit --model > skill preference > bound profile >
+    // compiled tool default.
     let model = args
         .model
         .clone()
         .or_else(|| skill_application.and_then(|skill| skill.model.clone()))
-        .unwrap_or_else(|| protocol::default_model_for_tool(&args.tool).unwrap_or("claude-sonnet-4-6").to_string());
+        .or_else(|| agent_profile.and_then(|profile| profile.model.clone()))
+        .unwrap_or_else(|| protocol::default_model_for_tool(&tool).unwrap_or("claude-sonnet-4-6").to_string());
 
     let raw_cwd = args.cwd.clone().unwrap_or_else(|| project_root.to_string());
     let cwd = PathBuf::from(canonicalize_cwd_in_project(&raw_cwd, project_root)?);
@@ -375,13 +426,8 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // Permission mode: the `--permission-mode` flag wins over the selected
     // `--agent` profile's `permission_mode`. Provider-specific and forwarded
     // verbatim; an unknown value only warns (stderr), never blocks.
-    let permission_mode = args.permission_mode.clone().or_else(|| {
-        crate::services::runtime::runtime_agent::provider_client::profile_permission_mode(
-            &project_root_path,
-            args.agent.as_deref(),
-            actor.as_ref(),
-        )
-    });
+    let permission_mode =
+        args.permission_mode.clone().or_else(|| agent_profile.and_then(|profile| profile.permission_mode.clone()));
     if let Some(mode) = permission_mode.as_deref() {
         crate::services::runtime::runtime_agent::provider_client::warn_unknown_permission_mode(mode);
     }
@@ -389,13 +435,8 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // Kernel-mediated approvals: the `--approvals` flag or an
     // `approval_policy` on the selected `--agent` profile sets
     // `extras.approvals = true` on every turn's session request.
-    let approvals = args.approvals
-        || crate::services::runtime::runtime_agent::provider_client::profile_has_approval_policy(
-            &project_root_path,
-            args.agent.as_deref(),
-            actor.as_ref(),
-        );
-    crate::services::runtime::runtime_agent::provider_client::warn_if_claude_autoapprove_bypass(&args.tool, approvals);
+    let approvals = args.approvals || agent_profile.is_some_and(|profile| profile.approval_policy.is_some());
+    crate::services::runtime::runtime_agent::provider_client::warn_if_claude_autoapprove_bypass(&tool, approvals);
 
     let producer = ResolverTurnProducer::for_project(&project_root_path);
 
@@ -403,10 +444,10 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
     // sees the MCP servers its profile/skill declares. Plain chat (no
     // --agent/--skill) defaults to the built-in `animus` server only. When an
     // actor is asserted, the spawned `animus mcp serve` child is bound to it.
-    let scope_selected = args.agent.is_some() || args.skill.is_some();
+    let scope_selected = agent_id.is_some() || args.skill.is_some();
     let mcp_contract = crate::services::runtime::agent_mcp::assemble_agent_mcp_contract_with_actor(
         &project_root_path,
-        &args.tool,
+        &tool,
         &model,
         &scope.profile_servers,
         &scope.skill_servers,
@@ -414,7 +455,7 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         &scope.tool_policy,
         scope_selected,
         args.no_animus_mcp,
-        args.agent.as_deref(),
+        agent_id,
         actor.as_ref(),
     )?;
 
@@ -469,6 +510,39 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
         }
     }
 
+    // Create only after the selected/bound profile and runtime contract have
+    // validated. The plugin create RPC stamps agent_id atomically; an explicit
+    // existing unbound conversation is bound under the turn lock below.
+    let (conversation_id, auto_created) = match args.conversation.as_ref() {
+        Some(id) => (id.clone(), false),
+        None => (
+            store
+                .create_with_ownership_and_agent(
+                    None,
+                    args.as_user.clone(),
+                    visibility_from_arg(args.visibility),
+                    agent_id.map(ToOwned::to_owned),
+                )?
+                .id,
+            true,
+        ),
+    };
+
+    if auto_created && !json {
+        eprintln!("conversation: {conversation_id}");
+    }
+
+    let reasoning_effort = args
+        .reasoning_effort
+        .map(|level| level.as_str().to_string())
+        .or_else(|| agent_profile.and_then(|profile| profile.reasoning_effort.clone()));
+    let agent_system_prompt =
+        agent_profile.map(|profile| profile.system_prompt.trim()).filter(|prompt| !prompt.is_empty());
+    let agent_tool_profile = agent_profile
+        .and_then(|profile| profile.tool_profile.as_deref())
+        .map(str::trim)
+        .filter(|profile| !profile.is_empty());
+
     // Sink selection: --json => JSONL stdout; --stream (no json) => text;
     // neither => discard streaming and print the final transcript turn.
     let mut sink: Box<dyn ChatStreamSink> = if json {
@@ -481,14 +555,19 @@ async fn handle_chat_send(args: ChatSendArgs, project_root: &str, json: bool) ->
 
     let ctx = TurnContext {
         conversation_id: &conversation_id,
-        tool: &args.tool,
+        agent_id,
+        expected_revision: args.expected_revision,
+        title_update: args.title.as_deref(),
+        tool: &tool,
         model: &model,
         user_message: &args.message,
         cwd,
         project_root: project_root_path.clone(),
-        reasoning_effort: args.reasoning_effort.map(|level| level.as_str()),
+        reasoning_effort: reasoning_effort.as_deref(),
         permission_mode: permission_mode.as_deref(),
         approvals,
+        agent_system_prompt,
+        agent_tool_profile,
         mcp_contract: mcp_contract.as_ref(),
         isolated_mcp_config_path: isolated_mcp_config_path.as_deref(),
         skill: skill_application,
@@ -532,6 +611,7 @@ fn handle_chat_list(args: ChatListArgs, project_root: &str, json: bool) -> Resul
             .map(|s| {
                 vec![
                     s.id.clone(),
+                    s.agent_id.clone().unwrap_or_else(|| "--".to_string()),
                     s.title.clone().unwrap_or_else(|| "--".to_string()),
                     s.tool.clone().unwrap_or_else(|| "--".to_string()),
                     s.model.clone().unwrap_or_else(|| "--".to_string()),
@@ -540,7 +620,7 @@ fn handle_chat_list(args: ChatListArgs, project_root: &str, json: bool) -> Resul
                 ]
             })
             .collect();
-        render_table(&["ID", "TITLE", "TOOL", "MODEL", "MSGS", "UPDATED"], &rows);
+        render_table(&["ID", "AGENT", "TITLE", "TOOL", "MODEL", "MSGS", "UPDATED"], &rows);
         return Ok(());
     }
     print_value(summaries, json)
@@ -559,9 +639,22 @@ mod export_tests {
     use super::*;
     use store::FileConversationStore;
 
+    fn seed_agents(root: &Path, agents_yaml: &str, phase_agent: &str) {
+        std::fs::create_dir_all(root.join(".animus")).unwrap();
+        std::fs::write(
+            root.join(".animus/workflows.yaml"),
+            format!(
+                "tools_allowlist:\n  - cargo\nagents:\n{agents_yaml}\nphases:\n  work:\n    mode: agent\n    agent_id: {phase_agent}\n"
+            ),
+        )
+        .unwrap();
+    }
+
     fn sample_meta() -> ConversationMeta {
         ConversationMeta {
             id: "conv-x".into(),
+            agent_id: Some("researcher".into()),
+            revision: 3,
             tool: Some("codex".into()),
             model: Some("gpt-5.5".into()),
             session_id: None,
@@ -649,14 +742,72 @@ mod export_tests {
 
         // Some(trimmed) → set.
         apply_conversation_title(&store, "conv-t", Some("  Named  ")).unwrap();
-        assert_eq!(store.load_meta("conv-t").unwrap().unwrap().title.as_deref(), Some("Named"),);
+        let named = store.load_meta("conv-t").unwrap().unwrap();
+        assert_eq!(named.title.as_deref(), Some("Named"));
+        assert_eq!(named.revision, 1);
 
         // Some(blank) → clear.
         apply_conversation_title(&store, "conv-t", Some("   ")).unwrap();
-        assert!(store.load_meta("conv-t").unwrap().unwrap().title.is_none());
+        let cleared = store.load_meta("conv-t").unwrap().unwrap();
+        assert!(cleared.title.is_none());
+        assert_eq!(cleared.revision, 2);
 
         // Missing conversation → no error.
         apply_conversation_title(&store, "missing", Some("x")).unwrap();
+    }
+
+    #[test]
+    fn canonical_agent_resolution_reuses_binding_and_rejects_conflicts() {
+        let tmp = tempfile::tempdir().unwrap();
+        seed_agents(
+            tmp.path(),
+            "  researcher:\n    system_prompt: Research exactly.\n    tool: codex\n    model: gpt-5.6\n  writer:\n    system_prompt: Write exactly.",
+            "researcher",
+        );
+        let _seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(tmp.path());
+
+        let selected = resolve_chat_agent(tmp.path(), None, None, Some("ReSeArChEr"))
+            .unwrap()
+            .expect("requested profile resolves");
+        assert_eq!(selected.0, "researcher", "caller casing must canonicalize to the configured key");
+        assert_eq!(selected.1.tool.as_deref(), Some("codex"));
+        assert_eq!(selected.1.model.as_deref(), Some("gpt-5.6"));
+
+        let continued = resolve_chat_agent(tmp.path(), None, Some("researcher"), None)
+            .unwrap()
+            .expect("persisted profile resolves without --agent");
+        assert_eq!(continued.0, "researcher");
+        assert_eq!(continued.1.system_prompt, "Research exactly.");
+
+        let error = resolve_chat_agent(tmp.path(), None, Some("researcher"), Some("writer")).unwrap_err();
+        assert!(error.to_string().contains("refusing conflicting --agent"), "unexpected error: {error}");
+        assert!(resolve_chat_agent(tmp.path(), None, None, None).unwrap().is_none(), "legacy chat stays unbound");
+    }
+
+    #[test]
+    fn renamed_deleted_hidden_and_cross_scope_profiles_fail_closed() {
+        let visible = tempfile::tempdir().unwrap();
+        seed_agents(visible.path(), "  researcher:\n    system_prompt: Research exactly.", "researcher");
+        let _visible_seam =
+            orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(visible.path());
+        assert!(resolve_chat_agent(visible.path(), None, Some("researcher"), None).unwrap().is_some());
+
+        // A different repository/tenant config contains no such canonical id:
+        // a persisted binding cannot drift across scope or follow a renamed /
+        // deleted profile to a default.
+        let other_scope = tempfile::tempdir().unwrap();
+        seed_agents(other_scope.path(), "  writer:\n    system_prompt: Write exactly.", "writer");
+        let _other_seam = orchestrator_config::workflow_config::config_source_client::install_yaml_config_source_base(
+            other_scope.path(),
+        );
+        let actor = animus_actor::Actor {
+            user_id: "other-user".to_string(),
+            claims: Vec::new(),
+            tenant_id: Some("other-tenant".to_string()),
+        };
+        let error = resolve_chat_agent(other_scope.path(), Some(&actor), Some("researcher"), None).unwrap_err();
+        assert!(error.to_string().contains("not visible in this project and actor scope"), "unexpected error: {error}");
     }
 
     #[test]

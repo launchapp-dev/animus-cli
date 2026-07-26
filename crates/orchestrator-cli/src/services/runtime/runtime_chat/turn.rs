@@ -47,7 +47,7 @@ use serde_json::{json, Value};
 use crate::services::runtime::runtime_agent::provider_client::{graft_skill_launch_contract, skill_has_launch_extras};
 
 use super::sink::{ChatStreamEvent, ChatStreamSink};
-use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationStore, TurnBlock};
+use super::store::{render_history_prompt, ChatMessage, ChatRole, ConversationMeta, ConversationStore, TurnBlock};
 
 /// Outcome of draining one provider session.
 struct TurnOutput {
@@ -157,6 +157,13 @@ impl TurnProducer for ResolverTurnProducer {
 /// Inputs for a single turn.
 pub(crate) struct TurnContext<'a> {
     pub conversation_id: &'a str,
+    /// Canonical configured profile this operation expects. `None` means the
+    /// conversation must still be unbound when the turn lock is acquired.
+    pub agent_id: Option<&'a str>,
+    /// Optimistic-concurrency token observed by the application preflight.
+    pub expected_revision: Option<u64>,
+    /// Optional title mutation applied under the same revision check and lock.
+    pub title_update: Option<&'a str>,
     pub tool: &'a str,
     pub model: &'a str,
     pub user_message: &'a str,
@@ -174,6 +181,11 @@ pub(crate) struct TurnContext<'a> {
     /// every turn's session request so the transport routes permission
     /// decisions through `animus.agent.request_approval`.
     pub approvals: bool,
+    /// Bound profile persona, applied to fresh, resumed, and replay-fallback
+    /// attempts (and composed before any explicit skill fragments).
+    pub agent_system_prompt: Option<&'a str>,
+    /// Provider-specific named profile from the bound agent config.
+    pub agent_tool_profile: Option<&'a str>,
     /// Per-agent MCP runtime contract for this conversation, threaded into
     /// `extras.runtime_contract` so the provider wires the profile/skill-
     /// scoped MCP servers. `None` when the tool cannot speak MCP.
@@ -234,6 +246,68 @@ pub(crate) async fn run_turn(
         .load_meta(ctx.conversation_id)?
         .ok_or_else(|| anyhow!("conversation '{}' not found", ctx.conversation_id))?;
 
+    if let Some(expected) = ctx.expected_revision {
+        if meta.revision != expected {
+            return Err(anyhow!(
+                "conversation '{}' revision conflict: expected {}, found {}",
+                ctx.conversation_id,
+                expected,
+                meta.revision
+            ));
+        }
+    }
+
+    // Re-check identity while holding the same lock that protects message
+    // persistence. This prevents a local bind/rebind race between the CLI's
+    // preflight and provider execution. The plugin contract carries the same
+    // field; multi-host backends must make save_meta conditional/serialized.
+    let mut meta_changed = false;
+    match (meta.agent_id.as_deref(), ctx.agent_id) {
+        (Some(stored), Some(expected)) if stored == expected => {}
+        (None, Some(expected)) => {
+            meta.agent_id = Some(expected.to_string());
+            meta_changed = true;
+        }
+        (None, None) => {}
+        (Some(stored), Some(expected)) => {
+            return Err(anyhow!(
+                "conversation agent binding changed before send (expected '{expected}', found '{stored}')"
+            ));
+        }
+        (Some(stored), None) => {
+            return Err(anyhow!(
+                "conversation became bound to agent '{stored}' before send; refusing unbound execution"
+            ));
+        }
+    }
+    if let Some(title) = ctx.title_update {
+        let trimmed = title.trim();
+        let title = if trimmed.is_empty() { None } else { Some(trimmed.to_string()) };
+        if meta.title != title {
+            meta.title = title;
+            meta_changed = true;
+        }
+    }
+    // An application-supplied revision also reserves this operation with a
+    // backend CAS before the first message append. Merely comparing the token
+    // after load would leave a multi-host gap between that read and mutation.
+    // Binding/title updates serve as the reservation when present; otherwise
+    // advance the revision alone.
+    if meta_changed || ctx.expected_revision.is_some() {
+        meta.updated_at = now_rfc3339();
+        save_meta_update(store, &mut meta)?;
+        let persisted = store
+            .load_meta(ctx.conversation_id)?
+            .ok_or_else(|| anyhow!("conversation '{}' disappeared while binding", ctx.conversation_id))?;
+        if persisted.agent_id != meta.agent_id || persisted.revision != meta.revision {
+            return Err(anyhow!(
+                "conversation store did not preserve canonical agent binding/revision reservation for '{}'; refusing provider execution",
+                ctx.conversation_id
+            ));
+        }
+        meta = persisted;
+    }
+
     // (1) Persist the user message FIRST — before the provider call — so a
     // crash mid-turn never loses the user's input.
     let user_seq = meta.message_count;
@@ -257,7 +331,7 @@ pub(crate) async fn run_turn(
     // stay consistent, so the next turn assigns a fresh seq instead of
     // colliding with — and the replay filter dropping — the prior user turn.
     meta.updated_at = now_rfc3339();
-    store.save_meta(&meta)?;
+    save_meta_update(store, &mut meta)?;
 
     // (2) Resume-vs-replay decision. A stored session_id is only valid for
     // the tool that issued it — a tool change forces replay. A backend that
@@ -367,7 +441,7 @@ pub(crate) async fn run_turn(
     meta.tool = Some(ctx.tool.to_string());
     meta.model = Some(ctx.model.to_string());
     meta.updated_at = now_rfc3339();
-    store.save_meta(&meta)?;
+    save_meta_update(store, &mut meta)?;
 
     sink.emit(&ChatStreamEvent::TurnCompleted {
         conversation_id: ctx.conversation_id.to_string(),
@@ -376,6 +450,13 @@ pub(crate) async fn run_turn(
     })?;
 
     Ok(assistant_seq)
+}
+
+fn save_meta_update(store: &dyn ConversationStore, meta: &mut ConversationMeta) -> Result<()> {
+    let expected = meta.revision;
+    meta.revision =
+        meta.revision.checked_add(1).ok_or_else(|| anyhow!("conversation '{}' revision exhausted", meta.id))?;
+    store.save_meta_if_revision(meta, Some(expected))
 }
 
 /// Build the request, start the session, and drain it once. The `resumed`
@@ -409,13 +490,18 @@ async fn drive_once(
         None => prompt,
     };
 
-    // Skill system-prompt fragments ride `extras.system_prompt` on every
-    // turn (chat has no explicit system-prompt flag to merge with).
-    if let Some(skill) = ctx.skill {
-        if let Value::Object(map) = &mut extras {
-            if let Some(merged) = animus_runtime_shared::merge_skill_system_prompt(None, skill) {
-                map.insert("system_prompt".to_string(), Value::String(merged));
-            }
+    // The bound profile persona rides every attempt. Explicit skill fragments
+    // compose after it using the same merge helper as ad-hoc agent runs.
+    if let Value::Object(map) = &mut extras {
+        let system_prompt = match ctx.skill {
+            Some(skill) => animus_runtime_shared::merge_skill_system_prompt(ctx.agent_system_prompt, skill),
+            None => ctx.agent_system_prompt.map(ToOwned::to_owned),
+        };
+        if let Some(system_prompt) = system_prompt {
+            map.insert("system_prompt".to_string(), Value::String(system_prompt));
+        }
+        if let Some(tool_profile) = ctx.agent_tool_profile {
+            map.insert("claude_profile".to_string(), Value::String(tool_profile.to_string()));
         }
     }
 
@@ -846,6 +932,9 @@ mod tests {
     fn ctx<'a>(id: &'a str, tool: &'a str, msg: &'a str, tmp: &tempfile::TempDir) -> TurnContext<'a> {
         TurnContext {
             conversation_id: id,
+            agent_id: None,
+            expected_revision: None,
+            title_update: None,
             tool,
             model: "claude-sonnet-4-6",
             user_message: msg,
@@ -854,6 +943,8 @@ mod tests {
             reasoning_effort: None,
             permission_mode: None,
             approvals: false,
+            agent_system_prompt: None,
+            agent_tool_profile: None,
             mcp_contract: None,
             isolated_mcp_config_path: None,
             skill: None,
@@ -897,6 +988,80 @@ mod tests {
             _ => None,
         });
         assert_eq!(started, Some(false));
+    }
+
+    #[tokio::test]
+    async fn canonical_agent_binding_and_persona_are_persisted_before_provider_execution() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        store.create(Some("c1".into())).unwrap();
+        let producer = MockProducer::new(vec![text_turn("hi", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let turn = TurnContext {
+            agent_id: Some("researcher"),
+            agent_system_prompt: Some("You are the research agent."),
+            agent_tool_profile: Some("research-profile"),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+
+        run_turn(&producer, &store, &mut sink, turn).await.unwrap();
+
+        let meta = store.load_meta("c1").unwrap().unwrap();
+        assert_eq!(meta.agent_id.as_deref(), Some("researcher"));
+        assert_eq!(meta.revision, 3, "bind + user acceptance + assistant completion each advance revision");
+        let request = &producer.requests()[0];
+        assert_eq!(request.extras.get("system_prompt").and_then(Value::as_str), Some("You are the research agent."));
+        assert_eq!(request.extras.get("claude_profile").and_then(Value::as_str), Some("research-profile"));
+    }
+
+    #[tokio::test]
+    async fn conflicting_binding_and_stale_revision_fail_before_message_or_provider() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        meta.agent_id = Some("researcher".to_string());
+        meta.revision = 1;
+        store.save_meta(&meta).unwrap();
+        let producer = MockProducer::new(vec![text_turn("unused", "sess-1")]);
+
+        let mut sink = CapturingSink::new();
+        let conflict = TurnContext { agent_id: Some("writer"), ..ctx("c1", "claude", "hello", &tmp) };
+        let error = run_turn(&producer, &store, &mut sink, conflict).await.unwrap_err();
+        assert!(error.to_string().contains("binding changed"), "unexpected error: {error}");
+
+        let mut sink = CapturingSink::new();
+        let stale = TurnContext {
+            agent_id: Some("researcher"),
+            expected_revision: Some(0),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+        let error = run_turn(&producer, &store, &mut sink, stale).await.unwrap_err();
+        assert!(error.to_string().contains("revision conflict"), "unexpected error: {error}");
+        assert!(store.load_messages("c1").unwrap().is_empty());
+        assert!(producer.requests().is_empty(), "failed preconditions must not reach the provider");
+    }
+
+    #[tokio::test]
+    async fn expected_revision_reserves_the_operation_before_message_append() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = store_for(&tmp);
+        let mut meta = store.create(Some("c1".into())).unwrap();
+        meta.agent_id = Some("researcher".to_string());
+        meta.revision = 4;
+        store.save_meta(&meta).unwrap();
+        let producer = MockProducer::new(vec![text_turn("answer", "sess-1")]);
+        let mut sink = CapturingSink::new();
+        let turn = TurnContext {
+            agent_id: Some("researcher"),
+            expected_revision: Some(4),
+            ..ctx("c1", "claude", "hello", &tmp)
+        };
+
+        run_turn(&producer, &store, &mut sink, turn).await.unwrap();
+
+        let meta = store.load_meta("c1").unwrap().unwrap();
+        assert_eq!(meta.revision, 7, "reservation + user acceptance + assistant completion");
+        assert_eq!(store.load_messages("c1").unwrap().len(), 2);
     }
 
     #[tokio::test]
@@ -1041,9 +1206,14 @@ mod tests {
         let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), text_turn("a2", "sess-1")]);
         let mut sink = CapturingSink::new();
 
-        run_turn(&producer, &store, &mut sink, ctx("c1", "claude", "q1", &tmp)).await.unwrap();
+        let bound = |message| TurnContext {
+            agent_id: Some("researcher"),
+            agent_system_prompt: Some("You are the research agent."),
+            ..ctx("c1", "claude", message, &tmp)
+        };
+        run_turn(&producer, &store, &mut sink, bound("q1")).await.unwrap();
         let mut sink2 = CapturingSink::new();
-        run_turn(&producer, &store, &mut sink2, ctx("c1", "claude", "q2", &tmp)).await.unwrap();
+        run_turn(&producer, &store, &mut sink2, bound("q2")).await.unwrap();
 
         let reqs = producer.requests();
         assert_eq!(reqs.len(), 2);
@@ -1132,9 +1302,14 @@ mod tests {
         let producer = MockProducer::new(vec![text_turn("a1", "sess-1"), stale, text_turn("a2", "sess-2")]);
         let mut sink = CapturingSink::new();
 
-        run_turn(&producer, &store, &mut sink, ctx("c1", "claude", "q1", &tmp)).await.unwrap();
+        let bound = |message| TurnContext {
+            agent_id: Some("researcher"),
+            agent_system_prompt: Some("You are the research agent."),
+            ..ctx("c1", "claude", message, &tmp)
+        };
+        run_turn(&producer, &store, &mut sink, bound("q1")).await.unwrap();
         let mut sink2 = CapturingSink::new();
-        run_turn(&producer, &store, &mut sink2, ctx("c1", "claude", "q2", &tmp)).await.unwrap();
+        run_turn(&producer, &store, &mut sink2, bound("q2")).await.unwrap();
 
         let reqs = producer.requests();
         assert_eq!(reqs.len(), 3, "expected establish + failed-resume + retry");
@@ -1151,6 +1326,12 @@ mod tests {
         assert!(reqs[2].prompt.contains("User: q1"), "retry must replay prior user turn");
         assert!(reqs[2].prompt.contains("Assistant: a1"), "retry must replay prior assistant turn");
         assert!(reqs[2].prompt.trim_end().ends_with("User: q2"));
+        assert!(
+            reqs.iter().all(|request| {
+                request.extras.get("system_prompt").and_then(Value::as_str) == Some("You are the research agent.")
+            }),
+            "bound persona must survive start, native resume, and resume-loss replay fallback"
+        );
         // After the successful retry, meta points at the new session.
         let meta = store.load_meta("c1").unwrap().unwrap();
         assert_eq!(meta.session_id.as_deref(), Some("sess-2"));
@@ -1277,6 +1458,9 @@ mod tests {
                             &mut sink,
                             TurnContext {
                                 conversation_id: "c1",
+                                agent_id: None,
+                                expected_revision: None,
+                                title_update: None,
                                 tool: "claude",
                                 model: "claude-sonnet-4-6",
                                 user_message: &message,
@@ -1285,6 +1469,8 @@ mod tests {
                                 reasoning_effort: None,
                                 permission_mode: None,
                                 approvals: false,
+                                agent_system_prompt: None,
+                                agent_tool_profile: None,
                                 mcp_contract: None,
                                 isolated_mcp_config_path: None,
                                 skill: None,
